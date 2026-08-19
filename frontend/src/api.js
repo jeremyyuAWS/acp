@@ -1,5 +1,7 @@
 import { SIM, simIdentity, simGetSources, simStartScan, simGetJob, simGetScan, simListScans, simRules, simRemediationDiffs } from './sim.js'
 import { CAPABILITY_FALLBACK } from './capability.js'
+import { SCOPE_UNIVERSE } from './scopePresets.js'
+import { TRACKED_17 } from './ruleDetails.js'
 
 const BASE = import.meta.env.VITE_API ?? 'http://localhost:8077'
 
@@ -7,13 +9,20 @@ const BASE = import.meta.env.VITE_API ?? 'http://localhost:8077'
 let driveToken = null
 let spToken = null
 let googleToken = null  // GIS Bearer token (auth mode = "gis")
+let msToken = null      // Microsoft (Entra) access token — the API Bearer for a Microsoft sign-in
 export const setDriveToken = (t) => { driveToken = t }
 export const setSPToken = (t) => { spToken = t }
 export const setGoogleToken = (t) => { googleToken = t }
-export const clearAllTokens = () => { googleToken = null; driveToken = null; spToken = null }
+export const setMsToken = (t) => { msToken = t }
+export const clearAllTokens = () => { googleToken = null; msToken = null; driveToken = null; spToken = null }
+// The Authorization bearer is Google's token when present, else the Microsoft one — tagged with
+// X-Auth-Provider so the backend verifies it against the right issuer (Graph, not Google's
+// tokeninfo). Without that tag a Microsoft sign-in has no bearer the backend accepts and every
+// call 401s the instant the user is in.
 const headers = (extra = {}) => ({
   ...extra,
-  ...(googleToken ? { 'Authorization': 'Bearer ' + googleToken } : {}),
+  ...(googleToken ? { 'Authorization': 'Bearer ' + googleToken }
+      : msToken ? { 'Authorization': 'Bearer ' + msToken, 'X-Auth-Provider': 'microsoft' } : {}),
   ...(driveToken ? { 'X-Drive-Token': driveToken } : {}),
   ...(spToken ? { 'X-SP-Token': spToken } : {}),
 })
@@ -56,9 +65,17 @@ const SCAN_URL_RE = /\/scans\/([^/?#]+)/
 
 const j = async (r) => {
   if (r.status === 401) {
-    googleToken = null
-    window.dispatchEvent(new CustomEvent('acp:session-expired', { detail: { reason: SESSION_EXPIRED } }))
-    throw new Error(SESSION_EXPIRED)
+    // Only a GATE 401 (the access gate rejected the session's bearer) signs the user out. A
+    // ROUTE 401 — an endpoint refusing for its own reason, e.g. a Drive-only route hit by a
+    // Microsoft user — must NOT eject an authenticated user or clear their token. The backend
+    // marks its gate 401s with `X-Acp-Auth: session`; without it, this is a route error and
+    // falls through to the normal !r.ok handling below. Found 2026-08-11: /sources 401'ing a
+    // Microsoft user with no Google Drive bounced the whole session to "expired".
+    if (r.headers.get('X-Acp-Auth') === 'session') {
+      googleToken = null; msToken = null
+      window.dispatchEvent(new CustomEvent('acp:session-expired', { detail: { reason: SESSION_EXPIRED } }))
+      throw new Error(SESSION_EXPIRED)
+    }
   }
   if (!r.ok) {
     let detail = `${r.status} ${r.statusText}`
@@ -301,11 +318,16 @@ export const remediateScan = (scanId, scope) => {
 }
 // Access allow-list (who can use the app) — managed from Settings.
 export const getAllowlist = () => (SIM
-  ? sim({ emails: ['demo@sim'], owner: 'demo@sim', domains: [] })
+  ? sim({ emails: ['demo@sim'], owner: 'demo@sim', domains: [], invite_enabled: false })
   : fetch(`${BASE}/admin/allowlist`, { headers: headers() }).then(j))
 export const setAllowlist = (emails) => (SIM
   ? sim({ emails })
   : fetch(`${BASE}/admin/allowlist`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ emails }) }).then(j))
+// Invite a tester as an Entra B2B guest AND add them to the allowlist in one step (ADR 0033).
+// Owner-only; the endpoint 409s (and the UI hides) unless the guest-invite credential is configured.
+export const inviteTester = (email) => (SIM
+  ? sim({ email, emails: ['demo@sim', email], status: 'PendingAcceptance' })
+  : fetch(`${BASE}/admin/invite`, { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ email }) }).then(j))
 // Per-scan decision snapshots (PRD: time-travel) — restore/persist triage + action decisions.
 export const getDecisions = (scanId) => (SIM
   ? sim({})
@@ -319,9 +341,12 @@ export const saveDecisionsBatch = (scanId, items) => (SIM
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/decisions`,
           { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ items }) }).then(j))
 // Run the WCAG assessment into Langfuse on demand (separate from the scan trace).
-export const assessScan = (scanId, level = 'AA') => (SIM
+// `includeLifecycleFlagged` is the authorized override (PRD §4.5): by default the run SKIPS files a
+// discovery rule flagged for archival or deletion (Archive/Delete Candidate, Archived, Deleted) —
+// pass true to pull them back into the assessment anyway.
+export const assessScan = (scanId, level = 'AA', includeLifecycleFlagged = false) => (SIM
   ? sim({ ok: true })
-  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/assess?level=${encodeURIComponent(level)}`,
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/assess?level=${encodeURIComponent(level)}&include_lifecycle_flagged=${includeLifecycleFlagged ? 'true' : 'false'}`,
           { method: 'POST', headers: headers() }).then(j))
 // Live remediation progress: in-flight jobs + latest fixed file (drives the Remediate bar).
 export const getRemediationStatus = (scanId) => {
@@ -350,6 +375,11 @@ const _simSettings = { ai_enabled: true, drive_mirror_enabled: true, drive_mirro
 export const getSettings = () => (SIM
   ? sim({ ..._simSettings, simulated: true })
   : fetch(`${BASE}/settings`, { headers: headers() }).then(j))
+// Source-staleness (Release Center): did each file's SOURCE change in Drive since ACP scanned it?
+// headers() attaches X-Drive-Token, which the endpoint needs to read the source's current state.
+export const getSourceStatus = (scanId) => (SIM
+  ? sim({ scan_id: scanId, stale_count: 0, untracked_count: 0, unavailable_count: 0, files: [] })
+  : fetch(`${BASE}/scans/${scanId}/source-status`, { headers: headers() }).then(j))
 // AI usage + cost governance rollup (ADR 0019 Phase 1) — today / month / all-time.
 const _emptyRoll = { calls: 0, ok: 0, failed: 0, cost_usd: 0, avg_latency_ms: 0, scans: 0, by_provider: [], by_zone: [], by_surface: [] }
 export const getAiCosts = () => (SIM
@@ -678,6 +708,34 @@ export const confirmCriterion = (scanId, file, sc, note) => (SIM || !scanId || !
     }).then((r) => (r.ok ? r.json() : { ok: false, reason: 'error' }))
       .catch(() => ({ ok: false, reason: 'error' })))
 
+// W4 — disposition lane for a dead-end criterion (UNCHECKED / GAP / AT). Records a human's
+// documented resolution: either a manual attestation ("verified out-of-band — reason") or an
+// out-of-scope decision ("not in this engagement's target — reason"), so the item reaches a
+// recorded, resolved state instead of sitting terminal. Mirrors confirmCriterion's shape.
+//
+// BACKEND DEFERRED: the persistence endpoint (POST /scans/{sid}/files/{file}/dispose, and its
+// read side below) is NOT yet implemented server-side. Against a real backend this call returns
+// { ok: false } and the disposition is not persisted across reload; in SIM it resolves ok so the
+// demo flow is complete. This is deliberately not faked — see the PR body for what the backend
+// needs (an immutable decision written via store.log_decision, guarded to dispositionable
+// outcomes, echoed back by a /dispositions read).
+export const disposeCriterion = (scanId, file, sc, kind, reason) => (SIM || !scanId || !file
+  ? sim({ ok: true, sc, kind, reason, actor: 'you', at: new Date().toISOString() })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/dispose`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ sc, kind, reason }),
+    }).then((r) => (r.ok ? r.json() : { ok: false, reason: 'error' }))
+      .catch(() => ({ ok: false, reason: 'error' })))
+
+// Read the recorded dispositions for a file so they survive a drawer reopen. Backend deferred
+// (see disposeCriterion): returns [] until the endpoint exists, so the drawer simply shows no
+// recorded dispositions rather than erroring.
+export const listDispositions = (scanId, file) => (SIM || !scanId || !file
+  ? sim([])
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/dispositions`, { headers: headers() })
+      .then((r) => (r.ok ? r.json() : []))
+      .catch(() => []))
+
 export const uploadToDrive = (scanId, file, blob, contentType) => {
   if (SIM) return sim({ url: 'https://drive.google.com/file/d/sim/view', file_id: 'sim' })
   const fd = new FormData()
@@ -685,37 +743,6 @@ export const uploadToDrive = (scanId, file, blob, contentType) => {
   fd.append('file', file)
   fd.append('blob', new File([blob], file, { type: contentType }))
   return fetch(`${BASE}/drive/upload`, { method: 'POST', headers: headers(), body: fd }).then(j)
-}
-
-// Replace one SharePoint file with its remediated bytes, through the server.
-//
-// The server archives the original into _mova-originals/<date>/ BEFORE it overwrites, and a
-// failed archive aborts the write (scanner._sp_archive_original). This SPA used to PUT to Graph
-// directly with no backup of any kind, so a save replaced the user's file with nothing to
-// recover from and nothing on screen saying so.
-//
-// Not reimplemented here. The archive is the safety-critical part of this path, and a second
-// copy of it in the browser is a second thing to keep correct — the failure mode being one copy
-// silently losing its fail-closed behaviour while the other keeps it.
-//
-// `driveId` may be absent: an item listed from OneDrive carries none, and the server resolves
-// that to /me/drive exactly as the download path does for the same items.
-export const uploadToSharePoint = ({ scanId, file, driveId, itemId, blob, score }) => {
-  if (!itemId) return Promise.reject(new Error('No SharePoint item id — nothing to replace.'))
-  // No SIM branch that fabricates success: this button's whole claim is that a real file was
-  // replaced, and a demo build reporting "✓ Saved to SharePoint" for a write that never left
-  // the browser is the one lie a viewer would act on.
-  if (SIM) return Promise.reject(new Error('SIM build — no SharePoint tenant to write to.'))
-  const fd = new FormData()
-  fd.append('scan_id', scanId || '')
-  fd.append('file', file || '')
-  if (driveId) fd.append('drive_id', driveId)
-  fd.append('item_id', itemId)
-  if (score != null) fd.append('score', String(score))
-  fd.append('blob', blob, file || 'remediated')
-  // No Content-Type header: the browser sets multipart/form-data WITH the boundary, and setting
-  // it by hand omits the boundary and the server cannot parse the body.
-  return fetch(`${BASE}/sharepoint/upload`, { method: 'POST', headers: headers(), body: fd }).then(j)
 }
 
 export const explainFinding = (scanId, file, ruleId) => (SIM
@@ -819,6 +846,260 @@ export const listDispositionAudit = (limit = 100) => (SIM
   ? sim([..._simDisp.approvals].slice().reverse())
   : fetch(`${BASE}/disposition/audit?limit=${limit}`, { headers: headers() }).then(j))
 
+// The control plane's estate view. `dept`/`owner` narrow WITHIN the caller's tenant; there is
+// deliberately no tenant parameter, because a caller-settable tenant is not a filter — the
+// server takes it from the request (see api/routes/control.py).
+//
+// The SIM shape is DERIVED from simGetScan's own files rather than from a second synthetic
+// estate. A prettier fake here would be the one place a viewer could catch the demo
+// contradicting itself: Discover and this tab would disagree about how many documents exist,
+// in a product whose entire pitch is that its numbers reconcile.
+export const getEstate = (dept = '', owner = '') => (SIM
+  ? sim((() => {
+      const files = (simGetScan('scan-cur').files || [])
+      const D = (f) => f.department || '(unassigned)'
+      const O = (f) => f.owner || '(unassigned)'
+      const kept = files.filter((f) => (!dept || D(f) === dept) && (!owner || O(f) === owner))
+
+      const byDept = {}
+      for (const f of kept) {
+        const k = D(f)
+        byDept[k] = byDept[k] || { department: k, documents: 0, _owners: new Set(), avg_triage: null }
+        byDept[k].documents += 1
+        byDept[k]._owners.add(O(f))
+      }
+      const departments = Object.values(byDept)
+        .map(({ _owners, ...r }) => ({ ...r, owners: _owners.size }))
+        .sort((a, b) => b.documents - a.documents)
+
+      // Owners are NOT narrowed by the filters: the panel exists to let a reader pick one, and
+      // a list that shrinks to match the current selection cannot be used to change it.
+      const byOwner = {}
+      for (const f of files) {
+        const k = O(f)
+        byOwner[k] = byOwner[k] || { owner: k, documents: 0, _depts: new Set() }
+        byOwner[k].documents += 1
+        byOwner[k]._depts.add(D(f))
+      }
+      const owners = Object.values(byOwner)
+        .map(({ _depts, ...o }) => ({ ...o, departments: _depts.size }))
+        .sort((a, b) => b.documents - a.documents)
+
+      return {
+        tenant: 'demo',
+        departments,
+        owners,
+        documents: departments.reduce((n, r) => n + r.documents, 0),
+        filters: { department: dept || null, owner: owner || null },
+        filtered: Boolean(dept || owner),
+      }
+    })())
+  : fetch(`${BASE}/control/estate?dept=${encodeURIComponent(dept)}&owner=${encodeURIComponent(owner)}`,
+          { headers: headers() }).then(j))
+
+// ── SharePoint (#156, #157) ───────────────────────────────────────────────────
+// Both routes shipped without a client, so site enumeration and server-side write-back existed
+// and could not be invoked by a person. These are those clients.
+//
+// The token rides on `headers()` as X-SP-Token, which the routes read — the SAME header the
+// scan path uses, deliberately: a site the browser can see with one set of scopes is not proof
+// the scan token can read it, and discovering through the path the scan takes is what makes the
+// picker's list honest (api/routes/sharepoint.py says so at length).
+//
+// NO SIM BRANCH, and that is the honest shape rather than an omission. There is no synthetic
+// SharePoint tenant to enumerate, and a fabricated site list would be the one thing a demo
+// viewer could act on and find missing — "Policies (9,870 files)" that does not exist is worse
+// than an empty state that explains itself. In SIM these reject with a message saying so.
+const SP_SIM = () => Promise.reject(new Error(
+  'SIM build — no SharePoint tenant to enumerate. Run against a real backend with a Microsoft '
+  + 'sign-in to list sites.'))
+
+export const listSharePointSites = (q = '') => (SIM
+  ? SP_SIM()
+  : fetch(`${BASE}/sharepoint/sites?q=${encodeURIComponent(q)}`, { headers: headers() }).then(j))
+
+// The site id is compound — `contoso.sharepoint.com,<guid>,<guid>` — which is why the route
+// declares `{site_id:path}`. encodeURIComponent would percent-encode the commas and the server
+// would then look up a site whose id contains "%2C"; the path converter expects them raw.
+export const listSharePointDrives = (siteId) => (SIM
+  ? SP_SIM()
+  : fetch(`${BASE}/sharepoint/sites/${siteId}/drives`, { headers: headers() }).then(j))
+
+// `driveId` is REQUIRED and comes from the SCAN, not from the browser's idea of where the file
+// lives: a Graph item id is unique only within its drive, so writing to the wrong one does not
+// error — it succeeds, into somebody else's library.
+// `itemId` selects the mode the server takes. Absent, the file lands in the mirror folder.
+// Present, the remediated bytes REPLACE that item in place — the original archived first, and a
+// failed archive aborting the write. Both decisions are the server's; this only names the target.
+export const uploadToSharePoint = ({ scanId, file, driveId, itemId, blob, score }) => {
+  // Required for a MIRROR write only. Replacing names an existing item, and an item listed from
+  // OneDrive carries no driveId — the server resolves that to /me/drive, the same convention the
+  // download path uses for the very same items.
+  if (!driveId && !itemId) {
+    return Promise.reject(new Error(
+      'No drive id for this file. A SharePoint item id is only unique within its drive, so the '
+      + 'write target has to be named explicitly — re-scan the site so the item carries it.'))
+  }
+  if (SIM) return SP_SIM()
+  const form = new FormData()
+  form.append('scan_id', scanId || '')
+  form.append('file', file || '')
+  if (driveId) form.append('drive_id', driveId)
+  if (itemId) form.append('item_id', itemId)
+  if (score != null) form.append('score', String(score))
+  form.append('blob', blob, file || 'remediated')
+  // No Content-Type header: the browser sets multipart/form-data WITH the boundary, and setting
+  // it by hand omits the boundary and the server cannot parse the body.
+  return fetch(`${BASE}/sharepoint/upload`, { method: 'POST', headers: headers(), body: form }).then(j)
+}
+
 export const queueHitlVerify = (scanId, file) => (SIM
   ? sim({ queued: 1 })
   : fetch(`${BASE}/hitl/queue/${encodeURIComponent(scanId)}/verify?file=${encodeURIComponent(file)}`, { method: 'POST', headers: headers() }).then(j))
+
+// ── Assess code-set + eligibility (Phase C2, Discover/Assess PRD) ───────────────────
+// The two READ-ONLY previews the Assess scope picker calls before a run starts:
+//   fetchCodeset()          → the Core-17 catalog [{code, name, formats:[...]}] — the selectable
+//                             set the WCAG picker renders as "1.4.3 — Contrast (Minimum)".
+//   fetchEligibility(codes) → {discovered, eligible, by_format, formats, codes:[…]} for the current
+//                             selection, so the picker can show "N files eligible" before running.
+// Neither starts a scan or mutates state, so both are safe to call live as the selection changes.
+//
+// The endpoint wraps the catalog as {codes:[…]}; fetchCodeset unwraps it so callers always get the
+// array. SIM has no backend, so it projects the SAME generated Core-17 tables the rest of the UI
+// reads (SCOPE_UNIVERSE ∩ TRACKED_17) over a small fixed demo inventory — the picker and its count
+// then behave offline exactly as they do against the API, instead of a second hand-typed list.
+const _SIM_CORE17 = SCOPE_UNIVERSE
+  .filter((r) => TRACKED_17.has(r.sc))
+  .map((r) => ({ code: r.sc, name: r.name, formats: [...r.formats].sort() }))
+// A representative discovered estate for the demo count — docx-heavy, the engine's strongest lane.
+const _SIM_INVENTORY = { discovered: 175, by_format: { docx: 92, pdf: 48, pptx: 21, xlsx: 14 } }
+
+export const fetchCodeset = () => (SIM
+  ? sim({ codes: _SIM_CORE17 })
+  : fetch(`${BASE}/assess/codeset`, { headers: headers() }).then(j)
+).then((r) => (Array.isArray(r) ? r : (r?.codes || [])))
+
+const _simEligibility = (codes) => {
+  const sel = (codes && codes.length) ? codes : _SIM_CORE17.map((c) => c.code)
+  const byCode = Object.fromEntries(_SIM_CORE17.map((c) => [c.code, c.formats]))
+  const fmts = new Set()
+  for (const code of sel) for (const f of (byCode[code] || [])) fmts.add(f)
+  const by_format = {}
+  for (const f of [...fmts].sort()) { const n = _SIM_INVENTORY.by_format[f] || 0; if (n > 0) by_format[f] = n }
+  const eligible = Object.values(by_format).reduce((a, b) => a + b, 0)
+  const codes_out = sel.map((code) => {
+    const cf = byCode[code] || []
+    return { code, name: _SIM_CORE17.find((c) => c.code === code)?.name || code, formats: cf,
+             eligible: cf.reduce((a, f) => a + (_SIM_INVENTORY.by_format[f] || 0), 0) }
+  })
+  return { discovered: _SIM_INVENTORY.discovered, eligible, by_format, formats: [...fmts].sort(), codes: codes_out }
+}
+
+export const fetchEligibility = (codes = null) => {
+  const list = (Array.isArray(codes) ? codes : (codes ? String(codes).split(',') : []))
+    .map((c) => String(c).trim()).filter(Boolean)
+  if (SIM) return sim(_simEligibility(list))
+  const q = list.join(',')
+  return fetch(`${BASE}/assess/eligibility${q ? `?codes=${encodeURIComponent(q)}` : ''}`, { headers: headers() }).then(j)
+}
+
+// ── Scope rules (Phase C4d, Discover/Assess PRD §4.4 / AC-09) ────────────────────────
+// Per-file WCAG scope rules: admins target files by folder / owner / department and assign a
+// Core-17 subset, with union / override precedence (see api/scope_resolver.py). The editor UI
+// (ScopeRules.jsx) reads the selector+catalog from /scope/selectors, lists/creates/toggles/deletes
+// rules over /scope/rules, and shows the scope-aware eligible-file count from
+// /assess/eligibility/scoped. Writes are owner-gated server-side; a validation failure is a 400
+// whose `detail` (the resolver's own message) `j` surfaces as the thrown Error — the form renders
+// it inline. SIM has no backend, so it keeps an in-memory rule store that validates the same way
+// the server does, so the demo behaves offline exactly as it does against the API.
+
+// The Core-17 catalog the SIM selector endpoint serves — same generated tables the rest of the UI
+// reads, so the picker shows "1.4.3 — Contrast (Minimum)" identically online and offline.
+const _SIM_SCOPE_SELECTORS = ['folder', 'owner', 'department']
+let _simScopeRules = []          // in-memory rule store for the demo build
+let _simScopeSeq = 0
+const _simAllowedCodes = () => new Set(_SIM_CORE17.map((c) => c.code))
+// Mirror api/scope_resolver.validate_scope_rule so a SIM create surfaces the same inline 400s.
+const _simValidateRule = (r) => {
+  if (!_SIM_SCOPE_SELECTORS.includes(r.selector))
+    throw new Error(`selector must be one of ${JSON.stringify(_SIM_SCOPE_SELECTORS)}, got ${JSON.stringify(r.selector)}`)
+  if (!String(r.value || '').trim()) throw new Error('scope rule value must be non-empty')
+  const codes = Array.isArray(r.codes) ? r.codes : []
+  if (!codes.length) throw new Error('scope rule must select at least one WCAG code')
+  const allowed = _simAllowedCodes()
+  const bad = codes.filter((c) => !allowed.has(c))
+  if (bad.length) throw new Error(`codes not in the allowed Core-17 set: ${JSON.stringify(bad.sort())}`)
+}
+
+// The building blocks the rule editor renders: the allowed selectors + the Core-17 catalog to
+// pick codes from. Read-only, no gate. Shape: {selectors:[...], codes:[{code, name, formats}]}.
+export const fetchScopeSelectors = () => (SIM
+  ? sim({ selectors: [..._SIM_SCOPE_SELECTORS], codes: _SIM_CORE17 })
+  : fetch(`${BASE}/scope/selectors`, { headers: headers() }).then(j))
+
+// All scope rules, priority-desc / name order (the store's ordering, passed through). Read-only.
+export const fetchScopeRules = () => (SIM
+  ? sim({ rules: [..._simScopeRules].sort((a, b) => (b.priority - a.priority) || String(a.name).localeCompare(b.name)) })
+  : fetch(`${BASE}/scope/rules`, { headers: headers() }).then(j)
+).then((r) => (Array.isArray(r) ? r : (r?.rules || [])))
+
+// Create a rule (owner-only). Validates against Core-17 before persisting; a malformed rule is a
+// 400 whose message `j` throws — the form catches and renders it inline. Resolves to the new rule.
+export const createScopeRule = (body) => {
+  if (SIM) {
+    return new Promise((res, rej) => setTimeout(() => {
+      try { _simValidateRule(body) } catch (e) { rej(e); return }
+      const rule = {
+        rule_id: `sim-rule-${++_simScopeSeq}`, name: body.name || '', selector: body.selector,
+        value: body.value, codes: [...(body.codes || [])], priority: Number(body.priority) || 0,
+        is_override: !!body.is_override, enabled: body.enabled !== false,
+        created_at: new Date().toISOString(), created_by: 'demo',
+      }
+      _simScopeRules.push(rule); res(rule)
+    }, 180))
+  }
+  return fetch(`${BASE}/scope/rules`, {
+    method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({
+      name: body.name || '', selector: body.selector, value: body.value,
+      codes: [...(body.codes || [])], priority: Number(body.priority) || 0,
+      is_override: !!body.is_override, enabled: body.enabled !== false,
+    }),
+  }).then(j)
+}
+
+// Enable / disable one rule (owner-only). 404 if it does not exist. Resolves to the updated rule.
+export const setScopeRuleEnabled = (id, enabled) => {
+  if (SIM) {
+    return sim((() => { const r = _simScopeRules.find((x) => x.rule_id === id); if (r) r.enabled = !!enabled; return r || { rule_id: id, enabled: !!enabled } })())
+  }
+  return fetch(`${BASE}/scope/rules/${encodeURIComponent(id)}`, {
+    method: 'PATCH', headers: headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ enabled: !!enabled }),
+  }).then(j)
+}
+
+// Delete one rule (owner-only). 404 if it does not exist.
+export const deleteScopeRule = (id) => {
+  if (SIM) { _simScopeRules = _simScopeRules.filter((x) => x.rule_id !== id); return sim({ deleted: id }) }
+  return fetch(`${BASE}/scope/rules/${encodeURIComponent(id)}`, { method: 'DELETE', headers: headers() }).then(j)
+}
+
+// Scope-aware eligibility: how many discovered files are eligible once enabled scope rules apply,
+// per file. Shape: {discovered, eligible, by_format, rules_applied}. Read-only; zeros when there is
+// no discovery run yet. SIM projects the demo inventory and counts how many rules would reach a file.
+export const fetchScopedEligibility = (codes = null) => {
+  const list = (Array.isArray(codes) ? codes : (codes ? String(codes).split(',') : []))
+    .map((c) => String(c).trim()).filter(Boolean)
+  if (SIM) {
+    const base = _simEligibility(list)
+    const enabled = _simScopeRules.filter((r) => r.enabled)
+    return sim({
+      discovered: base.discovered, eligible: base.eligible, by_format: base.by_format,
+      rules_applied: enabled.length,
+    })
+  }
+  const q = list.join(',')
+  return fetch(`${BASE}/assess/eligibility/scoped${q ? `?codes=${encodeURIComponent(q)}` : ''}`, { headers: headers() }).then(j)
+}

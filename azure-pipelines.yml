@@ -185,19 +185,3 @@ steps:
   - script: npx vite build
     workingDirectory: frontend
     displayName: Frontend build
-
-  # frontend-v2/ — the redesign fork (#139). Mirrors the three steps above, because the header
-  # invariant is that this file and .github/workflows/ci.yml cover the same ground; ci.yml does
-  # this with a job matrix, which this file's flat script style has no equivalent for. Spelled
-  # out rather than skipped: a fork with no gate is how a second UI rots while looking healthy.
-  - script: npm ci --no-audit --no-fund
-    workingDirectory: frontend-v2
-    displayName: Install frontend-v2 dependencies
-
-  - script: npx vitest run
-    workingDirectory: frontend-v2
-    displayName: frontend-v2 unit tests (redesign fork)
-
-  - script: npx vite build
-    workingDirectory: frontend-v2
-    displayName: frontend-v2 build

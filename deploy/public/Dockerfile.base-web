@@ -1,6 +1,6 @@
-# acp SPA BASE — node_modules only, keyed on frontend-v2/package-lock.json.
+# acp SPA BASE — node_modules only, keyed on frontend/package-lock.json.
 #
-# frontend-v2, matching Dockerfile and redeploy.sh's WEB_HASH. All three must name the SAME
+# frontend/, matching Dockerfile and redeploy.sh's WEB_HASH. All three must name the SAME
 # tree or the failure is silent rather than loud: the app image's `[ -d node_modules ] || npm
 # install` guard tests only that the directory EXISTS, so a base built from one lockfile would
 # satisfy it for a source tree with different dependencies and the install would be skipped.
@@ -10,7 +10,7 @@
 # do this with a cache flag.
 FROM mirror.gcr.io/library/node:20-slim
 WORKDIR /web
-COPY frontend-v2/package.json frontend-v2/package-lock.json ./
+COPY frontend/package.json frontend/package-lock.json ./
 # npm install instead of npm ci: avoids lockfile/npm-version mismatch between
 # local macOS npm and the container's npm when optional peer deps (esbuild) resolve
 # to different minor versions across npm releases.

@@ -34,6 +34,51 @@ export function ineligibleReason(f, { triage = {}, hasInscopeSelections = false,
 
 export const remediableFiles = (files, opts) => (files || []).filter((f) => !ineligibleReason(f, opts))
 
+// ── the per-document scope, as a thing other screens can ask about ────────────────────────────
+//
+// Marking ONE document in scope excludes every unmarked one — that is what `ineligibleReason`'s
+// `hasInscopeSelections` branch does. It is the second filter in this product, alongside the
+// criterion × format `scan_scope`, and until now it lived entirely inside Remediate: the
+// predicate was written out by hand in three places there, and Publish — the screen that
+// produces the compliance record — had no idea it existed.
+//
+// So an operator could mark 2 of 258 documents, remediate those two, and read a conformance
+// report whose every number is about 258. "Certified" against an unstated document scope is the
+// same unverifiable claim as certified against an unstated criterion scope, which is what
+// ScopeBanner was built for.
+//
+// One definition here, used by both screens, for the reason `_rule_outcome` is one gate: two
+// copies of a filter are two chances for the screen and the button to disagree.
+
+// Is a per-document restriction in force at all? Deliberately over ALL triage values rather than
+// over the current file list — that is exactly what the eligibility gate tests, and a statement
+// derived from a narrower question could report "no restriction" while the gate excludes
+// everything.
+export const hasDocumentSelection = (triage) =>
+  Object.values(triage || {}).some((v) => v === 'inscope')
+
+// null when nothing is restricted, so callers can render nothing without a special case.
+export function documentSelection(files, triage = {}) {
+  if (!hasDocumentSelection(triage)) return null
+  const list = files || []
+  const marked = list.filter((f) => triage[f.file] === 'inscope').length
+  return { marked, total: list.length, excluded: list.length - marked }
+}
+
+// The sentence, so Remediate and Publish cannot word the same fact differently.
+export function documentScopeSentence(sel) {
+  if (!sel) return null
+  if (sel.marked === 0) {
+    // The restriction is in force and nothing in THIS scan satisfies it — marks left over from a
+    // different set of documents. Worth its own wording: "0 of 258 in scope" reads like a
+    // starting state rather than a filter that will remediate nothing.
+    return `A document selection is active but none of these ${sel.total.toLocaleString()} `
+      + 'documents are marked in scope, so nothing here will be remediated.'
+  }
+  return `${sel.marked.toLocaleString()} of ${sel.total.toLocaleString()} documents marked in `
+    + `scope — the other ${sel.excluded.toLocaleString()} are not remediated.`
+}
+
 // What the scope panel must SAY, derived from the same eligibility test the button acts on.
 //
 // The panel used to show three chips — "N in scope · N N/A · N deferred" — each counting only

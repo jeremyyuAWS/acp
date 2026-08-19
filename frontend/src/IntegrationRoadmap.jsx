@@ -70,34 +70,34 @@ const PHASES = [
   // ── SharePoint ───────────────────────────────────────────────────────────────
   {
     id: 'SP-1', provider: SP, label: 'Auth & File Discovery', effort: '1–2 wk',
-    desc: 'Azure AD app registration + MSAL.js to enumerate SharePoint document libraries.',
+    desc: 'MSAL sign-in enumerates SharePoint sites and every document library — shipped; per-tenant app registration is the remaining setup.',
     items: [
       { text: 'Azure AD app registration (single-tenant or multi-tenant)', status: 'partial' },
-      { text: 'Microsoft Identity Platform (MSAL.js) sign-in with on-behalf-of flow', status: 'todo' },
-      { text: 'Graph API scopes: Files.Read, Sites.Read.All, User.Read', status: 'todo' },
-      { text: 'SharePoint site enumeration (Graph /sites?search=*)', status: 'todo' },
-      { text: 'Document library listing (Graph /drives per site)', status: 'todo' },
-      { text: 'File metadata sync: name, author, modified, content type, compliance label', status: 'todo' },
+      { text: 'Microsoft Identity Platform (MSAL.js) sign-in with on-behalf-of flow', status: 'done' },
+      { text: 'Graph API scopes (read-only): User.Read, Files.Read.All, Sites.Read.All', status: 'done' },
+      { text: 'SharePoint site enumeration (Graph /sites?search=*)', status: 'done' },
+      { text: 'Document library listing (Graph /drives per site — all libraries, not just default)', status: 'done' },
+      { text: 'File metadata sync: name, author, modified, content type, compliance label', status: 'partial' },
       { text: 'On-premises SharePoint routing (SPO vs. on-prem gateway)', status: 'todo' },
     ],
   },
   {
     id: 'SP-2', provider: SP, label: 'File Processing', effort: '2–3 wk',
-    desc: 'Download files via Microsoft Graph and feed the existing scan pipeline.',
+    desc: 'Download files via Microsoft Graph and feed the existing scan pipeline — shipped and unit-tested.',
     items: [
-      { text: 'SharePoint file download (Graph /drives/{id}/items/{id}/content)', status: 'todo' },
+      { text: 'SharePoint file download (Graph /drives/{id}/items/{id}/content)', status: 'done' },
       { text: 'Large file handling: chunked download for files >4 MB (range requests)', status: 'todo' },
       { text: 'SharePoint Search API integration (find files by type / date range)', status: 'todo' },
       { text: 'In-browser scan pipeline (shared with GDrive — same engines)', status: 'done' },
-      { text: 'Result persistence (shared Postgres/Firestore backend with GDrive results)', status: 'todo' },
+      { text: 'Result persistence (shared Postgres backend with GDrive results)', status: 'done' },
     ],
   },
   {
     id: 'SP-3', provider: SP, label: 'Write-Back & Remediation', effort: '2–3 wk',
-    desc: 'Upload remediated files back to SharePoint preserving version history.',
+    desc: 'Upload remediated files back to SharePoint (chunked upload sessions for >4 MB) and archive the original — shipped and unit-tested.',
     items: [
-      { text: 'Upload remediated file (Graph PUT /driveItem/content)', status: 'todo' },
-      { text: 'SharePoint versioning: preserve original as prior version, not overwrite', status: 'todo' },
+      { text: 'Upload remediated file (Graph PUT /driveItem/content, chunked >4 MB)', status: 'done' },
+      { text: 'SharePoint versioning: preserve original as prior version, not overwrite', status: 'done' },
       { text: 'Metadata update: write compliance status to SharePoint list column', status: 'todo' },
       { text: 'Checkout / check-in workflow (Graph checkout + upload + checkin)', status: 'todo' },
       { text: 'Document Set support (multi-file compliance packages)', status: 'todo' },
@@ -134,7 +134,7 @@ const PHASES = [
     desc: 'SSO, RBAC, audit log, data residency — what enterprise procurement checklists require.',
     items: [
       { text: 'SSO / SAML 2.0 integration (Okta, Azure AD, Google Workspace IdP)', status: 'todo' },
-      { text: 'Role-based access control: enforce the privilege matrix from Settings → Permissions', status: 'todo' },
+      { text: 'Role-based access control: enforce the privilege matrix the platform owner assigns', status: 'todo' },
       { text: 'Immutable audit log: who scanned what, when, result hash (Postgres append-only table)', status: 'todo' },
       { text: 'Data residency controls: EU (GCP europe-west1 / Azure North Europe) vs. US', status: 'todo' },
       { text: 'GDPR / data retention policy: auto-purge results older than N days', status: 'todo' },
@@ -145,11 +145,21 @@ const PHASES = [
   },
 ]
 
-const SUMMARY = {
-  google: { total: 23, done: 1, weeks: '7–11' },
-  msft:   { total: 21, done: 1, weeks: '7–11' },
-  shared: { total: 16, done: 0, weeks: '6–8' },
-}
+// total/done are DERIVED from the phase items above so the header can never drift from the
+// statuses beside it — which is exactly what happened: both providers sat hardcoded at done:1
+// while their items said otherwise (SharePoint had shipped nine, Google most of its list). Only
+// the week estimate is by hand, because remaining effort is a judgement, not a count.
+const WEEKS = { google: '1–3', msft: '3–6', shared: '6–8' }
+const SUMMARY = Object.fromEntries(
+  Object.keys(PROVIDER_META).map((prov) => {
+    const items = PHASES.filter((p) => p.provider === prov).flatMap((p) => p.items)
+    return [prov, {
+      total: items.length,
+      done: items.filter((i) => i.status === 'done').length,
+      weeks: WEEKS[prov],
+    }]
+  }),
+)
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function IntegrationRoadmap() {

@@ -6,6 +6,10 @@
   --line: #ece8ee;
   --bg: #faf8fb;
   --card: #ffffff;
+  /* Opaque surface token used by sticky table headers/columns and card backgrounds. Aliased to
+     --card so it is always opaque (an undefined --surface resolves to transparent, which let
+     scrolling rows bleed through the sticky scope-matrix header). */
+  --surface: var(--card);
 }
 * { box-sizing: border-box; }
 
@@ -372,12 +376,9 @@ input:focus-visible, [role="tab"]:focus-visible {
 .remcta-label { font-size: 13px; color: var(--muted); flex: 1 1 auto; min-width: 0; }
 
 /* Onboarding 3-step strip */
-.onboarding-steps { display: flex; gap: 0; margin: 20px 0 24px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--card); }
-.onboarding-step { flex: 1; padding: 16px 18px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
-.onboarding-step:last-child { border-right: none; }
-.onboarding-step-n { width: 26px; height: 26px; border-radius: 50%; background: var(--plum); color: #fff; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.onboarding-step-title { font-size: 13.5px; font-weight: 600; color: var(--ink); }
-.onboarding-step-desc { font-size: 12px; color: var(--muted); line-height: 1.4; }
+/* The three Discover/Assess/Remediate boxes are gone — the nav named those stages directly
+   above them, and the space is now the scan configurator (ScanSetup). The numbered-circle
+   language survives as .setupstep-n, which is the same visual idea doing real work. */
 .vh { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 /* not-yet-live tabs */
@@ -505,6 +506,55 @@ input:focus-visible, [role="tab"]:focus-visible {
 .emptytitle { margin: 14px 0 6px; font-size: 18px; font-weight: 600; }
 .emptysub { max-width: 460px; margin: 0 auto 20px; line-height: 1.5; }
 .emptyactions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+
+/* ── Pre-scan configurator ─────────────────────────────────────────────────────────────────
+   Left-aligned inside .empty, which is centred for a one-line message and wrong for a form. */
+.scansetup { text-align: left; max-width: 720px; margin: 0 auto; }
+.setuptitle { margin: 0 0 4px; font-size: 17px; color: var(--ink); }
+.setupsub { font-size: 13px; margin: 0 0 18px; line-height: 1.5; }
+.setupstep { padding: 14px 0; border-top: 1px solid var(--line); }
+.setupstep:first-of-type { border-top: none; padding-top: 0; }
+.setupstep-h { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; color: var(--ink); margin-bottom: 10px; }
+.setupstep-n { width: 22px; height: 22px; border-radius: 50%; background: var(--plum); color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.setupchips { display: flex; gap: 8px; flex-wrap: wrap; }
+.setupchip { font-size: 12.5px; padding: 6px 12px; border-radius: 20px; border: 1px solid var(--line); background: var(--surface); color: inherit; cursor: pointer; font: inherit; }
+.setupchip.on { background: color-mix(in srgb, var(--plum) 12%, transparent); border-color: color-mix(in srgb, var(--plum) 45%, transparent); color: var(--plum); font-weight: 600; }
+.setupcount { font-size: 12px; margin-top: 8px; }
+.setupgroup { border: 1px solid var(--line); border-radius: 10px; margin-top: 8px; background: var(--surface); }
+.setupgroup > summary { cursor: pointer; padding: 9px 12px; font-size: 13px; display: flex; align-items: center; gap: 8px; list-style: revert; }
+.setupcatbox { width: 15px; height: 15px; cursor: pointer; flex-shrink: 0; }
+.setuprow { display: flex; align-items: center; gap: 9px; padding: 6px 12px 6px 26px; border-top: 1px solid var(--line); font-size: 12.5px; cursor: pointer; }
+.setuprow-sc { flex: 1; min-width: 0; }
+.setuprow-f { font-size: 11px; white-space: nowrap; }
+.setuplane { font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
+.setupsummary { margin: 16px 0 14px; padding: 10px 13px; border-radius: 9px; background: color-mix(in srgb, var(--plum) 7%, transparent); border: 1px solid color-mix(in srgb, var(--plum) 22%, transparent); font-size: 12.5px; color: var(--ink); }
+.setupmsg { font-size: 12.5px; margin-top: 10px; text-align: center; }
+.setuphint { font-weight: 400; font-size: 12px; }
+.setupdesc { font-size: 12px; margin: 8px 0 0; line-height: 1.5; }
+.setupcustom { margin-top: 10px; }
+.setupbulk { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.setupbulk-sel { display: flex; gap: 12px; }
+.setuplink { border: none; background: none; padding: 0; font: inherit; font-size: 12px; color: var(--plum); cursor: pointer; text-decoration: underline; }
+
+/* ── Assess-time scope picker (AssessScope.jsx) ────────────────────────────────────────────── */
+.assessscope { margin-bottom: 16px; }
+.assessscope-codes { border: 1px solid var(--line); border-radius: 10px; margin-top: 6px; background: var(--surface); max-height: 320px; overflow-y: auto; }
+.assessscope-code:first-child { border-top: none; }
+.assessscope-elig { margin-top: 4px; }
+.assessscope-elign { font-size: 15px; color: var(--ink); }
+.assessscope-elign b { font-size: 22px; color: var(--plum); }
+.assessscope-eligfmts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.assessscope-eligfmt { font-size: 12px; padding: 3px 10px; border-radius: 20px; border: 1px solid var(--line); color: var(--muted); }
+.assessscope-eligfmt.on { border-color: color-mix(in srgb, var(--plum) 45%, transparent); color: var(--plum); background: color-mix(in srgb, var(--plum) 8%, transparent); }
+.assessscopestep > summary { cursor: pointer; }
+.setupfilter { display: flex; gap: 6px; flex-wrap: wrap; }
+.setupfchip { font-size: 11.5px; padding: 3px 9px; border-radius: 20px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); cursor: pointer; font: inherit; }
+.setupfchip.on { font-weight: 600; color: var(--ink); border-color: color-mix(in srgb, var(--plum) 45%, transparent); }
+.setuprun { margin-top: 12px; font-size: 12.5px; }
+.setupcount-sub { margin-top: 3px; }
+.setupsummary-grid { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 6px; }
+.setupsummary-grid > span { white-space: nowrap; }
+.setupsummary-grid .muted { margin-right: 5px; }
 .loadingbox { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); font-size: 14px; padding: 60px 0; }
 
 /* word cloud (top WCAG violations) */
@@ -802,6 +852,13 @@ input:focus-visible, [role="tab"]:focus-visible {
 .ratcard b { font-size: 22px; font-weight: 700; line-height: 1.1; }
 .ratcard .muted { font-size: 11px; }
 .linklike { background: none; border: none; padding: 0; color: var(--plum); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
+
+/* Document Location view filter (Discover.jsx) */
+.doclocbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; }
+.doclocbar-lbl { font-size: 12px; font-weight: 600; }
+.doclocbar select, .doclocbar input { font: inherit; font-size: 12.5px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: inherit; }
+.doclocbar input { min-width: 180px; }
+.doclocbar-count { font-size: 12px; }
 
 /* --- documents-to-remediate list (Remediate) --- */
 .remlist { display: flex; flex-direction: column; max-height: 420px; overflow-y: auto; }
@@ -1346,10 +1403,36 @@ input:focus-visible, [role="tab"]:focus-visible {
 .srccard-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
 .srccard-badge { display: inline-flex; align-items: center; gap: 5px; color: #3B6D11; font-weight: 500; }
 .srccard-err { font-size: 12px; color: #A32D2D; margin-top: 6px; }
-.srccard-inv { font-size: 12px; margin-top: 4px; }
 .srccard-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .srccard-connect { display: inline-flex; align-items: center; gap: 7px; padding: 9px 18px;
   font-size: 13px; font-weight: 500; border-radius: 10px; white-space: nowrap; cursor: pointer; }
+
+/* Sources page — section headings, health state, connection details, overflow, count line */
+.intsec-head { font-size: 11px; font-weight: 700; letter-spacing: .06em; margin: 4px 0 10px; }
+.srccard-count { font-weight: 500; color: var(--fg, inherit); }
+.srccard-health { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600;
+  padding: 2px 10px; border-radius: 999px; }
+.srccard-health-sub { font-size: 12px; margin-top: 4px; }
+.srccard-inv { font-size: 12px; margin-top: 4px; }
+.srccard-conn { margin-top: 8px; font-size: 12px; }
+.srccard-conn > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.srccard-ovf { position: relative; }
+.srccard-ovf > summary { list-style: none; cursor: pointer; border: 1px solid var(--line); border-radius: 8px;
+  padding: 4px 9px; font-weight: 700; color: var(--muted); user-select: none; }
+.srccard-ovf > summary::-webkit-details-marker { display: none; }
+.srccard-ovf-menu { position: absolute; right: 0; z-index: 5; margin-top: 4px; background: var(--card);
+  border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,.18);
+  display: flex; flex-direction: column; min-width: 130px; overflow: hidden; }
+.srccard-ovf-menu > button { text-align: left; background: none; border: none; padding: 8px 12px;
+  font: inherit; cursor: pointer; color: inherit; }
+.srccard-ovf-menu > button:hover { background: var(--line); }
+.intsoon-line { font-size: 12px; margin-top: 12px; }
+
+/* New-scan review modal — section blocks */
+.scanmodal-sec { border-top: 1px solid var(--line); padding: 12px 0; }
+.scanmodal-sec:first-of-type { border-top: none; padding-top: 4px; }
+.scanmodal-head { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+.scanmodal-est { font-size: 12px; margin: 6px 0 10px; }
 
 /* coming-soon chips */
 .intsoon { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -1796,11 +1879,97 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
   padding: 0 7px; border-radius: 999px; background: #854F0B; color: #fff; font-size: 13px; font-weight: 700; vertical-align: middle; }
 .rem-review-panel { border-color: #E6C461; box-shadow: 0 0 0 1px #F3E2B4 inset; }
 
+/* Scope banner (ScopeBanner) — what the numbers below it are counting.
+   Quiet by default and louder only when the scan itself was narrowed: a caveat that shouts
+   every time trains a reader to skip it, and this one has to still be read on the visit where
+   it matters. Never hidden when the scope is wide, though — an absent caveat reads as
+   "everything", which is the failure mode scanScope.js was written for. */
+.scopebanner { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin: 0 0 12px; padding: 7px 12px; font-size: 12.5px; line-height: 1.5;
+  background: #F5F7FA; border: 1px solid var(--line, #E3E6EC); border-left: 3px solid #9AA6B8;
+  border-radius: 6px; color: var(--ink, #202124); }
+.scopebanner-lead { font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase;
+  font-weight: 700; color: var(--muted, #5F5E5A); flex: none; }
+.scopebanner-note { flex: 1 1 100%; color: var(--muted, #5F5E5A); font-size: 11.5px; }
+/* A narrowed SCAN is the case where the total genuinely does not describe the estate. */
+.scopebanner-narrow { background: #FBF4E6; border-left-color: #C8922B; }
+
+/* Per-rule "what we check" detail, inline in the criterion table (RuleDetail).
+   Deliberately quiet: the table is a scoreboard first, and this is the answer to a question the
+   reader has to ask before it earns space. Closed by default; the summary reads as a link, not
+   as another column of data competing with the pass/fail bars. */
+.ruledetail { display: inline-block; margin-left: 8px; }
+.ruledetail > summary { cursor: pointer; font-size: 11.5px; color: #1F5FA8; list-style: none; }
+.ruledetail > summary::-webkit-details-marker { display: none; }
+.ruledetail > summary::marker { content: ""; }
+.ruledetail > summary:hover { text-decoration: underline; }
+.ruledetail > summary:focus-visible { outline: 2px solid #0b57d0; outline-offset: 2px; border-radius: 3px; }
+.ruledetail[open] > summary { font-weight: 600; }
+.rd-rule { margin: 8px 0 0; padding: 8px 10px; background: #F7F8FA; border: 1px solid var(--line, #E3E6EC);
+  border-radius: 6px; }
+.rd-hd { font-size: 12px; margin-bottom: 4px; }
+.rd-checks, .rd-fix { margin: 4px 0 0; font-size: 12px; line-height: 1.5; }
+/* The fix line is the one that may legitimately say "not documented yet". Kept visually equal to
+   the assess line rather than dimmed away, so the gap is admitted rather than hidden. */
+.rd-fix b { color: var(--navy, #1e2a4a); }
+
+/* Collapsible remediation sections (RemSection). The summary has to READ as the panel heading
+   it replaces, or collapsing the page costs it its scan structure -- so the h2 keeps its own
+   size and weight and the row simply becomes clickable.
+
+   list-style:none + ::marker on Safari: the default triangle sits outside the flex row and
+   pushes the heading off its baseline. Drawn as a rotating chevron instead, which also gives a
+   direction the default marker does not have at a glance. */
+.rem-sec > summary.rem-sec-sum { display: flex; align-items: center; gap: 8px; cursor: pointer;
+  list-style: none; padding: 0; margin: 0; }
+.rem-sec > summary.rem-sec-sum::-webkit-details-marker { display: none; }
+.rem-sec > summary.rem-sec-sum::marker { content: ""; }
+.rem-sec > summary.rem-sec-sum::before { content: "\25B8"; color: var(--muted, #5F5E5A); font-weight: 700;
+  flex: none; transition: transform .15s ease; }
+.rem-sec[open] > summary.rem-sec-sum::before { transform: rotate(90deg); }
+.rem-sec .rem-sec-title { margin: 0; font-size: inherit; }
+.rem-sec h2.rem-sec-title { font-size: 1.05rem; }
+.rem-sec .rem-sec-hint { font-weight: 400; }
+.rem-sec[open] .rem-sec-body { margin-top: 10px; }
+/* Focus must be visible on the whole row, not just the text -- the summary IS the control. */
+.rem-sec > summary.rem-sec-sum:focus-visible { outline: 2px solid #0b57d0; outline-offset: 2px;
+  border-radius: 4px; }
+@media (prefers-reduced-motion: reduce) {
+  .rem-sec > summary.rem-sec-sum::before { transition: none; }
+}
+
 /* The review list — the container the AI Work Inbox renders its EvidenceCards into. The
    .reviewcard / .autobadge / .whyreview-* rules that used to follow here styled Remediate's
    ReviewItemCard, WhyReview and ReviewComparison, all deleted as unreachable. `.diffbox` and
    `.difftag` are NOT part of that: six components still emit them. */
 .reviewlist { display: flex; flex-direction: column; gap: 10px; }
+
+/* AI Work Inbox navigation — search + collapse-all toolbar, and the collapsible per-card wrapper.
+   The card itself is unchanged; .revcard is a <details> shell around it so a reviewer can read the
+   queue as a list of headers and open only what they're working. */
+.revtoolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.revsearch { flex: 1 1 260px; min-width: 180px; padding: 7px 11px; font: inherit; font-size: 13.5px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--card, #fff); color: var(--ink); }
+.revsearch:focus { outline: 2px solid var(--plum); outline-offset: 1px; border-color: var(--plum); }
+.revtoolbar-count { font-size: 12.5px; flex: 0 0 auto; }
+.revcollapse-all { flex: 0 0 auto; background: none; border: 1px solid var(--line); border-radius: 8px;
+  padding: 7px 12px; font: inherit; font-size: 13px; font-weight: 600; color: var(--ink); cursor: pointer; }
+.revcollapse-all:hover:not(:disabled) { background: var(--bg, #faf8fb); }
+.revcollapse-all:disabled { opacity: 0.5; cursor: default; }
+
+.revcard { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--card, #fff); }
+.revcard > .revcard-sum { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer;
+  font-size: 13.5px; list-style: revert; user-select: none; }
+.revcard > .revcard-sum:hover { background: var(--bg, #faf8fb); }
+.revcard[open] > .revcard-sum { border-bottom: 1px solid var(--line); }
+.revcard-sum-file { font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.revcard-sum-rule { flex: 1 1 auto; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.revcard-sev { flex: 0 0 auto; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+  padding: 2px 8px; border-radius: 999px; }
+.revcard-sev.sev-critical { background: #FDECEC; color: #8A1F1F; }
+.revcard-sev.sev-serious { background: #FCEEDD; color: #8A4B0F; }
+.revcard-sev.sev-moderate { background: #FBF4D8; color: #6B5A11; }
+.revcard-sev.sev-minor { background: #EEF3EA; color: #3B5A22; }
 
 /* Verification (§8) */
 .verify-run { display: flex; align-items: center; gap: 12px; font-size: 13.5px; flex-wrap: wrap; }
@@ -2131,3 +2300,37 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 /* "What we did NOT check automatically" (ADR 0026 Epic 1) — the honest boundary list. */
 .notchecked { list-style: none; margin: 8px 0 0; padding: 0; }
 .notchecked li { padding: 4px 0 4px 10px; border-left: 2px solid var(--line); font-size: 12.5px; line-height: 1.45; }
+
+/* Scope-rule editor (Discover/Assess PRD §4.4 / AC-09, Phase C4d). */
+.scoperules-form { display: flex; flex-direction: column; gap: 12px; }
+.scoperules-frow { display: flex; flex-wrap: wrap; gap: 12px; }
+.scoperules-frow-opts { align-items: center; }
+.scoperules-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 180px; }
+.scoperules-field-sm { flex: 0 0 110px; }
+.scoperules-flabel { font-size: 12px; font-weight: 600; }
+.scoperules-field input, .scoperules-field select { padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+.scoperules-codes { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 0; }
+.scoperules-codegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 4px 14px; margin-top: 6px; }
+.scoperules-code { display: flex; align-items: baseline; gap: 7px; font-size: 12.5px; line-height: 1.4; }
+.scoperules-check { display: flex; align-items: baseline; gap: 7px; font-size: 12.5px; flex: 1 1 260px; }
+.scoperules-err { background: #FBEAEA; color: #A32D2D; border-radius: 8px; padding: 9px 13px; margin: 0; font-size: 13px; }
+
+.scoperules-list { margin-top: 18px; display: flex; flex-direction: column; gap: 8px; }
+.scoperules-listh { font-size: 13px; }
+.scoperule { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.scoperule.off { opacity: .58; }
+.scoperule-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.scoperule-name { font-size: 13.5px; }
+.scoperule-target { font-size: 13px; }
+.scoperule-target code { background: var(--line); border-radius: 5px; padding: 1px 6px; font-size: 12px; }
+.scoperule-override { font-size: 10px; font-weight: 700; letter-spacing: .04em; color: #854F0B; background: #FAEEDA; border-radius: 5px; padding: 2px 7px; }
+.scoperule-prio { font-size: 11.5px; }
+.scoperule-codes { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.scoperule-codechip { font-size: 11px; background: #E7F0FB; color: #1F5FA8; border-radius: 6px; padding: 2px 8px; white-space: nowrap; }
+.scoperule-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.scoperule-actions button { font-size: 12px; padding: 5px 10px; }
+.scoperule-del { color: #A32D2D; }
+
+.scoperules-elig { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.scoperules-elign { font-size: 14px; }

@@ -96,23 +96,41 @@ describe('AssessRunner names the file it is reading', () => {
   // assessment weighs on the strictest reading. It follows the scope rather than the 20-check
   // document core because the result the progress line leads to is scored over the scope; a line
   // promising 20 ahead of a result over 14 is the mismatch this assertion exists to prevent.
-  it('counts the criteria that actually block at the chosen level', async () => {
+  it('counts the criteria that actually block at the DERIVED level', async () => {
     assessScan.mockResolvedValue({ deferred: false })
     await mount(SCORED)
     await clickText('Assess')
     await settle()
-    expect(text()).toContain('14 criteria in scope')                // AA: the whole agreed scope
+    // The level is no longer picked here — it is DERIVED from the selected scope (deriveLevel over
+    // SCOPE_SCS). This scope contains AA criteria, so the target is AA and all 14 members block.
+    expect(text()).toContain('14 criteria in scope')
+    // No A/AA/AAA picker any more: the blocking level follows the scope, not a second control.
+    expect(container.querySelector('.lvlseg')).toBeNull()
+    expect(container.querySelector('[role="radiogroup"]')).toBeNull()
+  })
+})
 
-    // The level chips are disabled mid-run, so pick the level on a fresh mount rather than
-    // trying to switch under a running assessment. Clear the per-scan sessionStorage too:
-    // the component restores the saved phase AND level, so without this the remount comes
-    // back up already running at AA and the level click lands on a disabled chip.
-    await unmountAll()
-    sessionStorage.clear()
+describe('AssessRunner — ignore archival/deletion filter (Deva #6)', () => {
+  const toggle = () => container.querySelector('input[aria-label="Ignore files flagged for archival or deletion"]')
+
+  it('is checked by default and assesses with archival/deletion IGNORED (override off)', async () => {
+    assessScan.mockResolvedValue({ deferred: false })
     await mount(SCORED)
-    await clickText('minimum')                                     // level A
+    expect(toggle().checked).toBe(true)
     await clickText('Assess')
     await settle()
-    expect(text()).toContain('10 criteria in scope')                // A: the four AA members drop
+    expect(assessScan).toHaveBeenCalledWith('s1', 'AA', false)
+    expect(realErrors()).toEqual([])
+  })
+
+  it('unchecking it sends the include-flagged override so those files are assessed too', async () => {
+    assessScan.mockResolvedValue({ deferred: false })
+    await mount(SCORED)
+    await act(async () => { toggle().dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(toggle().checked).toBe(false)
+    await clickText('Assess')
+    await settle()
+    expect(assessScan).toHaveBeenCalledWith('s1', 'AA', true)
+    expect(realErrors()).toEqual([])
   })
 })

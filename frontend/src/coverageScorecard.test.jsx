@@ -109,4 +109,25 @@ describe('CoverageScorecard renders the two-axis capability view (ADR 0023)', ()
     expect(txt).toContain('not meant to match')
     expect(txt).not.toMatch(/Deva/)                       // customer name never reaches the UI
   })
+
+  // Coverage-gap warning (assessmentGaps). Folding gap→⚪ and at→🔴 hid whether a cell was a
+  // genuine "no method" hole; this states it per format, honestly, in both directions.
+  it('a document-only estate states there are NO coverage gaps rather than staying silent', async () => {
+    await render([{ file: 'a.docx', type: 'docx' }])
+    const txt = container.textContent
+    expect(txt).toContain('No coverage gaps')
+    expect(txt).not.toContain('no assessment method for')   // no per-format warning when there are none
+  })
+
+  it('an .html estate warns that 2.1.1 / 2.1.2 have no assessment method (needs AT)', async () => {
+    await render([{ file: 'page.html', type: 'html' }])
+    const txt = container.textContent
+    expect(txt).toContain('Coverage gaps')
+    expect(txt).toContain('no assessment method for')
+    expect(txt).toContain('.html')
+    expect(txt).toContain('2.1.1')
+    expect(txt).toContain('2.1.2')
+    expect(txt).toContain('2 criteria have')               // the plain-language rollup
+    expect(txt).not.toContain('No coverage gaps')          // the positive message is suppressed when gaps exist
+  })
 })

@@ -38,11 +38,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs" / "rules"
 
-# Both SPAs, listed explicitly — same reasoning as gen_scope_presets.py's OUTS: a glob over
-# `frontend*` would silently adopt any future directory that matched.
+# One SPA since the v2 redesign replaced `frontend/` in place. Still listed explicitly rather
+# than globbed `frontend*` — same reasoning as gen_scope_presets.py's OUTS: a glob would
+# silently adopt any future directory that matched and start writing generated code into it.
 OUTS = (
     ROOT / "frontend" / "src" / "ruleDetails.js",
-    ROOT / "frontend-v2" / "src" / "ruleDetails.js",
 )
 
 sys.path.insert(0, str(ROOT / "api"))

@@ -9,7 +9,9 @@ const src = readFileSync(join(here, 'Transparency.jsx'), 'utf8')
 
 describe('estate "By WCAG criterion" panel — the agreed scope by default, at/below the assessed level', () => {
   it('takes its criteria list from activeScope, never from a literal in this file', () => {
-    expect(src).toMatch(/const criteria = criteriaFor\(showAllCore\)/)
+    // The default is the tracked 17 now, not the agreed 14 — but the GUARD is unchanged in
+    // spirit: both branches come from an imported set, never from a literal typed here.
+    expect(src).toMatch(/const criteria = showAllCore \? criteriaFor\(true\) : TRACKED_17/)
     // The 14 are defined server-side (SCOPE_PRESETS) and reach the SPA through the generated
     // scopePresets.js. A second hand-typed copy on the customer-facing panel is the failure this
     // pins: two lists of the same agreed checklist drift, and nothing here would report it.
@@ -32,7 +34,12 @@ describe('estate "By WCAG criterion" panel — the agreed scope by default, at/b
 
   it('the scope narrowing is one labelled control, not a silent default', () => {
     expect(src).toMatch(/const \[showAllCore, setShowAllCore\] = useState\(false\)/)  // scoped by default
-    expect(src).toMatch(/outOfScopeNote\(outOfScopeFindings\)/)   // …and it says what it is leaving out
+    // …and it says what it is leaving out. The note is built inline now rather than through
+    // outOfScopeNote(), because the hidden set is the UNTRACKED 3 and that helper describes the
+    // 6 outside the agreed scope — a different question. Both facts still render; see the second
+    // paragraph, which reports the agreed scope separately.
+    expect(src).toMatch(/untrackedScs\.length\} of the \{CORE_SCS\.size\}/)
+    expect(src).toMatch(/outOfScopeNote\(0\)/)
     // The note is NOT conditional on the hidden criteria being clean. A criterion that vanishes
     // only when it would have looked bad is worse than one that never vanishes at all.
     expect(src).toMatch(/\{!showAllCore && \(\s*<p className="muted"/)

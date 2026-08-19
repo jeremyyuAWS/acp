@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import ScanSetup from './ScanSetup.jsx'
 import { Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
@@ -12,11 +13,14 @@ import WordCloud from './WordCloud.jsx'
 import Insight from './Insight.jsx'
 import { TraceChip } from './Transparency.jsx'
 import PiiPanel from './PiiPanel.jsx'
-import WhatsChanged from './WhatsChanged.jsx'
 import { scopeChip, scopeSentence, isNarrowScope } from './scanScope.js'
+import ScanScopeChip from './ScanScopeChip.jsx'
+import EstateCoverage from './EstateCoverage.jsx'
 
 // The estate dashboard — doubles as the exportable compliance report.
-export default function Overview({ run, files, trend, trendDates, onGo, scanList = [], onPickScan, me }) {
+export default function Overview({ run, files, trend, trendDates, onGo, scanList = [], onPickScan, me,
+                                   onScan, busy = false, hasDriveToken = false, hasSPToken = false,
+                                   onFileTypeChange }) {
   // Real signed-in org (email domain) — the hardcoded demo org only ever shows in SIM.
   const orgName = SIM ? IDENTITY.org : (me?.email?.split('@')[1]?.replace(/\.[^.]+$/, '') || me?.name || 'your organisation')
   const [on, setOn] = useState(false)
@@ -102,6 +106,23 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   // inventory without analysing it, and a cancelled/interrupted one stops partway, so `n` is
   // the documents we KNOW ABOUT while `analysed` is the documents we know ANYTHING about.
   const analysed = analysedCount(files)
+  // Estate-coverage funnel progress (stages 4-9). Discovery denominators (1-3) come from
+  // run.scope.inventory; these come from the file rows — each a REAL count, never a projection.
+  //   human_review = documents carrying at least one REVIEW-lane finding (ADR 0023: assessed-for-
+  //     review, a person must clear them before they can certify) — the estate's human-review load.
+  //   published    = documents with an actual published record (file_records.published_at), already
+  //     computed above as `publish` and used by the horizontal funnel — it was the one number left
+  //     reading "pending" while sitting one variable away.
+  const humanReview = files.filter((f) =>
+    (f.issues || []).some((i) => String(i.severity || '').toUpperCase() === 'REVIEW')).length
+  const estateProgress = {
+    assessed: analysed,
+    issues: files.filter((f) => (f.issues || []).length).length,
+    remediation_eligible: needFix,
+    remediated: files.filter((f) => f.remediated_at || f.drive_write_url).length,
+    human_review: humanReview,
+    published: publish,
+  }
   // audit-ready is a rate, and a rate needs a denominator that was measured. Over an estate
   // nobody analysed it is not 0% — it is unknown, and printing "0%" asserts that every one of
   // 258 documents was checked and none passed. Both this and the certifiable tile render '—'
@@ -254,6 +275,27 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           <button className="exportbtn alt" onClick={() => openReport(run.id)} title="Backend-generated WCAG compliance report PDF">⤓ Compliance report (PDF)</button>
         )}
       </div>
+      {/* The scan scope, EDITABLE, on the first tab — after a scan as well as before one.
+          EmptyState renders ScanSetup only while `run` is null, so the criteria and file types
+          were reachable exactly once: on a workspace that had never scanned. Every session
+          after the first opened on this dashboard with no way back to the decision that shapes
+          every number on it, and the only remaining editors were two panels inside Settings.
+
+          Collapsed by default, and the same <details> pattern Discover uses to fold Upload in:
+          the primary job of this screen is still to report, so an always-open editor would
+          compete with the metrics for the top of the page. <details> is natively
+          keyboard-operable, so this adds no focus handling of its own.
+
+          Deliberately OUTSIDE reportRef — that node is what the PDF export rasterises, and a
+          collapsed control has no place in an exported compliance record. */}
+      {onScan && (
+        <details className="panel scopeeditor">
+          <summary>Scan scope <span className="muted">· which checks, and which file types</span></summary>
+          <ScanSetup onScan={onScan} busy={busy}
+                     hasDriveToken={hasDriveToken} hasSPToken={hasSPToken}
+                     onFileTypeChange={onFileTypeChange} />
+        </details>
+      )}
       <div ref={reportRef}>
       <div className="metrics">
         <div className="metric"><span>documents</span><b>{n.toLocaleString()}</b></div>
@@ -274,6 +316,11 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           {isNarrowScope(run.scope) ? '⚠ ' : ''}{scopeSentence(run.scope, n)}
         </p>
       )}
+      {/* WHICH CRITERIA this scan covered, from its FROZEN scan_scope (R6 / Phase 3b) — beside the
+          file boundary above, which says which FILES. Both are read from the run, not the live
+          global scope, so an operator who changed the global scope after this scan still sees what
+          THIS scan assessed. Carries the change-scope-&-re-scan affordance and its impact estimate. */}
+      <ScanScopeChip run={run} fileCount={n} onScan={onScan} busy={busy} />
       {/* Say it on screen when the tiles above describe a different set of documents than the
           estate total does — a partly-analysed scan is the case that made every panel look
           like it was contradicting the others. */}
@@ -285,14 +332,19 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         </p>
       )}
 
+      {/* Whole-estate coverage: the three denominators (discovered / assessment-eligible /
+          remediation-eligible) as a funnel + format composition + capability-status split, from the
+          scan's real scope.inventory. Only shown once discovery has inventoried the estate. */}
+      {run.scope?.inventory?.discovered > 0 && (
+        <EstateCoverage report={run} progress={estateProgress} />
+      )}
+
       {ontDocs.length > 0 && (
         <div className="ontovbar">
           <span className="ontovtag">⬆ Business ontology{ontVer ? ` v${ontVer}` : ''} active</span>
           <span className="ontovtext"><b>{ontDocs.length}</b> of {n.toLocaleString()} documents classified by your rules — <b style={{ color: '#1F5FA8' }}>{ontCrit} Critical</b> · <b style={{ color: '#854F0B' }}>{ontHigh} High</b> by business priority</span>
         </div>
       )}
-
-      <WhatsChanged run={run} files={files} scanList={scanList} onPick={setSeg} onGo={onGo} />
 
       {scanList.length > 0 && (
         <section className="panel">

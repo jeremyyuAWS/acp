@@ -1,33 +1,19 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { getConfig } from './api.js'
 import { SIM } from './sim.js'
 import { googleUserInfo } from './googleIdentity.js'
 import SourceDrawer from './SourceDrawer.jsx'
 import FileDrawer from './FileDrawer.jsx'
 import { filesForSource, inventoryFacts, fmtSize } from './sourceOps.js'
-import FolderPicker from './FolderPicker.jsx'
+// Single source of truth for the SharePoint/Graph scopes, so this sign-in path and SharePoint.jsx
+// can never request different permissions than IT consented to (read-only; see that module).
+import { SP_SCOPES } from './sharepointScopes.js'
+import { signInForScopes, MsalNotReady, MsalNotConfigured } from './msalClient.js'
+import { friendlyAuthError } from './authErrors.js'
 
-const AZURE_CLIENT_ID  = import.meta.env.VITE_AZURE_CLIENT_ID  || ''
-const AZURE_TENANT     = import.meta.env.VITE_AZURE_TENANT_ID  || 'common'
+// Azure client/tenant come from /config at runtime now (getSpAuth in sharepointScopes.js), so a
+// deployment is pointed at a tenant with an env var and no rebuild; VITE_AZURE_* is the fallback.
 const GD_SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file'
-const SP_SCOPES = ['Files.Read', 'Files.ReadWrite', 'User.Read']
-
-// iOS-style switch for the scan-time options (PII scan, Durable scan).
-function ScanSwitch({ on, onToggle, label, title }) {
-  return (
-    <button type="button" role="switch" aria-checked={on} aria-label={label} onClick={onToggle} title={title}
-      style={{ display: 'inline-flex', alignItems: 'center', gap: 9, cursor: 'pointer', font: 'inherit',
-               border: '1px solid var(--line)', background: 'var(--surface)', color: 'inherit',
-               borderRadius: 999, padding: '5px 13px 5px 7px' }}>
-      <span aria-hidden="true" style={{ position: 'relative', width: 36, height: 20, borderRadius: 10,
-            background: on ? '#6D28D9' : '#c6c6cf', transition: 'background .15s', flexShrink: 0 }}>
-        <span style={{ position: 'absolute', top: 2, left: on ? 18 : 2, width: 16, height: 16, borderRadius: '50%',
-              background: '#fff', transition: 'left .15s', boxShadow: '0 1px 2px rgba(0,0,0,.35)' }} />
-      </span>
-      <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>{label}</span>
-    </button>
-  )
-}
 
 function GoogleG() {
   return (
@@ -63,6 +49,18 @@ function DriveMark() {
   )
 }
 
+function OneDriveMark() {
+  // Official OneDrive cloud mark (full colour), shown on a white tile like the Drive logo above.
+  return (
+    <svg viewBox="-154.5063 -164.9805 1339.0546 989.883" width="26" height="26" aria-hidden="true">
+      <path fill="#0364B8" d="M622.292 445.338l212.613-203.327C790.741 69.804 615.338-33.996 443.13 10.168a321.9 321.9 0 00-188.92 134.837c3.29-.083 368.082 300.333 368.082 300.333z" />
+      <path fill="#0078D4" d="M392.776 183.283l-.01.035A256.233 256.233 0 00257.5 144.921c-1.104 0-2.189.07-3.29.083C112.063 146.765-1.74 263.424.02 405.567a257.389 257.389 0 0046.244 144.04l318.528-39.894 244.21-196.915z" />
+      <path fill="#1490DF" d="M834.905 242.012c-4.674-.312-9.37-.528-14.123-.528a208.464 208.464 0 00-82.93 17.117l-.006-.022-128.844 54.22 142.041 175.456 253.934 61.728c54.8-101.732 16.752-228.625-84.98-283.424a209.23 209.23 0 00-85.09-24.546z" />
+      <path fill="#28A8EA" d="M46.264 549.607C94.36 618.757 173.27 659.967 257.5 659.922h563.281c76.946.022 147.691-42.202 184.195-109.937L609.001 312.798z" />
+    </svg>
+  )
+}
+
 const Tile = ({ bg, children }) => (
   <span style={{ width: 40, height: 40, borderRadius: 10, background: bg, display: 'inline-flex',
     alignItems: 'center', justifyContent: 'center', color: '#fff', flex: '0 0 auto' }}>
@@ -78,7 +76,7 @@ const G = (d) => (
 
 const LOGO = {
   google_drive: <Tile bg="#fff"><DriveMark /></Tile>,
-  onedrive: <Tile bg="#0364B8">{G('M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.5A3.5 3.5 0 0 1 19 18z')}</Tile>,
+  onedrive: <Tile bg="#fff"><OneDriveMark /></Tile>,
   sharepoint: <Tile bg="#036C70"><b style={{ fontSize: 15 }}>S</b></Tile>,
   confluence: <Tile bg="#1868DB"><b style={{ fontSize: 15 }}>C</b></Tile>,
   box: <Tile bg="#0061D5"><b style={{ fontSize: 12 }}>box</b></Tile>,
@@ -112,6 +110,18 @@ function lastScanLabel(scans, type) {
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
 
+// Most-recent completed scan RUN object for a source (not just its date) — used for the
+// truthful "N in last scan" count line, which reads the run's post-filter `files`.
+function lastCompletedRun(scans, type) {
+  const src = type === 'google_drive' ? 'drive' : type === 'onedrive' ? 'sharepoint' : null
+  if (!src) return null
+  let latest = null
+  for (const s of scans || []) {
+    if (s.source === src && s.completed_at && (!latest || s.completed_at > latest.completed_at)) latest = s
+  }
+  return latest
+}
+
 // Per-source health: this source's own recent scan history (up to its last 5 completed
 // scans) — error rate (files the engine couldn't open/parse) + avg compliance score.
 // A source with a rising error rate usually means a connector/permissions problem, not
@@ -132,27 +142,19 @@ function sourceHealth(scans, type) {
   const status = errRate >= 0.15 ? 'unhealthy' : errRate > 0 ? 'degraded' : 'healthy'
   return { status, errRate, totalErr, totalFiles, avgScore, scansCounted: recent.length }
 }
-const HEALTH_BADGE = {
-  healthy:   ['✓ healthy', '#3B6D11', '#E7F0DC'],
-  degraded:  ['◐ degraded', '#854F0B', '#FAEEDA'],
-  unhealthy: ['⚠ unhealthy', '#A32D2D', '#FCEBEB'],
-}
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function Integrations({ sources, files = [], scans = [], onScan, busy, hasDriveToken, hasSPToken, onConnect,
-                                       deepScan = true, setDeepScan, queuedScan = false, setQueuedScan,
-                                       excludeRemediated = true, setExcludeRemediated,
-                                       incremental = true, setIncremental, scanId = null,
-                                       onOpenAssess = null }) {
+                                       scanId = null, onOpenAssess = null }) {
   const [selSrc,      setSelSrc]      = useState(null)
   const [selFile,     setSelFile]     = useState(null)
-  const [pickerSrc,   setPickerSrc]   = useState(null)
   const [gdConnecting, setGdConnecting] = useState(false)
   const [gdError,      setGdError]      = useState('')
   const [spConnecting, setSpConnecting] = useState(false)
   const [spError,      setSpError]      = useState('')
   const [googleClientId, setGoogleClientId] = useState('')
+  const availRef = useRef(null)
   const gdTokenClientRef = useRef(null)
 
   useEffect(() => {
@@ -166,8 +168,6 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
   // file count and no schedule. That is where `undefined · 0 docs · agent: undefined` in the
   // drawer came from: not an empty estate, a source row nobody joined to the card.
   const spBackend      = sources.find((s) => s.type === 'onedrive' || s.type === 'sharepoint')
-  const connectedCount = (hasDriveToken ? 1 : 0) + (hasSPToken ? 1 : 0)
-  const total          = sources.reduce((a, s) => a + (s.files || 0), 0)
 
   // ── OAuth connect ────────────────────────────────────────────────────────────
 
@@ -198,167 +198,189 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
   }
 
   const connectMicrosoft = async () => {
-    if (!AZURE_CLIENT_ID) { setSpError('VITE_AZURE_CLIENT_ID not set — add it to frontend/.env.'); return }
-    if (!window.msal) { setSpError('MSAL not loaded yet — try again.'); return }
     setSpConnecting(true); setSpError('')
     try {
-      const cfg = {
-        auth: { clientId: AZURE_CLIENT_ID, authority: `https://login.microsoftonline.com/${AZURE_TENANT}`, redirectUri: window.location.origin },
-        cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: false },
-      }
-      const instance = new window.msal.PublicClientApplication(cfg)
-      await instance.initialize()
-      const loginResult  = await instance.loginPopup({ scopes: SP_SCOPES })
-      instance.setActiveAccount(loginResult.account)
-      const tokenResult  = await instance.acquireTokenSilent({ scopes: SP_SCOPES, account: loginResult.account })
-        .catch(() => instance.acquireTokenPopup({ scopes: SP_SCOPES }))
-      sessionStorage.setItem('sp_token', tokenResult.accessToken)
-      sessionStorage.setItem('sp_account', JSON.stringify(loginResult.account))
-      onConnect('microsoft', loginResult.account.username || '', tokenResult.accessToken)
+      // Shared, resilient MSAL client (msalClient.js) — same one the login screen uses, so the two
+      // never race over interaction state, and a stuck `interaction_in_progress` lock self-clears.
+      const { account, accessToken } = await signInForScopes(SP_SCOPES)
+      sessionStorage.setItem('sp_token', accessToken)
+      sessionStorage.setItem('sp_account', JSON.stringify(account))
+      onConnect('microsoft', account.username || '', accessToken)
     } catch (e) {
-      setSpError(e.errorCode === 'user_cancelled' ? 'Sign-in cancelled.' : (e.message || 'Connection failed.'))
+      if (e instanceof MsalNotReady) setSpError('MSAL not loaded yet — try again.')
+      else if (e instanceof MsalNotConfigured) setSpError('SharePoint sign-in isn’t configured for this deployment.')
+      else setSpError(friendlyAuthError(e))
     } finally {
       setSpConnecting(false)
     }
   }
 
   // ── Scan dispatch ────────────────────────────────────────────────────────────
-
-  const handleScan = (srcId) => {
-    if (SIM) { onScan(srcId === '_gdrive' ? 'drive' : srcId); return }
-    if (srcId === 'sp-root') { onScan('sharepoint'); return }
-    // Drive — open folder picker so user can narrow the scan
-    setPickerSrc(driveBackend || { type: 'google_drive', name: 'My Drive', id: 'root' })
-  }
-
-  const handlePickerScan = (folder) => {
-    setPickerSrc(null)
-    onScan('drive', folder)
-  }
+  //
+  // Every "New scan" button here just calls `onScan`, which App wires to `requestScan` — the
+  // universal gate that opens the app-level ScanReviewModal (scope + behavior review) before any
+  // scan runs. This tab used to own that modal; it now shares the one App renders for every entry
+  // point, so Discover / Overview / single-file / browse-panel scans can no longer bypass it.
+  //   • page-level "New scan" → onScan('all')   (every connected source)
+  //   • a card's "New scan"   → onScan('drive' | 'sharepoint')   (that source)
+  // A card's scan arg maps its connector type to the backend source doScan resolves against.
+  const cardScanArg = (src) => (src.type === 'google_drive' ? 'drive' : 'sharepoint')
 
   const canScanAll = SIM || hasDriveToken || hasSPToken
 
+  // The connected connectable sources (Drive / OneDrive) — the ones a scan can actually run against.
+  // Card fields win over the backend row's, so the OneDrive card keeps its id/type/name (the
+  // logo and the scan argument key off `type`) while inheriting user, file count, access and
+  // schedule from the row that actually knows them.
+  const connectedSources = CONNECTABLE.filter((s) => (s.type === 'google_drive' ? hasDriveToken : hasSPToken))
+    .map((s) => {
+      if (s.type === 'google_drive') return hasDriveToken ? (driveBackend || s) : s
+      return spBackend ? { ...spBackend, ...s } : s
+    })
+
+  // One dominant health state per source — never more than one badge (see plan §4).
+  const healthState = (h) => {
+    if (!h) return { key: 'none', label: 'Not yet scanned' }
+    if (h.status === 'healthy') return { key: 'ok', label: 'Healthy' }
+    return { key: 'attn', label: 'Needs attention',
+      sub: `${h.totalErr} file${h.totalErr !== 1 ? 's' : ''} couldn’t be accessed in recent scans` }
+  }
+  const HEALTH_STATE = {
+    ok:   ['#3B6D11', '#E7F0DC'],
+    attn: ['#A32D2D', '#FCEBEB'],
+    none: ['var(--muted)', 'var(--line)'],
+  }
+
   return (
     <>
+      {/* ── Page header ─────────────────────────────────────────────────────── */}
       <div className="estatebar">
         <div>
-          <b>{connectedCount} source{connectedCount !== 1 ? 's' : ''} connected</b>
-          {total > 0 && ` · ${total.toLocaleString()} documents under compliance monitoring`}
-          <div className="muted" style={{ marginTop: 2 }}>
-            connect a source below, then run a scan — the mova Agent classifies and re-scans continuously
+          <b style={{ fontSize: 20 }}>Content Sources</b>
+          <div className="muted" style={{ marginTop: 4 }}>
+            Manage the locations ACP scans and monitors.
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {/* Scan-time options — they configure the NEXT scan, so they live here next
-              to the Scan button (not in the global header). */}
-          {setDeepScan && (
-            <ScanSwitch on={deepScan} onToggle={() => setDeepScan(v => !v)} label="PII scan"
-              title={deepScan
-                ? 'PII scan also looks for sensitive data (SSNs, credit cards, emails) in your documents — a bit slower on large PDF sets. Turn off for a fast, accessibility-only scan.'
-                : 'Off — Fast scan (accessibility only). Turn on to also detect sensitive data (PII).'} />
-          )}
-          {setQueuedScan && (
-            <ScanSwitch on={queuedScan} onToggle={() => setQueuedScan(v => !v)} label="Durable scan"
-              title={queuedScan
-                ? 'Durable scan — runs in the background queue: keeps going if you close the tab AND survives server restarts, with parallel downloads for large libraries (recommended). Turn off for a quick one-off scan in this browser session.'
-                : 'Off — Quick scan in this browser session: starts instantly, streams live per-file progress, best for spot-checking a few files. Turn on for a durable background scan that survives restarts and handles very large libraries.'} />
-          )}
-          {setExcludeRemediated && (
-            <ScanSwitch on={excludeRemediated} onToggle={() => setExcludeRemediated(v => !v)} label="Skip Remediated/"
-              title={excludeRemediated
-                ? 'On — skips the Remediated/ folder ACP writes fixed copies to, so they don’t get re-discovered and flagged as new documents needing attention. Turn off to also audit that folder.'
-                : 'Off — the Remediated/ folder (ACP’s own output) is scanned like any other folder. Turn on to skip it and avoid a re-discovery feedback loop.'} />
-          )}
-          {setIncremental && (
-            <ScanSwitch on={incremental} onToggle={() => setIncremental(v => !v)} label="Incremental scan"
-              title={incremental
-                ? 'On — a file byte-identical to one already scored under the current rubric is copied forward instead of re-analysed (ADR 0011). Turn off to force a fresh re-analysis of every file (e.g. after a manual rubric edit, or if you don’t trust the cache).'
-                : 'Off — Fresh scan: every file is re-downloaded and re-analysed, even ones that haven’t changed. Turn on for the normal, much faster incremental behavior.'} />
-          )}
-          <button disabled={busy || !canScanAll} onClick={() => {
-            if (SIM) { onScan('all'); return }
-            if (hasDriveToken) { handleScan('_gdrive'); return }
-            if (hasSPToken)    { onScan('sharepoint'); return }
-          }}>
-            {busy ? 'scanning…' : 'Scan all sources'}
+          <button type="button" className="ghost small"
+                  onClick={() => availRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+            + Connect source
+          </button>
+          <button disabled={busy || !canScanAll} onClick={() => onScan('all')}>
+            {busy ? 'scanning…' : 'New scan'}
           </button>
         </div>
       </div>
 
-      {/* ── Active sources — horizontal cards ─────────────────────────────── */}
-      <div className="intsources">
-        {CONNECTABLE.map((s) => {
-          const isGdrive     = s.type === 'google_drive'
-          const connected    = isGdrive ? hasDriveToken : hasSPToken
-          const enriched     = isGdrive
-            ? (hasDriveToken ? (driveBackend || s) : s)
-            : (spBackend ? { ...spBackend, ...s } : s)
-          const isConnecting = isGdrive ? gdConnecting : spConnecting
-          const error        = isGdrive ? gdError : spError
-          const desc         = isGdrive
-            ? 'Scan Google Drive files for WCAG accessibility issues'
-            : 'Scan OneDrive & SharePoint for accessibility issues'
-          const lastScan     = lastScanLabel(scans, s.type)
-          const health       = sourceHealth(scans, s.type)
-          // The file rows ACP holds for THIS source — resolved by every key that names it, since
-          // the card id (`sp-root`) is not what a file row's `source` says (`sharepoint`).
-          const inv          = inventoryFacts(filesForSource(files, enriched))
+      {/* ── Connected sources — one status card each ────────────────────────── */}
+      {connectedSources.length > 0 && (
+        <section style={{ marginBottom: 24 }}>
+          <div className="intsec-head muted">CONNECTED SOURCES ({connectedSources.length})</div>
+          <div className="intsources">
+            {connectedSources.map((src) => {
+              const isGdrive  = src.type === 'google_drive'
+              const typeLabel = isGdrive ? 'Google Drive' : 'OneDrive'
+              const title     = src.name && src.name !== typeLabel ? `${typeLabel} — ${src.name}` : typeLabel
+              const store     = isGdrive ? 'Drive' : 'OneDrive'
+              const lastRun   = lastCompletedRun(scans, src.type)
+              const lastScan  = lastScanLabel(scans, src.type)
+              const health    = healthState(sourceHealth(scans, src.type))
+              const [hfg, hbg] = HEALTH_STATE[health.key]
+              const err       = isGdrive ? gdError : spError
+              // Inventory the card can prove: the file rows ACP holds for THIS source, not the
+              // store's own total. `src.files` above is what the connector reports it contains;
+              // this is what ACP has actually seen. Both are shown, labelled differently, because
+              // a gap between them is a scope fact worth noticing rather than a rounding error.
+              const inv       = inventoryFacts(filesForSource(files, src))
+              return (
+                <div className="srccard srccard--on" key={src.id}>
+                  <div className="srccard-logo" aria-hidden="true">{LOGO[src.type] || LOGO.web}</div>
 
-          return (
-            <div className={`srccard${connected ? ' srccard--on' : ''}`} key={s.id}>
-              {/* Left: logo */}
-              <div className="srccard-logo" aria-hidden="true">{LOGO[s.type] || LOGO.web}</div>
+                  <div className="srccard-body">
+                    <div className="srccard-name">{title}</div>
+                    <div className="srccard-meta">
+                      {src.user && <span>{src.user}</span>}
+                      {src.folder && <span>folder: {src.folder}</span>}
+                      <span className="srccard-count">
+                        {src.files != null ? `${src.files.toLocaleString()} in ${store}` : `— in ${store}`}
+                        {lastRun && lastRun.files != null && ` · ${lastRun.files.toLocaleString()} in last scan`}
+                      </span>
+                      <span>{lastScan ? `Last scanned ${lastScan}` : 'Not yet scanned'}</span>
+                    </div>
+                    {/* What Discovery found, in the order an operator reads it: how much, then
+                        when, then what went wrong. A source with no completed run says so and
+                        says why the count is empty — "Healthy · 0 files" with no explanation is
+                        the line that makes a working connection look broken. */}
+                    {inv.documents > 0 ? (
+                      <div className="srccard-inv muted">
+                        {inv.documents.toLocaleString()} discovered
+                        {inv.bytesKb != null && ` · ${fmtSize(inv.bytesKb)}`}
+                        {inv.owners != null && ` · ${inv.owners.toLocaleString()} owner${inv.owners === 1 ? '' : 's'}`}
+                        {inv.departments != null && ` · ${inv.departments.toLocaleString()} department${inv.departments === 1 ? '' : 's'}`}
+                      </div>
+                    ) : !lastRun ? (
+                      <div className="srccard-inv muted">
+                        No discovery completed — ACP has access, but the source has not yet been inventoried.
+                      </div>
+                    ) : null}
+                    {lastRun && (lastRun.error || 0) > 0 && (
+                      <div className="srccard-inv muted">
+                        {Number(lastRun.error).toLocaleString()} file{lastRun.error === 1 ? '' : 's'} could not be read in the last run
+                      </div>
+                    )}
+                    <div style={{ marginTop: 6 }}>
+                      <span className="srccard-health" style={{ background: hbg, color: hfg }}>{health.label}</span>
+                      {health.sub && <div className="srccard-health-sub muted">{health.sub}</div>}
+                    </div>
+                    <details className="srccard-conn">
+                      <summary>Connection details</summary>
+                      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                        <span className="pulsedot" aria-hidden="true" /> Connected · read-only access
+                      </div>
+                    </details>
+                    {err && <div className="srccard-err">{err}</div>}
+                  </div>
 
-              {/* Middle: name + status */}
-              <div className="srccard-body">
-                <div className="srccard-name">{enriched.name || s.name}</div>
-                {connected ? (
-                  <div className="srccard-meta">
-                    {enriched.user && <span>{enriched.user}</span>}
-                    {enriched.files != null && <span>{enriched.files.toLocaleString()} in {isGdrive ? 'Drive' : 'OneDrive'}</span>}
-                    <span>{lastScan ? `last scanned ${lastScan}` : 'not yet scanned'}</span>
-                    <span className="srccard-badge">
-                      <span className="pulsedot" aria-hidden="true" />connected · read-only
-                    </span>
-                    {health && (() => {
-                      const [label, fg, bg] = HEALTH_BADGE[health.status]
-                      const title = `${health.totalErr} of ${health.totalFiles} files failed to open across the last ${health.scansCounted} scan${health.scansCounted !== 1 ? 's' : ''}`
-                        + (health.avgScore != null ? ` · avg compliance ${health.avgScore}/100` : '')
-                      return <span className="srccard-badge" style={{ background: bg, color: fg, padding: '2px 8px', borderRadius: 999, fontSize: 11.5 }} title={title}>{label}</span>
-                    })()}
-                  </div>
-                ) : (
-                  <div className="srccard-desc">{desc}</div>
-                )}
-                {/* What ACP has actually seen, as distinct from what the store reports it holds.
-                    A gap between the two is a scope fact worth noticing, not a rounding error —
-                    and a connected source with nothing discovered says WHY, rather than sitting
-                    there looking broken. */}
-                {connected && (inv.documents > 0 ? (
-                  <div className="srccard-inv muted">
-                    {inv.documents.toLocaleString()} discovered
-                    {inv.bytesKb != null && ` · ${fmtSize(inv.bytesKb)}`}
-                    {inv.owners != null && ` · ${inv.owners.toLocaleString()} owner${inv.owners === 1 ? '' : 's'}`}
-                    {inv.departments != null && ` · ${inv.departments.toLocaleString()} department${inv.departments === 1 ? '' : 's'}`}
-                  </div>
-                ) : !lastScan ? (
-                  <div className="srccard-inv muted">
-                    No discovery completed — ACP has access, but the source has not yet been inventoried.
-                  </div>
-                ) : null)}
-                {error && <div className="srccard-err">{error}</div>}
-              </div>
-
-              {/* Right: action */}
-              <div className="srccard-actions">
-                {connected ? (
-                  <>
-                    <button className="ghost small" onClick={() => setSelSrc(enriched)}>Details</button>
-                    <button disabled={busy} onClick={() => handleScan(s.id)}>
-                      {busy ? 'Scanning…' : 'Scan'}
+                  <div className="srccard-actions">
+                    <button disabled={busy} onClick={() => onScan(cardScanArg(src))}>
+                      {busy ? 'Scanning…' : lastRun ? 'New scan' : 'Run first discovery'}
                     </button>
-                  </>
-                ) : (
+                    <button className="ghost small" onClick={() => setSelSrc(src)}>Manage</button>
+                    <details className="srccard-ovf">
+                      <summary aria-label="More actions" title="More actions">⋯</summary>
+                      <div className="srccard-ovf-menu">
+                        <button type="button" onClick={() => setSelSrc(src)}>View files</button>
+                        <button type="button" onClick={() => setSelSrc(src)}>Details</button>
+                      </div>
+                    </details>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* ── Available sources — connectable, not yet connected ──────────────── */}
+      <section ref={availRef}>
+        <div className="intsec-head muted">AVAILABLE SOURCES</div>
+        <div className="intsources">
+          {CONNECTABLE.filter((s) => !(s.type === 'google_drive' ? hasDriveToken : hasSPToken)).map((s) => {
+            const isGdrive     = s.type === 'google_drive'
+            const isConnecting = isGdrive ? gdConnecting : spConnecting
+            const error        = isGdrive ? gdError : spError
+            const desc         = isGdrive
+              ? 'Scan Google Drive files for WCAG accessibility issues'
+              : 'Scan OneDrive & SharePoint for accessibility issues'
+            return (
+              <div className="srccard" key={s.id}>
+                <div className="srccard-logo" aria-hidden="true">{LOGO[s.type] || LOGO.web}</div>
+                <div className="srccard-body">
+                  <div className="srccard-name">{s.name}</div>
+                  <div className="srccard-desc">{desc}</div>
+                  {error && <div className="srccard-err">{error}</div>}
+                </div>
+                <div className="srccard-actions">
                   <button className="srccard-connect" disabled={isConnecting}
                           onClick={isGdrive ? connectGoogle : connectMicrosoft}>
                     {isConnecting
@@ -367,33 +389,22 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                         ? <><GoogleG /> Connect Google Drive</>
                         : <><MsLogo /> Connect Microsoft</>}
                   </button>
-                )}
+                </div>
               </div>
-            </div>
-          )
-        })}
-      </div>
-
-      {/* ── Coming-soon sources — small chips ─────────────────────────────── */}
-      <div className="intsoon">
-        {FUTURE.map((s) => (
-          <div className="soonchip" key={s.name} aria-hidden="true">
-            {s.logo}
-            <span className="soonchip-name">{s.name}</span>
-            <span className="soonchip-tag">coming soon</span>
-          </div>
-        ))}
-      </div>
-
-      {pickerSrc && !busy && (
-        <FolderPicker onScan={handlePickerScan} onClose={() => setPickerSrc(null)} />
-      )}
+            )
+          })}
+        </div>
+        {/* The far-future connectors — a compact muted line, not big disabled cards. */}
+        <div className="intsoon-line muted">
+          More sources coming soon: {FUTURE.map((f) => f.name).join(' · ')}
+        </div>
+      </section>
 
       {/* The drawer resolves its own file rows (sourceOps.filesForSource): a card id is not a file
           row's `source` key — `sp-root` never matched `sharepoint` — and filtering here on
           `f.source === selSrc.id` is what handed it an empty list to call "0 docs". */}
       {selSrc  && <SourceDrawer source={selSrc} files={files} scans={scans} busy={busy}
-                                onScan={(src) => { setSelSrc(null); handleScan(src.id) }}
+                                onScan={(src) => onScan(cardScanArg(src))}
                                 onOpenAssess={onOpenAssess}
                                 onClose={() => setSelSrc(null)}  onPickFile={setSelFile} />}
       {selFile && <FileDrawer   file={selFile}   onClose={() => setSelFile(null)} scanId={scanId} />}

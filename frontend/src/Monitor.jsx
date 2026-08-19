@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { monitoringState, sourceWatch, IDENTITY, SIM } from './sim.js'
-import { getSchedule, putSchedule, listCampaigns, createCampaign, setCampaignStatus, getScanDiff } from './api.js'
+import { getSchedule, putSchedule, listCampaigns, createCampaign, setCampaignStatus, getScanDiff, getSourceStatus } from './api.js'
 import { prefersReducedMotion } from './a11y.js'
 import RegressionRadar from './RegressionRadar.jsx'
 import ComplianceDigest from './ComplianceDigest.jsx'
+import FailureLane from './FailureLane.jsx'
 
 // Step 10 · Monitor — the always-on surface. Shows every connected source being
 // continuously watched for new files and changes, a live event stream (with demo
@@ -126,6 +127,25 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
     if (!run?.id) { setCampaign(null); return }
     let live = true
     listCampaigns(run.id).then((cs) => { if (live) setCampaign(cs?.[0] || null) }).catch(() => {})
+    return () => { live = false }
+  }, [run?.id])
+
+  // R5 — real source-staleness on the Monitor tab. The Release Center already consumes this
+  // (Publish.jsx / getSourceStatus, #253); Continuous Monitoring showed only illustrative drift
+  // until now. Best-effort and honest: a scan with nothing trackable returns zero, any error leaves
+  // the panel empty rather than inventing changes, and it never marks a file "changed" it can't
+  // verify. Gated to a real run — SIM/demo keeps its illustrative surfaces (SampleTag), never this.
+  const [drift, setDrift] = useState({ loaded: false, stale: 0, untracked: 0, files: [] })
+  useEffect(() => {
+    if (SIM || !run?.id) { setDrift({ loaded: false, stale: 0, untracked: 0, files: [] }); return }
+    let live = true
+    getSourceStatus(run.id)
+      .then((s) => {
+        if (!live) return
+        const files = (s?.files || []).filter((r) => r.state === 'stale')
+        setDrift({ loaded: true, stale: s?.stale_count || 0, untracked: s?.untracked_count || 0, files })
+      })
+      .catch(() => { if (live) setDrift({ loaded: true, stale: 0, untracked: 0, files: [] }) })
     return () => { live = false }
   }, [run?.id])
   const BUCKET_ORDER = ['critical', 'serious', 'moderate', 'na']
@@ -330,6 +350,11 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
 
       <ComplianceDigest run={run} />
 
+      {/* W7 — operational-failure lane. Corrupt files, expired source sign-ins, unreachable
+          sources and worker errors show up here (retry → dead-letter) instead of vanishing.
+          Owner-scoped and self-polling, so it needs no run/scan context. */}
+      <FailureLane />
+
       <PublishedWatchdog run={run} scanList={scanList} publishedFiles={publishedFiles} />
 
       <RegressionRadar run={run} scanList={scanList} />
@@ -390,6 +415,40 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
         <div className="moncard"><span className="muted">In remediation plan</span><b>{prog.total.toLocaleString()}</b><span className="muted">across {prog.batches.length} batches</span></div>
         <div className="moncard"><span className="muted">Resolved</span><b style={{ color: '#3B6D11' }}>{prog.batches.reduce((a, b) => a + b.done, 0).toLocaleString()}</b><span className="muted">of {prog.batches.reduce((a, b) => a + b.count, 0).toLocaleString()}</span></div>
       </div>
+
+      {/* R5 — Source drift: REAL staleness from the source (getSourceStatus), the same signal the
+          Release Center gates on. Not illustrative — no SampleTag. Only rendered for a real run. */}
+      {!SIM && run?.id && (
+        <section className="panel mon-drift" style={{ marginBottom: 14 }}>
+          <div className="slahd">
+            <h2 style={{ margin: 0 }}>Source drift <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, color: '#3B6D11', background: '#E7F0DC', border: '1px solid #C9E0B0', borderRadius: 4, padding: '1px 5px', marginLeft: 8, verticalAlign: 'middle' }}>LIVE</span> <span className="muted">· files changed at the source since this scan</span></h2>
+            {drift.loaded && drift.stale > 0 && <span className="slachip breached">⚠ {drift.stale} changed</span>}
+          </div>
+          {!drift.loaded ? (
+            <p className="muted" style={{ marginTop: 8 }}>Checking sources…</p>
+          ) : drift.stale === 0 ? (
+            <p className="muted" style={{ marginTop: 8 }}>
+              No source changes since the last scan — every tracked file still matches what ACP assessed.
+              {drift.untracked > 0 && ` (${drift.untracked} file${drift.untracked === 1 ? '' : 's'} not trackable for drift.)`}
+            </p>
+          ) : (
+            <>
+              <p className="muted" style={{ marginTop: 8 }}>
+                {drift.stale} file{drift.stale === 1 ? '' : 's'} changed at the source since ACP scanned {drift.stale === 1 ? 'it' : 'them'} —
+                {drift.stale === 1 ? ' its' : ' their'} certification is stale until re-scanned. Re-scan from the Release Center to refresh.
+              </p>
+              <ul className="mon-drift-list" style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                {drift.files.slice(0, 8).map((r) => (
+                  <li key={r.file} style={{ fontSize: 13 }}><span className="fname">{r.file}</span></li>
+                ))}
+              </ul>
+              {drift.files.length > 8 && (
+                <p className="muted" style={{ marginTop: 4, fontSize: 12 }}>…and {drift.files.length - 8} more.</p>
+              )}
+            </>
+          )}
+        </section>
+      )}
 
       {slaItems.length > 0 && (
         <section className="panel" style={{ marginBottom: 14 }}>

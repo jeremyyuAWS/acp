@@ -76,13 +76,25 @@ const CAT_ORDER = ['Images', 'Headings & Titles', 'Tables & Structure', 'Links',
 export function buildFileCertificationModel(d) {
   const rows = d.rows || []
   const level = d.targetLevel || 'AA'
+  // W4 — documented human dispositions of otherwise dead-end criteria (disposition.js). An
+  // ATTESTED criterion stays in scope but is resolved by a human (no longer terminal-unchecked);
+  // an OUT_OF_SCOPE criterion leaves the certification denominator, with its reason on the record.
+  // Everything below degrades to the prior behaviour when no row carries a disposition.
+  const disposed = rows.filter((r) => r.disposition && r.disposition.kind)
+  const attestedRows = disposed.filter((r) => r.disposition.kind === 'attested')
+  const outOfScopeRows = disposed.filter((r) => r.disposition.kind === 'out_of_scope')
+  const outOfScopeSet = new Set(outOfScopeRows.map((r) => r.id))
   const passN = rows.filter((r) => r.outcome === 'PASS').length
   const fixedN = rows.filter((r) => r.outcome === 'FIXED').length
-  const failN = rows.filter((r) => r.outcome === 'FAIL').length
-  const humanN = rows.filter((r) => r.outcome === 'HUMAN').length
-  const uncheckedN = rows.filter((r) => r.outcome === 'UNCHECKED').length
+  const failN = rows.filter((r) => r.outcome === 'FAIL' && !outOfScopeSet.has(r.id)).length
+  const humanN = rows.filter((r) => r.outcome === 'HUMAN' && !outOfScopeSet.has(r.id)).length
+  const attestedN = attestedRows.length
+  // Out-of-scope and attested criteria are no longer counted as "not auto-checked".
+  const uncheckedN = rows.filter((r) => r.outcome === 'UNCHECKED' && !r.disposition).length
+  // The certification denominator excludes out-of-scope criteria (they left the scope on purpose).
+  const inScopeN = rows.length - outOfScopeSet.size
   const openN = failN + humanN
-  const fullyConformant = rows.length > 0 && openN === 0
+  const fullyConformant = inScopeN > 0 && openN === 0
   const generated = d.timestamp || d.date
   const tone = (good) => good
     ? { color: GREEN, bg: '#EEF5E8' }
@@ -97,16 +109,18 @@ export function buildFileCertificationModel(d) {
   blocks.push({
     k: 'callout',
     text: fullyConformant
-      ? `"${d.file}" meets all ${rows.length} in-scope WCAG 2.1 Level ${level} criteria evaluated for this file type — no open findings remain.`
-      : `"${d.file}" scored ${d.score ?? 'n/a'}/100 against WCAG 2.1 Level ${level} and is ${openN > 0 ? 'NOT yet fully certified' : 'conditionally certified'}: ${openN} of ${rows.length} in-scope criteria still need attention.`,
+      ? `"${d.file}" meets all ${inScopeN} in-scope WCAG 2.1 Level ${level} criteria evaluated for this file type — no open findings remain.`
+      : `"${d.file}" scored ${d.score ?? 'n/a'}/100 against WCAG 2.1 Level ${level} and is ${openN > 0 ? 'NOT yet fully certified' : 'conditionally certified'}: ${openN} of ${inScopeN} in-scope criteria still need attention.`,
     o: tone(fullyConformant),
   })
   blocks.push({
     k: 'bullets',
     items: [
-      `${passN + fixedN} of ${rows.length} in-scope criteria pass${fixedN ? ` — ${fixedN} auto-fixed, pending re-validation` : ''}`,
+      `${passN + fixedN} of ${inScopeN} in-scope criteria pass${fixedN ? ` — ${fixedN} auto-fixed, pending re-validation` : ''}`,
       failN ? `${failN} open finding${failN !== 1 ? 's' : ''} to resolve` : null,
       humanN ? `${humanN} criteri${humanN !== 1 ? 'a' : 'on'} need a human reviewer before certification` : null,
+      attestedN ? `${attestedN} criteri${attestedN !== 1 ? 'a' : 'on'} manually attested by a human (verified out-of-band) — see Dispositions` : null,
+      outOfScopeSet.size ? `${outOfScopeSet.size} criteri${outOfScopeSet.size !== 1 ? 'a' : 'on'} recorded out of scope for this engagement — see Dispositions` : null,
       uncheckedN ? `${uncheckedN} criteri${uncheckedN !== 1 ? 'a' : 'on'} not auto-checked for this file type — reported, not assumed passing` : null,
       fullyConformant ? 'Ready to certify and publish.' : 'Next step: resolve the open items below, then re-validate.',
     ].filter(Boolean),
@@ -172,6 +186,26 @@ export function buildFileCertificationModel(d) {
       after: x.after,
     })) })
     if (diffs.length > MAX) T(`+ ${diffs.length - MAX} more remediated change(s) not shown here — see the full coverage table and the remediated file.`, { size: 8.5, color: MUTED, lh: 12 })
+  }
+
+  // ── Manual attestations & dispositions (W4) — the documented resolution of criteria that
+  // automated checks could not decide. Each carries the reason a human recorded, so the record
+  // shows HOW a criterion outside ACP's automated reach was resolved, never a silent wave-through. ──
+  if (disposed.length) {
+    H('Manual attestations & dispositions')
+    T(`${disposed.length} criteri${disposed.length !== 1 ? 'a were' : 'on was'} resolved outside ACP's automated checks — ${attestedN} manually attested (verified out-of-band) and ${outOfScopeSet.size} recorded as out of scope for this engagement. Each is documented below with the reason on record.`, { size: 9, color: MUTED, gapAfter: 8 })
+    blocks.push({
+      k: 'table',
+      headers: ['WCAG', 'Criterion', 'Disposition', 'Reason'],
+      caption: 'Manual attestations and out-of-scope dispositions',
+      rows: disposed.map((r) => [
+        r.id, r.plain || r.name,
+        r.disposition.kind === 'attested' ? 'Manually attested' : 'Out of scope',
+        `${r.disposition.reason}${r.disposition.actor ? ` — ${r.disposition.actor}` : ''}`,
+      ]),
+      widths: [52, 150, 100, CW - 52 - 150 - 100],
+    })
+    T('A manual attestation is a human’s recorded verification, not an ACP-certified automated pass; an out-of-scope criterion is excluded from the in-scope conformance denominator above. Both are immutable decisions in the audit trail.', { size: 8.5, color: MUTED, lh: 12 })
   }
 
   // ── Compliance checklist — grouped by what a reviewer actually cares about ──
@@ -252,7 +286,9 @@ export function buildFileCertificationModel(d) {
     k: 'table',
     headers: ['WCAG', 'Criterion', 'Level', 'Fix approach', 'Outcome', 'Confidence'],
     caption: `Full WCAG coverage at the ${level} certification target`,
-    rows: rows.map((r) => [r.id, r.plain || r.name, r.level, (r.fix || '').replace(/[⚡✎✋]\s*/, ''), COV_OUT_TXT[r.outcome], r.confidence ? r.confidence.level.label : '—']),
+    rows: rows.map((r) => [r.id, r.plain || r.name, r.level, (r.fix || '').replace(/[⚡✎✋]\s*/, ''),
+      r.disposition ? (r.disposition.kind === 'attested' ? 'Attested (human)' : 'Out of scope') : COV_OUT_TXT[r.outcome],
+      r.disposition ? (r.disposition.kind === 'attested' ? 'Human' : '—') : r.confidence ? r.confidence.level.label : '—']),
     widths: [52, CW - 52 - 44 - 84 - 82 - 62, 44, 84, 82, 62],
   })
   // Confidence is evidence-based, never a fabricated % (ADR 0016): High = a deterministic
@@ -268,6 +304,8 @@ export function buildFileCertificationModel(d) {
     ['Assessed', `mova.io · WCAG ${level}`, `${rows.length} criteria evaluated · score ${d.score ?? 'n/a'}/100`, d.file],
     ...(fixedN > 0 ? [['Auto-remediated', 'mova.io auto-fix', `${fixedN} criterion/criteria fixed`, d.file]] : []),
     ...(humanN > 0 ? [['Pending human review', 'HITL queue', `${humanN} criterion/criteria awaiting a reviewer`, d.file]] : []),
+    ...(attestedN > 0 ? [['Manually attested', 'human disposition', `${attestedN} criterion/criteria verified out-of-band`, d.file]] : []),
+    ...(outOfScopeSet.size > 0 ? [['Marked out of scope', 'human disposition', `${outOfScopeSet.size} criterion/criteria excluded with a recorded reason`, d.file]] : []),
     ['Report generated', 'mova.io Platform', `${fullyConformant ? 'Zero open findings' : `${openN} item(s) still open`} · score ${d.score ?? 'n/a'}/100`, d.file],
   ]
   blocks.push({ k: 'table', headers: ['Step', 'Actor', 'Action', 'Document'], caption: 'Audit trail', rows: auditRows, widths: [72, 108, CW - 72 - 108 - 140, 140] })
@@ -277,8 +315,8 @@ export function buildFileCertificationModel(d) {
   blocks.push({
     k: 'callout',
     text: fullyConformant
-      ? `"${d.file}" has been assessed against WCAG 2.1 Level ${level} success criteria as required by the Americans with Disabilities Act (ADA) Title II, the European Accessibility Act (EN 301 549), and Section 508 of the Rehabilitation Act. All ${rows.length} in-scope criteria evaluated by the mova.io engine for this file type are passing.`
-      : `"${d.file}" has been assessed against WCAG 2.1 Level ${level} success criteria. ${passN + fixedN} of ${rows.length} in-scope criteria currently pass; ${failN} have an open finding and ${humanN} await human review. This document does NOT yet meet the bar for full certification — resolve the items listed above and re-validate to update this report.`,
+      ? `"${d.file}" has been assessed against WCAG 2.1 Level ${level} success criteria as required by the Americans with Disabilities Act (ADA) Title II, the European Accessibility Act (EN 301 549), and Section 508 of the Rehabilitation Act. All ${inScopeN} in-scope criteria evaluated by the mova.io engine for this file type are passing${attestedN ? ` (including ${attestedN} resolved by recorded human attestation)` : ''}.${outOfScopeSet.size ? ` ${outOfScopeSet.size} criteri${outOfScopeSet.size !== 1 ? 'a were' : 'on was'} recorded out of scope for this engagement.` : ''}`
+      : `"${d.file}" has been assessed against WCAG 2.1 Level ${level} success criteria. ${passN + fixedN} of ${inScopeN} in-scope criteria currently pass; ${failN} have an open finding and ${humanN} await human review. This document does NOT yet meet the bar for full certification — resolve the items listed above and re-validate to update this report.`,
     o: tone(fullyConformant),
   })
   T('Certified by the mova.io Accessibility Platform', { bold: true, size: 9.5, gapAfter: 4 })

@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { loadScores, saveDriveScore, uploadToDrive } from './GoogleDrive.jsx'
 import { uploadToSharePoint } from './api.js'
+import { SP_SCOPES, CAN_WRITE_BACK } from './sharepointScopes.js'
 
 const CLIENT_ID = import.meta.env.VITE_AZURE_CLIENT_ID || ''
 const TENANT   = import.meta.env.VITE_AZURE_TENANT_ID  || 'common'
-const SCOPES   = ['Files.Read', 'Files.ReadWrite', 'User.Read']
+const SCOPES   = SP_SCOPES   // read-only; see sharepointScopes.js
 const GRAPH    = 'https://graph.microsoft.com/v1.0'
 
 const SUPPORTED_EXT = ['.pdf', '.docx', '.pptx', '.xlsx', '.html', '.htm']
@@ -28,37 +29,40 @@ function fmtSize(bytes) {
 
 // ── Per-item write-back button ─────────────────────────────────────────────────
 
-// This button replaced the user's file in place with NO backup of any kind.
+// The write goes through the SERVER (/sharepoint/upload with item_id), not straight to Graph
+// from here.
 //
-// It PUT the remediated bytes straight to Graph over the original item. If the remediation was
-// wrong, or the wrong file was queued, or the blob was truncated, the original was gone — and
-// the confirmation said only "Replace in SharePoint?", so nobody agreeing to it was agreeing to
-// that. Drive's button in this same SPA has archived to _mova-originals since it shipped; only
-// SharePoint was unprotected.
+// What moves server-side: the archive-before-overwrite and its fail-closed behaviour
+// (scanner._sp_archive_original), the >4 MiB resumable session this path never had — a simple
+// PUT past 4 MiB is a 413 that says nothing about chunking — and Graph's permission errors
+// translated into the consent that would fix them instead of "Reconnect SharePoint".
 //
-// It now posts to /sharepoint/upload with item_id. The server copies the original into
-// _mova-originals/<date>/ first and ABORTS the write if that copy fails, so the worst outcome
-// becomes "your file was not remediated" — visible, retryable — instead of "your file was
-// replaced and the original is gone", which is neither.
-//
-// Three things come with the route rather than being reimplemented here: a resumable session
-// past 4 MiB (a simple PUT over the limit is a 413 that says nothing about chunking), Graph's
-// permission errors translated into the consent that would fix them, and record_remediation
-// when a scan is passed.
+// And record_remediation, WHEN there is a scan to record against. Being precise about that: the
+// route calls it only if a scanId is passed, and the one caller here is the ad-hoc upload panel,
+// where files are assessed individually and belong to no scan run. So this does not by itself
+// close the record gap for ad-hoc saves — nothing to record them against would be invented, and
+// inventing one would be worse than the gap. It closes it for any caller that HAS a scan, which
+// is what the remediation flow will pass when this button is reused there.
 export function SpUploadButton({ itemId, driveId, blob, score, engine, scanId, file }) {
   const [phase, setPhase] = useState('idle') // idle|confirm|saving|done|error
   const [errMsg, setErrMsg] = useState('')
+  // Read-only build: no write scope was requested, so writing back would 403 at Graph. Hide the
+  // affordance rather than offer a button that cannot succeed. Gated on the scopes themselves, so
+  // it tracks CAN_WRITE_BACK automatically if write is ever re-enabled. After the hooks above so
+  // the call order stays constant (rules of hooks); CAN_WRITE_BACK is a module constant regardless.
+  if (!CAN_WRITE_BACK) return null
 
   const doSave = async () => {
     setPhase('saving')
     try {
+      // item_id present → the server archives the original, then replaces it in place.
       await uploadToSharePoint({ scanId, file, driveId, itemId, blob, score })
       setPhase('done')
     } catch (e) {
       setPhase('error')
-      // The server tells a missing SCOPE (403, naming the consent) apart from a transport
-      // failure. "Reconnect SharePoint" sent people to re-authenticate when the fix was a
-      // tenant-admin grant they could not make themselves.
+      // The server distinguishes a missing scope (403, naming the consent) from a transport
+      // failure, and says which. Flattening that to "Reconnect SharePoint" sent people to
+      // re-authenticate when the fix was a tenant-admin grant they could not make themselves.
       setErrMsg(e?.message || 'Upload failed')
     }
   }
@@ -70,8 +74,6 @@ export function SpUploadButton({ itemId, driveId, blob, score, engine, scanId, f
   )
   if (phase === 'confirm') return (
     <span style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0, fontSize: 12 }}>
-      {/* Says what the confirmation now buys. It used to read "Replace in SharePoint?" over a
-          write with no backup, which asked for consent to something other than what happened. */}
       <span style={{ color: 'var(--muted)' }}>Replace in SharePoint? Original is copied to _mova-originals first.</span>
       <button className="ghost small" style={{ fontSize: 11, padding: '1px 6px' }} onClick={doSave}>Yes</button>
       <button className="ghost small" style={{ fontSize: 11, padding: '1px 6px' }} onClick={() => setPhase('idle')}>No</button>

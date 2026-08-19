@@ -170,7 +170,7 @@ export default function BeforeAfter({ file, issues = [], srcText, pdfUrl, office
     if (scanId && file?.name) markRemediated(scanId, file.name).catch(() => {})
   }
   const saveToDrive = async () => {
-    if (!scanId) { setDriveMsg('Connect Google Drive in Settings → Integrations first.'); setTimeout(() => setDriveMsg(null), 4000); return }
+    if (!scanId) { setDriveMsg('Connect Google Drive in Settings → Sources first.'); setTimeout(() => setDriveMsg(null), 4000); return }
     setDriveMsg('Uploading to Google Drive…')
     try {
       let blob, contentType

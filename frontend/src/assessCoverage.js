@@ -149,3 +149,33 @@ export function coverageSummary(files, { documents = true } = {}) {
     remNa: n((p) => p.remediation === 'na'),
   }
 }
+
+// Coverage gaps — the (criterion × format) cells where the barrier APPLIES to the format but ACP
+// has NO assessment method: a buildable gap ('gap' — statically detectable, just not wired yet,
+// reason in GAP_REASON) or an interaction / assistive-tech-only criterion ('at', reason AT_REASON).
+// These are the only two "no method" states with an explanatory reason, and they are the honest
+// definition of a coverage gap: a ⚪ N/A cell is NOT a gap (the barrier can't exist there) and a
+// 🔴 human cell is the "a person must assess" lane (a method exists — it's a human), not a hole.
+//
+// Derived straight from assessmentIn over the estate's REAL formats (ADR 0016) — never fabricated.
+// With today's capability tables GAP is empty (every statically-detectable document gap is closed)
+// and AT holds only html 2.1.1/2.1.2, so a document-only estate honestly returns zero gaps and an
+// estate that includes .html surfaces its two needs-AT keyboard criteria. `documents` scopes to
+// the 20-core exactly as coverageSummary does.
+export function assessmentGaps(files, { documents = true } = {}) {
+  const fmts = estateFormats(files)
+  const scs = documents ? DOCUMENTS_20 : WCAG.filter((c) => c.docApplies !== false).map((c) => c.sc)
+  const byFormat = fmts.map((fmt) => {
+    const criteria = scs
+      .map((sc) => ({ sc, name: NAME[sc] || sc, level: LEVEL[sc] || '', lane: assessmentIn(sc, fmt) }))
+      .filter((c) => c.lane === 'gap' || c.lane === 'at')
+      .map((c) => ({ ...c, reason: c.lane === 'gap' ? (GAP_REASON[c.sc] || 'Not yet built for this format') : AT_REASON }))
+    return { fmt, count: criteria.length, criteria }
+  }).filter((g) => g.count > 0)
+  return {
+    fmts,
+    byFormat,                                                   // only formats that actually have gaps
+    total: byFormat.reduce((n, g) => n + g.count, 0),           // total gap CELLS across the estate
+    cells: byFormat.flatMap((g) => g.criteria.map((c) => ({ ...c, fmt: g.fmt }))),
+  }
+}

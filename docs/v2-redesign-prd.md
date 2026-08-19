@@ -1,6 +1,6 @@
 # PRD — ACP v2 redesign
 
-**Status:** in progress · **Source:** the v2 requirements list, 2026-08-07 · **Fork:** `frontend-v2/` (#139)
+**Status:** in progress · **Source:** the v2 requirements list, 2026-08-07 · **Fork:** was `frontend-v2/` (#139); the fork **replaced `frontend/` in place** on 2026-08-19 and no longer exists as a separate tree — paths below that say `frontend-v2/` mean `frontend/`.
 
 This is written from the raw requirements list rather than around it, so each line is traceable
 back to something that was actually asked for. Where an item is done it says which PR did it, and

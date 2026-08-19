@@ -156,11 +156,11 @@ say "CalVer $BUILD_VERSION  (built $BUILD_TIME)"
 # absent: if a source change moved this hash, the cache would never hit and the whole exercise
 # would be pointless. Dockerfile.base-* are included so editing the apt block busts the base.
 _hash() { cat "$@" | shasum -a 256 | cut -c1-12; }
-# frontend-v2, matching Dockerfile and Dockerfile.base-web. This hash is what makes the base
+# frontend/, matching Dockerfile and Dockerfile.base-web. This hash is what makes the base
 # image rebuild when the dependencies change — point it at the wrong lockfile and a stale base
 # keeps satisfying the app image's `[ -d node_modules ]` guard, which skips npm install and
 # builds the SPA against another tree's dependencies without erroring.
-WEB_HASH="$(_hash frontend-v2/package-lock.json deploy/public/Dockerfile.base-web)"
+WEB_HASH="$(_hash frontend/package-lock.json deploy/public/Dockerfile.base-web)"
 API_HASH="$(_hash api/requirements.txt deploy/public/Dockerfile.base-api)"
 BASE_WEB="$ACR.azurecr.io/acp-base-web:$WEB_HASH"
 BASE_API="$ACR.azurecr.io/acp-base-api:$API_HASH"

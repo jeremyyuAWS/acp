@@ -46,11 +46,34 @@ export default function RegressionRadar({ run, scanList = [] }) {
           <span className="rchip imp">✓ {s.improved} improved</span>
           {s.new ? <span className="rchip neu">+{s.new} new</span> : null}
           {s.removed ? <span className="rchip rem">−{s.removed} removed</span> : null}
+          {/* Kept OUT of the removed chip on purpose. A document the scope excluded was not
+              read; it did not leave the estate, and merging the two turns "we assess only Word
+              documents" into "45 documents disappeared". */}
+          {s.not_read ? <span className="rchip rem" title="Excluded by this scan's file-type scope — not read, not missing">{s.not_read} not read</span> : null}
+          {s.incomparable ? <span className="rchip neu" title="Assessed against a different set of criteria, so the scores are not comparable">{s.incomparable} not comparable</span> : null}
         </div>
       </div>
 
+      {/* SAID, not merely implied. Suppressing incomparable deltas without explaining why leaves
+          a reader with a quiet radar and the conclusion that nothing changed — the same failure
+          as reporting the scope change as improvement, arrived at from the other side. */}
+      {diff.scope_changed ? (
+        <p className="muted" style={{ marginTop: 8, fontSize: 12.5 }} role="status">
+          The scan scope changed since {fmtDate(diff.prev_at)}.
+          {s.incomparable ? ` ${s.incomparable} document${s.incomparable === 1 ? ' was' : 's were'} assessed against a different set of criteria, so ${s.incomparable === 1 ? 'its score is' : 'their scores are'} not compared here — a score only means something against the criteria it was measured on.` : ''}
+          {s.not_read ? ` ${s.not_read} document${s.not_read === 1 ? '' : 's'} of other file types ${s.not_read === 1 ? 'was' : 'were'} not read this time.` : ''}
+        </p>
+      ) : null}
+
       {diff.regressed.length === 0 ? (
-        <p className="muted" style={{ marginTop: 8 }}>✓ Nothing got worse since the last scan — no document lost conformance.</p>
+        <p className="muted" style={{ marginTop: 8 }}>
+          {s.incomparable
+            /* "Nothing got worse" is a claim about documents that were COMPARED. With every
+               comparable document accounted for and others excluded, the honest sentence names
+               what it covers rather than implying it covered everything. */
+            ? `✓ Nothing got worse among the documents that could be compared.`
+            : '✓ Nothing got worse since the last scan — no document lost conformance.'}
+        </p>
       ) : (
         <div className="radarlist" style={{ marginTop: 10 }}>
           {diff.regressed.map((r) => (

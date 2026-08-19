@@ -1,6 +1,23 @@
 import { useState, useEffect } from 'react'
 import { getSettings, updateSettings } from './api.js'
 import { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } from './scopePresets.js'
+import { TRACKED_17 } from './ruleDetails.js'
+
+// The criteria this grid OFFERS. SCOPE_UNIVERSE is every (criterion, format) pair the engine can
+// reach a verdict on — 29 criteria — and that is the right answer to "what could be scoped",
+// which is why it stays the source. It is the wrong answer to "what should this operator be
+// choosing between".
+//
+// Twelve of the 29 are criteria Mova iO does not track: 1.4.2, 1.4.4, 1.4.6, 1.4.8, 1.4.9,
+// 1.4.10, 1.4.12, 2.4.1, 2.4.9, 2.4.10, 3.1.5 and 3.3.2 — AAA rules and viewer behaviours. Every
+// one of them is a row an operator has to read and dismiss before reaching a decision they can
+// act on, on the screen that is meant to be the FIRST thing they do.
+//
+// Filtered rather than a separate list, deliberately: the pairs still come from the generated,
+// CI-guarded universe, so this cannot offer a checkbox the engine has no verdict for. It only
+// narrows. Verified when written that all 17 tracked criteria are present in the universe —
+// none is silently dropped by this filter.
+const OFFERED = SCOPE_UNIVERSE.filter((r) => TRACKED_17.has(r.sc))
 
 // The operator scan scope, as a criterion × format grid.
 //
@@ -107,7 +124,18 @@ export default function ScanScope() {
   }
 
   const chosen = Object.values(sel).reduce((n, s) => n + s.size, 0)
-  const total = SCOPE_UNIVERSE.reduce((n, r) => n + r.formats.length, 0)
+  // Criteria in the SAVED scope that this grid no longer offers — set before the grid narrowed
+  // to the tracked list, or written straight to the setting through the API.
+  //
+  // They are PRESERVED, not dropped: toPayload serialises everything in `sel`, so a save keeps
+  // them. But `chosen` counts them while no row shows them, and a count that cannot be
+  // reconciled against what is on screen is the defect this codebase has now fixed three times.
+  // So it is stated instead of left to be discovered when the numbers refuse to add up.
+  const hidden = Object.entries(sel)
+    .filter(([sc, fmts]) => fmts.size && !OFFERED.some((r) => r.sc === sc))
+    .map(([sc]) => sc)
+    .sort()
+  const total = OFFERED.reduce((n, r) => n + r.formats.length, 0)
 
   const save = async () => {
     // An empty selection under "restrict" would store {} — which the backend reads as NO
@@ -191,6 +219,9 @@ export default function ScanScope() {
                     onClick={() => { setSel({}); setMsg('') }}>Clear selection</button>
             <span className="muted" style={{ fontSize: 12, marginLeft: 'auto' }}>
               {chosen} of {total} pairs selected
+              {hidden.length > 0 && (
+                <> · <b title={`Not shown: ${hidden.join(', ')}`}>{hidden.length} outside the tracked list</b></>
+              )}
             </span>
           </div>
           <div style={{ overflowX: 'auto' }}>
@@ -208,7 +239,7 @@ export default function ScanScope() {
                 </tr>
               </thead>
               <tbody>
-                {SCOPE_UNIVERSE.map((row) => (
+                {OFFERED.map((row) => (
                   <tr key={row.sc}>
                     <th scope="row" style={{ textAlign: 'left', fontWeight: 400, padding: '3px 8px', whiteSpace: 'nowrap' }}>
                       <b>{row.sc}</b> {row.name} <span className="muted">· {row.level}</span>

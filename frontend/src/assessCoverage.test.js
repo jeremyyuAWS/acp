@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  coverageSummary, assessmentIn, remediationIn, statusIn, statusAcross,
-  isAssessable, isCertifiable, estateFormats, DOCUMENTS_20,
+  coverageSummary, assessmentGaps, assessmentIn, remediationIn, statusIn, statusAcross,
+  isAssessable, isCertifiable, estateFormats, DOCUMENTS_20, AT_REASON,
 } from './assessCoverage.js'
 
 const filesOf = (...exts) => exts.map((e, i) => ({ file: `doc${i}.${e}`, type: e }))
@@ -135,44 +135,12 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     expect(s.auto + s.review + s.human + s.gap + s.at + s.na).toBe(20)
   })
 
-  it('remediation axis is counted independently (docx: 5⚡ 9🤖 1👤)', () => {
+  it('remediation axis is counted independently (docx: 6⚡ 8🤖 1👤)', () => {
     const s = coverageSummary(filesOf('docx'), { documents: true })
-    // 7🤖, not 6: docx 4.1.2 gained an assisted lane when the form-field name became writable
-    // (propose_forms drafts the w:alias Title, apply_field_name writes it on approval). The
-    // criterion was previously review-only on docx, so it contributed no remediation cell.
-    //
-    // 9🤖, not 7: docx 1.4.1 and 1.4.11 gained ASSISTED lanes. Both detectors had shipped since
-    // ADR 0023 Phase 1b and their findings already reached users, but neither pair was declared,
-    // so the fix axis read "No Remediation" — an absence of records rather than of work.
-    //
-    // Assisted and not human, after landing as human first and correcting: the distinction is
-    // between the CRITERION and the SIGNAL. 1.4.1 in general is editorial, but what ACP detects
-    // is specifically an explicitly removed underline, and putting it back is exact. Likewise
-    // the shade that brings an outline to 3:1 against a known fill is computed, not guessed. So
-    // each emits a prefilled card the human ELECTS — the 1.4.8 shape — carrying the measurement
-    // so nobody re-measures.
-    //
-    // 1👤: docx 2.1.2 — the last Core-17 criterion to be declared. HUMAN here is a conclusion,
-    // not the intermediate state 1.4.1 and 1.4.11 passed through. Whether keyboard focus can
-    // move away from a control is runtime behaviour, absent from the file, so ACP cannot know a
-    // trap exists, cannot say which control traps, and could not verify a fix. There is no
-    // signal to prefill from, and no future detector supplies one.
-    //
-    // 6⚡ 8🤖, not 5/9: docx 4.1.2 moved ASSISTED -> AUTO. Unlike the changes above it declared
-    // no new capability at all — the deterministic fixer already ran. form_labels borrows a
-    // field's label from adjacent visible text and writes it into <w:alias>, which is BOTH the
-    // visible prompt 3.3.2 wants and the accessible name 4.1.2 wants. One write, two criteria;
-    // only 3.3.2 was gated on and credited for it, so 4.1.2 read as needing a human while the
-    // bytes were already being fixed. A lane can understate as well as overstate.
-    //
-    // The ASSESSMENT axis deliberately does NOT follow to 🟢 — an explicit override keeps docx
-    // 4.1.2 at 🟡, because the detector reads content controls and stays silent on ActiveX and
-    // embedded OLE. A clean re-scan proves the fields are named, not that the criterion is met.
-    //
-    // These three numbers have now moved five times, once per capability change, and each move
-    // was caught HERE rather than by the backend suite — this file is the only place the
-    // per-lane totals are asserted. Worth knowing before assuming a green backend means the
-    // capability tables are consistent.
+    // Synced to the backend: the v2 capability table had drifted, missing the docx lanes added
+    // across #202/#203/#206/#208 (1.4.1/1.4.11 assisted, 2.1.2 human, 4.1.2 auto) — v1 was updated
+    // in each, v2 was not, because nothing made it fail. tests/test_capability_frontend_v2_sync.py
+    // is now the guard that would. These totals match v1's.
     expect({ remAuto: s.remAuto, remAi: s.remAi, remHuman: s.remHuman }).toEqual({ remAuto: 6, remAi: 8, remHuman: 1 })
   })
 
@@ -206,5 +174,46 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     const all = coverageSummary(filesOf('docx'), { documents: false })
     expect(all.total).toBeGreaterThan(documents.total)
     expect(all.auto + all.review + all.human + all.gap + all.at + all.na).toBe(all.total)
+  })
+})
+
+describe('assessmentGaps — the "no assessment method" cells (gap + at), honestly derived', () => {
+  // The gap total is exactly the gap + at rollup of coverageSummary, never more: a ⚪ N/A cell is
+  // not a gap and a 🔴 human cell is not a missing method. This ties the two derivations together
+  // so neither can drift into fabricating a hole.
+  for (const fmt of ['docx', 'xlsx', 'pptx', 'pdf', 'html']) {
+    it(`.${fmt}: gap total equals coverageSummary's gap + at (${fmt === 'html' ? '2 needs-AT' : 'zero'})`, () => {
+      const s = coverageSummary(filesOf(fmt), { documents: true })
+      const g = assessmentGaps(filesOf(fmt), { documents: true })
+      expect(g.total).toBe(s.gap + s.at)
+      expect(g.cells.length).toBe(g.total)
+      // every reported cell is genuinely a gap/at lane in the capability table — never invented
+      for (const c of g.cells) expect(assessmentIn(c.sc, c.fmt)).toBe(c.lane)
+    })
+  }
+
+  it('a document-only estate has NO gaps — all statically-detectable document gaps are closed', () => {
+    const g = assessmentGaps(filesOf('docx', 'xlsx', 'pptx', 'pdf'), { documents: true })
+    expect(g.total).toBe(0)
+    expect(g.byFormat).toEqual([])
+  })
+
+  it('an .html estate surfaces exactly the two needs-AT keyboard criteria, with AT_REASON', () => {
+    const g = assessmentGaps(filesOf('html'), { documents: true })
+    expect(g.total).toBe(2)
+    expect(g.byFormat).toHaveLength(1)
+    expect(g.byFormat[0].fmt).toBe('html')
+    expect(g.cells.map((c) => c.sc).sort()).toEqual(['2.1.1', '2.1.2'])
+    for (const c of g.cells) {
+      expect(c.lane).toBe('at')
+      expect(c.reason).toBe(AT_REASON)
+    }
+  })
+
+  it('a mixed estate groups gaps by format and only lists formats that have them', () => {
+    const g = assessmentGaps(filesOf('docx', 'html'), { documents: true })
+    expect(g.total).toBe(2)                               // only html contributes
+    expect(g.byFormat.map((r) => r.fmt)).toEqual(['html'])
+    expect(g.cells.every((c) => c.fmt === 'html')).toBe(true)
   })
 })

@@ -17,11 +17,6 @@ import { SCOPE_SCS, SCOPE_SIZE, SCOPE_LABEL } from './activeScope.js'
 // genuinely shift with the level — this is a real computation over the assessed findings,
 // not a cosmetic toggle.
 const RANK = { A: 1, AA: 2, AAA: 3 }
-const LEVELS = [
-  { k: 'A', desc: 'minimum' },
-  { k: 'AA', desc: 'legal target · ADA · EAA · 508' },
-  { k: 'AAA', desc: 'enhanced' },
-]
 
 // Real scan findings carry {rule_id, wcag, severity} but no conformance level, so derive
 // it from the SC catalog (rules/*.js meta) keyed by the WCAG SC number.
@@ -40,6 +35,17 @@ const scOf = (w) => ((String(w || '')).replace(/^SC_/, '').replace(/_/g, '.').ma
 // Level of a finding: explicit field (SIM) → rule-module meta → full WCAG catalog → default A.
 // The catalog step is what stops detector-only AAA criteria (1.4.9 etc.) from blocking at AA.
 const levelOf = (x) => x.level || SC_LEVEL[scOf(x.wcag)] || CATALOG_LEVEL[scOf(x.wcag)] || 'A'
+// The blocking conformance level is DERIVED from the success criteria the user already chose
+// (activeScope.SCOPE_SCS), not picked a second time here: it is the highest WCAG level present in
+// that set — any AAA criterion in scope makes the target AAA, otherwise AA (the legal ADA/EAA/508
+// floor, and what the standard docx scope resolves to). One source of truth for "which criteria
+// matter" — the scope — instead of a separate A/AA/AAA selector that could disagree with it.
+const deriveLevel = (scs) => {
+  let maxR = 0
+  for (const sc of scs) { const r = RANK[CATALOG_LEVEL[sc] || SC_LEVEL[sc] || 'A'] || 1; if (r > maxR) maxR = r }
+  return maxR >= 3 ? 'AAA' : maxR === 1 ? 'A' : 'AA'
+}
+const DERIVED_LEVEL = deriveLevel(SCOPE_SCS)
 // Whether a finding CAN be auto-fixed is format-aware: the same criterion may be a
 // deterministic fix on one file type and human-only on another (a docx contrast fix
 // exists; a pdf one does not). Answered by the remediation-capability table for the
@@ -66,7 +72,12 @@ const loadSaved = (id) => { try { return JSON.parse(sessionStorage.getItem(SKEY(
 
 export default function AssessRunner({ files = [], runId, scanBusy = false, onAssessed, onPhase }) {
   const saved = loadSaved(runId)
-  const [level, setLevel] = useState(saved?.level || 'AA')
+  // Derived from the selected scope, not a picker — see deriveLevel above.
+  const level = DERIVED_LEVEL
+  // Deva's Assess filter #6: ignore files a discovery rule flagged for archival or deletion. ON by
+  // default — the run already skips them (PRD §4.5), and this surfaces that as a controllable choice
+  // rather than a silent one. Unchecking sends the authorized include-flagged override to the run.
+  const [ignoreLifecycle, setIgnoreLifecycle] = useState(true)
   const [phase, setPhase] = useState(saved?.phase || 'idle') // idle | running | done
   const [progress, setProgress] = useState(0)
   const [currentFile, setCurrentFile] = useState(null)
@@ -118,12 +129,6 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   const discoveredN = files.filter((f) => f.status === 'discovered').length
   const deferredPending = discoveredN > 0 && docs.length === 0
   const assessN = deferredPending ? files.length : docs.length
-  const reset = () => {
-    clearInterval(timer.current); clearTimeout(phaseTimer.current)
-    setPhase('idle'); setResult(null); setResultFromCache(false); setProgress(0); setCurrentFile(null); setCurrentPhase('')
-    try { sessionStorage.removeItem(SKEY(runId)) } catch { /* ignore */ }
-  }
-
   // Deterministic conformance result over a set of scored docs at a WCAG level. Defaults to the
   // docs already in props (immediate model); the deferred path passes the freshly-analysed files.
   const computeResultFrom = (scored, lvl) => {
@@ -277,7 +282,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     // container restart) has a stale/absent token and every file would 401. Push a fresh Drive
     // token from the live session first (best-effort; the endpoint 422s harmlessly for a local /
     // SharePoint scan with no token). Then kick off the assessment.
-    Promise.resolve(refreshScanDriveToken(runId)).catch(() => {}).then(() => assessScan(runId, level)).then((resp) => {
+    Promise.resolve(refreshScanDriveToken(runId)).catch(() => {}).then(() => assessScan(runId, level, !ignoreLifecycle)).then((resp) => {
       if (resp && resp.deferred) {
         // The analysis is running now — track it for real.
         save({ phase: 'running', startedAt, level, deferred: true })
@@ -371,16 +376,22 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
         </button>
       </div>
 
-      <div className="lvlseg" role="radiogroup" aria-label="Target conformance level">
-        {LEVELS.map((l) => (
-          <button key={l.k} role="radio" aria-checked={level === l.k} className={level === l.k ? 'lvlchip on' : 'lvlchip'} onClick={() => { setLevel(l.k); reset() }} disabled={phase === 'running'}>
-            <b>{l.k}</b><span>{l.desc}</span>
-          </button>
-        ))}
-      </div>
       <p className="muted" style={{ fontSize: 12, margin: '4px 0 0', lineHeight: 1.5 }}>
-        The level controls <b>which WCAG success criteria count as blocking</b> — not which files are scanned. All {assessN} {deferredPending ? 'discovered' : 'parsable'} files are always assessed; at <b>A</b> only Level A findings block conformance, at <b>AA</b> both A + AA findings count (the legal target for ADA / EAA), and at <b>AAA</b> all findings count. Changing the level resets the result so you can re-run at the new target.
+        Scored against <b>WCAG 2.1 Level {level}</b>{level === 'AA' ? ' — the legal target for ADA / EAA / 508' : ''}, derived
+        from the <b>{ruleCount}</b> success criteria you selected in your {SCOPE_LABEL}. A finding blocks conformance when its
+        criterion is at or below Level {level}. All {assessN} {deferredPending ? 'discovered' : 'parsable'} files are assessed.
       </p>
+
+      {phase !== 'running' && (
+        <label className="assess-lifecycle-ignore" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, margin: '8px 0 0', fontSize: 12.5, lineHeight: 1.5, cursor: 'pointer' }}>
+          <input type="checkbox" checked={ignoreLifecycle} onChange={(e) => setIgnoreLifecycle(e.target.checked)}
+                 aria-label="Ignore files flagged for archival or deletion" style={{ marginTop: 2 }} />
+          <span>
+            <b>Ignore files flagged for archival or deletion</b>
+            <span className="muted"> — files a discovery rule marked <i>Archive Candidate</i>, <i>Archived</i>, <i>Delete&nbsp;Candidate</i> or <i>Deleted</i> are skipped; there is no point assessing a document you are about to remove. Uncheck to assess them anyway.</span>
+          </span>
+        </label>
+      )}
 
       <div role="status" aria-live="polite">
         {phase === 'running' && (
@@ -414,12 +425,12 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                                 real answer — it means nothing failed — so it renders as such
                                 rather than as a spinner that never resolves. */}
                             {scs === undefined
-                              ? <span className="muted alscs">reading criteria\u2026</span>
+                              ? <span className="muted alscs">reading criteria…</span>
                               : scs.length
                                 ? <span className="alscs">{scs.map((c) => <b key={c}>{c}</b>)}</span>
                                 : <span className="alclean">no failures</span>}
                           </>
-                        : <span className="muted alscs">{f.status === 'analysed' ? 'scoring\u2026' : 'queued'}</span>}
+                        : <span className="muted alscs">{f.status === 'analysed' ? 'scoring…' : 'queued'}</span>}
                     </li>
                   )
                 })}
