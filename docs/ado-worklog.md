@@ -1519,6 +1519,16 @@ invariant the redaction tests pin).
   types:[…]}` (not `{present, types:{}}`), so neither had shown on real traces; corrected the panel against
   the actual `file_assessment_result` output and fixed the SIM/fixtures that had reinforced the wrong shape.
   Backend + frontend tests; not a RULE_PATHS change.
+- **Browser-verified the session view end to end** (no commit — testing, 2026-08-19). Drove the merged
+  `origin/main` build in SIM mode and confirmed at the DOM: the Overview "📊 trace" chip opens the in-app
+  `SessionPanel` (accessible name *"…inside AccessOps (no Langfuse login)"*); its rollup reads 3 documents /
+  2 assessed / 1 conformant / 75 avg / 1 with-failures / 1 with-PII, with a document showing the honest
+  *not assessed* state; clicking a row drills into the file `TracePanel`, which renders the corrected shape —
+  failing criteria `1.1.1 ·1` / `1.4.3 ·3` (the dict that had shown nothing before the #454 fix) and PII
+  categories `us_ssn` / `email_address` (no values). No console errors; no operator email in the UI.
+  Verified via a standalone vite server from a throwaway `origin/main` worktree, because `preview_start` is
+  pinned to the shared checkout — which is 47 commits behind and holds another session's uncommitted
+  delivery-log work, so it was deliberately left untouched (see the "preview root" note in CLAUDE.md).
 
 ## Open items (backlog candidates)
 
@@ -1927,3 +1937,9 @@ invariant the redaction tests pin).
   Backend + frontend, CI green on `main`; not a RULE_PATHS change. **Sync marker still NOT advanced**
   (`fad0dfbe`, same convention as the prior entries): the large delta since it remains other sessions'
   undocumented feature work.
+- **2026-08-19 (session view browser verification)** — Recorded a no-commit testing note under the #459
+  Task: the session view was driven in the browser (SIM mode) against the merged `origin/main` and confirmed
+  at the DOM — SessionPanel rollup/rows/not-assessed, in-app chip, drill-in to the file TracePanel, and the
+  #454 shape fix rendering (failing-criteria chips, PII categories), no console errors. Verified from a
+  throwaway `origin/main` worktree because `preview_start` serves the stale shared checkout. Testing only —
+  **sync marker unchanged** (`fad0dfbe`, same convention).
