@@ -29,11 +29,11 @@ describe('lane taxonomy', () => {
     const rails = Object.values(LANES).map((l) => l.rail)
     expect(new Set(rails).size).toBe(rails.length)
   })
-  it('a not-applicable (out-of-scope) decision resolves the finding and lands it in Done', () => {
+  it('a not-applicable (out-of-scope) decision resolves the finding and lands it in Completed', () => {
     const f = { id: 7, hasProposal: true, after: 'x' }
     const decisions = { 7: { state: 'not_applicable' } }
     expect(isResolved(f, decisions)).toBe(true)
-    expect(workflowStatusOf(f, decisions)).toBe('done')   // settled, no re-scan to await
+    expect(workflowStatusOf(f, decisions)).toBe('completed')   // settled, no re-scan to await
   })
   it('reserves a coloured rail for attention lanes; everyday lanes get a neutral rail', () => {
     // Blocked + rejected-handoff are the only lanes a reviewer must actively unblock.
@@ -71,6 +71,17 @@ describe('row model', () => {
     expect(r.action).toBe('Approve fix')
     expect(r.lane.rail).toBe('green')
     expect(r.unread).toBe(true)
+  })
+  it('exposes the WCAG SC number and a QUIET lane label for the scannable row', () => {
+    // The row leads with the issue; the SC number is the one compact pill and the remediation state
+    // is quiet text (not the loud "Review automatic fix" pill it used to repeat on every row).
+    const r = rowModel({ id: 9, file: 'Clinical-Newsletter-79.docx', title: 'DOCX · Contrast minimum', page: 2, rule_id: '1.4.3', autoApplied: true })
+    expect(r.issue).toBe('Contrast minimum')
+    expect(r.sc).toBe('1.4.3')
+    expect(r.laneShort).toBe('Automatic fix')
+    expect(rowModel({ id: 1, ruleId: 'SC_1_1_1' }).sc).toBe('1.1.1')  // normalised from any spelling
+    expect(rowModel({ id: 3 }).sc).toBe(null)                          // no criterion → no pill
+    expect(rowModel({ id: 4, rule_id: '3.1.1' }).laneShort).toBe('Manual edit')  // quiet, per-lane
   })
 })
 

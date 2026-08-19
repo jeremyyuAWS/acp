@@ -91,6 +91,21 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
                 "worker_tier_alive": core.store.worker_tier_alive()}
 
     if sync:  # synchronous path for scripts/tests
+        from handlers import _defer_analysis_to_assess
+        if _defer_analysis_to_assess():
+            # Metadata-only discovery is the DEFAULT (ADR 0020): list + classify from metadata +
+            # persist inventory and STOP — nothing is downloaded or opened. The download + WCAG
+            # analysis run when Assess is called on this scan. Delegates to the same _scan_discover
+            # the fan-out path uses, so the 'discovered' state (inventory + assess_params) is
+            # identical. Set ACP_DEFER_ANALYSIS_TO_ASSESS=0 to force a full download+analyse scan.
+            from handlers import _scan_discover
+            scan_id = uuid.uuid4().hex[:12]
+            core.register_scan_tokens(scan_id, drive=token, sp=sp_token)  # in-memory only
+            _scan_discover({"source": source, "scan_id": scan_id, "folder": folder, "ai": ai,
+                            "user": user, "pii": pii, "batch": batch,
+                            "exclude_remediated": exclude_remediated, "incremental": incremental},
+                           {"scan_id": scan_id})
+            return {"scan_id": scan_id, "source": source, "discovered": True}
         inv: list = []
         report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token,
                           **({"folders": folders} if folders else {}),
@@ -114,6 +129,22 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
 
     def work():
         try:
+            from handlers import _defer_analysis_to_assess
+            if _defer_analysis_to_assess():
+                # Metadata-only discovery is the DEFAULT (ADR 0020): list + classify from metadata
+                # + persist inventory and STOP — nothing downloaded. The download + WCAG analysis
+                # run when Assess is called. Delegates to the fan-out _scan_discover so the
+                # 'discovered' state is identical; tokens stay registered for the later Assess.
+                # ACP_DEFER_ANALYSIS_TO_ASSESS=0 forces the legacy full download+analyse scan.
+                from handlers import _scan_discover
+                sid = uuid.uuid4().hex[:12]
+                core.register_scan_tokens(sid, drive=token, sp=sp_token)  # in-memory only
+                _scan_discover({"source": source, "scan_id": sid, "folder": folder, "ai": ai,
+                                "user": user, "pii": pii, "batch": batch,
+                                "exclude_remediated": exclude_remediated,
+                                "incremental": incremental}, {"scan_id": sid})
+                core.update_job(job_id, {"phase": "discovered", "done": True, "scan_id": sid})
+                return
             inv: list = []
             report = run_scan(source, progress=lambda d: core.update_job(job_id, d),
                               drive_token=token, folder=folder, sp_token=sp_token,

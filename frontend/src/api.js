@@ -302,12 +302,12 @@ export const openReport = (id, filename) => {
 const foldersQ = (folders) => ((folders || []).length
   ? (folders || []).map((f) => `&folders=${encodeURIComponent(typeof f === 'string' ? f : f.id)}`).join('')
   : '')
-export const startScan = (source = 'local', folder = null, aiEnabled = true, pii = true, excludeRemediated = false, incremental = true, folders = null) => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}`, { method: 'POST', headers: headers() }).then(j))
+export const startScan = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null) => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}`, { method: 'POST', headers: headers() }).then(j))
 export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/scans/jobs/${id}`, { headers: headers() }).then(j))
 
 // ── Durable async queue (ADR 0004/0005) ───────────────────────────────────────
 // Queued scan: runs in the worker pool, survives restarts, shows in /jobs + Grafana.
-export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = true, excludeRemediated = false, incremental = true, folders = null) => (SIM
+export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null) => (SIM
   ? sim({ scan_id: 'sim-scan', job_id: 'sim-job', queued: true, workers: 4 })
   : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}&queue=true&fanout=true`, { method: 'POST', headers: headers() }).then(j))
 // Stop an in-flight durable scan: kills its outstanding jobs server-side and closes the run

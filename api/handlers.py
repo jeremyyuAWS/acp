@@ -24,11 +24,12 @@ from scanner import run_scan
 
 
 def _defer_analysis_to_assess() -> bool:
-    """ADR 0020 stage 4 kill-switch. When on, Discover only LISTS the estate (metadata, no file
-    opened) and the download + WCAG analysis run at Assess time instead. Read per-call so the
-    flag can be flipped by env without a code change; default off keeps today's behaviour until
-    the switch is deliberately set."""
-    return _os.environ.get("ACP_DEFER_ANALYSIS_TO_ASSESS", "0").strip().lower() in ("1", "true", "yes", "on")
+    """ADR 0020 — metadata-only discovery is now the DEFAULT. Discover only LISTS the estate
+    (metadata, no file opened, nothing downloaded); the download + WCAG analysis run at Assess
+    time instead. Read per-call so the behaviour can be overridden by env without a code change:
+    set ACP_DEFER_ANALYSIS_TO_ASSESS=0 (or false/no/off) to force the legacy immediate-analysis
+    scan that downloads and analyses at Discover time."""
+    return _os.environ.get("ACP_DEFER_ANALYSIS_TO_ASSESS", "1").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _enqueue_analysis(scan_id: str, source: str, items: list[dict], *, ai: bool, pii: bool,
@@ -118,7 +119,14 @@ def ensure_remediated_folder(svc) -> str:
 
 @handler("scan")
 def _scan(payload: dict, job: dict) -> None:
-    """Run a scan to completion: discover → analyse → score → persist → finalize.
+    """Run a scan: discover → (analyse → score → persist → finalize).
+
+    Metadata-only discovery is the DEFAULT (ADR 0020): this monolithic 'scan' job LISTS the estate
+    and STOPS at a 'discovered' run, deferring the download + WCAG analysis to Assess — delegating
+    to _scan_discover so it produces the exact same discovered state (inventory + assess_params +
+    lifecycle + tracing) as the fan-out path, and the tokens are LEFT registered for that later
+    Assess. Only when ACP_DEFER_ANALYSIS_TO_ASSESS=0 (the legacy override) does this download and
+    analyse now, in which case it finalizes and clears the tokens here.
 
     payload: {source, scan_id, folder?, sp?, ai}
     The Drive/SharePoint tokens are looked up from the in-memory registry by
@@ -129,6 +137,13 @@ def _scan(payload: dict, job: dict) -> None:
     source = payload.get("source", "local")
     ai = bool(payload.get("ai", True))
     effective_ai = ai and core.store.get_ai_enabled()
+
+    if _defer_analysis_to_assess():
+        # Metadata-only discovery: list + classify from metadata + persist inventory, then STOP.
+        # Tokens stay registered so a later Assess can download; do NOT clear them here.
+        _scan_discover(payload, job)
+        return
+
     toks = core.get_scan_tokens(scan_id)
 
     inv: list = []

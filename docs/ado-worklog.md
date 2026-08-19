@@ -1045,6 +1045,47 @@ existing data and the existing decision path; nothing adds a second write path.
   document page-count data; #416's reasoning), and a wide stacked preview is exactly where a faked one
   would look most real. Frontend, not RULE_PATHS; 5 new tests, full frontend suite green (2055). A real
   test bug was fixed en route — an un-awaited async `unmountAll()` leaked teardown into the next test.
+- **Defaulted the workspace to the two-column Stacked layout** (#430). The Split/Stacked/Focus toggle
+  (#427) shipped defaulting to the side-by-side three-pane; the two-column Stacked workspace is the one
+  the redesign was built around and the reviewer preferred, so it is now what a reviewer sees first.
+  One-line default flip (`readLS('layout', 'stacked')`); anyone who prefers side-by-side switches and the
+  choice persists.
+- **Reworked the review states into a 5-stage taxonomy and fixed a live count double-count** (#434;
+  operator feedback). The top tabs conflated two overlapping lenses, so a scan showed a tab reading
+  "Ready to validate 25" while the progress line read "25 of 25 resolved" — the same acknowledged
+  auto-fixes counted twice — and review work could sit in a stage the default tab never surfaced,
+  dead-ending verification. New stages, each with one precise meaning and partitioning the queue: **Needs
+  review / Manual fixes / Awaiting validation / Blocked / Completed**. An unacknowledged auto-fix now
+  waits in Needs review (the reviewer still confirms it), moving to Awaiting validation once acknowledged;
+  the progress line reads "N reviewed" (a decision recorded), never "resolved", so an approved-but-not-
+  re-scanned fix is never both resolved AND awaiting validation. Honesty held (coordinated with the state
+  model's owner, ADR 0016): Awaiting validation stays distinct from Completed (the UI never claims done
+  before the re-scan earns it); `not_applicable` stays terminal and out of the coverage denominator;
+  "in progress" is gone as a tab but assigned/deferred route honestly into Manual fixes. Frontend, not
+  RULE_PATHS; suite green (2060), new tests pin the double-count fix and one-tab-per-finding.
+- **Redesigned the right pane around the reviewer's decision, with adaptive, grounded evidence** (#433;
+  operator feedback). The pane read like an engineering evidence record — hex values and ratios that prove
+  the rule passed but don't let a normal reviewer judge whether the document still LOOKS acceptable. Reordered
+  to **Your task → Before/after → What ACP changed → sticky Decision → collapsed Supporting details**
+  (the Issue→Proposed→Verified strip moved into the supporting section). Fixed the copy bug where a 1.4.3
+  contrast finding with no coordinates was labelled "structure or metadata": nature is now classified from
+  the CRITERION (1.4.3 is visual), not from whether geometry was attributed. Evidence adapts to the finding
+  type, and for contrast renders a grounded before/after — sample text at the real old/new colours with the
+  ratio COMPUTED from those real hexes (the WCAG luminance formula), returning null rather than a fabricated
+  "4.5:1" when a colour/background isn't recorded. The pptx/xlsx element crop (`Thumbnail.jsx`, real bounding
+  box) is reused where geometry exists; docx/pdf get the grounded colour before/after, never a faked crop or
+  page pager (ADR 0016). Auto-fix rows get an obvious "Approve ACP's fix" / "This looks wrong" — the latter
+  honestly labelled a flag, since there is no backend undo to revert an applied fix. Frontend; suite green (2089).
+- **Made the inbox rows scannable — issue-led, WCAG pill, quiet lane state** (#437; operator feedback). The
+  rows repeated a loud coloured lane pill ("Review automatic fix") on every row, burying the issue. The row
+  now leads with the ISSUE, the WCAG SC number is the one compact pill, and the remediation state is demoted
+  to quiet text (the lane's colour is already carried by the 4px rail). Frontend; suite green (2091).
+- **Aligned the "N need review" hero with the Needs-review tab so the two can't diverge** (#435). The
+  Review-queue hero counted a different population than the new Needs-review tab (it excluded the auto-fixes
+  the tab now includes) — a milder form of the same dead-end #434 fixed. The hero now derives from
+  `matchesWorkflow(f, 'needs-review')` over the same inbox queue, with a source-match guard so it can't
+  regress to a raw `queue.length`. The top-nav HITL bell was left as a deliberately distinct global metric
+  (the human-authoring queue). Frontend.
 
 ## Feature: Estate coverage — three denominators and discovery at scale · #4597
 
@@ -1353,6 +1394,19 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   stage to the scope funnel — exact when all document types are selected, a clamped bound when narrowed
   (the aggregate backend count spans all eligible formats). The sibling Assess filters Deva also asked for —
   document-type (#5) and WCAG-code (#7) — were already shipped in `AssessScope.jsx`, so were not rebuilt.
+- **Made discovery metadata-only by default — download deferred to Assess** (#436; operator request).
+  Discovery already read only metadata per source (extension/listing type detection, no byte-sniffing, no
+  file opened), but the default pipeline continued straight into downloading + analysing each file. Now a
+  scan lists metadata, classifies from it, persists the inventory, and STOPS — nothing is downloaded or
+  opened until Assess is explicitly run. Implemented as a default flip of `_defer_analysis_to_assess()`
+  (`ACP_DEFER_ANALYSIS_TO_ASSESS` "0"→"1", override preserved for the legacy full-scan); the monolithic
+  `scan` job and the sync/background routes now delegate to the already-proven `_scan_discover` rather
+  than teaching `run_scan` a partial mode, keeping blast radius minimal (`run_scan` untouched, so direct
+  callers keep full-scan behaviour). Risk noted: API/script callers that POST-then-read results must now
+  call Assess (or set the override); the UI already models Discover→Assess. Also aligned the frontend
+  `startScan`/`startScanQueued` `pii` default arg `true`→`false` to match the real behaviour (PII scanning
+  is opt-in and off by default at every layer). Not RULE_PATHS; backend suite green (the lone local
+  failure was an env-only Ollama vision test, green on CI), frontend 2055.
 
 ## Feature: Observability — AI tracing and cost (Langfuse)
 
@@ -1756,3 +1810,15 @@ invariant the redaction tests pin).
   three-pane workspace, with the layout + pane sizes persisted in `localStorage`. Named to avoid colliding
   with the preview's own Before/After/Side-by-side (document-diff) control. Frontend, not RULE_PATHS
   (frontend suite green at 2055). **Sync marker deliberately NOT advanced** (same convention).
+- **2026-08-19 (Remediation redesign from operator feedback + metadata-only Discover)** — A detailed operator
+  critique of the Remediate tab drove five PRs, added to **Remediate review queue (#4598)**: #430 (default
+  workspace → Stacked), #434 (the 5-stage taxonomy — Needs review / Manual fixes / Awaiting validation /
+  Blocked / Completed — fixing the auto-fix double-count and the reachability dead-end), #433 (decision-first
+  right pane + adaptive, grounded evidence, and the "structure/metadata" copy-bug fix classified by criterion
+  nature), #437 (issue-led scannable rows with a WCAG pill and quiet lane state), and #435 (the hero "N need
+  review" derived from the same Needs-review population so the two counts can't diverge). Cross-session
+  coordinated with the state-model owner throughout, preserving the ADR 0016 honesty invariants (Awaiting
+  validation ≠ Completed; not_applicable terminal + out of denominator; no fabricated geometry/ratios/pager).
+  Separately, to **Discover & Assess lifecycle rules (#4618)**: #436 made discovery metadata-only by default
+  (download deferred to Assess) and aligned the frontend `pii` default to off. **Sync marker deliberately NOT
+  advanced** (same convention as the prior entries).

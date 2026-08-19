@@ -9,9 +9,9 @@ const { default: RemediationInbox } = await import('./RemediationInbox.jsx')
 
 // Filenames are prefixed a-/b- so the document sort (alphabetical by file, then id) yields a
 // stable order for the interaction assertions below. Workflow stages under the top tabs:
-//   id1 autoApplied       → Ready to validate (the fix is in, awaiting the reviewer)
-//   id2 hasProposal       → Inbox (a fresh AI draft, untouched)
-//   id3 manual (no draft) → Inbox (fresh, needs a human)
+//   id1 autoApplied       → Needs review (an unconfirmed auto-fix — the reviewer confirms the change)
+//   id2 hasProposal       → Needs review (a fresh AI draft, untouched)
+//   id3 manual (no draft) → Manual fixes (needs a human to hand-edit)
 const QUEUE = [
   { id: 1, file: 'a-brief.docx', title: 'DOCX · Heading contrast is too low', page: 1, severity: 'SERIOUS', autoApplied: true, before: '#D9D9D9', after: '#2F6FED' },
   { id: 2, file: 'a-brief.docx', title: 'DOCX · Image needs alt text', page: 3, severity: 'CRITICAL', hasProposal: true, after: 'A bar chart of revenue' },
@@ -31,56 +31,69 @@ const btnByText = (t) => [...container.querySelectorAll('button')].find((b) => b
 const detailHeading = () => container.querySelector('h3')?.textContent
 
 describe('RemediationInbox — workflow-status queue', () => {
-  it('opens on the Inbox and shows its first untouched finding', async () => {
+  it('opens on Needs review and shows its first item', async () => {
     await render({ queue: QUEUE, decisions: {} })
-    // The auto-applied fix (id1) has moved on to Ready to validate, so the Inbox opens on id2.
-    expect(detailHeading()).toBe('Image needs alt text')
-    expect(container.textContent).toContain('Inbox 2')                // id2 + id3 untouched
-    expect(container.textContent).toContain('Ready to validate 1')    // id1, the applied auto-fix
-    expect(container.textContent).toContain('0 of 3 resolved')        // progress is a separate lens
+    // Needs review holds the unconfirmed auto-fix (id1) and the AI draft (id2); the manual finding
+    // (id3) is in Manual fixes. Document sort → id1 first.
+    expect(detailHeading()).toBe('Heading contrast is too low')
+    expect(container.textContent).toContain('Needs review 2')         // id1 (auto) + id2 (AI draft)
+    expect(container.textContent).toContain('Manual fixes 1')         // id3, manual-from-start
+    expect(container.textContent).toContain('0 of 3 reviewed')        // progress is a separate lens
   })
 
   it('partitions findings across the workflow tabs by pipeline stage', async () => {
     await render({ queue: QUEUE, decisions: {} })
-    // Ready to validate holds only the auto-applied fix; the inbox items are not there.
-    await click(btnByText('Ready to validate'))
-    expect(detailHeading()).toBe('Heading contrast is too low')
+    // Manual fixes holds only the manual-from-start finding; the needs-review items are not there.
+    await click(btnByText('Manual fixes'))
+    expect(detailHeading()).toBe('Scanned page, no text')
   })
 
   it('selecting a row populates the detail pane instead of expanding in place', async () => {
     await render({ queue: QUEUE, decisions: {} })
-    await click(btnByText('Scanned page, no text'))
-    expect(detailHeading()).toBe('Scanned page, no text')
+    await click(btnByText('Image needs alt text'))   // id2, in the default Needs review tab
+    expect(detailHeading()).toBe('Image needs alt text')
+  })
+
+  it('a queue row leads with the issue, shows the SC number as a compact pill, and the lane state quiet', async () => {
+    await render({ queue: [{ id: 1, file: 'Clinical-Newsletter-79.docx', title: 'DOCX · Contrast minimum', page: 2, rule_id: '1.4.3', autoApplied: true }], decisions: {} })
+    const row = container.querySelector('.rinbox-row')
+    expect(row.textContent).toContain('Contrast minimum')             // the issue is the dominant text
+    expect(row.textContent).toContain('1.4.3')                        // the compact WCAG pill
+    expect(row.textContent).toContain('Automatic fix')                // the lane state, quiet
+    expect(row.textContent).not.toContain('Review automatic fix')     // the loud repeated pill is gone
   })
 
   it('acting on a finding calls onDecide and auto-advances to the next unresolved one', async () => {
     const calls = []
     await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
-    expect(detailHeading()).toBe('Image needs alt text')             // id2, apply lane
+    await click(btnByText('Image needs alt text'))                   // id2, apply lane
+    expect(detailHeading()).toBe('Image needs alt text')
     await click(btnByText('Apply fix'))
     expect(calls).toEqual([[2, 'accepted']])
-    // auto-advance moved the workspace to the next unresolved inbox finding without a click
-    expect(detailHeading()).toBe('Scanned page, no text')
+    // auto-advance moved the workspace to the next unresolved needs-review finding without a click
+    expect(detailHeading()).toBe('Heading contrast is too low')      // id1, the remaining auto-fix
   })
 
   it('a manual finding shows guided steps and native-app actions, not an approve button', async () => {
     await render({ queue: QUEUE, decisions: {} })
+    await click(btnByText('Manual fixes'))                          // id3 lives in Manual fixes now
     await click(btnByText('Scanned page, no text'))
     expect(detailHeading()).toBe('Scanned page, no text')
     expect(container.textContent).toContain('Fix this in Acrobat Pro')  // pdf → Acrobat
     expect(btnByText('Upload & recheck')).toBeTruthy()
   })
 
-  it('an approved finding moves to Ready to validate; a rejected one to Done', async () => {
+  it('an approved finding moves to Awaiting validation; a rejected one to Completed', async () => {
     await render({ queue: QUEUE, decisions: { 2: { state: 'accepted' }, 3: { state: 'rejected' } } })
-    expect(container.textContent).toContain('Ready to validate 2')     // id1 (auto) + id2 (approved)
-    expect(container.textContent).toContain('Done 1')                  // id3 (rejected → resolved)
-    expect(container.textContent).toContain('2 of 3 resolved')         // progress agrees
+    expect(container.textContent).toContain('Awaiting validation 1') // id2 (approved), not yet re-scanned
+    expect(container.textContent).toContain('Completed 1')           // id3 (rejected → terminal)
+    expect(container.textContent).toContain('2 of 3 reviewed')       // id2 + id3 reviewed (id1 auto-fix still needs review)
   })
 
   it('marks a finding "Not applicable" (out of scope), resolving it without a fix', async () => {
     const calls = []
     await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push(d) })
+    await click(btnByText('Image needs alt text'))               // id2
     await click(btnByText('Not applicable'))
     expect(calls[0].state).toBe('not_applicable')
   })
@@ -88,7 +101,8 @@ describe('RemediationInbox — workflow-status queue', () => {
   it('lets the reviewer edit the AI draft and applies their version (Save edited fix)', async () => {
     const calls = []
     await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push(d) })
-    expect(detailHeading()).toBe('Image needs alt text')          // id2, apply lane, carries `after`
+    await click(btnByText('Image needs alt text'))               // id2, apply lane, carries `after`
+    expect(detailHeading()).toBe('Image needs alt text')
     const ta = container.querySelector('textarea[aria-label="Edit the proposed fix"]')
     expect(ta).toBeTruthy()
     // Edit through the native setter so React's controlled onChange fires.
@@ -102,7 +116,8 @@ describe('RemediationInbox — workflow-status queue', () => {
 
   it('offers specific decision actions (no bare "Reject") and hides verification until a fix is saved', async () => {
     await render({ queue: QUEUE, decisions: {} })
-    expect(detailHeading()).toBe('Image needs alt text')          // id2, apply lane, unresolved
+    await click(btnByText('Image needs alt text'))               // id2, apply lane, unresolved
+    expect(detailHeading()).toBe('Image needs alt text')
     expect(btnByText('Reject & handle manually')).toBeTruthy()    // the specific outcome
     expect(btnByText('Defer')).toBeTruthy()
     // The ambiguous bare "Reject" button is gone.
@@ -114,7 +129,7 @@ describe('RemediationInbox — workflow-status queue', () => {
 
   it('shows the verification path (Written → Re-scan → Certified) once a finding is saved', async () => {
     await render({ queue: QUEUE, decisions: { 2: { state: 'accepted' } } })
-    await click(btnByText('Ready to validate'))                   // where the saved fix now sits
+    await click(btnByText('Awaiting validation'))                 // where the saved fix now sits
     await click(btnByText('Image needs alt text'))
     expect(container.textContent).toContain('Re-scan')
     expect(container.textContent).toContain('Certified')
@@ -125,7 +140,7 @@ describe('RemediationInbox — workflow-status queue', () => {
     // Three panes: Remediation Inbox · Guided remediation · Document preview. The finding is reviewed
     // in the guided centre column; the preview lives in its own right-hand pane, NOT folded into an
     // Evidence section of the workspace.
-    expect(detailHeading()).toBe('Image needs alt text')
+    expect(detailHeading()).toBe('Heading contrast is too low')
     expect(container.textContent).toContain('Guided remediation')
     expect(container.textContent).toContain('Document preview')
     // the preview (its mode tabs) renders — now in the third pane

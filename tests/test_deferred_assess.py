@@ -91,3 +91,43 @@ def test_assess_kicks_off_fanout_from_inventory(isolated_store, monkeypatch):
     assert run["status"] == "running"                                        # flipped back for analysis
     jobs = isolated_store.list_jobs()
     assert sum(1 for j in jobs if j["type"] == "scan_file") == 2             # both files now enqueued
+
+
+# ── metadata-only discovery is the DEFAULT, including the monolithic 'scan' job ──────────────────
+
+def test_default_is_metadata_only(monkeypatch):
+    """With NO override set, discovery defers by default — the whole point of ADR 0020's flip."""
+    import handlers
+    monkeypatch.delenv("ACP_DEFER_ANALYSIS_TO_ASSESS", raising=False)
+    assert handlers._defer_analysis_to_assess() is True
+    monkeypatch.setenv("ACP_DEFER_ANALYSIS_TO_ASSESS", "0")                  # legacy override still works
+    assert handlers._defer_analysis_to_assess() is False
+
+
+def test_monolithic_scan_job_defers_to_metadata_only_by_default(isolated_store, monkeypatch):
+    """The non-fanout durable 'scan' job now LISTS metadata and STOPS by default (ADR 0020),
+    delegating to _scan_discover — run_scan (which would download+analyse) is never called, no
+    file is opened, and the in-memory tokens survive for the later Assess."""
+    import core
+    import handlers
+    import scanner
+    import worker
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.delenv("ACP_DEFER_ANALYSIS_TO_ASSESS", raising=False)         # exercise the DEFAULT
+    monkeypatch.setattr(scanner, "_list", lambda *a, **k: _items())
+
+    def _boom(*a, **k):                                                       # must NOT be reached
+        raise AssertionError("run_scan was called — the default should defer, not download")
+    monkeypatch.setattr(handlers, "run_scan", _boom)
+
+    sid = "s-mono-default"
+    core.register_scan_tokens(sid, drive="tok")
+    jid = isolated_store.enqueue_job("scan", {"source": "local", "scan_id": sid, "ai": True},
+                                     scan_id=sid)
+    assert worker.JobWorker(isolated_store, worker_id="w-mono").run_once() is True
+    assert isolated_store.get_job(jid)["status"] == "done"
+    assert isolated_store.get_scan(sid)["run"]["status"] == "discovered"     # stopped at discovery
+    assert isolated_store.count_inventory(sid) == 2                          # estate listed from metadata
+    jobs = isolated_store.list_jobs()
+    assert not any(j["type"] in ("scan_file", "scan_batch") for j in jobs)   # NOTHING opened
+    assert core.get_scan_tokens(sid) == {"drive": "tok"}                     # kept for the later Assess
