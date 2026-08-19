@@ -489,7 +489,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 + `${err?.message || err}. It is back in the queue — try again.`)
   }
 
-  const act = (id, kind, editedValue, approvedValues) => {
+  const act = (id, kind, editedValue, approvedValues, resolution = null) => {
     const item = queue.find((x) => x.id === id)
     setActError(null)
     setQueue((q) => q.filter((x) => x.id !== id))
@@ -520,7 +520,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     if (!SIM && item?.id && apiStatus) {
       const p = updateHitlItem(item.id, apiStatus, null,
                                apiStatus === 'approved' ? (editedValue || null) : null,
-                               { approvedValues: apiStatus === 'approved' ? (approvedValues || null) : null })
+                               { approvedValues: apiStatus === 'approved' ? (approvedValues || null) : null,
+                                 // A WCAG-exception / out-of-scope resolution: status stays 'approved'
+                                 // but it writes NO value — the reason is persisted on the row.
+                                 resolution: apiStatus === 'approved' ? (resolution || null) : null })
       // On approval the server re-validates the file: once its every review item is
       // approved it flips to compliant and enters the publish queue. Refresh the scan so
       // "Re-validated & ready to publish" (and the Publish tab) pick that up immediately.
@@ -861,6 +864,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               if (d.state === 'accepted') act(f.id, 'approved', d.value ?? f.after ?? null)
               else if (d.state === 'rejected') act(f.id, 'rejected')
               else if (d.state === 'assigned') act(f.id, 'deferred')
+              // Not applicable / out of scope: resolved as approved-with-no-value + an out_of_scope
+              // resolution, so it never blocks certification and leaves the coverage denominator.
+              else if (d.state === 'not_applicable') act(f.id, 'approved', null, undefined, 'out_of_scope')
             }}
           />
         )}

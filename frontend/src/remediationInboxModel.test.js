@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   laneOf, LANES, effortSecOf, effortLabel, isResolved, issueLabel, locationLabel, rowModel,
   tabOf, tabCounts, matchesTab, sortQueue, groupByDocument, nextUnresolvedId, progress,
-  normSc, autoFixRows, railColorOf, NEUTRAL_RAIL,
+  normSc, autoFixRows, railColorOf, NEUTRAL_RAIL, workflowStatusOf,
 } from './remediationInboxModel.js'
 
 const F = {
@@ -28,6 +28,12 @@ describe('lane taxonomy', () => {
   it('each lane has a distinct rail colour', () => {
     const rails = Object.values(LANES).map((l) => l.rail)
     expect(new Set(rails).size).toBe(rails.length)
+  })
+  it('a not-applicable (out-of-scope) decision resolves the finding and lands it in Done', () => {
+    const f = { id: 7, hasProposal: true, after: 'x' }
+    const decisions = { 7: { state: 'not_applicable' } }
+    expect(isResolved(f, decisions)).toBe(true)
+    expect(workflowStatusOf(f, decisions)).toBe('done')   // settled, no re-scan to await
   })
   it('reserves a coloured rail for attention lanes; everyday lanes get a neutral rail', () => {
     // Blocked + rejected-handoff are the only lanes a reviewer must actively unblock.

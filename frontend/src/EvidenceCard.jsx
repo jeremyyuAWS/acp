@@ -1143,6 +1143,13 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
                     onClick={() => decide('skipped')}>✋ I’ll fix it</button>
             <button className="qbtn reject" disabled={busy} aria-expanded={askReject}
                     onClick={() => setAskReject((v) => !v)}>✕ Reject{askReject ? ' —' : '…'}</button>
+            {/* Out of scope — the criterion does not apply to this document. Resolves the finding
+                (status stays approved, no value written) and takes it OUT of the coverage denominator,
+                persisted as an out_of_scope resolution — distinct from the decorative/logo exceptions,
+                which resolve an in-scope finding. */}
+            <button className="qbtn" disabled={busy}
+                    title="Not applicable — this criterion does not apply to the document. Resolves the finding without writing any text and removes it from the coverage denominator."
+                    onClick={() => decide('approved', null, 'out_of_scope')}>⊘ Not applicable</button>
             {traceUrl && <a className="rc-trace" href={traceUrl} target="_blank" rel="noopener noreferrer">📊 View trace</a>}
           </div>
           {/* Feedback intelligence: one more click captures WHY. Each rejection becomes training

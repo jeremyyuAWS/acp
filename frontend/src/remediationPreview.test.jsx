@@ -87,4 +87,41 @@ describe('RemediationPreview — contextual document pane', () => {
     expect(container.textContent).toContain('#D9D9D9 on #FFFFFF')       // found
     expect(container.textContent).toContain('Darken text to #595959')  // proposed
   })
+
+  // ── Zoom (mockup "− 100% +") — UI-only, no data required ──────────────────────────────────────
+  const zoomBtn = (label) => [...container.querySelectorAll('button')].find((b) => (b.getAttribute('aria-label') || '') === label)
+
+  it('offers a UI-only zoom control in Visual mode that steps the percentage', async () => {
+    await render({ finding: VISUAL })
+    expect(container.textContent).toContain('100%')        // starts at 100%
+    expect(zoomBtn('Zoom in')).toBeTruthy()
+    expect(zoomBtn('Zoom out')).toBeTruthy()
+    await click(zoomBtn('Zoom in'))
+    expect(container.textContent).toContain('125%')
+    await click(zoomBtn('Zoom out'))
+    await click(zoomBtn('Zoom out'))
+    expect(container.textContent).toContain('75%')
+  })
+
+  // ── Fix callouts — grounded ONLY on real applied/verified state (ADR 0016) ─────────────────────
+  it('shows NO fix callout for a bare proposal (after present but not applied)', async () => {
+    await render({ finding: VISUAL })       // has `after`, but no applied/verified/status
+    await click(tab('After'))
+    expect(container.querySelector('.fix-callout')).toBeNull()
+  })
+
+  it('shows a "✓ <what changed>" callout only once the fix is actually applied', async () => {
+    await render({ finding: { ...VISUAL, applied: true } })
+    await click(tab('After'))
+    const callout = container.querySelector('.fix-callout')
+    expect(callout).toBeTruthy()
+    expect(callout.textContent).toContain('Darken text to #595959')  // the real applied after-value
+    expect(container.textContent).not.toContain('Re-scan cleared')   // not verified yet
+  })
+
+  it('adds "Re-scan cleared" only for a verified finding, never fabricated', async () => {
+    await render({ finding: { ...VISUAL, status: 'verified' } })
+    await click(tab('After'))
+    expect(container.textContent).toContain('Re-scan cleared')
+  })
 })
