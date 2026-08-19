@@ -60,10 +60,28 @@ def assess_eligibility(request: Request, codes: str | None = Query(None)):
     by-format breakdown, the eligible format set, the total discovered, and the selected
     codes with their per-code lanes + reach. Zeros (not a 500) when no discovery run
     exists yet. Never triggers a scan or mutates state.
+
+    It also reports the archival/deletion lifecycle exclusion (PRD §4.5): `lifecycle_excluded`
+    (discovered files a discovery rule flagged for archival/deletion) and
+    `lifecycle_eligible_excluded` (the assessable subset the run actually skips). Both are 0 when
+    the latest discovery has no per-file inventory yet. The Assess scope preview shows these so the
+    reviewer sees how many files the default "ignore archival/deletion" excludes.
     """
+    owner = _owner(request)
     selected = wcag_codeset.parse_codes(codes)
-    inventory = _latest_inventory(_owner(request))
-    return wcag_codeset.eligibility(inventory, selected)
+    inventory = _latest_inventory(owner)
+    result = wcag_codeset.eligibility(inventory, selected)
+
+    sid = _latest_scan_id_with_inventory(owner)
+    rows: list = []
+    if sid:
+        try:
+            rows = core.store.list_inventory(sid)
+        except Exception:
+            rows = []
+    result.update(wcag_codeset.lifecycle_exclusion(
+        rows, selected, core.store.LIFECYCLE_EXCLUDED_DEFAULT))
+    return result
 
 
 def _latest_scan_id_with_inventory(owner: str) -> str | None:

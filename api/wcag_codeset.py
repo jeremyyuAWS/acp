@@ -161,3 +161,40 @@ def eligibility(inventory: dict | None, codes: Iterable[str] | None = None) -> d
         "formats": sorted(eligible_formats),
         "codes": codes_out,
     }
+
+
+def lifecycle_exclusion(rows: Iterable[dict] | None, codes: Iterable[str] | None = None,
+                        excluded_statuses: Iterable[str] = ()) -> dict:
+    """How many discovered files a discovery rule flagged for archival/deletion — the count the
+    Assess scope preview needs to show the reviewer what the run will skip (Discover/Assess PRD
+    §4.5; the run itself already excludes these by default, gated on include_lifecycle_flagged).
+
+    `rows` — the per-file inventory (store.list_inventory): each a dict carrying `lifecycle_status`
+    plus `file`/`mime` for its format. `codes` — the selected code-set (default Core 17), used to
+    decide format eligibility. `excluded_statuses` — the lifecycle statuses that mean "flagged"
+    (store.LIFECYCLE_EXCLUDED_DEFAULT); passed in rather than hard-coded so the store stays the one
+    authority for the set.
+
+    Returns `{lifecycle_excluded, lifecycle_eligible_excluded}`:
+      · lifecycle_excluded         — flagged files in total (any format), and
+      · lifecycle_eligible_excluded — the subset whose format has a lane for the selected codes,
+        i.e. the ASSESSABLE files the run actually skips (a flagged image was never eligible anyway).
+    Reads only; derives every number from real inventory state (ADR 0016), never a guess.
+    """
+    excluded = {s for s in excluded_statuses}
+    if not excluded:
+        return {"lifecycle_excluded": 0, "lifecycle_eligible_excluded": 0}
+
+    from estate_inventory import _format_of   # local import — estate_inventory is a light peer
+
+    eligible_formats = formats_for_codes(list(codes) if codes is not None else core17_codes())
+    total = 0
+    eligible_excluded = 0
+    for r in rows or []:
+        status = r.get("lifecycle_status") or "Active"
+        if status in excluded:
+            total += 1
+            fmt = _format_of(r.get("file") or "", r.get("mime") or "")
+            if fmt in eligible_formats:
+                eligible_excluded += 1
+    return {"lifecycle_excluded": total, "lifecycle_eligible_excluded": eligible_excluded}
