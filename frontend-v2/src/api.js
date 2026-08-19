@@ -341,9 +341,12 @@ export const saveDecisionsBatch = (scanId, items) => (SIM
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/decisions`,
           { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ items }) }).then(j))
 // Run the WCAG assessment into Langfuse on demand (separate from the scan trace).
-export const assessScan = (scanId, level = 'AA') => (SIM
+// `includeLifecycleFlagged` is the authorized override (PRD §4.5): by default the run SKIPS files a
+// discovery rule flagged for archival or deletion (Archive/Delete Candidate, Archived, Deleted) —
+// pass true to pull them back into the assessment anyway.
+export const assessScan = (scanId, level = 'AA', includeLifecycleFlagged = false) => (SIM
   ? sim({ ok: true })
-  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/assess?level=${encodeURIComponent(level)}`,
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/assess?level=${encodeURIComponent(level)}&include_lifecycle_flagged=${includeLifecycleFlagged ? 'true' : 'false'}`,
           { method: 'POST', headers: headers() }).then(j))
 // Live remediation progress: in-flight jobs + latest fixed file (drives the Remediate bar).
 export const getRemediationStatus = (scanId) => {
