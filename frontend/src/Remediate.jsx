@@ -19,6 +19,7 @@ import ProposalThumb from './ProposalThumb.jsx'
 import { remediableFiles, emptyScopeReason, scopeSummary, ineligibleReason,
          hasDocumentSelection, documentSelection, documentScopeSentence } from './remediableScope.js'
 import { measuredReviewTime, REVIEW_TIME_BASIS } from './reviewerTime.js'
+import { reviewEmptyLine, reviewLeadLine } from './reviewQueueCopy.js'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
 // (what to fix, prioritized, accept/reject/modify), the HITL queue, and self-remediation.
@@ -798,7 +799,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   <b>{reviewCount}</b> finding{reviewCount === 1 ? '' : 's'} need review across{' '}
                   <b>{reviewDocCount}</b> document{reviewDocCount === 1 ? '' : 's'}
                 </p>
-              : <p className="muted" style={{ margin: '2px 0 0', fontSize: 13 }}>All clear — nothing needs your review.</p>}
+              // NOT unconditionally "All clear": an unreadable document is not a clear one, and
+              // the reader who sees "All clear" stops reading (reviewQueueCopy.js).
+              : <p className="muted" style={{ margin: '2px 0 0', fontSize: 13 }}>{reviewLeadLine(files, reviewCount)}</p>}
           </div>
           {totalHitl > 0 && (
             <div className="rem-sec-prog">
@@ -853,10 +856,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             {actError}
           </p>
         )}
+        {/* Both branches of reviewEmptyLine are true about the QUEUE and incomplete about the
+            ESTATE, so the "N could not be analysed" caveat is appended to whichever one renders
+            rather than living inside one of them — which is how the original defect happened. */}
         {inboxQueue.length === 0 ? (
-          <p className="muted">{totalHitl === 0
-            ? 'Nothing needs your review — every fix was applied automatically. Items needing an AI-assisted fix or human sign-off will appear here.'
-            : `All reviewed — ${acted.approved} approved, ${acted.rejected} rejected${acted.deferred ? `, ${acted.deferred} deferred` : ''}. Verification runs on the approved fixes.`}</p>
+          <p className="muted">{reviewEmptyLine(files, { totalHitl, acted })}</p>
         ) : (
           <RemediationInbox
             queue={inboxQueue}
