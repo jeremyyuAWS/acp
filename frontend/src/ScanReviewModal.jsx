@@ -54,7 +54,8 @@ export default function ScanReviewModal({
   excludeRemediated, setExcludeRemediated, incremental, setIncremental,
   estCount = null, estWhere = null,
   hasDrive = false, hasSP = false,
-  canEditScope = true, rememberDefault = true,
+  canEditScope = true, rememberDefault = false,
+  scans = [],
   onConfirm, onCancel,
 }) {
   const label = scanSourceLabel(source, { hasDrive, hasSP })
@@ -120,8 +121,11 @@ export default function ScanReviewModal({
           </div>
           {/* source/hasDrive/hasSP so the wizard can seed its folder step from the SAME source the
               scan will resolve to; the run scope comes back out through onConfirm. */}
+          {/* `scans` is the user's own run history — the wizard derives its "reuse a recent scope"
+              shortcuts from the boundary each run FROZE, so every offer is a record rather than a
+              claim. Threaded rather than fetched here: App already holds the list. */}
           <ScanScopeWizard showStartButton canEditScope={canEditScope} rememberDefault={rememberDefault}
-            source={source} hasDrive={hasDrive} hasSP={hasSP}
+            source={source} hasDrive={hasDrive} hasSP={hasSP} scans={scans}
             onStartScan={(o) => { if (o?.cancel) onCancel?.(); else onConfirm?.(o) }} />
         </div>
       </div>
