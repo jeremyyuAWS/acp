@@ -1029,6 +1029,22 @@ existing data and the existing decision path; nothing adds a second write path.
   `kind='assignee'` rather than a new table; the scans route's decisions allow-list is widened to accept
   it. The frontend "Assigned to me" filter is the follow-up that reads these. Under RULE_PATHS
   (`api/assessment_policy.py`) → `Matrix-Note: none`; 7 tests.
+- **Split / Stacked / Focus workspace layouts + resizable panes** (#427). The three-pane guided work
+  queue (#418) had one fixed arrangement; this adds an Outlook-style layout toggle on the
+  Guided-remediation header that reflows the two workspace panes beside the inbox — **Split** (side by
+  side, default), **Stacked** (preview below the guided pane), **Focus** (preview hidden, so a text-only
+  fix gets the whole workspace). Named Split/Stacked/Focus deliberately, **not** "Side by side": the
+  preview already owns a Before/After/Side-by-side control (the document diff), and two controls two
+  inches apart must not say the same words for different things. Panes are resizable via `role="separator"`
+  dividers — inbox↔workspace in every layout, plus one between the workspace panes (vertical in Split,
+  horizontal in Stacked) — each of which **drags with the pointer AND nudges with Arrow keys**, the
+  ARIA-required keyboard path that also makes the resize verifiable in jsdom (no layout there, so pointer
+  math no-ops on a zero-size rect). Layout choice and pane sizes persist in `localStorage` keyed globally —
+  a workspace preference set once, unlike the per-scan search/filter state in `sessionStorage` — with every
+  storage access guarded against private-mode throws. The "Page N of M" pager stays omitted (no
+  document page-count data; #416's reasoning), and a wide stacked preview is exactly where a faked one
+  would look most real. Frontend, not RULE_PATHS; 5 new tests, full frontend suite green (2055). A real
+  test bug was fixed en route — an un-awaited async `unmountAll()` leaked teardown into the next test.
 
 ## Feature: Estate coverage — three denominators and discovery at scale · #4597
 
@@ -1735,3 +1751,8 @@ invariant the redaction tests pin).
   SUPERSEDED #408's two-column fold with a dedicated three-pane layout — the in-flight item the prior entry
   flagged, now landed. PR5's N/A decision is layout-independent and rides on either. **Sync marker
   deliberately NOT advanced** (same convention).
+- **2026-08-19 (Remediate layout controls)** — Added #427 to **Remediate review queue (#4598)**: an
+  Outlook-style Split / Stacked / Focus toggle and pointer-and-keyboard resizable dividers over the #418
+  three-pane workspace, with the layout + pane sizes persisted in `localStorage`. Named to avoid colliding
+  with the preview's own Before/After/Side-by-side (document-diff) control. Frontend, not RULE_PATHS
+  (frontend suite green at 2055). **Sync marker deliberately NOT advanced** (same convention).
