@@ -151,8 +151,9 @@ export const getFileTraceData = (scanId, file) => {
     id: `${scanId}::${file}`, document: file || 'doc-3f9a2c.docx', format: 'docx',
     timestamp: '2026-06-29T17:04:10Z',
     result: { score: 82, conformant: false, level: 'AA',
-      failing_criteria: ['1.1.1', '1.4.3'],
-      pii: { present: true, types: { ssn: 2, email: 5 } },
+      checks_failed: 2, failing_criteria: { '1.1.1': 1, '1.4.3': 3 }, findings_total: 4,
+      checks: { PASS: 12, FAIL: 2, REVIEW: 1, NOT_EVALUATED: 3 },
+      pii: { flagged: true, types: ['us_ssn', 'email_address'], findings: 5, critical: false },
       remediation: { remediated: true, written_back: false, published: false } },
     observations: [
       { type: 'SPAN', name: 'Discover', start: '2026-06-29T17:04:10Z', end: '2026-06-29T17:04:11Z', level: 'DEFAULT', model: null, input_tokens: 0, output_tokens: 0, cost: 0 },
@@ -161,6 +162,26 @@ export const getFileTraceData = (scanId, file) => {
     ] } })
   if (!scanId || !file) return Promise.resolve({ status: 'not_configured' })
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/trace/file/${encodeURIComponent(file)}/data`, { headers: headers() })
+    .then(j).catch(() => ({ status: 'pending' }))
+}
+// The whole SCAN's session — every file's trace as a PHI-safe list + rollup, for the in-app
+// SessionPanel. This is the aggregate that hung Langfuse's own UI on large scans; rendered
+// in-app it's a plain capped list. Same {status} contract as getFileTraceData; SIM returns a
+// canned session.
+export const getSessionTraceData = (scanId) => {
+  if (SIM) return sim({ status: 'ok', session: {
+    id: scanId, total: 3, truncated: false,
+    rollup: { documents: 3, assessed: 2, conformant: 1, avg_score: 74.5, with_failures: 1, with_pii: 1 },
+    files: [
+      { trace_id: `${scanId}::doc-3f9a2c.docx`, document: 'doc-3f9a2c.docx', format: 'docx',
+        result: { score: 67, conformant: false, level: 'AA', failing_criteria: { '1.1.1': 2, '1.4.3': 1 },
+          pii: { flagged: true, types: ['us_ssn'], findings: 3, critical: false } } },
+      { trace_id: `${scanId}::doc-b7970a.pdf`, document: 'doc-b7970a.pdf', format: 'pdf',
+        result: { score: 82, conformant: true, level: 'AA', failing_criteria: {} } },
+      { trace_id: `${scanId}::doc-929e23.xlsx`, document: 'doc-929e23.xlsx', format: 'xlsx', result: null },
+    ] } })
+  if (!scanId) return Promise.resolve({ status: 'not_configured' })
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/trace/session/data`, { headers: headers() })
     .then(j).catch(() => ({ status: 'pending' }))
 }
 // Sensitive-data (PII) findings for a scan (ADR 0006) — rollup + per-type counts (masked).

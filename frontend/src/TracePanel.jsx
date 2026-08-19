@@ -20,34 +20,43 @@ function duration(start, end) {
 
 const LEVEL_CLASS = { ERROR: 'tp-lvl-error', WARNING: 'tp-lvl-warn' }
 
+// The result shape is exactly what lf.file_assessment_result writes as the trace OUTPUT:
+//   { score, conformant, level, checks_failed, failing_criteria: {SC: count},
+//     findings_total, checks?: {PASS/FAIL/REVIEW/NOT_EVALUATED: count},
+//     pii?: {flagged, types: [category…], findings, critical}, remediation?: {…booleans} }
+// failing_criteria is a DICT keyed by WCAG SC (with finding counts) and pii.types is a LIST of
+// category names — never a value. Rendered to match that, not an assumed array/object.
 function ResultSummary({ result }) {
   if (!result) return <div className="muted" style={{ marginTop: 8 }}>No assessment recorded on this trace yet.</div>
-  const { score, conformant, level, failing_criteria: failing, pii, remediation: rem } = result
-  const piiTypes = pii && pii.types ? Object.keys(pii.types) : []
+  const { score, conformant, level, failing_criteria: fc, pii, remediation: rem } = result
+  const failing = fc && typeof fc === 'object' ? Object.entries(fc) : []
+  const piiTypes = pii && Array.isArray(pii.types) ? pii.types : []
   return (
     <div className="tp-summary">
       <div className="tp-metrics">
         {typeof score === 'number' && (
-          <div className="tp-metric"><div className="tp-metric-v">{score}</div><div className="tp-metric-k">score / 100</div></div>
+          <div className="tp-metric"><div className="tp-metric-v">{Math.round(score)}</div><div className="tp-metric-k">score / 100</div></div>
         )}
         <div className="tp-metric">
           <div className="tp-metric-v">{conformant ? '✓' : '✗'}</div>
           <div className="tp-metric-k">{level ? `${level} conformant` : 'conformant'}</div>
         </div>
       </div>
-      {Array.isArray(failing) && failing.length > 0 && (
+      {failing.length > 0 && (
         <div className="tp-row">
           <div className="tp-row-k">Failing criteria</div>
-          <div className="tp-chips">{failing.map((c) => <span key={c} className="tp-chip tp-chip-fail">{c}</span>)}</div>
+          <div className="tp-chips">{failing.map(([sc, n]) => (
+            <span key={sc} className="tp-chip tp-chip-fail">{sc}{n ? ` ·${n}` : ''}</span>
+          ))}</div>
         </div>
       )}
-      {pii && pii.present && (
+      {pii && pii.flagged && (
         <div className="tp-row">
-          <div className="tp-row-k">Sensitive data</div>
+          <div className="tp-row-k">Sensitive data{pii.critical ? ' (critical)' : ''}</div>
           <div className="tp-chips">
             {piiTypes.length
-              ? piiTypes.map((t) => <span key={t} className="tp-chip tp-chip-pii">{t}{pii.types[t] ? ` ·${pii.types[t]}` : ''}</span>)
-              : <span className="tp-chip tp-chip-pii">present</span>}
+              ? piiTypes.map((t) => <span key={t} className="tp-chip tp-chip-pii">{t}</span>)
+              : <span className="tp-chip tp-chip-pii">{pii.findings ? `${pii.findings} finding${pii.findings === 1 ? '' : 's'}` : 'present'}</span>}
           </div>
         </div>
       )}

@@ -997,3 +997,80 @@ def fetch_trace(trace_id: str) -> dict | None:
         "result": out or None,
         "observations": [_obs_summary(o) for o in obs_sorted],
     }
+
+
+# The whole-scan SESSION view — every file's trace grouped by scan_id. This is the aggregate
+# that hung the Langfuse UI on large scans (the reason for the v2→v3 move); rendered in-app it
+# is a plain list ACP controls, so a big scan can't wedge it. The session endpoint returns each
+# trace's input/output but NO observations, so it is cheap to fetch for many files at once — the
+# per-file drill-in (fetch_trace) pulls the timeline only when a row is opened.
+def _file_row(t: dict) -> dict:
+    """One session trace reduced to a list row. Same privacy rules as fetch_trace: the trace name
+    (operator email) is dropped; document/format come from the redacted input, result from the
+    output that file_assessment_result wrote (score/conformant/failing_criteria/pii/remediation)."""
+    tin = t.get("input") if isinstance(t.get("input"), dict) else {}
+    out = t.get("output") if isinstance(t.get("output"), dict) else {}
+    return {
+        "trace_id": t.get("id"),
+        # the file-centric route keys off the document label (trace id = "{scan}::{document}")
+        "document": (tin or {}).get("document"),
+        "format": (tin or {}).get("format"),
+        "result": out or None,
+    }
+
+
+def _session_rollup(rows: list[dict]) -> dict:
+    """Scan-level totals over EVERY file (not the capped page): how many documents, how many were
+    assessed, how many conformant, the average score of the assessed, and how many carry a WCAG
+    failure or flagged PII. All derived from the same per-file results the rows show, so the
+    header and the list cannot disagree."""
+    assessed = [r["result"] for r in rows if r.get("result")]
+    scored = [r.get("score") for r in assessed if isinstance(r.get("score"), (int, float))]
+    return {
+        "documents": len(rows),
+        "assessed": len(assessed),
+        "conformant": sum(1 for r in assessed if r.get("conformant")),
+        "avg_score": round(sum(scored) / len(scored), 1) if scored else None,
+        "with_failures": sum(1 for r in assessed if (r.get("failing_criteria") or {})),
+        "with_pii": sum(1 for r in assessed if (r.get("pii") or {}).get("flagged")),
+    }
+
+
+def fetch_session(scan_id: str, limit: int = 500) -> dict | None:
+    """Normalized, PHI-safe view of a whole scan's SESSION for the in-app session panel.
+
+    Fetched with ACP's own keys. Returns None when tracing isn't configured, the session isn't
+    ingested yet, or the fetch errors — the route turns those into honest UI states. Files are
+    ordered worst-first (lowest score, then the still-unassessed) so a reviewer sees the documents
+    that need attention at the top; `total`/`truncated` are honest about a cap on very large scans
+    (the list is capped, the rollup is not)."""
+    if not _ENABLED:
+        return None
+    try:
+        import httpx
+        r = httpx.get(f"{_HOST.rstrip('/')}/api/public/sessions/{scan_id}",
+                      auth=(_PK, _SK), timeout=8.0)
+        if r.status_code != 200:
+            return None
+        s = r.json() or {}
+    except Exception:
+        return None
+    traces = [t for t in (s.get("traces") or []) if isinstance(t, dict)]
+    rows = [_file_row(t) for t in traces]
+    rollup = _session_rollup(rows)
+
+    def _key(row):
+        res = row.get("result") or {}
+        score = res.get("score")
+        # assessed first (0), unassessed last (1); within assessed, lowest score first
+        return (0 if row.get("result") else 1, score if isinstance(score, (int, float)) else 1e9)
+
+    rows.sort(key=_key)
+    total = len(rows)
+    return {
+        "id": scan_id,
+        "total": total,
+        "truncated": total > limit,
+        "rollup": rollup,
+        "files": rows[:limit],
+    }

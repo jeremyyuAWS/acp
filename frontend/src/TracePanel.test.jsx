@@ -30,8 +30,8 @@ describe('TracePanel', () => {
   it('shows the score, failing criteria, PII and timeline on the happy path', async () => {
     mockResult = { status: 'ok', trace: {
       id: 's1::doc-3f9a2c.docx', document: 'doc-3f9a2c.docx', format: 'docx',
-      result: { score: 82, conformant: false, level: 'AA', failing_criteria: ['1.1.1', '1.4.3'],
-        pii: { present: true, types: { ssn: 2 } },
+      result: { score: 82, conformant: false, level: 'AA', failing_criteria: { '1.1.1': 1, '1.4.3': 3 },
+        pii: { flagged: true, types: ['us_ssn'], findings: 2, critical: false },
         remediation: { remediated: true, written_back: false, published: false } },
       observations: [
         { type: 'SPAN', name: 'Discover', start: '2026-06-29T17:04:10Z', end: '2026-06-29T17:04:11Z' },
@@ -68,11 +68,11 @@ describe('TracePanel', () => {
   it('never renders a PII value — only the type category', async () => {
     mockResult = { status: 'ok', trace: {
       document: 'doc-x.docx', format: 'docx',
-      result: { score: 70, conformant: false, level: 'AA', failing_criteria: [],
-        pii: { present: true, types: { ssn: 3 } }, remediation: null },
+      result: { score: 70, conformant: false, level: 'AA', failing_criteria: {},
+        pii: { flagged: true, types: ['us_ssn'], findings: 3, critical: true }, remediation: null },
       observations: [] } }
     const c = await mount()
-    expect(c.textContent).toContain('ssn')            // the category shows
-    expect(c.textContent).not.toContain('123-45')     // no value ever would
+    expect(c.textContent).toContain('us_ssn')          // the category shows
+    expect(c.textContent).not.toContain('123-45')      // no value ever would
   })
 })

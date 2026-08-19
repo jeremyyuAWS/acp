@@ -508,7 +508,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               </div>
             </div>
             <p className="muted assessnote">{note}</p>
-            <div style={{ marginTop: 8 }}><TraceChip scanId={runId} kind="session" label="View this scan's traces in Langfuse" /></div>
+            <div style={{ marginTop: 8 }}><TraceChip scanId={runId} kind="session" label="View this scan's traces" /></div>
           </div>
         )}
       </div>
