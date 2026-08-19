@@ -627,8 +627,13 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
         if getattr(fb, "name", "") == "ollama":
             res = fb.generate(prompt, image_bytes, model=None, timeout=OLLAMA_VISION_TIMEOUT)
     mdl = res.get("model") or model or OLLAMA_VISION_MODEL
+    # Token usage the provider measured (Ollama's prompt_eval_count/eval_count, or a cloud
+    # adapter's usage) rides onto every trace below so the Langfuse generation carries real
+    # `usage` (N1) — counts only, never any prompt/completion text (docs/audit-langfuse-phi.md).
     _tr = dict(model=mdl, scan_id=scan_id, file=file, provider=res.get("provider", "ollama"),
-               zone=res.get("zone"), cost_usd=res.get("cost_usd", 0.0))
+               zone=res.get("zone"), cost_usd=res.get("cost_usd", 0.0),
+               prompt_tokens=res.get("prompt_tokens"),
+               completion_tokens=res.get("completion_tokens"))
     raw = (res.get("text") or "").strip() if res.get("ok") else ""
     if not res.get("ok") or not raw:
         # The adapter already logged the distinguishing detail and named the mode; carry its
@@ -664,8 +669,8 @@ def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
     usable. Traced through Langfuse (surface 'vision') — model, latency, prompt size, ok."""
     if not image_bytes:
         return None
-    alt = _vision_generate(_vision_prompt(filename, context, style, guidance), image_bytes,
-                           scan_id=scan_id, file=file)
+    prompt = _vision_prompt(filename, context, style, guidance)
+    alt = _vision_generate(prompt, image_bytes, scan_id=scan_id, file=file)
     if not alt:
         # The model may have replied with nothing at all rather than failed — see
         # _minimal_vision_prompt. One bare retry, which is the difference between a working
@@ -676,7 +681,37 @@ def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
     # (moondream, the CPU default) can return garbage the empty-check above misses. Better no draft,
     # which routes the image to a human, than a nonsense alt in a compliance artifact. See the
     # 2026-08-12 vision bake-off and _is_usable_alt.
-    return {"alt": alt, "model": OLLAMA_VISION_MODEL} if (alt and _is_usable_alt(alt)) else None
+    model_used = OLLAMA_VISION_MODEL
+    escalation = None
+    # Acceptance-gated cloud escalation (ADR 0019 §2/§3c), mirrored from describe_image_structured
+    # so the LIVE reviewer draft path escalates too: when the local vision model returns nothing
+    # usable, escalate to the configured cloud provider — only when an admin has enabled one and its
+    # secret is present, so the default keyless build never leaves the box and this stays a no-op
+    # (cloud_vision_provider() → None). The transparent numbered path is attached to the result so
+    # the review card can read a real field instead of re-deriving it from the ai_calls ledger.
+    if not (alt and _is_usable_alt(alt)):
+        esc = _escalate_vision(prompt, image_bytes, scan_id=scan_id, file=file)
+        if esc:
+            alt = esc["alt"]
+            model_used = esc["model"]
+            escalation = esc
+    if not (alt and _is_usable_alt(alt)):
+        return None
+    prov = provenance()
+    out = {
+        "alt": alt,
+        "model": model_used,
+        # Honest processing provenance on EVERY usable draft (ADR 0019 §3b): a local draft is
+        # 'ollama'/'local'; an escalated one names the cloud provider + its governance zone. No
+        # secret here — a provider name and a 'local'/'customer_cloud' zone only.
+        "provider": escalation["provider"] if escalation else prov.get("provider"),
+        "processing_zone": escalation["zone"] if escalation
+        else ("local" if prov.get("zone") == "local" else "customer_cloud"),
+    }
+    if escalation:
+        out["escalation"] = escalation["steps"]      # the transparent numbered path
+        out["cost_usd"] = escalation["cost_usd"]
+    return out
 
 
 # An optional SECOND vision model for the validator — a different model catches a confident-but-wrong
@@ -912,7 +947,10 @@ def _escalate_vision(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     _trace_ai("vision", prompt, res.get("text"), _t0, ok=bool(res.get("ok")), model=mdl,
               provider=res.get("provider") or "cloud", zone=res.get("zone"),
               cost_usd=res.get("cost_usd", 0.0), scan_id=scan_id, file=file,
-              reason=res.get("reason"))
+              reason=res.get("reason"),
+              # Real token usage from the cloud adapter → the Langfuse generation's `usage` (N1).
+              prompt_tokens=res.get("prompt_tokens"),
+              completion_tokens=res.get("completion_tokens"))
     if not res.get("ok"):
         return None
     alt = _clean_alt(res.get("text") or "")
@@ -1054,8 +1092,18 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
         res = describe_image(image_bytes, filename=filename, context=detail, style=style,
                              guidance=guidance)
         if res:
-            return {"suggestion": res["alt"], "kind": "alt text",
-                    "is_template": False, "model": res["model"]}
+            out = {"suggestion": res["alt"], "kind": "alt text",
+                   "is_template": False, "model": res["model"]}
+            # Forward the honest processing provenance (ADR 0019) so the review card reads a real
+            # field instead of re-deriving the escalation path from the ai_calls ledger. Additive
+            # and vision-only: provider + processing_zone on every real vision draft, plus the
+            # numbered `escalation` steps and cost_usd only when a cloud escalation actually
+            # occurred. No secret is carried — a provider name, a 'local'/'customer_cloud' zone,
+            # and the numbered path only.
+            for k in ("provider", "processing_zone", "escalation", "cost_usd"):
+                if res.get(k) is not None:
+                    out[k] = res[k]
+            return out
         # vision unavailable / unusable → fall through to the text template below.
     prompt = _suggest_prompt(rule_id, rule_name, filename, detail, guidance)
     import time as _t

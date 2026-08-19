@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { workflowStatusOf, workflowCounts, matchesWorkflow, WORKFLOW_TABS } from './remediationInboxModel.js'
+import { workflowStatusOf, workflowCounts, matchesWorkflow, workflowStepIndex, WORKFLOW_TABS } from './remediationInboxModel.js'
 
 describe('workflowStatusOf — pipeline stage from real state (no invented flags)', () => {
   it('a blocked finding → blocked', () => {
@@ -44,5 +44,23 @@ describe('workflowCounts / matchesWorkflow', () => {
   })
   it('exposes the four pipeline tabs plus Done', () => {
     expect(WORKFLOW_TABS).toEqual(['inbox', 'in-progress', 'ready-to-validate', 'blocked', 'done'])
+  })
+})
+
+describe('workflowStepIndex — the footer loop step (Show 0 → Review 1 → Verify 2)', () => {
+  it('a fresh manual finding is at Show the problem (0)', () => {
+    expect(workflowStepIndex({ id: 1 })).toBe(0)                               // no proposal to review
+    expect(workflowStepIndex({ id: 1, status: 'blocked' })).toBe(0)           // blocked → still just showing it
+  })
+  it('a finding with an AI proposal awaiting a decision is at Review (1)', () => {
+    expect(workflowStepIndex({ id: 1, hasProposal: true, after: 'x' })).toBe(1)  // apply lane, still inbox
+  })
+  it('a fix that is in (auto-applied or approved) is at Verify (2)', () => {
+    expect(workflowStepIndex({ id: 1, autoApplied: true })).toBe(2)
+    expect(workflowStepIndex({ id: 1, hasProposal: true, after: 'x' }, { 1: { state: 'accepted' } })).toBe(2)
+  })
+  it('a fully done finding is past all three (3 — none active)', () => {
+    expect(workflowStepIndex({ id: 1, status: 'verified' })).toBe(3)
+    expect(workflowStepIndex({ id: 1 }, { 1: { state: 'rejected' } })).toBe(3)
   })
 })

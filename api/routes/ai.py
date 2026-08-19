@@ -255,6 +255,16 @@ def ai_status():
     says where the name came from; this says what it broke."""
     import ai as _ai
     vision = _ai.vision_is_available()
+    # Whether a governed cloud vision provider is a configured fallback — a SAFE, non-admin signal
+    # (ADR 0019) the review card's empty-state honesty message needs without admin rights. Derived
+    # from providers' secret-free view: a boolean + display-safe provider name and zone, NEVER the
+    # key, the key_secret_ref value, or the endpoint. Best-effort: any lookup failure degrades to
+    # the out-of-box 'no cloud' answer rather than 500-ing the status probe the SPA polls.
+    import providers as _providers
+    try:
+        cloud = _providers.cloud_status()
+    except Exception:
+        cloud = {"enabled": False, "provider": None, "zone": None}
     return {"available": _ai.is_available(), "base_url": _ai.OLLAMA_BASE_URL,
             "model": _ai.OLLAMA_MODEL, "ai_enabled": core.store.get_ai_enabled(),
             "backend": os.environ.get("ACP_AI_BACKEND", "auto").lower(),
@@ -264,6 +274,11 @@ def ai_status():
             # actually pulled is a separate question, and the one that decides if a generate
             # call 404s — report it rather than leaving 'available' to imply it.
             "model_available": _ai.model_is_available(),
+            # A cloud vision provider enabled + key-present (a fallback exists), plus its
+            # display-safe name and zone. No secret — see providers.cloud_status.
+            "cloud_enabled": cloud["enabled"],
+            "cloud_provider": cloud["provider"],
+            "cloud_zone": cloud["zone"],
             # 'override' = admin Settings (stored in the DB, outranks the env var);
             # 'env' = the deploy's env var. Without this, an env change that a stale
             # override is shadowing looks like an env change that did not apply.

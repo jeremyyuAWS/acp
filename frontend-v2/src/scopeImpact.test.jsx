@@ -43,6 +43,43 @@ describe('scopeImpact (pure)', () => {
   })
 })
 
+// The backend adds lifecycle fields when discovery has per-file inventory (PR #379).
+const ELIG_LC = { ...ELIG, lifecycle_excluded: 1200, lifecycle_eligible_excluded: 800 }
+const ALL = new Set(['docx', 'pdf', 'pptx', 'xlsx'])
+
+describe('scopeImpact — archival/deletion lifecycle stage', () => {
+  it('appends a "queued to assess" stage that drops the flagged files, exact when all types selected', () => {
+    const r = scopeImpact(ELIG_LC, ALL)                 // inScope == eligible == 6408
+    expect(r.lifecycleExcluded).toBe(800)
+    expect(r.assessed).toBe(5608)                       // 6408 − 800
+    expect(r.pct).toBe(45)                              // 5608 / 12486, not the pre-lifecycle 51
+    expect(r.funnel.map((s) => [s.key, s.count, s.drop])).toEqual([
+      ['discovered', 12486, 0], ['eligible', 6408, 6078], ['inscope', 6408, 0], ['assessed', 5608, 800],
+    ])
+    expect(r.excluded.map((x) => x.key)).toEqual(['nomethod', 'lifecycle'])
+  })
+
+  it('subtracts from the narrowed in-scope total when the operator deselected formats', () => {
+    const r = scopeImpact(ELIG_LC, SEL)                 // docx+pdf → inScope 5408
+    expect(r.assessed).toBe(4608)                       // 5408 − 800
+    expect(r.funnel.at(-1)).toMatchObject({ key: 'assessed', count: 4608, drop: 800 })
+    expect(r.excluded.map((x) => x.key)).toEqual(['nomethod', 'deselected', 'lifecycle'])
+  })
+
+  it('clamps the drop so it never exceeds what is in scope', () => {
+    const r = scopeImpact({ discovered: 100, eligible: 60, by_format: { docx: 40, pdf: 20 }, lifecycle_eligible_excluded: 50 },
+                          new Set(['docx']))            // inScope 40 < flagged 50
+    expect(r.funnel.at(-1)).toMatchObject({ key: 'assessed', count: 0, drop: 40 })
+  })
+
+  it('adds no stage when the field is absent or zero (honest — nothing to back)', () => {
+    expect(scopeImpact(ELIG, ALL).funnel.map((s) => s.key)).not.toContain('assessed')          // no field
+    const zero = scopeImpact({ ...ELIG, lifecycle_eligible_excluded: 0 }, ALL)
+    expect(zero.funnel.map((s) => s.key)).not.toContain('assessed')                            // field present, 0
+    expect(zero.excluded.map((x) => x.key)).not.toContain('lifecycle')
+  })
+})
+
 // A small catalog with real, uneven coverage: X is docx/pdf only, Y is pptx only, Z is all four.
 const CODESET = [
   { code: '1.4.3', name: 'Contrast (Minimum)', formats: ['docx', 'pdf'] },        // X — no pptx, no xlsx
@@ -114,6 +151,15 @@ describe('ScopeImpact (component)', () => {
     expect(container.textContent).toContain('Inventory only')
     // one progressbar per funnel stage
     expect(container.querySelectorAll('[role=progressbar]').length).toBe(3)
+  })
+
+  it('draws the archival/deletion stage when the backend reports it', async () => {
+    await render({ elig: ELIG_LC, formats: ALL })
+    expect(container.querySelectorAll('[role=progressbar]').length).toBe(4)   // + the lifecycle stage
+    expect(container.textContent).toContain('Queued to assess — archival/deletion excluded')
+    expect(container.textContent).toContain('−800')
+    expect(container.textContent).toContain('Flagged for archival or deletion')
+    expect(container.textContent).toContain('45% of the discovered estate')
   })
 
   it('warns about a selected criterion with no method for a selected document type', async () => {

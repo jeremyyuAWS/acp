@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
-import { escalationPath } from './escalationPath.js'
+import { escalationPath, escalationFromDraft } from './escalationPath.js'
 
 // P1 item 2 — the auto-escalation numbered path. When the per-call ledger shows a local vision
 // attempt that couldn't ground a description followed by an escalation to a cloud provider, the card
@@ -35,6 +35,46 @@ describe('escalationPath — derived from the ledger only', () => {
     ])
     expect(p.cloudOk).toBe(false)
     expect(p.provider).toBe('anthropic')
+  })
+})
+
+// #378 — the PREFERRED source: the same path read straight off a /ai/suggest draft response, so the
+// card renders the real backend field instead of re-deriving it from the ledger.
+describe('escalationFromDraft — read the path off the draft response (#378)', () => {
+  // The exact shape api/ai.py forwards on an escalated vision draft.
+  const escalated = {
+    suggestion: 'A bar chart of Q3 revenue by region', is_template: false, model: 'gpt-4o',
+    provider: 'openai', processing_zone: 'customer_cloud', cost_usd: 0.0021,
+    escalation: [
+      { provider: 'ollama', zone: 'local', outcome: 'no grounded description' },
+      { provider: 'openai', zone: 'customer_cloud', outcome: 'produced a description', cost_usd: 0.0021 },
+    ],
+  }
+
+  it('reads provider / cloud model / zone / cost from an escalated draft', () => {
+    const p = escalationFromDraft(escalated)
+    expect(p).toEqual(expect.objectContaining({
+      provider: 'openai', cloudModel: 'gpt-4o', cloudZone: 'customer_cloud',
+      cloudOk: true, costUsd: 0.0021, source: 'draft',
+    }))
+  })
+
+  it('is null for a plain local draft (no escalation field)', () => {
+    expect(escalationFromDraft({ suggestion: 'x', provider: 'ollama', processing_zone: 'local' })).toBeNull()
+    expect(escalationFromDraft({ suggestion: 'x', escalation: [] })).toBeNull()
+    expect(escalationFromDraft(null)).toBeNull()
+    expect(escalationFromDraft(undefined)).toBeNull()
+  })
+
+  it('honours a "cloud unavailable" outcome in the steps (cloudOk=false)', () => {
+    const p = escalationFromDraft({
+      ...escalated,
+      escalation: [
+        { provider: 'ollama', zone: 'local', outcome: 'no grounded description' },
+        { provider: 'openai', zone: 'customer_cloud', outcome: 'cloud unavailable' },
+      ],
+    })
+    expect(p.cloudOk).toBe(false)
   })
 })
 

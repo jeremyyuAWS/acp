@@ -211,6 +211,19 @@ export function workflowCounts(list, decisions = {}) {
   return counts
 }
 
+// Which of the sticky footer's three loop steps — Show the problem (0) → Review the proposed change
+// (1) → Verify the result (2) — a finding is currently ON, so the footer can light the live step and
+// check off the ones behind it. Returns 3 when the finding is fully done (all three complete, none
+// active). Derived from the same real state as workflowStatusOf, never an invented step marker.
+export function workflowStepIndex(f, decisions = {}) {
+  const status = workflowStatusOf(f, decisions)
+  if (status === 'done') return 3
+  if (status === 'ready-to-validate') return 2              // a fix is in — verify it via the re-scan
+  const lane = laneOf(f)
+  if (lane.key === 'apply' || lane.key === 'review') return 1  // an AI proposal is waiting for review
+  return 0                                                   // manual / fresh / blocked — show the problem
+}
+
 // ── Sorting ─────────────────────────────────────────────────────────────────────────────────────
 const SEV_RANK = { CRITICAL: 0, SERIOUS: 1, MODERATE: 2, MINOR: 3 }
 

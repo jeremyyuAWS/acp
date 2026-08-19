@@ -72,6 +72,101 @@ def test_vision_that_fails_falls_back_and_says_so(monkeypatch):
     assert "no vision model is available" in out["reason"]
 
 
+# ── Gap 1 (#367 follow-up): the escalation path reaches the draft response ─────
+# describe_image now escalates like describe_image_structured, and suggest_fix + /ai/suggest
+# forward the honest processing provenance so the review card reads a REAL field instead of
+# re-deriving the escalation path from the ai_calls ledger. Additive + vision-only + no secret.
+
+class _Cloud:
+    """A stubbed enabled+key-present cloud vision provider (no real key, no network)."""
+    name = "azure_openai"
+    zone = "tenant"
+
+    def generate(self, prompt, image_bytes, *, model=None, timeout=120.0):
+        return {"text": "Bar chart of quarterly revenue by region", "model": "gpt-4o",
+                "provider": "azure_openai", "zone": "tenant", "ok": True,
+                "cost_usd": 0.0032, "latency_ms": 800}
+
+
+def test_describe_image_escalates_when_local_is_unusable(monkeypatch):
+    """No cloud → None (unchanged). Cloud enabled + local unusable → escalate, and the numbered
+    path + provider + zone come back on the result."""
+    monkeypatch.setattr(_ai, "_vision_generate", lambda *a, **k: "")   # local returns nothing usable
+    monkeypatch.setattr("providers.cloud_vision_provider", lambda: _Cloud())
+    out = _ai.describe_image(b"IMGBYTES", filename="chart.png")
+    assert out["alt"] == "Bar chart of quarterly revenue by region"
+    assert out["model"] == "gpt-4o" and out["provider"] == "azure_openai"
+    assert out["processing_zone"] == "tenant" and out["cost_usd"] == 0.0032
+    steps = out["escalation"]
+    assert steps[0]["provider"] == "ollama" and steps[1]["provider"] == "azure_openai"
+
+
+def test_describe_image_local_draft_reports_zone_but_never_escalates(monkeypatch):
+    """A usable local draft stays local: provider/processing_zone are reported honestly, and no
+    cloud provider is ever consulted, so no escalation key appears."""
+    monkeypatch.setattr(_ai, "_vision_generate",
+                        lambda *a, **k: "A nurse reviews a chart with a patient.")
+    called = {"cloud": 0}
+    monkeypatch.setattr("providers.cloud_vision_provider",
+                        lambda: called.__setitem__("cloud", called["cloud"] + 1))
+    out = _ai.describe_image(b"IMGBYTES", filename="p.png")
+    assert called["cloud"] == 0                          # grounded/usable → cloud never consulted
+    assert out["provider"] == "ollama" and out["processing_zone"] == "local"
+    assert "escalation" not in out and "cost_usd" not in out
+
+
+def test_suggest_fix_forwards_escalation_fields_only_for_vision(monkeypatch):
+    monkeypatch.setattr(_ai, "describe_image", lambda *a, **k: {
+        "alt": "Bar chart of quarterly revenue by region", "model": "gpt-4o",
+        "provider": "azure_openai", "processing_zone": "customer_cloud",
+        "escalation": [{"provider": "ollama"}, {"provider": "azure_openai"}], "cost_usd": 0.0032})
+    out = _ai.suggest_fix("1.1.1", "Non-text Content", "A", "chart.pptx", image_bytes=b"X")
+    assert out["is_template"] is False
+    assert out["provider"] == "azure_openai" and out["processing_zone"] == "customer_cloud"
+    assert out["escalation"][1]["provider"] == "azure_openai" and out["cost_usd"] == 0.0032
+
+    # A non-vision criterion (text template) carries none of these keys.
+    import httpx
+
+    class _R:
+        @staticmethod
+        def raise_for_status(): pass
+        @staticmethod
+        def json(): return {"response": "Rename the file descriptively."}
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _R())
+    txt = _ai.suggest_fix("2.4.4", "Link Purpose", "A", "d.docx")
+    for k in ("provider", "processing_zone", "escalation", "cost_usd"):
+        assert k not in txt
+
+
+def _stub_core_status(monkeypatch, trace):
+    import core
+    monkeypatch.setattr(core, "store", types.SimpleNamespace(
+        get_ai_enabled=lambda: True,
+        get_trace_row=lambda s, f, r: trace))
+
+
+def test_ai_suggest_route_returns_escalation_and_leaks_no_secret(monkeypatch):
+    """End to end through the route: a cloud-escalated 1.1.1 draft carries the numbered path,
+    provider, and zone in the /ai/suggest payload — and nothing that resembles a secret."""
+    import routes.ai as rai
+    _stub_core_status(monkeypatch, {"rule_name": "Non-text Content", "level": "A", "detail": ""})
+    monkeypatch.setattr(_ai, "model_is_available", lambda: False)
+    monkeypatch.setattr(_ai, "vision_is_available", lambda: True)
+    monkeypatch.setattr(rai, "_image_for_locator", lambda *a, **k: b"THE-IMAGE")
+    # real suggest_fix runs; only the local vision + cloud provider seams are stubbed
+    monkeypatch.setattr(_ai, "_vision_generate", lambda *a, **k: "")
+    monkeypatch.setattr("providers.cloud_vision_provider", lambda: _Cloud())
+
+    req = types.SimpleNamespace(state=types.SimpleNamespace(user_email=None))
+    out = rai.ai_suggest(request=req, scan_id="s1", file="chart.pptx", rule_id="1.1.1",
+                         locator="ppt/slides/slide1.xml#rId2")
+    assert out["provider"] == "azure_openai" and out["processing_zone"] == "tenant"
+    assert out["escalation"][1]["provider"] == "azure_openai"
+    blob = repr(out).lower()
+    assert "key_secret_ref" not in blob and "api-key" not in blob and "sk-" not in blob
+
+
 # ── the route wires the locator through ───────────────────────────────────────
 
 def _stub_core(monkeypatch, trace):

@@ -141,13 +141,22 @@ class VisionProvider(Protocol):
 
 def _result(*, text: str | None, model: str, provider: str, zone: str,
             latency_ms: int, ok: bool, cost_usd: float = 0.0,
-            reason: str = REASON_OK) -> dict:
+            reason: str = REASON_OK,
+            prompt_tokens: int | None = None,
+            completion_tokens: int | None = None) -> dict:
     """The normalized vision result every adapter returns. `cost_usd` is a real measured cost
     (0 for local Ollama; a cloud adapter fills its per-call token cost) — never a fabricated
     number (ADR 0016). `reason` says WHICH way a call ended, because `ok=False` on its own is
-    not actionable — see the reason constants above."""
+    not actionable — see the reason constants above.
+
+    `prompt_tokens`/`completion_tokens` are the REAL token counts the API returned (Ollama's
+    prompt_eval_count/eval_count; a cloud provider's usage) — the numbers ai._trace_ai forwards
+    so the Langfuse generation carries real `usage` (ADR 0019 §1, Langfuse audit N1). They are
+    counts only, never any prompt/completion text (docs/audit-langfuse-phi.md); None when the
+    provider did not report them (a failed call, or a transport that omits usage)."""
     return {"text": text, "model": model, "provider": provider, "zone": zone,
-            "latency_ms": latency_ms, "ok": ok, "cost_usd": cost_usd, "reason": reason}
+            "latency_ms": latency_ms, "ok": ok, "cost_usd": cost_usd, "reason": reason,
+            "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens}
 
 
 class OllamaVisionProvider:
@@ -198,7 +207,9 @@ class OllamaVisionProvider:
                          "declined to answer THIS prompt.")
             return _fail(REASON_EMPTY)
         return _result(text=raw, model=mdl, provider=self.name, zone=self.zone,
-                       latency_ms=int((time.monotonic() - t0) * 1000), ok=True)
+                       latency_ms=int((time.monotonic() - t0) * 1000), ok=True,
+                       prompt_tokens=data.get("prompt_eval_count"),
+                       completion_tokens=data.get("eval_count"))
 
 
 # ── Provider configuration (ADR 0019 §6, secret-ref design) ────────────────────
@@ -249,6 +260,22 @@ def list_provider_views() -> list[dict]:
     for name in CLOUD_PROVIDERS:
         out.append(provider_view(configured.get(name, {"provider": name})))
     return out
+
+
+def cloud_status() -> dict:
+    """Non-admin, secret-free answer to 'is a governed cloud vision provider a configured, usable
+    fallback?' — for the review card's empty-state honesty message, which must know WITHOUT admin
+    rights whether escalation can happen (ADR 0019).
+
+    Computed from the SAFE provider views only: `enabled` is True when some cloud provider is both
+    admin-enabled AND its ops-provisioned secret is present (`key_present`), and `provider`/`zone`
+    name that provider display-safely. It exposes NO secret — never the key value, the
+    key_secret_ref value, or the endpoint — a boolean plus a provider name and a 'local'/'cloud'
+    zone only. When nothing qualifies it reports the out-of-box state (disabled, no provider)."""
+    for v in list_provider_views():
+        if v.get("enabled") and v.get("key_present"):
+            return {"enabled": True, "provider": v.get("provider"), "zone": v.get("zone")}
+    return {"enabled": False, "provider": None, "zone": None}
 
 
 # Per-1M-token list prices (USD) for cost accounting. These are REAL billing inputs multiplied by
@@ -344,7 +371,9 @@ class AzureOpenAIVisionProvider:
                          + usage.get("completion_tokens", 0) / 1e6 * price[1], 6)
         return _result(text=text, model=self.model, provider=self.name,
                        zone=self.zone, latency_ms=int((time.monotonic() - t0) * 1000),
-                       ok=True, cost_usd=cost)
+                       ok=True, cost_usd=cost,
+                       prompt_tokens=usage.get("prompt_tokens"),
+                       completion_tokens=usage.get("completion_tokens"))
 
 
 class OpenAIVisionProvider:
@@ -408,7 +437,9 @@ class OpenAIVisionProvider:
             cost = round(usage.get("prompt_tokens", 0) / 1e6 * price[0]
                          + usage.get("completion_tokens", 0) / 1e6 * price[1], 6)
         return _result(text=text, model=mdl, provider=self.name, zone=self.zone,
-                       latency_ms=int((time.monotonic() - t0) * 1000), ok=True, cost_usd=cost)
+                       latency_ms=int((time.monotonic() - t0) * 1000), ok=True, cost_usd=cost,
+                       prompt_tokens=usage.get("prompt_tokens"),
+                       completion_tokens=usage.get("completion_tokens"))
 
 
 class AnthropicVisionProvider:
@@ -479,8 +510,12 @@ class AnthropicVisionProvider:
         if price:
             cost = round(usage.get("input_tokens", 0) / 1e6 * price[0]
                          + usage.get("output_tokens", 0) / 1e6 * price[1], 6)
+        # Messages API names them input_tokens/output_tokens; the normalized result uses the
+        # provider-neutral prompt/completion so ai._trace_ai forwards one shape to Langfuse.
         return _result(text=text, model=mdl, provider=self.name, zone=self.zone,
-                       latency_ms=int((time.monotonic() - t0) * 1000), ok=True, cost_usd=cost)
+                       latency_ms=int((time.monotonic() - t0) * 1000), ok=True, cost_usd=cost,
+                       prompt_tokens=usage.get("input_tokens"),
+                       completion_tokens=usage.get("output_tokens"))
 
 
 class RunPodServerlessVisionProvider:
@@ -546,9 +581,13 @@ class RunPodServerlessVisionProvider:
         # GPU-seconds → cost. RunPod surfaces execution time on the envelope; 0 if absent/no rate.
         exec_ms = data.get("executionTime") or (data.get("usage") or {}).get("execution_time_ms") or 0
         cost = round((exec_ms / 1000.0) * self.cost_per_sec, 6) if (exec_ms and self.cost_per_sec) else 0.0
+        # The OpenAI-compatible envelope carries token usage; surface it for the Langfuse generation.
+        usage = data.get("usage") or {}
         return _result(text=text, model=mdl, provider=self.name, zone=self.zone,
                        latency_ms=int((time.monotonic() - t0) * 1000), ok=True,
-                       cost_usd=cost)
+                       cost_usd=cost,
+                       prompt_tokens=usage.get("prompt_tokens"),
+                       completion_tokens=usage.get("completion_tokens"))
 
 
 def serverless_vision_provider() -> VisionProvider | None:
