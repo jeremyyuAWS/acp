@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  coverageSummary, assessmentIn, remediationIn, statusIn, statusAcross,
-  isAssessable, isCertifiable, estateFormats, DOCUMENTS_20,
+  coverageSummary, assessmentGaps, assessmentIn, remediationIn, statusIn, statusAcross,
+  isAssessable, isCertifiable, estateFormats, DOCUMENTS_20, AT_REASON,
 } from './assessCoverage.js'
 
 const filesOf = (...exts) => exts.map((e, i) => ({ file: `doc${i}.${e}`, type: e }))
@@ -174,5 +174,46 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     const all = coverageSummary(filesOf('docx'), { documents: false })
     expect(all.total).toBeGreaterThan(documents.total)
     expect(all.auto + all.review + all.human + all.gap + all.at + all.na).toBe(all.total)
+  })
+})
+
+describe('assessmentGaps — the "no assessment method" cells (gap + at), honestly derived', () => {
+  // The gap total is exactly the gap + at rollup of coverageSummary, never more: a ⚪ N/A cell is
+  // not a gap and a 🔴 human cell is not a missing method. This ties the two derivations together
+  // so neither can drift into fabricating a hole.
+  for (const fmt of ['docx', 'xlsx', 'pptx', 'pdf', 'html']) {
+    it(`.${fmt}: gap total equals coverageSummary's gap + at (${fmt === 'html' ? '2 needs-AT' : 'zero'})`, () => {
+      const s = coverageSummary(filesOf(fmt), { documents: true })
+      const g = assessmentGaps(filesOf(fmt), { documents: true })
+      expect(g.total).toBe(s.gap + s.at)
+      expect(g.cells.length).toBe(g.total)
+      // every reported cell is genuinely a gap/at lane in the capability table — never invented
+      for (const c of g.cells) expect(assessmentIn(c.sc, c.fmt)).toBe(c.lane)
+    })
+  }
+
+  it('a document-only estate has NO gaps — all statically-detectable document gaps are closed', () => {
+    const g = assessmentGaps(filesOf('docx', 'xlsx', 'pptx', 'pdf'), { documents: true })
+    expect(g.total).toBe(0)
+    expect(g.byFormat).toEqual([])
+  })
+
+  it('an .html estate surfaces exactly the two needs-AT keyboard criteria, with AT_REASON', () => {
+    const g = assessmentGaps(filesOf('html'), { documents: true })
+    expect(g.total).toBe(2)
+    expect(g.byFormat).toHaveLength(1)
+    expect(g.byFormat[0].fmt).toBe('html')
+    expect(g.cells.map((c) => c.sc).sort()).toEqual(['2.1.1', '2.1.2'])
+    for (const c of g.cells) {
+      expect(c.lane).toBe('at')
+      expect(c.reason).toBe(AT_REASON)
+    }
+  })
+
+  it('a mixed estate groups gaps by format and only lists formats that have them', () => {
+    const g = assessmentGaps(filesOf('docx', 'html'), { documents: true })
+    expect(g.total).toBe(2)                               // only html contributes
+    expect(g.byFormat.map((r) => r.fmt)).toEqual(['html'])
+    expect(g.cells.every((c) => c.fmt === 'html')).toBe(true)
   })
 })
