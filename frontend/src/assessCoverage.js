@@ -92,6 +92,27 @@ export function remediationIn(sc, fmt) {
 // module is about. (Before the two-axis split it conflated assessment with remediation.)
 export const statusIn = assessmentIn
 
+// Normalise a finding's WCAG label ("SC_1_1_1", "1.1.1 Non-text Content", "1.1.1") to its SC code.
+const _scOf = (w) => ((String(w || '')).replace(/^SC_/, '').replace(/_/g, '.').match(/\d+\.\d+\.\d+/) || [])[0]
+
+// REMEDIATION-eligible, finding-level: how many documents ACP can actually FIX something in — the
+// honest third denominator between "assessable" (any supported format) and "remediated". A document
+// counts when it carries at least one finding whose remediation lane in THAT file's format is `auto`
+// (deterministic) or `ai` (AI proposes, a human approves). Human-only findings — reading level, PDF
+// re-tagging, and the like — do not make a file remediable, so a document whose every open finding is
+// human-only is assessable but NOT remediation-eligible. Unlike a format-level count (which equals
+// assessable, since every supported format has some fix lane), this genuinely narrows the set, and it
+// is real only after Assess has produced the findings — there is no fix lane to check before then.
+export function remediationEligibleCount(files) {
+  return (files || []).filter((f) => {
+    const fmt = fmtOf(f)
+    return (f.issues || []).some((i) => {
+      const lane = remediationIn(_scOf(i.wcag), fmt)
+      return lane === 'auto' || lane === 'ai'
+    })
+  }).length
+}
+
 // Union of a lane across the formats present in the estate — "the best we can do in ANY file
 // type you have". Ordered best→worst for each axis; pass the resolver for the axis you want.
 const ASSESS_PRIORITY = ['auto', 'review', 'human', 'gap', 'at', 'na']

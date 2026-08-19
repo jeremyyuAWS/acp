@@ -6,6 +6,7 @@ import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer, { statusOf } from './FileDrawer.jsx'
 import { findingsByCriterion, findingsByLevel, levelOfFinding } from './wcagFinding.js'
 import { analysedCount, avgScore } from './docStatus.js'
+import { remediationEligibleCount } from './assessCoverage.js'
 import { IDENTITY, SIM, remediableCount, recommendationSummary } from './sim.js'
 import { openReport } from './api.js'
 import { loadPublished } from './ontology.js'
@@ -118,7 +119,11 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const estateProgress = {
     assessed: analysed,
     issues: files.filter((f) => (f.issues || []).length).length,
-    remediation_eligible: needFix,
+    // The funnel's "remediation eligible" is the honest finding-level count — documents with at least
+    // one AUTO/AI-fixable finding — not `needFix` (documents with any remediation ACTION, which the
+    // "need remediation" metric and the Remediate tab use). A document whose every open finding is
+    // human-only is assessable but not remediable, and the funnel should say so.
+    remediation_eligible: remediationEligibleCount(files),
     remediated: files.filter((f) => f.remediated_at || f.drive_write_url).length,
     human_review: humanReview,
     published: publish,
