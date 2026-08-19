@@ -3,7 +3,7 @@ import ScopeBanner from './ScopeBanner.jsx'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
 import RemediationInbox from './RemediationInbox.jsx'
-import { autoFixRows } from './remediationInboxModel.js'
+import { autoFixRows, matchesWorkflow } from './remediationInboxModel.js'
 import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
@@ -573,10 +573,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const pendingHitlFiles = new Set(queue.map((q) => q.file))
   const totalHitl = queue.length + acted.approved + acted.rejected + acted.deferred + self.length
   const hitlProgress = totalHitl > 0 ? Math.round(((totalHitl - queue.length) / totalHitl) * 100) : 0
-  // Redesign R4: the ONE dominant statement — how many findings across how many documents. Both are
-  // real counts (the live queue and its distinct files); no fabricated time estimate is shown until
-  // per-finding review time is grounded (Phase 2).
-  const reviewDocCount = new Set(queue.map((q) => q.file).filter(Boolean)).size
+  // Redesign R4: the ONE dominant statement — how many findings need review across how many
+  // documents. Derived below from the assembled inbox queue (not the raw human queue) so the
+  // headline is the SAME count as the "Needs review" tab and the two can never disagree.
   useEffect(() => { onHitlCount?.(queue.length) }, [queue.length, onHitlCount])
   // Don't surface remediation numbers until the user has actually started remediating
   // (ran "Remediate all" or acted on a review item) — pre-engagement estimates read as
@@ -630,6 +629,13 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // "Needs manual handling" lane, so a reviewer sees exactly what was bounced back for a person.
   const inboxQueue = [...queue, ...rejectedItems, ...autoFixItems]
   const inboxDecisions = { ...decisions, ...ackd }
+  // The hero "N need review" IS the Needs-review tab's population (workflowStatusOf over the inbox
+  // queue), not the raw human queue — so an unconfirmed auto-fix counted under Needs review shows in
+  // both, and the headline can never diverge from the tab (the R4 count-consistency fix). The doc
+  // count is the distinct documents among exactly those findings.
+  const reviewNeeds = inboxQueue.filter((f) => matchesWorkflow(f, 'needs-review', inboxDecisions))
+  const reviewCount = reviewNeeds.length
+  const reviewDocCount = new Set(reviewNeeds.map((f) => f.file).filter(Boolean)).size
   const fixGroups = groupFixesByRule(fixSource)
   const impact = summarizeImpact(fixSource)
   const fixedCount = totalFixes(fixSource)
@@ -782,9 +788,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               badges. The numeric pill is gone — the count lives in the sentence, said once. */}
           <div>
             <h2 style={{ margin: 0 }}>Review queue</h2>
-            {queue.length > 0
+            {reviewCount > 0
               ? <p className="rem-review-lead" style={{ margin: '2px 0 0', fontSize: 13 }}>
-                  <b>{queue.length}</b> finding{queue.length === 1 ? '' : 's'} need review across{' '}
+                  <b>{reviewCount}</b> finding{reviewCount === 1 ? '' : 's'} need review across{' '}
                   <b>{reviewDocCount}</b> document{reviewDocCount === 1 ? '' : 's'}
                 </p>
               : <p className="muted" style={{ margin: '2px 0 0', fontSize: 13 }}>All clear — nothing needs your review.</p>}
