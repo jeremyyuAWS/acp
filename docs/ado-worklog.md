@@ -162,6 +162,18 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   `reset()` are gone, and the stale "the level controls which SCs count as blocking" explainer is
   replaced by a derived-level line. Conformance computation and every downstream count are unchanged
   (AA → 14 criteria block). Suite green at 1648.
+- **Carried the per-document selection through to the certification facts** (PRD 6.1, #410). Criteria and
+  formats funnel through the single `scan_scope` gate, so Assess/Remediate/Publish inherit them for free
+  — but the operator's per-document selection (marking a **subset** of documents in-scope in Remediate,
+  `triage='inscope'`) lived only in `scan_decisions`, invisible to the verdict facts: the Remediate and
+  Publish actions already honoured it (explicit file list), but the Assess status card and the
+  conformance report counted the whole estate regardless. Added a per-document twin applied at **read
+  time** (the marks are made after traces are written, so a scan-time freeze cannot work):
+  `assessment_policy.selected_documents(decisions)` (once any file is in-scope, only in-scope files
+  stay), and an opt-in `get_certification_facts(..., apply_document_selection=…)` that only the two
+  aggregate readers (scan_status, report.pdf facts) opt into — `file_status`, the coverage matrix and
+  every other caller see the whole estate, so per-file cards are unaffected. Gated so an unscoped run, or
+  opting in with no marks, is byte-for-byte identity. `Matrix-Note: none`.
 
 ## Feature: v2 frontend redesign · #4602
 
@@ -735,6 +747,27 @@ reach production, safely.
   `SP_SCOPES` are read out of `sharepointScopes.js` rather than restated, so the preflight cannot pass while
   the app asks for something else. Offline by default (CI-safe); `--live` reaches RunPod and emits a probe
   trace. No secret is ever printed.
+- **Moved the vision lane off RunPod onto an in-tenant Azure GPU, and fixed the switch that silently used
+  the CPU** (#405). Two things, one arc. `set_integration_env.sh` gains a GPU group: the live deployment
+  had both RunPod vars correct and the endpoint warm, yet every scan ran on the local CPU floor because
+  `ACP_VISION_PROVIDER` was `'ollama'` — `active_vision_provider()` defaults to ollama, so that switch
+  decides whether the credentials are consulted at all. All three now move together and an endpoint id
+  without a key is refused (that combination looks configured and uses the CPU — worse than
+  unconfigured). `gpu_up.sh` moves the lane in-tenant: Ollama on an ACA GPU workload profile in acp-app's
+  own environment, internal ingress, scale-to-zero, no code change (the existing ollama lane via
+  `ai_base_url`); RunPod was a personal account standing in while Azure quota was approved, so retiring
+  it is the point. Azure-only means no fallback, so switch-over is gated on a real generation from a
+  replica of the calling app, not on the container reporting Running. `Matrix-Note: none` — deploy
+  tooling only.
+- **Resolve the ACA GPU SKU from the region instead of hard-coding it** (#414). `gpu_up.sh` failed its
+  first real run — `Workload profile type 'NC8AS_T4' is invalid`: two mistakes on one line.
+  `--workload-profile-name` (an operator-chosen label) and `--workload-profile-type` (an Azure SKU
+  string) are different fields and the script passed the same value for both, and that value was a guess
+  at a SKU. The fix is not a better default — GPU availability and SKU strings vary by region, so any
+  baked-in constant is wrong somewhere — so the script resolves the environment's region, asks `az
+  containerapp env workload-profile list-supported` what that region offers, and passes a real GPU entry
+  as the type; a region with no GPU SKU now says exactly that and prints what it does offer.
+  `Matrix-Note: none` — deploy tooling only.
 
 ## Feature: Release Center · #4599
 
@@ -949,6 +982,37 @@ existing data and the existing decision path; nothing adds a second write path.
   re-adding the CSS rule fails the deletion case. One assertion in `reviewQueueNaming.test.jsx` pinned the
   rail's renamed step and was dropped rather than loosened — the line no longer exists, so any weakened
   form would have passed vacuously. Frontend, not RULE_PATHS.
+- **Rebuilt the Remediate workspace as a guided master/detail queue — R4 PRs 1–4** (#404, #408, #412,
+  #415; `docs/remediate-redesign-spec.md`). With the ProgressRail gone, the redesign's workspace half
+  landed in four sequenced PRs. #404 (PR1) fixed a before/after flag bug and deduped a noisy review
+  queue. #408 (PR2) reshaped the inbox into a **two-column** workspace — a queue column beside a detail
+  workspace — folding the document preview into the detail pane's Evidence section (a standalone third
+  pane "sat empty for every finding", so it was merged in rather than shown hollow). #412 (PR3) retired
+  the ambiguous bare **"Reject"** for the specific outcome it performs ("Reject & handle manually"),
+  added **"Defer"** as one set-aside vocabulary across both the AI and manual lanes (the app tracks no
+  assignee, so "assigned" over-promised), showed the verification path (Written → Re-scan → Certified)
+  only **after** a fix is saved rather than as a bare "Resolved", and compacted three stacked
+  queue-header rows into search+sort plus status tabs. #415 (PR4) added an **editable** proposed-value
+  field: the reviewer adjusts the exact text ACP will write and the primary action flips "Apply fix" →
+  **"Save edited fix"**, carrying `d.value` through Remediate's existing `act(id, kind, editedValue)`
+  path (draft resets per finding, so an emptied field never applies a blank fix). Left out of PR4 — a
+  persisted "Not applicable" state: the backend folds `not_applicable` into
+  `not_automatically_assessable` for v1 and the HITL vocabulary is approved/rejected/skipped only, so a
+  frontend-only N/A would not survive a refresh (its own backend change). Frontend, not RULE_PATHS.
+- **Zoom control + grounded fix callouts in the Document preview** (#416). Brought `RemediationPreview`
+  closer to the mockup's preview pane, adding only what real finding data can back (ADR 0016): a
+  UI-only zoom (−/100%/+, 50–200% in 25% steps, purely presentational — fetches nothing), and a small
+  "✓ <what changed>" / "Re-scan cleared" callout carrying the finding's **own** applied `after` value,
+  shown only when the finding records a real applied/verified state — a bare proposal gets no callout,
+  and there is never a stock "Text color updated". Deliberately omitted: the mockup's "Page N of M"
+  pager — the finding model carries only its own `finding.page` and there is no document page-count or
+  multi-page render model, so faking "Page 2 of 8" would be fabricated UI. Frontend.
+- **Persisted a per-file assignee — the backend for "Assigned to me"** (#417). Added
+  `assessment_policy.assignments(decisions) → {file: assignee_email}` and `files_assigned_to(decisions,
+  email) → frozenset` (re-exported from `store`), reusing the existing `scan_decisions` table with a new
+  `kind='assignee'` rather than a new table; the scans route's decisions allow-list is widened to accept
+  it. The frontend "Assigned to me" filter is the follow-up that reads these. Under RULE_PATHS
+  (`api/assessment_policy.py`) → `Matrix-Note: none`; 7 tests.
 
 ## Feature: Estate coverage — three denominators and discovery at scale · #4597
 
@@ -1048,6 +1112,30 @@ three-denominator model (#297, under Documentation).
   reached (`i < len(targets) - 1`) untested; a regression could make a multi-library site silently report
   `truncated=false`. Two tests now drive a site with two libraries — cap hit in the first (second never
   fetched → truncated), and both fully listed (→ not truncated). Test-only.
+- **Made the funnel's remediation-eligible stage a finding-level denominator** (#407). The coverage
+  funnel fed its "remediation-eligible" stage from `needFix` (documents carrying any remediation action
+  — the Remediate-tab count), which is not the honest three-denominator meaning. Format-level
+  eligibility equals assessable (every supported format has some fix lane), so the real narrowing is at
+  the **finding** level: a document is remediation-eligible when it carries ≥1 finding whose lane in that
+  file's format is auto (deterministic) or ai (AI proposes, human approves). A document whose every open
+  finding is human-only (reading level, PDF re-tagging) is assessable but **not** remediable, and the
+  funnel now says so — `assessCoverage.remediationEligibleCount` computes it from the authoritative
+  `remediationIn` lane map. `needFix` is unchanged for the "need remediation" metric. 10 new tests.
+- **Surfaced the coverage funnel on the Discover tab, from the same helper as Overview** (#413). The
+  three-denominator funnel (discovered → assessment-eligible → remediation-eligible) rendered only on
+  Overview, but discovery happens on Discover — so an operator scanning a drive could not see how much of
+  what they just scanned is eligible until they navigated away. The per-file progress computation was
+  extracted from `Overview.jsx` into a shared `estateProgress.js` (`estateProgressFromFiles`) and
+  `EstateCoverage` now renders on Discover from the same inventory + helper, so the two tabs can never
+  disagree; guarded on `discovered > 0` so it never shows empty.
+- **Fixed a live regression where every local scan crashed** (#411). `handlers._scan` and the
+  sync/in-process `routes/scans.py` paths call `run_scan(..., inventory_out=inv)` to persist per-file
+  inventory the way the fan-out path does, but `run_scan`'s signature never gained the parameter — so
+  **every** local / in-process scan raised `run_scan() got an unexpected keyword argument
+  'inventory_out'` and failed outright on the deployed app, while CI stayed green because no test drove
+  that path with the argument. Added `inventory_out` and threaded it into the `_list(...)` call that
+  already supports it; a regression test now pins both the signature and the pass-through. `Matrix-Note:
+  none`.
 
 ---
 
@@ -1609,3 +1697,16 @@ invariant the redaction tests pin).
   still NOT advanced** (`fad0dfbe`, same convention): the 68-commit delta remains dominated by other
   sessions' undocumented feature work (SMB sources, remediation/certify/monitor lanes, coverage scorecard,
   etc.), left for their own sessions.
+- **2026-08-19 (R4 workspace, coverage, scope, GPU)** — Added ten of the day's merged PRs as Tasks. To
+  **Remediate review queue (#4598)**: #404/#408/#412/#415 (the R4 workspace rebuilt as a two-column
+  master/detail queue with specific decision actions and an editable "Save edited fix" draft), #416
+  (preview zoom + grounded fix callouts) and #417 (per-file assignee backend for "Assigned to me"). To
+  **Estate coverage (#4597)**: #407 (finding-level remediation-eligible denominator), #413 (the funnel on
+  the Discover tab from a shared helper) and #411 (fixed the `inventory_out` regression that crashed every
+  local scan). To **Operator scan scope (#4601)**: #410 (per-document selection carried through to the
+  certification facts). To **Continuous deployment (#4614)**: #405 and #414 (the vision lane moved off
+  RunPod onto an in-tenant Azure GPU, with the SKU resolved from the region). **In flight, not yet logged
+  as done:** #418 splits the folded preview back into a dedicated **third pane** (the guided-work-queue
+  mockup) — it supersedes #408's two-column fold; a later sync records it once merged. **Sync marker
+  deliberately NOT advanced** (same convention as the prior entries): the surrounding delta stays for the
+  other sessions to characterise.
