@@ -983,7 +983,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
     items = _list(source, svc, folder=effective_folder, sp_token=toks.get("sp"),
                   max_files=FANOUT_MAX_FILES,
                   exclude_remediated=bool(payload.get("exclude_remediated", False)),
-                  scope_out=scope, scope_files=_scope_for_listing(), inventory_out=inventory)
+                  scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory)
     # shadow_candidate (a file sharing a logical name with another — possibly ACP's own output
     # shadowing its source) is computed inside _enqueue_analysis from the item list, so the same
     # rule applies whether the fan-out runs now or later at Assess.

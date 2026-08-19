@@ -2154,13 +2154,18 @@ def _collapse_duplicate_alt(issues: list[dict]) -> list[dict]:
     return [i for i in issues if i.get("ruleId") not in _FIRST_PARTY_ALT_RULES]
 
 
-def _scope_for_listing() -> dict | None:
-    """The operator's `scan_scope` map, for gating what gets READ. None = no restriction.
+def _scope_for_listing(user: str | None = None) -> dict | None:
+    """The `scan_scope` map for gating what gets READ, for the signed-in `user`. None = no restriction.
 
     Deliberately the same resolution `_scoped_for_scoring` uses — the Store, not `in_scope`'s
     storeless fallback, which cannot see the `scan_scope` setting and answers "everything is in
     scope" to every question. That fallback is precisely how this feature came to gate scoring
     and nothing else.
+
+    `user` threads the per-user scope override (ADR 0035 stage 2): the effective scope is the owner
+    default WIDENED by this user's override when they have one, resolved once here and frozen into
+    `scan_runs.scope` by the caller. `user=None` is exactly the owner default, so an unscoped or
+    single-tenant deployment behaves as before.
 
     NOT wrapped in a bare try/except, for the reason spelled out in `_scoped_for_scoring`: a gate
     that fails open and says nothing is indistinguishable from a gate that was never wired up,
@@ -2169,7 +2174,7 @@ def _scope_for_listing() -> dict | None:
     """
     import core
     from store import active_scope
-    return active_scope(core.store)
+    return active_scope(core.store, user=user)
 
 
 def _scoped_for_scoring(issues: list[dict], filename: str,
@@ -2402,7 +2407,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         items = _list(source, svc, folder=effective_folder, sp_token=sp_token,
                      max_files=FANOUT_MAX_FILES,
                      exclude_remediated=exclude_remediated, scope_out=scope,
-                     scope_files=_scope_for_listing(), inventory_out=inventory_out)
+                     scope_files=_scope_for_listing(user), inventory_out=inventory_out)
         n = len(items)
         progress({"phase": "discovering", "files_found": n, "files_done": 0, "current": None})
 
