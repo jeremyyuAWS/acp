@@ -147,6 +147,44 @@ def _seed_discovery(store, sid: str, owner: str, files: list[dict],
     })
 
 
+def _seed_per_file(store, sid: str, rows: list[dict]) -> None:
+    """Per-file scan_inventory rows (store.add_inventory), so the endpoint can read each file's
+    lifecycle_status. `rows` — dicts with `file` (+ optional `mime`); a `status` key, if present,
+    is applied via set_lifecycle_status after insert (the store defaults every row to Active)."""
+    store.add_inventory(sid, [{"file": r["file"], "mime": r.get("mime", ""),
+                               "doc_class": r.get("doc_class", "")} for r in rows])
+    for r in rows:
+        if r.get("status"):
+            store.set_lifecycle_status(sid, r["file"], r["status"])
+
+
+def test_endpoint_reports_lifecycle_exclusion(client):
+    """Files a discovery rule flagged for archival/deletion are counted, so the Assess scope
+    preview can show how many the default 'ignore archival/deletion' excludes (Deva #6)."""
+    c, store = client
+    files = [{"id": "a", "name": "report.docx", "mimeType": ""},
+             {"id": "b", "name": "old.pdf", "mimeType": ""},
+             {"id": "c", "name": "deck.pptx", "mimeType": ""}]
+    _seed_discovery(store, "scan01", "demo", files)
+    _seed_per_file(store, "scan01", [
+        {"file": "report.docx"},                             # Active — not flagged
+        {"file": "old.pdf", "status": "Archive Candidate"},  # flagged
+        {"file": "deck.pptx", "status": "Delete Candidate"}, # flagged
+    ])
+    body = c.get("/assess/eligibility").json()
+    assert body["lifecycle_excluded"] == 2
+    assert body["lifecycle_eligible_excluded"] == 2         # both flagged files are assessable formats
+
+
+def test_endpoint_lifecycle_zero_without_per_file_inventory(client):
+    """A summarize-only estate (no per-file rows) reports zero exclusion, never a 500."""
+    c, store = client
+    _seed_discovery(store, "scan01", "demo", _SAMPLE_ESTATE)
+    body = c.get("/assess/eligibility").json()
+    assert body["lifecycle_excluded"] == 0
+    assert body["lifecycle_eligible_excluded"] == 0
+
+
 def test_endpoint_default_reports_eligible_count(client):
     c, store = client
     _seed_discovery(store, "scan01", "demo", _SAMPLE_ESTATE)
