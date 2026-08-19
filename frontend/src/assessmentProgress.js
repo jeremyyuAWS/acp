@@ -35,10 +35,46 @@ export function etaText(seconds) {
 function normalizeOutcomes(o) {
   if (!o || typeof o !== 'object') return null
   const n = (x) => (typeof x === 'number' && x >= 0 ? Math.round(x) : 0)
-  const out = { passed: n(o.passed), review: n(o.review), skipped: n(o.skipped), processing: n(o.processing) }
-  // Only meaningful once the backend has actually populated at least one bucket; otherwise the panel
-  // should show nothing rather than a row of zeros that reads as "everything skipped".
-  return (out.passed || out.review || out.skipped || out.processing) ? out : null
+  const out = {
+    passed: n(o.passed), review: n(o.review), failed: n(o.failed),
+    skipped: n(o.skipped), processing: n(o.processing),
+  }
+  // Only meaningful once at least one bucket is populated; otherwise the panel should show nothing
+  // rather than a row of zeros that reads as "everything skipped".
+  return (out.passed || out.review || out.failed || out.skipped || out.processing) ? out : null
+}
+
+// Map a live scan `run` (the scan_runs summary get_scan returns) to the outcome tally the progress
+// panel shows. The buckets are EXACTLY the ones finalize_scan_run computes — certifiable=passed,
+// uncertain=need-review, error=failed — derived live from file_records for a running scan (see
+// store._fill_run_aggregate / _AGG_SELECT), so the live chips and the final numbers can never diverge.
+// Returns null until analysis has produced at least one real result, so chips do not appear during the
+// read phase or a metadata-only discovery (where the buckets are all zero and would read "0 · 0 · 0").
+export function outcomesFromRun(run) {
+  if (!run || typeof run !== 'object') return null
+  const passed = run.certifiable > 0 ? Math.round(run.certifiable) : 0
+  const review = run.uncertain > 0 ? Math.round(run.uncertain) : 0
+  const failed = run.error > 0 ? Math.round(run.error) : 0
+  if (passed + review + failed === 0) return null
+  const total = run.files > 0 ? run.files : 0
+  const doneRaw = run.files_done > 0 ? run.files_done : 0
+  const completed = total ? Math.min(doneRaw, total) : doneRaw
+  return { passed, review, failed, processing: Math.max(0, total - completed) }
+}
+
+// Ordered chips for the progress panel — most-actionable first, zero buckets dropped to stay scannable.
+const CHIP_ORDER = [
+  ['passed', 'passed', 'ok'],
+  ['review', 'need review', 'warn'],
+  ['failed', 'failed', 'bad'],
+  ['skipped', 'skipped', 'muted'],
+  ['processing', 'processing', 'muted'],
+]
+export function outcomeChips(outcomes) {
+  if (!outcomes) return []
+  return CHIP_ORDER
+    .filter(([k]) => outcomes[k] > 0)
+    .map(([k, label, kind]) => ({ key: k, count: outcomes[k], label, kind }))
 }
 
 export function assessmentProgress(p) {

@@ -2,7 +2,7 @@
 // are the load-bearing assertions: the percentage is completed-with-saved-results (never downloads),
 // and rate/ETA are null until there is a real signal rather than a fabricated "2 minutes left".
 import { describe, it, expect } from 'vitest'
-import { assessmentProgress, assessmentLine, etaText } from './assessmentProgress.js'
+import { assessmentProgress, assessmentLine, etaText, outcomesFromRun, outcomeChips } from './assessmentProgress.js'
 
 describe('assessmentProgress', () => {
   it('is null for no payload', () => {
@@ -40,7 +40,7 @@ describe('assessmentProgress', () => {
     expect(assessmentProgress({ phase: 'analysing', files_found: 10, files_done: 3 }).outcomes).toBe(null)
     expect(assessmentProgress({ phase: 'analysing', files_found: 10, files_done: 3, outcomes: { passed: 0, review: 0, skipped: 0, processing: 0 } }).outcomes).toBe(null)
     expect(assessmentProgress({ phase: 'analysing', files_found: 10, files_done: 3, outcomes: { passed: 2, review: 1 } }).outcomes)
-      .toEqual({ passed: 2, review: 1, skipped: 0, processing: 0 })
+      .toEqual({ passed: 2, review: 1, failed: 0, skipped: 0, processing: 0 })
   })
 })
 
@@ -70,5 +70,41 @@ describe('assessmentLine', () => {
 
   it('uses a phase-appropriate verb', () => {
     expect(assessmentLine({ phase: 'reading', files_found: 10, files_done: 4 })).toMatch(/^Retrieving 4 of 10/)
+  })
+})
+
+describe('outcomesFromRun', () => {
+  it('maps the run summary to the outcome tally, matching the finalize buckets', () => {
+    // certifiable→passed, uncertain→review, error→failed; processing = files - files_done.
+    const run = { files: 250, files_done: 145, certifiable: 97, uncertain: 23, error: 7 }
+    expect(outcomesFromRun(run)).toEqual({ passed: 97, review: 23, failed: 7, processing: 105 })
+  })
+
+  it('is null until analysis has produced at least one result — not "0 · 0 · 0"', () => {
+    // Read phase / metadata-only discovery: files_done climbs but no per-file results yet.
+    expect(outcomesFromRun({ files: 250, files_done: 40, certifiable: 0, uncertain: 0, error: 0 })).toBe(null)
+    expect(outcomesFromRun(null)).toBe(null)
+  })
+
+  it('never shows negative processing when files_done overshoots', () => {
+    expect(outcomesFromRun({ files: 10, files_done: 12, certifiable: 10, uncertain: 0, error: 0 }).processing).toBe(0)
+  })
+
+  it('flows through into the progress payload the panel reads', () => {
+    const vm = assessmentProgress({ phase: 'analysing', files_found: 250, files_done: 145,
+      outcomes: outcomesFromRun({ files: 250, files_done: 145, certifiable: 97, uncertain: 23, error: 7 }) })
+    expect(vm.outcomes).toEqual({ passed: 97, review: 23, failed: 7, skipped: 0, processing: 105 })
+  })
+})
+
+describe('outcomeChips', () => {
+  it('orders most-actionable first and drops zero buckets', () => {
+    const chips = outcomeChips({ passed: 97, review: 23, failed: 0, skipped: 0, processing: 7 })
+    expect(chips.map((c) => c.key)).toEqual(['passed', 'review', 'processing'])   // failed/skipped dropped
+    expect(chips[1]).toMatchObject({ count: 23, label: 'need review', kind: 'warn' })
+  })
+
+  it('is empty for no outcomes', () => {
+    expect(outcomeChips(null)).toEqual([])
   })
 })
