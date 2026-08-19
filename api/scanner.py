@@ -1162,11 +1162,14 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         # sources do — everything downstream is source-agnostic. The live SMB transport is
         # deployment-gated (see smb_source._walk); discovery shape and inventory are real here.
         import smb_source
-        root = folder if folder not in (None, "", "root") else (smb_source.smb_config()["shares"] or [""])[0]
-        result = smb_source.list_smb(root, max_files=max_files or 2000, scope_out=scope_out,
-                                     inventory_out=inventory_out)
+        cfg = smb_source.smb_config()
+        # A specific share via `folder`, else the whole configured estate — EVERY in-scope share, not
+        # just the first (a UTSW estate spans up to ~10 shares; walking one under-reports it).
+        roots = [folder] if folder not in (None, "", "root") else cfg["shares"]
+        result = smb_source.list_smb_estate(roots, max_files=max_files or 2000, cfg=cfg,
+                                            scope_out=scope_out, inventory_out=inventory_out)
         if scope_out is not None:
-            scope_out.update({"kind": "smb", "root": root, "kept": len(result),
+            scope_out.update({"kind": "smb", "root": ", ".join(roots) or None, "kept": len(result),
                               "truncated": bool((scope_out.get("inventory") or {}).get("truncated"))})
     elif folder and folder != "root":
         # Specific folder: recursive BFS
