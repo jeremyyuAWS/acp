@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } from 'react'
 import HitlBell from './HitlBell.jsx'
+import { assessmentLine } from './assessmentProgress.js'
 import { refreshDriveToken } from './driveAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
 import { getSources, getRubric, getConfig, getMe, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, getScanLocations, SESSION_EXPIRED } from './api'
@@ -76,6 +77,13 @@ function fmtStamp(iso) {
 
 function progressText(p) {
   if (!p) return ''
+  // The two long, per-file phases now show the OUTCOME-oriented line — how much is done (with saved
+  // results), how fast, how long left — instead of "Reading files · 145/250 · one-filename". Multiple
+  // files are processed at once, so a single in-flight filename is not the honest signal; the count is
+  // (see assessmentProgress.js). The earlier phases keep their plain status label.
+  if ((p.phase === 'reading' || p.phase === 'analysing') && p.files_found) {
+    return assessmentLine(p)
+  }
   const m = {
     queued: 'Queued…', connecting: 'Connecting to source…', discovering: 'Discovering files…',
     reading: `Reading files · ${p.files_done}/${p.files_found}`,
@@ -86,7 +94,6 @@ function progressText(p) {
     scoring: 'Compiling results…', done: 'Complete', error: 'Error',
   }
   let s = m[p.phase] ?? p.phase
-  if (p.current && (p.phase === 'reading' || p.phase === 'analysing')) s += ` · ${p.current}`
   // Queued scans don't stream per-file progress, so reassure the user it's alive
   // by showing elapsed time on the long worker-pool phase.
   if (p.elapsed != null) s += ` · still working (${p.elapsed}s)`

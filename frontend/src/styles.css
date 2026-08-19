@@ -252,6 +252,39 @@ input:focus-visible, [role="tab"]:focus-visible {
 .tracechip { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 600; color: var(--plum); background: #F4EEFC; border: 1px solid #D9CCF2; border-radius: 999px; padding: 2px 9px; text-decoration: none; white-space: nowrap; }
 .tracechip:hover { background: #EBE0FA; }
 .tracechip--unavailable { color: #aaa; background: #f5f5f5; border-color: #e0e0e0; cursor: default; pointer-events: none; }
+/* TraceChip renders as a <button> for the in-app panel — reset the native chrome so it
+   matches the <a> pill exactly, and keep it keyboard-activatable with a pointer cursor. */
+button.tracechip { cursor: pointer; font-family: inherit; line-height: normal; }
+button.rc-trace { background: none; border: none; padding: 0; font: inherit; cursor: pointer; }
+
+/* In-app trace panel (TracePanel) — rendered in the shared Drawer shell. */
+.tp-body { margin-top: 12px; overflow-y: auto; }
+.tp-summary { display: flex; flex-direction: column; gap: 10px; }
+.tp-metrics { display: flex; gap: 20px; }
+.tp-metric { text-align: center; }
+.tp-metric-v { font-size: 26px; font-weight: 700; color: var(--ink); line-height: 1.1; }
+.tp-metric-k { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.tp-row { display: flex; gap: 10px; align-items: baseline; }
+.tp-row-k { font-size: 12px; color: var(--muted); min-width: 108px; }
+.tp-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.tp-chip { font-size: 11px; font-weight: 600; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--line); color: var(--ink); }
+.tp-chip-fail { background: #FDECEC; border-color: #F5C7C7; color: #9A2727; }
+.tp-chip-pii { background: #FFF4E0; border-color: #F3D79B; color: #8A5A00; }
+.tp-chip-ok { background: #E7F6EC; border-color: #B6E2C4; color: #1E6B37; }
+.tp-chip-muted { background: #F3F1F5; color: var(--muted); }
+.tp-section-h { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 18px 0 8px; }
+.tp-timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.tp-obs { border: 1px solid var(--line); border-left: 3px solid #D9CCF2; border-radius: 8px; padding: 8px 10px; }
+.tp-obs.tp-lvl-warn { border-left-color: var(--amber); }
+.tp-obs.tp-lvl-error { border-left-color: #C0392B; }
+.tp-obs-head { display: flex; align-items: center; gap: 8px; }
+.tp-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; border-radius: 4px; padding: 1px 5px; }
+.tp-badge-gen { background: #EDE3FA; color: var(--plum); }
+.tp-badge-span { background: #EAF2F8; color: #2C6390; }
+.tp-obs-name { font-size: 13px; font-weight: 600; color: var(--ink); }
+.tp-obs-dur { font-size: 11px; margin-left: auto; }
+.tp-obs-meta { display: flex; gap: 10px; font-size: 11px; margin-top: 4px; }
+.tp-obs-status { font-size: 11px; margin-top: 4px; }
 .rulebreak .rulerows { display: flex; flex-direction: column; gap: 7px; margin-top: 6px; }
 .rulerow { display: grid; grid-template-columns: minmax(170px, 1.3fr) 2fr minmax(135px, auto); align-items: center; gap: 12px; }
 .rulemeta { font-size: 12.5px; display: flex; align-items: center; gap: 6px; min-width: 0; }
