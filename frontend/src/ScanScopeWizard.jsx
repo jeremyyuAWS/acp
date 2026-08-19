@@ -211,7 +211,6 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   const [folders, setFolders] = useState([])
   const [excluded, setExcluded] = useState([])
   const [savedFolders, setSavedFolders] = useState(null)   // null = not loaded yet
-  const [pickerOpen, setPickerOpen] = useState(false)
   // THREE STEPS, because one panel asking for folders, formats, criteria and engine switches at
   // once makes every decision compete with every other. The order is deliberate: where, then what,
   // then confirm — folders decide which estate is judged, criteria only decide how each document
@@ -612,37 +611,37 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
               })}
           </div>
 
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center',
-                        marginBottom: 8 }}>
-            {savedFolders === null ? (
-              <span className="muted" style={{ fontSize: 12.5 }}>Loading…</span>
-            ) : folders.length === 0 ? (
-              // Said out loud rather than left blank. "Nothing selected" and "everything" look the
-              // same on screen otherwise, and the reassuring reading of a blank row is the wrong one.
-              <span style={{ fontSize: 12.5 }}>
-                <b>Entire source</b> — every accessible folder
-              </span>
-            ) : (
-              <>
-                {folders.map((f) => (
-                  <span key={f.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
-                    fontSize: 11.5, background: '#F1EFF3', border: '1px solid var(--line)',
-                    borderRadius: 999, padding: '2px 8px' }}>📁 {f.name}</span>
-                ))}
-                {excluded.map((f) => (
-                  <span key={f.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
-                    fontSize: 11.5, background: '#FBF0F0', border: '1px solid var(--line)',
-                    borderRadius: 999, padding: '2px 8px' }}>🚫 except {f.name}</span>
-                ))}
-              </>
-            )}
-            {scopeMode === 'some' && (
-              <button className="linklike" type="button" style={{ fontSize: 12 }}
-                      disabled={busy} onClick={() => setPickerOpen(true)}>
-                {folders.length ? 'Change…' : 'Choose folders…'}
-              </button>
-            )}
-          </div>
+          {/* THE BROWSER IS ON THE PAGE, not behind a "Choose folders…" link into a modal.
+              The link version made the two halves of one decision sequential: you picked inside a
+              dialog, saved, closed it, and only then read a row of chips on the screen underneath.
+              The scope you were assembling was never visible while you were assembling it, and it
+              became visible at exactly the point it had stopped being cheap to change. Inline and
+              two-column, every tick moves a chip that is already on screen — an over-wide
+              selection is something you SEE rather than something the count tells you afterwards,
+              which is the whole shape of the defect this screen exists to prevent. */}
+          {savedFolders === null ? (
+            <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>Loading…</div>
+          ) : scopeMode === 'all' ? (
+            // Said out loud rather than left blank. "Nothing selected" and "everything" look the
+            // same on screen otherwise, and the reassuring reading of a blank row is the wrong one.
+            <div style={{ fontSize: 12.5, marginBottom: 8 }}>
+              <b>Entire source</b> — every accessible folder
+            </div>
+          ) : (
+            <div style={{ marginBottom: 8 }}>
+              <FolderPicker
+                layout="inline"
+                key={locKey}
+                rootName={locKey === 'drive' ? 'My Drive' : 'OneDrive'}
+                lister={locKey === 'drive' ? listFolders : (parent) => listSpFolders(parent)}
+                initial={folders}
+                initialExclude={excluded}
+                // It has no Save of its own: the wizard footer is the only footer on this screen,
+                // and a second commit button next to it would make "saved" ambiguous. So the
+                // picker reports as you tick.
+                onChange={(inc, exc) => { setFolders(inc); setExcluded(exc || []) }} />
+            </div>
+          )}
 
           {/* Divergence from the connection default is allowed — that is what "this run" means —
               but never silent: an unremarked difference between the card and the run is the exact
@@ -659,16 +658,6 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
             </div>
           )}
 
-          {pickerOpen && (
-            <FolderPicker
-              title="Folders to scan"
-              rootName={locKey === 'drive' ? 'My Drive' : 'OneDrive'}
-              lister={locKey === 'drive' ? listFolders : (parent) => listSpFolders(parent)}
-              initial={folders}
-              initialExclude={excluded}
-              onConfirm={(inc, exc) => { setFolders(inc); setExcluded(exc || []); setPickerOpen(false) }}
-              onClose={() => setPickerOpen(false)} />
-          )}
         </>
       )}
 
