@@ -52,3 +52,36 @@ export function scopeImpact(elig, formats = new Set()) {
     funnel, excluded,
   }
 }
+
+/** Coverage-gap blind spots on the current selection: a (selected criterion × selected document
+ *  type) that ACP has NO assessment lane for, so nothing in that document type will ever be scored
+ *  against that criterion. This is the same catalog fact the save-time scope derivation gates on
+ *  (`row.formats` — the formats a code can be judged on); a pair the catalog can't reach never
+ *  enters scope however the boxes are ticked, and here we surface WHY, per document type.
+ *
+ *  HONESTY (ADR 0016): a gap is reported only from the catalog row for that code — if a selected
+ *  code has no catalog row we cannot decide its lanes, so it is skipped, never guessed. The result
+ *  is one entry per selected format that at least one selected criterion cannot be checked on.
+ *
+ *  @param codeset          the catalog: [{code, name, formats:[...]}]
+ *  @param selectedCodes    Set (or iterable) of ticked WCAG codes
+ *  @param selectedFormats  Set (or iterable) of ticked document formats
+ *  @returns [{ format, count, codes:[{code,name}] }] — most-affected format first */
+export function coverageGaps(codeset = [], selectedCodes = new Set(), selectedFormats = new Set()) {
+  const byCode = new Map((codeset || []).map((r) => [r.code, r]))
+  const gaps = []
+  for (const fmt of selectedFormats) {
+    const missing = []
+    for (const code of selectedCodes) {
+      const row = byCode.get(code)
+      if (!row) continue                                   // no catalog row → can't decide, don't invent a gap
+      if (!(row.formats || []).includes(fmt)) missing.push({ code, name: row.name })
+    }
+    if (missing.length) {
+      missing.sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }))
+      gaps.push({ format: fmt, count: missing.length, codes: missing })
+    }
+  }
+  gaps.sort((a, b) => b.count - a.count || a.format.localeCompare(b.format))
+  return gaps
+}

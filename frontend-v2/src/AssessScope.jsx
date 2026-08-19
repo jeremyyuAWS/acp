@@ -218,8 +218,9 @@ export default function AssessScope({ onSaved }) {
             <span className="muted" style={{ fontSize: 13 }}>{eligLoading ? 'Counting eligible files…' : '—'}</span>
           )}
         </div>
-        {/* Live population funnel — the narrowing behind the single count above, with each drop named. */}
-        <ScopeImpact elig={elig} formats={formats} loading={eligLoading} />
+        {/* Live population funnel — the narrowing behind the single count above, with each drop named —
+            plus coverage-gap warnings for any selected criterion with no lane for a selected doc-type. */}
+        <ScopeImpact elig={elig} formats={formats} codeset={codeset} codes={codes} loading={eligLoading} />
       </div>
 
       <div className="emptyactions" style={{ marginTop: 8 }}>
