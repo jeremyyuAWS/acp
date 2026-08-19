@@ -275,12 +275,18 @@ Every model call is auditable without any document content leaving the boundary.
 full tracing layer that is an **env-gated no-op** — with `LANGFUSE_SECRET_KEY` absent, every call
 returns a `_Noop` and nothing is sent.
 
-**Version, today and next.** Deployed: **Langfuse v2 on a single shared Postgres** (`langfusedb`
-alongside `acpdb`); the SDK is pinned `>=2,<3`. Region **eastus2**, project **`acp-compliance`**.
-Wired onto **both** acp-app and acp-worker (`set_integration_env.sh` — Langfuse on the API alone
-would miss the worker, where scanning runs). **Planned scale-up: Langfuse v3, which adds
-ClickHouse + Redis + S3/MinIO** for high trace volume — a documented upgrade path, *not deployed
-today*.
+**Version — today, and the committed next step.** Deployed today: **Langfuse v2 on a single shared
+Postgres** (`langfusedb` alongside `acpdb`); the SDK is pinned `>=2,<3`. Region **eastus2**, project
+**`acp-compliance`**. Wired onto **both** acp-app and acp-worker (`set_integration_env.sh` —
+Langfuse on the API alone would miss the worker, where scanning runs).
+
+**Next: migrating to Langfuse v3.** This is the planned direction, not a maybe. v3 re-architects the
+trace store onto **ClickHouse** (a columnar analytics DB built for high-volume, high-cardinality
+trace/cost queries) with **Redis** (queue/cache) and **S3/MinIO** (blob store) alongside Postgres —
+so trace analytics and cost roll-ups scale past what a single Postgres serves. **Not yet cut over**
+(the system runs v2 today). The migration is deliberately low-risk on our side: ACP's Langfuse
+client and the PHI invariant are **version-independent**, so this is a **backing-store / deployment
+migration, not an application rewrite** — what ACP sends is unchanged.
 
 **What it captures.**
 - **Two traces per scan.** A **Scan/Discover** trace (discovery + optional PII deep-scan, carrying
@@ -417,8 +423,10 @@ Named deliberately — every one of these is real as of 2026-08-19.
   same trade. Quality escalation to cloud needs an admin to enable a provider.
 - **Concurrency discipline is documented, not enforced.** `CLAUDE.md` carries hard-won rules for
   many parallel sessions on one checkout; nothing mechanically prevents breaking them.
-- **Langfuse is v2 on one Postgres.** Fine at current volume; high trace volume is the trigger to
-  take the v3 (ClickHouse) upgrade path, which is planned but not built.
+- **Langfuse v2 is the trace-volume ceiling until the v3 migration lands.** v2 on a single Postgres
+  is fine at current volume; the **v3 (ClickHouse + Redis + S3/MinIO) migration is committed** and is
+  the fix, but it isn't cut over yet — so the interim limitation is that a single Postgres backs all
+  tracing. Low-risk when it lands (backing-store migration, not an app change).
 
 The retired weaknesses (worth saying, because the old deck led with them): the manual laptop
 deploy is **replaced by automated CD**, and the PDF engine is **now versioned in-repo** (ADR 0029).
