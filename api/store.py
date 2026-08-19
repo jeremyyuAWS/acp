@@ -158,6 +158,13 @@ _SCHEMA = [
     # Idempotent, and readers accept both tokens anyway, so a rollback to an older image
     # (which would write the old token again) degrades to mixed rows, not wrong counts.
     "UPDATE scan_rule_traces SET outcome='NOT_EVALUATED' WHERE outcome='NOT_APPLICABLE'",
+    # ADR 0037 Step 0 — per-file stage timings (download vs analyse), a SIDE-CHANNEL kept entirely off
+    # the scoring path: written best-effort AFTER save_file_result, read only by /scans/{id}/timings.
+    # Idempotent per file (same PK discipline as file_records) so a retried job re-writes, never doubles.
+    """CREATE TABLE IF NOT EXISTS file_stage_timings (
+      scan_id TEXT, file TEXT, timings TEXT,
+      PRIMARY KEY (scan_id, file)
+    )""",
     """CREATE TABLE IF NOT EXISTS hitl_queue (
       id TEXT PRIMARY KEY,
       created_at TEXT,
@@ -1244,6 +1251,36 @@ class Store:
                 "SELECT files,certifiable,uncertain,error,avg_score FROM scan_runs WHERE id=%s", (scan_id,))
             return self._db.fetchone(cur) or {}
 
+    def record_file_timing(self, scan_id: str, file: str, rollup: dict) -> None:
+        """Persist one file's per-stage timing (ADR 0037 Step 0). A SIDE-CHANNEL — the caller wraps this
+        best-effort so a timing write can never fail the scan. Idempotent (upsert on scan_id,file), the
+        same retry discipline as file_records, so a re-run re-writes rather than doubling."""
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO file_stage_timings(scan_id,file,timings) VALUES(%s,%s,%s) "
+                "ON CONFLICT(scan_id,file) DO UPDATE SET timings=EXCLUDED.timings",
+                (scan_id, file, _json.dumps(rollup or {})))
+
+    def scan_timings(self, scan_id: str) -> dict:
+        """The per-scan stage-timing rollup (ADR 0037 Step 0): merge every file's timing and summarize —
+        totals, counts, per-stage average seconds, and the bottleneck stage. A scan that ran before this
+        shipped (or one still early) reports zeros and bottleneck=None, never a fabricated number."""
+        import json as _json
+        from stage_timing import merge_rollups, summarize
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT timings FROM file_stage_timings WHERE scan_id=%s", (scan_id,))
+            rows = self._db.fetchall(cur)
+        rollups = []
+        for r in rows or []:
+            try:
+                rollups.append(_json.loads(r["timings"]) if r.get("timings") else {})
+            except Exception:                     # a corrupt row must not sink the whole rollup
+                continue
+        out = summarize(merge_rollups(rollups))
+        out["files_timed"] = len(rollups)
+        return out
+
     def pii_summary(self, sid: str | None = None) -> dict:
         """Sensitive-data rollup: docs affected, total items, and per-type counts.
         Scoped to one scan when sid is given, else across all scans."""
@@ -1291,10 +1328,11 @@ class Store:
     # reset-completeness test (test_reset_leaves_no_customer_data) fails closed if a data table
     # is left out.
     _ANALYTICS_TABLES = ["scan_runs", "file_records", "issue_records", "scan_rule_traces",
-                         "scan_file_manifests", "scan_inventory", "file_tags", "scan_decisions",
-                         "pii_findings", "hitl_queue", "hitl_events", "disposition_audit",
-                         "decision_log", "inventory", "jobs", "documents", "org_memory",
-                         "remediation_state", "remediation_diff", "applied_fixes", "ai_calls"]
+                         "file_stage_timings", "scan_file_manifests", "scan_inventory", "file_tags",
+                         "scan_decisions", "pii_findings", "hitl_queue", "hitl_events",
+                         "disposition_audit", "decision_log", "inventory", "jobs", "documents",
+                         "org_memory", "remediation_state", "remediation_diff", "applied_fixes",
+                         "ai_calls"]
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start

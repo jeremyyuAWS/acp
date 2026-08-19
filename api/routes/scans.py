@@ -283,6 +283,17 @@ def scan(sid: str, request: Request):
     return res
 
 
+@router.get("/scans/{sid}/timings")
+def scan_timings(sid: str, request: Request):
+    """Per-stage timing rollup for one scan (ADR 0037 Step 0 — measure first): where the scan spent its
+    time (download vs analyse), the per-stage average seconds, and the bottleneck stage. Owner-scoped via
+    the same get_scan gate, so it never reveals another user's scan; a scan with nothing recorded reports
+    zeros and bottleneck=null rather than a fabricated number."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    return core.store.scan_timings(sid)
+
+
 @router.get("/scans/{sid}/files/{filename:path}/status")
 def get_file_accessibility_status(sid: str, filename: str, request: Request):
     """ADR 0026 — the authoritative Accessibility Status for one file. Derived-at-read over the
