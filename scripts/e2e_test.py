@@ -13,6 +13,24 @@ Usage:
   python scripts/e2e_test.py --source drive --folder <drive-folder-id> \
       --gis-token <access-token>
 
+  # SharePoint / OneDrive (per-user MS Graph token — see below):
+  python scripts/e2e_test.py --source sharepoint --site <graph-site-id> \
+      --sp-token "$SP_TOKEN"
+
+THE SHAREPOINT TOKEN HAS TO COME FROM A PERSON. SP_SCOPES are DELEGATED
+(User.Read, Files.Read.All, Sites.Read.All), so there is no client-credentials path and no
+server-side bypass — ACP_DEMO_DRIVE_KEY is Drive-only. Get one from the browser session after
+Connect Microsoft, or from `az account get-access-token --resource https://graph.microsoft.com`
+IF that principal carries the delegated scopes; an app-only token usually does not, and this
+script says so rather than surfacing a bare 401.
+
+WHY SHAREPOINT DOES NOT USE THE EXPECTED TABLE BELOW. That table is ground truth for the
+hand-authored local corpus: named files with known issue floors and score ceilings. A real
+SharePoint estate has no such ground truth, and pointing this at one would print 18 "expected
+file not scanned" warnings and assert nothing about what IS there. So --source sharepoint runs
+an ESTATE-shaped check instead: counts by extension, listed-vs-assessed, truncation, and which
+provider actually served each AI call. See `estate_assertions()`.
+
 Exit code 0 = all assertions pass, 1 = failures found.
 """
 from __future__ import annotations
@@ -39,9 +57,20 @@ ANSI = {
 def c(color: str, s: str) -> str:
     return f"{ANSI[color]}{s}{ANSI['reset']}"
 
+SP_TOKEN = ""  # set via --sp-token or ACP_SP_TOKEN
+
 def _drive_headers() -> dict:
-    """Auth headers for Drive scan requests."""
+    """Auth headers for the scan request, per source.
+
+    SharePoint's token rides `x-sp-token` (api/routes/scans.py:47) and is per-USER: the API
+    refuses `source=sharepoint` outright without one, because SP_SCOPES are delegated and there
+    is no server-side equivalent of the Drive demo key.
+    """
     h = {}
+    if SOURCE == "sharepoint":
+        if SP_TOKEN:
+            h["x-sp-token"] = SP_TOKEN
+        return h
     if GIS_TOKEN:
         h["x-drive-token"] = GIS_TOKEN
     elif DEMO_KEY:
@@ -126,6 +155,86 @@ ORDERING_CHECKS = [
     ("docx-critical-no-headings.docx","docx-clean-accessible.docx",   "DOCX critical < clean"),
 ]
 
+def estate_assertions(scan: dict, scan_id: str, expect_per_type: int,
+                      failures: list, warnings: list) -> None:
+    """What is checkable on an estate nobody hand-authored ground truth for.
+
+    The EXPECTED table above cannot help here, so this asserts the four things that actually go
+    wrong on a real source — each chosen because its failure mode is a NUMBER THAT LOOKS FINE:
+
+      1. counts by extension     one bucket coming back empty is invisible in a total. "300
+                                 files" reads as success whether or not any xlsx were listed.
+      2. listed vs assessed      ADR 0020 defers analysis: Discover lists and persists inventory
+                                 and STOPS; Assess opens files. So listed > assessed is correct
+                                 by design, and printing both stops it reading as a loss.
+      3. truncation              a capped run reports a clean, smaller number. This is the one
+                                 failure that cannot be spotted from the result alone.
+      4. provider and zone       from the per-call ledger. Configuration says what SHOULD run;
+                                 ai_calls says what did. The gap between them is the silent
+                                 GPU→CPU fallback this whole preflight/provenance effort exists
+                                 to make visible.
+    """
+    files = scan.get("files", [])
+    scope = scan.get("scope") or {}
+    inv   = scope.get("inventory") or {}
+
+    # 1. by extension
+    by_ext: dict[str, int] = {}
+    for f in files:
+        ext = (f.get("file", "").rsplit(".", 1) + [""])[1].lower()
+        by_ext[ext] = by_ext.get(ext, 0) + 1
+    print(f"  assessed {len(files)} file(s) across {len(by_ext)} type(s)")
+    for ext, n in sorted(by_ext.items(), key=lambda kv: -kv[1]):
+        print(f"    .{ext:<6} {n:>4}")
+    if expect_per_type:
+        for ext in ("docx", "xlsx", "pptx", "pdf"):
+            n = by_ext.get(ext, 0)
+            if n == 0:
+                failures.append(f"No .{ext} files in the scan — the type is missing entirely, "
+                                f"which a total would have hidden")
+                print(c("red", f"  ✗ .{ext}: none found"))
+            elif n < expect_per_type:
+                warnings.append(f".{ext}: {n} < expected {expect_per_type}")
+                print(c("yellow", f"  ? .{ext}: {n} (expected ~{expect_per_type})"))
+
+    # 2. listed vs assessed — the deferred-analysis gap, stated rather than implied
+    listed = inv.get("discovered") or scope.get("kept")
+    if listed is not None:
+        print(f"  discovered {listed} · assessed {len(files)}")
+        if len(files) > (listed or 0):
+            failures.append(f"assessed ({len(files)}) exceeds discovered ({listed}) — the "
+                            f"denominators disagree, so one of them is wrong")
+
+    # 3. truncation — the number that looks clean because it was cut
+    if inv.get("truncated") or scope.get("truncated"):
+        failures.append("The listing was TRUNCATED: the counts above describe a capped subset, "
+                        "not the estate. Raise ACP_FANOUT_MAX_FILES and re-run before reading "
+                        "any of them as coverage.")
+        print(c("red", "  ✗ listing truncated — counts describe a capped subset"))
+    else:
+        print(c("green", "  ✓ listing not truncated"))
+
+    # 4. what actually served the AI calls
+    try:
+        calls = _get(f"/scans/{scan_id}/ai_calls")
+    except Exception as e:
+        warnings.append(f"could not read the ai_calls ledger: {e}")
+        return
+    if not calls:
+        print(c("yellow", "  ? no AI calls recorded — expected if no document held an "
+                          "undescribed image (only 1.1.1 remediation uses vision)"))
+        return
+    seen: dict[str, int] = {}
+    for cl in calls:
+        k = f"{cl.get('provider','?')}/{cl.get('processing_zone') or cl.get('zone','?')}"
+        seen[k] = seen.get(k, 0) + 1
+    for k, n in sorted(seen.items(), key=lambda kv: -kv[1]):
+        print(f"    {k:<28} {n:>4} call(s)")
+    if any(k.startswith("ollama/") for k in seen) and len(seen) > 1:
+        warnings.append(f"Mixed providers served this scan ({', '.join(seen)}) — some calls fell "
+                        f"back to the local floor. Configuration alone would not have shown this.")
+
+
 RULE_CATALOG_IDS = {
     "1.1.1","1.3.1","1.4.1","1.4.3","1.4.4","1.4.10","1.4.11","1.4.12",
     "2.1.1","2.4.2","2.4.3","2.4.4","2.4.6","2.4.7","3.1.1","3.1.4","4.1.2",
@@ -135,8 +244,17 @@ def main():
     global BASE_URL, SOURCE, FOLDER, DEMO_KEY, GIS_TOKEN
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url",   default=BASE_URL)
-    parser.add_argument("--source",     default="local", choices=["local", "drive"])
+    parser.add_argument("--source",     default="local",
+                        choices=["local", "drive", "sharepoint"])
     parser.add_argument("--folder",     default=None,    help="Drive folder ID to scan")
+    # The API reuses `folder` to carry the SharePoint SITE id (scanner.py:1140), so --site is an
+    # alias rather than a second parameter — one knob on the wire, the readable name here.
+    parser.add_argument("--site",       default=None,
+                        help="SharePoint site id (omit for OneDrive). Sent as `folder`.")
+    parser.add_argument("--sp-token",   default=os.environ.get("ACP_SP_TOKEN", ""),
+                        help="Per-user MS Graph token (delegated). Or set ACP_SP_TOKEN.")
+    parser.add_argument("--expect-per-type", type=int, default=0,
+                        help="Expected count per document type, e.g. 50. 0 disables the check.")
     parser.add_argument("--demo-key",   default=None,    help="ACP_DEMO_DRIVE_KEY value")
     parser.add_argument("--gis-token",  default=None,    help="Per-user GIS access token")
     parser.add_argument("--langfuse-url", default=os.environ.get("LANGFUSE_HOST", ""),
@@ -148,13 +266,30 @@ def main():
     parser.add_argument("--e2e-key",      default=os.environ.get("ACP_E2E_KEY", ""),
                         help="X-E2E-Key bypass token (or set ACP_E2E_KEY env var)")
     args = parser.parse_args()
-    global E2E_KEY
+    global E2E_KEY, SP_TOKEN
     BASE_URL  = args.base_url.rstrip("/")
     SOURCE    = args.source
-    FOLDER    = args.folder
+    FOLDER    = args.site if args.source == "sharepoint" else args.folder
     DEMO_KEY  = args.demo_key
     GIS_TOKEN = args.gis_token
     E2E_KEY   = args.e2e_key
+    SP_TOKEN  = args.sp_token
+
+    # Fail here, not at the API's 401. The message an operator needs is not "unauthorized" — it
+    # is WHY no automated credential will do, which is a design fact about delegated scopes and
+    # not something they can fix by trying a different key.
+    if SOURCE == "sharepoint" and not SP_TOKEN:
+        print(c("red", "\n  ✗ --source sharepoint needs --sp-token (or ACP_SP_TOKEN).\n"))
+        print("    SP_SCOPES are DELEGATED — User.Read, Files.Read.All, Sites.Read.All — so a\n"
+              "    person signs in and there is no client-credentials path. ACP_DEMO_DRIVE_KEY\n"
+              "    is Drive-only and does not apply.\n\n"
+              "    Get a token from the browser session after Connect Microsoft, or:\n"
+              "      az account get-access-token --resource https://graph.microsoft.com \\\n"
+              "        --query accessToken -o tsv\n"
+              "    …but only if that principal carries the delegated scopes. An app-only token\n"
+              "    authenticates and then returns an empty estate, which reads as 'the site is\n"
+              "    empty' rather than as the wrong credential.")
+        sys.exit(1)
 
     failures: list[str] = []
     warnings: list[str] = []
@@ -218,7 +353,18 @@ def main():
 
     print(f"  {len(scanned_names)} files in scan result")
 
-    for fname, exp in EXPECTED.items():
+    # An estate has no per-file ground truth, so the EXPECTED table is not merely unhelpful here
+    # — it is actively misleading: every one of its 18 named local-corpus files would report as
+    # "not scanned", burying whatever the estate check has to say under warnings about files
+    # that were never supposed to be there. Emptying both tables makes the two loops below
+    # no-ops, which keeps sections 5 and 6 (rule traces, HITL round-trip) running unchanged —
+    # they are source-agnostic and worth having on every source.
+    expected, ordering = EXPECTED, ORDERING_CHECKS
+    if SOURCE == "sharepoint":
+        estate_assertions(scan, scan_id, args.expect_per_type, failures, warnings)
+        expected, ordering = {}, []
+
+    for fname, exp in expected.items():
         if fname not in scanned_names:
             warnings.append(f"Expected file not scanned: {fname}")
             print(c("yellow", f"  ? {fname}  — not found in scan (check corpus deployment)"))
@@ -250,7 +396,7 @@ def main():
 
     # Ordering checks: lower-quality files must score ≤ higher-quality ones
     print()
-    for lo_file, hi_file, label in ORDERING_CHECKS:
+    for lo_file, hi_file, label in ordering:
         lo = file_map.get(lo_file)
         hi = file_map.get(hi_file)
         if not lo or not hi:
