@@ -721,6 +721,20 @@ reach production, safely.
   `wait … || true` dropped so a failed pull fails the build, and `ollama list` /
   `test -d /models/manifests` asserted. Applies to GPU (llava:13b + llama3.1:8b) and CPU
   (moondream + llama3.1:8b) images (#302).
+- **Deployment preflight** (#352). `scripts/preflight.py` — is this deployment actually wired for a
+  real-source, GPU-backed, traced run? Every dependency fails silently and in the reassuring direction:
+  `RUNPOD_ENDPOINT_ID`/`RUNPOD_API_KEY` set but `ACP_VISION_PROVIDER` unset leaves `choice` defaulting to
+  "ollama", so vision keeps working on the local CPU floor with no error and the only symptom is that it is
+  slow; `ACP_AZURE_CLIENT_ID` unset hides the Connect Microsoft button, which reads as "SharePoint is not
+  part of this build"; Langfuse unset makes every `lf.*` call a no-op by design. Answers in three states —
+  PASS (verified), WARN (configured but unverified, deliberately off, or not checkable here), FAIL
+  (configured and wrong) — and only FAIL exits non-zero, because a gate that trips on WARN gets disabled.
+  Two checks carry it: the vision provider is *resolved* through `active_vision_provider()` rather than
+  inferred from the env (so it also catches an admin `ai_vision_provider` override), and the tracing phase
+  lanes are checked for a **caller**, not for the function — which is exactly how the #343 Discover gap read.
+  `SP_SCOPES` are read out of `sharepointScopes.js` rather than restated, so the preflight cannot pass while
+  the app asks for something else. Offline by default (CI-safe); `--live` reaches RunPod and emits a probe
+  trace. No secret is ever printed.
 
 ## Feature: Release Center · #4599
 
@@ -1057,6 +1071,62 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
 - **Closed the `file_tags` RESET-classification duplicate** (#318). #312 and #313 had each added `file_tags`
   to `_ANALYTICS_TABLES` (two sessions fixing the same miss), leaving it listed twice — harmless but untidy;
   #318 drops the duplicate. Closes the cleanup flagged on the RESET-fix bullet above.
+- **Source operations panel** (#328). The per-source drill-down was a compliance dashboard on a
+  connections surface — a scored donut, a top-flagged-documents list, an "agent" paragraph — under the
+  subtitle `undefined · 0 docs · agent: undefined`, rendered directly beneath a card the same page had
+  badged **Healthy**. Two quiet failures, not missing features: the OneDrive card is a hard-coded
+  CONNECTABLE row (`sp-root`) that nothing joined to its backend source row (which arrives as type
+  `onedrive` *or* `sharepoint` — Graph serves both from one connection), and the drawer filtered files on
+  `f.source === selSrc.id`, matching that card id against rows keyed `sharepoint`, so the empty result was
+  rendered as "0 docs" rather than as a lookup that found nothing. Replaced with **Manage &lt;source&gt;** —
+  Overview / Scope / Rules / Activity — over a pure `sourceOps.js` where every number traces to a prop and
+  an unavailable value returns `null` for the caller to render as *Not available*, never `0`: `folders` is
+  null for a source that reports flat filenames, because "we don't know" and "there are none" are different
+  claims about the estate. Overview's discovery outcome is a **partition** — every file in exactly one
+  bucket, rows summing to the total on screen — with archive/delete candidates deliberately *not* counted
+  as assessment-eligible, matching #320's exclusion. Scope keeps rule exclusions, permission denials and
+  read failures apart; red is reserved for failed access, amber for anything awaiting a human. Both SPAs.
+- **Inventory-grain new / changed / removed** (#343). `get_scan_diff` reads `file_records` — the *assessed*
+  grain, which an ADR 0020 Discover-only run leaves empty until Assess — so wiring the panel to it would
+  have reported "0 new · 0 changed · 0 removed" for precisely the runs it is about. `get_inventory_diff`
+  reads `scan_inventory` instead, keeping three pairs apart: `removed` vs `not_listed` (a moved listing
+  boundary or a truncated listing means absence is not deletion — the same lesson `get_scan_diff` learned
+  when a narrowed scope reported "45 documents disappeared"), `changed` vs `indeterminate` (md5Checksum is
+  absent for native Google Workspace files, so checksums cover binary uploads and nothing else), and
+  `no_baseline` vs a quiet estate (the line is omitted, never rendered as three zeros). The baseline is
+  per-source via `previous_run_for_source`: `list_scans` spans every source *and* filters to
+  `completed_at IS NOT NULL`, which hides an unassessed Discover run — the run this diff exists for.
+- **Discover-phase tracing** (#343). `lf.discover_span` existed and read like the phase was traced; its only
+  caller is `_analyse_and_persist_one`, on the analyse path, which under ADR 0020 runs at *Assess* time.
+  `_scan_discover` called nothing, so a Discover-only run produced no Langfuse trace at all — and the estate
+  rows Discover inventories and never opens were invisible permanently, because nothing later opens them.
+  Adds a run trace (counts carried *with* the listing boundary and the truncation flag) and per-file Discover
+  spans from the inventory, capped with the cap **stated** beside `files_inventoried` rather than silently
+  applied. Emitted after the inventory is persisted and wrapped, so a Langfuse outage costs tracing only.
+- **Rule match counts and review queues** (#357). The Rules tab listed each rule's predicate but not how many
+  files it matched. `POST /disposition/policies/{id}/preview` evaluates over `list_all_documents()` — the
+  *estate-wide* table — so rendering `would_match` under a per-source heading would be a correct number
+  saying something false. Rather than reimplement the predicate client-side (a second source of truth
+  diverging from `disposition.matches`), the split filters the preview's own returned rows by
+  `documents.source`: "2 matched in OneDrive · 5 across all sources". A preview with a total but no rows
+  reports `null`, not `0`. Previews fire on tab open and sequentially — each is a full-table scan in Python.
+- **Pending-approval queue, recording-only** (#360). ADR 0003 Phase 3 has had list/approve/reject since it
+  shipped; v2 has had no UI for it since #319 dropped the Disposition panel, so an approval could be created
+  and never actioned. Approve here **records the decision and touches nothing**, for two reasons that are
+  facts about the code rather than preferences: `execute_action` supports Drive-backed documents only (a
+  SharePoint row returns "unsupported source"), and ACP holds read-only scopes (`CAN_WRITE_BACK` is false),
+  so a button claiming to move a file would describe a capability the deployment lacks. `approve?execute=false`
+  is new (default unchanged); `'approved'` had to join the live set in `doc_has_disposition`, or the next
+  execute run would re-propose a document whose approval was already recorded.
+- **Lifecycle audit trail** (#365). The queue shows what needs a decision and cannot show what *was* decided
+  — a rejected disposition was recorded and then invisible. Adds the append-only trail to the Activity tab,
+  with the enrichment now shared with the queue (`_readable`): `disposition_audit` stores four ids and an
+  enum, so the join supplies the document's source/path and the policy **name** — "archive sp:1 under p1" is
+  not something an auditor can read back, and a deleted rule renders as "no longer configured" rather than
+  falling back to its id. Each outcome states what it meant for the file beside the stored value, since
+  `'approved'` alone does not say whether anything moved. `source` is also what makes the queue and the trail
+  scopeable at all: the table has no such column, so an unenriched render puts the whole estate's history
+  under a heading naming one source.
 
 ## Open items (backlog candidates)
 
@@ -1067,7 +1137,15 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
 
 - **The v2 redesign is a fork** — `frontend-v2` was forked so it could move without risking
   the live SPA, and both are now being maintained. It needs a merge path before they diverge
-  further.
+  further. *(2026-08-19: the cost is now measurable rather than theoretical. Six PRs
+  (#328/#343/#357/#360/#365, plus the earlier panel work) each shipped to BOTH trees, so
+  `sourceOps.js`, `SourceDrawer.jsx` and both their test files exist twice, byte-identical and
+  hand-synced. Duplicating was correct each time — `netlify.toml` still deploys `frontend/`, so
+  v2-only would have shipped nothing to the live demo — but ci.yml's own note says "When
+  frontend-v2/ replaces frontend/, delete [this job]", and every feature added meanwhile doubles
+  the eventual reconciliation. This needs a decision on when the swap happens, not more parallel
+  features. Related: `Disposition.jsx` sits in `frontend-v2/src` fully written and mounted nowhere
+  since #319 — it reads as live code and is not.)*
 - **Unfinished work parked on a branch (#130)** — a retiring worktree's uncommitted changes
   were committed explicitly unreviewed and unfinished, based on `5d81724`, several commits
   behind main at the time. It was pushed so the work is recoverable and visible to the
@@ -1313,3 +1391,33 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   feature work from other sessions — #340 (rejected-fix lane W2/W8), #341 (per-scan scope chip R6), #343
   (inventory-grain new/changed/removed + Discover tracing), #344 (report scope-of-assertion funnel) — left
   for their own sessions to characterise, the same way #337 is. #342 is a delivery-log commit.
+
+- **2026-08-19 (source operations panel — author sweep)** — Characterised my own six PRs, which two earlier
+  sweeps deliberately left for this session: #328 was "covered by this marker but only lightly characterised
+  from its subject … left for its author to bind", and #343 was named among the commits "left for their own
+  sessions to characterise". Added five bullets under Feature **#4618** (#328 source operations panel, #343
+  inventory-grain diff *and* its separate Discover-tracing half, #357 rule match counts + review queues,
+  #360 recording-only approval queue, #365 lifecycle audit trail) and one under **#4614** (#352 deployment
+  preflight — ops verification, not lifecycle, so it does not belong under #4618). The #338 reconciliation
+  bullet stands unchanged: it correctly separates the drawer's lifecycle axis from C4d's WCAG axis, and
+  nothing here re-litigates that.
+
+  Worth recording as a pattern rather than six unrelated fixes: **every one of these turned out to be a
+  boundary defect**, and in each the obvious implementation produced a correct number that said something
+  false in its context — `get_scan_diff` answering a Discover question from assessed data, `discover_span`
+  existing with no caller on the discover path, `preview` counting the whole estate under a per-source
+  heading, `disposition_audit` having no source column at all, and `list_scans` hiding unassessed runs from
+  the baseline lookup. None failed loudly; most were caught only by checking the data source before building
+  on it, and two only because a test asserted a precondition that had been assumed.
+
+  **Sync marker deliberately NOT advanced** (left at `fad0dfbe`), same reasoning as the two entries above:
+  the range still holds undocumented feature work from other sessions — #347 (monitor retry/dead-letter W7),
+  #350 (manual-attestation lane W4+W5), #351 (remediate contextual preview), #354 (per-document progress
+  bar), #356 (OpenAI + Anthropic vision adapters), #359/#361/#364 (remediate transform strip, sticky
+  workflow footer, adaptive preview modes), #362/#363 (assess coverage-gap warnings and scorecard) — and
+  advancing over them would swallow work their own sessions should characterise. Excluded as non-feature:
+  the delivery-log commit #349, and this entry's own.
+
+  Updated the **"v2 redesign is a fork"** Open item in place rather than raising a second one: this session
+  put six PRs into both trees, so the duplication it warns about is now measurable — `sourceOps.js`,
+  `SourceDrawer.jsx` and both their test files exist twice, byte-identical and hand-synced.
