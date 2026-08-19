@@ -69,7 +69,7 @@ small set of managed dependencies. Everything else is optional and opt-in.
  └──────────────┘  SMB · local     └─────────────────┘
 
  managed deps:   Postgres (job queue + state) · Redis (scan tokens) · Log Analytics
- observability:  acp-langfuse (v2, PHI-safe traces) · acp-grafana (Postgres mode)
+ observability:  acp-langfuse-v3 (Azure VM: ClickHouse, PHI-safe traces) · acp-grafana (Postgres mode)
  optional AI:    acp-ollama GPU (T4, scale-to-zero, in-tenant) · RunPod serverless · cloud vision
 ```
 
@@ -89,7 +89,7 @@ Resource group `mdk-accessibility`, one managed Container Apps environment, one 
 |---|---|---|
 | `acp-app` | Container App | External ingress, port 8077. 1 CPU / 2 GiB, single revision |
 | `acp-worker` | Container App | No ingress. Same image, `python -m worker_main`. Scale 1–3 (ADR 0013) |
-| `acp-langfuse` | Container App | `langfuse/langfuse:2`, **eastus2**. PHI-safe AI traces (see Observability) |
+| `acp-langfuse-v3` | **Azure VM** (`Standard_D4s_v3` + 128 GB Premium disk) | Langfuse **v3** — ClickHouse + Redis + MinIO + Postgres via docker-compose behind Caddy/TLS, **eastus2**. PHI-safe AI traces (see Observability). Replaced the v2 Container App |
 | `acp-grafana` | Container App | Dashboards — provisioned only in Postgres mode |
 | `acp-ollama` | Container App | **Optional / opt-in.** In-tenant **T4 GPU** (`NC8AS_T4`), internal :11434, **scale-to-zero** (`gpu_up.sh`, ADR 0022/0027) |
 | `acp-app-staging` / `acp-worker-staging` | Container Apps | **Optional.** Unattended staging tier, separate DB (`staging_up.sh`) — dormant until provisioned |
@@ -275,18 +275,26 @@ Every model call is auditable without any document content leaving the boundary.
 full tracing layer that is an **env-gated no-op** — with `LANGFUSE_SECRET_KEY` absent, every call
 returns a `_Noop` and nothing is sent.
 
-**Version — today, and the committed next step.** Deployed today: **Langfuse v2 on a single shared
-Postgres** (`langfusedb` alongside `acpdb`); the SDK is pinned `>=2,<3`. Region **eastus2**, project
-**`acp-compliance`**. Wired onto **both** acp-app and acp-worker (`set_integration_env.sh` —
-Langfuse on the API alone would miss the worker, where scanning runs).
+**Version — now on Langfuse v3 (ClickHouse).** ACP moved from v2 to **v3** on 2026-08-19. The trigger
+was concrete: with the enriched per-file traces, a real **44-document scan hung the v2 Session view**
+(v2 on a single Postgres renders every trace in a session at once). v3 re-architects the trace store
+onto **ClickHouse** (columnar, built for high-volume, high-cardinality trace/cost queries), with
+**Redis** (queue/cache) and **MinIO** (event/media blobs), and splits the app into **web + worker** —
+which is what makes the aggregate Session view scale. Project **`acp-compliance`**, wired onto **both**
+acp-app and acp-worker (`set_integration_env.sh` — Langfuse on the API alone would miss the worker,
+where scanning runs).
 
-**Next: migrating to Langfuse v3.** This is the planned direction, not a maybe. v3 re-architects the
-trace store onto **ClickHouse** (a columnar analytics DB built for high-volume, high-cardinality
-trace/cost queries) with **Redis** (queue/cache) and **S3/MinIO** (blob store) alongside Postgres —
-so trace analytics and cost roll-ups scale past what a single Postgres serves. **Not yet cut over**
-(the system runs v2 today). The migration is deliberately low-risk on our side: ACP's Langfuse
-client and the PHI invariant are **version-independent**, so this is a **backing-store / deployment
-migration, not an application rewrite** — what ACP sends is unchanged.
+**Why a VM, not Container Apps.** ClickHouse needs real local disk and does **not** run reliably on
+Azure Container Apps (ACA offers only Azure Files/SMB mounts, which ClickHouse fights). So v3 runs on a
+**dedicated Azure VM** — `acp-langfuse-v3`, `Standard_D4s_v3` (16 GB) + a 128 GB Premium data disk —
+via docker-compose (ClickHouse · Redis · MinIO · Postgres · web · worker) behind **Caddy** with
+automatic Let's Encrypt TLS, at `acp-langfuse-v3.eastus2.cloudapp.azure.com`.
+
+**The cutover was host-only.** v3 was built alongside v2 and verified (health 200, `acp-compliance`
+project, ingestion 207) before flipping `acp-app`/`acp-worker`'s `LANGFUSE_HOST` — keys re-seeded, so
+**no application change**; ACP's client and PHI invariant are version-independent, so what ACP *sends*
+is unchanged. Old v2 (the container app on shared Postgres) was deleted; its trace data was
+deliberately not migrated (start-fresh). Runbook + compose live in `deploy/langfuse-v3/` (#447).
 
 **What it captures.**
 - **Two traces per scan.** A **Scan/Discover** trace (discovery + optional PII deep-scan, carrying
@@ -389,7 +397,7 @@ in scope.
  │ acp-ollama (GPU) ─ SAME env/region ─ T4   │   │ acp-ollama (GPU) ─ T4 IF the region      │
  │ Postgres · Redis · Blob  (PHI in-region)  │   │ offers it (SKU discovered, else A100/…)  │
  └───────────────────────────────────────────┘   └──────────────────────────────────────────┘
-   acp-langfuse → eastus2  (PHI-safe traces)       RunPod serverless GPU → GLOBAL  🟡 cloud
+   acp-langfuse-v3 → eastus2 VM (ClickHouse)       RunPod serverless GPU → GLOBAL  🟡 cloud
 ```
 
 The in‑tenant GPU **must share the app's ACA environment**, and an environment is one region — so a
@@ -494,10 +502,11 @@ Named deliberately — every one of these is real as of 2026-08-19.
   same trade. Quality escalation to cloud needs an admin to enable a provider.
 - **Concurrency discipline is documented, not enforced.** `CLAUDE.md` carries hard-won rules for
   many parallel sessions on one checkout; nothing mechanically prevents breaking them.
-- **Langfuse v2 is the trace-volume ceiling until the v3 migration lands.** v2 on a single Postgres
-  is fine at current volume; the **v3 (ClickHouse + Redis + S3/MinIO) migration is committed** and is
-  the fix, but it isn't cut over yet — so the interim limitation is that a single Postgres backs all
-  tracing. Low-risk when it lands (backing-store migration, not an app change).
+- **Langfuse v3 is a self-managed VM now.** The trace-volume ceiling is solved (ClickHouse scales the
+  Session view), but v3 runs as a **hand-provisioned Azure VM** (docker-compose behind Caddy) rather than
+  a managed Container App — a box to patch, back up, and keep TLS current, provisioned by a runbook rather
+  than the CI pipeline. Its v2 trace history was not migrated (start-fresh), and stopping the VM to save
+  cost also stops tracing.
 
 The retired weaknesses (worth saying, because the old deck led with them): the manual laptop
 deploy is **replaced by automated CD**, and the PDF engine is **now versioned in-repo** (ADR 0029).
