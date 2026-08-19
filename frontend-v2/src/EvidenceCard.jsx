@@ -8,7 +8,8 @@ import ProposalThumb, { isSafeThumb } from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import { speakAsScreenReader, srSupported } from './srPreview.js'
 import { runAutoDraft, resetAutoDraftBreaker } from './autoDraft.js'
-import { escalationPath } from './escalationPath.js'
+import { escalationPath, escalationFromDraft } from './escalationPath.js'
+import { loadAiModels } from './aiModel.js'
 import HowToConfirm from './HowToConfirm.jsx'
 
 // Evidence Card (PRD v2) — a PR-style review of ONE accessibility issue. The human APPROVES
@@ -46,6 +47,16 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   const [aiCalls, setAiCalls] = useState(null)            // null = unloaded, [] = loaded-empty
   const [drafting, setDrafting] = useState(false)
   const [draftMsg, setDraftMsg] = useState(null)   // { kind: 'ai' | 'template' | 'error', text }
+  // The escalation path read straight off a /ai/suggest draft response (#378) — the preferred source
+  // over re-deriving it from the ai_calls ledger. Set by the draft functions when a response carries
+  // the numbered `escalation` field (i.e. a cloud escalation actually happened); null otherwise, and
+  // the render then falls back to the ledger-derived path for drafts that predate this field.
+  const [draftEscalation, setDraftEscalation] = useState(null)
+  // /ai/status's non-admin cloud-provider signal (#378: cloud_enabled / cloud_provider / cloud_zone),
+  // fetched lazily once a draft has actually failed so the empty-state message tells the truth about
+  // whether a governed cloud fallback exists — instead of guessing from the AI-provenance zone.
+  // null = not yet loaded (module-cached via loadAiModels, so one fetch serves the whole inbox).
+  const [cloudStatus, setCloudStatus] = useState(null)
   // Deterministic verification aid: the text OCR actually read from the drafted image, so the
   // reviewer checks the description against what the image SAYS instead of squinting at a thumb.
   const [ocrAid, setOcrAid] = useState(null)
@@ -140,6 +151,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
       if (!s) { setDraftMsg({ kind: 'error', text: 'The model returned nothing — write the value yourself.' }); return }
       setValue(s)
       setOcrAid(r.ocr_text || null)
+      // Read the escalation path off the response itself (#378) — null when this draft stayed local.
+      setDraftEscalation(escalationFromDraft(r))
       if (r.is_template) {
         // A fill-in-the-blank template, NOT a description of this image. It is deliberately
         // NOT recorded as aiDraft: approving it verbatim must count as human-authored, and
@@ -186,6 +199,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
         const r = await suggestFix(item.scan_id, item.file, item.rule_id, instances[i]?.locator)
         const s = (r?.suggestion || '').trim()
         if (s && !r.is_template) { setValueAt(i, s); n += 1 }
+        const esc = escalationFromDraft(r)   // surface the path from whichever image escalated (#378)
+        if (esc) setDraftEscalation(esc)
       } catch (e) {
         // One image failing must not stop the batch — but a model that is not pulled fails every
         // image identically, so asking 18 more times tells the reviewer nothing new and delays the
@@ -213,6 +228,10 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
       if (!s) { setDraftMsg({ kind: 'error', text: `Image ${i + 1}: the model returned nothing — write it yourself.` }); return }
       setValueAt(i, s)
       setOcrAid(r.ocr_text || null)
+      // A per-image escalation reads off this image's own response (#378); keep any earlier one shown
+      // if this image stayed local, so the card doesn't blank a path a sibling image established.
+      const esc = escalationFromDraft(r)
+      if (esc) setDraftEscalation(esc)
       const styleWord = style === 'shorter' ? ' (shorter)' : style === 'detailed' ? ' (more detail)'
         : style === 'regenerate' ? ' (regenerated)' : style === 'numbers' ? ' (numbers stated)'
         : style === 'no_colour' ? ' (colour-free)' : style === 'professional' ? ' (professional tone)'
@@ -274,11 +293,13 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
     }
   }
   const auditRows = (aiCalls || []).filter((c) => !c.file || c.file === item?.file)
-  // Auto-escalation numbered path (P1) — derived from the ledger the card already has: a local
-  // vision attempt that couldn't ground, followed by an escalation to a governed cloud provider.
-  // Rendered as the transparent path (below, on the surface) instead of leaving the failed local
-  // attempt reading as a dead end. Null in the common all-local case.
-  const escalation = escalationPath(auditRows)
+  // Auto-escalation numbered path (P1 / #378) — a local vision attempt that couldn't ground, followed
+  // by an escalation to a governed cloud provider, rendered as the transparent path on the surface so
+  // the failed local attempt doesn't read as a dead end. PREFERRED source is the real field the draft
+  // response now carries (escalationFromDraft); the ledger-derived path is the fallback for drafts that
+  // predate #378 (e.g. a card pre-drafted at scan time, where no live /ai/suggest call was made). Null
+  // in the common all-local case, from either source.
+  const escalation = draftEscalation || escalationPath(auditRows)
   // The ledger is otherwise fetched lazily (only when the reviewer opens the audit trail). To show
   // the escalation path WITHOUT a click — the whole point of item 2 — pull it once for a file whose
   // AI actually ran in the cloud (provZone 'cloud' is the escalation signal). This stays bounded to
@@ -294,35 +315,67 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
     return () => { live = false }
   }, [aiValueShown, provZone, item?.scan_id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Empty-state honesty (P1) — when the local model produced nothing (a failed or template draft)
-  // AND this deployment has no governed cloud provider to escalate to, the manual-authoring state
-  // must say WHY it is manual and point an admin at the fix, rather than leaving a raw "Ollama not
-  // running" as the last word. "No cloud fallback" is inferred from what the card can see: no
-  // escalation happened (a cloud call would have left a ledger row) and the active/configured zone
-  // is not cloud. A definitive "is any cloud provider enabled?" signal for a non-admin reviewer is
-  // not exposed by the API today — see the PR body's deferred backend gap; this uses the zone as the
-  // available, honest proxy and never claims cloud is off when we actually saw a cloud call.
-  const draftFailedLocalOnly = !escalation
-    && (draftMsg?.kind === 'error' || draftMsg?.kind === 'template')
-    && (actualZone || aiProv?.zone || 'local') !== 'cloud'
+  // Empty-state honesty (P1 / #378) — a draft that failed with NO escalation is the manual-authoring
+  // state. WHY it is manual now comes from /ai/status's non-admin cloud signal (cloud_enabled), not
+  // from the AI-provenance zone the card previously used as a proxy: the proxy could not distinguish
+  // "no cloud provider configured" from "cloud configured but this file happened to run local", and it
+  // never had a first-class "is a governed cloud fallback enabled?" answer. #378 exposes exactly that,
+  // key-free, so a reviewer sees the honest reason. Fetched lazily (module-cached via loadAiModels →
+  // one /ai/status call for the whole inbox) and only once a draft has actually failed.
+  const draftFailed = draftMsg?.kind === 'error' || draftMsg?.kind === 'template'
+  useEffect(() => {
+    // Only fetch when there is actually a manual empty-state to explain: a failed draft, no escalation
+    // shown instead, and the cloud status not already loaded.
+    if (!draftFailed || escalation || cloudStatus !== null) return
+    let live = true
+    ;(async () => {
+      try {
+        const s = await loadAiModels()
+        if (live) setCloudStatus(s || {})
+      } catch { if (live) setCloudStatus({}) }
+    })()
+    return () => { live = false }
+  }, [draftFailed, escalation, cloudStatus])
+  const cloudEnabled = !!cloudStatus?.cloud_enabled
+  const cloudProvider = (typeof cloudStatus?.cloud_provider === 'string' && cloudStatus.cloud_provider.trim())
+    ? cloudStatus.cloud_provider.trim() : null
+  // Show the hint only once we KNOW the cloud state (status loaded), so the message is never wrong in
+  // the gap before the fetch resolves. No escalation + a failed draft is the trigger.
+  const showManualHint = draftFailed && !escalation && cloudStatus !== null
   // Reuse the app's existing custom-event navigation (acp:session-expired / acp:scan-unavailable are
   // the same pattern) rather than hardcoding a route — App listens for acp:open-settings and opens
   // the Settings modal (which contains the AI Providers panel), gated on the settings permission.
   const openProviderSettings = () =>
     window.dispatchEvent(new CustomEvent('acp:open-settings', { detail: { section: 'ai-providers' } }))
-  const manualCloudHint = draftFailedLocalOnly ? (
+  const manualCloudHint = showManualHint ? (
     <div className="evcard-manual-empty" role="note"
          style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap', fontSize: 12.5,
                   background: 'var(--surface-1, #f6f5f2)', border: '1px solid var(--line)', borderRadius: 8,
                   padding: '8px 11px', margin: '6px 0 0' }}>
       <span aria-hidden="true">✍️</span>
       <span style={{ flex: 1, minWidth: 0 }}>
-        <b>Why you’re writing this by hand:</b> the local vision model couldn’t describe this image,
-        and no governed cloud provider is enabled to fall back to. Author the value below — or enable a
-        cloud provider so ACP can draft descriptions the local model can’t ground.{' '}
-        <button type="button" className="evcard-linkbtn" onClick={openProviderSettings}>
-          Settings → AI Providers
-        </button>
+        {cloudEnabled ? (
+          <>
+            {/* A governed cloud provider IS enabled but this image still needs a human — the local
+                model couldn't describe it and the cloud fallback couldn't ground one either. Name the
+                provider honestly rather than implying none exists. */}
+            <b>Why you’re writing this by hand:</b> the local vision model couldn’t describe this image,
+            and {cloudProvider ? <>your governed cloud provider (<b>{cloudProvider}</b>)</> : 'your governed cloud provider'} couldn’t
+            ground a description for it either — so it needs a human. Author the value below.{' '}
+            <button type="button" className="evcard-linkbtn" onClick={openProviderSettings}>
+              Settings → AI Providers
+            </button>
+          </>
+        ) : (
+          <>
+            <b>Why you’re writing this by hand:</b> the local vision model couldn’t describe this image,
+            and no governed cloud provider is enabled to fall back to. Author the value below — or enable a
+            cloud provider so ACP can draft descriptions the local model can’t ground.{' '}
+            <button type="button" className="evcard-linkbtn" onClick={openProviderSettings}>
+              Settings → AI Providers
+            </button>
+          </>
+        )}
       </span>
     </div>
   ) : null

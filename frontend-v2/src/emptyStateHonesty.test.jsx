@@ -3,24 +3,28 @@ import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
 
-// P1 item 3 — empty-state honesty. When the local model produced nothing AND no governed cloud
-// provider is enabled to fall back to, the manual-authoring state must say WHY it is manual (not a
-// raw "Ollama not running") and link an admin to Settings → AI Providers, reusing the app's existing
-// navigation rather than hardcoding a URL.
+// #378 item 3 — empty-state honesty. When the local model produced nothing AND no escalation happened,
+// the manual-authoring state must say WHY it is manual and link an admin to Settings → AI Providers.
+// The reason now comes from /ai/status's non-admin cloud signal (cloud_enabled / cloud_provider) —
+// #378's first-class "is a governed cloud fallback enabled?" answer — instead of the AI-provenance
+// zone the card previously used as a proxy.
 
-const h = vi.hoisted(() => ({ zone: 'local' }))
+const h = vi.hoisted(() => ({ status: { cloud_enabled: false, cloud_provider: null, cloud_zone: null } }))
 
 vi.mock('./api.js', () => ({
   // Local model returns nothing usable → the card's draft fails, which is the empty state.
   suggestFix: () => Promise.resolve({ suggestion: '', is_template: false }),
   getFileRemediationDiffs: () => Promise.resolve([]),
-  aiProvenance: () => ({ zone: h.zone, provider: 'ollama', model: 'm', vision_model: 'v', host: 'localhost' }),
+  aiProvenance: () => ({ zone: 'local', provider: 'ollama', model: 'm', vision_model: 'v', host: 'localhost' }),
   getFileThumbnail: () => Promise.resolve(null),
   getFilePage: () => Promise.resolve(null),
   getFileGeometry: () => Promise.resolve(null),
   getScanAiCalls: () => Promise.resolve([]),      // no cloud call in the ledger → no escalation
   validateAlt: () => Promise.resolve({}),
 }))
+// The card reads /ai/status through aiModel.loadAiModels (module-cached in the real app). Control it
+// here so cloud_enabled true vs false is exercised directly.
+vi.mock('./aiModel.js', () => ({ loadAiModels: () => Promise.resolve(h.status) }))
 
 const { default: EvidenceCard } = await import('./EvidenceCard.jsx')
 
@@ -31,20 +35,18 @@ const item = {
   status: 'pending', finding_count: 1,
 }
 
-let container
 const mount = async (props = {}) => {
   const { container: c, root } = createTestRoot()
-  container = c
   await act(async () => { root.render(createElement(EvidenceCard, { item, onAct: () => {}, ...props })) })
-  // let the auto-draft promise settle
-  await act(async () => { await Promise.resolve() })
+  // let the auto-draft promise AND the follow-on /ai/status fetch settle
+  for (let k = 0; k < 6; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
   return c
 }
-beforeEach(() => { h.zone = 'local' })
+beforeEach(() => { h.status = { cloud_enabled: false, cloud_provider: null, cloud_zone: null } })
 afterEach(unmountAll)
 
-describe('EvidenceCard — empty-state honesty when there is no cloud fallback', () => {
-  it('explains WHY it is manual and links to Settings → AI Providers (local-only, draft failed)', async () => {
+describe('EvidenceCard — empty-state honesty from /ai/status (#378 item 3)', () => {
+  it('cloud_enabled=false: explains it is manual and links to Settings → AI Providers', async () => {
     const c = await mount()
     const hint = c.querySelector('.evcard-manual-empty')
     expect(hint).not.toBeNull()
@@ -67,9 +69,17 @@ describe('EvidenceCard — empty-state honesty when there is no cloud fallback',
     expect(fired.detail?.section).toBe('ai-providers')
   })
 
-  it('does NOT show the enable-cloud hint when a cloud provider is already the active zone', async () => {
-    h.zone = 'cloud'         // cloud is enabled/active — the honest message is not "enable one"
+  it('cloud_enabled=true: names the provider it would escalate to, not "none enabled"', async () => {
+    h.status = { cloud_enabled: true, cloud_provider: 'openai', cloud_zone: 'customer_cloud' }
     const c = await mount()
-    expect(c.querySelector('.evcard-manual-empty')).toBeNull()
+    const hint = c.querySelector('.evcard-manual-empty')
+    expect(hint).not.toBeNull()
+    expect(hint.textContent).toMatch(/openai/)
+    // With a provider enabled, the honest message must NOT claim none is enabled.
+    expect(hint.textContent).not.toMatch(/no governed cloud provider is enabled/i)
+    expect(hint.textContent).toMatch(/couldn.?t ground a description/i)
+    // Still offers the admin the Settings entry point.
+    const link = [...hint.querySelectorAll('button')].find((b) => /Settings → AI Providers/.test(b.textContent))
+    expect(link).toBeTruthy()
   })
 })
