@@ -1086,6 +1086,15 @@ existing data and the existing decision path; nothing adds a second write path.
   `matchesWorkflow(f, 'needs-review')` over the same inbox queue, with a source-match guard so it can't
   regress to a raw `queue.length`. The top-nav HITL bell was left as a deliberately distinct global metric
   (the human-authoring queue). Frontend.
+- **Aligned the top-nav bell to the same needs-review count, closing the consistency across all three
+  surfaces** (#442). The nav badge (`App.jsx` `hitlCount`) was fed `onHitlCount(queue.length)` — the raw
+  human-authoring queue, which excluded the unconfirmed auto-fixes the tab and hero now count — so it read
+  a smaller, inconsistent number. It now reports `reviewCount`, the exact `matchesWorkflow(f,
+  'needs-review', inboxDecisions)` value the hero uses, so bell = hero = Needs-review tab. The
+  `onHitlCount` effect was relocated below `reviewCount`'s definition and keyed on it, so the badge
+  refreshes when a decision or auto-fix acknowledgement changes the count (the old `queue.length` keying
+  missed those). A source guard blocks a regression to `queue.length`. Cross-session hand-off from the
+  state-model owner's session (who owned the `onHitlCount` seam but was blocked). Frontend; suite green (2092).
 
 ## Feature: Estate coverage — three denominators and discovery at scale · #4597
 
@@ -1822,3 +1831,9 @@ invariant the redaction tests pin).
   Separately, to **Discover & Assess lifecycle rules (#4618)**: #436 made discovery metadata-only by default
   (download deferred to Assess) and aligned the frontend `pii` default to off. **Sync marker deliberately NOT
   advanced** (same convention as the prior entries).
+- **2026-08-19 (Bell count alignment)** — Added #442 to **Remediate review queue (#4598)**: aligned the
+  top-nav notification bell to the same `matchesWorkflow('needs-review')` count as the hero (#435) and the
+  tab (#434), so all three review-count surfaces show one number, with a source guard against regressing to
+  `queue.length`. Cross-session hand-off from the state-model owner's session (they owned the `onHitlCount`
+  seam but were blocked; ownership flipped with their confirmation). **Sync marker deliberately NOT advanced**
+  (same convention).
