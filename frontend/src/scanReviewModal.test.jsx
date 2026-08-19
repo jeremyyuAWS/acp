@@ -18,9 +18,16 @@ import { createTestRoot, unmountAll } from './testRoots.js'
 afterEach(unmountAll)
 
 // The wizard nested inside reads getSettings/updateSettings.
+// The wizard's folder step reads the connection's saved locations, so the mock needs those too.
+// A PARTIAL mock of a module a component imports from does not fail at import — it fails at the
+// first call, inside a useEffect, and surfaces as an unrelated assertion.
 vi.mock('./api.js', () => ({
   getSettings: vi.fn(async () => ({ scan_scope: '' })),
   updateSettings: vi.fn(async () => ({ scan_scope: '' })),
+  getScanLocations: vi.fn(async () => ({ locations: {} })),
+  setScanLocations: vi.fn(async () => ({ ok: true })),
+  listFolders: vi.fn(async () => ({ folders: [] })),
+  listSpFolders: vi.fn(async () => ({ drive_id: 'd', folders: [] })),
 }))
 
 const { default: ScanReviewModal, scanSourceLabel } = await import('./ScanReviewModal.jsx')

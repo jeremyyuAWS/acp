@@ -1,5 +1,7 @@
 import { useState, useEffect, Fragment } from 'react'
-import { getSettings, updateSettings } from './api.js'
+import { getSettings, updateSettings, getScanLocations, setScanLocations,
+         listFolders, listSpFolders } from './api.js'
+import FolderPicker from './FolderPicker.jsx'
 import { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } from './scopePresets.js'
 import { TRACKED_17, RULE_DETAILS } from './ruleDetails.js'
 import { ASSESSMENT_FALLBACK, assessmentFor } from './capability.js'
@@ -176,8 +178,58 @@ const PROFILES = [
     hint: 'No restriction — assess every criterion the engine supports.' },
 ]
 
+// Which stored location set a scan of `source` uses. The scan itself resolves 'all' to a single
+// backend source from the tokens present (App.doScan), so this mirrors that rule rather than
+// inventing a second one — two different answers to "which source is this?" is how the card and
+// the run end up describing different estates.
+export function locationsKeyFor(source, { hasDrive = false, hasSP = false } = {}) {
+  if (source === 'sharepoint') return hasSP ? 'sharepoint' : null
+  if (source === 'drive' || source === 'all') return hasDrive ? 'drive' : (hasSP ? 'sharepoint' : null)
+  return null
+}
+
 export default function ScanScopeWizard({ onStartScan, showStartButton = false,
-                                          canEditScope = true, rememberDefault = true }) {
+                                          canEditScope = true, rememberDefault = true,
+                                          source = 'all', hasDrive = false, hasSP = false }) {
+  // ── FOLDER SCOPE (PRD §6, step 1) ──────────────────────────────────────────────────────────
+  //
+  // WHOSE ANSWER IS THIS? The Sources card stores a folder set per CONNECTION; this wizard
+  // chooses one per RUN. Two stores with no stated relationship is how the card ends up saying
+  // "Scans: HR" while last night's run covered the whole Drive — the boundary defect in a new
+  // costume, since anyone reading the card to interpret a count reads the wrong boundary.
+  //
+  // So the rule is: the card is the DEFAULT and seeds this control, a change here applies to THIS
+  // RUN only, and writing back to the card is an explicit checkbox. The two therefore agree unless
+  // somebody deliberately diverges them, and the run records its own scope regardless
+  // (scan_runs.scope is frozen at scan start, ADR 0035).
+  //
+  // It is also the rule this screen already teaches for criteria — "Remember these selections for
+  // my next scan" is the same opt-in write-back — so it is one concept, not two.
+  const locKey = locationsKeyFor(source, { hasDrive, hasSP })
+  const [folders, setFolders] = useState([])
+  const [excluded, setExcluded] = useState([])
+  const [savedFolders, setSavedFolders] = useState(null)   // null = not loaded yet
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [saveFolders, setSaveFolders] = useState(false)    // write back to the card, off by default
+
+  useEffect(() => {
+    if (!locKey) { setSavedFolders([]); return undefined }
+    let alive = true
+    getScanLocations().then((r) => {
+      if (!alive) return
+      const inc = (r.locations || {})[locKey] || []
+      const exc = ((r.locations || {})._exclude || {})[locKey] || []
+      setFolders(inc); setExcluded(exc); setSavedFolders(inc)
+    }).catch(() => { if (alive) setSavedFolders([]) })
+    return () => { alive = false }
+  }, [locKey])
+
+  // Diverging from the card is legitimate — it is what "this run only" means — but it must be
+  // SAID. An unremarked difference between the card and the run is the whole failure mode.
+  const foldersDiffer = savedFolders !== null
+    && JSON.stringify(folders.map((f) => f.id).sort())
+       !== JSON.stringify((savedFolders || []).map((f) => f.id).sort())
+
   const [restrict, setRestrict] = useState(false)
   const [sel, setSel] = useState({})
   const [saved, setSaved] = useState('')       // the raw value as loaded, for the dirty check
@@ -410,7 +462,13 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
     // "Remember" persists this scope as the platform default for next time; either way the scan
     // runs. A read-only account cannot persist, so it just starts with the scope already stored.
     if (remember && canEdit) { await save() }
-    onStartScan?.()
+    // Explicit write-back only. A one-off narrow scan must not quietly reconfigure the connection:
+    // every later scheduled scan would then cover less, and it would look like configuration
+    // somebody chose on purpose.
+    if (saveFolders && locKey) {
+      try { await setScanLocations(locKey, folders, excluded) } catch { /* the run still goes */ }
+    }
+    onStartScan?.({ folders, exclude: excluded })
   }
 
   const dirty = (() => {
@@ -443,6 +501,78 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                                   borderRadius: 8, padding: '10px 12px', color: '#6B4A0B' }}>
           🔒 <b>Read-only.</b> Scope is set by your workspace owner — this scan uses the shared scope.
         </p>
+      )}
+
+      {/* ── 0. Drive locations (PRD §6 step 1) ──────────────────────────────── */}
+      {/* FIRST, because it is the question with the largest effect on what a scan means: criteria
+          decide how each document is judged, folders decide which estate is being judged at all.
+          Asking it after the criteria invites someone to tune 53 checks and then discover they
+          were tuning them over the wrong half of the Drive. */}
+      {locKey && (
+        <>
+          <div style={{ margin: '4px 0', fontSize: 12, fontWeight: 700, letterSpacing: '.04em',
+                        color: 'var(--muted)' }}>
+            DRIVE LOCATIONS
+          </div>
+          <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>
+            Choose which locations ACP should assess. Subfolders are included unless you exclude them.
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center',
+                        marginBottom: 8 }}>
+            {savedFolders === null ? (
+              <span className="muted" style={{ fontSize: 12.5 }}>Loading…</span>
+            ) : folders.length === 0 ? (
+              // Said out loud rather than left blank. "Nothing selected" and "everything" look the
+              // same on screen otherwise, and the reassuring reading of a blank row is the wrong one.
+              <span style={{ fontSize: 12.5 }}>
+                <b>Entire source</b> — every accessible folder
+              </span>
+            ) : (
+              <>
+                {folders.map((f) => (
+                  <span key={f.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
+                    fontSize: 11.5, background: '#F1EFF3', border: '1px solid var(--line)',
+                    borderRadius: 999, padding: '2px 8px' }}>📁 {f.name}</span>
+                ))}
+                {excluded.map((f) => (
+                  <span key={f.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
+                    fontSize: 11.5, background: '#FBF0F0', border: '1px solid var(--line)',
+                    borderRadius: 999, padding: '2px 8px' }}>🚫 except {f.name}</span>
+                ))}
+              </>
+            )}
+            <button className="linklike" type="button" style={{ fontSize: 12 }}
+                    disabled={busy} onClick={() => setPickerOpen(true)}>
+              {folders.length ? 'Change…' : 'Choose folders…'}
+            </button>
+          </div>
+
+          {/* Divergence from the connection default is allowed — that is what "this run" means —
+              but never silent: an unremarked difference between the card and the run is the exact
+              failure this whole arrangement exists to prevent. */}
+          {foldersDiffer && (
+            <div style={{ fontSize: 12.5, background: '#F1EFF3', border: '1px solid var(--line)',
+                          borderRadius: 8, padding: '9px 12px', marginBottom: 10, lineHeight: 1.45 }}>
+              This differs from the folders saved on the source. It applies to <b>this scan only</b>.
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                <input type="checkbox" checked={saveFolders} disabled={busy}
+                       onChange={(e) => setSaveFolders(e.target.checked)} />
+                Also save as the default for this source
+              </label>
+            </div>
+          )}
+
+          {pickerOpen && (
+            <FolderPicker
+              title="Folders to scan"
+              rootName={locKey === 'drive' ? 'My Drive' : 'OneDrive'}
+              lister={locKey === 'drive' ? listFolders : (parent) => listSpFolders(parent)}
+              initial={folders}
+              initialExclude={excluded}
+              onConfirm={(inc, exc) => { setFolders(inc); setExcluded(exc || []); setPickerOpen(false) }}
+              onClose={() => setPickerOpen(false)} />
+          )}
+        </>
       )}
 
       {/* ── 1. Scan profile ─────────────────────────────────────────────────── */}
