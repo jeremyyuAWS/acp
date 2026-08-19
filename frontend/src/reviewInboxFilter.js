@@ -1,4 +1,4 @@
-// Search for the AI Work Inbox (Remediate). The inbox can hold dozens of EvidenceCards; a
+// Search for the Review queue (Remediate). The inbox can hold dozens of EvidenceCards; a
 // reviewer navigating it needs to jump to "the docx link-purpose ones" or "everything in
 // contract.pdf" without scrolling the whole queue. This is the one piece with real logic, so it
 // lives here as a pure function the tests can exercise directly rather than through a full mount.

@@ -36,7 +36,7 @@ describe('v2 Remediate: collapsible sections', () => {
     }
   })
 
-  it('leaves the AI Work Inbox open — it is the work, not reference', () => {
+  it('leaves the Review queue open — it is the work, not reference', () => {
     // The one section an operator actually acts in. Collapsing it would put a click between them
     // and the only task on the page.
     const s = rem()

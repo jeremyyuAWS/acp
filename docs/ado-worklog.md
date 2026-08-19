@@ -891,6 +891,20 @@ existing data and the existing decision path; nothing adds a second write path.
   `cloud_enabled`; the `ai_calls`-ledger derivation is kept only as a fallback for cards pre-drafted at scan
   time (no live `/ai/suggest` call), so the two cannot diverge. Closes the copilot loop end to end:
   UI (#367) → gateway adapters (#356) → backend fields (#378) → UI reading them (#382).
+- **Renamed "AI Work Inbox" → "Review queue" across every surface** (redesign spec R4 §3, the last named
+  R4 remainder). The old name described how the work was GENERATED, not what the operator must do with
+  it; whether a finding carries an AI draft is an attribute of that finding, shown on its card, and not
+  the identity of the queue it sits in. Five user-visible strings changed — the Remediate section `<h2>`
+  and its ProgressRail step, the global bell's heading plus its `aria-label`/`title`, the Review Center
+  dialog's title and accessible name, Publish's "approve them in Remediate → step 3 · …" hand-off, and
+  Upload's step button — plus ~25 comments and CSS section headers, because leaving the maintainer's copy
+  of a retired term behind is how a rename half-reverts one component at a time.
+  `reviewQueueNaming.test.jsx` pins it in two lanes that do not substitute for each other: a DOM case
+  mounting ReviewCenter (the accessible name was the one place the old term could have survived unseen)
+  and a source sweep over every `.js`/`.jsx`/`.css` in `frontend/src`, self-excluded and asserting it read
+  >100 files first so it cannot pass by looking at nothing. Verified by mutation — reverting the Remediate
+  heading alone fails both lanes. Nothing asserted any of these strings before, which is why a rename the
+  spec called "coordinated work, not just the section header" had sat open. Frontend, not RULE_PATHS.
 
 ## Feature: Estate coverage — three denominators and discovery at scale · #4597
 
@@ -1257,7 +1271,10 @@ invariant the redaction tests pin).
   #277 makes the miss visible on the review card. **R4** advanced: the master/detail inbox is built and
   wired (#291), dead accordion state retired (#299), auto-fixes folded in as green rows (#300); the
   AI-Work-Inbox → Review-queue rename and a grounded per-finding time estimate remain (#300's "~5 sec"
-  is the auto-fix lane's fixed effort, not a measured estimate). **R5** closed — Monitor tab reads the
+  is the auto-fix lane's fixed effort, not a measured estimate). *(Both since closed — the measured
+  estimate by `reviewerTime.js`, the rename across all five user-visible surfaces by the entry below;
+  what is still open on R4 is the ProgressRail, which the spec's item 1 says to drop and which now
+  coexists with the workflow tablist #366 put inside RemediationInbox.)* **R5** closed — Monitor tab reads the
   real `/source-status` (#278). **R8** closed for four of the 12 cells — xlsx 1.4.1/1.4.11/4.1.2 and pdf
   2.4.3 declared (#289); eight remain. **R10** partly met — a named declare-gate proves those four
   detectors emit (#288); the general fixture-verification harness for understated cells is still open.

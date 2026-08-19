@@ -622,7 +622,7 @@ export const REVIEW_TYPES = {
   },
 }
 
-// ── Review Intent (AI Work Inbox reframe) ───────────────────────────────────────
+// ── Review Intent (Review queue reframe) ───────────────────────────────────────
 // ONE plain-language sentence, rendered at the TOP of the card, that answers "why am I here and
 // what do I do?" before any audit detail. Task-first, no jargon ("AI/heuristic detection",
 // "semantic judgement", "review suggested" all move under Details). Keyed off reviewType and

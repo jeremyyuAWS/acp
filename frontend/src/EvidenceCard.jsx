@@ -268,7 +268,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   const ladder = verificationLadder(card)
   const signals = evidenceSignals(card)
   const whyReview = whyHumanReview(card)
-  // Review Intent (AI Work Inbox) — the one plain-language sentence at the top: why you're here
+  // Review Intent (Review queue) — the one plain-language sentence at the top: why you're here
   // and what to do, before any audit detail. The primary button's label follows the same workflow.
   const intent = reviewIntent(item, card.sc)
   const primaryAction = primaryActionLabel(item)
@@ -382,7 +382,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   // Verifiable trust states (ADR 0019 §3a) — grounding + validation, the evidence-based replacement
   // for a confidence label. No number, no opaque level; the review-requirement axis is whyReview.
   const trust = trustStates(card)
-  // "Why this is safe to approve" (AI Work Inbox P0) — the affirmative, plain-language summary of
+  // "Why this is safe to approve" (Review queue P0) — the affirmative, plain-language summary of
   // what has ALREADY been checked, so the reviewer builds confidence up front instead of digging
   // through the audit trail. Null when the honest answer is "still needs judgement" — then only the
   // "Why human review?" callout stands.
@@ -456,7 +456,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
     return () => obs.disconnect()
   }, [seen])
 
-  // Auto-generate the preview (AI Work Inbox P0 — replaces the "Draft with AI" button): a value-fix
+  // Auto-generate the preview (Review queue P0 — replaces the "Draft with AI" button): a value-fix
   // that reached the inbox with no draft is the fallback case where vision was unavailable at scan
   // time. Draft it automatically, at most once, only after it is in view, and through the shared
   // gate so opening a 40-finding inbox never stampedes the model. A reviewer's own text is never
@@ -562,11 +562,11 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
         </span>
       </header>
 
-      {/* Review Intent (AI Work Inbox) — the first thing the reviewer reads: one plain-language
+      {/* Review Intent (Review queue) — the first thing the reviewer reads: one plain-language
           sentence, task-first, no jargon. The audit lifecycle/trust states follow below. */}
       {intent && <p className="evcard-intent">{intent}</p>}
 
-      {/* "Why this is safe to approve" (AI Work Inbox P0) — positive, up-front evidence framing so
+      {/* "Why this is safe to approve" (Review queue P0) — positive, up-front evidence framing so
           the reviewer sees what has already been checked without opening the audit trail. Rendered
           ONLY when whySafeToApprove found genuinely affirmative, real signals; a finding that still
           needs human judgement shows nothing here (the "Why human review?" callout carries it). */}
@@ -877,7 +877,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
             </div>
           )}
 
-          {/* Details ▾ (AI Work Inbox progressive disclosure) — the audit jargon a reviewer only
+          {/* Details ▾ (Review queue progressive disclosure) — the audit jargon a reviewer only
               needs when they want to dig: the trust-state enums, model/provenance/zone + audit
               trail, the clustered detection evidence, and the honest "why a human is here". The
               primary flow above answers what to do; this answers how the AI got there. Collapsed by

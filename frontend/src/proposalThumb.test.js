@@ -92,7 +92,7 @@ describe('the review screens render the proposal, not a template', () => {
   })
 
   it('Remediate renders the master/detail RemediationInbox, fed the live queue', () => {
-    // The AI Work Inbox is now a master/detail queue (RemediationInbox): selecting a finding
+    // The Review queue is now a master/detail queue (RemediationInbox): selecting a finding
     // populates a detail pane whose before/after shows the ACTUAL proposed value (the mapped
     // item's `after`, from firstProposed), never a template. The proposal-rendering is
     // render-tested in RemediationInbox.test.jsx; here we pin the wiring.
