@@ -16,30 +16,33 @@
 // fix handed back for a person. Only those keep a saturated coloured rail; the everyday lanes
 // (review/apply/manual/recheck) get a neutral rail (railColorOf), so the queue is not a wall of
 // amber/orange bars that all read as "urgent". `color` is unchanged — it still tints each lane's pill.
+// `label` is the full lane name; `short` is the quiet remediation-state word a scannable queue row
+// shows next to the compact WCAG pill (the row leads with the ISSUE, so the lane is demoted to quiet
+// text, not a loud coloured pill on every row).
 export const LANES = {
   review: {
     key: 'review', rail: 'green', color: '#1f9d6b', attention: false,
-    label: 'Review automatic fix', action: 'Approve fix',
+    label: 'Review automatic fix', short: 'Automatic fix', action: 'Approve fix',
     didLine: 'ACP fixed it — review the change',
   },
   apply: {
     key: 'apply', rail: 'blue', color: '#2f6fed', attention: false,
-    label: 'Apply suggested fix', action: 'Apply fix',
+    label: 'Apply suggested fix', short: 'AI-drafted fix', action: 'Apply fix',
     didLine: 'ACP drafted a fix — apply or reject',
   },
   manual: {
     key: 'manual', rail: 'amber', color: '#c2871a', attention: false,
-    label: 'Manual edit required', action: 'Open in Word',
+    label: 'Manual edit required', short: 'Manual edit', action: 'Open in Word',
     didLine: 'Needs a manual edit — guided steps provided',
   },
   recheck: {
     key: 'recheck', rail: 'gray', color: '#8a8f98', attention: false,
-    label: 'Recheck needed', action: 'Recheck',
+    label: 'Recheck needed', short: 'Recheck', action: 'Recheck',
     didLine: 'Edited — re-scan to confirm it passes',
   },
   blocked: {
     key: 'blocked', rail: 'red', color: '#c0553f', attention: true,
-    label: 'Blocked', action: 'Review block',
+    label: 'Blocked', short: 'Blocked', action: 'Review block',
     didLine: 'Blocked — cannot be remediated as-is',
   },
   // W2 — the destination for a rejected AI fix. Rejecting an AI proposal used to just remove the
@@ -49,7 +52,7 @@ export const LANES = {
   // this one is fixable, just not by the AI's rejected attempt.
   handoff: {
     key: 'handoff', rail: 'orange', color: '#b1622b', attention: true,
-    label: 'Rejected — needs manual handling', action: 'Mark as assigned',
+    label: 'Rejected — needs manual handling', short: 'Manual (rejected fix)', action: 'Mark as assigned',
     didLine: 'AI fix rejected — a person must handle this',
   },
 }
@@ -137,8 +140,10 @@ export function rowModel(f, decisions = {}) {
     issue: issueLabel(f),
     file: f?.file || '',
     location: locationLabel(f),
+    sc: normSc(f?.rule_id ?? f?.ruleId ?? f?.wcag) || null, // the WCAG SC number, as a compact row pill
     did: lane.didLine,
     action: lane.action,
+    laneShort: lane.short,   // the quiet remediation-state word (demoted from a loud coloured pill)
     severity: f?.severity || null,
     confidence: f?.confidence ?? null,
     effort: effortLabel(f),
