@@ -12,6 +12,8 @@ import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
 import { dupeCountOf, duplicateFiles } from './dedupe.js'
 import { scopeSentence, isNarrowScope } from './scanScope.js'
+import EstateCoverage from './EstateCoverage.jsx'
+import { estateProgressFromFiles } from './estateProgress.js'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
@@ -290,6 +292,16 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         </summary>
         <ScanScope />
       </details>
+
+      {/* Estate coverage funnel — discovered → assessment-eligible → remediation-eligible, on the tab
+          where discovery happens. Shown once a scan has produced an inventory; assessment/remediation
+          stages fill in as Assess and Remediate run. */}
+      {scope?.inventory && scope.inventory.discovered > 0 && (
+        <section className="panel">
+          <h2>Estate coverage <span className="muted" style={{ fontWeight: 400 }}>· discovered → assessable → remediable</span></h2>
+          <EstateCoverage inventory={scope.inventory} progress={estateProgressFromFiles(files)} />
+        </section>
+      )}
 
       <div className="estatebar">
         <div>

@@ -6,7 +6,7 @@ import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer, { statusOf } from './FileDrawer.jsx'
 import { findingsByCriterion, findingsByLevel, levelOfFinding } from './wcagFinding.js'
 import { analysedCount, avgScore } from './docStatus.js'
-import { remediationEligibleCount } from './assessCoverage.js'
+import { estateProgressFromFiles } from './estateProgress.js'
 import { IDENTITY, SIM, remediableCount, recommendationSummary } from './sim.js'
 import { openReport } from './api.js'
 import { loadPublished } from './ontology.js'
@@ -114,20 +114,11 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   //   published    = documents with an actual published record (file_records.published_at), already
   //     computed above as `publish` and used by the horizontal funnel — it was the one number left
   //     reading "pending" while sitting one variable away.
-  const humanReview = files.filter((f) =>
-    (f.issues || []).some((i) => String(i.severity || '').toUpperCase() === 'REVIEW')).length
-  const estateProgress = {
-    assessed: analysed,
-    issues: files.filter((f) => (f.issues || []).length).length,
-    // The funnel's "remediation eligible" is the honest finding-level count — documents with at least
-    // one AUTO/AI-fixable finding — not `needFix` (documents with any remediation ACTION, which the
-    // "need remediation" metric and the Remediate tab use). A document whose every open finding is
-    // human-only is assessable but not remediable, and the funnel should say so.
-    remediation_eligible: remediationEligibleCount(files),
-    remediated: files.filter((f) => f.remediated_at || f.drive_write_url).length,
-    human_review: humanReview,
-    published: publish,
-  }
+  // Funnel progress (stages 4–9), shared with the Discover tab so the two funnels never disagree.
+  // remediation_eligible is the honest finding-level count (documents with an auto/AI-fixable
+  // finding), not `needFix` (documents with any remediation action, which the "need remediation"
+  // metric and the Remediate tab use). See estateProgress.js.
+  const estateProgress = estateProgressFromFiles(files)
   // audit-ready is a rate, and a rate needs a denominator that was measured. Over an estate
   // nobody analysed it is not 0% — it is unknown, and printing "0%" asserts that every one of
   // 258 documents was checked and none passed. Both this and the certifiable tile render '—'
