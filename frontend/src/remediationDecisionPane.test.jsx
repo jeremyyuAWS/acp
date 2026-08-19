@@ -106,7 +106,7 @@ describe('Guided pane — preserves the #412/#415 behaviours', () => {
     expect(container.textContent).not.toContain('Re-scan')                    // capital-R only after save
     await unmountAll(); ({ container, root } = createTestRoot())
     await renderInbox({ queue: [CONTRAST_APPLY], decisions: { 1: { state: 'accepted' } } })
-    await click(btnByText('Ready to validate'))                              // where the saved fix sits
+    await click(btnByText('Awaiting validation'))                            // where the saved fix sits
     await click(btnByText('Heading contrast is too low'))
     expect(container.textContent).toContain('Re-scan')
     expect(container.textContent).toContain('Certified')
@@ -116,8 +116,9 @@ describe('Guided pane — preserves the #412/#415 behaviours', () => {
 describe('Guided pane — auto-fix rows get an obvious, honestly-labelled decision', () => {
   it('offers "Approve ACP’s fix" and a "This looks wrong" flag (no editable draft)', async () => {
     const calls = []
+    // An UNacknowledged auto-fix awaits the reviewer's confirmation, so it sits in Needs review (the
+    // default tab) — not Awaiting validation — and is selected on open.
     await renderInbox({ queue: [CONTRAST_AUTO], decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
-    await click(btnByText('Ready to validate'))                    // auto-applied fixes live here
     expect(btnByText('Approve ACP’s fix')).toBeTruthy()
     expect(btnByText('This looks wrong')).toBeTruthy()
     // The change is already applied — there is no edit-and-apply draft for it.
@@ -129,7 +130,6 @@ describe('Guided pane — auto-fix rows get an obvious, honestly-labelled decisi
   it('the "This looks wrong" flag routes through onDecide as a rejection', async () => {
     const calls = []
     await renderInbox({ queue: [CONTRAST_AUTO], decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
-    await click(btnByText('Ready to validate'))
     await click(btnByText('This looks wrong'))
     expect(calls).toContainEqual([2, 'rejected'])
   })
