@@ -7,7 +7,7 @@ import { autoFixRows } from './remediationInboxModel.js'
 import FileDrawer, { REC_STYLE, fmtEffort, EFFORT_BASIS, SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
-import { PRI_COLOR, PRI_RANK } from './ontology.js'
+import { PRI_RANK } from './ontology.js'
 import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl } from './api.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
@@ -29,8 +29,6 @@ import { measuredReviewTime, REVIEW_TIME_BASIS } from './reviewerTime.js'
 // confidence and risk statement traces to real pipeline data (applied-fix evidence, the
 // live HITL queue, confidence.js, the recommendation model); nothing is fabricated.
 const REM_ACTIONS = REMEDIATION_ACTIONS
-const ACTIONS = ['auto', 'assisted', 'review', 'archive', 'keep', 'manual']
-const ETA_OVERRIDE = { archive: 2, keep: 0, manual: 35, review: 10 }
 const ACTION_DESC = {
   auto: 'The agent fixes these mechanically — alt text, headings, language, titles — then re-validates. No human needed.',
   assisted: 'AI proposes the fix; a human approves before publish. For critical, sensitive, contrast/link, or media (captions) findings.',
@@ -42,20 +40,6 @@ const exposureOf = (f) => (f.tags || []).includes('public-facing') ? 'public-fac
 const EXP_COLOR = { 'public-facing': '#1F5FA8', 'high-traffic': '#D85A30', internal: '#9a948f' }
 const SR_W = { Executive: 3, Director: 2, Manager: 1, Staff: 0 }
 const priority = (f) => (f.tags || []).filter((t) => t === 'public-facing' || t === 'high-traffic').length * 2 + (SR_W[f.seniority] || 0) + (f.issues || []).filter((i) => i.severity === 'CRITICAL').length * 2
-
-// AI triage: the same risk signals, surfaced as a priority tier + a plain-language reason.
-const PRI = { high: ['P1 · high', '#1F5FA8', '#E2EDFB'], med: ['P2 · medium', '#854F0B', '#FAEEDA'], low: ['P3 · low', '#5F5E5A', '#EFEDEA'] }
-const priTier = (f) => { const s = priority(f); return s >= 6 ? 'high' : s >= 3 ? 'med' : 'low' }
-const priWhy = (f) => {
-  const r = []
-  if ((f.tags || []).includes('public-facing')) r.push('public-facing')
-  else if ((f.tags || []).includes('high-traffic')) r.push('high-traffic')
-  if (f.seniority === 'Executive' || f.seniority === 'Director') r.push(`${f.seniority.toLowerCase()}-owned`)
-  const crit = (f.issues || []).filter((i) => i.severity === 'CRITICAL').length
-  if (crit) r.push(`${crit} critical finding${crit === 1 ? '' : 's'}`)
-  if (!r.length) { const ser = (f.issues || []).filter((i) => i.severity === 'SERIOUS').length; r.push(ser ? `${ser} serious finding${ser === 1 ? '' : 's'}` : 'low exposure, no critical findings') }
-  return r.slice(0, 2).join(' · ')
-}
 
 const FIX_WCAG_LABELS = {
   SC_1_1_1: { label: 'alt-text generated', color: '#639922' },
@@ -381,7 +365,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [self, setSelf] = useState([])
   const [sel, setSel] = useState(null)
   const [seg, setSeg] = useState(null)
-  const [editing, setEditing] = useState(null)
   const [remBusy, setRemBusy] = useState(false)
   const [remMsg, setRemMsg] = useState('')
   const [remProg, setRemProg] = useState(null)   // { total, done, latest, failed }
@@ -616,8 +599,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     return eff === 'auto' && !decisions[f.file]
   })
   const batchAutoRemediate = () => setDecisions?.((s) => { const n = { ...s }; autoFiles.forEach((f) => { n[f.file] = { state: 'accepted' } }); return n })
-  const decide = (file, d) => { setDecisions?.((s) => ({ ...s, [file]: d })); setEditing(null) }
-  const undo = (file) => setDecisions?.((s) => { const n = { ...s }; delete n[file]; return n })
   const acceptAll = () => setDecisions?.((s) => { const n = { ...s }; remediable.forEach((f) => { if (!n[f.file]) n[f.file] = { state: 'accepted' } }); return n })
   const dcount = (st) => remediable.filter((f) => decisions[f.file]?.state === st).length
   const pending = remediable.length - dcount('accepted') - dcount('override') - dcount('rejected')
@@ -1178,60 +1159,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             </div>
           )}
 
-          {remediable.length > 0 && (
-            <section className="panel">
-              <h2>Documents to remediate <span className="muted">· {remediable.length} · <b style={{ color: 'var(--ink)', fontWeight: 500 }}>AI-triaged</b> by business risk — exposure × severity × ownership — accept / reject / modify</span></h2>
-              {ontCount > 0 && <div className="ontbanner">⬆ Ordered by your <b>business ontology</b> — {ontCount} document{ontCount === 1 ? '' : 's'} elevated by published rules (published from the ontology rules)</div>}
-              <div className="remlist">
-                {remediable.map((f) => {
-                  const rec = f.rec; const dec = decisions[f.file]
-                  const effAction = dec?.state === 'override' ? dec.action : rec.action
-                  const [label, rbg, rfg, icon] = REC_STYLE[effAction] || REC_STYLE.review
-                  const effEta = dec?.state === 'override' ? (ETA_OVERRIDE[dec.action] ?? rec.etaMin) : rec.etaMin
-                  const [priLabel, priFg, priBg] = PRI[priTier(f)]
-                  return (
-                    <div className={`remrow${dec?.state === 'rejected' ? ' rowrej' : ''}`} key={f.file} style={{ borderLeft: `3px solid ${rfg}`, paddingLeft: 10 }}>
-                      <div className="remmaincol">
-                        <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span>
-                          {pendingHitlFiles.has(f.file) && <span className="hitlbadge">⚑ awaiting review</span>}
-                        </button>
-                        {f.ont ? (
-                          <div className="rempri">
-                            <span className="pritag" style={{ background: PRI_COLOR[f.ont.priority][1], color: PRI_COLOR[f.ont.priority][0] }}>{f.ont.priority}</span>
-                            {f.ont.label && <span className="ontlabelpill" style={{ color: f.ont.label.color, background: f.ont.label.color + '22' }}>{f.ont.label.name}</span>}
-                            <span className="muted">business rule: {f.ont.rule.name}{f.ont.sla ? ` · ${f.ont.sla}d SLA` : ''}</span>
-                          </div>
-                        ) : (
-                          <div className="rempri"><span className="pritag" style={{ background: priBg, color: priFg }}>{priLabel}</span><span className="muted">why: {priWhy(f)}</span></div>
-                        )}
-                      </div>
-                      <span className="reccell">
-                        <span className="badge" style={{ background: rbg, color: rfg }}>{icon} {label}</span>
-                        {dec?.state === 'accepted' && <span className="dectag ok">✓ accepted</span>}
-                        {dec?.state === 'override' && <span className="dectag ov">modified</span>}
-                        {dec?.state === 'rejected' && <span className="dectag rj">rejected</span>}
-                        {editing === f.file ? (
-                          <span className="modchips">
-                            {ACTIONS.map((a) => { const [l, , fg, ic] = REC_STYLE[a]; return <button key={a} className="modchip" style={{ color: fg }} onClick={() => decide(f.file, a === rec.action ? { state: 'accepted' } : { state: 'override', action: a })}>{ic} {l}</button> })}
-                            <button className="modchip cancel" onClick={() => setEditing(null)}>cancel</button>
-                          </span>
-                        ) : (
-                          <span className="decctl">
-                            {!dec ? (<>
-                              <button className="decbtn ok" title="Accept" onClick={() => decide(f.file, { state: 'accepted' })}>✓</button>
-                              <button className="decbtn rj" title="Reject" onClick={() => decide(f.file, { state: 'rejected' })}>✕</button>
-                              <button className="decbtn ed" title="Modify action" onClick={() => setEditing(f.file)}>✎</button>
-                            </>) : <button className="decbtn undo" title="Undo" onClick={() => undo(f.file)}>↺</button>}
-                          </span>
-                        )}
-                      </span>
-                      <span className="etacell" title={EFFORT_BASIS}>{fmtEffort(effEta)}</span>
-                    </div>
-                  )
-                })}
-              </div>
-            </section>
-          )}
+          {/* The legacy file-level "Documents to remediate" accept/reject/modify table was retired here:
+              per-finding accept / reject / assign decisions now live solely in the RemediationInbox above
+              (the single decision surface). Server-side remediation still runs the whole remediable set from
+              the runner below and the hero CTA; it never consumed the file-level decisions. */}
 
           {/* Server-side remediation runner. */}
           <div className="remcta">
