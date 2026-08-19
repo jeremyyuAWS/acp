@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { getConfig } from './api.js'
+import { getConfig, listFolders, listSpFolders, getScanLocations, setScanLocations } from './api.js'
 import { SIM } from './sim.js'
 import { googleUserInfo } from './googleIdentity.js'
 import SourceDrawer from './SourceDrawer.jsx'
@@ -145,6 +145,17 @@ function sourceHealth(scans, type) {
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
+// The picker is shared with Discover — the SAME component, so "choose exactly what to scan"
+// cannot mean two different things in two places. Its header comment used to claim this file
+// already used it; it did not, which is why the Sources tab promised to "manage the locations
+// ACP scans" and then offered no way to choose one.
+import FolderPicker from './FolderPicker.jsx'
+
+// Which source key a card's locations are stored under. Drive and SharePoint/OneDrive are the
+// two sources with a folder hierarchy to narrow; a local corpus has no picker.
+const LOC_KEY = (type) => (type === 'google_drive' ? 'drive'
+  : (type === 'sharepoint' || type === 'onedrive') ? 'sharepoint' : null)
+
 export default function Integrations({ sources, files = [], scans = [], onScan, busy, hasDriveToken, hasSPToken, onConnect,
                                        scanId = null, onOpenAssess = null }) {
   const [selSrc,      setSelSrc]      = useState(null)
@@ -217,6 +228,29 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
 
   // ── Scan dispatch ────────────────────────────────────────────────────────────
   //
+  // Locations are a property of the CONNECTION, loaded once for the tab. `null` while loading is
+  // deliberately distinct from `{}`: "we do not know yet" must not render as "scans everything",
+  // which is the reassuring reading and the wrong one.
+  const [locs, setLocs] = useState(null)
+  const [pickFor, setPickFor] = useState(null)   // the source whose picker is open
+  useEffect(() => {
+    let alive = true
+    getScanLocations().then((r) => alive && setLocs(r.locations || {})).catch(() => alive && setLocs({}))
+    return () => { alive = false }
+  }, [])
+
+  const saveLocations = (src, folders) => {
+    const key = LOC_KEY(src.type)
+    if (!key) return
+    setLocs((s) => ({ ...(s || {}), [key]: folders }))     // optimistic: the chips redraw at once
+    setScanLocations(key, folders).catch(() => {
+      // Put it back rather than leave the card asserting a scope the server does not have. A
+      // card that claims a narrowing the next scan will not apply is worse than a failed save.
+      getScanLocations().then((r) => setLocs(r.locations || {})).catch(() => {})
+    })
+    setPickFor(null)
+  }
+
   // Every "New scan" button here just calls `onScan`, which App wires to `requestScan` — the
   // universal gate that opens the app-level ScanReviewModal (scope + behavior review) before any
   // scan runs. This tab used to own that modal; it now shares the one App renders for every entry
@@ -300,7 +334,6 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                     <div className="srccard-name">{title}</div>
                     <div className="srccard-meta">
                       {src.user && <span>{src.user}</span>}
-                      {src.folder && <span>folder: {src.folder}</span>}
                       <span className="srccard-count">
                         {src.files != null ? `${src.files.toLocaleString()} in ${store}` : `— in ${store}`}
                         {lastRun && lastRun.files != null && ` · ${lastRun.files.toLocaleString()} in last scan`}
@@ -326,6 +359,29 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                     {lastRun && (lastRun.error || 0) > 0 && (
                       <div className="srccard-inv muted">
                         {Number(lastRun.error).toLocaleString()} file{lastRun.error === 1 ? '' : 's'} could not be read in the last run
+                      </div>
+                    )}
+                    {/* SCANNED LOCATIONS — the control this page's own subtitle promises
+                        ("Manage the locations ACP scans and monitors") and did not have. It sits
+                        on the card rather than behind a scan because it is configuration: a thing
+                        decided once about a source, not re-chosen every run. Stated in both
+                        directions — "Entire Drive" is rendered as loudly as a narrowing, because
+                        a row that appears only when narrowed teaches a reader to read its absence
+                        as "everything", and it is absent on every source that never set one. */}
+                    {LOC_KEY(src.type) && (
+                      <div className="srccard-inv" style={{ display: 'flex', gap: 6, flexWrap: 'wrap',
+                                                            alignItems: 'center', marginTop: 4 }}>
+                        <span className="muted">Scans:</span>
+                        {locs === null ? <span className="muted">…</span>
+                          : (locs[LOC_KEY(src.type)] || []).length === 0 ? (
+                            <span>Entire {store}</span>
+                          ) : (locs[LOC_KEY(src.type)] || []).map((f) => (
+                            <span key={f.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
+                              fontSize: 11.5, background: '#F1EFF3', border: '1px solid var(--line)',
+                              borderRadius: 999, padding: '2px 8px' }}>📁 {f.name}</span>
+                          ))}
+                        <button className="linklike" style={{ fontSize: 12 }}
+                                onClick={() => setPickFor(src)}>Edit</button>
                       </div>
                     )}
                     <div style={{ marginTop: 6 }}>
@@ -407,6 +463,20 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                                 onScan={(src) => onScan(cardScanArg(src))}
                                 onOpenAssess={onOpenAssess}
                                 onClose={() => setSelSrc(null)}  onPickFile={setSelFile} />}
+      {/* One picker component for both sources — the lister is what differs. Drive drills through
+          GET /folders; OneDrive/SharePoint through GET /sharepoint/folders, whose ids already
+          carry their driveId because a Graph item id is unique only within its drive. */}
+      {pickFor && (
+        <FolderPicker
+          title={`Folders to scan in ${pickFor.name || 'this source'}`}
+          rootName={LOC_KEY(pickFor.type) === 'drive' ? 'My Drive' : 'OneDrive'}
+          lister={LOC_KEY(pickFor.type) === 'drive'
+            ? listFolders
+            : (parent) => listSpFolders(parent)}
+          initial={(locs || {})[LOC_KEY(pickFor.type)] || []}
+          onConfirm={(folders) => saveLocations(pickFor, folders)}
+          onClose={() => setPickFor(null)} />
+      )}
       {selFile && <FileDrawer   file={selFile}   onClose={() => setSelFile(null)} scanId={scanId} />}
     </>
   )

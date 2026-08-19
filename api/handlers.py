@@ -152,6 +152,7 @@ def _scan(payload: dict, job: dict) -> None:
         drive_token=toks.get("drive"),
         sp_token=toks.get("sp"),
         folder=payload.get("folder"),
+        **({"folders": payload["folders"]} if payload.get("folders") else {}),
         ai_enabled=effective_ai,
         scan_id=scan_id,
         user=payload.get("user"),
@@ -982,10 +983,14 @@ def _scan_discover(payload: dict, job: dict) -> None:
     pii = bool(payload.get("pii", False))
     user = payload.get("user")
     folder = payload.get("folder")
+    # The fan-out path is the PRODUCTION listing path (see below), so multi-folder scope has to
+    # be read here too — wiring only run_scan would narrow scans correctly in dev and scan the
+    # whole estate in the deployment that matters.
+    folders = payload.get("folders")
     toks = core.get_scan_tokens(scan_id)
     rb = Rubric.load_active(ACP / "config")
     svc = None if source in ("local", "sharepoint") else _drive_service(toks.get("drive"))
-    effective_folder = folder if folder else ("root" if toks.get("drive") else None)
+    effective_folder = folder if folder else (None if folders else ("root" if toks.get("drive") else None))
     scope: dict = {}
     # `inventory` collects per-file rows for the NON-scannable estate (media / unsupported /
     # extensionless) — every accessible file that is NOT in the assessable `items` set. The
@@ -996,7 +1001,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
     # (ADR 0007 fan-out); run_scan's is the local one, and wiring only that would leave a
     # hospital's PDFs being downloaded and OCR'd in the deployment that matters.
     items = _list(source, svc, folder=effective_folder, sp_token=toks.get("sp"),
-                  max_files=FANOUT_MAX_FILES,
+                  max_files=FANOUT_MAX_FILES, **({"folders": folders} if folders else {}),
                   exclude_remediated=bool(payload.get("exclude_remediated", False)),
                   scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory)
     # shadow_candidate (a file sharing a logical name with another — possibly ACP's own output

@@ -188,6 +188,61 @@ def adc_scopes(request: Request):
     }
 
 
+_LOCATIONS_KEY = "scan_locations"
+
+
+@router.get("/sources/locations")
+def get_scan_locations(request: Request):
+    """The folders each source is scoped to, as chosen on the Sources tab.
+
+    Mounted under /sources — an ALREADY-GATED prefix — rather than a new top-level path. core.py's
+    API_PREFIXES gate is DEFAULT-OPEN: a route group not listed there is served with no auth at
+    all, which is how /campaigns and /disposition once shipped unauthenticated. A new prefix would
+    have done exactly that here (verified: core.is_public("/scan-locations") returned True), and
+    this route writes server state. Reusing a gated prefix removes the possibility rather than
+    adding one more entry that has to stay in sync.
+
+    A location set is a property of the CONNECTION, not of one scan. That is the whole reason
+    this is persisted rather than passed per scan: "which folders do we scan" is a thing an
+    operator decides once about a source, and re-asking on every scan is what made the existing
+    Drive picker (Discover tab) feel like a per-scan detour instead of configuration.
+
+    Empty / absent means the whole source, which is the pre-existing behaviour and the safe
+    reading: a MISSING selection must never be interpreted as "scan nothing".
+    """
+    import json
+    raw = core.store.get_setting(_LOCATIONS_KEY) or "{}"
+    try:
+        return {"locations": json.loads(raw)}
+    except (ValueError, TypeError):
+        # A corrupt value must not take the Sources tab down; it means "no narrowing", which is
+        # the same as never having chosen — and is visibly wrong on screen rather than silently
+        # narrowing a scan to something nobody picked.
+        return {"locations": {}}
+
+
+@router.put("/sources/locations")
+async def put_scan_locations(request: Request):
+    """Replace the chosen locations for one source. Body: {source, folders:[{id,name}]}."""
+    import json
+    body = await request.json()
+    source = (body.get("source") or "").strip()
+    if source not in ("drive", "sharepoint"):
+        raise HTTPException(400, "source must be 'drive' or 'sharepoint'")
+    folders = body.get("folders") or []
+    if not isinstance(folders, list):
+        raise HTTPException(400, "folders must be a list")
+    clean = [{"id": str(f.get("id")), "name": str(f.get("name") or f.get("id"))}
+             for f in folders if isinstance(f, dict) and f.get("id")]
+    try:
+        current = json.loads(core.store.get_setting(_LOCATIONS_KEY) or "{}")
+    except (ValueError, TypeError):
+        current = {}
+    current[source] = clean
+    core.store.set_setting(_LOCATIONS_KEY, json.dumps(current))
+    return {"ok": True, "source": source, "folders": clean}
+
+
 @router.get("/folders")
 def folders(request: Request, parent: str = "root"):
     """List immediate subfolders of a Drive folder — drives the frontend folder picker."""

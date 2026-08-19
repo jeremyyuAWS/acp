@@ -35,6 +35,11 @@ def _inv_capability(row: dict) -> dict:
 @router.post("/scans")
 def start_scan(request: Request, source: str = Query("local", pattern="^(local|drive|sharepoint)$"),
                sync: bool = False, folder: str | None = Query(None),
+               # Repeatable: ?folders=<id>&folders=<id>. `folder` stays the single-root form, so
+               # every existing caller, saved link and already-queued job is unaffected. A
+               # SharePoint/OneDrive folder is written `<driveId>/<itemId>` — the pair, because a
+               # Graph item id is unique only within its drive.
+               folders: list[str] | None = Query(None),
                ai: bool = Query(True), queue: bool = Query(False),
                # PII (deep) scan is opt-in: it doubles scan time by extracting + regex-scanning
                # every file's text, so a scan is fast unless the caller explicitly asks for it.
@@ -74,7 +79,7 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
         # 'scan' job (default, proven). Both are durable and resume across replicas.
         jtype = "scan_discover" if fanout else "scan"
         job_id = core.store.enqueue_job(
-            jtype, {"source": source, "scan_id": scan_id, "folder": folder, "ai": ai,
+            jtype, {"source": source, "scan_id": scan_id, "folder": folder, "folders": folders, "ai": ai,
                     "user": user, "pii": pii, "batch": batch,
                     "exclude_remediated": exclude_remediated, "incremental": incremental},
             scan_id=scan_id)
@@ -103,6 +108,7 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
             return {"scan_id": scan_id, "source": source, "discovered": True}
         inv: list = []
         report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token,
+                          **({"folders": folders} if folders else {}),
                           ai_enabled=effective_ai, user=user, detect_pii=pii,
                           exclude_remediated=exclude_remediated, inventory_out=inv)
         sid = core.store.save_scan(report)
@@ -142,6 +148,7 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
             inv: list = []
             report = run_scan(source, progress=lambda d: core.update_job(job_id, d),
                               drive_token=token, folder=folder, sp_token=sp_token,
+                              **({"folders": folders} if folders else {}),
                               ai_enabled=effective_ai, user=user, detect_pii=pii,
                               exclude_remediated=exclude_remediated, inventory_out=inv)
             sid = core.store.save_scan(report)

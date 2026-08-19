@@ -44,6 +44,12 @@ export function isNarrowScope(scope) {
   // nothing, so the number IS the estate and a ⚠ there would be a warning about nothing —
   // which is how a callout stops being read. `skipped_out_of_scope > 0` is the difference
   // between "narrowed" and "narrowed and it mattered".
+  // A chosen-folder SET narrows every source it applies to, and it is checked FIRST because the
+  // clauses after it do not cover it. A OneDrive folder scan has kind 'sharepoint' and NO site —
+  // so without this, picking three OneDrive folders produced a count with no ⚠ and no boundary:
+  // the 2026-07-30 defect at the top of this file, with the source swapped again. A new
+  // narrowing mode gets to re-introduce it for free unless it says so here.
+  if (Array.isArray(scope.folders) && scope.folders.length > 0) return true
   return (scope.kind === 'folder' || !!scope.site || !!scope.truncated
           || (Number(scope.skipped_out_of_scope) || 0) > 0)
 }
@@ -58,10 +64,17 @@ export const isTruncated = (scope) => !!(scope && scope.truncated)
 export function scopeLabel(scope) {
   if (!scope) return null
   switch (scope.kind) {
-    case 'folder':
-      return scope.folder_name
-        ? `in the Drive folder “${scope.folder_name}”`
+    case 'folder': {
+      // Several chosen folders name themselves rather than collapsing to "in 3 Drive folders":
+      // the reader's question is WHICH parts of the estate this covers, and a bare count answers
+      // "how many boundaries" instead — the same substitution of a number for a boundary this
+      // module exists to stop.
+      const named = (scope.folders || []).map((f) => f && f.name).filter(Boolean)
+      if (named.length > 1) return `in the Drive folders ${named.map((n) => `“${n}”`).join(', ')}`
+      return (scope.folder_name || named[0])
+        ? `in the Drive folder “${scope.folder_name || named[0]}”`
         : 'in one Drive folder'
+    }
     case 'drive':
       return 'across your whole Google Drive'
     case 'sharepoint':
@@ -69,6 +82,16 @@ export function scopeLabel(scope) {
       // user's OneDrive, as it always has; with one it read every document library on that site
       // and nothing else. Calling both "across OneDrive" named the wrong source AND claimed the
       // whole of it.
+      {
+        // Chosen folders beat both readings below: with folders picked this is neither "across
+        // your OneDrive" nor "one site" — it is those folders, and either of the others claims a
+        // boundary the scan did not have.
+        const picked = (scope.folders || []).map((f) => f && f.name).filter(Boolean)
+        if (picked.length) {
+          const where = scope.site_name ? ` on “${scope.site_name}”` : ' in OneDrive'
+          return `in ${picked.map((n) => `“${n}”`).join(', ')}${where}`
+        }
+      }
       if (!scope.site) return 'across your OneDrive'
       return scope.site_name
         ? `in the SharePoint site “${scope.site_name}”`
@@ -87,6 +110,11 @@ export function scopeSentence(scope, count) {
   if (!label) return null
   const n = Number.isFinite(count) ? count : (scope.kept ?? 0)
   let s = `${n.toLocaleString()} ${plural(n)} ${label}.`
+  if (scope.kind === 'sharepoint' && Array.isArray(scope.folders) && scope.folders.length) {
+    // The counterpart of the folder clause below, unconditional for the same reason: at any
+    // size, chosen folders are not the estate.
+    s += ' Documents in other folders were not scanned.'
+  }
   if (scope.kind === 'folder') {
     // The actual missing sentence from the incident. Said unconditionally for a folder scan,
     // including a folder with many files in it: the reader's question is "is this my estate?",
@@ -132,7 +160,17 @@ export function scopeSentence(scope, count) {
 export function scopeChip(scope) {
   if (!scope) return null
   if (scope.kind === 'folder') {
-    return { text: scope.folder_name ? `📁 ${scope.folder_name}` : '📁 one folder', narrow: true }
+    const picked = (scope.folders || []).map((f) => f && f.name).filter(Boolean)
+    if (picked.length > 1) return { text: `📁 ${picked.length} folders`, narrow: true }
+    const only = scope.folder_name || picked[0]
+    return { text: only ? `📁 ${only}` : '📁 one folder', narrow: true }
+  }
+  // A folder-narrowed SharePoint/OneDrive scan, which has no `site` to be labelled by. Placed
+  // before the site branch so a folder inside a site is named by the folder, the tighter bound.
+  if (scope.kind === 'sharepoint' && Array.isArray(scope.folders) && scope.folders.length) {
+    const picked = scope.folders.map((f) => f && f.name).filter(Boolean)
+    return { text: picked.length > 1 ? `📁 ${picked.length} folders`
+                                     : `📁 ${picked[0] || 'one folder'}`, narrow: true }
   }
   // Before `truncated`, because a site scan that also hit its cap is still most usefully
   // identified by WHICH site — the folder branch above takes the same precedence for the same
