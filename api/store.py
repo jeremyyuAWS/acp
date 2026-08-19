@@ -1328,10 +1328,11 @@ class Store:
     # reset-completeness test (test_reset_leaves_no_customer_data) fails closed if a data table
     # is left out.
     _ANALYTICS_TABLES = ["scan_runs", "file_records", "issue_records", "scan_rule_traces",
-                         "scan_file_manifests", "scan_inventory", "file_tags", "scan_decisions",
-                         "pii_findings", "hitl_queue", "hitl_events", "disposition_audit",
-                         "decision_log", "inventory", "jobs", "documents", "org_memory",
-                         "remediation_state", "remediation_diff", "applied_fixes", "ai_calls"]
+                         "file_stage_timings", "scan_file_manifests", "scan_inventory", "file_tags",
+                         "scan_decisions", "pii_findings", "hitl_queue", "hitl_events",
+                         "disposition_audit", "decision_log", "inventory", "jobs", "documents",
+                         "org_memory", "remediation_state", "remediation_diff", "applied_fixes",
+                         "ai_calls"]
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
