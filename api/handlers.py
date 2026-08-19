@@ -1570,6 +1570,11 @@ def ensure_assess_trace(scan_id: str, level: str = "AA") -> None:
             conformant = not bool(f.get("issues"))
         aspan.end(output={"conformant": conformant, "failing_criteria": len(sc_counts or {})})
         _lf.file_score(scan_id, fname, f.get("score"))
+        # Trace-level verdict, so the Langfuse session list shows the outcome per file instead of
+        # "no input or output" — the score, conformance, and the failing WCAG criteria + counts.
+        _lf.file_assessment_result(scan_id, fname, score=f.get("score"),
+                                   conformant=conformant, level=level,
+                                   failing_criteria=sc_counts)
     _lf.flush()
 
 

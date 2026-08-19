@@ -80,6 +80,15 @@ def _doc_label(file: str | None) -> str | None:
     return f"doc-{digest}{ext}"
 
 
+def _fmt(file: str | None) -> str | None:
+    """The document's format (docx/pdf/xlsx/pptx/…) from its extension, or None. A type, not an
+    identifier — safe to send for the same reason `_doc_label` keeps the extension."""
+    if not file or "." not in str(file):
+        return None
+    cand = str(file).rsplit(".", 1)[-1]
+    return cand.lower() if (cand.isalnum() and len(cand) <= 5) else None
+
+
 def _trace_id(scan_id: str | None, file: str | None) -> str | None:
     """The per-file trace id, `{scan_id}::{label}`.
 
@@ -638,6 +647,11 @@ def file_trace(scan_id: str, file: str, user: str | None = None):
             name=f"{who} · {_doc_label(file)}",
             user_id=who,
             tags=_file_tags(file, who),
+            # Trace-level input so the session view shows WHAT was assessed, not an empty shell.
+            # Structured only — a redacted label + the format (a type, not an identifier); never
+            # document content (docs/audit-langfuse-phi.md). The result lands as trace output via
+            # file_assessment_result at Assess.
+            input={"document": _doc_label(file), "format": _fmt(file)},
             metadata={"scan_id": scan_id, "file": _doc_label(file)},
         )
     except Exception:
@@ -830,6 +844,33 @@ def file_score(scan_id: str, file: str, score: float | None) -> None:
         # growing the trace's score list ("85.00, 85.00, 85.00, …").
         lf.score(id=_det_id(scan_id, file, "compliance_score"),
                  trace_id=_trace_id(scan_id, file), name="compliance_score", value=float(score))
+    except Exception:
+        pass
+
+
+def file_assessment_result(scan_id: str, file: str, *, score: float | None,
+                           conformant: bool, level: str,
+                           failing_criteria: dict | None = None) -> None:
+    """Attach the WCAG assessment RESULT to a file's trace as trace-level OUTPUT, so the session
+    view shows the outcome instead of 'no input or output'. Complements file_score (a Langfuse
+    SCORE) and the per-rule spans (the ✓/✗ detail); this is the one-line verdict the list view
+    reads. Structured only — a number, a boolean, the failing WCAG SC codes and their counts,
+    and tallies. Never document content or a finding's text (docs/audit-langfuse-phi.md): the
+    keys are WCAG identifiers like '1.4.3', the values are counts. Idempotent — a re-assess
+    upserts the trace's output by id."""
+    lf = _lf()
+    if lf is None:
+        return
+    fc = {str(k): int(v) for k, v in (failing_criteria or {}).items()}
+    try:
+        lf.trace(id=_trace_id(scan_id, file)).update(output={
+            "score": float(score) if score is not None else None,
+            "conformant": bool(conformant),
+            "level": level,
+            "checks_failed": len(fc),
+            "failing_criteria": fc,                 # {WCAG SC code: finding_count} — no free text
+            "findings_total": sum(fc.values()),
+        })
     except Exception:
         pass
 
