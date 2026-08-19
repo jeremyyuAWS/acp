@@ -197,7 +197,8 @@ def _parse(text: str) -> dict[str, str]:
 def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, ok: bool,
               model: str | None = None, scan_id: str | None = None, file: str | None = None,
               provider: str = "ollama", zone: str | None = None, cost_usd: float = 0.0,
-              reason: str | None = None) -> None:
+              reason: str | None = None, prompt_tokens: int | None = None,
+              completion_tokens: int | None = None) -> None:
     """Emit a Langfuse span + persist an ai_calls provenance row for one model call — model,
     latency, prompt size, completion, ok, and (ADR 0019 §1) which provider/zone/cost it ran on.
     model defaults to the text model; vision calls pass the vision model. `provider`/`zone`/`cost_usd`
@@ -213,8 +214,12 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
     zn = zone or provenance()["zone"]
     try:
         import lf as _lf
+        # Forward provider/zone/cost (G3) and token usage (G1) so the Langfuse GENERATION carries
+        # them — they were computed here for the ai_calls row below but dropped on the trace side.
         _lf.trace_ai_call(surface, mdl, latency_ms, ok=ok, prompt_chars=len(prompt or ""),
-                          completion=completion, scan_id=scan_id, file=file)
+                          completion=completion, scan_id=scan_id, file=file,
+                          provider=provider, zone=zn, cost=cost_usd,
+                          prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
     except Exception:
         pass
     # ADR 0019 Phase 0b — persist an ai_calls provenance row (provider/model/local-or-cloud zone/
@@ -255,8 +260,13 @@ def explain_finding(
             timeout=90,
         )
         r.raise_for_status()
-        raw = r.json().get("response", "").strip()
-        _trace_ai("explain", prompt, raw, _t0, ok=True)
+        _data = r.json()
+        raw = (_data.get("response", "") or "").strip()
+        # Ollama /api/generate reports token counts on the response: prompt_eval_count (input)
+        # and eval_count (output). Counts only — carried onto the Langfuse generation's usage.
+        _trace_ai("explain", prompt, raw, _t0, ok=True,
+                  prompt_tokens=_data.get("prompt_eval_count"),
+                  completion_tokens=_data.get("eval_count"))
         return {**_parse(raw), "model": OLLAMA_MODEL, "raw": raw}
     except Exception:
         _trace_ai("explain", prompt, None, _t0, ok=False)
@@ -1054,8 +1064,11 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
             timeout=90,
         )
         r.raise_for_status()
-        text = r.json().get("response", "").strip().strip('"').strip()
-        _trace_ai("suggest", prompt, text, _t0, ok=bool(text))
+        _data = r.json()
+        text = (_data.get("response", "") or "").strip().strip('"').strip()
+        _trace_ai("suggest", prompt, text, _t0, ok=bool(text),
+                  prompt_tokens=_data.get("prompt_eval_count"),
+                  completion_tokens=_data.get("eval_count"))
         if not text:
             return None
         kind = _SUGGEST_KIND.get(rule_id, ("fix", ""))[0]
@@ -1107,9 +1120,12 @@ def simplify_text(text: str, *, scan_id: str | None = None, file: str | None = N
             timeout=OLLAMA_VISION_TIMEOUT,
         )
         r.raise_for_status()
-        out = (r.json().get("response", "") or "").strip().strip('"').strip()
+        _data = r.json()
+        out = (_data.get("response", "") or "").strip().strip('"').strip()
         out = re.sub(r"^(plain[- ]language version|rewritten text|here is[^:]*)\s*:\s*", "", out, flags=re.I).strip()
-        _trace_ai("simplify", prompt, out, _t0, ok=bool(out), scan_id=scan_id, file=file)
+        _trace_ai("simplify", prompt, out, _t0, ok=bool(out), scan_id=scan_id, file=file,
+                  prompt_tokens=_data.get("prompt_eval_count"),
+                  completion_tokens=_data.get("eval_count"))
         # Guard: a rewrite must actually be shorter/simpler and non-trivial, else treat as a miss.
         return out if (out and len(out) >= 20 and out.lower() != src.lower()) else None
     except Exception:
@@ -1184,8 +1200,11 @@ def _ollama_narrative(facts: dict) -> tuple[str, str] | None:
             json={"model": OLLAMA_MODEL, "prompt": _p, "stream": False,
                   "options": {"temperature": 0.4, "num_predict": 200}}, timeout=150)
         r.raise_for_status()
-        raw = r.json().get("response", "").strip()
-        _trace_ai("digest", _p, raw, _t0, ok=bool(raw and len(raw) > 40))
+        _data = r.json()
+        raw = (_data.get("response", "") or "").strip()
+        _trace_ai("digest", _p, raw, _t0, ok=bool(raw and len(raw) > 40),
+                  prompt_tokens=_data.get("prompt_eval_count"),
+                  completion_tokens=_data.get("eval_count"))
         return (raw, OLLAMA_MODEL) if raw and len(raw) > 40 else None
     except Exception:
         _trace_ai("digest", _p, None, _t0, ok=False)

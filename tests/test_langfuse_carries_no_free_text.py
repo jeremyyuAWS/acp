@@ -46,6 +46,9 @@ class _Trace:
     def span(self, **kw):
         return _Span(self._sink, **kw)
 
+    def generation(self, **kw):
+        return _Span(self._sink, **kw)
+
     def update(self, **kw):
         self._sink.append(kw)
         return self
@@ -73,7 +76,7 @@ class _FakeLangfuse:
         out: list[dict] = []
         for payload in self.sent:
             out.append(payload)
-            for key in ("input", "output", "metadata"):
+            for key in ("input", "output", "metadata", "usage"):
                 nested = payload.get(key)
                 if isinstance(nested, dict):
                     out.append(nested)
@@ -143,9 +146,77 @@ def test_prompts_are_still_sent_as_a_length_only(captured):
     assert any(p.get("prompt_chars") == len(prompt) for p in captured.fields())
 
 
+def test_ai_generation_carries_model_tokens_cost_zone_but_no_text(captured):
+    """G1+G3. The model call is now a GENERATION carrying model / token usage / cost / provider /
+    zone — the LLM-native fields Langfuse rolls up — and STILL no prompt or completion text."""
+    prompt = "Describe this image. Context: " + SECRET
+    completion = "A bar chart of " + SECRET
+    lf.trace_ai_call("vision", "llava:7b", 1500, ok=True,
+                     prompt_chars=len(prompt), completion=completion,
+                     scan_id="scan-1", file="intake.docx",
+                     provider="azure_openai", zone="cloud", cost=0.0123,
+                     prompt_tokens=312, completion_tokens=48)
+
+    blob = captured.everything()
+    assert SECRET not in blob, "prompt/completion text reached Langfuse via the generation"
+
+    fields = captured.fields()
+    # A generation payload names the model at the top level (that is what makes it a generation,
+    # not a span) — assert the LLM-native fields are all present.
+    assert any(p.get("model") == "llava:7b" for p in fields), fields
+    assert any(p.get("input") == 312 and p.get("output") == 48 for p in fields), (
+        "token usage must reach the generation (usage.input / usage.output)")
+    assert any(p.get("total_cost") == 0.0123 for p in fields), "cost must reach the generation"
+    assert any(p.get("provider") == "azure_openai" and p.get("zone") == "cloud" for p in fields)
+    # Sizes are still there as counts, never the strings.
+    assert any(p.get("prompt_chars") == len(prompt) for p in fields)
+    assert any(p.get("completion_chars") == len(completion) for p in fields)
+
+
+def test_ai_generation_nests_under_the_file_trace(captured):
+    """G2. When scan_id + file are known the generation hangs on the file's OWN trace id
+    (`{scan_id}::{doc-label}`), not a detached top-level `ai:` trace — so a document's model
+    calls live in its story. The trace id must carry the REDACTED label, never the filename."""
+    lf.trace_ai_call("vision", "llava:7b", 100, ok=True, prompt_chars=10,
+                     completion="x", scan_id="scan-9", file="intake.docx")
+    tid = lf._trace_id("scan-9", "intake.docx")
+    assert any(p.get("id") == tid for p in captured.sent), (
+        f"generation did not nest on the file trace {tid!r}: {captured.sent}")
+    # session grouping preserved so the scan's session view still gathers this call.
+    assert any(p.get("session_id") == "scan-9" for p in captured.sent)
+
+
+def test_ai_call_without_a_file_falls_back_to_a_session_grouped_trace(captured):
+    """G2 fallback. A request-path call with no file (e.g. the changelog digest) still traces —
+    as a per-call `ai:{surface}` trace grouped into the session — rather than being dropped."""
+    lf.trace_ai_call("digest", "qwen3", 50, ok=True, prompt_chars=5,
+                     completion="y", scan_id="scan-7")
+    assert any(p.get("name") == "ai:digest" and p.get("session_id") == "scan-7"
+               for p in captured.sent), captured.sent
+
+
+def test_remediation_span_carries_counts_and_no_text(captured):
+    """G4. The Remediate span reports how many fixes applied / skipped — COUNTS only. No
+    filename, no per-fix prose, no reviewer text."""
+    trace = lf.file_trace("scan-1", "intake.docx", user="nurse@hospital.org")
+    lf.remediate_span(trace, "https://drive/xyz", fixes_applied=4, fixes_skipped=2,
+                      per_rule={"1.1.1": 3, "2.4.4": 1})
+    fields = captured.fields()
+    assert any(p.get("fixes_applied") == 4 and p.get("fixes_skipped") == 2 for p in fields), fields
+    assert any(p.get("fixes_by_rule") == {"1.1.1": 3, "2.4.4": 1} for p in fields)
+    # No document content: the applied/skipped MESSAGES ("3 images: added alt text") are prose and
+    # must not ride the span, and neither may the filename.
+    blob = captured.everything()
+    assert "intake.docx" not in blob and "added alt text" not in blob
+
+
 def test_nothing_is_sent_at_all_when_tracing_is_disabled(monkeypatch):
     """The other half of the guarantee: absent credentials means no tracing, not partial."""
     monkeypatch.setattr(lf, "_lf", lambda: None)
     # Must not raise, and must reach no client.
     lf.trace_hitl_decision("scan-1", "intake.docx", "1.1.1", "rejected", note=SECRET)
-    lf.trace_ai_call("describe_image", "moondream", 1, ok=True, completion=SECRET)
+    lf.trace_ai_call("describe_image", "moondream", 1, ok=True, completion=SECRET,
+                     prompt_tokens=1, completion_tokens=1, cost=0.5)
+    # generation() and remediate_span() are no-ops on a _Noop trace, so they never touch a client.
+    assert isinstance(lf.generation(lf._Noop(), "vision", model="m"), lf._Noop)
+    lf.remediate_span(lf._Noop(), "https://drive/xyz", fixes_applied=1, fixes_skipped=0)

@@ -347,15 +347,22 @@ def fire_webhook(items: list[dict]) -> None:
 
 
 # ── Langfuse remediation span ─────────────────────────────────────────────────
-def emit_remediation_span(scan_id: str, filename: str, drive_write_url: str | None):
+def emit_remediation_span(scan_id: str, filename: str, drive_write_url: str | None, *,
+                          fixes_applied: int | None = None, fixes_skipped: int | None = None,
+                          per_rule: dict | None = None):
     """Emit a 'Remediate' span on this file's OWN Langfuse trace (file-centric tracing —
     see lf.file_trace): the same trace that already carries its Discover and (if run)
-    Assess spans, so the file's full lifecycle lives in one place."""
+    Assess spans, so the file's full lifecycle lives in one place.
+
+    fixes_applied/fixes_skipped/per_rule are the deterministic remediation outcome from
+    handlers._remediate_file (COUNTS only, PHI-safe). Optional: the manual-upload and
+    mark-remediated routes have no fix pass to report and leave them None."""
     try:
         import lf as _lf
         owner = (get_store().get_scan(scan_id) or {}).get("run", {}).get("owner_email")
         trace = _lf.file_trace(scan_id, filename, user=owner)
-        _lf.remediate_span(trace, drive_write_url)
+        _lf.remediate_span(trace, drive_write_url, fixes_applied=fixes_applied,
+                           fixes_skipped=fixes_skipped, per_rule=per_rule)
         _lf.flush()
     except Exception:
         pass
