@@ -4,9 +4,9 @@ import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
 import RemediationInbox from './RemediationInbox.jsx'
 import { autoFixRows } from './remediationInboxModel.js'
-import FileDrawer, { REC_STYLE, fmtEffort, EFFORT_BASIS, SOURCE_URL } from './FileDrawer.jsx'
+import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
-import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
+import { SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_RANK } from './ontology.js'
 import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl } from './api.js'
 import { SIM, simProposalsFor } from './sim.js'
@@ -29,12 +29,6 @@ import { measuredReviewTime, REVIEW_TIME_BASIS } from './reviewerTime.js'
 // confidence and risk statement traces to real pipeline data (applied-fix evidence, the
 // live HITL queue, confidence.js, the recommendation model); nothing is fabricated.
 const REM_ACTIONS = REMEDIATION_ACTIONS
-const ACTION_DESC = {
-  auto: 'The agent fixes these mechanically — alt text, headings, language, titles — then re-validates. No human needed.',
-  assisted: 'AI proposes the fix; a human approves before publish. For critical, sensitive, contrast/link, or media (captions) findings.',
-  review: 'A rule couldn’t be auto-evaluated. A reviewer confirms before the document can be certified.',
-  manual: 'Unreadable source — a human must re-author or re-export the file before it can be assessed.',
-}
 const SR_COLOR = { Executive: '#1F5FA8', Director: '#D85A30', Manager: '#BF8C00', Staff: '#9a948f' }
 const exposureOf = (f) => (f.tags || []).includes('public-facing') ? 'public-facing' : (f.tags || []).includes('high-traffic') ? 'high-traffic' : 'internal'
 const EXP_COLOR = { 'public-facing': '#1F5FA8', 'high-traffic': '#D85A30', internal: '#9a948f' }
@@ -578,9 +572,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // in-progress work and confuse first-time users. Until then the cards show zeros.
   const remStarted = remProg != null || remBusy || serverFixed > 0 || (acted.approved + acted.rejected + acted.deferred + self.length) > 0
 
-  // --- remediation plan + decisions (moved from Discover) ---
-  const plan = files.length ? recommendationSummary(files) : null
-  const planCards = plan ? plan.buckets.filter((b) => REM_ACTIONS.includes(b.action)) : []
+  // --- remediable set + decisions (moved from Discover) ---
   // Published business ontology takes precedence in the queue order (Critical → Low),
   // then the AI risk triage breaks ties.
   const ontRank = (f) => f.ont?.priority ? PRI_RANK[f.ont.priority] : 9
@@ -593,16 +585,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const scopeInfo = scopeSummary(files, scopeOpts)
   const remediable = remediableFiles(files, scopeOpts)
     .sort((a, b) => (ontRank(a) - ontRank(b)) || (priority(b) - priority(a)))
-  const ontCount = remediable.filter((f) => f.ont).length
-  const autoFiles = remediable.filter((f) => {
-    const eff = decisions[f.file]?.state === 'override' ? decisions[f.file].action : f.rec?.action
-    return eff === 'auto' && !decisions[f.file]
-  })
-  const batchAutoRemediate = () => setDecisions?.((s) => { const n = { ...s }; autoFiles.forEach((f) => { n[f.file] = { state: 'accepted' } }); return n })
-  const acceptAll = () => setDecisions?.((s) => { const n = { ...s }; remediable.forEach((f) => { if (!n[f.file]) n[f.file] = { state: 'accepted' } }); return n })
   const dcount = (st) => remediable.filter((f) => decisions[f.file]?.state === st).length
-  const pending = remediable.length - dcount('accepted') - dcount('override') - dcount('rejected')
-  const humanCount = pending - autoFiles.length   // pending files NOT auto — the gap between the two plan buttons
 
   // business priority (findings-based)
   const flagged = files.filter((f) => (f.issues || []).length)
@@ -1099,53 +1082,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             </div>
           )}
 
-          {/* Remediation plan + accept/reject/modify decisions. */}
-          {plan && (
-            <div className="planband">
-              <div className="planhead">
-                <div>
-                  <b>Remediation plan</b>
-                  <div className="muted" style={{ marginTop: 2 }}>
-                    <b style={{ color: 'var(--ink)' }} title={EFFORT_BASIS}>{fmtEffort(plan.remediateMin)}</b> across {plan.remediableDocs} documents · <b style={{ color: '#3B6D11' }}>{plan.autoPct}% fully automatic</b>
-                  </div>
-                </div>
-                <div className="plandec">
-                  <span className="muted">{dcount('accepted')} accepted · {dcount('override')} modified · {dcount('rejected')} rejected · {pending} pending</span>
-                  {autoFiles.length > 0 && (
-                    <button className="batchbtn" onClick={batchAutoRemediate}
-                            title="Accept ONLY the fully-automatic files — the engine fixes these deterministically when you click Remediate all. No human review involved.">
-                      {/* Weight, not opacity — see the ⚠ note on the sibling button below. This one
-                          still cleared 4.5:1 at 0.85 (5.15 on #1F5FA8), but the mechanism is the
-                          same and a future palette tweak would have taken it under silently. */}
-                      ⚡ Auto-fix {autoFiles.length} file{autoFiles.length !== 1 ? 's' : ''} <span style={{ fontWeight: 400 }}>· no review needed</span></button>
-                  )}
-                  <button className="acceptfullbtn" disabled={!pending} onClick={acceptAll}
-                          title="Accept the WHOLE plan — every remediable file, including the ones below that need assisted or manual work from a person.">
-                    {/* ⚠ White on this button's #A56814 is 4.58:1 — it clears 4.5:1 with almost no
-                        margin, and `opacity: 0.85` spent that margin: the sub-label rendered at
-                        3.78:1. 13px/600 is not large text, so 4.5:1 applies. Weight de-emphasises
-                        it without touching the ratio. The background is left alone deliberately —
-                        it passes, and re-picking a brand colour is a separate decision — but it
-                        has no headroom, so anything that lightens it fails. */}
-                    👥 Accept full plan · {pending}{humanCount > 0 && <span style={{ fontWeight: 400 }}> · +{humanCount} need a person</span>}
-                  </button>
-                </div>
-              </div>
-              <div className="plancards">
-                {planCards.map((b) => {
-                  const [label, bg, fg, icon] = REC_STYLE[b.action] || REC_STYLE.review
-                  return (
-                    <div className="plancard" key={b.action} style={{ background: bg }} tabIndex={0} aria-label={`${label}: ${ACTION_DESC[b.action]}`}>
-                      <div className="plancardtop" style={{ color: fg }}><span>{icon}</span><b>{b.n}</b></div>
-                      <div className="plancardlbl" style={{ color: fg }}>{label}</div>
-                      <div className="muted plancardeta" title={EFFORT_BASIS}>{b.action === 'manual' ? `${fmtEffort(b.min)} manual` : fmtEffort(b.min)}</div>
-                      <div className="plantip" role="tooltip"><b style={{ color: fg }}>{icon} {label}</b>{ACTION_DESC[b.action]}</div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )}
+          {/* The "Remediation plan" band (bulk "Auto-fix N" / "Accept full plan" buttons + the plan-card
+              grid) was retired here — it was the second bulk decision surface. Accepting or auto-fixing
+              work now happens per finding in the RemediationInbox above, and server-side remediation runs
+              the whole remediable set from the runner below; neither depended on this band. */}
 
           {flagged.length > 0 && (
             <div className="prioritypanel">

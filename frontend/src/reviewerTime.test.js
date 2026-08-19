@@ -41,12 +41,6 @@ describe('durations that survive are labelled as estimates', () => {
     expect(c).not.toMatch(/rec\.remediateMin|\{effortH\}h|remediateMin \|\| 0\) \/ 60/)
     expect(c).toMatch(/title=\{EFFORT_BASIS\}/)
   })
-
-  it('the Remediate plan cards drop the bare "~" prefix for the est. formatter', () => {
-    const c = code('Remediate.jsx')
-    expect(c).not.toMatch(/~\$\{hrs\(/)
-    expect(c).toMatch(/fmtEffort\(b\.min\)/)
-  })
 })
 
 describe('reviewer time is measured or it is not shown', () => {
