@@ -34,6 +34,7 @@ flowchart TB
     end
 
     subgraph ai["AI lane (governed, ADR 0019/0022)"]
+        azt4["<b>Azure T4 (in-tenant)</b><br/>qwen2.5vl:7b (GPU)<br/>scale-to-zero · local 🟢"]
         runpod["<b>RunPod Serverless</b><br/>Qwen2.5-VL (GPU)<br/>scale-to-zero · cloud 🟡"]
         ollama["<b>Ollama floor</b><br/>moondream vision +<br/>llama3.2 text (CPU) · local 🟢"]
     end
@@ -44,7 +45,7 @@ flowchart TB
         formats["api/formats/*<br/>HTML + capability registry"]
     end
 
-    langfuse["Langfuse<br/>per-file LLM traces<br/>(PHI-redacted)"]
+    langfuse["Langfuse v3 (Azure VM)<br/>per-file LLM traces<br/>ClickHouse · PHI-redacted"]
 
     browser -->|HTTPS| app
     app <-->|"enqueue / read state"| pg
@@ -52,8 +53,8 @@ flowchart TB
     worker <-->|"claim_job (CAS)"| pg
     worker <-->|tokens| redis
     worker --> dotnet & pdfeng & formats
-    worker -->|alt-text · vision| runpod
-    runpod -.->|"fallback on miss"| ollama
+    worker -->|"alt-text · vision"| azt4 & runpod
+    azt4 & runpod -.->|"fallback on miss"| ollama
     worker --> ollama
     worker -->|remediated files| blob
     app & worker -.-> langfuse
@@ -77,8 +78,10 @@ manages three apps:
 | **`acp-grafana`** | Postgres mode only | dashboards over the Postgres DSN | 0.5 CPU / 1 GiB | min=max=1 | external, port 3000 |
 
 > **Note vs the old deck:** there is **no `acp-redis` and no `acp-ollama` Container App** anymore.
-> Redis is an external managed service via `REDIS_URL`; GPU vision is RunPod serverless (out of
-> band from the deploy). The PDF engine is now **in‑tree** (ADR 0029), not vendored.
+> Redis is an external managed service via `REDIS_URL`; GPU vision is out of band from this deploy —
+> either an **in‑tenant Azure T4** (`gpu_up.sh`, an ACA GPU workload profile in acp‑app's own env) or
+> RunPod serverless. The PDF engine is now **in‑tree** (ADR 0029), not vendored. Observability moved to a
+> **standalone Langfuse v3 VM** (`acp-langfuse-v3`), separate from these apps.
 
 `acp-app` runs in **single‑revision mode**, so each deploy makes the new revision the sole
 100%‑traffic revision automatically (`deploy.sh:186-188`, `redeploy.sh:137-138`).
@@ -90,8 +93,8 @@ manages three apps:
 | **Postgres** | secret `database-url` → `DATABASE_URL` | durable job queue + all scan state. Unset ⇒ SQLite single‑instance only |
 | **Azure Blob** | `ACP_BLOB_ACCOUNT` (default `acpremediatedstore`) | remediated output (ADR 0010); managed‑identity auth, **no keys** |
 | **Redis** | secret `redis-url` → `REDIS_URL` | cross‑replica scan tokens + progress. **Required once the worker tier is split** |
-| **RunPod Serverless** | `ACP_RUNPOD_ENDPOINT_ID` + secret `runpod-api-key` | GPU vision (Qwen2.5‑VL), scale‑to‑zero. Optional — falls back to CPU floor |
-| **Langfuse** | `LANGFUSE_HOST` + secrets `langfuse-pk/sk` | per‑file LLM traces (self‑hosted) |
+| **GPU vision** | `OLLAMA_BASE_URL` (in‑tenant Azure T4) **or** `ACP_RUNPOD_ENDPOINT_ID` + `runpod-api-key` (serverless) | GPU vision. Two options behind the Ollama adapter: an in‑tenant **Azure T4** (`gpu_up.sh`, scale‑to‑zero, stays local 🟢) or RunPod serverless (cloud 🟡). Optional — falls back to CPU floor |
+| **Langfuse v3** | `LANGFUSE_HOST` + secrets `langfuse-pk/sk` | per‑file LLM traces (PHI‑safe). Self‑managed **Azure VM** `acp-langfuse-v3` (ClickHouse + Redis + MinIO + Postgres, eastus2) — see §8 |
 | **Google / Microsoft** | `ACP_GOOGLE_CLIENT_ID` / MSAL | per‑user Drive/SharePoint sign‑in + isolation identity |
 
 ---
@@ -455,9 +458,15 @@ flowchart TB
   scan**: a Scan/Discover trace (file→rule span tree, PII spans) and a separate Assess trace carrying
   the 0–100 `compliance_score`; AI calls are Langfuse *generations* with model / tokens / **cost** /
   zone. PHI‑safe: `user:` tag for per‑user attribution, the filename HMAC‑masked to `doc-<6hex>.<ext>`,
-  completions sent as **lengths**, not text. **v2 on one Postgres today; the v3 (ClickHouse + Redis +
-  S3/MinIO) migration is committed** — a backing‑store change, not an app rewrite. Deployed in
-  **eastus2**, project `acp-compliance`; see the deck's Observability slide for the full picture.
+  completions sent as **lengths**, not text. **Now on Langfuse v3 (ClickHouse).** ACP cut over from v2
+  to v3 on 2026‑08‑19: the enriched per‑file traces overwhelmed v2's single Postgres (a real 44‑document
+  scan hung the Session view), so v3 splits the store into **ClickHouse + Redis + MinIO + Postgres**. It
+  runs on a dedicated **Azure VM** — `acp-langfuse-v3`, `Standard_D4s_v3` + a 128 GB Premium data disk,
+  **eastus2** — via docker‑compose behind Caddy/TLS, *not* Container Apps (ClickHouse needs real local
+  disk, which ACA's Azure Files/SMB mounts fight). The cutover was **host‑only** — `LANGFUSE_HOST`
+  repointed + keys re‑seeded, no app change (the PHI invariant above is version‑independent); the v2
+  Container App was deleted and trace history was not migrated (start‑fresh). Runbook + compose in
+  `deploy/langfuse-v3/` (#447/#449). See the deck's Observability slide for the full picture.
 
 ---
 
@@ -486,17 +495,32 @@ flowchart TB
   every read enforces `owner_email` (`get_scan` returns None on mismatch, `store.py:1423`).
 - **Token verification** asks the provider (Google `tokeninfo` / MS Graph `/me`), 9‑min cache — no
   local JWKS. `verify_ms_token` (`core.py:248`) gives Microsoft/Entra users the same posture as Google.
+- **Sign‑in asks which account** — sign‑in now forces an account chooser for both Google (GIS) and
+  Microsoft (MSAL) rather than silently reusing the browser's single existing session; the two data
+  connections stay independent (Drive rides `X-Drive-Token`, OneDrive/SharePoint rides `X-SP-Token`), so a
+  personal Drive alongside a work tenant no longer needs a second browser profile.
 - **Scope resolution** — the owner sets a global `scan_scope` (`PUT /settings` → `_require_admin` on
   `OWNER_EMAIL`; `is_scope_owner`, on `/me` and `/config`, hides the editor for non‑owners). A
-  **per‑user override** now layers on top (ADR 0035, `store.set_user_setting` / `resolve_setting`):
-  precedence is **per‑user override → owner global default → no restriction**. The storage/resolution
-  primitive is shipped; threading it through the whole assessment hot path is in progress.
+  **per‑user override** layers on top (ADR 0035, `store.set_user_setting` / `resolve_setting`):
+  precedence is **per‑user override → owner global default → no restriction**. This is now wired **end to
+  end** — the override folds into `active_scope` as a **widen‑only union** (a user may assess *more* than
+  the owner mandated, never less), threaded through the two scan‑listing chokepoints
+  (`scanner._scope_for_listing` / `handlers._scan_discover`) and **frozen once** into `scan_runs.scope` at
+  fan‑out. A signed‑in user manages their own override from a non‑admin surface — `GET/PUT/DELETE
+  /settings/mine` (keyed to their email, can never write another's) behind a Settings editor that renders
+  the owner‑mandated pairs locked‑on so widen‑only is visible.
 - **Sources authenticate differently** — Google Drive (keyless ADC or per‑user GIS), SharePoint/
   OneDrive (Entra via Graph), and the new **SMB on‑prem connector** (ADR 0032/0036): a read‑only
   `svc-acp` NTFS account, credential from Key Vault via Managed Identity, running **inside** the
   customer network and talking to Azure over **outbound‑only HTTPS :443** — so PHI never leaves the
   perimeter to be discovered. (Discovery logic shipped; the live `smbprotocol` transport is
   deployment‑gated — in pilot, not live.)
+- **Folder‑level source scope** — a connected source is no longer all‑or‑nothing: each source card carries
+  a folder selection (a property of the **connection**, `GET/PUT /sources/locations`), and child folders
+  under a selected parent can be **excluded** (pruned at the walk, not post‑filtered). In the scan wizard,
+  folder choice is **step 1** (seeded from the card), with the card‑vs‑run precedence explicit: the card
+  seeds the wizard, a change applies to that run only, and write‑back is an explicit action shown only once
+  they diverge.
 
 ---
 
@@ -547,8 +571,18 @@ flowchart LR
   Azure creds.
 - **Isolation is a config invariant, not a mechanism** — an `ACCESS_CODE` on a Google deploy silently
   collapses everyone to the `demo` estate. Guarded only by a startup warning.
-- **GPU vision is best‑effort** — RunPod serverless cold‑starts on first request; a miss falls back to
-  the weaker CPU floor (correct, but lower quality).
+- **GPU vision is best‑effort** — both GPU options (in‑tenant Azure T4, RunPod serverless) are
+  scale‑to‑zero, so the first request after idle cold‑starts; a miss falls back to the weaker CPU floor
+  (correct, but lower quality).
+- **The assessment fan‑out shares one flat worker pool** — every `scan_file` job (download, OCR, vision,
+  assess, DB write — five stages with opposite constraints) contends for a single `ACP_WORKERS`
+  concurrency limit, there is no GPU micro‑batching or VRAM‑shaped limit, and there is no per‑stage
+  instrumentation to locate the bottleneck. **ADR 0037** (Track B) is the committed, measure‑first design
+  to fix this — bounded per‑stage pools over the existing durable queue, tuned from measured per‑stage
+  time — but it is **design only, not yet built**.
+- **Langfuse v3 is a self‑managed VM now** — the trace‑volume ceiling is solved (ClickHouse scales the
+  Session view), but v3 runs as a hand‑provisioned Azure VM behind Caddy — a box to patch, back up, and
+  keep TLS current, provisioned by a runbook (`deploy/langfuse-v3/`) rather than the CI pipeline.
 - **Concurrency discipline is documented, not enforced** — `CLAUDE.md` carries the hard‑won rules;
   nothing mechanically prevents breaking them.
 
