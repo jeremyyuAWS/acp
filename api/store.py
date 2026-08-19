@@ -3594,6 +3594,47 @@ class Store:
                 "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value",
                 (key, value))
 
+    # ── Per-user setting overrides (R7: owner default + per-user override) ─────────────────────
+    # A per-user override is stored as an ordinary app_settings row under a namespaced key, so it
+    # needs no schema change and inherits the settings table's persistence and RESET treatment. The
+    # namespace carries the owner email verbatim; a ':' in an email is not valid, so the three-part
+    # "user:<email>:<key>" split is unambiguous. Nothing here changes what a scan resolves — the
+    # scan-time precedence (override > owner default) is a separate, reviewed change on the scope hot
+    # path (assessment_policy.active_scope); this is only the storage + resolution primitive it will
+    # read. See ADR 0035.
+    @staticmethod
+    def _user_setting_key(user: str, key: str) -> str:
+        return f"user:{user}:{key}"
+
+    def set_user_setting(self, user: str, key: str, value: str) -> None:
+        """Store a per-user override for `key`. An empty string is a real value (it clears a scope),
+        distinct from having no override at all — use clear_user_setting to remove the override."""
+        self.set_setting(self._user_setting_key(user, key), value)
+
+    def get_user_setting(self, user: str, key: str) -> str | None:
+        """This user's override for `key`, or None when they have none. None is the signal to fall
+        back to the owner default — an override that is present but empty ("") is NOT None."""
+        return self.get_setting(self._user_setting_key(user, key), None)
+
+    def clear_user_setting(self, user: str, key: str) -> None:
+        """Remove this user's override so `key` falls back to the owner default. Idempotent."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "DELETE FROM app_settings WHERE key=%s",
+                             (self._user_setting_key(user, key),))
+
+    def resolve_setting(self, key: str, user: str | None = None, default: str | None = None) -> str | None:
+        """The EFFECTIVE value of `key` for `user`: their own override if they have one, else the
+        owner/global default, else `default`. Precedence, highest first:
+          1. the user's per-user override (present even if empty)
+          2. the global (owner) setting
+          3. `default`
+        With `user=None` this is exactly get_setting — a caller with no user asks only the global."""
+        if user is not None:
+            override = self.get_user_setting(user, key)
+            if override is not None:
+                return override
+        return self.get_setting(key, default)
+
     # ── Scheduled-sweep outcome ───────────────────────────────────────────────
     # A sweep that cannot reach its source deliberately saves NOTHING and leaves the last real
     # scan standing (core._do_scheduled_scan; the alternative — substituting the bundled samples
