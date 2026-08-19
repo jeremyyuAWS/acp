@@ -891,6 +891,31 @@ existing data and the existing decision path; nothing adds a second write path.
   `cloud_enabled`; the `ai_calls`-ledger derivation is kept only as a fallback for cards pre-drafted at scan
   time (no live `/ai/suggest` call), so the two cannot diverge. Closes the copilot loop end to end:
   UI (#367) → gateway adapters (#356) → backend fields (#378) → UI reading them (#382).
+- **Workflow-status top tabs backed by real pipeline state** (#366). The inbox's queue tabs now track
+  where each finding sits on the journey Inbox → In progress → Ready to validate → Done (plus Blocked) —
+  a second lens on the same findings, distinct from the remediation-lane taxonomy (which answers "what
+  kind of fix", not "where in the pipeline"). `workflowStatusOf` derives the stage purely from real state
+  (the finding's status, its lane, the recorded decision; ADR 0016), never an invented flag: a rejected AI
+  fix awaiting triage stays in **Inbox**, not In progress, because its action is still "Mark as assigned" —
+  nobody has started it. The old lane-based tab helpers are kept for the lane views.
+- **The workspace footer lights each finding's live workflow step** (#370). The sticky Show → Review →
+  Verify guide was decorative — drawn identically for every finding. `workflowStepIndex` maps the selected
+  finding's stage onto the three steps so the footer lights the live one, ticks off the steps behind it,
+  and dims what's ahead. `activeStep` defaults null, so the footer renders exactly as before wherever the
+  step isn't supplied; the active step carries `aria-current="step"`.
+- **Retired both duplicate decision surfaces — the inbox is now the single place to decide** (#389, #394).
+  The Remediate tab still carried two extra decision surfaces below the guided inbox, both writing the same
+  `decisions` map the inbox owns: a file-level "Documents to remediate" accept/reject/modify table, and a
+  bulk "Remediation plan" band ("Auto-fix N" / "Accept full plan" + the plan-card grid). #389 removed the
+  table and the code only it used (`editing`/`decide`/`undo`, and the orphaned `ACTIONS`/`ETA_OVERRIDE`/
+  `PRI`/`priTier`/`priWhy` helpers); #394 removed the band (`plan`/`planCards`/`autoFiles`/
+  `batchAutoRemediate`/`acceptAll`/`pending`/`humanCount`, the now-dead `ACTION_DESC`, and the
+  `REC_STYLE`/`fmtEffort`/`EFFORT_BASIS`/`recommendationSummary` imports). −69 and −71 lines. Every
+  accept/reject/modify now happens in one place; server-side "remediate everything" (hero CTA + runner) is
+  untouched — it always ran the whole remediable set and never read the file-level decisions. Two
+  source-text contrast/effort guards that asserted on the band were updated (the dim-guard is now three
+  sites, not four). Landed after #385 promoted `frontend-v2/` to be the live `frontend/`; verified in
+  vitest (2002–2004 pass), not the browser preview.
 
 ## Feature: Estate coverage — three denominators and discovery at scale · #4597
 
@@ -1146,6 +1171,35 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   `'approved'` alone does not say whether anything moved. `source` is also what makes the queue and the trail
   scopeable at all: the table has no such column, so an unenriched render puts the whole estate's history
   under a heading naming one source.
+- **Create archival & deletion rules in Discover** (#383; Deva ask #3). The disposition rule engine —
+  create/preview/execute over folder/path/modified-before predicates, candidate-first marking — existed
+  backend-side, but the authoring UI had been dropped from Settings (#319) and was orphaned: no mounted
+  screen could write a rule. Adds `DispositionRules.jsx` inside the Discover tab — a condition → action
+  editor exposing the backend's `path`/`parent_folder`/`modified_age_days`/`modified_at` fields the older
+  editor lacked; rules are created **disabled** and approval-gated, and "delete" is always the recoverable
+  Drive trash. Frontend over the existing `/disposition/policies` API.
+- **The default scan path evaluates the archival/deletion rules, not only the fanout path** (#384; Deva
+  ask #4). Lifecycle-rule evaluation and per-file inventory persistence ran only inside `_scan_discover`
+  (the durable fanout job). A **default** Discover — the in-process thread the UI uses, the `sync` path,
+  and the monolithic `scan` job — called `run_scan` without `inventory_out` and never persisted per-file
+  inventory or evaluated the rules, so an admin's archive/delete rule (now authorable via #383) was
+  silently ignored on a normal scan, and the per-file inventory the Assess eligibility count reads went
+  unpopulated. A shared `handlers.persist_discovery_inventory` (dedupe → `add_inventory` →
+  `_evaluate_discover_lifecycle_rules`) now runs on every path; idempotent, candidate-first, never executes
+  a Drive move/delete. `test_jobs`' `fake_run_scan` gained the `inventory_out` kwarg. Backend; not
+  RULE_PATHS. Verified against a real venv — the helper unit test, an end-to-end worker test, a 183-test
+  regression slice, and all three matrix/backlog/progress guards.
+- **Assess ignores files flagged for archival or deletion — now a visible, controllable filter** (#375,
+  #379, #381; Deva ask #6). The assess run already excluded archive/delete-flagged files by default
+  (`LIFECYCLE_EXCLUDED_DEFAULT`), but silently — nothing in Assess said so, let a reviewer override it, or
+  reflected it in the scope preview's counts. #375 adds an "Ignore files flagged for archival or deletion"
+  checkbox (on by default, naming the four skipped statuses) wired to the existing `include_lifecycle_flagged`
+  query param on `POST /scans/{sid}/assess`. #379 has `GET /assess/eligibility` report `lifecycle_excluded`
+  and `lifecycle_eligible_excluded`, computed by a pure `wcag_codeset.lifecycle_exclusion` over real per-file
+  `lifecycle_status` (no fabricated counts). #381 adds a "Queued to assess — archival/deletion excluded"
+  stage to the scope funnel — exact when all document types are selected, a clamped bound when narrowed
+  (the aggregate backend count spans all eligible formats). The sibling Assess filters Deva also asked for —
+  document-type (#5) and WCAG-code (#7) — were already shipped in `AssessScope.jsx`, so were not rebuilt.
 
 ## Feature: Observability — AI tracing and cost (Langfuse)
 
@@ -1486,3 +1540,14 @@ invariant the redaction tests pin).
   undocumented feature work other sessions should characterise. Context, not edited here: #385 retired the
   `frontend/` fork, which resolves the standing "v2 redesign is a fork" Open item — left for that session to
   close.
+- **2026-08-19 (Remediate single decision surface + Deva Assess/Discover lifecycle)** — Documented my
+  session's nine PRs, none previously in the log. To **Remediate review queue (#4598)**: #366
+  (workflow-status top tabs from real pipeline state), #370 (footer lights the live workflow step), and
+  #389/#394 (retired the file-level "Documents to remediate" table and the bulk "Remediation plan" band —
+  the inbox is now the single decision surface). To **Discover & Assess lifecycle rules (#4618)**: #383
+  (create archival/deletion rules in Discover — Deva #3), #384 (the default scan path evaluates them, not
+  only the fanout path — Deva #4), and #375/#379/#381 (Assess ignores flagged files as a visible,
+  controllable filter, with the eligibility count and a scope-funnel stage — Deva #6). Deva's already-shipped
+  Assess filters (#5 document-type, #7 WCAG-code) noted in place, not re-added. **Sync marker deliberately
+  NOT advanced** (same convention as the four prior entries): the SMB source work (#388–#397) and other
+  commits in the range remain for their sessions to characterise.
