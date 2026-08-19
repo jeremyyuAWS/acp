@@ -559,8 +559,10 @@ def scope_problem(store=None) -> str | None:
     return parse_scope_setting(raw or "")[1]
 
 
-def active_scope(store=None) -> dict[str, frozenset[str]] | None:
-    """The (criterion -> formats) map currently in force, or None for no restriction."""
+def _owner_scope(store=None) -> dict[str, frozenset[str]] | None:
+    """The owner/global `scan_scope` in force — the pre-stage-2 resolution, unchanged. `_scope_override`
+    (the per-call/test hook) wins; else the global setting; a store read failure resolves to no
+    restriction rather than raising in the hot path (scope_problem reports the error to /config)."""
     raw = _scope_override
     if raw is None and store is not None:
         try:
@@ -568,6 +570,58 @@ def active_scope(store=None) -> dict[str, frozenset[str]] | None:
         except Exception:
             raw = ""
     return parse_scope_setting(raw or "")[0]
+
+
+def _widen_union(owner: dict | None, user_scope: dict | None) -> dict[str, frozenset[str]] | None:
+    """`owner_default ∪ user_override`, per criterion (ADR 0035 — a per-user override may only WIDEN).
+
+    Both are `dict | None`, where None means "no restriction" (assess everything). The union of
+    "everything" with anything is still everything, so if EITHER side is None the effective scope is
+    None. Two dicts union per criterion (formats OR'd). The result is always a SUPERSET of the owner
+    scope, which is the invariant that matters for a hospital: the owner's scope is a compliance
+    mandate, and an override can add criteria or formats but can never remove one the owner required —
+    so a user override can never silently hide a finding the owner asked to be checked.
+    """
+    if owner is None or user_scope is None:
+        return None
+    out: dict[str, frozenset[str]] = {}
+    for sc in set(owner) | set(user_scope):
+        out[sc] = owner.get(sc, frozenset()) | user_scope.get(sc, frozenset())
+    return out or None
+
+
+def active_scope(store=None, user: str | None = None) -> dict[str, frozenset[str]] | None:
+    """The (criterion -> formats) map in force for `user`, or None for no restriction.
+
+    The owner/global default, with — when the signed-in `user` has a per-user override — the WIDEN-ONLY
+    union applied on top (ADR 0035 stage 2). `user=None` (no signed-in user, or a caller that wants only
+    the global) is EXACTLY the pre-stage-2 owner default, so every existing caller is unchanged.
+
+    Precedence and the widen rule, from `store.resolve_setting` + `_widen_union`:
+      * no override for this user  → the owner default, untouched;
+      * an override present        → `owner ∪ override` per format (the user may assess MORE, never
+        less than the owner mandated);
+      * an empty override (`""`)    → the user opting into "no restriction" — a real value, distinct
+        from having none — which widens to everything;
+      * a MALFORMED override        → ignored (owner default), so a typo can neither widen a user to a
+        surprise whole-estate scan nor narrow below the owner mandate. The set-side route validates.
+
+    Resolved ONCE at scan start and frozen into `scan_runs.scope` by the caller (the freeze-once
+    invariant Phase 3a established); nothing downstream re-reads it live.
+    """
+    owner = _owner_scope(store)
+    if user is None or store is None:
+        return owner
+    try:
+        raw_user = store.get_user_setting(user, SCOPE_SETTING)
+    except Exception:
+        return owner
+    if raw_user is None:
+        return owner
+    user_scope, err = parse_scope_setting(raw_user)
+    if err is not None:
+        return owner
+    return _widen_union(owner, user_scope)
 
 
 def in_scope(rule_id: str, fmt: str | None, scope: dict | None = None) -> bool:

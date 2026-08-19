@@ -125,7 +125,7 @@ def test_a_docx_scoped_scan_never_downloads_the_pdf(corpus, monkeypatch):
     monkeypatch.setattr(scanner, "_download",
                         lambda it, tmp, svc, **kw: fetched.append(it["name"]))
     monkeypatch.setattr(scanner, "cache_source_bytes", lambda *a, **k: None)
-    monkeypatch.setattr(scanner, "_scope_for_listing", lambda: DOCX_ONLY)
+    monkeypatch.setattr(scanner, "_scope_for_listing", lambda user=None: DOCX_ONLY)
 
     scanner.run_scan("local", folder=str(corpus), ai_enabled=False, scan_id="s-scope")
 
@@ -142,8 +142,24 @@ def test_an_unscoped_scan_downloads_everything(corpus, monkeypatch):
     monkeypatch.setattr(scanner, "_download",
                         lambda it, tmp, svc, **kw: fetched.append(it["name"]))
     monkeypatch.setattr(scanner, "cache_source_bytes", lambda *a, **k: None)
-    monkeypatch.setattr(scanner, "_scope_for_listing", lambda: None)
+    monkeypatch.setattr(scanner, "_scope_for_listing", lambda user=None: None)
 
     scanner.run_scan("local", folder=str(corpus), ai_enabled=False, scan_id="s-open")
 
     assert {"a.docx", "b.pdf", "c.pptx", "d.xlsx", "e.html"} <= set(fetched)
+
+
+def test_run_scan_threads_the_signed_in_user_into_the_scope_gate(corpus, monkeypatch):
+    """Per-user scope (ADR 0035 stage 2) only works if the scan's `user` reaches the scope
+    resolution. run_scan already carries `user`; this pins that it is passed to `_scope_for_listing`,
+    which resolves the owner default WIDENED by that user's override and freezes it. Without this
+    thread the override would be stored and silently never applied."""
+    seen: list = []
+    monkeypatch.setattr(scanner, "_download", lambda it, tmp, svc, **kw: None)
+    monkeypatch.setattr(scanner, "cache_source_bytes", lambda *a, **k: None)
+    monkeypatch.setattr(scanner, "_scope_for_listing", lambda user=None: seen.append(user) or None)
+
+    scanner.run_scan("local", folder=str(corpus), ai_enabled=False, scan_id="s-user",
+                     user="reviewer@hospital.org")
+
+    assert seen == ["reviewer@hospital.org"]

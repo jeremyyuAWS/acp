@@ -31,7 +31,7 @@ def test_run_scan_threads_inventory_out_into_list_and_does_not_crash(monkeypatch
         return []                                # no scannable items → no download/analyse needed
 
     monkeypatch.setattr(scanner, "_list", fake_list)
-    monkeypatch.setattr(scanner, "_scope_for_listing", lambda: None)
+    monkeypatch.setattr(scanner, "_scope_for_listing", lambda user=None: None)
 
     inv: list = []
     report = scanner.run_scan("local", inventory_out=inv)   # must NOT raise TypeError
