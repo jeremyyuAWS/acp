@@ -67,6 +67,30 @@ def test_human_verified_overlay_moves_out_of_needs_review():
     _invariant(m)
 
 
+def test_not_applicable_leaves_the_denominator():
+    # Two review criteria: the reviewer approves 1.4.1 and marks 1.4.11 out-of-scope (not applicable).
+    d = _doc(evaluated=16, review=2, not_evaluated=2, review_criteria=["1.4.1", "1.4.11"])
+    base = st.derive_file_status(d, [], 0)                       # nothing decided yet
+    m = st.derive_file_status(d, ["1.4.1"], 0, na_review_scs=["1.4.11"])
+    assert m["not_applicable"] == 1
+    assert m["not_applicable_criteria"] == ["1.4.11"]
+    assert m["human_verified"] == 1                              # 1.4.1 approved; NA is NOT human_verified
+    assert m["needs_review"] == 0                                # both review items settled
+    # N/A leaves the denominator: in_scope (and the coverage total) drop by exactly one vs baseline,
+    # so the reported coverage % rises rather than counting an out-of-scope item as unmet.
+    assert m["in_scope"] == base["in_scope"] - 1
+    assert m["coverage"]["total"] == base["coverage"]["total"] - 1
+    _invariant(m)
+
+
+def test_not_applicable_only_counts_this_files_review_criteria():
+    # An out-of-scope SC that is not a review criterion of this file removes nothing (no phantom).
+    d = _doc(evaluated=16, review=1, not_evaluated=3, review_criteria=["1.4.1"])
+    m = st.derive_file_status(d, [], 0, na_review_scs=["9.9.9"])
+    assert m["not_applicable"] == 0
+    _invariant(m)
+
+
 def test_needs_remediation_wins():
     d = _doc(evaluated=10, failing=3, review=1, remediated=1, review_criteria=["1.4.1"])
     m = st.derive_file_status(d, [], 5)          # even with unapplied, fails come first

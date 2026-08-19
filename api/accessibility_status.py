@@ -37,6 +37,7 @@ CTA = {
 
 
 def derive_file_status(doc: dict, approved_review_scs, unapplied_approved: int, *,
+                       na_review_scs=(),
                        per_item_secs: int = DEFAULT_REVIEW_SECS,
                        assessing: bool = False, revalidating: bool = False,
                        certified: bool = False) -> dict:
@@ -44,11 +45,14 @@ def derive_file_status(doc: dict, approved_review_scs, unapplied_approved: int, 
 
     `doc` is an entry of `get_certification_facts()['documents']` (evaluated/failing/review/
     not_evaluated/remediated + review_criteria). `approved_review_scs` = the SCs a human has approved
-    for this file. `unapplied_approved` = count_unapplied_approved_values(scan, file).
+    for this file. `na_review_scs` = the SCs a human marked out-of-scope (not applicable).
+    `unapplied_approved` = count_unapplied_approved_values(scan, file).
 
-    The six buckets partition `in_scope` exactly (identity enforced by test):
+    Five buckets partition `in_scope` exactly (identity enforced by test):
         automatically_verified + human_verified + needs_review + needs_remediation
           + not_automatically_assessable == in_scope
+    `not_applicable` is reported SEPARATELY and sits OUTSIDE in_scope — a not-applicable finding is
+    out of scope, so it leaves the coverage denominator rather than counting as an unmet obligation.
     """
     evaluated = int(doc.get("evaluated", 0))
     failing = int(doc.get("failing", 0))
@@ -63,18 +67,27 @@ def derive_file_status(doc: dict, approved_review_scs, unapplied_approved: int, 
     # Keep the SC identities, not just the count: the drawer seeds its ✓ chips and the Coverage
     # Manifest marks human-approved rows from this list — same derivation as human_verified, so the
     # chips can never disagree with the hero's numbers.
-    approved_sc_list = sorted(set(approved_review_scs) & set(review_scs))
+    # not_applicable (out_of_scope) SCs are pulled OUT first: they are review findings the reviewer
+    # judged inapplicable, so they resolve into their own bucket that LEAVES in_scope (the coverage
+    # denominator), not into human_verified. Restricted to this file's review criteria so an
+    # out-of-scope mark can only ever remove a real review item.
+    na_sc_list = sorted(set(na_review_scs) & set(review_scs))
+    not_applicable = len(na_sc_list)
+    approved_sc_list = sorted((set(approved_review_scs) - set(na_review_scs)) & set(review_scs))
     approved_reviews = len(approved_sc_list)
 
     automatically_verified = max(0, evaluated - failing)     # deterministic PASS
     needs_remediation = max(0, failing - remediated_eff)     # unresolved FAIL
-    needs_review = max(0, review - approved_reviews)         # still awaiting a human
+    needs_review = max(0, review - approved_reviews - not_applicable)  # still awaiting a human
     human_verified = remediated_eff + approved_reviews       # a human / verified fix resolved it
-    not_automatically_assessable = not_evaluated             # no auto pass/fail (v1 folds N/A in here)
+    not_automatically_assessable = not_evaluated             # no auto pass/fail
 
-    in_scope = evaluated + not_evaluated + review
-    resolved = automatically_verified + human_verified + 0   # not_applicable folded for v1
-    coverage_evaluable = evaluated + review                  # criteria ACP had a method for
+    # N/A leaves the denominator: in_scope and the five-bucket partition both drop by not_applicable,
+    # so the identity (av + hv + needs_review + needs_remediation + not_auto == in_scope) still holds
+    # and the reported coverage % rises — the finding is out of scope, not an unmet obligation.
+    in_scope = evaluated + not_evaluated + review - not_applicable
+    resolved = automatically_verified + human_verified       # of the IN-SCOPE items, those settled
+    coverage_evaluable = max(0, evaluated + review - not_applicable)  # criteria ACP had a method for
 
     if assessing:
         state = STATE_ASSESSING
@@ -103,7 +116,8 @@ def derive_file_status(doc: dict, approved_review_scs, unapplied_approved: int, 
         "needs_review": needs_review,
         "needs_remediation": needs_remediation,
         "not_automatically_assessable": not_automatically_assessable,
-        "not_applicable": 0,   # v1: folded into not_automatically_assessable (ADR limitation, noted)
+        "not_applicable": not_applicable,   # reviewer-judged out of scope — counted OUTSIDE in_scope
+        "not_applicable_criteria": na_sc_list,
         "unapplied_approved": int(unapplied_approved),
         "est_review_secs": needs_review * int(per_item_secs),
         "state": state,
@@ -124,11 +138,22 @@ def file_status(store, scan_id: str, file: str, *, per_item_secs: int = DEFAULT_
         d["rule_id"] for d in store.list_decisions(scan_id, limit=2000)
         if d.get("action") == "hitl.approved" and d.get("file") == file and d.get("rule_id")
     }
+    # SCs the reviewer marked out_of_scope (not applicable) — read from the row, where the resolution
+    # is persisted, not parsed out of the audit note. These leave in_scope in derive_file_status.
+    # Guarded like the batched-unapplied query below: a store double without list_hitl_queue yields no NA.
+    na = set()
+    _lhq = getattr(store, "list_hitl_queue", None)
+    if callable(_lhq):
+        try:
+            na = {r.get("rule_id") for r in _lhq(scan_id=scan_id)
+                  if r.get("file") == file and (r.get("resolution") or "").strip() == "out_of_scope" and r.get("rule_id")}
+        except Exception:
+            na = set()
     try:
         unapplied = store.count_unapplied_approved_values(scan_id, file)
     except Exception:
         unapplied = 0
-    return derive_file_status(doc, approved, unapplied, per_item_secs=per_item_secs)
+    return derive_file_status(doc, approved, unapplied, na_review_scs=na, per_item_secs=per_item_secs)
 
 
 # The aggregation-summable fields (ADR 0026 PR 3): a scan/folder/estate status is the SUM of its
@@ -165,6 +190,17 @@ def scan_status(store, scan_id: str, *, per_item_secs: int = DEFAULT_REVIEW_SECS
     for d in store.list_decisions(scan_id, limit=5000):
         if d.get("action") == "hitl.approved" and d.get("file") and d.get("rule_id"):
             approved_by_file.setdefault(d["file"], set()).add(d["rule_id"])
+    # Out-of-scope (not-applicable) SCs per file, from the persisted row resolution — one scan query.
+    # Guarded (getattr) so a store double without list_hitl_queue simply contributes no NA.
+    na_by_file: dict[str, set] = {}
+    _lhq = getattr(store, "list_hitl_queue", None)
+    if callable(_lhq):
+        try:
+            for r in _lhq(scan_id=scan_id):
+                if (r.get("resolution") or "").strip() == "out_of_scope" and r.get("file") and r.get("rule_id"):
+                    na_by_file.setdefault(r["file"], set()).add(r["rule_id"])
+        except Exception:
+            na_by_file = {}
 
     batch = getattr(store, "count_unapplied_approved_values_by_file", None)
     unapplied_by_file: dict | None = None
@@ -185,6 +221,7 @@ def scan_status(store, scan_id: str, *, per_item_secs: int = DEFAULT_REVIEW_SECS
             except Exception:
                 unapplied = 0
         m = derive_file_status(doc, approved_by_file.get(doc.get("file"), ()), unapplied,
+                               na_review_scs=na_by_file.get(doc.get("file"), ()),
                                per_item_secs=per_item_secs)
         for k in _SUM_FIELDS:
             totals[k] += int(m.get(k, 0))

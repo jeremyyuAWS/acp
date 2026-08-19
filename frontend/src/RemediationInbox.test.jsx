@@ -76,6 +76,13 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(container.textContent).toContain('2 of 3 resolved')         // progress agrees
   })
 
+  it('marks a finding "Not applicable" (out of scope), resolving it without a fix', async () => {
+    const calls = []
+    await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push(d) })
+    await click(btnByText('Not applicable'))
+    expect(calls[0].state).toBe('not_applicable')
+  })
+
   it('lets the reviewer edit the AI draft and applies their version (Save edited fix)', async () => {
     const calls = []
     await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push(d) })
