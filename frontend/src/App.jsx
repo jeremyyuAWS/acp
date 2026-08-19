@@ -3,6 +3,7 @@ import HitlBell from './HitlBell.jsx'
 import { assessmentLine, outcomesFromRun, outcomeChips } from './assessmentProgress.js'
 import ProcessingDetails from './ProcessingDetails.jsx'
 import ScopeFunnel from './ScopeFunnel.jsx'
+import { armNotifyOnComplete, notifyScanComplete, notificationsSupported, notifyPermission } from './scanNotify.js'
 import { refreshDriveToken } from './driveAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
 import { getSources, getRubric, getConfig, getMe, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, getScanLocations, SESSION_EXPIRED } from './api'
@@ -245,6 +246,10 @@ export default function App() {
   // The in-flight durable scan's id — what the banner's Stop button cancels. null when
   // no queued scan is being polled (sync scans finish in-request and can't be stopped).
   const [liveScanId, setLiveScanId] = useState(null)
+  // "Notify me when complete" (slice 3c): the button drives `notifyArmed` for its label; the ref is what
+  // the async scan-completion code reads, since it fires long after this render's closure was captured.
+  const [notifyArmed, setNotifyArmed] = useState(false)
+  const notifyArmedRef = useRef(false)
   const [tick, setTick] = useState(0)                  // bumped every minute to keep timeAgo labels fresh
   const [platformVersion, setPlatformVersion] = useState(null)  // full git-derived CalVer from /config (with the daily .N)
   // Bumped once if /config reports a scope different from activeScope.js's fallback. React cannot
@@ -659,12 +664,22 @@ export default function App() {
       // is NOT lost — it stays in scan_runs and stays selectable in Time-travel, with its own
       // decisions and triage, however far through the workflow it got.
       resetScanScopedState()
+      // "Notify me when complete" (slice 3c): if the user armed it and walked away, ping them with the
+      // outcome. Best-effort — notifyScanComplete never throws, so a missing notification can't fail the
+      // scan it describes.
+      if (notifyArmedRef.current) {
+        const r = fresh.run || {}
+        notifyScanComplete({ assessed: r.files_done || 0, total: r.files || 0, review: r.uncertain || 0 })
+      }
       setScanList(await listScans())
       const newAvg = fresh.run.avg_score
       if (prevAvg != null && newAvg != null && newAvg !== prevAvg) { setDelta(newAvg - prevAvg); setDeltaKey((k) => k + 1) }
       // Guide the user into the workflow: land on Discover (step 1) after a scan.
       setView(me?.allow && !me.allow.includes('discover') ? 'overview' : 'discover')
-    } catch (e) { setErr(`scan failed: ${e?.message ?? e}`) } finally { setBusy(false); setProgress(null); setLiveScanId(null) }
+    } catch (e) { setErr(`scan failed: ${e?.message ?? e}`) } finally {
+      setBusy(false); setProgress(null); setLiveScanId(null)
+      setNotifyArmed(false); notifyArmedRef.current = false      // one arming per run
+    }
   }
 
   // Reconnect to an in-flight scan after a page reload — the durable fan-out keeps
@@ -903,9 +918,25 @@ export default function App() {
                 kills the outstanding jobs server-side; the poll loop then sees the run leave
                 'running' and exits normally. Files already analysed are kept. */}
             {liveScanId && (
-              <button className="ghost small" style={{ marginLeft: 'auto' }}
-                      title="Stop this scan — files already analysed are kept"
-                      onClick={() => cancelScan(liveScanId).catch(() => {})}>■ Stop scan</button>
+              <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8 }}>
+                {/* Continue working — notify me when complete (slice 3c). This banner is non-modal and
+                    the scan runs server-side, so a user can already work elsewhere; arming this pings
+                    them with the outcome when it finishes, so they need not watch the spinner. */}
+                {notificationsSupported() && notifyPermission() !== 'denied' && (
+                  <button className="ghost small" disabled={notifyArmed}
+                          title={notifyArmed ? 'You’ll be notified when this scan finishes'
+                                             : 'Keep working — get a notification when this scan finishes'}
+                          onClick={async () => {
+                            const ok = await armNotifyOnComplete()
+                            if (ok) { notifyArmedRef.current = true; setNotifyArmed(true) }
+                          }}>
+                    {notifyArmed ? '🔔 Will notify you' : '🔔 Notify me when done'}
+                  </button>
+                )}
+                <button className="ghost small"
+                        title="Stop this scan — files already analysed are kept"
+                        onClick={() => cancelScan(liveScanId).catch(() => {})}>■ Stop scan</button>
+              </span>
             )}
           </div>
           <div className="track"><i style={{ width: `${progressPct(progress)}%`, background: '#BF8C00', transition: 'width .3s' }} /></div>
