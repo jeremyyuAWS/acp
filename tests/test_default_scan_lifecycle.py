@@ -68,9 +68,13 @@ def test_re_running_is_idempotent(isolated_store, monkeypatch):
 
 
 def test_scan_job_wires_run_scan_inventory_into_the_lifecycle_pass(isolated_store, monkeypatch):
-    """End-to-end on the monolithic 'scan' job (the path a non-fanout durable scan takes): run_scan
-    fills inventory_out, and the handler now persists it and evaluates the enabled archive rule —
-    proving the wiring, not just the helper. Modeled on test_jobs.test_scan_handler_*."""
+    """End-to-end on the monolithic 'scan' job in IMMEDIATE mode (the path a non-fanout durable
+    scan takes when full analysis is forced): run_scan fills inventory_out, and the handler
+    persists it and evaluates the enabled archive rule — proving the wiring, not just the helper.
+    Metadata-only discovery is the default now (ADR 0020); this pins the legacy immediate path with
+    the documented override. The deferred path's inventory + lifecycle wiring is covered by
+    test_discover_lifecycle_rules. Modeled on test_jobs.test_scan_handler_*."""
+    monkeypatch.setenv("ACP_DEFER_ANALYSIS_TO_ASSESS", "0")
     import core, scanner, handlers  # noqa: F401 — registers the 'scan' handler
     import worker
     store = isolated_store
