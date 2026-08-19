@@ -26,6 +26,7 @@ globalThis.__BUILD_TIME__ = '2026-08-01T00:00:00.000Z'
 globalThis.__BUILD_VERSION__ = '2026.8.1'
 
 const startScanQueued = vi.fn(async () => { throw new Error('test stub — do not run the poll loop') })
+const startScan = vi.fn(async () => { throw new Error('test stub — do not run the poll loop') })
 
 // Spread the real api and override only what App's startup + a scan touch, so a new export never
 // silently breaks this mount. getConfig → demo mode (persona picker); the scan API throws so the
@@ -42,13 +43,16 @@ vi.mock('./api.js', async (importActual) => ({
   getScan: vi.fn(async () => ({ run: { id: 's1', status: 'done' }, files: [] })),
   getDecisions: vi.fn(async () => ({})),
   startScanQueued,
-  startScan: vi.fn(async () => ({ job_id: 'j1' })),
+  // The Durable toggle is no longer on the modal, so a default confirm takes the NON-queued path
+  // and THIS is the call that has to be observable. Throws for the same reason startScanQueued
+  // does: it stops doScan before the getJob poll loop.
+  startScan,
 }))
 
 const { default: App } = await import('./App.jsx')
 
 afterEach(unmountAll)
-beforeEach(() => { startScanQueued.mockClear() })
+beforeEach(() => { startScanQueued.mockClear(); startScan.mockClear() })
 
 const flush = async () => { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() }) }
 const click = async (el) => { await act(async () => { el.click() }); await flush() }
@@ -86,27 +90,32 @@ describe('the universal scan gate (App)', () => {
     expect(startScanQueued).not.toHaveBeenCalled()
   })
 
-  it('defaults the Durable-scan toggle OFF — session-scoped is the pilot default', async () => {
+  it('does not put the engine switches in front of the user', async () => {
+    // The four behaviour toggles were removed from this surface: they are platform behaviour, not
+    // per-run decisions. Their DEFAULTS are still pinned — against App.jsx's source, in
+    // scanBehaviourDefaults.test.js — so this assertion moved rather than disappeared, and what
+    // it guards here is that they do not come back to the gate.
     const c = await mountSignedInOnDiscover()
     await click(byText(c, 'button', /Re-scan all sources/))
-    const durable = durableSwitch(c)
-    expect(durable, 'no Durable scan toggle in the gate').toBeTruthy()
-    expect(durable.getAttribute('aria-checked')).toBe('false')
+    expect(durableSwitch(c), 'the Durable toggle is back on the scan gate').toBeFalsy()
+    expect([...dialog(c).querySelectorAll('[role="switch"]')].length).toBe(0)
   })
 
   it('starts the scan only when the gate is confirmed', async () => {
     const c = await mountSignedInOnDiscover()
     await click(byText(c, 'button', /Re-scan all sources/))
-    expect(startScanQueued).not.toHaveBeenCalled()
-    // The durable path is what startScanQueued (stubbed to throw) makes observable without running
-    // a poll loop; the pilot default is now session-scoped, so flip Durable on before confirming.
-    await click(durableSwitch(c))
+    expect(startScan).not.toHaveBeenCalled()
+    // Durable is off by default and no longer togglable here, so a confirm takes the non-queued
+    // path. Three steps now, so walk to Start the way a user does.
+    const cont = () => [...dialog(c).querySelectorAll('button')].find((b) => /Continue/.test(b.textContent))
+    await click(cont())
+    await click(cont())
     const start = [...dialog(c).querySelectorAll('button')].find((b) => /Start scan/.test(b.textContent))
     expect(start).toBeTruthy()
     await click(start)
     // Confirm dispatched the scan (source 'all' for "Re-scan all sources") and closed the gate.
-    expect(startScanQueued).toHaveBeenCalled()
-    expect(startScanQueued.mock.calls[0][0]).toBe('all')
+    expect(startScan).toHaveBeenCalled()
+    expect(startScan.mock.calls[0][0]).toBe('all')
     expect(dialog(c)).toBeNull()
   })
 
@@ -117,5 +126,6 @@ describe('the universal scan gate (App)', () => {
     await click(cancel)
     expect(dialog(c)).toBeNull()
     expect(startScanQueued).not.toHaveBeenCalled()
+    expect(startScan).not.toHaveBeenCalled()
   })
 })
