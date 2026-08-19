@@ -1,0 +1,7 @@
+# Caddy reverse proxy in front of langfuse-web, with automatic Let's Encrypt TLS.
+# provision.sh substitutes ${LF_FQDN} and writes the result as ./Caddyfile next to the compose.
+# TLS provisioning needs port 80 reachable and ${LF_FQDN} resolvable (the VM's *.cloudapp.azure.com
+# DNS label satisfies both).
+${LF_FQDN} {
+  reverse_proxy langfuse-web:3000
+}
