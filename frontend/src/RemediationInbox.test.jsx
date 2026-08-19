@@ -76,6 +76,21 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(container.textContent).toContain('2 of 3 resolved')         // progress agrees
   })
 
+  it('lets the reviewer edit the AI draft and applies their version (Save edited fix)', async () => {
+    const calls = []
+    await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push(d) })
+    expect(detailHeading()).toBe('Image needs alt text')          // id2, apply lane, carries `after`
+    const ta = container.querySelector('textarea[aria-label="Edit the proposed fix"]')
+    expect(ta).toBeTruthy()
+    // Edit through the native setter so React's controlled onChange fires.
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+    await act(async () => { setValue.call(ta, 'A revenue bar chart, 2021–2025'); ta.dispatchEvent(new Event('input', { bubbles: true })) })
+    // Editing flips the primary action to "Save edited fix" and carries the edited value.
+    await click(btnByText('Save edited fix'))
+    expect(calls[0].state).toBe('accepted')
+    expect(calls[0].value).toBe('A revenue bar chart, 2021–2025')
+  })
+
   it('offers specific decision actions (no bare "Reject") and hides verification until a fix is saved', async () => {
     await render({ queue: QUEUE, decisions: {} })
     expect(detailHeading()).toBe('Image needs alt text')          // id2, apply lane, unresolved

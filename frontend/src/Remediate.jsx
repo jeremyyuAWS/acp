@@ -856,7 +856,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               // Auto-applied (green) rows are already applied + re-scanned — "Approve" acknowledges
               // them locally (resolve + advance); the human review lanes route to the hitl flow.
               if (f.autoApplied) { setAckd((a) => ({ ...a, [f.id]: d })); return }
-              if (d.state === 'accepted') act(f.id, 'approved', f.after ?? null)
+              // d.value carries a reviewer-EDITED proposed value (the "Save edited fix" flow); fall
+              // back to the AI's proposal when they didn't touch it. act() writes it to the document.
+              if (d.state === 'accepted') act(f.id, 'approved', d.value ?? f.after ?? null)
               else if (d.state === 'rejected') act(f.id, 'rejected')
               else if (d.state === 'assigned') act(f.id, 'deferred')
             }}
