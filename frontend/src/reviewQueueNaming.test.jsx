@@ -47,12 +47,15 @@ describe('the review queue is named for the work, not for its generator', () => 
     expect(container.textContent).not.toContain('AI Work Inbox')
   })
 
-  it('renames the Remediate section header and its pipeline step', () => {
+  it('renames the Remediate section header', () => {
     // Source-level, matching remediateCollapse.test.js: Remediate mounts a page's worth of
     // dependencies, and what is asserted here is a literal in the JSX, not behaviour.
     const r = read('Remediate.jsx')
     expect(r).toMatch(/<h2 style=\{\{ margin: 0 \}\}>Review queue<\/h2>/)
-    expect(r).toMatch(/key: 'review', label: 'Review queue'/)
+    // The ProgressRail's `label: 'Review queue'` step was asserted here too, until R4 item 1
+    // deleted the rail (see remediateNavigation.test.jsx). Dropped rather than loosened: the
+    // line it pinned does not exist, so any weakened form of it would pass vacuously. The
+    // sweep below still covers the whole file for the retired name.
   })
 
   it('renames the bell and the Publish hand-off that points at it', () => {

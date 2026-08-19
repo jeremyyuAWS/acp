@@ -905,6 +905,25 @@ existing data and the existing decision path; nothing adds a second write path.
   >100 files first so it cannot pass by looking at nothing. Verified by mutation — reverting the Remediate
   heading alone fails both lanes. Nothing asserted any of these strings before, which is why a rename the
   spec called "coordinated work, not just the section header" had sat open. Frontend, not RULE_PATHS.
+- **Dropped the ProgressRail — one navigation system on Remediate, not two** (redesign spec R4 item 1,
+  which closes R4). The rail rendered Scan › Assess › Remediate › Review queue › Verify › Publish across
+  the top of the page. Every state it showed is said better, and closer to the work, elsewhere: Scan and
+  Assess were hard-coded `'done'` (constants, not state); Remediate is the hero line; the review count is
+  the section's own sentence and progress track — the very count #272/#273 deduplicated to one dominant
+  statement, of which the rail was a fourth copy; Verify is the `rem-verify` RemSection, whose
+  `<VerifyState>` carries state/percentage/remaining/ready where the rail carried one of three words; and
+  Publish is the hero's primary CTA plus a top-level tab. **What made this safe now rather than when the
+  spec was written** is that the contextual status the spec asked for in its place has since been built —
+  #366's workflow tablist inside RemediationInbox and #370's footer lighting each finding's live step.
+  Deleting the rail before those existed would have removed a wayfinder and put nothing there.
+  `remediateNavigation.test.jsx` pins the claim the change actually makes: each case pairs "the rail is
+  gone" with "its replacement is still here", because asserting an absence on its own passes just as
+  happily if the whole page is gone. It also sweeps the stylesheet — orphaned CSS for a deleted component
+  is how a removed element comes back, since the next person finds `.progressrail` styled and assumes it
+  is live. Verified by mutation in both directions: breaking the Verify replacement fails the Verify case,
+  re-adding the CSS rule fails the deletion case. One assertion in `reviewQueueNaming.test.jsx` pinned the
+  rail's renamed step and was dropped rather than loosened — the line no longer exists, so any weakened
+  form would have passed vacuously. Frontend, not RULE_PATHS.
 
 ## Feature: Estate coverage — three denominators and discovery at scale · #4597
 
@@ -1272,9 +1291,8 @@ invariant the redaction tests pin).
   wired (#291), dead accordion state retired (#299), auto-fixes folded in as green rows (#300); the
   AI-Work-Inbox → Review-queue rename and a grounded per-finding time estimate remain (#300's "~5 sec"
   is the auto-fix lane's fixed effort, not a measured estimate). *(Both since closed — the measured
-  estimate by `reviewerTime.js`, the rename across all five user-visible surfaces by the entry below;
-  what is still open on R4 is the ProgressRail, which the spec's item 1 says to drop and which now
-  coexists with the workflow tablist #366 put inside RemediationInbox.)* **R5** closed — Monitor tab reads the
+  estimate by `reviewerTime.js`, the rename across all five user-visible surfaces by the entry below,
+  and item 1's ProgressRail dropped by the entry after it — so **R4 is closed**.)* **R5** closed — Monitor tab reads the
   real `/source-status` (#278). **R8** closed for four of the 12 cells — xlsx 1.4.1/1.4.11/4.1.2 and pdf
   2.4.3 declared (#289); eight remain. **R10** partly met — a named declare-gate proves those four
   detectors emit (#288); the general fixture-verification harness for understated cells is still open.
