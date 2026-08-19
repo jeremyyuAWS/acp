@@ -1505,6 +1505,20 @@ invariant the redaction tests pin).
   bigger, aggregate surface). Registered the `/data` route BEFORE the greedy `{filename:path}` catch-all
   so Starlette's first-match doesn't shadow it — the same catch-all already shadows the pre-existing
   `/exists` route, left as-is since the SPA tolerates it. Backend + frontend tests; not a RULE_PATHS change.
+- **View a whole scan's traces INSIDE AccessOps — the session view (#459, follow-up to #454)**. The
+  whole-scan *session* deferred by #454: the aggregate that hung Langfuse's own UI on large scans (the
+  reason for the v2→v3 move). `lf.fetch_session` fetches the scan's Langfuse session with ACP's own keys
+  and returns a PHI-safe per-file list + a scan-level rollup (documents / assessed / conformant / avg score
+  / with-failures / with-PII) — trace name (operator email) dropped, worst-scoring documents first,
+  unassessed last, the list capped with an honest `total`/`truncated` while the rollup still counts every
+  file. `GET /scans/{sid}/trace/session/data` serves it; a `SessionPanel` drawer renders the rollup + one
+  row per document, and clicking a row drills into that file's `TracePanel`. The session "📊 View traces"
+  chips (Remediate, Assess runner, Overview, Queue) now open this in-app and were renamed off "…in
+  Langfuse". **Also fixed a #454 shipping defect the live data exposed:** `TracePanel` rendered the wrong
+  result shape — `failing_criteria` is a dict `{SC: count}` (not an array) and `pii` is `{flagged,
+  types:[…]}` (not `{present, types:{}}`), so neither had shown on real traces; corrected the panel against
+  the actual `file_assessment_result` output and fixed the SIM/fixtures that had reinforced the wrong shape.
+  Backend + frontend tests; not a RULE_PATHS change.
 
 ## Open items (backlog candidates)
 
@@ -1906,3 +1920,10 @@ invariant the redaction tests pin).
   {file}/data` route) rendered by a `TracePanel` drawer, not a public deep-link. Backend + frontend, CI green
   on `main`; not a RULE_PATHS change. **Sync marker still NOT advanced** (`fad0dfbe`, same convention as the
   prior entries): the large delta since it remains other sessions' undocumented feature work.
+- **2026-08-19 (in-app session view)** — Added #459 as one Task under Observability — AI tracing and cost
+  (Langfuse): the whole-scan session view #454 deferred (`lf.fetch_session` + `/trace/session/data` +
+  `SessionPanel`, with per-file drill-in), plus the #454 result-shape fix the live data exposed (failing
+  criteria is a dict, PII is `{flagged, types:[…]}` — the panel and its fixtures had the wrong shape).
+  Backend + frontend, CI green on `main`; not a RULE_PATHS change. **Sync marker still NOT advanced**
+  (`fad0dfbe`, same convention as the prior entries): the large delta since it remains other sessions'
+  undocumented feature work.
