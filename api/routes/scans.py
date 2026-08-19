@@ -811,7 +811,7 @@ def report_pdf(sid: str, request: Request):
             "hash": res["run"].get("rubric_hash") or rb.hash}
     pdf = build_report(res["run"], res["files"], meta, decisions=core.store.get_decisions(sid),
                        evidence=core.store.get_remediation_evidence(sid),
-                       facts=core.store.get_certification_facts(sid))
+                       facts=core.store.get_certification_facts(sid, apply_document_selection=True))
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="acp-report-{sid}.pdf"'})
 

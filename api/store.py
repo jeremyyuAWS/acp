@@ -479,7 +479,7 @@ from assessment_policy import (  # noqa: F401,E402  (re-export)
     _LEGACY_NOT_EVALUATED, _SUPERSEDING_OUTCOMES, _SC_LEVEL, _ALL_FORMATS,
     active_scope, scope_problem, parse_scope_setting,
     in_scope, in_target, parse_target, config_target,
-    formats_in_scope, file_in_scope, scope_as_json, scope_from_json, criteria_for_format,
+    formats_in_scope, file_in_scope, selected_documents, scope_as_json, scope_from_json, criteria_for_format,
     filter_issues_to_target, filter_issues_to_scope, _rule_outcome, _certify, _registry_for,
     _split_sc_counts, _file_format, _extract_sc, _pages_csv,
 )
@@ -2430,7 +2430,7 @@ class Store:
         funnel = estate_inventory.funnel_facts(sc.get("inventory"))
         return {"estate": funnel} if funnel else {}
 
-    def get_certification_facts(self, scan_id: str) -> dict:
+    def get_certification_facts(self, scan_id: str, apply_document_selection: bool = False) -> dict:
         """Facts backing the certification-decision block, the richer file inventory, and the
         scope-of-assertion statement (backlog R2 / R6 / R-A). Every number is COUNTED from
         stored rows — none is estimated, and none is a percentage of an invented denominator.
@@ -2502,6 +2502,17 @@ class Store:
             if outcome == "FAIL":
                 f["failing"] += 1
                 f["findings"] += t.get("finding_count") or 0
+
+        # Per-document carry-through (PRD §6.1): when the caller opts in, narrow the facts to the
+        # operator's Remediate-time document selection (triage='inscope') — the per-document twin of
+        # scan_scope, so the Assess status card and the conformance report inherit it just as they
+        # inherit the criterion×format scope. Read-time (the marks are made after the traces), and
+        # gated: without opt-in, or with no selection made, per_file — and every count below — is
+        # untouched, so file cards and the coverage matrix keep seeing the whole estate.
+        if apply_document_selection:
+            selection = selected_documents(self.get_decisions(scan_id))
+            if selection is not None:
+                per_file = {fn: v for fn, v in per_file.items() if fn in selection}
 
         docs = []
         for f in sorted(per_file.values(), key=lambda x: x["file"]):
