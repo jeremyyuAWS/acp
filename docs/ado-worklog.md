@@ -999,6 +999,22 @@ existing data and the existing decision path; nothing adds a second write path.
   persisted "Not applicable" state: the backend folds `not_applicable` into
   `not_automatically_assessable` for v1 and the HITL vocabulary is approved/rejected/skipped only, so a
   frontend-only N/A would not survive a refresh (its own backend change). Frontend, not RULE_PATHS.
+- **First-class "Not applicable" (out-of-scope) decision — R4 PR5** (#422; `docs/remediate-redesign-spec.md`).
+  Landed the persisted N/A state PR4 deferred, backend + frontend. The design decision was to REUSE the
+  existing per-finding `resolution` mechanism (how a `decorative` / essential-logo exception already
+  resolves a finding), not a new HITL status — a new status would strand every file that used it, since
+  `mark_file_compliant_if_reviewed` requires every row `approved`. So N/A resolves as status `approved` +
+  resolution `out_of_scope`: it writes no value, persists on the row (survives a refresh, keeps the finding
+  out of the queue) and is recorded verbatim in the audit log. Lifted the v1 folding in
+  `accessibility_status.py` — `not_applicable` is now a real reported bucket, sourced from the rows'
+  resolution and pulled out of BOTH `needs_review` and `in_scope`, so the five-bucket identity still holds
+  and (the deliberate reporting choice) an N/A finding LEAVES the coverage denominator, so the reported %
+  rises, matching how the WCAG matrix already excludes N/A cells. Frontend: a "Not applicable" action in the
+  Remediate inbox and on `EvidenceCard`; the model treats it as resolved → Done; `Remediate.act` now
+  forwards the resolution (PR3/PR4 had been dropping it). Not RULE_PATHS — all four backend checks pass, no
+  Matrix-Note. Backend 3093 passed (+ new N/A-bucket identity and `out_of_scope` route tests); frontend
+  1842 (+ inbox action, model resolved→Done, act-forwards-resolution). Shipped after a rerun cleared a
+  tesseract apt-mirror infra flake, not a test regression.
 - **Zoom control + grounded fix callouts in the Document preview** (#416). Brought `RemediationPreview`
   closer to the mockup's preview pane, adding only what real finding data can back (ADR 0016): a
   UI-only zoom (−/100%/+, 50–200% in 25% steps, purely presentational — fetches nothing), and a small
@@ -1710,3 +1726,12 @@ invariant the redaction tests pin).
   mockup) — it supersedes #408's two-column fold; a later sync records it once merged. **Sync marker
   deliberately NOT advanced** (same convention as the prior entries): the surrounding delta stays for the
   other sessions to characterise.
+- **2026-08-19 (R4 PR5 — Not applicable)** — Added #422 to **Remediate review queue (#4598)**: the
+  first-class out-of-scope decision PR4 deferred, reusing the per-finding `resolution` mechanism (not a new
+  HITL status, which would have stranded certification) and lifting the v1 `not_applicable` folding into a
+  real reported bucket that LEAVES the coverage denominator — so the reported % rises, matching the WCAG
+  matrix's N/A treatment. Backend + frontend, not RULE_PATHS (all four backend checks green). For the
+  record: **#418 has since merged** (`42e125e4`, "three-pane guided work queue — mockup A"), which
+  SUPERSEDED #408's two-column fold with a dedicated three-pane layout — the in-flight item the prior entry
+  flagged, now landed. PR5's N/A decision is layout-independent and rides on either. **Sync marker
+  deliberately NOT advanced** (same convention).
