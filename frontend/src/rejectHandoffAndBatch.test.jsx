@@ -52,13 +52,13 @@ describe('W2 — rejected fix appears in the inbox as manual-handling work', () 
     expect(detailHeading()).toBe('Image needs alt text')
     expect(container.textContent).toContain('Needs manual handling')   // eyebrow + tab
     expect(container.textContent).toContain('Fix this in Word')          // guided manual steps (docx → Word)
-    expect(btnByText('Mark as assigned')).toBeTruthy()
+    expect(btnByText('Defer')).toBeTruthy()                              // set aside for later (state: assigned)
     expect(btnByText('Approve fix')).toBeFalsy()
   })
   it('acting on it clears it via onDecide(assigned)', async () => {
     const calls = []
     await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
-    await click(btnByText('Mark as assigned'))
+    await click(btnByText('Defer'))
     expect(calls).toEqual([[9, 'assigned']])
   })
 })
