@@ -54,6 +54,36 @@ def smb_config() -> dict:
     }
 
 
+def describe_smb_readiness(cfg: dict | None = None) -> dict:
+    """A preflight readiness report for the SMB source — CONFIG ONLY, no network touched.
+
+    Answers "can an SMB scan even be attempted?" before one is started, so a health check or the
+    Content Sources UI fails with a clear, specific reason rather than starting a scan that returns an
+    empty estate. `ready` is True when a share list AND some credential source are configured — either
+    a Key Vault secret name (the VNet/Managed-Identity path, preferred) or a username+password
+    (dev/test). The actual reachability of the shares is a separate live check the transport does; this
+    only catches the misconfiguration that is cheap to catch.
+    """
+    cfg = cfg or smb_config()
+    shares = cfg.get("shares") or []
+    has_kv = bool(cfg.get("credential_kv"))
+    has_userpass = bool(cfg.get("username") and cfg.get("password"))
+    missing: list[str] = []
+    if not shares:
+        missing.append("shares (ACP_SMB_SHARES)")
+    if not (has_kv or has_userpass):
+        missing.append("credential (ACP_SMB_CREDENTIAL_KV, or ACP_SMB_USERNAME + ACP_SMB_PASSWORD)")
+    return {
+        "ready": not missing,
+        "shares": shares,
+        "share_count": len(shares),
+        # Key Vault wins when both are set: the MI path is the one a real deployment uses, and a
+        # stray dev password in the env should not silently become the credential of record.
+        "credential_source": "key_vault" if has_kv else "userpass" if has_userpass else None,
+        "missing": missing,
+    }
+
+
 def _mime_of(name: str) -> str | None:
     """Best-effort MIME from the file name — an SMB directory listing carries no content type, so the
     extension is all we have, exactly as the `local` adapter does."""
