@@ -1,0 +1,129 @@
+# Unattended staging deploy — the complement to deploy.yml.
+#
+# deploy.yml ships PRODUCTION: auto-TRIGGERED on every green main, but human-APPROVED at the
+# `production` GitHub Environment gate, so the live app only moves when someone clicks approve.
+# That gate is why production's CalVer can sit hours behind main (an approval waiting is the
+# common case, not a bug).
+#
+# This file is the other half: it ships the SAME green commit to a STAGING container app with NO
+# approval gate, so `main`'s tip is always live SOMEWHERE within minutes of merging — which is
+# what "the version updates with every push" actually asks for. Production stays gated; staging
+# is the fast, unattended, throwaway environment.
+#
+# It reuses deploy/public/redeploy.sh unchanged — the same eight guards (pin, CI gate, isolated
+# clone, module count, health-before, stamped-image refusal). The ONLY differences from prod are
+# the four this file sets: no reviewer gate, staging app/worker names, staging FQDN, and the
+# dormancy guard below.
+#
+# ── DORMANT UNTIL PROVISIONED ────────────────────────────────────────────────────────────────
+# The job is gated on `vars.STAGING_FQDN != ''`, so merging this file changes nothing until the
+# staging target exists. It "turns on" the moment you set that repo variable. Before it can
+# succeed, three things must exist OUTSIDE this repo (redeploy.sh updates apps, it does not
+# create them, and it health-checks BOTH app and worker as `Running` before it will deploy):
+#
+#   1. Two Azure Container Apps — `acp-app-staging` and `acp-worker-staging` — in the
+#      `mdk-accessibility` resource group, provisioned with their OWN config/secrets and their
+#      OWN DATABASE_URL. Give staging a SEPARATE database: they share this registry image, and a
+#      staging app pointed at the production DB would write to production data. `deploy.sh` (the
+#      first-deploy script) stands these up; redeploy.sh only swaps their image afterwards.
+#   2. A `staging` GitHub Environment with NO required reviewers (that is what makes it
+#      unattended). GitHub creates it on first deployment if absent — leave its protection rules
+#      empty and it stays unattended by construction.
+#   3. Repo variable `STAGING_FQDN` = the staging app hostname (no scheme). Setting it is also
+#      the switch that un-dormants this workflow. Optional overrides: STAGING_RG / STAGING_APP /
+#      STAGING_WORKER if you provision under different names.
+#
+# The Azure secrets (AZURE_CLIENT_ID / TENANT_ID / SUBSCRIPTION_ID) and the OIDC federation are
+# shared with prod; the service principal's Contributor on `mdk-accessibility` + AcrPush already
+# covers the staging apps in that same group. See docs/pipeline.md → "Chain B — staging".
+name: deploy-staging
+
+on:
+  # Same trigger as prod, and for the same reason: workflow_run fires AFTER CI concludes on main,
+  # so redeploy.sh's CI gate always sees a finished run rather than racing the merge's own CI.
+  # `branches: [main]` keeps PR-branch CI completions from triggering it.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pin:
+        description: "Commit to deploy to staging (default: current main)"
+        required: false
+        type: string
+
+concurrency:
+  # Same hazard as prod: two staging deploys at once race the CalVer ordinal and could split
+  # acp-app-staging and acp-worker-staging onto different images. Queue rather than cancel — a
+  # half-finished deploy is worse than a queued one, and rapid merges still converge on the tip.
+  group: deploy-staging
+  cancel-in-progress: false
+
+permissions:
+  id-token: write      # OIDC federation to Azure — no stored client secret
+  contents: read
+  actions: read        # redeploy.sh's CI gate reads the pinned commit's CI conclusion
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Fire only on a manual dispatch or a GREEN triggering CI run — AND only once staging has been
+    # provisioned (STAGING_FQDN set). Until then the job is skipped, so this file is inert on merge
+    # rather than a standing red run against a target that does not exist yet.
+    if: >-
+      (github.event_name == 'workflow_dispatch' ||
+       github.event.workflow_run.conclusion == 'success')
+      && vars.STAGING_FQDN != ''
+    # No required reviewers on this environment — that is the whole point. Deploys unattended the
+    # moment CI is green. Production's gate is untouched; it lives on the `production` environment.
+    environment:
+      name: staging
+      url: https://${{ vars.STAGING_FQDN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Pin the EXACT commit CI greenlit. Staging has no approval wait, so there is no
+          # drift window to reason about — but pinning head_sha still beats a moving `main` ref:
+          # if a newer commit merged in the seconds since, deploying main's tip would hand
+          # redeploy.sh a sha whose own CI may still be queued, and its gate would (correctly)
+          # refuse it. head_sha is always the one CI just passed. A manual dispatch pins its input.
+          ref: ${{ github.event.workflow_run.head_sha || inputs.pin || github.sha }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to staging
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACP_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          # The greenlit sha on an auto run; the dispatch input on a manual one; redeploy.sh
+          # resolves an empty value to origin/main.
+          ACP_PIN: ${{ github.event.workflow_run.head_sha || inputs.pin }}
+          # Staging targets. redeploy.sh reads all four from the environment (ACP_RG/ACP_APP/
+          # ACP_WORKER, ACR left at the shared default). Overridable via repo vars if provisioned
+          # under other names.
+          ACP_RG: ${{ vars.STAGING_RG || 'mdk-accessibility' }}
+          ACP_APP: ${{ vars.STAGING_APP || 'acp-app-staging' }}
+          ACP_WORKER: ${{ vars.STAGING_WORKER || 'acp-worker-staging' }}
+        run: bash deploy/public/redeploy.sh
+
+      - name: Confirm staging reports the new build
+        run: |
+          set -euo pipefail
+          FQDN="${{ vars.STAGING_FQDN }}"
+          H="$(curl -fsS --max-time 20 "https://$FQDN/healthz")"
+          R="$(curl -fsS --max-time 20 "https://$FQDN/readyz")"
+          echo "healthz: $H"
+          echo "readyz:  $R"
+          case "$H" in *'"version_stamped":true'*) ;; *) echo "::error::staging is not version-stamped"; exit 1 ;; esac
+          case "$R" in *'"ready":true'*)           ;; *) echo "::error::staging is not ready";          exit 1 ;; esac
