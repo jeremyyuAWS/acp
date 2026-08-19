@@ -174,6 +174,24 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   aggregate readers (scan_status, report.pdf facts) opt into — `file_status`, the coverage matrix and
   every other caller see the whole estate, so per-file cards are unaffected. Gated so an unscoped run, or
   opting in with no marks, is byte-for-byte identity. `Matrix-Note: none`.
+- **Per-user scan-scope override, end to end (ADR 0035)** — #424/#429/#445. #424 wired the stage-1
+  override into `active_scope` as a **widen-only union** (owner default ∪ per-user override, per format),
+  threaded through the two scan-listing chokepoints (`scanner._scope_for_listing` /
+  `handlers._scan_discover`) and frozen once into `scan_runs.scope`: a user may assess **more** than the
+  owner mandated, never less. #429 added the non-admin `GET/PUT/DELETE /settings/mine` route, keyed to the
+  signed-in email so no one can write another user's scope (malformed scope → 422 and NOT stored, matching
+  the admin PUT; "" / {} store as "no restriction"). #445 shipped the Settings-UI surface: `ScopeGrid.jsx`
+  extracted from `ScanScope.jsx` as a shared presentational grid with a `lockedHas(sc,f)` prop (the
+  refactor is behaviour-preserving — the existing 51 ScanScope/assess tests stay green), and `MyScanScope.jsx`
+  renders the owner-mandated pairs **locked-on** (making widen-only visible), lets the user add pairs, and
+  saves via PUT (additions only) or DELETE (fall back to org default).
+- **Choose the folders each source scans — and actually apply it** — #441/#451. #441 put a "Scans:" row on
+  each connected-source card showing "Entire Drive" or the chosen folders as named chips with Edit; the
+  selection is a property of the **connection** (`GET/PUT /sources/locations`), not of one scan, so "New
+  scan" needs no picker. Previously the only folder picker lived on Discover, reachable *after* a scan had
+  already read the whole estate. #451 added child-folder **exclusions** (an unchecked child under a selected
+  parent becomes an explicit exclusion, pruned at the **walk** not post-filtered) and fixed two bugs that
+  made the whole feature cosmetic — the saved folder scope was not being applied at scan time.
 
 ## Feature: v2 frontend redesign · #4602
 
@@ -478,6 +496,13 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   `documents`, since it is the only table carrying `department`.
 - Added tenant-scoped estate aggregates for the control plane (#160).
 - Built an estate view for a single tenant, and a Settings tab to read it (#165).
+- **Ask which account at sign-in, for Google and Microsoft** (#453). A browser with one signed-in Google
+  session went straight through on that account — GIS was called as `requestAccessToken()` with no prompt,
+  MSAL as `loginPopup({ scopes })` — both silently reusing the single existing session. That is right for a
+  token refresh and wrong for a **sign-in**, the one moment the user chooses who to be; it also made the
+  ordinary setup impossible without a second Chrome profile (a personal Google Drive alongside a work
+  Microsoft account). The two data connections were always independent (Drive rides `X-Drive-Token`,
+  OneDrive/SharePoint rides `X-SP-Token`), so only the missing chooser was in the way — now added for both.
 
 ## Feature: Local model benchmarking · #4609
 
@@ -609,6 +634,17 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   CPU, plus region/GPU-tier tables with real sizes (`NC8AS_T4` = 8 vCPU + 1× **T4 16 GB** running
   `qwen2.5vl:7b`; RunPod serverless; the in-process CPU floor). Honest caveats stated on-slide: no Asia
   region is live today (single env + Langfuse eastus2); the RunPod GPU class is configurable.
+- **Updated the deck's Observability slide to say Langfuse v3 is *live*** (#457) — the follow-up the
+  architecture-deck entry above flagged. #438 had framed v3/ClickHouse as the *committed migration*; the
+  cutover then shipped (#449/#447), so the slide was stale on merge. Corrected to what is deployed: v3 is
+  live on a dedicated Azure VM (`acp-langfuse-v3`, `Standard_D4s_v3` + 128 GB Premium disk, eastus2,
+  ClickHouse + Redis + MinIO + Postgres via docker-compose behind Caddy/TLS); the trigger (a 44-document
+  scan hung the v2 Session view); why a VM rather than Container Apps (ClickHouse needs real local disk,
+  which ACA's Azure Files/SMB mounts fight); and the host-only cutover (LANGFUSE_HOST repoint + keys
+  re-seeded, no app change, v2 deleted). The weaknesses slide's "v2 is the ceiling" line was replaced by
+  the real new tradeoff — v3 is a self-managed VM to patch/back-up/TLS, provisioned by a runbook not the
+  pipeline — and both topology ASCIIs + the Azure inventory now read `acp-langfuse-v3` (VM), not the v2
+  Container App. Docs-only, not RULE_PATHS.
 
 ## Feature: docx Core-17 criterion coverage · #4610
 
@@ -787,6 +823,16 @@ reach production, safely.
   containerapp env workload-profile list-supported` what that region offers, and passes a real GPU entry
   as the type; a region with no GPU SKU now says exactly that and prints what it does offer.
   `Matrix-Note: none` — deploy tooling only.
+- **Made the GPU-vision preflight aware of the ollama-on-GPU path, and probe the model** (#450). `check_gpu`
+  was RunPod-serverless-only (ADR 0022 era), but since #405 the GPU runs as `ACP_VISION_PROVIDER=ollama`
+  pointed at the Azure GPU host — so the old check had two pilot-visible gaps. (1) It reported today's
+  **correct** production config as broken ("the GPU provider is NOT what a scan will use"); now ollama
+  pointing at a remote GPU host (zone ≠ local) reads PASS, and the local CPU floor FAILs only when RunPod
+  was configured and we fell back to it (the ADR 0022 trap). (2) On `--live` it probed only RunPod health,
+  leaving the ollama/GPU path with no reachability + vision-model probe — exactly the #302 failure, where a
+  reachable endpoint's baked vision model was shadowed by the container VOLUME and produced nothing for 45
+  days with no error. A new `_probe_ollama_vision` reuses the runtime's own `ai.vision_unavailable_reason()`,
+  so preflight and a real scan agree. `Matrix-Note: none` — deploy/preflight tooling only.
 
 ## Feature: Release Center · #4599
 
@@ -1435,6 +1481,13 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   `startScan`/`startScanQueued` `pii` default arg `true`→`false` to match the real behaviour (PII scanning
   is opt-in and off by default at every layer). Not RULE_PATHS; backend suite green (the lone local
   failure was an env-only Ollama vision test, green on CI), frontend 2055.
+- **Defaulted the baseline scan to skip nothing** (#443). The Scan-behaviour group had four toggles with
+  `incremental` alone starting **on** — and it is the one toggle whose effect is invisible: an incremental
+  scan that skips a file still reports a score for it, carried from the previous run, with nothing on screen
+  distinguishing "scored now" from "scored last time". The group now starts uniformly off, so the scan a
+  user gets without touching anything is the plainest one (nothing skipped, nothing inferred) and the
+  toggles read as additions to a known baseline. Incremental remains available for fast re-scans once a
+  baseline exists.
 
 ## Feature: Observability — AI tracing and cost (Langfuse)
 
@@ -1943,3 +1996,16 @@ invariant the redaction tests pin).
   #454 shape fix rendering (failing-criteria chips, PII categories), no console errors. Verified from a
   throwaway `origin/main` worktree because `preview_start` serves the stale shared checkout. Testing only —
   **sync marker unchanged** (`fad0dfbe`, same convention).
+- **2026-08-19 (scan scope, sources, auth, GPU preflight + deck-v3-live follow-up)** — Added the day's
+  remaining non-Track-A merges. To **Operator scan scope (#4601)**: the per-user scan-scope override end to
+  end — #424 (widen-only resolution wiring), #429 (`/settings/mine` route), #445 (the Settings-UI editor,
+  ADR 0035) — and folder-level source scoping, #441 (choose folders per source card) + #451 (child
+  exclusions + actually applying the saved scope). To **Discover & Assess lifecycle rules (#4618)**: #443
+  (default Incremental **off** so the baseline scan skips nothing). To **Multi-tenancy and the control plane
+  (#4608)**: #453 (a Google/Microsoft account chooser at sign-in). To **Continuous deployment (#4614)**:
+  #450 (the GPU-vision preflight now recognises the ollama-on-GPU path and probes the model — closing the
+  #302 blind spot). To **Documentation**: #457, the deck Observability-slide follow-up the architecture-docs
+  entry flagged (v3 is now stated as **live** on the Azure VM). **Deliberately left for the owning session:**
+  the Track-A scan-progress/transparency stream (#452, #455, #458, #460, #461, #463) — a cohesive sequence of
+  slices being logged by that session. **Sync marker deliberately NOT advanced** (same convention as the
+  prior entries).
