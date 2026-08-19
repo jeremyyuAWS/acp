@@ -65,8 +65,12 @@ export default function GroundedBeforeAfter({ finding }) {
           <Swatch label="After" color={ev.fgAfter} bg={ev.bg} ratio={ev.afterRatio} />
         </div>
         <p className="muted" style={{ fontSize: 11.5, margin: '8px 0 0' }}>
-          The same words, shown at the old and new text color on the document’s background.
-          {ev.bg == null && ' Contrast ratio isn’t shown — the finding didn’t record the background color.'}
+          {/* Sample text, NOT the document's real run: a docx/pdf contrast finding carries the colour
+              VALUES, not the affected text, so we must not imply this is the document's own words. */}
+          Sample text at the old and new text color.
+          {ev.bg != null
+            ? ' Shown on the document’s real background.'
+            : ' Contrast ratio isn’t shown — the finding didn’t record the background color.'}
         </p>
       </div>
     )
