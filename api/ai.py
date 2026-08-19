@@ -627,8 +627,13 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
         if getattr(fb, "name", "") == "ollama":
             res = fb.generate(prompt, image_bytes, model=None, timeout=OLLAMA_VISION_TIMEOUT)
     mdl = res.get("model") or model or OLLAMA_VISION_MODEL
+    # Token usage the provider measured (Ollama's prompt_eval_count/eval_count, or a cloud
+    # adapter's usage) rides onto every trace below so the Langfuse generation carries real
+    # `usage` (N1) — counts only, never any prompt/completion text (docs/audit-langfuse-phi.md).
     _tr = dict(model=mdl, scan_id=scan_id, file=file, provider=res.get("provider", "ollama"),
-               zone=res.get("zone"), cost_usd=res.get("cost_usd", 0.0))
+               zone=res.get("zone"), cost_usd=res.get("cost_usd", 0.0),
+               prompt_tokens=res.get("prompt_tokens"),
+               completion_tokens=res.get("completion_tokens"))
     raw = (res.get("text") or "").strip() if res.get("ok") else ""
     if not res.get("ok") or not raw:
         # The adapter already logged the distinguishing detail and named the mode; carry its
@@ -912,7 +917,10 @@ def _escalate_vision(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     _trace_ai("vision", prompt, res.get("text"), _t0, ok=bool(res.get("ok")), model=mdl,
               provider=res.get("provider") or "cloud", zone=res.get("zone"),
               cost_usd=res.get("cost_usd", 0.0), scan_id=scan_id, file=file,
-              reason=res.get("reason"))
+              reason=res.get("reason"),
+              # Real token usage from the cloud adapter → the Langfuse generation's `usage` (N1).
+              prompt_tokens=res.get("prompt_tokens"),
+              completion_tokens=res.get("completion_tokens"))
     if not res.get("ok"):
         return None
     alt = _clean_alt(res.get("text") or "")

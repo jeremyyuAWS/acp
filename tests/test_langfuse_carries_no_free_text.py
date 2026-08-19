@@ -247,6 +247,51 @@ def test_remediation_span_carries_counts_and_no_text(captured):
     assert "intake.docx" not in blob and "added alt text" not in blob
 
 
+def test_cloud_vision_generation_carries_real_usage_from_the_adapter(captured, monkeypatch):
+    """N1 (Langfuse audit new-feature bucket). A cloud vision escalation must reach Langfuse as a
+    GENERATION carrying the REAL token usage the provider measured — not the zeros/None the cloud
+    path emitted before this change, when the counts were computed for cost and then dropped on the
+    trace side. Driven end-to-end through ai._escalate_vision so the wiring, not just lf, is proven.
+
+    Still numbers only: the prompt and the model's answer both carry a patient identifier here, and
+    neither may appear in what is sent (docs/audit-langfuse-phi.md)."""
+    import types
+    sys.path.insert(0, str(ACP / "api"))
+    import ai
+    import providers
+
+    prompt = "Describe this chart. Context: " + SECRET
+    answer = "A bar chart of " + SECRET
+
+    class _FakeCloud:
+        name = "anthropic"
+        zone = "cloud"
+
+        def generate(self, prompt, image_bytes, *, model=None, timeout=120.0):
+            # The shape a real cloud adapter now returns: cost AND token usage measured together.
+            return {"text": answer, "model": "claude-opus-4-8", "provider": "anthropic",
+                    "zone": "cloud", "latency_ms": 900, "ok": True, "cost_usd": 0.0123,
+                    "reason": providers.REASON_OK,
+                    "prompt_tokens": 312, "completion_tokens": 48}
+
+    monkeypatch.setattr(providers, "cloud_vision_provider", lambda: _FakeCloud())
+
+    out = ai._escalate_vision(prompt, b"IMGBYTES", scan_id="scan-1", file="intake.docx")
+    assert out is not None and out["provider"] == "anthropic"
+
+    blob = captured.everything()
+    assert SECRET not in blob, "prompt/completion text reached Langfuse via the cloud generation"
+    assert "John Smith" not in blob and "0114233" not in blob
+
+    fields = captured.fields()
+    assert any(p.get("model") == "claude-opus-4-8" for p in fields), fields
+    # The whole point of N1: the generation's usage carries the adapter's REAL counts, not 0/None.
+    assert any(p.get("input") == 312 and p.get("output") == 48 for p in fields), (
+        "cloud-vision token usage did not reach the Langfuse generation (usage.input/output)")
+    assert any(p.get("total_cost") == 0.0123 for p in fields)
+    assert any(p.get("provider") == "anthropic" and p.get("zone") == "cloud" for p in fields)
+
+
 def test_nothing_is_sent_at_all_when_tracing_is_disabled(monkeypatch):
     """The other half of the guarantee: absent credentials means no tracing, not partial."""
     monkeypatch.setattr(lf, "_lf", lambda: None)
