@@ -33,15 +33,22 @@ INTERNAL_FQDN = "acp-ollama.internal.greenwater-4bf2c997.eastus2.azurecontainera
 EXTERNAL_FQDN = "acp-ollama.greenwater-4bf2c997.eastus2.azurecontainerapps.io"
 
 
-def _stub_az(tmp_path, log: Path, *, fqdn: str = INTERNAL_FQDN,
-             generates: bool = True, pulls: bool = True) -> Path:
-    """An `az` that answers every probe gpu_up.sh makes, and can fail the two that gate the switch.
+GPU_SKUS = ("Consumption", "D4", "Consumption-GPU-NC8as-T4", "Consumption-GPU-NC24-A100")
+NO_GPU_SKUS = ("Consumption", "D4", "D8", "E16")
 
-    `generates` controls what the verification exec returns; `pulls` controls the model pull.
-    Everything else succeeds, so a test that fails tells you about the gate rather than the setup.
+
+def _stub_az(tmp_path, log: Path, *, fqdn: str = INTERNAL_FQDN,
+             generates: bool = True, pulls: bool = True,
+             supported: tuple = GPU_SKUS, profile_on_env: str = "") -> Path:
+    """An `az` that answers every probe gpu_up.sh makes, and can fail the ones that gate the switch.
+
+    `supported` is what the REGION offers — the list the script must discover its SKU from rather
+    than hard-coding one. `profile_on_env` is what the environment already has (empty = none, so
+    the discovery path runs). `generates` and `pulls` control the two switch-over gates.
     """
     binn = tmp_path / "bin"
     binn.mkdir(exist_ok=True)
+    supported_lines = " ".join(f'"{s}"' for s in supported)
     az = binn / "az"
     az.write_text(f"""#!/usr/bin/env bash
 printf '%s\\n' "$*" >> {log}
@@ -51,8 +58,14 @@ if [ "$1" = account ]; then echo 00000000-0000-0000-0000-000000000000; exit 0; f
 if [ "$1" = containerapp ]; then
   case "$2 $3" in
     "env workload-profile")
-      # already present, so the add branch is not the thing under test here
-      case "$4" in list) echo "NC8as-T4"; exit 0 ;; esac
+      case "$4" in
+        list)           printf '%s' "{profile_on_env}"; exit 0 ;;   # what the env already has
+        list-supported) printf '%s\\n' {supported_lines}; exit 0 ;; # what the REGION offers
+        add)            exit 0 ;;
+      esac
+      exit 0 ;;
+    "env show")
+      case "$*" in *location*) echo "eastus2"; exit 0 ;; esac
       exit 0 ;;
     "exec ") : ;;
   esac
@@ -83,7 +96,7 @@ def _run(tmp_path, binn: Path, **env_extra) -> subprocess.CompletedProcess:
     env = dict(os.environ, PATH=f"{binn}:{os.environ['PATH']}")
     for v in ("ACP_RG", "ACP_APP", "ACP_WORKER", "ACP_GPU_APP", "ACP_ACA_ENV", "ACP_SUBSCRIPTION",
               "ACP_GPU_ACTIVATE", "ACP_GPU_DRY_RUN", "ACP_GPU_RETIRE_RUNPOD",
-              "ACP_GPU_PROFILE", "ACP_GPU_VISION_MODEL"):
+              "ACP_GPU_PROFILE", "ACP_GPU_PROFILE_TYPE", "ACP_GPU_VISION_MODEL"):
         env.pop(v, None)
     env.update(env_extra)
     return subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True,
@@ -193,3 +206,78 @@ def test_retiring_runpod_is_refused_while_it_is_still_serving(tmp_path):
     assert r.returncode != 0
     assert not [ln for ln in _lines(log) if "--remove-env-vars" in ln or "secret remove" in ln]
     assert "Switch over first" in r.stderr
+
+
+# ── the SKU is discovered, never guessed ─────────────────────────────────────────────────────
+# The first version of this script passed the same value for --workload-profile-name and
+# --workload-profile-type. They are different fields: the name is a friendly label you choose,
+# the type is an Azure SKU string. It failed in production as
+#
+#     (WorkloadProfileInvalidType) Workload profile type 'NC8AS_T4' is invalid.
+#
+# which says nothing whatsoever about what IS valid. GPU availability varies by region and the
+# SKU strings change, so the fix is not a better hard-coded default — it is asking Azure.
+
+
+@requires_bash
+def test_the_sku_is_discovered_from_the_region_and_passed_as_the_type(tmp_path):
+    log = tmp_path / "calls.log"
+    r = _run(tmp_path, _stub_az(tmp_path, log), ACP_GPU_ACTIVATE="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    add = next((ln for ln in _lines(log) if "workload-profile add" in ln), None)
+    assert add, "no workload profile was added"
+    # The regression itself: name and type must not be the same value.
+    assert "--workload-profile-type Consumption-GPU-NC8as-T4" in add, \
+        f"the discovered GPU SKU was not passed as the type: {add}"
+    assert "--workload-profile-name acp-gpu" in add, \
+        f"the friendly name was not passed as the name: {add}"
+    assert "--workload-profile-name Consumption-GPU" not in add, \
+        "the SKU was passed as the NAME — that is the field confusion this test exists for"
+
+
+@requires_bash
+def test_it_asks_azure_which_skus_the_region_offers(tmp_path):
+    """Discovery has to actually happen — a passing add proves nothing if the list was skipped."""
+    log = tmp_path / "calls.log"
+    r = _run(tmp_path, _stub_az(tmp_path, log))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert [ln for ln in _lines(log) if "list-supported" in ln], \
+        "the script never asked which profiles the region supports"
+
+
+@requires_bash
+def test_a_region_with_no_gpu_sku_fails_with_the_list_rather_than_a_type_error(tmp_path):
+    """The failure an operator can act on names what IS available, not what was rejected."""
+    log = tmp_path / "calls.log"
+    r = _run(tmp_path, _stub_az(tmp_path, log, supported=NO_GPU_SKUS), ACP_GPU_ACTIVATE="1")
+    assert r.returncode != 0
+    assert "no GPU workload profile is available" in r.stderr
+    assert "D4" in r.stderr, "the supported list was not shown, so the operator learns nothing"
+    assert not [ln for ln in _lines(log) if "workload-profile add" in ln], \
+        "an add was attempted against a region with no GPU SKU"
+    assert _switches(log) == [], "production was switched despite no GPU being provisioned"
+
+
+@requires_bash
+def test_an_explicit_sku_the_region_does_not_offer_is_refused(tmp_path):
+    # Pinning a SKU is legitimate — pinning one this region cannot serve is the same failure the
+    # hard-coded default produced, so it gets the same treatment.
+    log = tmp_path / "calls.log"
+    r = _run(tmp_path, _stub_az(tmp_path, log),
+             ACP_GPU_PROFILE_TYPE="Consumption-GPU-NC40-H100", ACP_GPU_ACTIVATE="1")
+    assert r.returncode != 0
+    assert "not offered in" in r.stderr
+    assert "Consumption-GPU-NC8as-T4" in r.stderr, "the supported alternatives were not listed"
+    assert not [ln for ln in _lines(log) if "workload-profile add" in ln]
+
+
+@requires_bash
+def test_an_existing_profile_is_reused_without_rediscovery(tmp_path):
+    log = tmp_path / "calls.log"
+    r = _run(tmp_path, _stub_az(tmp_path, log, profile_on_env="acp-gpu"), ACP_GPU_ACTIVATE="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not [ln for ln in _lines(log) if "workload-profile add" in ln], \
+        "an existing profile was re-added"
+    assert not [ln for ln in _lines(log) if "list-supported" in ln], \
+        "the region was queried for a profile that already exists"
