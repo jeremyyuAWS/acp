@@ -576,7 +576,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // Redesign R4: the ONE dominant statement — how many findings need review across how many
   // documents. Derived below from the assembled inbox queue (not the raw human queue) so the
   // headline is the SAME count as the "Needs review" tab and the two can never disagree.
-  useEffect(() => { onHitlCount?.(queue.length) }, [queue.length, onHitlCount])
+  // (The nav badge that mirrors this count is reported below, once reviewCount is derived.)
   // Don't surface remediation numbers until the user has actually started remediating
   // (ran "Remediate all" or acted on a review item) — pre-engagement estimates read as
   // in-progress work and confuse first-time users. Until then the cards show zeros.
@@ -636,6 +636,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const reviewNeeds = inboxQueue.filter((f) => matchesWorkflow(f, 'needs-review', inboxDecisions))
   const reviewCount = reviewNeeds.length
   const reviewDocCount = new Set(reviewNeeds.map((f) => f.file).filter(Boolean)).size
+  // The top-nav badge (App.jsx hitlCount) reports the SAME needs-review count as the hero and the
+  // "Needs review" tab, so all three review-count surfaces agree. Uses reviewCount, not the raw human
+  // queue.length that excluded unconfirmed auto-fixes; keyed on reviewCount so the badge refreshes when
+  // a decision or an auto-fix acknowledgement changes the needs-review population.
+  useEffect(() => { onHitlCount?.(reviewCount) }, [reviewCount, onHitlCount])
   const fixGroups = groupFixesByRule(fixSource)
   const impact = summarizeImpact(fixSource)
   const fixedCount = totalFixes(fixSource)
