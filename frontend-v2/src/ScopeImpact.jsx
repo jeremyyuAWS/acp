@@ -8,7 +8,7 @@ import { scopeImpact, coverageGaps } from './scopeImpact.js'
 // assessment method for a document type they also ticked, so nothing there will ever be scored
 // against it. Presentation only; all math is in scopeImpact.js so it is unit-tested directly.
 
-const STAGE_COLOR = { discovered: '#8a8f98', eligible: '#2f6fed', inscope: '#1f9d6b' }
+const STAGE_COLOR = { discovered: '#8a8f98', eligible: '#2f6fed', inscope: '#1f9d6b', assessed: '#0f766e' }
 const FORMAT_LABEL = { docx: 'Word', pdf: 'PDF', pptx: 'PowerPoint', xlsx: 'Excel' }
 const fmtLabel = (f) => FORMAT_LABEL[f] || f.toUpperCase()
 const setSize = (s) => (s instanceof Set ? s.size : Array.isArray(s) ? s.length : 0)
