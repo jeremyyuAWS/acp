@@ -54,6 +54,15 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(detailHeading()).toBe('Image needs alt text')
   })
 
+  it('a queue row leads with the issue, shows the SC number as a compact pill, and the lane state quiet', async () => {
+    await render({ queue: [{ id: 1, file: 'Clinical-Newsletter-79.docx', title: 'DOCX · Contrast minimum', page: 2, rule_id: '1.4.3', autoApplied: true }], decisions: {} })
+    const row = container.querySelector('.rinbox-row')
+    expect(row.textContent).toContain('Contrast minimum')             // the issue is the dominant text
+    expect(row.textContent).toContain('1.4.3')                        // the compact WCAG pill
+    expect(row.textContent).toContain('Automatic fix')                // the lane state, quiet
+    expect(row.textContent).not.toContain('Review automatic fix')     // the loud repeated pill is gone
+  })
+
   it('acting on a finding calls onDecide and auto-advances to the next unresolved one', async () => {
     const calls = []
     await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })

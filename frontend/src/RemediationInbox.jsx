@@ -75,13 +75,20 @@ function QueueRow({ f, decisions, selected, onSelect, showFile = true }) {
             {subline}
           </span>
         )}
-        {/* The lane's status is the badge below — the full sentence (r.did) is stated once, in the
-            workspace detail, not repeated on every row. */}
+        {/* Compact chips: the WCAG SC number as the one prominent pill, then the remediation state as
+            QUIET text (the lane's colour is already carried by the rail on the left, so the state does
+            not need a loud coloured pill on every row). The full "what ACP did" sentence (r.did) is
+            stated once in the workspace detail, never repeated per row. */}
         <span style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: r.lane.color,
-                         border: `1px solid ${r.lane.color}`, borderRadius: 20, padding: '1px 8px' }}>
-            {r.lane.label}
-          </span>
+          {r.sc && (
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.02em',
+                           background: 'var(--surface-2,#f0eef3)', color: 'var(--ink,#2a2340)',
+                           borderRadius: 5, padding: '1px 6px',
+                           fontFamily: 'var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace)' }}>
+              {r.sc}
+            </span>
+          )}
+          {r.laneShort && <span className="muted" style={{ fontSize: 11 }}>{r.laneShort}</span>}
           {r.effort !== '—' && <span className="muted" style={{ fontSize: 11 }}>{r.effort}</span>}
           {r.severity && <span className={`revcard-sev sev-${String(r.severity).toLowerCase()}`} style={{ fontSize: 10 }}>{r.severity}</span>}
           {r.resolved && <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>✓ resolved</span>}
