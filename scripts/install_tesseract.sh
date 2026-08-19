@@ -100,8 +100,16 @@ do_install() { apt_run "$1" install -y -q "${APT_OPTS[@]}" $PKGS; }
 do_update()  { apt_run "$1" update -q "${APT_OPTS[@]}"; }
 
 # Rung 0 — already there.
-if command -v tesseract >/dev/null 2>&1; then
-  note "tesseract already present: $(command -v tesseract)"
+#
+# PROBE is the binary this asks about, and it is overridable for one specific reason: on CI the
+# workflow installs tesseract BEFORE the suite runs, so by the time tests/test_install_tesseract.py
+# executes, /usr/bin/tesseract exists — and the script's own tests would short-circuit here and
+# silently exercise none of the rungs below. They passed locally (no tesseract in the container)
+# and failed on CI, which is the right way round to find it but only because the tests assert on
+# behaviour rather than on exit status alone.
+PROBE=${ACP_TESSERACT_PROBE:-tesseract}
+if command -v "$PROBE" >/dev/null 2>&1; then
+  note "tesseract already present: $(command -v "$PROBE")"
   exit 0
 fi
 

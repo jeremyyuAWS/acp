@@ -94,10 +94,16 @@ exit 0
 
 
 def _run(tmp_path, binn: Path, **env_extra) -> subprocess.CompletedProcess:
-    # PATH is REPLACED, not prepended, for the stub dir plus the system dirs the script needs
-    # (timeout, mktemp, sleep, grep). A prepend would leave a real `tesseract` from the image
-    # visible on some hosts, and rung 0 would exit before any rung under test ran.
+    # PATH keeps /usr/bin and /bin because the script needs timeout, mktemp, sleep and grep.
+    # That also means a REAL tesseract on PATH is visible to rung 0 — and on CI there always is
+    # one, because the workflow installs it before the suite runs. Shadowing cannot help: an
+    # earlier PATH entry can add a binary, never hide one. So rung 0 is pointed at a name that
+    # cannot exist, and the rung-0 test overrides it back.
+    #
+    # This is the bug CI caught on cecaa9b: without it every case below exited 0 at
+    # "tesseract already present" having exercised nothing, green locally and red on CI.
     env = dict(os.environ, PATH="{}:/usr/bin:/bin".format(binn))
+    env["ACP_TESSERACT_PROBE"] = "acp-tesseract-probe-that-cannot-exist"
     env["ACP_SUDO"] = ""                     # no sudo in the test environment
     env["ACP_APT_BACKOFF"] = "0"             # the real 5s/10s backoff is not worth the wall clock
     env["ACP_APT_CODENAME"] = "noble"        # don't depend on this container's /etc/os-release
@@ -134,9 +140,10 @@ def test_the_fast_path_installs_without_ever_refreshing_the_index(tmp_path):
 
 @requires_bash
 def test_an_already_present_tesseract_costs_nothing(tmp_path):
+    # The one case that WANTS rung 0 to fire, so it puts the probe back to the real name.
     log = tmp_path / "calls.log"
     binn = _stub(tmp_path, log, with_tesseract=True)
-    r = _run(tmp_path, binn)
+    r = _run(tmp_path, binn, ACP_TESSERACT_PROBE="tesseract")
     assert r.returncode == 0, r.stdout + r.stderr
     assert _calls(log) == [], "apt was invoked although tesseract was already installed"
 
