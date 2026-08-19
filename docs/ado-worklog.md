@@ -872,6 +872,25 @@ existing data and the existing decision path; nothing adds a second write path.
   the inbox decisions. An auto fix is already applied and re-scanned, so Approve *acknowledges* it
   (resolve + advance) and never re-applies; the human lanes still route to the HITL `act()` flow. The
   GroupedFixes summary stays for the at-a-glance count — slimming it is a follow-up.
+- **Review-card copilot — re-steer a draft, see the escalation path, honest empty state** (#367). The
+  refine palette (Shorter / More detail / Regenerate, #131) gains four steers — Mention the numbers ·
+  Ignore colours · Professional tone · Plain language — each re-asking the vision model through the
+  existing draft path (`ai._vision_prompt` taught the new keys so the buttons steer rather than no-op).
+  The card surfaces the transparent local→cloud escalation path ("local attempted → no grounded
+  description → escalated to {provider} → grounded") instead of showing the failed local attempt as a
+  dead end, and when authoring is genuinely manual the empty state says *why* and links to Settings →
+  AI Providers rather than a raw "Ollama not running". Rides #356's OpenAI/Anthropic adapters. Frontend.
+- **Backend so the copilot reads real data, not a proxy** (#378). `/ai/suggest` now runs the same
+  acceptance-gated cloud escalation the remediation path already had and forwards the honest provenance —
+  `provider`, `processing_zone`, the numbered `escalation` steps, and measured `cost_usd` — on the vision
+  draft. A non-admin `/ai/status` signal (`cloud_enabled` / `cloud_provider` / `cloud_zone`, from the SAFE
+  provider view, never the key) lets the empty state name the fallback without admin rights. On the keyless
+  build `cloud_vision_provider()` is `None`, so it is a no-op and nothing leaves the box. Not RULE_PATHS.
+- **Card switched off the ledger/zone proxy onto those fields** (#382). The escalation numbered-path now
+  renders from the `/ai/suggest` response (`escalationFromDraft`) and the empty state reads `/ai/status`'s
+  `cloud_enabled`; the `ai_calls`-ledger derivation is kept only as a fallback for cards pre-drafted at scan
+  time (no live `/ai/suggest` call), so the two cannot diverge. Closes the copilot loop end to end:
+  UI (#367) → gateway adapters (#356) → backend fields (#378) → UI reading them (#382).
 
 ## Feature: Estate coverage — three denominators and discovery at scale · #4597
 
@@ -1127,6 +1146,33 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   `'approved'` alone does not say whether anything moved. `source` is also what makes the queue and the trail
   scopeable at all: the table has no such column, so an unenriched render puts the whole estate's history
   under a heading naming one source.
+
+## Feature: Observability — AI tracing and cost (Langfuse)
+
+The scan / assess / remediate lifecycle was already traced, but the AI calls themselves were recorded as
+cost-less, detached spans, and one decision surface had no trace at all. An audit first established the
+state — 18/18 PHI tests green, coverage broad, the debt quality rather than absence — then four fixes
+brought AI-call fidelity up to date and two extended it to the newest surfaces. Every new field is a
+count / token number / model id / zone / cost — never prompt, completion, note, or filename (the PHI
+invariant the redaction tests pin).
+
+- **AI calls are Langfuse generations, not spans, carrying model + tokens + cost** (#368, G1). Added an
+  `lf.generation()` helper (no-op when disabled) and switched `trace_ai_call` to it; token counts come from
+  the provider results. They were logged as `.span()`, so per-call token usage and cost never reached the
+  trace — only the `ai_calls` DB table had them.
+- **Those generations nest under the file's own trace** (#368, G2). They were top-level `ai:{surface}`
+  traces grouped only by scan session, so a file's Discover/Assess/Remediate trace never showed its own
+  model calls; now they hang on `_trace_id(scan_id, file)` when known, with session grouping preserved.
+- **Provider / zone / cost carried into the trace** (#368, G3). `ai._trace_ai` already computed them for the
+  `ai_calls` row but the `lf` signature dropped them at the boundary; widened so trace and ledger agree.
+- **Remediation span carries fix / skip counts** (#368, G4). `remediate_span` recorded only the Drive URL;
+  the per-rule applied/skipped counts already existed in `_remediate_file` and are now passed through.
+- **Cloud-vision token usage surfaces as generation `usage`** (#372, N1). Widened `providers._result` and
+  each adapter (Azure, OpenAI, Anthropic, RunPod, Ollama) to carry prompt/completion tokens, threaded
+  through `ai.py` — so cloud-vision generations carry real token usage, not just cost.
+- **The disposition / pending-approval queue is now traced** (#371, N2). `routes/disposition.py` was the one
+  untraced decision surface; a new `trace_disposition_decision` (status / action / policy-id / `reason_chars`
+  count / HMAC doc label) mirrors the HITL decision span at every point a disposition is recorded.
 
 ## Open items (backlog candidates)
 
@@ -1428,3 +1474,15 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   Updated the **"v2 redesign is a fork"** Open item in place rather than raising a second one: this session
   put six PRs into both trees, so the duplication it warns about is now measurable — `sourceOps.js`,
   `SourceDrawer.jsx` and both their test files exist twice, byte-identical and hand-synced.
+- **2026-08-18 (copilot + observability)** — Documented this session's six PRs, none previously in the log.
+  The review-card copilot end to end — #367 (palette + escalation path + honest empty state), #378 (backend
+  forwarding the escalation path + a non-admin `cloud_enabled` signal), #382 (the card reading those real
+  fields, retiring the ledger/zone proxy) — added as three Tasks under **#4598 (AI Work Inbox)**. The
+  Langfuse observability catch-up — #368 (G1–G4: generations with model/tokens/cost, nested under the file
+  trace, remediation counts), #372 (N1 cloud-vision token usage), #371 (N2 disposition-queue tracing) — added
+  as a new **Observability — AI tracing and cost** Feature (unbound; no ADO id known). #356 (vision adapters)
+  and #340/#341/#347/#350 are already logged by their own sessions and left untouched. **Sync marker
+  deliberately NOT advanced** (still `fad0dfbe`), same convention as the three prior entries: the range holds
+  undocumented feature work other sessions should characterise. Context, not edited here: #385 retired the
+  `frontend/` fork, which resolves the standing "v2 redesign is a fork" Open item — left for that session to
+  close.
