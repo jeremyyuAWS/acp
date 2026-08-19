@@ -459,7 +459,7 @@ def put_decisions_batch(sid: str, request: Request, body: dict):
     n = 0
     for it in (body.get("items") or []):
         file, kind, value = it.get("file"), it.get("kind"), it.get("value")
-        if not file or kind not in ("triage", "action"):
+        if not file or kind not in ("triage", "action", "assignee"):
             continue
         if value is None:
             core.store.delete_decision(sid, file, kind)
@@ -472,9 +472,10 @@ def put_decisions_batch(sid: str, request: Request, body: dict):
 
 @router.put("/scans/{sid}/decisions/{filename:path}")
 def put_decision(sid: str, filename: str, request: Request, body: dict,
-                 kind: str = Query("triage", pattern="^(triage|action)$")):
+                 kind: str = Query("triage", pattern="^(triage|action|assignee)$")):
     """Upsert one decision for a file on this scan. body {value}: a string (triage:
-    inscope|na|defer) or an object (action: {state, action}); value=null deletes it."""
+    inscope|na|defer; assignee: the assignee's email) or an object (action: {state, action});
+    value=null deletes it."""
     import datetime as _dt
     import json as _json
     owner = _owner(request)
