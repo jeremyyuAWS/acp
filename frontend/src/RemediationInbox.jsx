@@ -339,8 +339,11 @@ export default function RemediationInbox({
 
   // Workspace layout + pane sizes, restored from the reviewer's last session (localStorage).
   const [layout, setLayout] = useState(() => {
-    const v = initialLayout ?? readLS('layout', 'split')
-    return LAYOUT_KEYS.includes(v) ? v : 'split'
+    // Default to the two-column STACKED workspace (queue + one scrolling workspace column) — the
+    // focused layout the redesign was built around. Reviewers who prefer side-by-side switch to
+    // Split (or Focus); their choice persists in localStorage and wins over this default.
+    const v = initialLayout ?? readLS('layout', 'stacked')
+    return LAYOUT_KEYS.includes(v) ? v : 'stacked'
   })
   const [leftW, setLeftW] = useState(() => clamp(readNum('leftW', 28), 18, 45))   // inbox width, % of the row
   const [centerW, setCenterW] = useState(() => clamp(readNum('centerW', 34), 20, 60)) // guided width in Split, % of the row
