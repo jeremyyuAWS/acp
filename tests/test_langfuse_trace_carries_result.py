@@ -84,3 +84,38 @@ def test_extensionless_file_has_no_format_but_still_a_document(cap):
     lf.file_trace("scan-1", "README", user="x")
     inp = cap.sent[0]["input"]
     assert inp["format"] is None and inp["document"].startswith("doc-")
+
+
+def test_full_per_check_breakdown_pii_flag_and_remediation(cap):
+    lf.file_assessment_result(
+        "scan-1", "intake.docx", score=74.0, conformant=False, level="AA",
+        failing_criteria={"1.4.3": 2},
+        outcomes={"PASS": 12, "FAIL": 1, "REVIEW": 2, "NOT_EVALUATED": 3},
+        pii={"flagged": True, "types": ["us_ssn", "email_address"], "findings": 5, "critical": True},
+        remediation={"remediated": True, "written_back": True, "published": False})
+    out = next(p["output"] for p in cap.sent if "output" in p)
+    # full breakdown — every outcome, not just failures
+    assert out["checks"] == {"PASS": 12, "FAIL": 1, "REVIEW": 2, "NOT_EVALUATED": 3}
+    # PII flag: type CATEGORIES + counts, never a value
+    assert out["pii"]["flagged"] is True and out["pii"]["critical"] is True
+    assert out["pii"]["types"] == ["us_ssn", "email_address"] and out["pii"]["findings"] == 5
+    # remediation status, booleans coerced
+    assert out["remediation"] == {"remediated": True, "written_back": True, "published": False}
+
+
+def test_new_fields_are_omitted_when_not_supplied(cap):
+    # backward-compatible: a caller that passes none of the new kwargs emits none of the keys
+    lf.file_assessment_result("scan-1", "a.pdf", score=100, conformant=True, level="AA")
+    out = next(p["output"] for p in cap.sent if "output" in p)
+    assert "checks" not in out and "pii" not in out and "remediation" not in out
+
+
+def test_pii_payload_carries_no_masked_samples_or_free_text(cap):
+    # only the fields the helper is given; even if a caller were sloppy, the helper never reaches
+    # into samples/labels — it emits exactly what it is handed, which the handler builds from
+    # categories + counts.
+    lf.file_assessment_result("scan-1", "a.docx", score=80, conformant=False, level="AA",
+                              pii={"flagged": True, "types": ["credit_card"], "findings": 1,
+                                   "critical": False})
+    out = next(p["output"] for p in cap.sent if "output" in p)
+    assert set(out["pii"].keys()) == {"flagged", "types", "findings", "critical"}
