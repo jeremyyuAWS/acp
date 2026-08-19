@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } from 'react'
 import HitlBell from './HitlBell.jsx'
-import { assessmentLine } from './assessmentProgress.js'
+import { assessmentLine, outcomesFromRun, outcomeChips } from './assessmentProgress.js'
 import { refreshDriveToken } from './driveAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
 import { getSources, getRubric, getConfig, getMe, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, getScanLocations, SESSION_EXPIRED } from './api'
@@ -106,6 +106,15 @@ function progressText(p) {
 // real per-file count; the post-read phases fill the remainder.
 const PHASE_PCT = { queued: 2, connecting: 5, discovering: 9, reading: 12, tagging: 88, analysing: 92, scoring: 97, done: 100, error: 100 }
 
+// Semantic colours for the live outcome chips (passed / need-review / failed / processing). Kept as a
+// small style map so the chip row needs no new CSS and reads the same in light contexts.
+const OCHIP_STYLE = {
+  ok: { color: '#2F7D51', background: '#E6F2EA' },
+  warn: { color: '#9A6011', background: '#F7EDDB' },
+  bad: { color: '#A5314A', background: '#F9E7EB' },
+  muted: { color: '#54636F', background: '#ECEFF4' },
+}
+
 
 function progressPct(p) {
   if (!p) return 0
@@ -130,7 +139,9 @@ function queuedProgress(g, elapsed) {
   if (!total) return { phase: 'discovering', elapsed }        // estate not listed yet
   const phase = done < total ? 'analysing' : 'scoring'
   const pct = Math.round(12 + Math.min(1, done / total) * (95 - 12))
-  return { phase, files_found: total, files_done: done, current: null, elapsed, pct }
+  // Outcome tally, streamed live off the run summary (certifiable/uncertain/error, derived from
+  // file_records as each file lands) — so the progress chips show real state, not just a counter.
+  return { phase, files_found: total, files_done: done, current: null, elapsed, pct, outcomes: outcomesFromRun(run) }
 }
 
 // Shown on results views (Overview / Dashboard / Monitor) until the user runs Assess —
@@ -868,6 +879,20 @@ export default function App() {
             )}
           </div>
           <div className="track"><i style={{ width: `${progressPct(progress)}%`, background: '#BF8C00', transition: 'width .3s' }} /></div>
+          {/* Outcome chips — what is actually EMERGING from the run (passed / need-review / failed /
+              still-processing), streamed off the run summary as files land. Shown only once analysis
+              has produced a real result (outcomeChips returns [] otherwise), so they never read
+              "0 · 0 · 0" during the read phase or a metadata-only discovery. */}
+          {outcomeChips(progress.outcomes).length > 0 && (
+            <div className="scanoutcomes" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+              {outcomeChips(progress.outcomes).map((c) => (
+                <span key={c.key} style={{ fontSize: 12, fontWeight: 500, padding: '2px 9px', borderRadius: 999,
+                                           fontVariantNumeric: 'tabular-nums', ...OCHIP_STYLE[c.kind] }}>
+                  <b>{c.count.toLocaleString()}</b> {c.label}
+                </span>
+              ))}
+            </div>
+          )}
           {/* Narrate the phase the scanner reports, or say nothing. The old line came from a
               timer, so it could never be absent — and it was wrong whenever the timer and the
               phase disagreed. Silence beats a plausible sentence.
