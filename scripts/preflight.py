@@ -171,6 +171,34 @@ def check_sharepoint() -> None:
 
 # ── Langfuse tracing ─────────────────────────────────────────────────────────
 
+def check_smb() -> None:
+    g = "Network drive (SMB)"
+    import smb_source
+    r = smb_source.describe_smb_readiness()
+    shares, cred = r["shares"], r["credential_source"]
+    if not shares and not cred:
+        # SMB is an OPTIONAL source (like SharePoint): unconfigured is not a failure, but say so —
+        # otherwise "no network-drive scans" reads as a missing feature rather than a deliberate choice.
+        record(g, "configured", WARN,
+               "no ACP_SMB_SHARES — the network-drive source is not part of this deployment")
+        return
+    record(g, "shares", PASS if shares else FAIL,
+           f"{len(shares)} in scope: {', '.join(shares)}" if shares else
+           "ACP_SMB_SHARES not set but a credential is — a network-drive scan has nothing to walk")
+    record(g, "credential", PASS if cred else FAIL,
+           "via Key Vault (Managed Identity)" if cred == "key_vault" else
+           "via username+password" if cred == "userpass" else
+           "none — set ACP_SMB_CREDENTIAL_KV (Key Vault, preferred) or ACP_SMB_USERNAME + ACP_SMB_PASSWORD")
+    if cred == "userpass":
+        record(g, "credential posture", WARN,
+               "dev/test password in env — prefer Key Vault + Managed Identity for a PHI deployment")
+    # The live reach cannot be verified headlessly: it needs the smbprotocol transport and the
+    # customer's private network route (ADR 0036). Same honesty as SharePoint's token acquisition —
+    # config being right is necessary, not sufficient, and PASS is never borrowed for what did not run.
+    record(g, "share reachability", WARN,
+           "not verified here — needs the live transport + the customer's private route; run a real scan")
+
+
 def check_tracing(live: bool) -> None:
     g = "Tracing"
     try:
@@ -234,6 +262,7 @@ def main() -> int:
 
     check_gpu(args.live)
     check_sharepoint()
+    check_smb()
     check_tracing(args.live)
 
     failed = sum(1 for r in results if r["state"] == FAIL)
