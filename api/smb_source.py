@@ -187,7 +187,13 @@ def list_smb(root: str, *, max_files: int = 2000, cfg: dict | None = None,
         if scannable and len(files) >= max_files:
             hit_cap = True
             break
-        est_files.append({"id": _join_unc(parent, name), "name": name, "mimeType": _mime_of(name)})
+        # size + modifiedTime come free from the directory listing, so the estate drill-down's
+        # biggest-first and recency lenses work for SMB exactly as they do for Drive/SharePoint
+        # (estate_inventory._sample_meta reads these keys). owner and shared are NOT cheap on SMB —
+        # they need per-file Windows ACL reads — so they are honestly left absent (owner None,
+        # shared False) rather than a wrong value; a later ACL pass can add them.
+        est_files.append({"id": _join_unc(parent, name), "name": name, "mimeType": _mime_of(name),
+                          "size": entry.get("size"), "modifiedTime": entry.get("modified")})
         if scannable:
             files.append(_file_dict(entry, parent))
         elif inventory_out is not None:
