@@ -161,6 +161,56 @@ export function tabCounts(list, decisions = {}) {
   return counts
 }
 
+// ── Workflow-status tabs (the Outlook-style top bar) ─────────────────────────────────────────────
+// A SECOND lens on the same findings, by pipeline STAGE rather than remediation lane: where a
+// finding is on the journey Inbox → In progress → Ready to validate → Done, plus Blocked. This is
+// what the top tabs answer ("what's new / being worked / awaiting the re-scan / done"), whereas the
+// lane taxonomy above answers "what kind of fix is it".
+//
+// HONESTY (ADR 0016): every stage is derived from REAL state — the finding's status, its lane, and
+// the recorded decision. There is no invented "in progress" flag; it is inferred only from states
+// that genuinely mean a person is mid-way (an assigned/deferred decision). A stage we cannot
+// evidence is never assigned.
+export const WORKFLOW_TABS = ['inbox', 'in-progress', 'ready-to-validate', 'blocked', 'done']
+export const WORKFLOW_LABELS = {
+  inbox: 'Inbox', 'in-progress': 'In progress', 'ready-to-validate': 'Ready to validate',
+  blocked: 'Blocked', done: 'Done',
+}
+
+/** The pipeline stage a finding sits in, for the workflow top tabs. */
+export function workflowStatusOf(f, decisions = {}) {
+  const st = String(f?.status || '').toLowerCase()
+  const d = decisions[f?.id] ?? decisions[f?.file]
+  const lane = laneOf(f)
+
+  if (lane.key === 'blocked') return 'blocked'
+  // Closed out: fully re-validated, or a rejection that ended the work.
+  if (st === 'verified') return 'done'
+  if (d && d.state === 'rejected') return 'done'
+  // A fix is in and awaiting the re-scan that confirms it: an approved decision not yet verified,
+  // the recheck lane (edited, re-scanning), or a deterministic auto-fix already applied.
+  if (d && (d.state === 'accepted' || d.state === 'approved')) return 'ready-to-validate'
+  if (lane.key === 'recheck') return 'ready-to-validate'
+  if (f?.autoApplied || f?.applied) return 'ready-to-validate'
+  // A person has explicitly taken it on but no fix is in yet: assigned or deferred. A rejected-AI-fix
+  // handoff is NOT here — its action is still "Mark as assigned", i.e. nobody has started it, so it
+  // waits in the Inbox as untriaged manual work until someone assigns it.
+  if (d && (d.state === 'assigned' || d.state === 'deferred')) return 'in-progress'
+  // Untouched, awaiting first attention.
+  return 'inbox'
+}
+
+export function matchesWorkflow(f, tab, decisions = {}) {
+  if (tab === 'all') return true
+  return workflowStatusOf(f, decisions) === tab
+}
+
+export function workflowCounts(list, decisions = {}) {
+  const counts = { all: list.length, inbox: 0, 'in-progress': 0, 'ready-to-validate': 0, blocked: 0, done: 0 }
+  for (const f of list) counts[workflowStatusOf(f, decisions)] += 1
+  return counts
+}
+
 // ── Sorting ─────────────────────────────────────────────────────────────────────────────────────
 const SEV_RANK = { CRITICAL: 0, SERIOUS: 1, MODERATE: 2, MINOR: 3 }
 

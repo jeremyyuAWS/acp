@@ -197,7 +197,8 @@ def _parse(text: str) -> dict[str, str]:
 def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, ok: bool,
               model: str | None = None, scan_id: str | None = None, file: str | None = None,
               provider: str = "ollama", zone: str | None = None, cost_usd: float = 0.0,
-              reason: str | None = None) -> None:
+              reason: str | None = None, prompt_tokens: int | None = None,
+              completion_tokens: int | None = None) -> None:
     """Emit a Langfuse span + persist an ai_calls provenance row for one model call — model,
     latency, prompt size, completion, ok, and (ADR 0019 §1) which provider/zone/cost it ran on.
     model defaults to the text model; vision calls pass the vision model. `provider`/`zone`/`cost_usd`
@@ -213,8 +214,12 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
     zn = zone or provenance()["zone"]
     try:
         import lf as _lf
+        # Forward provider/zone/cost (G3) and token usage (G1) so the Langfuse GENERATION carries
+        # them — they were computed here for the ai_calls row below but dropped on the trace side.
         _lf.trace_ai_call(surface, mdl, latency_ms, ok=ok, prompt_chars=len(prompt or ""),
-                          completion=completion, scan_id=scan_id, file=file)
+                          completion=completion, scan_id=scan_id, file=file,
+                          provider=provider, zone=zn, cost=cost_usd,
+                          prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
     except Exception:
         pass
     # ADR 0019 Phase 0b — persist an ai_calls provenance row (provider/model/local-or-cloud zone/
@@ -255,8 +260,13 @@ def explain_finding(
             timeout=90,
         )
         r.raise_for_status()
-        raw = r.json().get("response", "").strip()
-        _trace_ai("explain", prompt, raw, _t0, ok=True)
+        _data = r.json()
+        raw = (_data.get("response", "") or "").strip()
+        # Ollama /api/generate reports token counts on the response: prompt_eval_count (input)
+        # and eval_count (output). Counts only — carried onto the Langfuse generation's usage.
+        _trace_ai("explain", prompt, raw, _t0, ok=True,
+                  prompt_tokens=_data.get("prompt_eval_count"),
+                  completion_tokens=_data.get("eval_count"))
         return {**_parse(raw), "model": OLLAMA_MODEL, "raw": raw}
     except Exception:
         _trace_ai("explain", prompt, None, _t0, ok=False)
@@ -503,14 +513,32 @@ def _clean_alt(text: str) -> str:
 def _vision_prompt(filename: str, context: str, style: str = "", guidance: str = "") -> str:
     where = f" It appears in the document '{filename}'." if filename else ""
     near = f" Nearby text for context: {context.strip()[:200]}" if context and context.strip() else ""
-    # Reviewer-directed refinement (#131) — a length steer only; the description stays grounded in
-    # what the model actually sees. Unknown/absent style → the default concise sentence.
+    # Reviewer-directed refinement (#131, extended P1) — a bounded steer, never a free prompt; the
+    # description stays grounded in what the model actually sees. 'shorter'/'detailed' steer length;
+    # 'numbers'/'no_colour'/'professional'/'plain' steer content/tone. Unknown/absent style → the
+    # default concise sentence.
     length = {
         "shorter": "Reply with ONE very short phrase (under 10 words) — just the essential subject. ",
         "detailed": "Reply with ONE fuller sentence (up to 40 words) that also describes the key visual "
                     "elements. State a number, label, or value ONLY if you can clearly read it in the "
                     "image — never estimate or invent figures; if the values are not legible, describe "
                     "what the image shows without them. ",
+        # Mention the numbers — surface the figures a reviewer of a chart/table cares about, still
+        # only ones actually legible in the image (no invention).
+        "numbers": "Reply with ONE concise sentence (under 30 words). State every number, label, or "
+                   "value you can CLEARLY read in the image — figures are often the whole point — but "
+                   "never estimate or invent a figure you cannot read. ",
+        # Ignore colours — a description that does not lean on colour, so it works for a colour-blind
+        # reader (WCAG 1.4.1 in spirit): identify things by shape, position, label, or text instead.
+        "no_colour": "Reply with ONE concise sentence (under 30 words). Describe the image WITHOUT "
+                     "relying on colour — identify things by shape, position, label, or the text they "
+                     "carry, so the description works for a reader who cannot distinguish colours. ",
+        # Professional tone — formal business register for a corporate/compliance document.
+        "professional": "Reply with ONE concise, formal sentence (under 30 words) in a professional "
+                        "business tone — no casual phrasing, contractions, or filler. ",
+        # Plain language — simple everyday words, short, no jargon (plain-language accessibility).
+        "plain": "Reply with ONE short sentence in plain language (under 20 words) — simple everyday "
+                 "words, no jargon, abbreviations, or technical terms. ",
     }.get(style,
           "Reply with ONE concise sentence (under 30 words) that includes the key text verbatim where "
           "it carries meaning. ")
@@ -1054,8 +1082,11 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
             timeout=90,
         )
         r.raise_for_status()
-        text = r.json().get("response", "").strip().strip('"').strip()
-        _trace_ai("suggest", prompt, text, _t0, ok=bool(text))
+        _data = r.json()
+        text = (_data.get("response", "") or "").strip().strip('"').strip()
+        _trace_ai("suggest", prompt, text, _t0, ok=bool(text),
+                  prompt_tokens=_data.get("prompt_eval_count"),
+                  completion_tokens=_data.get("eval_count"))
         if not text:
             return None
         kind = _SUGGEST_KIND.get(rule_id, ("fix", ""))[0]
@@ -1107,9 +1138,12 @@ def simplify_text(text: str, *, scan_id: str | None = None, file: str | None = N
             timeout=OLLAMA_VISION_TIMEOUT,
         )
         r.raise_for_status()
-        out = (r.json().get("response", "") or "").strip().strip('"').strip()
+        _data = r.json()
+        out = (_data.get("response", "") or "").strip().strip('"').strip()
         out = re.sub(r"^(plain[- ]language version|rewritten text|here is[^:]*)\s*:\s*", "", out, flags=re.I).strip()
-        _trace_ai("simplify", prompt, out, _t0, ok=bool(out), scan_id=scan_id, file=file)
+        _trace_ai("simplify", prompt, out, _t0, ok=bool(out), scan_id=scan_id, file=file,
+                  prompt_tokens=_data.get("prompt_eval_count"),
+                  completion_tokens=_data.get("eval_count"))
         # Guard: a rewrite must actually be shorter/simpler and non-trivial, else treat as a miss.
         return out if (out and len(out) >= 20 and out.lower() != src.lower()) else None
     except Exception:
@@ -1184,8 +1218,11 @@ def _ollama_narrative(facts: dict) -> tuple[str, str] | None:
             json={"model": OLLAMA_MODEL, "prompt": _p, "stream": False,
                   "options": {"temperature": 0.4, "num_predict": 200}}, timeout=150)
         r.raise_for_status()
-        raw = r.json().get("response", "").strip()
-        _trace_ai("digest", _p, raw, _t0, ok=bool(raw and len(raw) > 40))
+        _data = r.json()
+        raw = (_data.get("response", "") or "").strip()
+        _trace_ai("digest", _p, raw, _t0, ok=bool(raw and len(raw) > 40),
+                  prompt_tokens=_data.get("prompt_eval_count"),
+                  completion_tokens=_data.get("eval_count"))
         return (raw, OLLAMA_MODEL) if raw and len(raw) > 40 else None
     except Exception:
         _trace_ai("digest", _p, None, _t0, ok=False)

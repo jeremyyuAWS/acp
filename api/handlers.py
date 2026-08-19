@@ -486,6 +486,11 @@ def _remediate_file(payload: dict, job: dict) -> None:
     # link text). Collected here so they can be enqueued AFTER the residual re-scan below,
     # with an honest `validated` flag (True only when the applied fix actually cleared).
     inline_proposals: list[dict] = []
+    # Normalized remediation tallies for the Langfuse Remediate span (G4). Every fixer returns a
+    # list of applied-fix messages and a list of skipped/deferred ones; the HTML path names the
+    # latter `_deferred` and the office/pdf paths `_skipped`, so collapse both onto one name here.
+    # COUNTS only reach the trace — the messages are prose and stay out (see lf.remediate_span).
+    rem_skipped: list = []
 
     _phase(job, f"applying fixes to {filename}")
     _scope_allows = _remediation_scope(filename, scan_id)
@@ -506,6 +511,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
             data.decode("utf-8", errors="replace"),
             ai_enabled=core.store.get_ai_enabled(), diffs=rem_diffs,
             proposals=inline_proposals, in_scope=_scope_allows)
+        rem_skipped = _deferred
         fixed_bytes = fixed_html.encode("utf-8")
         mimetype = "text/html"
     else:  # pdf / office — file-based deterministic remediators (ADR 0005 step 4)
@@ -522,6 +528,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
                     src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
                     diffs=rem_diffs, proposals=_pdf_proposals, applied_fixes=_applied_fixes,
                     in_scope=_scope_allows)
+                rem_skipped = _skipped
                 mimetype = "application/pdf"
                 # A PDF's AI-written alt text is evidence exactly like an Office document's.
                 # It used to be dropped: remediate_pdf returned only prose, so no row reached
@@ -562,6 +569,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
                     src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
                     applied_fixes=_applied_fixes, proposals=_proposals,
                     evidence=_evidence, diffs=rem_diffs, in_scope=_scope_allows)
+                rem_skipped = _skipped
                 mimetype = _OFFICE_MIME[ext]
                 _record_applied_fixes(scan_id, filename, _applied_fixes)
                 # AI-proposed (but not auto-applied) alt: an ungrounded vision guess is
@@ -707,7 +715,11 @@ def _remediate_file(payload: dict, job: dict) -> None:
               f"(settings.drive_mirror_enabled=false)", flush=True)
 
     core.store.record_remediation(scan_id, filename, drive_write_url=web_url, blob_url=blob_url)
-    core.emit_remediation_span(scan_id, filename, drive_write_url=web_url)
+    # G4: the Remediate span now carries what the fix pass DID — how many fixes applied vs
+    # skipped/deferred — not just where the copy was written. `applied` and `rem_skipped` are
+    # lists of prose messages; only their counts reach the trace (lf.remediate_span is PHI-safe).
+    core.emit_remediation_span(scan_id, filename, drive_write_url=web_url,
+                               fixes_applied=len(applied), fixes_skipped=len(rem_skipped))
     core.store.log_decision("system", "remediate.applied", scan_id=scan_id, file=filename,
                             detail="; ".join(applied) or "no auto fixes needed")
     # ADR 0003 Phase 2: mark this file's deterministically-auto-fixable violations

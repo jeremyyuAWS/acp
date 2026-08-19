@@ -8,6 +8,7 @@ import ProposalThumb, { isSafeThumb } from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import { speakAsScreenReader, srSupported } from './srPreview.js'
 import { runAutoDraft, resetAutoDraftBreaker } from './autoDraft.js'
+import { escalationPath } from './escalationPath.js'
 import HowToConfirm from './HowToConfirm.jsx'
 
 // Evidence Card (PRD v2) — a PR-style review of ONE accessibility issue. The human APPROVES
@@ -212,7 +213,10 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
       if (!s) { setDraftMsg({ kind: 'error', text: `Image ${i + 1}: the model returned nothing — write it yourself.` }); return }
       setValueAt(i, s)
       setOcrAid(r.ocr_text || null)
-      const styleWord = style === 'shorter' ? ' (shorter)' : style === 'detailed' ? ' (more detail)' : style === 'regenerate' ? ' (regenerated)' : ''
+      const styleWord = style === 'shorter' ? ' (shorter)' : style === 'detailed' ? ' (more detail)'
+        : style === 'regenerate' ? ' (regenerated)' : style === 'numbers' ? ' (numbers stated)'
+        : style === 'no_colour' ? ' (colour-free)' : style === 'professional' ? ' (professional tone)'
+        : style === 'plain' ? ' (plain language)' : ''
       setDraftMsg(r.is_template
         ? { kind: 'template', text: r.reason || 'Template only — no vision model was available. Rewrite it before approving.' }
         : r.deterministic
@@ -270,6 +274,58 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
     }
   }
   const auditRows = (aiCalls || []).filter((c) => !c.file || c.file === item?.file)
+  // Auto-escalation numbered path (P1) — derived from the ledger the card already has: a local
+  // vision attempt that couldn't ground, followed by an escalation to a governed cloud provider.
+  // Rendered as the transparent path (below, on the surface) instead of leaving the failed local
+  // attempt reading as a dead end. Null in the common all-local case.
+  const escalation = escalationPath(auditRows)
+  // The ledger is otherwise fetched lazily (only when the reviewer opens the audit trail). To show
+  // the escalation path WITHOUT a click — the whole point of item 2 — pull it once for a file whose
+  // AI actually ran in the cloud (provZone 'cloud' is the escalation signal). This stays bounded to
+  // escalated/cloud files rather than fetching the whole-scan ledger for every card in the inbox
+  // (Remediate deliberately fetches it once for the scan, not per card); an all-local card makes no
+  // request here and simply shows nothing.
+  useEffect(() => {
+    if (aiCalls !== null || !aiValueShown || provZone !== 'cloud' || !item?.scan_id) return
+    let live = true
+    getScanAiCalls(item.scan_id)
+      .then((r) => { if (live) setAiCalls(Array.isArray(r) ? r : []) })
+      .catch(() => { if (live) setAiCalls([]) })
+    return () => { live = false }
+  }, [aiValueShown, provZone, item?.scan_id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Empty-state honesty (P1) — when the local model produced nothing (a failed or template draft)
+  // AND this deployment has no governed cloud provider to escalate to, the manual-authoring state
+  // must say WHY it is manual and point an admin at the fix, rather than leaving a raw "Ollama not
+  // running" as the last word. "No cloud fallback" is inferred from what the card can see: no
+  // escalation happened (a cloud call would have left a ledger row) and the active/configured zone
+  // is not cloud. A definitive "is any cloud provider enabled?" signal for a non-admin reviewer is
+  // not exposed by the API today — see the PR body's deferred backend gap; this uses the zone as the
+  // available, honest proxy and never claims cloud is off when we actually saw a cloud call.
+  const draftFailedLocalOnly = !escalation
+    && (draftMsg?.kind === 'error' || draftMsg?.kind === 'template')
+    && (actualZone || aiProv?.zone || 'local') !== 'cloud'
+  // Reuse the app's existing custom-event navigation (acp:session-expired / acp:scan-unavailable are
+  // the same pattern) rather than hardcoding a route — App listens for acp:open-settings and opens
+  // the Settings modal (which contains the AI Providers panel), gated on the settings permission.
+  const openProviderSettings = () =>
+    window.dispatchEvent(new CustomEvent('acp:open-settings', { detail: { section: 'ai-providers' } }))
+  const manualCloudHint = draftFailedLocalOnly ? (
+    <div className="evcard-manual-empty" role="note"
+         style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap', fontSize: 12.5,
+                  background: 'var(--surface-1, #f6f5f2)', border: '1px solid var(--line)', borderRadius: 8,
+                  padding: '8px 11px', margin: '6px 0 0' }}>
+      <span aria-hidden="true">✍️</span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <b>Why you’re writing this by hand:</b> the local vision model couldn’t describe this image,
+        and no governed cloud provider is enabled to fall back to. Author the value below — or enable a
+        cloud provider so ACP can draft descriptions the local model can’t ground.{' '}
+        <button type="button" className="evcard-linkbtn" onClick={openProviderSettings}>
+          Settings → AI Providers
+        </button>
+      </span>
+    </div>
+  ) : null
   // Verifiable trust states (ADR 0019 §3a) — grounding + validation, the evidence-based replacement
   // for a confidence label. No number, no opaque level; the review-requirement axis is whyReview.
   const trust = trustStates(card)
@@ -633,6 +689,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
                   {draftMsg.text}
                 </span>
               )}
+              {usingEvidence && !draftingAll && draftingIdx == null && manualCloudHint}
               {usingEvidence && ocrAid && (
                 <details className="evcard-ocr-aid">
                   <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>
@@ -681,6 +738,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
                   )}
                 </span>
               )}
+              {!drafting && manualCloudHint}
               {ocrAid && (
                 <details className="evcard-ocr-aid">
                   <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>
@@ -741,6 +799,27 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
                 {provZone === 'local'
                   ? 'ran on your infrastructure — no document left your network'
                   : 'processed off your network'}{actualZone ? '' : ' (configured)'}
+              </span>
+            </div>
+          )}
+
+          {/* Auto-escalation numbered path (P1) — when the ledger shows the local model attempted this
+              image and couldn't ground a description, the escalation to a governed cloud provider is
+              shown as a transparent path, ON THE CARD, so the failed local attempt reads as step one
+              of a working handoff rather than a dead end. Every step is a real ai_calls row — the
+              provider names itself, nothing is fabricated (see escalationPath.js). */}
+          {escalation && (
+            <div className="evcard-escalation" role="note"
+                 style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap', fontSize: 12,
+                          background: '#E1F5EE', border: '1px solid var(--line)', borderRadius: 8,
+                          padding: '7px 11px', margin: '2px 0 8px' }}>
+              <span aria-hidden="true" style={{ color: '#0F6E56' }}>↗</span>
+              <span>
+                <b>AI escalation path:</b>{' '}
+                <span className="evcard-escalation-steps">
+                  ✓ local attempted → no grounded description → escalated to {escalation.provider}
+                  {escalation.cloudModel ? ` (${escalation.cloudModel})` : ''} → {escalation.cloudOk ? 'grounded' : 'cloud unavailable'}
+                </span>
               </span>
             </div>
           )}

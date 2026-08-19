@@ -414,34 +414,98 @@ def _project_id() -> str:
     return "acp-compliance"
 
 
+def generation(trace, name: str, *, model: str | None = None, prompt_chars: int = 0,
+               completion_chars: int = 0, prompt_tokens: int | None = None,
+               completion_tokens: int | None = None, cost: float = 0.0,
+               provider: str | None = None, zone: str | None = None,
+               latency_ms: int | None = None, ok: bool = True, surface: str | None = None):
+    """A Langfuse GENERATION (not a span) for one model call, hung on `trace`.
+
+    A generation is what carries the LLM-native fields Langfuse understands — model, token
+    usage and cost — so they land in the token/cost rollups a span cannot feed. Mirrors the
+    span helpers: no-op when tracing is disabled or `trace` is a _Noop, and every Langfuse
+    call is wrapped so a SDK surprise never breaks the AI call it is observing.
+
+    PHI (docs/audit-langfuse-phi.md): everything here is non-content metadata — model id,
+    provider, zone, latency, ok, token COUNTS, cost, and the CHAR COUNTS of prompt/completion.
+    The prompt and completion TEXT are never passed in and never sent, exactly as the span
+    form did; `name`/`surface` are the call kind ('vision', 'explain'), not a filename."""
+    if trace is None or isinstance(trace, _Noop):
+        return _Noop()
+    # Langfuse v2 usage model — token counts + a real measured cost (0 for local Ollama; a
+    # cloud adapter's per-call cost otherwise, never a fabricated one). Keys omitted when the
+    # provider did not report them, so an absent count reads as "unknown", not "zero".
+    usage: dict = {"unit": "TOKENS"}
+    if prompt_tokens is not None:
+        usage["input"] = prompt_tokens
+    if completion_tokens is not None:
+        usage["output"] = completion_tokens
+    if prompt_tokens is not None and completion_tokens is not None:
+        usage["total"] = prompt_tokens + completion_tokens
+    if cost:
+        usage["total_cost"] = cost
+    try:
+        g = trace.generation(
+            name=name,
+            model=model,
+            input={"prompt_chars": prompt_chars, "model": model},
+            output={"completion_chars": completion_chars, "latency_ms": latency_ms, "ok": ok},
+            usage=usage,
+            metadata={"provider": provider, "zone": zone, "cost_usd": cost,
+                      "surface": surface or name, "prompt_tokens": prompt_tokens,
+                      "completion_tokens": completion_tokens, "ok": ok},
+        )
+        g.end()
+        return g
+    except Exception:
+        return _Noop()
+
+
 def trace_ai_call(surface: str, model: str, latency_ms: int, *, ok: bool,
                   prompt_chars: int = 0, completion: str | None = None,
-                  scan_id: str | None = None, file: str | None = None) -> None:
-    """Trace one local-model (Ollama) generation. AI calls run on the request path,
-    outside the per-file scan trace, so each becomes its own trace (grouped into the
-    scan's session when scan_id is known). Captures model, latency, prompt size,
-    completion SIZE and success — the LLM-observability the audit found missing. No-op when
-    tracing is disabled.
+                  scan_id: str | None = None, file: str | None = None,
+                  provider: str = "ollama", zone: str | None = None, cost: float = 0.0,
+                  prompt_tokens: int | None = None,
+                  completion_tokens: int | None = None) -> None:
+    """Trace one model call as a Langfuse GENERATION. Captures model, latency, prompt size,
+    completion SIZE, token usage, provider/zone and cost — the LLM-observability the audit
+    found missing (it was recorded as a plain span, so token usage and cost never reached
+    Langfuse). No-op when tracing is disabled.
+
+    NESTING (G2). When scan_id + file are known this generation is hung on the file's OWN
+    trace (`_trace_id(scan_id, file)`) — the same trace that carries that document's
+    Discover/Assess/Remediate/HITL — so a file's model calls are visible in its story rather
+    than in a detached top-level trace. When they are not (a request-path call with no file,
+    e.g. the changelog digest), it falls back to a per-call `ai:{surface}` trace. Either way
+    the call is grouped into the scan's Langfuse SESSION via session_id=scan_id, so the
+    session view still gathers every one of a scan's AI calls.
+
+    PROVIDER / ZONE / COST (G3). `ai._trace_ai` already knows which provider served the call,
+    in which zone, at what cost (ADR 0019) and writes them to the ai_calls table; they now
+    ride the generation too, so the trace and the provenance ledger agree.
 
     THE COMPLETION IS SENT AS A LENGTH, NOT AS TEXT (docs/audit-langfuse-phi.md). The
     completion is model output derived from the document — alt text, rewrites, extracted
     values — so for a PHI customer it is document content by another name and must not be
     retained in a trace. This mirrors what the module already does one axis over: the prompt
     is `prompt_chars`, a count, never the prompt, and `trace_hitl_decision` sends the
-    reviewer note the same way. The count keeps the observability the audit wanted (did the
-    model return anything? how much?) without holding the content. `ok`, `latency_ms`,
-    `model` and `prompt_chars` are non-content metadata and stay."""
+    reviewer note the same way."""
     lf = _lf()
     if lf is None:
         return
     try:
-        t = lf.trace(name=f"ai:{surface}", session_id=scan_id,
-                     metadata={"file": _doc_label(file), "model": model, "surface": surface})
-        s = t.span(name=surface,
-                   input={"prompt_chars": prompt_chars, "model": model},
-                   output={"completion_chars": len(completion or ""),
-                           "latency_ms": latency_ms, "ok": ok})
-        s.end()
+        tid = _trace_id(scan_id, file)
+        if tid:
+            t = lf.trace(id=tid, session_id=scan_id,
+                         metadata={"file": _doc_label(file), "surface": surface})
+        else:
+            t = lf.trace(name=f"ai:{surface}", session_id=scan_id,
+                         metadata={"file": _doc_label(file), "model": model, "surface": surface})
+        generation(t, surface, model=model, prompt_chars=prompt_chars,
+                   completion_chars=len(completion or ""),
+                   prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                   cost=cost, provider=provider, zone=zone, latency_ms=latency_ms, ok=ok,
+                   surface=surface)
     except Exception:
         pass
 
@@ -566,14 +630,32 @@ def assess_span(trace, level: str):
         return _Noop()
 
 
-def remediate_span(trace, drive_write_url: str | None):
-    """The Remediate phase span on a file's trace."""
+def remediate_span(trace, drive_write_url: str | None, *, fixes_applied: int | None = None,
+                   fixes_skipped: int | None = None, per_rule: dict | None = None):
+    """The Remediate phase span on a file's trace.
+
+    Now carries the outcome of the fix pass, not just where the corrected copy was written:
+    how many fixes were APPLIED and how many were SKIPPED (deferred to review / out of scope),
+    optionally broken out per WCAG criterion. Before this the span said a file was remediated
+    but never what changed, so a reader could not tell a heavy fix from a no-op.
+
+    PHI (docs/audit-langfuse-phi.md): COUNTS ONLY. The applied/skipped messages `_remediate_file`
+    produces are prose ("3 images: added alt text") and are deliberately NOT sent — only their
+    tallies — so no filename, no reviewer text and no document content rides on this span. Keys
+    are omitted when the caller doesn't know them (the manual-upload / mark-remediated routes),
+    so their absence reads as "not reported", not "zero fixes"."""
     if isinstance(trace, _Noop):
         return
     try:
-        s = trace.span(name="Remediate",
-                       output={"drive_write_url": drive_write_url,
-                               "written_to_drive": drive_write_url is not None})
+        out: dict = {"drive_write_url": drive_write_url,
+                     "written_to_drive": drive_write_url is not None}
+        if fixes_applied is not None:
+            out["fixes_applied"] = fixes_applied
+        if fixes_skipped is not None:
+            out["fixes_skipped"] = fixes_skipped
+        if per_rule:
+            out["fixes_by_rule"] = per_rule
+        s = trace.span(name="Remediate", output=out)
         s.end()
     except Exception:
         pass

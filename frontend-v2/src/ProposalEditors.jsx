@@ -81,12 +81,17 @@ export default function ProposalEditors({ proposals, values, onChange, file, sc,
                   {draftingIdx === i ? 'Drafting…' : '↻ Draft this image'}
                 </button>
               )}
-              {/* Refine the draft (#131) — re-ask the vision model for a shorter or fuller
-                  description, or a fresh take. A bounded length steer, not a free prompt; shown
-                  only once there's a draft to refine. The reviewer still approves the result. */}
+              {/* Refine the draft (#131, extended P1) — re-ask the vision model with an extra steer:
+                  a shorter/fuller take, a fresh regenerate, or one of the four content/tone steers
+                  (mention the numbers · ignore colours · professional tone · plain language). Each is
+                  a bounded steer, not a free prompt; shown only once there's a draft to refine, and
+                  disabled while a draft is in flight exactly as the original three are. The reviewer
+                  still approves the result. */}
               {onDraft && filled && (
                 <span className="evcard-refine">
-                  {[['shorter', 'Shorter'], ['detailed', 'More detail'], ['regenerate', '↻ Regenerate']].map(([k, label]) => (
+                  {[['numbers', 'Mention the numbers'], ['no_colour', 'Ignore colours'],
+                    ['professional', 'Professional tone'], ['plain', 'Plain language'],
+                    ['shorter', 'Shorter'], ['detailed', 'More detail'], ['regenerate', '↻ Regenerate']].map(([k, label]) => (
                     <button key={k} type="button" className="evcard-refine-btn" disabled={draftingIdx != null}
                             title={`Re-draft this description — ${label.toLowerCase()}`}
                             onClick={() => onDraft(i, k)}>{label}</button>

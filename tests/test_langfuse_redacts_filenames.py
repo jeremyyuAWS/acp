@@ -36,6 +36,9 @@ class _Node:
     def span(self, **kw):
         return _Node(self._sink, **kw)
 
+    def generation(self, **kw):
+        return _Node(self._sink, **kw)
+
     def update(self, **kw):
         self._sink.append(kw)
         return self

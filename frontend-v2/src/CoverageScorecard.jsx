@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { coverageSummary, assessmentIn, remediationIn, GAP_REASON, AT_REASON } from './assessCoverage.js'
+import { coverageSummary, assessmentGaps, assessmentIn, remediationIn, GAP_REASON, AT_REASON } from './assessCoverage.js'
 import { CORE_SCS, DENOMINATOR, SCOPE_SIZE, SCOPE_LABEL } from './activeScope.js'
 
 // Capability coverage scorecard for the Assess tab (ADR 0023, two axes). Answers the up-front
@@ -111,6 +111,64 @@ function Bar({ counts, total }) {
   )
 }
 
+// Coverage-gap warning — the (criterion × format) cells where the barrier applies but ACP has NO
+// assessment method (buildable 'gap' or AT-only 'at'), derived by assessmentGaps from the same
+// capability tables. This is the piece the folded lanes hid: gap→⚪ and at→🔴 fold a "not-yet-
+// assessed" hole into N/A / human, so the operator could not tell a genuine hole from an
+// inapplicable cell. Here it is stated per format, in plain "N criteria have no assessment method
+// for .fmt" language, using GAP_REASON/AT_REASON for the why. When there is no hole (a document-
+// only estate today), we SAY SO rather than staying silent — the absence of a warning should be a
+// positive statement, not an ambiguous blank. Never fabricates a gap: the list is exactly what the
+// model derives, so an all-covered estate reads "full assessment coverage".
+function GapSummary({ files, documents }) {
+  const g = assessmentGaps(files, { documents })
+  const fmts = g.fmts.map(fmtLabel).join(', ')
+  if (g.total === 0) {
+    return (
+      <p className="muted" style={{ fontSize: 11.5, margin: '10px 0 0', lineHeight: 1.5 }}>
+        <b style={{ color: '#2b6a1e' }}>✓ No coverage gaps</b> — ACP has an assessment method for every
+        applicable criterion in {fmts}. Cells shown as ⚪ are barriers that can’t exist in these file
+        types, not methods ACP is missing.
+      </p>
+    )
+  }
+  const label = g.total === 1 ? '1 criterion has' : `${g.total} criteria have`
+  return (
+    <div role="note" style={{ marginTop: 10, padding: '9px 11px', borderRadius: 8,
+      background: '#fbf3d6', border: '1px solid #eeda9a' }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: '#8a6a0e' }}>
+        ⚠️ Coverage gaps — {label} no assessment method for your file types
+      </div>
+      <div style={{ display: 'grid', gap: 6, marginTop: 7 }}>
+        {g.byFormat.map((row) => (
+          <div key={row.fmt} style={{ fontSize: 12 }}>
+            <span style={{ fontWeight: 700, color: '#8a6a0e' }}>
+              {row.count} {row.count === 1 ? 'criterion has' : 'criteria have'} no method for {fmtLabel(row.fmt)}
+            </span>
+            <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6, marginLeft: 8, verticalAlign: 'middle' }}>
+              {row.criteria.map((c) => (
+                <span key={c.sc} title={c.reason} style={{ display: 'inline-block', fontSize: 11, fontWeight: 600,
+                  color: '#8a6a0e', background: '#fdf8e6', border: '1px solid #eeda9a', borderRadius: 6,
+                  padding: '1px 7px', whiteSpace: 'nowrap' }}>
+                  <b style={{ fontVariantNumeric: 'tabular-nums' }}>{c.sc}</b> {c.name}
+                  <span style={{ marginLeft: 5, opacity: 0.75, fontWeight: 400 }}>
+                    {c.lane === 'at' ? 'needs AT testing' : 'buildable'}
+                  </span>
+                </span>
+              ))}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="muted" style={{ fontSize: 11, marginTop: 7, lineHeight: 1.45 }}>
+        {g.cells.some((c) => c.lane === 'at') && <>{AT_REASON}. </>}
+        {g.cells.some((c) => c.lane === 'gap') && <>Buildable gaps are statically detectable criteria ACP does not check yet. </>}
+        These fold into ⚪/🔴 above; listed here so a missing method is not mistaken for an inapplicable cell.
+      </div>
+    </div>
+  )
+}
+
 export default function CoverageScorecard({ files = [] }) {
   const [documents, setDocuments] = useState(true)
   const [open, setOpen] = useState(false)
@@ -156,6 +214,10 @@ export default function CoverageScorecard({ files = [] }) {
         <Tile emoji="⚪" n={assess.na} total={s.total} kind="na" palette={A} sub="barrier can't exist here" />
       </div>
       <div style={{ marginTop: 10 }}><Bar counts={assess} total={s.total} /></div>
+
+      {/* Coverage-gap warning — where ACP has no assessment method (buildable / needs-AT), stated
+          per format so the folded ⚪/🔴 lanes don't hide a genuine hole. */}
+      <GapSummary files={files} documents={documents} />
 
       {/* Layer 2 — Remediation: if it fails, how is it fixed? */}
       <div className="muted" style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.03em', textTransform: 'uppercase', margin: '16px 0 4px' }}>Remediation — if it fails, how is it fixed?</div>
