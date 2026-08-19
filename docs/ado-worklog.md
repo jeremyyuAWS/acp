@@ -1458,6 +1458,19 @@ invariant the redaction tests pin).
   already emits, never a value; and `remediation` = {remediated, written_back, published} booleans off the
   file record. New kwargs optional (backward-compatible); the category-not-value invariant is pinned by
   test, and the no-free-text / redacts-filenames guards stay green.
+- **Upgraded the deployed Langfuse v2 → v3 so the Session view scales** (ops + #447). With #403/#406
+  enriching every per-file trace, a real 44-document scan exposed the OSS limit: the v2 instance
+  (`langfuse/langfuse:2` on a single Postgres) rendered every trace in a session at once and **hung** on
+  large scans — individual traces opened fine, the aggregate Session view did not. v3 moves the trace
+  store to **ClickHouse** (+ Redis queue, MinIO blobs, web/worker split), which is what scales the
+  aggregate view. ClickHouse does not run reliably on Azure Container Apps (only Azure Files/SMB mounts,
+  which it fights), so v3 runs on a dedicated **Azure VM** (`acp-langfuse-v3`, D4s_v3 + Premium disk) via
+  docker-compose behind Caddy/TLS. Built alongside v2 and verified (health 200, `acp-compliance` project +
+  same `pk`/`sk`, ingestion 207) before cutover; then `acp-app`/`acp-worker` `LANGFUSE_HOST` was repointed
+  (host-only — the keys were re-seeded, so no app key change) and the Session view confirmed loading at
+  scale on a live scan. Old v2 app deleted; its trace data (not migrated — deliberate start-fresh) still
+  sits in the shared Postgres. **#447** adds `deploy/langfuse-v3/` (compose + provision/cutover scripts +
+  a runbook) so the hand-provisioned migration is reproducible and reversible. No app code changed.
 
 ## Open items (backlog candidates)
 
@@ -1837,3 +1850,10 @@ invariant the redaction tests pin).
   `queue.length`. Cross-session hand-off from the state-model owner's session (they owned the `onHitlCount`
   seam but were blocked; ownership flipped with their confirmation). **Sync marker deliberately NOT advanced**
   (same convention).
+- **2026-08-19 (Langfuse v3 upgrade)** — Added one Task under Observability — AI tracing and cost (Langfuse):
+  the v2→v3 migration that moved the trace store to ClickHouse on a dedicated Azure VM so the enriched
+  (#403/#406) Session view stops hanging on large scans, cut over host-only, and deleted the old v2 app.
+  #447 (`deploy/langfuse-v3/`) captures the runbook + compose so the hand-provisioned move is reproducible.
+  This is ops + one docs-only PR, not a RULE_PATHS change. **Sync marker still NOT advanced** (`fad0dfbe`,
+  same convention as the prior entries): the large delta since it remains other sessions' undocumented
+  feature work, left for them to characterise.
