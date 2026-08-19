@@ -583,6 +583,70 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
     return result
 
 
+def _search_folders(svc, folder_ids: list[str], max_files: int = 1000,
+                    exclude_remediated: bool = False, scope_out: dict | None = None,
+                    inventory_out: list | None = None) -> list[dict]:
+    """Walk SEVERAL folder subtrees and return their union.
+
+    Scoping to one folder was never the real ask — an estate is "HR and Finance", not "HR". This
+    keeps `_search_folder` as the single-root primitive and unions the results.
+
+    TWO THINGS THIS HAS TO GET RIGHT, both of which produce a plausible wrong number rather than
+    an error:
+
+    1. DEDUPE BY ID ACROSS ROOTS. Picking a folder and something inside it is an ordinary
+       selection, not a mistake, and Drive will then hand the same file back twice. Every source
+       is responsible for yielding unique identities (see _sp_list) — without this, _dedupe_names
+       renames the repeat to "Policy (1).docx", a phantom document that inflates the count, is
+       downloaded and analysed twice, and shows up as "x2 copies".
+
+    2. THE CAP IS SHARED, NOT PER ROOT. `max_files` bounds the whole listing; spending it per
+       root would let four folders quietly list 4x the ceiling. The remaining budget shrinks as
+       roots are walked, and truncation anywhere truncates the scan — a listing that stopped
+       early in ONE subtree has still not seen the estate.
+    """
+    merged: list[dict] = []
+    seen: set[str] = set()
+    names: list[dict] = []
+    truncated = False
+    walked = listed = skipped_acp = skipped_mirror = 0
+    for fid in folder_ids:
+        remaining = max_files - len(merged)
+        if remaining <= 0:
+            # Out of budget with roots still unwalked. That is truncation in the strict sense the
+            # scope contract means: there are files we did not list.
+            truncated = True
+            break
+        sub: dict = {}
+        batch = _search_folder(svc, fid, remaining, exclude_remediated=exclude_remediated,
+                               scope_out=sub, inventory_out=inventory_out)
+        for it in batch:
+            key = it.get("id") or it.get("path") or it.get("name")
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(it)
+        names.append({"id": fid, "name": _folder_name(svc, fid)})
+        walked += int(sub.get("folders_walked") or 0)
+        listed += int(sub.get("listed") or 0)
+        skipped_acp += int(sub.get("skipped_acp") or 0)
+        skipped_mirror += int(sub.get("skipped_mirror") or 0)
+        truncated = truncated or bool(sub.get("truncated"))
+    if scope_out is not None:
+        # `kind` stays "folder" for one root AND for many. isNarrowScope() keys off it, so a new
+        # kind here would silently drop the ⚠ that stops a narrowed count reading as the estate —
+        # the 2026-07-30 defect, re-introduced by a rename. `folders` carries the detail.
+        scope_out.update({"kind": "folder", "folder_id": folder_ids[0] if folder_ids else None,
+                          "folders": names, "folders_walked": walked, "listed": listed,
+                          "skipped_acp": skipped_acp, "skipped_mirror": skipped_mirror,
+                          "kept": len(merged), "truncated": truncated, "cap": max_files})
+        if len(names) == 1:
+            scope_out["folder_name"] = names[0]["name"]
+    print(f"[scan] discovery ({len(folder_ids)} folder roots): {walked} folder(s) walked · "
+          f"{listed} listed · {len(merged)} scannable after dedupe", flush=True)
+    return merged
+
+
 GRAPH = "https://graph.microsoft.com/v1.0"
 
 # The driveItem fields the estate inventory needs — the source metadata columns (size, created /
@@ -647,6 +711,87 @@ def _sp_drives(token: str, site_id: str) -> list[dict]:
             for d in data.get("value", []) if d.get("id")]
 
 
+def _sp_folders(token: str, drive_id: str, item_id: str = "root") -> list[dict]:
+    """Immediate subfolders of a driveItem — the Graph counterpart of routes/drive.py's /folders.
+
+    A LOCATION HERE IS (drive, item), NEVER AN ITEM ALONE. Graph item ids are unique only WITHIN
+    a drive, so an item id on its own does not identify a folder: two libraries can hand back the
+    same id. _sp_list already carries driveId per file for exactly this reason — the download path
+    once hardcoded /me/drive, which for a site-listed file would fetch the signed-in user's file of
+    that id or 404. A folder picker that returned bare item ids would rebuild that bug in the
+    scan's scope instead of its download.
+    """
+    seg = "root" if item_id in (None, "", "root") else f"items/{item_id}"
+    url = (f"{GRAPH}/drives/{drive_id}/{seg}/children"
+           "?$select=id,name,folder,parentReference&$top=200")
+    out: list[dict] = []
+    while url:
+        data = _sp_get(token, url)
+        for it in data.get("value", []):
+            if it.get("folder") is None:
+                continue                      # files are not pickable locations
+            out.append({"id": it.get("id"), "name": it.get("name"), "drive_id": drive_id,
+                        "child_count": (it.get("folder") or {}).get("childCount")})
+        url = data.get("@odata.nextLink")
+    return out
+
+
+def _sp_default_drive(token: str, site: str | None = None) -> str | None:
+    """The drive a picker starts in: a site's default library, or the user's OneDrive."""
+    try:
+        base = f"{GRAPH}/sites/{site}/drive" if site else f"{GRAPH}/me/drive"
+        return (_sp_get(token, base + "?$select=id") or {}).get("id")
+    except Exception:
+        return None
+
+
+def _sp_walk_folder(token: str, drive_id: str, item_id: str, max_files: int,
+                    exts: set[str], inventory_out: list | None = None) -> tuple[list[dict], bool]:
+    """BFS one Graph folder subtree. Returns (raw driveItems, truncated).
+
+    Recursion is server-side here for the same reason _search_folder does it for Drive: the
+    picker hands back a folder and the user means "and everything under it". Making that an
+    "include subfolders" toggle would offer a choice whose wrong answer silently under-reports.
+    """
+    queue = [item_id]
+    seen: set[str] = set()
+    raw: list[dict] = []
+    truncated = False
+    while queue:
+        cur = queue.pop(0)
+        if cur in seen:
+            continue                          # a shortcut/cycle must not walk forever
+        seen.add(cur)
+        seg = "root" if cur in (None, "", "root") else f"items/{cur}"
+        url = f"{GRAPH}/drives/{drive_id}/{seg}/children?$select={_SP_ITEM_SELECT},folder&$top=200"
+        while url:
+            if len(raw) >= max_files:
+                truncated = True
+                break
+            data = _sp_get(token, url)
+            for it in data.get("value", []):
+                if it.get("folder") is not None:
+                    queue.append(it.get("id"))
+                    continue
+                it["_acp_drive_id"] = drive_id
+                raw.append(it)
+            url = data.get("@odata.nextLink")
+        if truncated:
+            break
+    return raw, truncated
+
+
+def _sp_folder_name(token: str, drive_id: str, item_id: str) -> str | None:
+    """A chosen folder's display name. Best-effort for the same reason _sp_site_name is: this
+    exists only so the UI can NAME the boundary, and a scan must never fail because a label
+    lookup did."""
+    try:
+        data = _sp_get(token, f"{GRAPH}/drives/{drive_id}/items/{item_id}?$select=name")
+        return data.get("name") or None
+    except Exception:
+        return None
+
+
 def _sp_site_name(token: str, site_id: str) -> str | None:
     """A site's display name, or None. The SharePoint counterpart of `_folder_name`, and
     best-effort for the same reason: this exists only so the UI can NAME the boundary it reports
@@ -666,7 +811,8 @@ def _sp_site_name(token: str, site_id: str) -> str | None:
 
 def _sp_list(token: str, max_files: int = 200, site: str | None = None,
              exclude_remediated: bool = False, inventory_out: list | None = None,
-             scope_out: dict | None = None) -> list[dict]:
+             scope_out: dict | None = None,
+             locations: list[tuple[str, str]] | None = None) -> list[dict]:
     """List scannable files from OneDrive, or from every document library on a SharePoint site.
 
     The RETURN value is the scannable analysis set (the six supported extensions) — unchanged, so
@@ -738,24 +884,43 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
     est_files: list[dict] = []
     hit_cap = False
 
-    if site:
+    # A target is (drive_id, an iterable of item BATCHES). Both modes below feed the identical
+    # per-item processing beneath — dedupe, mirror-folder skip, inventory row, scannable filter.
+    # Folder narrowing that re-implemented any of that would drift from the whole-drive path in
+    # exactly the places (ACP output re-ingestion, driveId stamping) the comments here warn about.
+    def _pages(url: str):
+        while url:
+            data = _sp_get(token, url)
+            yield data.get("value", [])
+            url = data.get("@odata.nextLink")
+
+    if locations:
+        # Chosen folders. Each location is (drive_id, item_id) — never a bare item id, because a
+        # Graph item id is unique only within its drive (see _sp_folders).
+        targets = []
+        for drive_id, item_id in locations:
+            walked, cut = _sp_walk_folder(token, drive_id, item_id, max_files, exts,
+                                          inventory_out=None)
+            hit_cap = hit_cap or cut
+            targets.append((drive_id, iter([walked])))
+    elif site:
         drives = _sp_drives(token, site)
         if not drives:
             print(f"[scan] SharePoint site {site} has no document libraries visible to this "
                   f"token — nothing to scan", flush=True)
-        targets = [(d["id"], f"{GRAPH}/drives/{d['id']}/root/search(q='')"
-                              f"?$select={_SP_ITEM_SELECT}&$top=200") for d in drives]
+        targets = [(d["id"], _pages(f"{GRAPH}/drives/{d['id']}/root/search(q='')"
+                                    f"?$select={_SP_ITEM_SELECT}&$top=200")) for d in drives]
     else:
         # None, not a resolved id: the download path reads a missing driveId as /me/drive, which
         # is what every item stored before this change looks like.
-        targets = [(None, f"{GRAPH}/me/drive/root/search(q='')"
-                          f"?$select={_SP_ITEM_SELECT}&$top=200")]
+        targets = [(None, _pages(f"{GRAPH}/me/drive/root/search(q='')"
+                                 f"?$select={_SP_ITEM_SELECT}&$top=200"))]
 
-    for i, (drive_id, start) in enumerate(targets):
-        url = start
-        while url and len(files) < max_files:
-            data = _sp_get(token, url)
-            for item in data.get("value", []):
+    for i, (drive_id, pages) in enumerate(targets):
+        for batch in pages:
+            if len(files) >= max_files:
+                break
+            for item in batch:
                 if "file" not in item:
                     continue
                 item_id = item.get("id")
@@ -806,11 +971,11 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 elif inventory_out is not None:
                     # Non-scannable item — inventoried with metadata, never analysed.
                     inventory_out.append(_sp_inventory_row(item))
-            url = data.get("@odata.nextLink")
         if len(files) >= max_files:
-            # Truncated only if the cap left something unlisted: this library still has a page (`url`)
-            # or a later library was never reached. A page fully read is not truncation.
-            if url or i < len(targets) - 1:
+            # Truncated only if the cap left something unlisted: this library still has a batch
+            # pending, or a later library was never reached. A page fully read is not truncation —
+            # the distinction the whole scope contract turns on.
+            if next(pages, None) is not None or i < len(targets) - 1:
                 hit_cap = True
             break
 
@@ -1068,10 +1233,30 @@ def _dedupe_names(items: list[dict]) -> list[dict]:
     return out
 
 
+def _sp_locations(roots: list[str]) -> tuple[list[tuple[str, str]], str | None]:
+    """Split chosen SharePoint roots into (drive, item) folder locations and a bare site id.
+
+    A folder location is written `<driveId>/<itemId>` — the pair, because a Graph item id is
+    unique only within its drive. A root with no "/" is a site id, which is what the site picker
+    has always sent, so an existing caller is unchanged.
+    """
+    locs: list[tuple[str, str]] = []
+    site: str | None = None
+    for r in roots:
+        if "/" in r:
+            drive_id, _, item_id = r.partition("/")
+            if drive_id and item_id:
+                locs.append((drive_id, item_id))
+        elif site is None:
+            site = r
+    return locs, site
+
+
 def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None = None,
           max_files: int | None = None, exclude_remediated: bool = False,
           scope_out: dict | None = None, scope_files: dict | None = None,
-          inventory_out: list | None = None) -> list[dict]:
+          inventory_out: list | None = None,
+          folders: list[str] | None = None) -> list[dict]:
     """List the source. `scope_out`, when given, is filled in with WHAT WAS COVERED.
 
     `inventory_out`, when given, is filled with per-file inventory rows for the NON-scannable
@@ -1102,6 +1287,12 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
     answer. `folder_name` is resolved here (one metadata read) so the UI can say which folder
     rather than showing a Drive id nobody recognises.
     """
+    # `folders` is the multi-root form of `folder`; `folder` remains accepted so every existing
+    # caller, saved link and queued job keeps working. "root" is Drive's sentinel for "no
+    # narrowing" and is dropped here rather than at four branches below.
+    roots = [f for f in (list(folders) if folders else ([folder] if folder else []))
+             if f and f != "root"]
+
     # The monolithic scan keeps conservative caps (one box's disk holds every file);
     # the fan-out path (ADR 0007) passes a high cap since each file is its own job.
     if source == "local":
@@ -1139,10 +1330,20 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         # `folder` carries the SharePoint SITE id here, reusing the parameter Drive already uses
         # to narrow a scan rather than threading a second one through five call sites. "root" is
         # Drive's own sentinel for "no narrowing" and means the same thing here: OneDrive.
-        site = None if folder in (None, "", "root") else folder
+        # Roots may now be FOLDERS as well as a site: `<driveId>/<itemId>` is a folder inside a
+        # library or OneDrive, a bare id is a site. Folder narrowing is what makes OneDrive
+        # scopeable at all — before this, "SharePoint" could only ever mean a whole site or the
+        # whole of the signed-in user's OneDrive.
+        sp_locs, site = _sp_locations(roots)
+        # `locations` is passed ONLY when folders were actually chosen, so a scan that does not
+        # use the new mode calls _sp_list with exactly the arguments it always did. Passing it
+        # unconditionally broke four existing tests whose stubs pin the old signature — and those
+        # stubs are right to: a caller that has not opted into a feature should not be able to
+        # tell it exists.
+        extra = {"locations": sp_locs} if sp_locs else {}
         result = _sp_list(sp_token, max_files or 200, site=site,
                           exclude_remediated=exclude_remediated, inventory_out=inventory_out,
-                          scope_out=scope_out)
+                          scope_out=scope_out, **extra)
         if scope_out is not None:
             # `site_name` for the same reason `folder_name` exists on the Drive branch: a Graph
             # site id is `contoso.sharepoint.com,<guid>,<guid>`, and a boundary the reader cannot
@@ -1155,6 +1356,14 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
             scope_out.update({"kind": "sharepoint", "site": site, "kept": len(result),
                               "site_name": _sp_site_name(sp_token, site) if site else None,
                               "truncated": bool((scope_out.get("inventory") or {}).get("truncated"))})
+            if sp_locs:
+                # THIS IS LOAD-BEARING, not decoration. isNarrowScope() fired on `site` for
+                # SharePoint — and a OneDrive folder scan has NO site, so without `folders` here
+                # a narrowed count would render with no boundary and read as the whole estate.
+                # That is precisely the 2026-07-30 defect (see frontend/src/scanScope.js), which
+                # a new narrowing mode gets to re-introduce for free unless it says so.
+                scope_out["folders"] = [{"id": f"{d}/{i}", "name": _sp_folder_name(sp_token, d, i)}
+                                        for d, i in sp_locs]
     elif source == "smb":
         # Network drive (ADR 0032). `folder` carries the in-scope SMB share root (a UNC path), the
         # same parameter Drive uses to narrow a scan and SharePoint reuses for the site id. The
@@ -1171,13 +1380,19 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         if scope_out is not None:
             scope_out.update({"kind": "smb", "root": ", ".join(roots) or None, "kept": len(result),
                               "truncated": bool((scope_out.get("inventory") or {}).get("truncated"))})
-    elif folder and folder != "root":
-        # Specific folder: recursive BFS
-        result = _search_folder(svc, folder, max_files or 1000,
+    elif len(roots) > 1:
+        # Several chosen folders: walk each subtree and union them, sharing one cap.
+        result = _search_folders(svc, roots, max_files or 1000,
+                                 exclude_remediated=exclude_remediated, scope_out=scope_out,
+                                 inventory_out=inventory_out)
+    elif roots:
+        # Specific folder: recursive BFS. Kept as its own branch rather than folded into
+        # _search_folders so a single-folder scan produces byte-identical scope to before.
+        result = _search_folder(svc, roots[0], max_files or 1000,
                                 exclude_remediated=exclude_remediated, scope_out=scope_out,
                                 inventory_out=inventory_out)
         if scope_out is not None:
-            scope_out["folder_name"] = _folder_name(svc, folder)
+            scope_out["folder_name"] = _folder_name(svc, roots[0])
     elif folder == "root" or folder is None:
         # No specific folder chosen: search the whole Drive
         result = _search_drive(svc, max_files or 500, exclude_remediated=exclude_remediated,
@@ -2352,7 +2567,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
              folder: str | None = None, sp_token: str | None = None,
              ai_enabled: bool = True, scan_id: str | None = None,
              user: str | None = None, detect_pii: bool = False,
-             exclude_remediated: bool = False, inventory_out: list | None = None) -> dict:
+             exclude_remediated: bool = False, inventory_out: list | None = None,
+             folders: list[str] | None = None) -> dict:
     from store import RULE_CATALOG, _extract_sc  # import here to avoid circular at module load
     rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
@@ -2395,7 +2611,10 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
 
     tmp = Path(tempfile.mkdtemp(prefix="acp-api-scan-"))
     # Per-user token: default to whole-Drive search. ADC/demo: pinned demo folder.
-    effective_folder = folder if folder else ("root" if drive_token else None)
+    # `folders` (multi-root) wins when given; `folder` stays the single-root form. The "root"
+    # fallback means "whole Drive" and must not be applied when explicit folders were chosen —
+    # doing so would widen a deliberately narrowed scan back to the entire estate.
+    effective_folder = folder if folder else (None if folders else ("root" if drive_token else None))
     try:
         progress({"phase": "connecting", "files_found": 0, "files_done": 0, "current": None})
         svc = None if source in ("local", "sharepoint") else _drive_service(drive_token)
@@ -2406,6 +2625,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         # the "raise ACP_FANOUT_MAX_FILES" hint pointed at a knob that never reached it.
         items = _list(source, svc, folder=effective_folder, sp_token=sp_token,
                      max_files=FANOUT_MAX_FILES,
+                     **({"folders": folders} if folders else {}),
                      exclude_remediated=exclude_remediated, scope_out=scope,
                      scope_files=_scope_for_listing(user), inventory_out=inventory_out)
         n = len(items)

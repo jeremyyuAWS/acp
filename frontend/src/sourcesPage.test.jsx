@@ -20,11 +20,18 @@ import { createTestRoot, unmountAll } from './testRoots.js'
 
 afterEach(unmountAll)
 
-// Integrations reads getConfig; the wizard nested in the modal reads getSettings/updateSettings.
+// Integrations reads getConfig; the wizard nested in the modal reads getSettings/updateSettings;
+// the Scanned-locations row reads getScanLocations and writes setScanLocations. A partial mock of
+// a module the component imports FROM does not fail at import — it fails at first call, inside a
+// useEffect, as eleven unrelated assertions.
 vi.mock('./api.js', () => ({
   getConfig: vi.fn(async () => ({ google_client_id: null })),
   getSettings: vi.fn(async () => ({ scan_scope: '' })),
   updateSettings: vi.fn(async () => ({ scan_scope: '' })),
+  getScanLocations: vi.fn(async () => ({ locations: {} })),
+  setScanLocations: vi.fn(async (source, folders) => ({ ok: true, source, folders })),
+  listFolders: vi.fn(async () => ({ folders: [] })),
+  listSpFolders: vi.fn(async () => ({ drive_id: 'd', folders: [] })),
 }))
 
 const { default: Integrations } = await import('./Integrations.jsx')

@@ -66,6 +66,40 @@ def drives(site_id: str, request: Request):
         raise HTTPException(status_code=502, detail=f"Microsoft Graph error: {e}") from e
 
 
+@router.get("/sharepoint/folders")
+def sp_folders(request: Request, drive_id: str = "", parent: str = "root", site: str = ""):
+    """Immediate subfolders of a driveItem — the Graph counterpart of drive.py's /folders.
+
+    Without this, "SharePoint" could only ever be scoped to a WHOLE SITE and OneDrive could not
+    be scoped at all: the site picker was the only narrowing surface, and OneDrive has no site to
+    pick. A user with one relevant folder in a large OneDrive had to scan all of it.
+
+    `drive_id` may be omitted, in which case it resolves to the site's default document library
+    or — with no site either — the signed-in user's OneDrive, so the picker can open at a sensible
+    root without the caller first making two lookups of its own.
+
+    The returned ids are `<driveId>/<itemId>` PAIRS, which is the form `?folders=` expects: a
+    Graph item id is unique only within its drive, so a bare id does not identify a folder.
+    Handing back the bare id and re-attaching the drive at the call site is exactly how the
+    download path once ended up fetching the signed-in user's file of that id (see _sp_list).
+    """
+    token = _token(request)
+    try:
+        did = drive_id or scanner._sp_default_drive(token, site or None)
+        if not did:
+            raise HTTPException(status_code=404,
+                                detail="no document library found for that site or user")
+        return {"drive_id": did, "parent": parent,
+                "folders": [{**f, "id": f"{did}/{f['id']}", "item_id": f["id"]}
+                            for f in scanner._sp_folders(token, did, parent)]}
+    except HTTPException:
+        raise
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Microsoft Graph error: {e}") from e
+
+
 @router.post("/sharepoint/upload")
 async def sharepoint_upload(request: Request):
     """Write one remediated file back to SharePoint.

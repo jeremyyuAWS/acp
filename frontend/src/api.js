@@ -295,14 +295,21 @@ export const openReport = (id, filename) => {
       setTimeout(() => URL.revokeObjectURL(url), 60000)
     })
 }
-export const startScan = (source = 'local', folder = null, aiEnabled = true, pii = true, excludeRemediated = false, incremental = true) => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}`, { method: 'POST', headers: headers() }).then(j))
+// The `?folders=` query for a chosen location set. `folder` (singular) stays the one-root form
+// so an existing caller is untouched; both may be sent and the server unions them.
+// A SharePoint/OneDrive location is `<driveId>/<itemId>` — the pair, because a Graph item id is
+// unique only within its drive.
+const foldersQ = (folders) => ((folders || []).length
+  ? (folders || []).map((f) => `&folders=${encodeURIComponent(typeof f === 'string' ? f : f.id)}`).join('')
+  : '')
+export const startScan = (source = 'local', folder = null, aiEnabled = true, pii = true, excludeRemediated = false, incremental = true, folders = null) => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}`, { method: 'POST', headers: headers() }).then(j))
 export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/scans/jobs/${id}`, { headers: headers() }).then(j))
 
 // ── Durable async queue (ADR 0004/0005) ───────────────────────────────────────
 // Queued scan: runs in the worker pool, survives restarts, shows in /jobs + Grafana.
-export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = true, excludeRemediated = false, incremental = true) => (SIM
+export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = true, excludeRemediated = false, incremental = true, folders = null) => (SIM
   ? sim({ scan_id: 'sim-scan', job_id: 'sim-job', queued: true, workers: 4 })
-  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}&queue=true&fanout=true`, { method: 'POST', headers: headers() }).then(j))
+  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}&queue=true&fanout=true`, { method: 'POST', headers: headers() }).then(j))
 // Stop an in-flight durable scan: kills its outstanding jobs server-side and closes the run
 // as 'cancelled' (files already analysed keep their records). Owner-scoped — 409 otherwise.
 export const cancelScan = (scanId) => (SIM
@@ -584,6 +591,21 @@ export const setWorkers = (count) => (SIM
 export const resetDemoData = (scope = 'all') => (SIM
   ? sim({ scope, cleared_tables: [], langfuse_traces_deleted: 0 })
   : fetch(`${BASE}/admin/reset?scope=${scope}&confirm=true`, { method: 'POST', headers: headers() }).then(j))
+// Graph folder picker (OneDrive / SharePoint). Returns ids ALREADY in `<driveId>/<itemId>` form,
+// which is what ?folders= expects — re-attaching the drive at the call site is how the download
+// path once fetched the signed-in user's file of that id instead.
+export const listSpFolders = (parent = 'root', driveId = '', site = '') => (SIM
+  ? sim({ drive_id: 'sim-drive', parent, folders: [] })
+  : fetch(`${BASE}/sharepoint/folders?parent=${encodeURIComponent(parent)}${driveId ? `&drive_id=${encodeURIComponent(driveId)}` : ''}${site ? `&site=${encodeURIComponent(site)}` : ''}`, { headers: headers() }).then(j))
+
+// The folders each source is scoped to — a property of the CONNECTION, not of one scan, which is
+// why it is stored server-side rather than re-picked on every scan.
+export const getScanLocations = () => (SIM ? sim({ locations: {} })
+  : fetch(`${BASE}/sources/locations`, { headers: headers() }).then(j))
+export const setScanLocations = (source, folders) => (SIM ? sim({ ok: true, source, folders })
+  : fetch(`${BASE}/sources/locations`, { method: 'PUT', headers: { ...headers(), 'Content-Type': 'application/json' },
+                                         body: JSON.stringify({ source, folders }) }).then(j))
+
 export const listFolders = (parent = 'root') => (SIM ? sim({ parent, name: 'My Drive', folders: [] }) : fetch(`${BASE}/folders?parent=${encodeURIComponent(parent)}`, { headers: headers() }).then(j))
 export const getSchedule = () => (SIM
   ? sim({ enabled: false, interval_minutes: 60, next_at: null, last_at: null })
