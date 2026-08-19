@@ -7,6 +7,7 @@ import { fixSteps, appName } from './remediationGuide.js'
 import { scOf } from './fixSummary.js'
 import RemediationPreview from './RemediationPreview.jsx'
 import WorkspaceProgress from './WorkspaceProgress.jsx'
+import RemediationTransform from './RemediationTransform.jsx'
 
 // Master/detail Remediation inbox. Remediation is queue work — select an item, understand it, act,
 // move to the next — so the layout is an email-style split: a 38% work queue on the left, a 62%
@@ -160,7 +161,11 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
           <p className="muted" style={{ fontSize: 11.5, letterSpacing: '.08em', textTransform: 'uppercase', margin: '0 0 8px' }}>
             {isManual ? 'How to fix it' : 'What changed'}
           </p>
-          {isManual ? <ManualSteps f={f} /> : <BeforeAfter f={f} />}
+          {isManual
+            ? <ManualSteps f={f} />
+            : (f.after != null && f.after !== '')
+              ? <RemediationTransform finding={f} decisions={decisions} />  /* Found → Proposed → Verified */
+              : <BeforeAfter f={f} />}
         </div>
 
         {/* Collapsed context — kept out of the default view (spec: two collapsed sections). */}
