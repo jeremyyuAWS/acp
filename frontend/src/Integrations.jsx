@@ -239,11 +239,18 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
     return () => { alive = false }
   }, [])
 
-  const saveLocations = (src, folders) => {
+  // Exclusions live under a reserved `_exclude` key in the same stored map, so one GET carries
+  // the whole scope. Read through a helper because "no exclusions" and "source not configured"
+  // must both come back as [] rather than undefined — a chip list that renders `undefined.map`
+  // takes the Sources tab down.
+  const exclFor = (key) => ((locs || {})._exclude || {})[key] || []
+
+  const saveLocations = (src, folders, exclude = []) => {
     const key = LOC_KEY(src.type)
     if (!key) return
-    setLocs((s) => ({ ...(s || {}), [key]: folders }))     // optimistic: the chips redraw at once
-    setScanLocations(key, folders).catch(() => {
+    setLocs((s) => ({ ...(s || {}), [key]: folders,
+                      _exclude: { ...((s || {})._exclude || {}), [key]: exclude } }))
+    setScanLocations(key, folders, exclude).catch(() => {
       // Put it back rather than leave the card asserting a scope the server does not have. A
       // card that claims a narrowing the next scan will not apply is worse than a failed save.
       getScanLocations().then((r) => setLocs(r.locations || {})).catch(() => {})
@@ -380,6 +387,14 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                               fontSize: 11.5, background: '#F1EFF3', border: '1px solid var(--line)',
                               borderRadius: 999, padding: '2px 8px' }}>📁 {f.name}</span>
                           ))}
+                        {/* Carve-outs beside the inclusions, never on their own screen: "HR" and
+                            "HR except Archive" are different scopes and the card is where someone
+                            checks what a count covered. */}
+                        {exclFor(LOC_KEY(src.type)).map((f) => (
+                          <span key={f.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
+                            fontSize: 11.5, background: '#FBF0F0', border: '1px solid var(--line)',
+                            borderRadius: 999, padding: '2px 8px' }}>🚫 except {f.name}</span>
+                        ))}
                         <button className="linklike" style={{ fontSize: 12 }}
                                 onClick={() => setPickFor(src)}>Edit</button>
                       </div>
@@ -474,7 +489,8 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
             ? listFolders
             : (parent) => listSpFolders(parent)}
           initial={(locs || {})[LOC_KEY(pickFor.type)] || []}
-          onConfirm={(folders) => saveLocations(pickFor, folders)}
+          initialExclude={exclFor(LOC_KEY(pickFor.type))}
+          onConfirm={(folders, exclude) => saveLocations(pickFor, folders, exclude)}
           onClose={() => setPickFor(null)} />
       )}
       {selFile && <FileDrawer   file={selFile}   onClose={() => setSelFile(null)} scanId={scanId} />}

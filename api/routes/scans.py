@@ -40,6 +40,11 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
                # SharePoint/OneDrive folder is written `<driveId>/<itemId>` — the pair, because a
                # Graph item id is unique only within its drive.
                folders: list[str] | None = Query(None),
+               # Subtrees to carve OUT of the chosen folders — a selected parent with an
+               # excluded child (PRD 6.3). Ignored without `folders`, since there is nothing
+               # to carve out of and applying them to a whole-estate scan would narrow it
+               # invisibly.
+               exclude_folders: list[str] | None = Query(None),
                ai: bool = Query(True), queue: bool = Query(False),
                # PII (deep) scan is opt-in: it doubles scan time by extracting + regex-scanning
                # every file's text, so a scan is fast unless the caller explicitly asks for it.
@@ -79,7 +84,8 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
         # 'scan' job (default, proven). Both are durable and resume across replicas.
         jtype = "scan_discover" if fanout else "scan"
         job_id = core.store.enqueue_job(
-            jtype, {"source": source, "scan_id": scan_id, "folder": folder, "folders": folders, "ai": ai,
+            jtype, {"source": source, "scan_id": scan_id, "folder": folder, "folders": folders,
+                    "exclude_folders": exclude_folders, "ai": ai,
                     "user": user, "pii": pii, "batch": batch,
                     "exclude_remediated": exclude_remediated, "incremental": incremental},
             scan_id=scan_id)
@@ -109,6 +115,7 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
         inv: list = []
         report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token,
                           **({"folders": folders} if folders else {}),
+                          **({"exclude_folders": exclude_folders} if exclude_folders else {}),
                           ai_enabled=effective_ai, user=user, detect_pii=pii,
                           exclude_remediated=exclude_remediated, inventory_out=inv)
         sid = core.store.save_scan(report)
@@ -149,6 +156,7 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
             report = run_scan(source, progress=lambda d: core.update_job(job_id, d),
                               drive_token=token, folder=folder, sp_token=sp_token,
                               **({"folders": folders} if folders else {}),
+                              **({"exclude_folders": exclude_folders} if exclude_folders else {}),
                               ai_enabled=effective_ai, user=user, detect_pii=pii,
                               exclude_remediated=exclude_remediated, inventory_out=inv)
             sid = core.store.save_scan(report)

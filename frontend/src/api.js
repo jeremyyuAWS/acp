@@ -302,6 +302,12 @@ export const openReport = (id, filename) => {
 const foldersQ = (folders) => ((folders || []).length
   ? (folders || []).map((f) => `&folders=${encodeURIComponent(typeof f === 'string' ? f : f.id)}`).join('')
   : '')
+// Carve-outs beneath the chosen folders. Server-side these are ignored without `folders`, since
+// there would be nothing to carve out of and applying them to a whole-estate scan would narrow it
+// with nothing on screen to say so.
+const excludeQ = (exclude) => ((exclude || []).length
+  ? (exclude || []).map((f) => `&exclude_folders=${encodeURIComponent(typeof f === 'string' ? f : f.id)}`).join('')
+  : '')
 export const startScan = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null) => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}`, { method: 'POST', headers: headers() }).then(j))
 export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/scans/jobs/${id}`, { headers: headers() }).then(j))
 
@@ -602,9 +608,9 @@ export const listSpFolders = (parent = 'root', driveId = '', site = '') => (SIM
 // why it is stored server-side rather than re-picked on every scan.
 export const getScanLocations = () => (SIM ? sim({ locations: {} })
   : fetch(`${BASE}/sources/locations`, { headers: headers() }).then(j))
-export const setScanLocations = (source, folders) => (SIM ? sim({ ok: true, source, folders })
+export const setScanLocations = (source, folders, exclude = []) => (SIM ? sim({ ok: true, source, folders, exclude })
   : fetch(`${BASE}/sources/locations`, { method: 'PUT', headers: { ...headers(), 'Content-Type': 'application/json' },
-                                         body: JSON.stringify({ source, folders }) }).then(j))
+                                         body: JSON.stringify({ source, folders, exclude }) }).then(j))
 
 export const listFolders = (parent = 'root') => (SIM ? sim({ parent, name: 'My Drive', folders: [] }) : fetch(`${BASE}/folders?parent=${encodeURIComponent(parent)}`, { headers: headers() }).then(j))
 export const getSchedule = () => (SIM

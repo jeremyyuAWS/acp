@@ -496,7 +496,8 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
 
 
 def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediated: bool = False,
-                   scope_out: dict | None = None, inventory_out: list | None = None) -> list[dict]:
+                   scope_out: dict | None = None, inventory_out: list | None = None,
+                   exclude_ids: set | None = None) -> list[dict]:
     """BFS over a folder subtree — returns all scannable files in the folder AND
     every nested subfolder. Bounded by max_files (newest folders may be skipped
     once the cap is hit) and a cycle guard, so a huge tree can't run unbounded.
@@ -506,6 +507,11 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
     parent-folder lineage, and sufficient since ACP only ever writes remediated
     output to that one well-known folder (handlers.ensure_remediated_folder).
 
+    `exclude_ids` are folder ids whose subtrees are pruned: an "include this parent EXCEPT that
+    child" selection (PRD §6.3). Pruned at the point of enqueue, so an excluded folder is never
+    listed and neither are its descendants — "most specific path wins", and re-inclusion beneath
+    an exclusion is deliberately not supported, so one check at the boundary is the whole rule.
+
     `scope_out`, when given, is filled in with WHAT THIS LISTING COVERED — see `_list`. This is
     the path that reported "1 document" on 2026-07-30 while the estate the user had in mind held
     eight: the folder held exactly one file, the listing was right, and NOTHING said the other
@@ -514,12 +520,14 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
     if exclude_remediated:
         import core
         remediated_folder_name = core.store.get_drive_mirror_folder()
+    excluded = set(exclude_ids or ())
     queue = [folder_id]
     seen_folders: set[str] = set()
     raw: list[dict] = []
     listed = 0            # raw non-folder items Drive returned
     skipped_acp = 0       # ACP's own output, skipped by provenance
     skipped_mirror = 0    # subfolders skipped by name (pre-provenance copies live here)
+    skipped_excluded = 0  # subtrees the user explicitly excluded beneath an included parent
     while queue and len(raw) < max_files:
         fid = queue.pop(0)
         if fid in seen_folders:
@@ -550,6 +558,13 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
                     if exclude_remediated and f["name"] == remediated_folder_name:
                         skipped_mirror += 1
                         continue
+                    # A user-excluded subtree. Pruned here rather than filtered afterwards so its
+                    # descendants are never enqueued either — filtering the RESULT would still
+                    # walk the subtree, spend the cap on files it then discards, and (worse) let
+                    # an excluded branch push wanted files past the cap.
+                    if f["id"] in excluded:
+                        skipped_excluded += 1
+                        continue
                     queue.append(f["id"])
                     continue
                 listed += 1
@@ -576,6 +591,7 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
         scope_out.update({"kind": "folder", "folder_id": folder_id,
                           "folders_walked": len(seen_folders), "listed": listed,
                           "skipped_acp": skipped_acp, "skipped_mirror": skipped_mirror,
+                          "skipped_excluded": skipped_excluded,
                           "kept": len(result), "truncated": truncated, "cap": max_files})
     print(f"[scan] discovery (folder subtree): {len(seen_folders)} folder(s) walked · "
           f"{listed} listed · {skipped_acp} skipped as ACP-generated output · "
@@ -585,7 +601,8 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
 
 def _search_folders(svc, folder_ids: list[str], max_files: int = 1000,
                     exclude_remediated: bool = False, scope_out: dict | None = None,
-                    inventory_out: list | None = None) -> list[dict]:
+                    inventory_out: list | None = None,
+                    exclude_ids: set | None = None) -> list[dict]:
     """Walk SEVERAL folder subtrees and return their union.
 
     Scoping to one folder was never the real ask — an estate is "HR and Finance", not "HR". This
@@ -609,7 +626,7 @@ def _search_folders(svc, folder_ids: list[str], max_files: int = 1000,
     seen: set[str] = set()
     names: list[dict] = []
     truncated = False
-    walked = listed = skipped_acp = skipped_mirror = 0
+    walked = listed = skipped_acp = skipped_mirror = skipped_excluded = 0
     for fid in folder_ids:
         remaining = max_files - len(merged)
         if remaining <= 0:
@@ -619,7 +636,8 @@ def _search_folders(svc, folder_ids: list[str], max_files: int = 1000,
             break
         sub: dict = {}
         batch = _search_folder(svc, fid, remaining, exclude_remediated=exclude_remediated,
-                               scope_out=sub, inventory_out=inventory_out)
+                               scope_out=sub, inventory_out=inventory_out,
+                               exclude_ids=exclude_ids)
         for it in batch:
             key = it.get("id") or it.get("path") or it.get("name")
             if key in seen:
@@ -631,6 +649,7 @@ def _search_folders(svc, folder_ids: list[str], max_files: int = 1000,
         listed += int(sub.get("listed") or 0)
         skipped_acp += int(sub.get("skipped_acp") or 0)
         skipped_mirror += int(sub.get("skipped_mirror") or 0)
+        skipped_excluded += int(sub.get("skipped_excluded") or 0)
         truncated = truncated or bool(sub.get("truncated"))
     if scope_out is not None:
         # `kind` stays "folder" for one root AND for many. isNarrowScope() keys off it, so a new
@@ -639,6 +658,7 @@ def _search_folders(svc, folder_ids: list[str], max_files: int = 1000,
         scope_out.update({"kind": "folder", "folder_id": folder_ids[0] if folder_ids else None,
                           "folders": names, "folders_walked": walked, "listed": listed,
                           "skipped_acp": skipped_acp, "skipped_mirror": skipped_mirror,
+                          "skipped_excluded": skipped_excluded,
                           "kept": len(merged), "truncated": truncated, "cap": max_files})
         if len(names) == 1:
             scope_out["folder_name"] = names[0]["name"]
@@ -746,13 +766,15 @@ def _sp_default_drive(token: str, site: str | None = None) -> str | None:
 
 
 def _sp_walk_folder(token: str, drive_id: str, item_id: str, max_files: int,
-                    exts: set[str], inventory_out: list | None = None) -> tuple[list[dict], bool]:
+                    exts: set[str], inventory_out: list | None = None,
+                    exclude_ids: set | None = None) -> tuple[list[dict], bool]:
     """BFS one Graph folder subtree. Returns (raw driveItems, truncated).
 
     Recursion is server-side here for the same reason _search_folder does it for Drive: the
     picker hands back a folder and the user means "and everything under it". Making that an
     "include subfolders" toggle would offer a choice whose wrong answer silently under-reports.
     """
+    excluded = set(exclude_ids or ())
     queue = [item_id]
     seen: set[str] = set()
     raw: list[dict] = []
@@ -771,6 +793,12 @@ def _sp_walk_folder(token: str, drive_id: str, item_id: str, max_files: int,
             data = _sp_get(token, url)
             for it in data.get("value", []):
                 if it.get("folder") is not None:
+                    # Excluded subtree — pruned at enqueue, same rule as the Drive walker.
+                    # Both `<driveId>/<itemId>` and a bare item id are accepted so a caller
+                    # need not know which form reached it.
+                    if (it.get("id") in excluded
+                            or f"{drive_id}/{it.get('id')}" in excluded):
+                        continue
                     queue.append(it.get("id"))
                     continue
                 it["_acp_drive_id"] = drive_id
@@ -812,7 +840,8 @@ def _sp_site_name(token: str, site_id: str) -> str | None:
 def _sp_list(token: str, max_files: int = 200, site: str | None = None,
              exclude_remediated: bool = False, inventory_out: list | None = None,
              scope_out: dict | None = None,
-             locations: list[tuple[str, str]] | None = None) -> list[dict]:
+             locations: list[tuple[str, str]] | None = None,
+             exclude_ids: set | None = None) -> list[dict]:
     """List scannable files from OneDrive, or from every document library on a SharePoint site.
 
     The RETURN value is the scannable analysis set (the six supported extensions) — unchanged, so
@@ -900,7 +929,7 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
         targets = []
         for drive_id, item_id in locations:
             walked, cut = _sp_walk_folder(token, drive_id, item_id, max_files, exts,
-                                          inventory_out=None)
+                                          inventory_out=None, exclude_ids=exclude_ids)
             hit_cap = hit_cap or cut
             targets.append((drive_id, iter([walked])))
     elif site:
@@ -1256,7 +1285,8 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
           max_files: int | None = None, exclude_remediated: bool = False,
           scope_out: dict | None = None, scope_files: dict | None = None,
           inventory_out: list | None = None,
-          folders: list[str] | None = None) -> list[dict]:
+          folders: list[str] | None = None,
+          exclude_folders: list[str] | None = None) -> list[dict]:
     """List the source. `scope_out`, when given, is filled in with WHAT WAS COVERED.
 
     `inventory_out`, when given, is filled with per-file inventory rows for the NON-scannable
@@ -1292,6 +1322,11 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
     # narrowing" and is dropped here rather than at four branches below.
     roots = [f for f in (list(folders) if folders else ([folder] if folder else []))
              if f and f != "root"]
+    # Exclusions only mean anything BENEATH an inclusion (PRD 6.3: a selected parent with an
+    # excluded child). With no roots there is nothing to carve out of, and honouring them
+    # against a whole-Drive scan would silently narrow a scan nobody asked to narrow — the
+    # boundary defect in its most invisible form, since the card shows no chips either.
+    excl = {e for e in (exclude_folders or ()) if e} if roots else set()
 
     # The monolithic scan keeps conservative caps (one box's disk holds every file);
     # the fan-out path (ADR 0007) passes a high cap since each file is its own job.
@@ -1341,6 +1376,8 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         # stubs are right to: a caller that has not opted into a feature should not be able to
         # tell it exists.
         extra = {"locations": sp_locs} if sp_locs else {}
+        if excl:
+            extra["exclude_ids"] = excl
         result = _sp_list(sp_token, max_files or 200, site=site,
                           exclude_remediated=exclude_remediated, inventory_out=inventory_out,
                           scope_out=scope_out, **extra)
@@ -1384,13 +1421,13 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         # Several chosen folders: walk each subtree and union them, sharing one cap.
         result = _search_folders(svc, roots, max_files or 1000,
                                  exclude_remediated=exclude_remediated, scope_out=scope_out,
-                                 inventory_out=inventory_out)
+                                 inventory_out=inventory_out, exclude_ids=excl)
     elif roots:
         # Specific folder: recursive BFS. Kept as its own branch rather than folded into
         # _search_folders so a single-folder scan produces byte-identical scope to before.
         result = _search_folder(svc, roots[0], max_files or 1000,
                                 exclude_remediated=exclude_remediated, scope_out=scope_out,
-                                inventory_out=inventory_out)
+                                inventory_out=inventory_out, exclude_ids=excl)
         if scope_out is not None:
             scope_out["folder_name"] = _folder_name(svc, roots[0])
     elif folder == "root" or folder is None:
@@ -1452,6 +1489,13 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         # predates this field.
         from store import scope_as_json
         scope_out["scan_scope"] = scope_as_json(scope_files)
+
+    # THE EXCLUSIONS ARE PART OF THE BOUNDARY. A scan of "/Programme except /Programme/Archive"
+    # covers less than its included paths suggest, and a reader comparing two runs of the same
+    # folder cannot see why one is smaller unless the carve-out is recorded alongside the count.
+    # Written for every source that honoured them, so the UI renders one rule rather than two.
+    if scope_out is not None and excl:
+        scope_out["excluded"] = sorted(excl)
     if scope_files is not None:
         from store import file_in_scope       # module-level idiom here: avoids a circular import
         _before = len(result)
@@ -2568,7 +2612,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
              ai_enabled: bool = True, scan_id: str | None = None,
              user: str | None = None, detect_pii: bool = False,
              exclude_remediated: bool = False, inventory_out: list | None = None,
-             folders: list[str] | None = None) -> dict:
+             folders: list[str] | None = None,
+             exclude_folders: list[str] | None = None) -> dict:
     from store import RULE_CATALOG, _extract_sc  # import here to avoid circular at module load
     rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
@@ -2626,6 +2671,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         items = _list(source, svc, folder=effective_folder, sp_token=sp_token,
                      max_files=FANOUT_MAX_FILES,
                      **({"folders": folders} if folders else {}),
+                     **({"exclude_folders": exclude_folders} if exclude_folders else {}),
                      exclude_remediated=exclude_remediated, scope_out=scope,
                      scope_files=_scope_for_listing(user), inventory_out=inventory_out)
         n = len(items)
