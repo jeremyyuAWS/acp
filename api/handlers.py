@@ -153,6 +153,7 @@ def _scan(payload: dict, job: dict) -> None:
         sp_token=toks.get("sp"),
         folder=payload.get("folder"),
         **({"folders": payload["folders"]} if payload.get("folders") else {}),
+        **({"exclude_folders": payload["exclude_folders"]} if payload.get("exclude_folders") else {}),
         ai_enabled=effective_ai,
         scan_id=scan_id,
         user=payload.get("user"),
@@ -987,6 +988,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
     # be read here too — wiring only run_scan would narrow scans correctly in dev and scan the
     # whole estate in the deployment that matters.
     folders = payload.get("folders")
+    exclude_folders = payload.get("exclude_folders")
     toks = core.get_scan_tokens(scan_id)
     rb = Rubric.load_active(ACP / "config")
     svc = None if source in ("local", "sharepoint") else _drive_service(toks.get("drive"))
@@ -1002,6 +1004,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
     # hospital's PDFs being downloaded and OCR'd in the deployment that matters.
     items = _list(source, svc, folder=effective_folder, sp_token=toks.get("sp"),
                   max_files=FANOUT_MAX_FILES, **({"folders": folders} if folders else {}),
+                  **({"exclude_folders": exclude_folders} if exclude_folders else {}),
                   exclude_remediated=bool(payload.get("exclude_remediated", False)),
                   scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory)
     # shadow_candidate (a file sharing a logical name with another — possibly ACP's own output

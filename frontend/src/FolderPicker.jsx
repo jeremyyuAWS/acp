@@ -33,6 +33,7 @@ export default function FolderPicker({
   lister = listFolders,
   rootName = 'My Drive',
   initial = [],
+  initialExclude = [],
   title = 'Choose folders to scan',
 }) {
   const [stack, setStack] = useState([{ id: 'root', name: rootName }])
@@ -43,6 +44,11 @@ export default function FolderPicker({
   // the chips as opaque Drive/Graph ids, which is not a boundary a reader can check a count
   // against — the same reason scanner resolves folder_name / site_name server-side.
   const [picked, setPicked] = useState(() => initial.map((f) => ({ id: f.id, name: f.name })))
+  // Explicit carve-outs beneath an included parent (PRD §6.3). Held separately from `picked`
+  // rather than as a negative entry in it, because the two answer different questions and a
+  // single list would make "not included" and "explicitly excluded" the same value — which is
+  // exactly the distinction the review step has to show.
+  const [excluded, setExcluded] = useState(() => initialExclude.map((f) => ({ id: f.id, name: f.name })))
   const current = stack[stack.length - 1]
 
   const load = useCallback((folderId) => {
@@ -58,9 +64,28 @@ export default function FolderPicker({
   const enter = (folder) => setStack((s) => [...s, folder])
   const goTo  = (idx)    => setStack((s) => s.slice(0, idx + 1))
   const isPicked = (id) => picked.some((p) => p.id === id)
+  const isExcluded = (id) => excluded.some((p) => p.id === id)
   const toggle = (f) => setPicked((s) => (s.some((p) => p.id === f.id)
     ? s.filter((p) => p.id !== f.id)
     : [...s, { id: f.id, name: f.name }]))
+  const toggleExclude = (f) => setExcluded((s) => (s.some((p) => p.id === f.id)
+    ? s.filter((p) => p.id !== f.id)
+    : [...s, { id: f.id, name: f.name }]))
+
+  // Is the folder we are looking INSIDE already covered by an inclusion? The tree loads lazily,
+  // so full PRD tri-state (which needs the whole tree to know "some descendants selected") is
+  // not knowable here — but the BREADCRUMB is the ancestry, and you can only carve out a child
+  // while drilling into it. That makes this exact, not approximate: a row is inherited-included
+  // iff one of the folders above it in `stack` was picked.
+  const inherited = stack.some((a) => isPicked(a.id))
+
+  // What one row's checkbox means, and what unchecking it does. Kept as one function because the
+  // two branches are easy to drift apart, and drift here silently converts an exclusion into a
+  // no-op — the folder still gets scanned and the chip still says it will not be.
+  const rowState = (f) => (inherited
+    ? { checked: !isExcluded(f.id), onToggle: () => toggleExclude(f),
+        hint: isExcluded(f.id) ? 'excluded' : 'included via parent' }
+    : { checked: isPicked(f.id), onToggle: () => toggle(f), hint: null })
 
   // Multi-select mode is what the Sources tab uses; Discover still passes onScan and gets the
   // one-folder behaviour it always had, so that call site is unchanged by this growing a mode.
@@ -124,19 +149,32 @@ export default function FolderPicker({
             <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 10,
               padding: '11px 18px', fontSize: 13,
               borderBottom: idx < folders.length - 1 ? '1px solid var(--line)' : 'none' }}>
-              {multi && (
+              {multi && (() => {
                 // Selecting and drilling in are DIFFERENT actions on the same row, so they get
                 // different targets. One control doing both is the picker bug where opening a
                 // folder to look inside it silently changes what you are about to scan.
-                <input type="checkbox" checked={isPicked(f.id)} onChange={() => toggle(f)}
-                       aria-label={`Select ${f.name}`} style={{ cursor: 'pointer' }} />
-              )}
+                const st = rowState(f)
+                return (
+                  <input type="checkbox" checked={st.checked} onChange={st.onToggle}
+                         aria-label={inherited
+                           ? `${st.checked ? 'Exclude' : 'Include'} ${f.name}`
+                           : `Select ${f.name}`}
+                         style={{ cursor: 'pointer' }} />
+                )
+              })()}
               <button style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1,
                 background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left',
                 fontSize: 13, padding: 0 }}
                 onClick={() => (multi ? enter(f) : enter(f))}>
                 <FolderIcon />
-                <span style={{ flex: 1, color: 'var(--ink)', fontWeight: 500 }}>{f.name}</span>
+                <span style={{ flex: 1, color: 'var(--ink)', fontWeight: 500 }}>
+                  {f.name}
+                  {multi && inherited && (
+                    <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>
+                      {isExcluded(f.id) ? '· excluded' : '· included via parent'}
+                    </span>
+                  )}
+                </span>
                 <span style={{ color: 'var(--ink)', fontSize: 15 }}>›</span>
               </button>
             </div>
@@ -165,6 +203,19 @@ export default function FolderPicker({
                             onClick={() => toggle(f)}>✕</button>
                   </span>
                 ))}
+                {/* Carve-outs are shown WITH the inclusions, not on a separate screen: "HR" and
+                    "HR except Archive" are different scopes, and a reader checking a count needs
+                    both halves in one glance. */}
+                {excluded.map((f) => (
+                  <span key={f.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6,
+                    fontSize: 12, background: '#FBF0F0', border: '1px solid var(--line)',
+                    borderRadius: 999, padding: '3px 8px' }}>
+                    🚫 except {f.name}
+                    <button className="linklike" aria-label={`Stop excluding ${f.name}`}
+                            style={{ fontSize: 13, lineHeight: 1 }}
+                            onClick={() => toggleExclude(f)}>✕</button>
+                  </span>
+                ))}
               </div>
             )}
           </div>
@@ -175,15 +226,15 @@ export default function FolderPicker({
                       background: '#F1EFF3', border: '1px solid var(--line)', borderRadius: 8,
                       padding: '9px 12px', display: 'flex', alignItems: 'center', gap: 8, lineHeight: 1.4 }}>
           <span aria-hidden="true" style={{ fontSize: 14 }}>↳</span>
-          <span>Scans the chosen folder{multi ? 's' : ''} <strong>and everything inside</strong> — all subfolders, recursively.</span>
+          <span>Scans the chosen folder{multi ? 's' : ''} <strong>and everything inside</strong> — all subfolders, recursively{multi ? ', except any you exclude' : ''}.</span>
         </div>
 
         {/* Footer */}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
           {multi ? (
             <>
-              <button className="ghost small" onClick={() => onConfirm([])}>Scan all of {rootName}</button>
-              <button onClick={() => onConfirm(picked)}>
+              <button className="ghost small" onClick={() => onConfirm([], [])}>Scan all of {rootName}</button>
+              <button onClick={() => onConfirm(picked, excluded)}>
                 {picked.length ? `Save ${picked.length} location${picked.length === 1 ? '' : 's'}` : 'Save'}
               </button>
             </>

@@ -131,6 +131,13 @@ export function scopeSentence(scope, count) {
     // button that does not exist.
     s += ' Documents on other SharePoint sites, and in your OneDrive, were not scanned.'
   }
+  // An exclusion makes the scan cover LESS than its included paths imply. Two runs of the same
+  // folder, one with an Archive carve-out, otherwise render identical boundaries and different
+  // counts — the 2026-07-30 defect one level down.
+  const nExcl = Array.isArray(scope.excluded) ? scope.excluded.length : 0
+  if (nExcl) {
+    s += ` ${nExcl} folder${nExcl === 1 ? ' was' : 's were'} excluded from within that selection.`
+  }
   if (scope.truncated) {
     s += ` This scan hit its ${
       Number.isFinite(scope.cap) ? scope.cap.toLocaleString() + '-file ' : ''

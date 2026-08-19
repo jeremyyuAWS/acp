@@ -230,17 +230,30 @@ async def put_scan_locations(request: Request):
     if source not in ("drive", "sharepoint"):
         raise HTTPException(400, "source must be 'drive' or 'sharepoint'")
     folders = body.get("folders") or []
-    if not isinstance(folders, list):
-        raise HTTPException(400, "folders must be a list")
-    clean = [{"id": str(f.get("id")), "name": str(f.get("name") or f.get("id"))}
-             for f in folders if isinstance(f, dict) and f.get("id")]
+    exclude = body.get("exclude") or []
+    if not isinstance(folders, list) or not isinstance(exclude, list):
+        raise HTTPException(400, "folders and exclude must be lists")
+
+    def _clean(rows):
+        return [{"id": str(f.get("id")), "name": str(f.get("name") or f.get("id"))}
+                for f in rows if isinstance(f, dict) and f.get("id")]
+
+    clean = _clean(folders)
+    # Exclusions are only meaningful beneath an inclusion, so they are dropped with the
+    # inclusions rather than kept as orphans. A stored exclusion with nothing to carve out of
+    # would silently re-arm the moment somebody picked a folder that happened to contain it —
+    # a narrowing nobody chose, from a decision made about a different scope.
+    clean_excl = _clean(exclude) if clean else []
     try:
         current = json.loads(core.store.get_setting(_LOCATIONS_KEY) or "{}")
     except (ValueError, TypeError):
         current = {}
     current[source] = clean
+    excl_map = current.get("_exclude") if isinstance(current.get("_exclude"), dict) else {}
+    excl_map[source] = clean_excl
+    current["_exclude"] = excl_map
     core.store.set_setting(_LOCATIONS_KEY, json.dumps(current))
-    return {"ok": True, "source": source, "folders": clean}
+    return {"ok": True, "source": source, "folders": clean, "exclude": clean_excl}
 
 
 @router.get("/folders")
