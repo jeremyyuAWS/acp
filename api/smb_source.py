@@ -169,8 +169,18 @@ def list_smb(root: str, *, max_files: int = 2000, cfg: dict | None = None,
     cfg = cfg or smb_config()
     files: list[dict] = []
     est_files: list[dict] = []           # every file (scannable or not) → the estate classifier
-    hit_cap = False
+    hit_cap = _walk_root_into(root, cfg, files=files, est_files=est_files,
+                              max_files=max_files, inventory_out=inventory_out)
+    if scope_out is not None:
+        scope_out["inventory"] = estate_inventory.summarize(est_files, truncated=hit_cap)
+    return files
 
+
+def _walk_root_into(root: str, cfg: dict, *, files: list, est_files: list,
+                    max_files: int, inventory_out: list | None) -> bool:
+    """Walk ONE share root, appending scannable files to `files` and an estate row for EVERY file to
+    `est_files`. Both lists are passed in so a multi-share walk accumulates one combined estate.
+    Returns True when the scannable cap stopped this walk with items still unlisted (truncation)."""
     for entry in _walk(root, cfg):
         if entry.get("is_dir"):
             continue
@@ -185,8 +195,7 @@ def list_smb(root: str, *, max_files: int = 2000, cfg: dict | None = None,
         # boundary — stop, and do not count it, so `discovered` matches exactly what was listed and
         # `truncated` truthfully says there is more.
         if scannable and len(files) >= max_files:
-            hit_cap = True
-            break
+            return True
         # size + modifiedTime come free from the directory listing, so the estate drill-down's
         # biggest-first and recency lenses work for SMB exactly as they do for Drive/SharePoint
         # (estate_inventory._sample_meta reads these keys). owner and shared are NOT cheap on SMB —
@@ -198,9 +207,31 @@ def list_smb(root: str, *, max_files: int = 2000, cfg: dict | None = None,
             files.append(_file_dict(entry, parent))
         elif inventory_out is not None:
             inventory_out.append(_file_dict(entry, parent))
+    return False
 
+
+def list_smb_estate(roots: list[str], *, max_files: int = 2000, cfg: dict | None = None,
+                    scope_out: dict | None = None, inventory_out: list | None = None) -> list[dict]:
+    """List the whole SMB estate across EVERY in-scope share, presented as one.
+
+    A hospital estate spans several shares (UTSW: up to ~10). Walking only the first would report an
+    estate smaller than it is — the same failure the SharePoint multi-library walk guards against. So
+    every root is walked into one combined analysis set + one estate summary. The cap is GLOBAL across
+    shares (it bounds the whole scan, not each share), and truncation is honest: True only when the cap
+    stopped a walk with items unlisted — which also means later shares were never reached, so the
+    estate is a floor. Roots are walked in order; a bare/empty `roots` yields an empty estate.
+    """
+    cfg = cfg or smb_config()
+    files: list[dict] = []
+    est_files: list[dict] = []
+    truncated = False
+    for root in roots:
+        if _walk_root_into(root, cfg, files=files, est_files=est_files,
+                           max_files=max_files, inventory_out=inventory_out):
+            truncated = True        # cap hit mid-share → this share has more AND later shares unreached
+            break
     if scope_out is not None:
-        scope_out["inventory"] = estate_inventory.summarize(est_files, truncated=hit_cap)
+        scope_out["inventory"] = estate_inventory.summarize(est_files, truncated=truncated)
     return files
 
 
