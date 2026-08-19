@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from 'react'
 import {
   rowModel, laneOf, sortQueue, groupByDocument, nextUnresolvedId, progress,
-  matchesTab, tabCounts, isResolved, TABS, SORTS,
+  matchesWorkflow, workflowCounts, isResolved, WORKFLOW_TABS, WORKFLOW_LABELS, SORTS,
 } from './remediationInboxModel.js'
 import { fixSteps, appName } from './remediationGuide.js'
 import { scOf } from './fixSummary.js'
@@ -17,7 +17,6 @@ import WorkspaceFooter from './WorkspaceFooter.jsx'
 // thing feel fast. All derivation lives in remediationInboxModel.js; this file is presentation.
 
 const SORT_LABEL = { priority: 'Priority', document: 'Document', newest: 'Newest', fastest: 'Fastest to resolve' }
-const TAB_LABEL = { all: 'All', 'auto-fixed': 'Auto-fixed', 'needs-attention': 'Needs manual handling', manual: 'Manual', blocked: 'Blocked', resolved: 'Resolved' }
 const fmtOf = (file) => String(file || '').split('.').pop().toLowerCase()
 // The success-criterion key a finding shares with its siblings, used to batch a decision across
 // every other queued finding of the same rule (W8). Normalised so 'SC_1_1_1' / 'WCAG 1.1.1' / '1.1.1' all match.
@@ -233,7 +232,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
 
 export default function RemediationInbox({
   queue = [], decisions = {}, onDecide, onOpenWord, onRecheck,
-  initialSort = 'priority', initialTab = 'all', scanId = null, aiEnabled = true,
+  initialSort = 'priority', initialTab = 'inbox', scanId = null, aiEnabled = true,
 }) {
   const [selectedId, setSelectedId] = useState(null)
   const [tab, setTab] = useState(initialTab)
@@ -241,12 +240,12 @@ export default function RemediationInbox({
   const [search, setSearch] = useState('')
   const [collapsed, setCollapsed] = useState({}) // file -> true when a document group is collapsed
 
-  const counts = useMemo(() => tabCounts(queue, decisions), [queue, decisions])
+  const counts = useMemo(() => workflowCounts(queue, decisions), [queue, decisions])
   const prog = useMemo(() => progress(queue, decisions), [queue, decisions])
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase()
-    const filtered = queue.filter((f) => matchesTab(f, tab, decisions) &&
+    const filtered = queue.filter((f) => matchesWorkflow(f, tab, decisions) &&
       (!q || rowModel(f, decisions).issue.toLowerCase().includes(q) || String(f.file).toLowerCase().includes(q)))
     return sortQueue(filtered, sort)
   }, [queue, tab, sort, search, decisions])
@@ -313,13 +312,13 @@ export default function RemediationInbox({
                  placeholder="Search findings…" aria-label="Search findings"
                  style={{ width: '100%', fontSize: 13, padding: '6px 10px', borderRadius: 8, border: '1px solid var(--line,#e2dce4)' }} />
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
-            {TABS.map((t) => (
+            {WORKFLOW_TABS.map((t) => (
               <button key={t} type="button" aria-pressed={tab === t} onClick={() => setTab(t)}
                       style={{ fontSize: 11.5, padding: '2px 9px', borderRadius: 20, cursor: 'pointer',
                                border: `1px solid ${tab === t ? 'var(--ink)' : 'var(--line,#e2dce4)'}`,
                                background: tab === t ? 'var(--ink)' : 'transparent', color: tab === t ? '#fff' : 'var(--ink)',
                                fontWeight: tab === t ? 700 : 500 }}>
-                {TAB_LABEL[t]} {counts[t] > 0 ? counts[t] : ''}
+                {WORKFLOW_LABELS[t]} {counts[t] > 0 ? counts[t] : ''}
               </button>
             ))}
           </div>
@@ -336,7 +335,7 @@ export default function RemediationInbox({
         </div>
         <div style={{ flex: '1 1 auto', overflowY: 'auto' }}>
           {visible.length === 0 ? (
-            <p className="muted" style={{ padding: 16, fontSize: 13 }}>Nothing here. {tab !== 'all' && <button className="linklike" onClick={() => setTab('all')}>Show all</button>}</p>
+            <p className="muted" style={{ padding: 16, fontSize: 13 }}>Nothing here. {tab !== 'inbox' && <button className="linklike" onClick={() => setTab('inbox')}>Back to Inbox</button>}</p>
           ) : groups.map((g) => (
             <div key={g.file}>
               <button type="button" onClick={() => setCollapsed((c) => ({ ...c, [g.file]: !c[g.file] }))}
