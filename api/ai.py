@@ -503,14 +503,32 @@ def _clean_alt(text: str) -> str:
 def _vision_prompt(filename: str, context: str, style: str = "", guidance: str = "") -> str:
     where = f" It appears in the document '{filename}'." if filename else ""
     near = f" Nearby text for context: {context.strip()[:200]}" if context and context.strip() else ""
-    # Reviewer-directed refinement (#131) — a length steer only; the description stays grounded in
-    # what the model actually sees. Unknown/absent style → the default concise sentence.
+    # Reviewer-directed refinement (#131, extended P1) — a bounded steer, never a free prompt; the
+    # description stays grounded in what the model actually sees. 'shorter'/'detailed' steer length;
+    # 'numbers'/'no_colour'/'professional'/'plain' steer content/tone. Unknown/absent style → the
+    # default concise sentence.
     length = {
         "shorter": "Reply with ONE very short phrase (under 10 words) — just the essential subject. ",
         "detailed": "Reply with ONE fuller sentence (up to 40 words) that also describes the key visual "
                     "elements. State a number, label, or value ONLY if you can clearly read it in the "
                     "image — never estimate or invent figures; if the values are not legible, describe "
                     "what the image shows without them. ",
+        # Mention the numbers — surface the figures a reviewer of a chart/table cares about, still
+        # only ones actually legible in the image (no invention).
+        "numbers": "Reply with ONE concise sentence (under 30 words). State every number, label, or "
+                   "value you can CLEARLY read in the image — figures are often the whole point — but "
+                   "never estimate or invent a figure you cannot read. ",
+        # Ignore colours — a description that does not lean on colour, so it works for a colour-blind
+        # reader (WCAG 1.4.1 in spirit): identify things by shape, position, label, or text instead.
+        "no_colour": "Reply with ONE concise sentence (under 30 words). Describe the image WITHOUT "
+                     "relying on colour — identify things by shape, position, label, or the text they "
+                     "carry, so the description works for a reader who cannot distinguish colours. ",
+        # Professional tone — formal business register for a corporate/compliance document.
+        "professional": "Reply with ONE concise, formal sentence (under 30 words) in a professional "
+                        "business tone — no casual phrasing, contractions, or filler. ",
+        # Plain language — simple everyday words, short, no jargon (plain-language accessibility).
+        "plain": "Reply with ONE short sentence in plain language (under 20 words) — simple everyday "
+                 "words, no jargon, abbreviations, or technical terms. ",
     }.get(style,
           "Reply with ONE concise sentence (under 30 words) that includes the key text verbatim where "
           "it carries meaning. ")

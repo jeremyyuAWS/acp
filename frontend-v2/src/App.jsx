@@ -269,6 +269,16 @@ export default function App() {
     return () => window.removeEventListener('acp:session-expired', onExpired)
   }, [])
 
+  // Deep-link into Settings from anywhere in the app (P1: the review card's empty-state honesty hint
+  // points an admin at Settings → AI Providers). Reuses the same custom-event pattern as
+  // acp:session-expired / acp:scan-unavailable rather than threading a callback through the tree.
+  // Gated on the settings permission exactly as the ⚙ button and the modal render already are.
+  useEffect(() => {
+    const onOpenSettings = () => { if (me?.allow?.includes('settings')) setSettingsOpen(true) }
+    window.addEventListener('acp:open-settings', onOpenSettings)
+    return () => window.removeEventListener('acp:open-settings', onOpenSettings)
+  }, [me])
+
   // Refetch the scan when a remediation or a deferred assessment announces that the server's
   // file_records changed — see scanRefetch.js for which events and why.
   useScanRefetch(scan?.run?.id, setScan)
