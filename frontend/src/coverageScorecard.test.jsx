@@ -36,6 +36,18 @@ describe('CoverageScorecard renders the two-axis capability view (ADR 0023)', ()
     expect(txt).not.toContain('deterministic remediation')
   })
 
+  it('the remediation tiles carry a denominator (unit), not a bare count', async () => {
+    // The ⚡/🤖/👤 tiles used to print "6 / 8 / 1" with no denominator, so a reader couldn't tell
+    // whether they were criteria, findings, files or methods. They now read "N of 20 criteria",
+    // the same core the assessment row above counts against. Guard: the tile carrying a
+    // remediation label also carries a "/<n>" denominator.
+    await render([{ file: 'a.docx', type: 'docx' }])
+    const tiles = [...container.querySelectorAll('div')]
+    const remTile = tiles.find((d) => /AI Generated Fix/.test(d.textContent) && !/Assessment/.test(d.textContent))
+    expect(remTile).toBeTruthy()
+    expect(remTile.textContent).toMatch(/\/\d+/)          // e.g. "🤖 8/20 …"
+  })
+
   it('expands an .html estate grouped by assessment lane, showing needs-AT keyboard criteria', async () => {
     await render([{ file: 'page.html', type: 'html' }])
     await click(btnByText('Show all'))

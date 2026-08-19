@@ -24,9 +24,14 @@
 // The axes are independent: e.g. 1.1.1 is 🟡 review + 🤖 AI; 2.4.2 is 🟢 auto + ⚡ automatic.
 import { CAPABILITY_FALLBACK as REM, ASSESSMENT_FALLBACK as ASMT, fmtOf } from './capability.js'
 import { WCAG } from './wcagCatalog.js'
+import { DOCUMENTS_20 as DOCUMENTS_20_CORE } from './documents20.js'
 
-// The 20-check document core (US-regulated A/AA criteria that apply to documents).
-export const DOCUMENTS_20 = ['1.1.1', '1.3.1', '1.3.2', '1.3.3', '2.4.6', '3.1.1', '3.1.2', '1.4.4', '1.4.5', '1.4.10', '1.4.12', '1.4.1', '1.4.3', '1.4.11', '2.4.2', '2.4.3', '2.4.4', '2.1.1', '2.1.2', '4.1.2']
+// The 20-check document core (US-regulated A/AA criteria that apply to documents). Derived from
+// the single canonical source (documents20.js) rather than re-listed — this used to be a second,
+// hand-maintained copy of the same 20 SCs, one edit away from silently disagreeing with the
+// activeScope.js `CORE_SCS` the rest of the page counts against. Kept as an array (order-preserved
+// from the Set) because callers here iterate it.
+export const DOCUMENTS_20 = [...DOCUMENTS_20_CORE]
 
 // Buildable gaps — the barrier applies to the format and is statically detectable, ACP just
 // doesn't check it there yet. A curated roadmap statement (not a fabricated capability claim):

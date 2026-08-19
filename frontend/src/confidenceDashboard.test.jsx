@@ -33,7 +33,9 @@ describe('ConfidenceDashboard (process confidence, ADR 0026 Epic 5)', () => {
     getScanStatus.mockResolvedValue(BASE)
     await mount()
     expect(container.textContent).toContain('88%')            // 210/240 coverage
-    expect(container.textContent).toContain('210 of 240 criteria · 12 documents')
+    // The unit is criterion CHECKS (criteria × documents), not WCAG criteria — labelled so it
+    // doesn't read as a fifth, disagreeing criteria denominator against the 14/17/20 elsewhere.
+    expect(container.textContent).toContain('210 of 240 criterion checks · 12 documents')
     expect(container.textContent).toContain('75%')            // 180/240 auto verified
     expect(container.textContent).toContain('180 of 240')
     expect(container.textContent).toContain('Needs Review')
