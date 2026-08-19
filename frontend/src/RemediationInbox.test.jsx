@@ -76,6 +76,18 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(container.textContent).toContain('2 of 3 resolved')         // progress agrees
   })
 
+  it('folds the document preview into the workspace as an Evidence section (no separate third pane)', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    // The single workspace column carries the issue heading AND the preview (its mode tabs), stacked
+    // as Problem → Evidence → How to fix. The old always-mounted third preview pane — and its
+    // "Select a finding to see it in the document" empty state — is gone.
+    expect(detailHeading()).toBe('Image needs alt text')
+    expect(container.textContent).toContain('Evidence')
+    const tabLabels = [...container.querySelectorAll('[role=tab]')].map((b) => b.textContent.trim())
+    expect(tabLabels).toContain('Visual')
+    expect(container.textContent).not.toContain('Select a finding to see it in the document')
+  })
+
   it('search narrows the queue within the current tab', async () => {
     await render({ queue: QUEUE, decisions: {} })
     const input = container.querySelector('input[type=search]')

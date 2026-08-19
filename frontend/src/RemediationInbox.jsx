@@ -11,10 +11,13 @@ import RemediationTransform from './RemediationTransform.jsx'
 import WorkspaceFooter from './WorkspaceFooter.jsx'
 
 // Master/detail Remediation inbox. Remediation is queue work — select an item, understand it, act,
-// move to the next — so the layout is an email-style split: a 38% work queue on the left, a 62%
-// remediation workspace on the right. Selecting a row NEVER expands it; it populates the detail
-// pane. Acting on a finding auto-advances to the next unresolved one, which is what makes the whole
-// thing feel fast. All derivation lives in remediationInboxModel.js; this file is presentation.
+// move to the next — so the layout is a TWO-column split: a 35% work queue on the left to find and
+// choose the next finding, and a 65% remediation WORKSPACE on the right that stacks, in one scrolling
+// column, everything needed to finish it — Problem → Evidence → How to fix → Decision. The document
+// preview is folded into the Evidence section (not a separate third pane that sat empty for every
+// structure/metadata finding). Selecting a row NEVER expands it; it populates the workspace. Acting
+// on a finding auto-advances to the next unresolved one, which is what makes the whole thing feel
+// fast. All derivation lives in remediationInboxModel.js; this file is presentation.
 
 const SORT_LABEL = { priority: 'Priority', document: 'Document', newest: 'Newest', fastest: 'Fastest to resolve' }
 const fmtOf = (file) => String(file || '').split('.').pop().toLowerCase()
@@ -134,7 +137,7 @@ function ManualSteps({ f }) {
   )
 }
 
-function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCount = 0, onApplyToMatching }) {
+function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCount = 0, onApplyToMatching, scanId = null }) {
   if (!f) {
     return (
       <div style={{ display: 'grid', placeItems: 'center', height: '100%', textAlign: 'center', padding: 24 }}>
@@ -164,7 +167,16 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
         <p style={{ fontSize: 14, color: 'var(--ink)', margin: '0 0 4px' }}>{lane.didLine}.</p>
         <Meta row={{ ...r, wcag: (f.rule_id || f.ruleId || '') }} />
 
-        {/* 2 · What changed? (or, for manual, how to change it) */}
+        {/* 2 · Evidence — see the finding in the document (the folded-in preview). Adaptive: a boxed
+            page region for a visible finding, an honest note for a structure/metadata one. */}
+        <div style={{ marginTop: 18 }}>
+          <p className="muted" style={{ fontSize: 11.5, letterSpacing: '.08em', textTransform: 'uppercase', margin: '0 0 8px' }}>
+            Evidence
+          </p>
+          <RemediationPreview finding={f} scanId={scanId} embedded />
+        </div>
+
+        {/* 3 · What changed? (or, for manual, how to change it) */}
         <div style={{ marginTop: 18 }}>
           <p className="muted" style={{ fontSize: 11.5, letterSpacing: '.08em', textTransform: 'uppercase', margin: '0 0 8px' }}>
             {isManual ? 'How to fix it' : 'What changed'}
@@ -313,8 +325,8 @@ export default function RemediationInbox({
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
       <WorkspaceProgress queue={queue} decisions={decisions} selected={selected} />
       <div className="rinbox" style={{ display: 'flex', gap: 0, border: '1px solid var(--line,#e2dce4)', borderRadius: 12, overflow: 'hidden', minHeight: 480 }}>
-      {/* ── Left: the work queue (28%) ── */}
-      <div style={{ flex: '0 0 28%', maxWidth: '28%', borderRight: '1px solid var(--line,#e2dce4)', display: 'flex', flexDirection: 'column', minHeight: 480 }}>
+      {/* ── Left: the work queue (35%) — find and select the next finding ── */}
+      <div style={{ flex: '0 0 35%', maxWidth: '35%', borderRight: '1px solid var(--line,#e2dce4)', display: 'flex', flexDirection: 'column', minHeight: 480 }}>
         <div style={{ flex: '0 0 auto', padding: '10px 12px', borderBottom: '1px solid var(--line,#e2dce4)' }}>
           <input type="search" value={search} onChange={(e) => setSearch(e.target.value)}
                  placeholder="Search findings…" aria-label="Search findings"
@@ -369,15 +381,13 @@ export default function RemediationInbox({
         </div>
       </div>
 
-      {/* ── Centre: guided remediation — one decision at a time (34%) ── */}
-      <div style={{ flex: '0 0 34%', maxWidth: '34%', minWidth: 0, borderRight: '1px solid var(--line,#e2dce4)' }}>
+      {/* ── Right: the remediation workspace (65%) — one scrolling column that stacks
+           Problem → Evidence → How to fix → Decision, with the document preview folded into the
+           Evidence section rather than living as a separate, often-empty third pane. ── */}
+      <div style={{ flex: '1 1 65%', minWidth: 0 }}>
         <DetailPane f={selected} decisions={decisions} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
-                    matchingCount={matchingCount} onApplyToMatching={applyToMatching} />
-      </div>
-
-      {/* ── Right: contextual document preview (38%) ── */}
-      <div style={{ flex: '1 1 38%', minWidth: 0 }}>
-        <RemediationPreview finding={selected} scanId={selected?.scanId || scanId} />
+                    matchingCount={matchingCount} onApplyToMatching={applyToMatching}
+                    scanId={selected?.scanId || scanId} />
       </div>
       </div>
       {/* Sticky workflow guide (Show → Review → Verify) + Previous / N of M / Next navigation. */}
