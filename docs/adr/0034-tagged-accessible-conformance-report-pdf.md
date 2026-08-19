@@ -88,10 +88,13 @@ margin boxes). It also **surfaced two findings** that tag-existence hides:
 
 1. **`<th scope>` emits no PDF `/Scope`** (0/16 TH scoped). Header association may still validate via
    table position — a **veraPDF** question, not an assumption.
-2. **`aria-hidden` does not artifact an SVG** — the decorative chart became an *orphan* `/Figure`
-   marked-content (real content, neither tagged-with-alt nor Artifact — PDF/UA forbids it). The
-   "charts are decorative, exclude them" plan does not work as-is; a chart needs a real `alt` (or a
-   genuine Artifact wrap) **plus** its adjacent data table — an HTML chart is not accessible by default.
+2. **An HTML chart is not accessible by default** — *resolved in the spike (iteration 2).*
+   `aria-hidden` on an inline `<svg>` did not artifact it; it left an *orphan* `/Figure` marked-content
+   (real content, neither tagged-with-alt nor Artifact — PDF/UA forbids it), and `<svg role="img"
+   aria-label>` was ignored for tagging too. The treatment that works, verified by probe: an
+   `<img alt="…conclusion…">` carrying the chart as a data-URI SVG tags as a `/Figure` **with** `/Alt`
+   and leaves no orphan, beside a data table with the exact counts. So "charts are decorative, exclude
+   them" is wrong; "chart is a Figure with a conclusion-stating alt + a data table" is the pattern.
 
 The representative report must pass **all** of the following before the rewrite is committed — none is
 satisfied by tag-existence alone:
@@ -99,7 +102,8 @@ satisfied by tag-existence alone:
 - **Visual parity** for every page type (regression vs the current ReportLab output).
 - Correct **heading hierarchy and reading order** *(checked structurally in the spike)*.
 - **Properly scoped table headers** — finding 1; confirm in veraPDF.
-- **Meaningful alt / artifact treatment for every chart** — finding 2; needs rework.
+- **Meaningful alt / artifact treatment for every chart** — finding 2, *resolved* (chart is a Figure
+  with a conclusion-stating `/Alt` + a data table); still worth a screen-reader read.
 - Page furniture and decoration **excluded from reading order** *(header/footer confirmed)*.
 - Searchable/selectable text and **working links**.
 - **veraPDF or PAC 2024** validation (the automated PDF/UA gate — not `TaggedPdfRule` alone).

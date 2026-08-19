@@ -14,6 +14,7 @@ Run:  python sample_report.py            # writes sample_report.pdf
 """
 from __future__ import annotations
 
+import base64
 import sys
 from pathlib import Path
 
@@ -22,20 +23,31 @@ import weasyprint
 OUT = Path(__file__).resolve().parent / "sample_report.pdf"
 
 # ── Chart treatment (the part that is NOT "free") ────────────────────────────────────────────────
-# A chart is accessible only when three things are true, none automatic:
-#   1. a concise text alternative that states the chart's CONCLUSION (not "a bar chart"),
-#   2. an adjacent real data table so the numbers are in the tag tree, not only in pixels,
-#   3. the decorative drawing itself excluded from the structure tree (aria-hidden here; the spike
-#      verifies WeasyPrint actually keeps it out of the tags).
-# The decorative SVG below carries aria-hidden="true" and NO role, so it must not appear as a Figure
-# in the structure tree; the <table> beside it carries the data.
-_DECOR_BARS = """
-<svg aria-hidden="true" width="220" height="90" viewBox="0 0 220 90">
-  <rect x="0"   y="20" width="40" height="70" fill="#A32D2D"></rect>
-  <rect x="55"  y="45" width="40" height="45" fill="#854F0B"></rect>
-  <rect x="110" y="70" width="40" height="20" fill="#1F5FA8"></rect>
-  <rect x="165" y="80" width="40" height="10" fill="#9a948f"></rect>
-</svg>"""
+# The spike's first iteration proved an HTML chart is not accessible by default:
+#   * an aria-hidden inline <svg> does NOT become an Artifact in WeasyPrint — it leaves an ORPHAN
+#     /Figure marked-content (real content, neither tagged-with-alt nor artifact → PDF/UA forbids it);
+#   * <svg role="img" aria-label> is likewise ignored for tagging (still orphan).
+# What WORKS (verified): an <img> with a real alt tags as a /Figure WITH /Alt and no orphan. So the
+# chart is delivered as three things, none automatic:
+#   1. an <img alt="…"> whose alt states the chart's CONCLUSION (not "a bar chart"),
+#   2. an adjacent real data <table> so the numbers are in the tag tree, not only in pixels,
+#   3. the drawing carried inside that <img> (a data-URI SVG), so it is a single tagged Figure.
+# The SVG is base64-encoded into the data URI: a raw `utf8,` URI truncates at the first `#` in a hex
+# colour, silently blanking the image.
+_CHART_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="220" height="96" viewBox="0 0 220 96">'
+    '<rect x="0" y="12" width="44" height="84" fill="#A32D2D"/>'      # Critical 14
+    '<rect x="58" y="42" width="44" height="54" fill="#854F0B"/>'     # Serious 9
+    '<rect x="116" y="72" width="44" height="24" fill="#1F5FA8"/>'    # Moderate 4
+    '<rect x="174" y="84" width="44" height="12" fill="#9a948f"/>'    # Minor 2
+    '</svg>'
+)
+_CHART_ALT = ("Open findings by severity: Critical 14, Serious 9, Moderate 4, Minor 2 — findings "
+              "concentrate in the two highest severities.")
+_CHART_IMG = (
+    f'<img alt="{_CHART_ALT}" width="220" height="96" '
+    f'src="data:image/svg+xml;base64,{base64.b64encode(_CHART_SVG.encode()).decode()}">'
+)
 
 HTML = f"""<!doctype html>
 <html lang="en-US">
@@ -123,10 +135,11 @@ HTML = f"""<!doctype html>
     <h2>Document status &amp; open-finding severity</h2>
     <p>Open findings concentrate in the two highest severities: <strong>CRITICAL</strong> and
        <strong>SERIOUS</strong> together account for most of the estate's open findings, which is where
-       remediation effort should go first. Full counts are in the table below; the bars are decorative.</p>
+       remediation effort should go first. The chart states this conclusion in its alt text; the table
+       carries the exact counts.</p>
     <div class="chartrow">
       <table>
-        <caption>Open findings by severity (text alternative for the chart).</caption>
+        <caption>Open findings by severity (the chart's data, in the tag tree).</caption>
         <thead><tr><th scope="col">Severity</th><th scope="col" class="num">Open findings</th></tr></thead>
         <tbody>
           <tr><th scope="row">Critical</th><td class="num">14</td></tr>
@@ -135,7 +148,7 @@ HTML = f"""<!doctype html>
           <tr><th scope="row">Minor</th><td class="num">2</td></tr>
         </tbody>
       </table>
-      {_DECOR_BARS}
+      {_CHART_IMG}
     </div>
   </section>
 </body>
