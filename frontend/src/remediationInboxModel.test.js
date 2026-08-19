@@ -29,11 +29,11 @@ describe('lane taxonomy', () => {
     const rails = Object.values(LANES).map((l) => l.rail)
     expect(new Set(rails).size).toBe(rails.length)
   })
-  it('a not-applicable (out-of-scope) decision resolves the finding and lands it in Done', () => {
+  it('a not-applicable (out-of-scope) decision resolves the finding and lands it in Completed', () => {
     const f = { id: 7, hasProposal: true, after: 'x' }
     const decisions = { 7: { state: 'not_applicable' } }
     expect(isResolved(f, decisions)).toBe(true)
-    expect(workflowStatusOf(f, decisions)).toBe('done')   // settled, no re-scan to await
+    expect(workflowStatusOf(f, decisions)).toBe('completed')   // settled, no re-scan to await
   })
   it('reserves a coloured rail for attention lanes; everyday lanes get a neutral rail', () => {
     // Blocked + rejected-handoff are the only lanes a reviewer must actively unblock.

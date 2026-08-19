@@ -328,7 +328,7 @@ function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
 
 export default function RemediationInbox({
   queue = [], decisions = {}, onDecide, onOpenWord, onRecheck,
-  initialSort = 'priority', initialTab = 'inbox', scanId = null, initialLayout = null,
+  initialSort = 'priority', initialTab = 'needs-review', scanId = null, initialLayout = null,
 }) {
   const [selectedId, setSelectedId] = useState(null)
   const [tab, setTab] = useState(initialTab)
@@ -491,12 +491,14 @@ export default function RemediationInbox({
             </select>
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-            <span className="muted" style={{ fontSize: 11.5, fontWeight: 600 }}>{prog.resolved} of {prog.total} resolved</span>
+            {/* "reviewed" (a decision is recorded), NOT "resolved" — an approved fix awaiting the
+                re-scan is reviewed but not yet Completed, so this never contradicts the tab counts. */}
+            <span className="muted" style={{ fontSize: 11.5, fontWeight: 600 }}>{prog.resolved} of {prog.total} reviewed</span>
           </div>
         </div>
         <div style={{ flex: '1 1 auto', overflowY: 'auto' }}>
           {visible.length === 0 ? (
-            <p className="muted" style={{ padding: 16, fontSize: 13 }}>Nothing here. {tab !== 'inbox' && <button className="linklike" onClick={() => setTab('inbox')}>Back to Inbox</button>}</p>
+            <p className="muted" style={{ padding: 16, fontSize: 13 }}>Nothing here. {tab !== 'needs-review' && <button className="linklike" onClick={() => setTab('needs-review')}>Back to Needs review</button>}</p>
           ) : groups.map((g) => (
             // A document with a SINGLE finding needs no expandable group header — the row itself
             // names the file. Only multi-finding documents get the collapsible 📄 header, so the file
