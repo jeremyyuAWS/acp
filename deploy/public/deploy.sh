@@ -419,7 +419,11 @@ echo "   blob account = $BLOB_ACCOUNT"
 # NOTE: this path is codified but not yet exercised against live infra (it's gated behind the
 # billable Redis + second app, greenlit separately) — shake out az-CLI specifics (notably the
 # --command quoting) on the first real spin-up.
-WORKER_APP="acp-worker"
+# Overridable so a staging spin-up can name its own worker (acp-worker-staging) instead of
+# clobbering the production one. redeploy.sh already honours ACP_WORKER for the same reason; this
+# closes the gap where deploy.sh ignored it and would have retargeted prod's worker. Prod's manual
+# deploys don't set it, so the default is unchanged.
+WORKER_APP="${ACP_WORKER:-acp-worker}"
 # The worker command is the SINGLE dash-free token `acp-worker` — a launcher baked into the image
 # (deploy/public/worker-entry.sh → /usr/local/bin/acp-worker). az's --command can carry neither a
 # bare "-c" (argparse eats it) nor a JSON array string (stored as ONE literal token → exec of a
