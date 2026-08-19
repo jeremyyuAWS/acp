@@ -5,6 +5,11 @@
 #   bash deploy/public/gpu_up.sh                       # provision, verify, print the switch-over
 #   ACP_GPU_ACTIVATE=1 bash deploy/public/gpu_up.sh    # …and flip the app onto it
 #   ACP_GPU_DRY_RUN=1 bash deploy/public/gpu_up.sh     # print, change nothing
+#   ACP_GPU_PROFILE_TYPE=<sku> bash …                  # pin the SKU instead of discovering it
+#
+# The GPU SKU is DISCOVERED from `az containerapp env workload-profile list-supported` for the
+# environment's own region, not hard-coded. Availability varies by region and the SKU strings
+# change, so a baked-in default is wrong somewhere and stale everywhere else.
 #
 # WHY THIS SHAPE. Three properties are wanted at once and no other arrangement has all three:
 #
@@ -48,7 +53,17 @@ RG="${ACP_RG:-mdk-accessibility}"
 APP="${ACP_APP:-acp-app}"
 WORKER="${ACP_WORKER:-acp-worker}"
 GPU_APP="${ACP_GPU_APP:-acp-ollama}"
-PROFILE="${ACP_GPU_PROFILE:-NC8as-T4}"      # T4/16GB fits a quantised 7B VL model comfortably
+# The workload profile NAME is a friendly label you choose; the TYPE is an Azure SKU string and
+# must match one Azure actually offers in this region. They are NOT the same field, and the first
+# version of this script passed the same value for both — which failed as
+# `(WorkloadProfileInvalidType) Workload profile type 'NC8AS_T4' is invalid`.
+#
+# The type is therefore DISCOVERED, never guessed. GPU profile availability varies by region and
+# the SKU strings change; a hard-coded default is a value that is wrong somewhere and goes stale
+# everywhere else. `az containerapp env workload-profile list-supported` is the authority, so ask
+# it and let ACP_GPU_PROFILE_TYPE override when you want a specific SKU.
+PROFILE="${ACP_GPU_PROFILE:-acp-gpu}"           # friendly name for the profile on the environment
+PROFILE_TYPE="${ACP_GPU_PROFILE_TYPE:-}"        # empty => discover from the region's supported list
 IMAGE="${ACP_GPU_IMAGE:-docker.io/ollama/ollama:latest}"
 MODEL="${ACP_GPU_VISION_MODEL:-qwen2.5vl:7b}"
 DRY="${ACP_GPU_DRY_RUN:-0}"
@@ -84,20 +99,48 @@ say "environment $ENVNAME  (rg=$RG, from $APP)"
 say "checking for GPU workload profile '$PROFILE'"
 HAVE="$(az containerapp env workload-profile list "${AZ[@]}" -g "$RG" -n "$ENVNAME" \
   --query "[?name=='$PROFILE'].name | [0]" -o tsv 2>/dev/null || true)"
-if [ -z "$HAVE" ] || [ "$HAVE" = "None" ]; then
-  if [ "$DRY" = 1 ]; then
-    echo "  would: add workload profile $PROFILE"
-  else
-    say "adding workload profile $PROFILE"
-    az containerapp env workload-profile add "${AZ[@]}" -g "$RG" -n "$ENVNAME" \
-      --workload-profile-name "$PROFILE" --workload-profile-type "$PROFILE" \
-      --min-nodes 0 --max-nodes 1 -o none \
-      || die "could not add workload profile '$PROFILE' to '$ENVNAME'.
-  Serverless GPU profiles are region- and quota-limited. Check availability in this region and
-  that the subscription has GPU quota, then re-run. Nothing was created."
-  fi
-else
+if [ -n "$HAVE" ] && [ "$HAVE" != "None" ]; then
   echo "  ✓ $PROFILE already on the environment"
+else
+  # ── discover the SKU, do not guess it ──────────────────────────────────────────────────────
+  # `list-supported` is per-REGION and is the only authority on what this subscription can
+  # actually add. Asking it turns "invalid type" — which says nothing about what IS valid — into
+  # either the right SKU or a list of every SKU the region offers.
+  REGION="$(az containerapp env show "${AZ[@]}" -g "$RG" -n "$ENVNAME" --query location -o tsv 2>/dev/null || true)"
+  [ -n "$REGION" ] || die "cannot resolve the region of '$ENVNAME' — needed to ask Azure which GPU profiles it offers"
+  SUPPORTED="$(az containerapp env workload-profile list-supported "${AZ[@]}" -l "$REGION" \
+    --query '[].name' -o tsv 2>/dev/null || true)"
+  [ -n "$SUPPORTED" ] || die "could not list supported workload profiles in '$REGION'.
+  Without that list this script would be guessing SKU strings, which is what it is trying not to do."
+
+  if [ -n "$PROFILE_TYPE" ]; then
+    printf '%s\n' "$SUPPORTED" | grep -qxF "$PROFILE_TYPE" \
+      || die "ACP_GPU_PROFILE_TYPE='$PROFILE_TYPE' is not offered in $REGION. Supported here:
+$(printf '%s\n' "$SUPPORTED" | sed 's/^/    /')"
+  else
+    # A GPU profile, by the only marker the names reliably carry. Ordered so an explicitly
+    # GPU-labelled consumption profile wins over a bare NC/A100 SKU name.
+    PROFILE_TYPE="$(printf '%s\n' "$SUPPORTED" | grep -i -m1 'gpu' || true)"
+    [ -n "$PROFILE_TYPE" ] || PROFILE_TYPE="$(printf '%s\n' "$SUPPORTED" | grep -iE -m1 'NC[0-9]|A100|T4' || true)"
+    [ -n "$PROFILE_TYPE" ] || die "no GPU workload profile is available in $REGION. This is the
+  region/quota limit, stated plainly rather than as an 'invalid type'. Supported here:
+$(printf '%s\n' "$SUPPORTED" | sed 's/^/    /')
+  Either request GPU quota in $REGION, or provision the environment in a region that has it."
+    echo "  discovered GPU SKU in $REGION: $PROFILE_TYPE"
+  fi
+
+  if [ "$DRY" = 1 ]; then
+    echo "  would: add workload profile name=$PROFILE type=$PROFILE_TYPE"
+  else
+    say "adding workload profile $PROFILE (type $PROFILE_TYPE)"
+    az containerapp env workload-profile add "${AZ[@]}" -g "$RG" -n "$ENVNAME" \
+      --workload-profile-name "$PROFILE" --workload-profile-type "$PROFILE_TYPE" \
+      --min-nodes 0 --max-nodes 1 -o none \
+      || die "could not add workload profile '$PROFILE' (type '$PROFILE_TYPE') to '$ENVNAME'.
+  The SKU is one Azure lists as supported in $REGION, so the likely cause is GPU QUOTA on this
+  subscription rather than the type. Request quota for '$PROFILE_TYPE' in $REGION and re-run —
+  nothing was created."
+  fi
 fi
 
 # ── 3. the Ollama app ────────────────────────────────────────────────────────────────────────
