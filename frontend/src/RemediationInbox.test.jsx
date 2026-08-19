@@ -20,7 +20,7 @@ const QUEUE = [
 
 let container, root
 // The workspace layout + pane sizes persist in localStorage; clear it so each test starts from the
-// Split default rather than inheriting a previous test's choice.
+// Stacked default rather than inheriting a previous test's choice.
 beforeEach(() => { try { localStorage.clear() } catch {} ;({ container, root } = createTestRoot()) })
 
 // Interaction tests use a deterministic document sort so the queue order is stable;
@@ -120,8 +120,8 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(container.textContent).toContain('Certified')
   })
 
-  it('renders the document preview as a dedicated third pane (three-pane mockup layout)', async () => {
-    await render({ queue: QUEUE, decisions: {} })
+  it('Split renders the document preview as a dedicated third pane (three-pane mockup layout)', async () => {
+    await render({ queue: QUEUE, decisions: {}, initialLayout: 'split' })
     // Three panes: Remediation Inbox · Guided remediation · Document preview. The finding is reviewed
     // in the guided centre column; the preview lives in its own right-hand pane, NOT folded into an
     // Evidence section of the workspace.
@@ -150,14 +150,16 @@ describe('RemediationInbox — workflow-status queue', () => {
   const rinbox = () => container.querySelector('.rinbox')
   const sep = (label) => [...container.querySelectorAll('[role=separator]')].find((s) => s.getAttribute('aria-label') === label)
 
-  it('offers a Split / Stacked / Focus layout toggle, defaulting to Split with both workspace panes', async () => {
+  it('offers a Split / Stacked / Focus layout toggle, defaulting to Stacked (the two-column workspace)', async () => {
     await render({ queue: QUEUE, decisions: {} })
     expect(layoutBtn('Split')).toBeTruthy()
     expect(layoutBtn('Stacked')).toBeTruthy()
     expect(layoutBtn('Focus')).toBeTruthy()
-    expect(rinbox().getAttribute('data-layout')).toBe('split')
-    expect(layoutBtn('Split').getAttribute('aria-pressed')).toBe('true')
-    // Split shows both the guided pane and the document preview.
+    // Opens in the two-column Stacked workspace — queue beside one column that stacks the guided pane
+    // above the document preview. Reviewers can switch to Split/Focus; the choice persists.
+    expect(rinbox().getAttribute('data-layout')).toBe('stacked')
+    expect(layoutBtn('Stacked').getAttribute('aria-pressed')).toBe('true')
+    // Stacked still shows both the guided pane and the document preview, one above the other.
     expect(container.textContent).toContain('Guided remediation')
     expect(container.textContent).toContain('Document preview')
   })
