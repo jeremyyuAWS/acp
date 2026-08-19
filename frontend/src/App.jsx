@@ -1110,6 +1110,7 @@ export default function App() {
             : (pendingScan.source === 'all' || s.type === 'google_drive')))
             .reduce((a, s) => a + (s.files || 0), 0)}
           hasDrive={hasDriveToken} hasSP={hasSPToken} canEditScope={scopeOwner !== false}
+          scans={scanList}
           onConfirm={(runScope) => { const { source, folder } = pendingScan; setPendingScan(null); doScan(source, folder, runScope) }}
           onCancel={() => setPendingScan(null)} />
       )}

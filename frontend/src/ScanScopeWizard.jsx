@@ -1,10 +1,11 @@
-import { useState, useEffect, Fragment } from 'react'
+import { useState, useEffect, useMemo, Fragment } from 'react'
 import { getSettings, updateSettings, getScanLocations, setScanLocations,
          listFolders, listSpFolders } from './api.js'
 import FolderPicker from './FolderPicker.jsx'
 import { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } from './scopePresets.js'
 import { TRACKED_17, RULE_DETAILS } from './ruleDetails.js'
 import { ASSESSMENT_FALLBACK, assessmentFor } from './capability.js'
+import { reusableScopes, describeScope, whenLabel } from './recentScopes.js'
 
 // ── Scan-scope WIZARD (Phase 1) ─────────────────────────────────────────────────────────────────
 //
@@ -191,8 +192,9 @@ export function locationsKeyFor(source, { hasDrive = false, hasSP = false } = {}
 }
 
 export default function ScanScopeWizard({ onStartScan, showStartButton = false,
-                                          canEditScope = true, rememberDefault = true,
-                                          source = 'all', hasDrive = false, hasSP = false }) {
+                                          canEditScope = true, rememberDefault = false,
+                                          source = 'all', hasDrive = false, hasSP = false,
+                                          scans = [] }) {
   // ── FOLDER SCOPE (PRD §6, step 1) ──────────────────────────────────────────────────────────
   //
   // WHOSE ANSWER IS THIS? The Sources card stores a folder set per CONNECTION; this wizard
@@ -205,8 +207,12 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   // somebody deliberately diverges them, and the run records its own scope regardless
   // (scan_runs.scope is frozen at scan start, ADR 0035).
   //
-  // It is also the rule this screen already teaches for criteria — "Remember these selections for
-  // my next scan" is the same opt-in write-back — so it is one concept, not two.
+  // The criteria half now follows the SAME rule, which it did not before: "Remember these
+  // selections" was opt-OUT and on by default, so a one-off narrow criteria choice was written to
+  // the platform default for everyone unless somebody noticed a ticked box and unticked it. That
+  // is the identical failure the folder half is careful about — a one-off quietly becoming
+  // configuration — with the defaults the wrong way round. Both are now explicit, off by default,
+  // and shown only once the run actually differs from what is stored.
   const locKey = locationsKeyFor(source, { hasDrive, hasSP })
   const [folders, setFolders] = useState([])
   const [excluded, setExcluded] = useState([])
@@ -238,7 +244,13 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
 
   // Diverging from the card is legitimate — it is what "this run only" means — but it must be
   // SAID. An unremarked difference between the card and the run is the whole failure mode.
-  const chooseAll = () => { setScopeMode('all'); setFolders([]); setExcluded([]) }
+  // The inline picker seeds its own selection from `initial` at MOUNT, so anything that replaces
+  // the selection from outside it (choosing "Entire source", applying a recent scope) has to
+  // remount it. Without this the browser keeps showing the previous chips while the wizard state
+  // says something else — two answers to "what am I about to scan?" on one screen, which is the
+  // failure the two-column layout exists to remove.
+  const [pickerSeed, setPickerSeed] = useState(0)
+  const chooseAll = () => { setScopeMode('all'); setFolders([]); setExcluded([]); setPickerSeed((n) => n + 1) }
 
   // The same component serves two surfaces: the scan-launch modal (stepped) and the Settings
   // scope editor (one panel, no start button). Stepping the editor would hide half its controls
@@ -264,6 +276,32 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   const canEdit = canEditScope && !forbidden
   const [msg, setMsg] = useState('')
   const [remember, setRemember] = useState(rememberDefault)
+
+  // ── REUSE A SCOPE YOU HAVE ACTUALLY RUN ────────────────────────────────────────────────────
+  // Derived from `scan_runs.scope`, not from a saved-scopes store. A saved scope is a claim about
+  // what WILL be covered; a run's frozen scope is a record of what WAS, and only the second can be
+  // checked. Reusing one also keeps the two runs comparable — a diff cannot tell a document that
+  // got worse from a document measured against fewer criteria unless both boundaries agree.
+  const reusable = useMemo(() => reusableScopes(scans, locKey), [scans, locKey])
+  const [reusedKey, setReusedKey] = useState(null)
+
+  const applyScope = (e) => {
+    setFolders(e.folders)
+    // Carve-outs are carried over even though the run recorded only their IDS. Dropping them
+    // would WIDEN this scan while the control the user clicked was labelled as a narrowing; the
+    // name is what is missing, so the chip says that rather than printing a raw Drive id.
+    setExcluded(e.excluded.map((f) => ({ id: f.id, name: f.name || 'folder not named on that run' })))
+    setScopeMode(e.folders.length ? 'some' : 'all')
+    setPickerSeed((n) => n + 1)
+    // Round-tripped through the SAME parser the stored scope uses, so a reused scope and a saved
+    // one cannot normalise differently — and readyOnly drops pairs this release cannot assess, so
+    // an old scope does not resurrect a cell that would return nothing.
+    const parsed = e.scanScope ? parseStoredScope(JSON.stringify(e.scanScope)) : null
+    setRestrict(Boolean(parsed))
+    setSel(parsed ? readyOnly(parsed) : {})
+    setReusedKey(e.key)
+    setMsg('')
+  }
 
   useEffect(() => {
     let alive = true
@@ -589,6 +627,49 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
             Choose which locations ACP should assess. Subfolders are included unless you exclude them.
           </div>
 
+          {/* REUSE A SCOPE YOU HAVE ACTUALLY RUN. Offered before the radio group because for a
+              recurring audit it answers the whole wizard in one click — and because a shortcut
+              placed after the thing it shortcuts is a shortcut nobody takes.
+              These come from `scan_runs.scope`, the boundary each run FROZE at scan start, so
+              every entry is a record of what was covered rather than a claim about what would be.
+              A run with no recorded scope is deliberately absent: NULL means unknown, and applying
+              unknown would apply as "everything". */}
+          {reusable.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.04em',
+                            color: 'var(--muted)', marginBottom: 6 }}>
+                REUSE A RECENT SCOPE
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {reusable.map((e) => {
+                  const on = reusedKey === e.key
+                  return (
+                    <button key={e.key} type="button" disabled={busy} aria-pressed={on}
+                            onClick={() => applyScope(e)}
+                            style={{ textAlign: 'left', cursor: 'pointer', font: 'inherit',
+                                     border: `1px solid ${on ? '#6D28D9' : 'var(--line)'}`,
+                                     background: on ? '#F3EEFC' : 'var(--surface)', color: 'inherit',
+                                     borderRadius: 10, padding: '7px 10px', flex: '1 1 240px' }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 600 }}>{describeScope(e)}</div>
+                      <div className="muted" style={{ fontSize: 11.5 }}>
+                        Last run {whenLabel(e.at)}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+              {reusedKey && (
+                // Applying one is not the end of the decision, it is the start: the browser below
+                // now shows what was applied, and saying so is what stops "reused" being taken for
+                // "verified". Anything reused is still editable, and still frozen fresh at start.
+                <div role="status" aria-live="polite" className="muted"
+                     style={{ fontSize: 11.5, marginTop: 6 }}>
+                  Applied to this run — check the locations and criteria below before starting.
+                </div>
+              )}
+            </div>
+          )}
+
           {/* The two answers, as an explicit choice. Inferring "entire source" from an empty
               selection means the most consequential scope decision is made by NOT clicking. */}
           <div role="radiogroup" aria-label="What to assess"
@@ -631,7 +712,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
             <div style={{ marginBottom: 8 }}>
               <FolderPicker
                 layout="inline"
-                key={locKey}
+                key={`${locKey}:${pickerSeed}`}
                 rootName={locKey === 'drive' ? 'My Drive' : 'OneDrive'}
                 lister={locKey === 'drive' ? listFolders : (parent) => listSpFolders(parent)}
                 initial={folders}
@@ -995,12 +1076,28 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
       {/* ── 5/7. Footer ─────────────────────────────────────────────────────── */}
       {showStartButton ? (
         <>
-          {step === 3 && (
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, margin: '12px 0 0' }}>
-              <input type="checkbox" checked={remember} disabled={busy}
-                     onChange={(e) => setRemember(e.target.checked)} />
-              Remember these selections for my next scan
-            </label>
+          {/* THE CRITERIA WRITE-BACK, now symmetric with the folder one directly above it.
+              It used to read "Remember these selections for my next scan", be ticked by DEFAULT,
+              and appear on every run. Three things were wrong with that. It is not "my next scan"
+              — `scan_scope` is the platform default and applies to everyone. Being on by default
+              made a one-off narrowing into permanent configuration unless somebody noticed a
+              ticked box, which is the exact failure the folder half is careful about, with the
+              default the wrong way round. And a checkbox that is always there is a checkbox people
+              tick without reading; appearing only once the run actually DIFFERS from what is
+              stored makes its absence a signal too.
+              Hidden for a non-owner rather than shown and ignored: PUT /settings is admin-only, so
+              offering it to a read-only account promises a write that 403s. */}
+          {step === 3 && dirty && canEdit && (
+            <div style={{ margin: '12px 0 0' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                <input type="checkbox" checked={remember} disabled={busy}
+                       onChange={(e) => setRemember(e.target.checked)} />
+                Also save these criteria as the platform default
+              </label>
+              <div className="muted" style={{ fontSize: 11.5, marginLeft: 24 }}>
+                Applies to every later scan, for everyone. This run uses them either way.
+              </div>
+            </div>
           )}
 
           {/* Sticky footer: the running scope stays visible while the folder tree or the criterion

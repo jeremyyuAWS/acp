@@ -164,7 +164,10 @@ describe('scope state', () => {
     await click(cont())
     const startBtn = [...c.querySelectorAll('button')].find((b) => /Start scan/.test(b.textContent))
     expect(startBtn).toBeTruthy()
-    expect(c.textContent).toMatch(/Remember these selections for my next scan/)
+    // The criteria write-back is NOT here: this run matches the stored scope, so there is nothing
+    // to write and a checkbox offering to write it would be a control that does nothing. It
+    // appears only on divergence — see "the criteria write-back is opt-in and only on divergence".
+    expect(c.textContent).not.toMatch(/save these criteria as the platform default/)
     await click(startBtn)
     expect(started).toHaveBeenCalled()
   })
