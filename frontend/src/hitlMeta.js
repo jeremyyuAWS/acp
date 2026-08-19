@@ -1,4 +1,4 @@
-// HITL inbox metadata — the human-review "AI Work Inbox" (Phase 1).
+// HITL inbox metadata — the human-review "Review queue" (Phase 1).
 //
 // Why a finding lands in front of a person, keyed by WCAG success criterion. These are
 // exactly the criteria whose fix ACP CANNOT safely auto-apply: it either needs a

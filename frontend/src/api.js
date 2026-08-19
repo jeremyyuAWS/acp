@@ -480,7 +480,7 @@ export const setCampaignStatus = (campaignId, status) => (SIM
 export const autoPopulateHitlQueue = (scanId) => (SIM
   ? sim({ queued: 0, items: [] })
   : fetch(`${BASE}/hitl/queue/${encodeURIComponent(scanId)}/auto`, { method: 'POST', headers: headers() }).then(j))
-// List ALL HITL items across scans (the global "AI Work Inbox" bell). No scan_id → the
+// List ALL HITL items across scans (the global "Review queue" bell). No scan_id → the
 // backend returns every item; status omitted → every status (metrics need resolved ones).
 export const listAllHitl = (status = null) => (SIM
   ? sim([], 60)

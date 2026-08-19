@@ -1,4 +1,4 @@
-// The auto-draft gate must never let the AI Work Inbox stampede the model: no matter how many
+// The auto-draft gate must never let the Review queue stampede the model: no matter how many
 // undrafted cards fire on sight, at most MAX_CONCURRENT vision calls run at once, and a call that
 // throws still frees its slot.
 import { describe, it, expect } from 'vitest'

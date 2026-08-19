@@ -926,7 +926,7 @@ export default function Upload({ onCertified, me }) {
                 </div>
               )}
               <p className="muted" style={{ marginTop: 12 }}>{autoFixed.length} finding(s) auto-fixed · <b>{review.length}</b> routed to human review{prescreen.length > 0 && <> · <b>{prescreen.length}</b> flagged for HITL review (Phase 2)</>}.</p>
-              <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 4 }}><button onClick={() => setStep(3)}>AI Work Inbox →</button></div>
+              <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 4 }}><button onClick={() => setStep(3)}>Review queue →</button></div>
             </section>
           )}
 

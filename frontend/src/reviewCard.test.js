@@ -267,7 +267,7 @@ describe('validationChecklist — machine-verified receipt for an applied fix', 
   })
 })
 
-describe('reviewIntent — the one plain-language sentence at the top (AI Work Inbox)', () => {
+describe('reviewIntent — the one plain-language sentence at the top (Review queue)', () => {
   const withDraft = { proposals: [{ proposed_value: 'a chart of revenue' }] }
   const noDraft = { proposals: [] }
   it('a drafted fix → “review and approve”, flavoured by the SC noun', () => {

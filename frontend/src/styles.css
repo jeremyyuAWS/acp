@@ -1653,7 +1653,7 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 }
 @media (prefers-reduced-motion: reduce) { .dlfixed { animation: none; } }
 
-/* ── HITL "AI Work Inbox": global bell + review center ─────────────────────── */
+/* ── HITL "Review queue": global bell + review center ──────────────────────── */
 .hitlbell { position: relative; display: inline-flex; }
 .hitlbell-btn { position: relative; border: 1px solid var(--line); background: var(--card);
   border-radius: 9px; padding: 5px 9px; font-size: 15px; cursor: pointer; line-height: 1; }
@@ -1938,13 +1938,13 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
   .rem-sec > summary.rem-sec-sum::before { transition: none; }
 }
 
-/* The review list — the container the AI Work Inbox renders its EvidenceCards into. The
+/* The review list — the container the Review queue renders its EvidenceCards into. The
    .reviewcard / .autobadge / .whyreview-* rules that used to follow here styled Remediate's
    ReviewItemCard, WhyReview and ReviewComparison, all deleted as unreachable. `.diffbox` and
    `.difftag` are NOT part of that: six components still emit them. */
 .reviewlist { display: flex; flex-direction: column; gap: 10px; }
 
-/* AI Work Inbox navigation — search + collapse-all toolbar, and the collapsible per-card wrapper.
+/* Review queue navigation — search + collapse-all toolbar, and the collapsible per-card wrapper.
    The card itself is unchanged; .revcard is a <details> shell around it so a reviewer can read the
    queue as a list of headers and open only what they're working. */
 .revtoolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -2112,12 +2112,12 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .evcard-draft-btn:disabled { opacity: 0.6; cursor: default; }
 .evcard-draft-msg { display: block; font-size: 11.5px; margin-top: 4px; line-height: 1.4; }
 
-/* Auto-draft status (AI Work Inbox — the "Draft with AI" button was removed; drafts generate on
+/* Auto-draft status (Review queue — the "Draft with AI" button was removed; drafts generate on
    sight). A passive, low-emphasis indicator, not a button: the reviewer waits, they don't act. */
 .evcard-drafting { display: inline-block; font-size: 12px; color: var(--muted, #666);
   font-style: italic; }
 
-/* Details ▾ (AI Work Inbox progressive disclosure) — collapses the trust-state enums, provenance,
+/* Details ▾ (Review queue progressive disclosure) — collapses the trust-state enums, provenance,
    audit trail, detection evidence and "why human review" so the card leads with the decision, not
    the machinery. Quiet by default; the body reveals the blocks in their original styling. */
 .evcard-details { margin: 2px 0 10px; }
@@ -2139,12 +2139,12 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
   cursor: pointer; white-space: nowrap; }
 .evcard-similar-btn:hover { background: var(--bg); border-color: var(--plum); }
 
-/* Review Intent (AI Work Inbox) — the one plain-language sentence at the top of every review
+/* Review Intent (Review queue) — the one plain-language sentence at the top of every review
    card. Reads as the reviewer's brief, not a system label: slightly larger, calm, task-first. */
 .evcard-intent { font-size: 14px; line-height: 1.5; font-weight: 500; color: var(--fg, #1c1620);
   margin: 0 0 12px; }
 
-/* "Why this is safe to approve" (AI Work Inbox P0) — the affirmative, up-front evidence summary.
+/* "Why this is safe to approve" (Review queue P0) — the affirmative, up-front evidence summary.
    Green so it reads as reassurance, not another warning; only rendered when the signals are
    genuinely positive (see whySafeToApprove), so the colour is never a false promise. */
 .evcard-safe { margin: 0 0 12px; padding: 9px 12px; border: 1px solid var(--ok-line, #b7dfc0);

@@ -15,7 +15,7 @@ import { riskComparator, reviewRisk, fmtEst } from './reviewRisk.js'
 const scOf = (r) => String(r || '').replace(/^SC[_ ]?/i, '').replace(/_/g, '.').match(/^\d+\.\d+\.\d+/)?.[0] || ''
 const isToday = (iso) => { if (!iso) return false; const d = new Date(iso), n = new Date(); return d.toDateString() === n.toDateString() }
 
-// The full-screen "AI Work Inbox" — GitHub-PRs-meets-Gmail. Items are grouped by issue
+// The full-screen "Review queue" — GitHub-PRs-meets-Gmail. Items are grouped by issue
 // type, priority-sorted, each showing the REAL reason it escalated to a human, with
 // one-click approve / reject / skip (and inline edit of the AI-drafted value).
 export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }) {
@@ -117,11 +117,11 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
   const confirmSection = (sec) => sec.groups.flatMap((g) => g.items).forEach((it) => doAct(it, 'approved'))
 
   return (
-    <div className="rc-overlay" role="dialog" aria-modal="true" aria-label="AI Work Inbox">
+    <div className="rc-overlay" role="dialog" aria-modal="true" aria-label="Review queue">
       <div className="rc-panel">
         <div className="rc-head">
           <div>
-            <h2 className="rc-title">🔔 AI Work Inbox</h2>
+            <h2 className="rc-title">🔔 Review queue</h2>
             <p className="muted rc-sub">AI-drafted and low-confidence fixes awaiting your approval before they can be certified.</p>
           </div>
           <button className="rc-close" onClick={onClose} aria-label="Close">✕</button>

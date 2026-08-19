@@ -1,6 +1,6 @@
 // Bounded auto-draft gate.
 //
-// The AI Work Inbox renders EVERY pending finding as its own EvidenceCard at once (Remediate maps
+// The Review queue renders EVERY pending finding as its own EvidenceCard at once (Remediate maps
 // the whole queue). Now that an undrafted card generates its AI preview automatically instead of
 // waiting for a "Draft with AI" click, firing on sight would launch a vision call for every
 // undrafted card and image the moment the inbox opens — a thundering herd that stalls a single
