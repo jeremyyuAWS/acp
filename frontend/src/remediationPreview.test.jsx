@@ -46,6 +46,16 @@ describe('RemediationPreview — contextual document pane', () => {
     expect(container.querySelector('img')).toBeNull()                   // no scanId → no image element
   })
 
+  it('renders the real "before" value, never the beforeLiteral boolean flag', async () => {
+    // Regression: Remediate.jsx sets `beforeLiteral: !!firstBefore(it)` (a boolean). The pane used
+    // to read `beforeLiteral ?? before`, so it rendered the FLAG — "before false" when absent,
+    // "before true" when present — instead of the value. It must show `f.before`.
+    await render({ finding: { id: 9, file: 'brief.docx', page: 3, beforeLiteral: false, before: 'Required property not present', after: 'Add the property' } })
+    expect(container.textContent).toContain('Required property not present')
+    expect(container.textContent).not.toContain('before false')
+    expect(container.textContent).not.toContain('before true')
+  })
+
   it('the After view shows the proposed change and that it re-validates on approval', async () => {
     await render({ finding: VISUAL })
     await click(tab('After'))

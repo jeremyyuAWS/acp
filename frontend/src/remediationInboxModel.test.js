@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   laneOf, LANES, effortSecOf, effortLabel, isResolved, issueLabel, locationLabel, rowModel,
   tabOf, tabCounts, matchesTab, sortQueue, groupByDocument, nextUnresolvedId, progress,
-  normSc, autoFixRows,
+  normSc, autoFixRows, railColorOf, NEUTRAL_RAIL,
 } from './remediationInboxModel.js'
 
 const F = {
@@ -28,6 +28,16 @@ describe('lane taxonomy', () => {
   it('each lane has a distinct rail colour', () => {
     const rails = Object.values(LANES).map((l) => l.rail)
     expect(new Set(rails).size).toBe(rails.length)
+  })
+  it('reserves a coloured rail for attention lanes; everyday lanes get a neutral rail', () => {
+    // Blocked + rejected-handoff are the only lanes a reviewer must actively unblock.
+    expect(railColorOf(LANES.blocked)).toBe(LANES.blocked.color)
+    expect(railColorOf(LANES.handoff)).toBe(LANES.handoff.color)
+    // The common lanes no longer paint a saturated vertical bar on every row.
+    expect(railColorOf(LANES.manual)).toBe(NEUTRAL_RAIL)
+    expect(railColorOf(LANES.review)).toBe(NEUTRAL_RAIL)
+    expect(railColorOf(LANES.apply)).toBe(NEUTRAL_RAIL)
+    expect(railColorOf(LANES.recheck)).toBe(NEUTRAL_RAIL)
   })
 })
 

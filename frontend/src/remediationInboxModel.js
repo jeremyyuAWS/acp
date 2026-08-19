@@ -12,29 +12,33 @@
 // ── Remediation lanes ─────────────────────────────────────────────────────────────────────────
 // A finding sits in exactly one lane; the lane drives the row's colour rail, the primary action
 // label, and the "what ACP did" line. Colours are the six-state remediation vocabulary.
+// `attention` marks the lanes a reviewer must actively unblock — a blocked finding or a rejected AI
+// fix handed back for a person. Only those keep a saturated coloured rail; the everyday lanes
+// (review/apply/manual/recheck) get a neutral rail (railColorOf), so the queue is not a wall of
+// amber/orange bars that all read as "urgent". `color` is unchanged — it still tints each lane's pill.
 export const LANES = {
   review: {
-    key: 'review', rail: 'green', color: '#1f9d6b',
+    key: 'review', rail: 'green', color: '#1f9d6b', attention: false,
     label: 'Review automatic fix', action: 'Approve fix',
     didLine: 'ACP fixed it — review the change',
   },
   apply: {
-    key: 'apply', rail: 'blue', color: '#2f6fed',
+    key: 'apply', rail: 'blue', color: '#2f6fed', attention: false,
     label: 'Apply suggested fix', action: 'Apply fix',
     didLine: 'ACP drafted a fix — apply or reject',
   },
   manual: {
-    key: 'manual', rail: 'amber', color: '#c2871a',
+    key: 'manual', rail: 'amber', color: '#c2871a', attention: false,
     label: 'Manual edit required', action: 'Open in Word',
     didLine: 'Needs a manual edit — guided steps provided',
   },
   recheck: {
-    key: 'recheck', rail: 'gray', color: '#8a8f98',
+    key: 'recheck', rail: 'gray', color: '#8a8f98', attention: false,
     label: 'Recheck needed', action: 'Recheck',
     didLine: 'Edited — re-scan to confirm it passes',
   },
   blocked: {
-    key: 'blocked', rail: 'red', color: '#c0553f',
+    key: 'blocked', rail: 'red', color: '#c0553f', attention: true,
     label: 'Blocked', action: 'Review block',
     didLine: 'Blocked — cannot be remediated as-is',
   },
@@ -44,13 +48,21 @@ export const LANES = {
   // the reviewer can see what they bounced back, and distinct from `blocked` (which is unfixable) —
   // this one is fixable, just not by the AI's rejected attempt.
   handoff: {
-    key: 'handoff', rail: 'orange', color: '#b1622b',
+    key: 'handoff', rail: 'orange', color: '#b1622b', attention: true,
     label: 'Rejected — needs manual handling', action: 'Mark as assigned',
     didLine: 'AI fix rejected — a person must handle this',
   },
 }
 
 export const LANE_ORDER = ['review', 'apply', 'manual', 'handoff', 'recheck', 'blocked']
+
+// The colour of a row's 4px lane rail. Attention lanes (blocked, rejected-handoff) keep their
+// saturated colour so they stand out; everything else gets a neutral rail. This is what "reserve
+// orange for items that genuinely require attention" comes down to in the queue.
+export const NEUTRAL_RAIL = 'var(--rail-neutral, #d8d3dd)'
+export function railColorOf(lane) {
+  return lane?.attention ? lane.color : NEUTRAL_RAIL
+}
 
 const RESOLVED_STATUSES = new Set(['approved', 'applied', 'accepted', 'rejected', 'resolved', 'verified'])
 
