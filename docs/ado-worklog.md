@@ -590,6 +590,25 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   truncation, dedup-by-identity), the scan-setup UX split, and the shipped/next roadmap. Central rule:
   unsupported means NOT EVALUATED, never passed; never report the three as one percentage. Implemented
   under the "Estate coverage" Feature below.
+- **Brought the architecture docs current for the engineering deck** (#432, #438, #439, #444). The
+  slide deck `docs/acp-architecture-deck.md` had gone materially stale (last verified 2026-07-29):
+  refreshed the AI lane (five vision adapters, not Ollama+RunPod; text default `llama3.2`; the
+  local-floor → acceptance-gated → GPU/cloud escalation; the in-tenant Azure T4 via `gpu_up.sh`
+  alongside RunPod serverless), added a dedicated **Observability** slide (Langfuse **v2 on one Postgres
+  today, v3+ClickHouse the committed migration**; the two-trace Scan/Assess model + `compliance_score`;
+  the HMAC-filename / counts-and-lengths PHI invariant), a **Sources** slide (Drive / SharePoint / SMB),
+  replaced the obsolete "manual deploy" headline weakness with the **two-chain CD** (prod approval-gated
+  + unattended staging), and added the accessibility status model (ADR 0026 — `not_applicable` leaves the
+  coverage denominator). #438 firmed the Langfuse v3 wording from "optional upgrade path" to a committed
+  migration. (The actual v3/ClickHouse cutover has SINCE shipped — #449/#447, logged under Observability
+  above — so the deck's Observability slide now needs a follow-up to say v3 is *live*, not planned.)
+  #439 patched the long-form `acp-architecture.md` to match (Movate AccessOps naming, the
+  five-adapter AI lane, per-user scope ADR 0035, the SMB connector's auth posture, the staging tier).
+  #444 added two **Scan → Assess → Remediate + vision/GPU routing** slides: an ASCII workflow showing that
+  only the image SCs (1.1.1, 1.4.5/1.4.9, scanned-PDF) enter the vision lane while deterministic SCs stay
+  CPU, plus region/GPU-tier tables with real sizes (`NC8AS_T4` = 8 vCPU + 1× **T4 16 GB** running
+  `qwen2.5vl:7b`; RunPod serverless; the in-process CPU floor). Honest caveats stated on-slide: no Asia
+  region is live today (single env + Langfuse eastus2); the RunPod GPU class is configurable.
 
 ## Feature: docx Core-17 criterion coverage · #4610
 
@@ -1857,3 +1876,11 @@ invariant the redaction tests pin).
   This is ops + one docs-only PR, not a RULE_PATHS change. **Sync marker still NOT advanced** (`fad0dfbe`,
   same convention as the prior entries): the large delta since it remains other sessions' undocumented
   feature work, left for them to characterise.
+- **2026-08-19 (Architecture docs refresh)** — Added the architecture-deck + long-form refresh (#432, #438,
+  #439, #444) to **Documentation**: the AI-lane / Observability / Sources / two-chain-CD / status-model
+  corrections and the new Scan→Assess→Remediate vision/GPU-routing slides (with the real T4 sizing). NOTE:
+  the deck framed Langfuse v3/ClickHouse as the *committed migration*, but the actual v3 cutover then shipped
+  (see the Langfuse v3 upgrade entry above, #449/#447) — so the deck's Observability slide needs a follow-up
+  to say v3 is **live**. The Remediate workspace/layout/taxonomy/count PRs (#418/#427/#430/#434/#435/#442)
+  were already logged under #4598 by the state-model owner's session, so nothing was added there. Docs-only,
+  not RULE_PATHS. **Sync marker deliberately NOT advanced** (same convention).
