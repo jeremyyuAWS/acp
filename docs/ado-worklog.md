@@ -1260,6 +1260,21 @@ invariant the redaction tests pin).
 - **The disposition / pending-approval queue is now traced** (#371, N2). `routes/disposition.py` was the one
   untraced decision surface; a new `trace_disposition_decision` (status / action / policy-id / `reason_chars`
   count / HMAC doc label) mirrors the HITL decision span at every point a disposition is recorded.
+- **Per-file traces carry the document + assessment result, not an empty shell** (#403). Every trace in the
+  Langfuse session view read "no input or output": `file_trace` set a name/tags/metadata but never
+  trace-level `input`/`output`, and only the child spans carried data — which the session LIST view does not
+  surface (the $0.00 cost is correct: deterministic local checks have no per-token cost). `file_trace` now
+  sets `input` = {redacted document label, format}; a new `file_assessment_result` sets `output` = score /
+  conformant / level / failing WCAG criteria + counts, called per file in `ensure_assess_trace`. Strictly
+  structured (docs/audit-langfuse-phi.md) — no document content, no raw filename; a test asserts the data
+  lands AND carries no free text.
+- **Traces gain a PII flag, remediation status, and the full per-check breakdown** (#406). Extends #403's
+  trace output with `checks` = the whole {PASS/FAIL/REVIEW/NOT_EVALUATED: count} breakdown (not just
+  failures, from the `get_scan_traces` rows already fetched); `pii` = {flagged, types, findings, critical}
+  where `types` are CATEGORIES (`us_ssn`, `email_address`) — the same `sensitive_data_types` the PII span
+  already emits, never a value; and `remediation` = {remediated, written_back, published} booleans off the
+  file record. New kwargs optional (backward-compatible); the category-not-value invariant is pinned by
+  test, and the no-free-text / redacts-filenames guards stay green.
 
 ## Open items (backlog candidates)
 
@@ -1586,3 +1601,11 @@ invariant the redaction tests pin).
   Assess filters (#5 document-type, #7 WCAG-code) noted in place, not re-added. **Sync marker deliberately
   NOT advanced** (same convention as the four prior entries): the SMB source work (#388–#397) and other
   commits in the range remain for their sessions to characterise.
+- **2026-08-19 (Langfuse trace enrichment)** — Added #403 and #406 as two Tasks under Observability — AI
+  tracing and cost (Langfuse). #403 turns the empty per-file traces ("no input or output") into real
+  input (document + format) and output (score / conformant / failing WCAG criteria); #406 extends the output
+  with the full per-check breakdown, a PII flag (type categories, never values), and remediation status.
+  Both stay inside the PHI privacy guard, with the no-free-text / redaction tests kept green. **Sync marker
+  still NOT advanced** (`fad0dfbe`, same convention): the 68-commit delta remains dominated by other
+  sessions' undocumented feature work (SMB sources, remediation/certify/monitor lanes, coverage scorecard,
+  etc.), left for their own sessions.
