@@ -116,19 +116,19 @@ def main() -> int:
           f"{len(scoped)}/{len(th)} scoped — WeasyPrint omits /Scope; verify header association in veraPDF",
           severity="WARN")
 
-    # ── 4. figures: alt present, decorative handled ────────────────────────────────────────────
+    # ── 4. figures: the chart tags as a Figure WITH alt, and no orphan ─────────────────────────
+    # Iteration 2: the chart is an <img alt="conclusion"> (data-URI SVG), not an aria-hidden inline
+    # <svg>. That is the treatment the probe found actually works: it tags as a /Figure carrying
+    # /Alt, and leaves NO orphan /Figure marked-content. Both are now hard checks — the orphan was a
+    # real PDF/UA violation in iteration 1, so this guards against regressing to it.
     figs = [e for _, t, e in elems if t == "/Figure"]
     figs_no_alt = [e for e in figs if not e.get("/Alt")]
-    check("no tagged Figure lacks /Alt", len(figs_no_alt) == 0,
+    check("chart tags as a Figure carrying /Alt", len(figs) >= 1 and len(figs_no_alt) == 0,
           f"{len(figs)} Figure struct elem(s), {len(figs_no_alt)} missing alt")
-    # FINDING (WARN): the decorative SVG is aria-hidden, intending an Artifact. But the content stream
-    # carries a /Figure marked-content that is NOT linked into the struct tree (orphan) — real content
-    # that is neither tagged-with-alt nor an Artifact, which PDF/UA forbids. aria-hidden does NOT
-    # artifact an SVG in WeasyPrint; the decorative-chart approach needs a different technique.
     orphan_figs = mc.get("/Figure", 0) - len(figs)
-    check("no orphan /Figure marked-content (decorative cleanly artifacted)", orphan_figs <= 0,
+    check("no orphan /Figure marked-content", orphan_figs <= 0,
           f"{mc.get('/Figure', 0)} /Figure in stream vs {len(figs)} in struct tree — "
-          f"{max(orphan_figs, 0)} orphan; aria-hidden did not artifact the SVG", severity="WARN")
+          f"{max(orphan_figs, 0)} orphan")
 
     # ── 5. furniture is Artifacts ──────────────────────────────────────────────────────────────
     check("Artifact marked-content present (running header/footer)", mc.get("/Artifact", 0) > 0,

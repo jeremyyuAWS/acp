@@ -27,21 +27,27 @@ Run against WeasyPrint 69 / reportlab-free, verified locally:
 - **Running header/footer are Artifacts** (41 Artifact marked-content sequences) — page furniture is
   kept out of the reading order automatically via `@page` margin boxes.
 
-## What the spike SURFACED (findings for the gate — the point of doing it)
+## Findings (the point of doing it)
 
-Two real issues that "tags exist" would have hidden:
+Two real issues surfaced that "tags exist" would have hidden. One is now resolved in the spike; one
+is a WeasyPrint limitation for the veraPDF gate.
 
-1. **`<th scope>` does not become a PDF `/Scope` attribute.** WeasyPrint tags header cells as `/TH`
-   but emits no explicit `/Scope`; 0 of 16 TH cells carried one. PDF/UA can associate headers by
-   table position, so this may still validate — **but it must be confirmed in veraPDF**, not assumed.
-2. **`aria-hidden` does not artifact an SVG.** The decorative bar chart produced an **orphan
-   `/Figure` marked-content** (in the content stream, not linked into the struct tree) — real content
-   that is neither tagged-with-alt nor an Artifact, which PDF/UA forbids. **The "charts are
-   decorative, exclude them" approach does not work as-is in WeasyPrint** and needs a different
-   technique (e.g. render the chart as an image with a proper `alt`, or wrap it so it is a true
-   Artifact, keeping the adjacent data table as the real information).
+1. **`<th scope>` does not become a PDF `/Scope` attribute** — *open, for veraPDF.* WeasyPrint tags
+   header cells as `/TH` but emits no explicit `/Scope`; 0 of 16 TH cells carried one. PDF/UA can
+   associate headers by table position (the "regular table" heuristic), so this may still validate —
+   **but it must be confirmed in veraPDF**, not assumed. If veraPDF rejects it, the honest fallback is
+   a targeted pikepdf post-process that annotates the *already-correct* TH cells with their `/Scope`
+   (annotating true structure, not fabricating a tree — categorically different from the faked
+   `StructTreeRoot` this ADR rejected).
 
-Both are exactly the "document semantics, not tag existence" risks that make this a spike.
+2. **An HTML chart is not accessible by default** — *resolved in iteration 2.* Iteration 1 used an
+   `aria-hidden` inline `<svg>`, expecting an Artifact; instead it produced an **orphan `/Figure`
+   marked-content** (real content, neither tagged-with-alt nor Artifact — PDF/UA forbids it).
+   `<svg role="img" aria-label>` was likewise ignored for tagging. **What works (verified by probe):**
+   an `<img alt="…conclusion…">` carrying the chart as a data-URI SVG tags as a `/Figure` **with**
+   `/Alt` and leaves **no orphan**. So the chart is now: an `<img>` whose alt states the conclusion +
+   an adjacent data `<table>` with the exact counts. The inspector's chart checks are now hard
+   (they guard against regressing to the orphan).
 
 ## What the spike does NOT prove — the validation gate (from review)
 
@@ -52,7 +58,8 @@ representative report must pass **all** of:
 - [ ] **Visual parity** for every page type (regression against the current ReportLab output)
 - [x] Correct heading hierarchy and reading order — *checked structurally here*
 - [ ] **Properly scoped table headers** — finding #1 above; **confirm in veraPDF**
-- [ ] Meaningful **alt text or artifact treatment for every chart** — finding #2 above; **needs rework**
+- [x] Meaningful **alt text or artifact treatment for every chart** — finding #2, *resolved*: chart is a
+      Figure with a conclusion-stating `/Alt` + an adjacent data table (still worth a screen-reader read)
 - [x] Page header/footer/decorative elements excluded from reading order — *header/footer confirmed*
 - [ ] Searchable/selectable text and working links (a `<a href>` link tags as `Link`; selection
       needs a manual check — WeasyPrint text is real glyphs, not outlines)
