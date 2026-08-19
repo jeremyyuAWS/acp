@@ -21,15 +21,20 @@ describe('Overview wires in EstateCoverage', () => {
     expect(src).toMatch(/run\.scope\?\.inventory\?\.discovered > 0 &&/)
   })
 
-  it('passes the full funnel progress — every stage a real count, none guessed', () => {
-    // assessed/issues/remediation_eligible/remediated + human_review and published all come from
-    // real file rows. human_review = docs with a REVIEW-lane finding (a person must clear them);
-    // published = docs with a published_at record. Both were previously stuck rendering "pending".
-    expect(src).toMatch(/assessed: analysed/)
-    expect(src).toMatch(/remediated: files\.filter\(\(f\) => f\.remediated_at \|\| f\.drive_write_url\)\.length/)
-    expect(src).toMatch(/human_review: humanReview/)
-    expect(src).toMatch(/published: publish/)
-    // human_review is derived, not guessed: REVIEW-severity findings per file
-    expect(src).toMatch(/severity[\s\S]{0,40}REVIEW/)
+  it('passes the full funnel progress via the shared helper — every stage a real count, none guessed', () => {
+    // The progress computation lives in estateProgress.js — shared with the Discover tab so the two
+    // funnels can never disagree about the same estate. Overview computes it from the file rows there.
+    expect(src).toMatch(/import \{ estateProgressFromFiles \} from '\.\/estateProgress\.js'/)
+    expect(src).toMatch(/const estateProgress = estateProgressFromFiles\(files\)/)
+
+    // The real-count definitions moved with it — assessed/issues/remediation_eligible/remediated +
+    // human_review and published, each counted from file rows, none guessed.
+    const prog = readFileSync(join(here, 'estateProgress.js'), 'utf8')
+    expect(prog).toMatch(/assessed: analysedCount\(fs\)/)
+    expect(prog).toMatch(/remediated: fs\.filter\(\(f\) => f\.remediated_at \|\| f\.drive_write_url\)\.length/)
+    expect(prog).toMatch(/remediation_eligible: remediationEligibleCount\(fs\)/)
+    expect(prog).toMatch(/published: fs\.filter\(\(f\) => f\.published_at\)\.length/)
+    // human_review is derived, not guessed: REVIEW-severity findings per file.
+    expect(prog).toMatch(/severity[\s\S]{0,40}REVIEW/)
   })
 })
