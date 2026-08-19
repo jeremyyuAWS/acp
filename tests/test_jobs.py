@@ -135,8 +135,11 @@ def test_worker_no_handler_dead_letters_eventually(store):
 
 
 def test_scan_handler_runs_persists_finalizes(store, monkeypatch):
-    """The async `scan` job: run_scan → save_scan → finalize, with the token cleared.
-    run_scan is stubbed so the test needs no engines."""
+    """The async `scan` job in IMMEDIATE mode: run_scan → save_scan → finalize, token cleared.
+    run_scan is stubbed so the test needs no engines. Metadata-only discovery is the default now
+    (ADR 0020), so this pins the legacy immediate-analysis path with the documented override —
+    the deferred (metadata-only) behaviour is covered in test_deferred_assess."""
+    monkeypatch.setenv("ACP_DEFER_ANALYSIS_TO_ASSESS", "0")
     import core, scanner, handlers  # noqa: F401 — registers the 'scan' handler
     import worker
 
