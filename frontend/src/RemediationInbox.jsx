@@ -137,7 +137,7 @@ function ManualSteps({ f }) {
   )
 }
 
-function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCount = 0, onApplyToMatching, scanId = null }) {
+function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCount = 0, onApplyToMatching, scanId = null, draft = null, onDraftChange }) {
   if (!f) {
     return (
       <div style={{ display: 'grid', placeItems: 'center', height: '100%', textAlign: 'center', padding: 24 }}>
@@ -156,6 +156,11 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
   const isManual = lane.key === 'manual' || isHandoff
   const resolved = isResolved(f, decisions)
   const eyebrow = isHandoff ? 'Needs manual handling' : lane.key === 'manual' ? 'Manual remediation' : 'Review'
+  // A drafted AI value the reviewer can adjust before applying. `draft` falls back to the finding's
+  // proposed value until the reviewer types; `edited` flips the primary action to "Save edited fix".
+  const canEdit = !isManual && f.after != null && f.after !== ''
+  const draftValue = draft ?? (f.after ?? '')
+  const edited = canEdit && draftValue !== (f.after ?? '')
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ flex: '1 1 auto', overflowY: 'auto', padding: '18px 22px' }}>
@@ -183,8 +188,24 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
           </p>
           {isManual
             ? <ManualSteps f={f} />
-            : (f.after != null && f.after !== '')
-              ? <RemediationTransform finding={f} decisions={decisions} />  /* Found → Proposed → Verified */
+            : canEdit
+              ? (
+                <>
+                  <RemediationTransform finding={f} decisions={decisions} />  {/* Found → Proposed → Verified */}
+                  {/* Editable draft — the reviewer adjusts the exact text ACP will write, then applies
+                      their version. Empties reset to the AI's proposal (placeholder), never a blank fix. */}
+                  <div style={{ marginTop: 10 }}>
+                    <label className="muted" htmlFor="rem-draft" style={{ fontSize: 11.5, letterSpacing: '.08em', textTransform: 'uppercase', display: 'block', margin: '0 0 6px' }}>
+                      Edit before applying
+                    </label>
+                    <textarea id="rem-draft" value={draftValue} onChange={(e) => onDraftChange?.(e.target.value)}
+                              aria-label="Edit the proposed fix" rows={2}
+                              style={{ width: '100%', fontSize: 13.5, padding: '8px 10px', borderRadius: 8,
+                                       border: '1px solid var(--line,#e2dce4)', fontFamily: 'inherit', resize: 'vertical' }} />
+                    {edited && <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>Edited — “Save edited fix” writes your version instead of the AI’s.</p>}
+                  </div>
+                </>
+              )
               : <BeforeAfter f={f} />}
         </div>
 
@@ -244,7 +265,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
             </>
           ) : (
             <>
-              <button className="primary" onClick={() => onDecide?.(f, { state: 'accepted' })}>{lane.action}</button>
+              <button className="primary" onClick={() => onDecide?.(f, { state: 'accepted', value: canEdit ? draftValue : undefined })}>{edited ? 'Save edited fix' : lane.action}</button>
               {/* A specific action, not a bare "Reject": declining an AI fix hands the finding to a
                   person (the handoff lane), so the label names that outcome rather than leaving the
                   reviewer to guess what "Reject" does. */}
@@ -268,6 +289,7 @@ export default function RemediationInbox({
   const [sort, setSort] = useState(initialSort)
   const [search, setSearch] = useState('')
   const [collapsed, setCollapsed] = useState({}) // file -> true when a document group is collapsed
+  const [drafts, setDrafts] = useState({}) // finding id -> reviewer-edited proposed value (null until edited)
 
   const counts = useMemo(() => workflowCounts(queue, decisions), [queue, decisions])
   const prog = useMemo(() => progress(queue, decisions), [queue, decisions])
@@ -395,7 +417,9 @@ export default function RemediationInbox({
       <div style={{ flex: '1 1 65%', minWidth: 0 }}>
         <DetailPane f={selected} decisions={decisions} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
                     matchingCount={matchingCount} onApplyToMatching={applyToMatching}
-                    scanId={selected?.scanId || scanId} />
+                    scanId={selected?.scanId || scanId}
+                    draft={selected ? (drafts[selected.id] ?? null) : null}
+                    onDraftChange={(v) => selected && setDrafts((d) => ({ ...d, [selected.id]: v }))} />
       </div>
       </div>
       {/* Sticky workflow guide (Show → Review → Verify) + Previous / N of M / Next navigation. */}
