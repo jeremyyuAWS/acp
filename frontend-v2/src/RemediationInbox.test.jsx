@@ -8,7 +8,10 @@ afterEach(unmountAll)
 const { default: RemediationInbox } = await import('./RemediationInbox.jsx')
 
 // Filenames are prefixed a-/b- so the document sort (alphabetical by file, then id) yields a
-// stable [1, 2, 3] order for the interaction assertions below.
+// stable order for the interaction assertions below. Workflow stages under the top tabs:
+//   id1 autoApplied       → Ready to validate (the fix is in, awaiting the reviewer)
+//   id2 hasProposal       → Inbox (a fresh AI draft, untouched)
+//   id3 manual (no draft) → Inbox (fresh, needs a human)
 const QUEUE = [
   { id: 1, file: 'a-brief.docx', title: 'DOCX · Heading contrast is too low', page: 1, severity: 'SERIOUS', autoApplied: true, before: '#D9D9D9', after: '#2F6FED' },
   { id: 2, file: 'a-brief.docx', title: 'DOCX · Image needs alt text', page: 3, severity: 'CRITICAL', hasProposal: true, after: 'A bar chart of revenue' },
@@ -18,36 +21,44 @@ const QUEUE = [
 let container, root
 beforeEach(() => { ;({ container, root } = createTestRoot()) })
 
-// Interaction tests use a deterministic document sort so the queue order is stable (1,2,3);
+// Interaction tests use a deterministic document sort so the queue order is stable;
 // the priority-default ordering (critical-first) is covered by remediationInboxModel.test.js.
 const render = async (props) => { await act(async () => { root.render(createElement(RemediationInbox, { initialSort: 'document', onOpenWord: () => {}, onRecheck: () => {}, ...props })) }) }
 const click = async (el) => { await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }
 const btnByText = (t) => [...container.querySelectorAll('button')].find((b) => b.textContent.includes(t))
 const detailHeading = () => container.querySelector('h3')?.textContent
 
-describe('RemediationInbox — master/detail queue', () => {
-  it('selects the first unresolved finding and shows it in the detail pane', async () => {
+describe('RemediationInbox — workflow-status queue', () => {
+  it('opens on the Inbox and shows its first untouched finding', async () => {
     await render({ queue: QUEUE, decisions: {} })
-    expect(detailHeading()).toBe('Heading contrast is too low')       // plain issue, no format prefix
-    expect(container.textContent).toContain('0 of 3 resolved')        // progress header
-    expect(container.textContent).toContain('Approve fix')            // green-lane action
+    // The auto-applied fix (id1) has moved on to Ready to validate, so the Inbox opens on id2.
+    expect(detailHeading()).toBe('Image needs alt text')
+    expect(container.textContent).toContain('Inbox 2')                // id2 + id3 untouched
+    expect(container.textContent).toContain('Ready to validate 1')    // id1, the applied auto-fix
+    expect(container.textContent).toContain('0 of 3 resolved')        // progress is a separate lens
+  })
+
+  it('partitions findings across the workflow tabs by pipeline stage', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    // Ready to validate holds only the auto-applied fix; the inbox items are not there.
+    await click(btnByText('Ready to validate'))
+    expect(detailHeading()).toBe('Heading contrast is too low')
   })
 
   it('selecting a row populates the detail pane instead of expanding in place', async () => {
     await render({ queue: QUEUE, decisions: {} })
-    await click(btnByText('Image needs alt text'))
-    expect(detailHeading()).toBe('Image needs alt text')
-    expect(container.textContent).toContain('A bar chart of revenue')  // the AI-drafted "after"
+    await click(btnByText('Scanned page, no text'))
+    expect(detailHeading()).toBe('Scanned page, no text')
   })
 
   it('acting on a finding calls onDecide and auto-advances to the next unresolved one', async () => {
     const calls = []
     await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
-    expect(detailHeading()).toBe('Heading contrast is too low')
-    await click(btnByText('Approve fix'))
-    expect(calls).toEqual([[1, 'accepted']])
-    // auto-advance moved the workspace to finding #2 without the reviewer selecting it
-    expect(detailHeading()).toBe('Image needs alt text')
+    expect(detailHeading()).toBe('Image needs alt text')             // id2, apply lane
+    await click(btnByText('Apply fix'))
+    expect(calls).toEqual([[2, 'accepted']])
+    // auto-advance moved the workspace to the next unresolved inbox finding without a click
+    expect(detailHeading()).toBe('Scanned page, no text')
   })
 
   it('a manual finding shows guided steps and native-app actions, not an approve button', async () => {
@@ -58,14 +69,14 @@ describe('RemediationInbox — master/detail queue', () => {
     expect(btnByText('Upload & recheck')).toBeTruthy()
   })
 
-  it('the Resolved tab and search narrow the queue', async () => {
-    await render({ queue: QUEUE, decisions: { 1: { state: 'accepted' } } })
-    // #1 is resolved → the Resolved tab exists with a count
-    expect(btnByText('Resolved 1')).toBeTruthy()
-    expect(container.textContent).toContain('1 of 3 resolved')
+  it('an approved finding moves to Ready to validate; a rejected one to Done', async () => {
+    await render({ queue: QUEUE, decisions: { 2: { state: 'accepted' }, 3: { state: 'rejected' } } })
+    expect(container.textContent).toContain('Ready to validate 2')     // id1 (auto) + id2 (approved)
+    expect(container.textContent).toContain('Done 1')                  // id3 (rejected → resolved)
+    expect(container.textContent).toContain('2 of 3 resolved')         // progress agrees
   })
 
-  it('search narrows the queue to findings whose issue or file matches', async () => {
+  it('search narrows the queue within the current tab', async () => {
     await render({ queue: QUEUE, decisions: {} })
     const input = container.querySelector('input[type=search]')
     // Drive the controlled input through the native value setter so React's onChange fires.
@@ -73,6 +84,6 @@ describe('RemediationInbox — master/detail queue', () => {
     await act(async () => { setValue.call(input, 'alt text'); input.dispatchEvent(new Event('input', { bubbles: true })) })
     const rows = [...container.querySelectorAll('.rinbox-row')]
     expect(rows.some((r) => r.textContent.includes('Image needs alt text'))).toBe(true)
-    expect(rows.some((r) => r.textContent.includes('Heading contrast is too low'))).toBe(false)
+    expect(rows.some((r) => r.textContent.includes('Scanned page'))).toBe(false)
   })
 })
