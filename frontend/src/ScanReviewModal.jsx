@@ -138,8 +138,11 @@ export default function ScanReviewModal({
               <>Document count is determined when the scan starts.</>
             )}
           </div>
+          {/* source/hasDrive/hasSP so the wizard can seed its folder step from the SAME source the
+              scan will resolve to; the run scope comes back out through onConfirm. */}
           <ScanScopeWizard showStartButton canEditScope={canEditScope} rememberDefault={rememberDefault}
-            onStartScan={(o) => { if (o?.cancel) onCancel?.(); else onConfirm?.() }} />
+            source={source} hasDrive={hasDrive} hasSP={hasSP}
+            onStartScan={(o) => { if (o?.cancel) onCancel?.(); else onConfirm?.(o) }} />
         </div>
       </div>
     </div>

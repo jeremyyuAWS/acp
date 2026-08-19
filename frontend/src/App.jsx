@@ -564,7 +564,11 @@ export default function App() {
   // only the Sources tab reached it. (`pendingScan` state is declared with the other hooks above.)
   const requestScan = (source, folder = null) => setPendingScan({ source, folder })
 
-  const doScan = async (source, folder = null) => {
+  // `runScope` is the wizard's per-run folder choice ({folders, exclude}). Given, it wins over the
+  // connection default below — that is what "this run only" means. Absent (a scan started without
+  // the wizard), the saved connection scope is used, so a scheduled or card-launched scan still
+  // honours what the source is configured to cover.
+  const doScan = async (source, folder = null, runScope = null) => {
     if (busy) return                              // a scan/assessment is already running — don't launch another
     setBusy(true); setErr(null); setProgress({ phase: 'queued' })
     const prevAvg = scan?.run?.avg_score
@@ -587,7 +591,10 @@ export default function App() {
     // covered something else.
     let picked = null
     let excluded = null
-    if (!SIM && (apiSource === 'drive' || apiSource === 'sharepoint') && !folder) {
+    if (runScope && Array.isArray(runScope.folders)) {
+      picked = runScope.folders
+      excluded = runScope.exclude || []
+    } else if (!SIM && (apiSource === 'drive' || apiSource === 'sharepoint') && !folder) {
       try {
         const { locations } = await getScanLocations()
         picked = (locations || {})[apiSource] || []
@@ -1061,7 +1068,7 @@ export default function App() {
             : (pendingScan.source === 'all' || s.type === 'google_drive')))
             .reduce((a, s) => a + (s.files || 0), 0)}
           hasDrive={hasDriveToken} hasSP={hasSPToken} canEditScope={scopeOwner !== false}
-          onConfirm={() => { const { source, folder } = pendingScan; setPendingScan(null); doScan(source, folder) }}
+          onConfirm={(runScope) => { const { source, folder } = pendingScan; setPendingScan(null); doScan(source, folder, runScope) }}
           onCancel={() => setPendingScan(null)} />
       )}
     </div>

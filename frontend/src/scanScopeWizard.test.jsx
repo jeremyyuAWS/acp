@@ -439,8 +439,9 @@ describe('App renders the gate once and routes every entry point through it', ()
   it('opens the gate via requestScan instead of scanning inline', () => {
     expect(code).toMatch(/const requestScan = \(source, folder = null\) => setPendingScan/)
     expect(code).toMatch(/<ScanReviewModal/)
-    // The confirm is the only path that dispatches doScan.
-    expect(code).toMatch(/onConfirm=\{[\s\S]*?doScan\(source, folder\)/)
+    // The confirm is the only path that dispatches doScan. It now also carries the wizard's
+    // per-run folder scope as a third argument — the intent (one dispatch path) is unchanged.
+    expect(code).toMatch(/onConfirm=\{[\s\S]*?doScan\(source, folder, runScope\)/)
   })
 
   it('wires onScan={requestScan} at every entry point, not doScan', () => {
