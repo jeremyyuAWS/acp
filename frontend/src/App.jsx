@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } from 'react'
 import HitlBell from './HitlBell.jsx'
 import { assessmentLine, outcomesFromRun, outcomeChips } from './assessmentProgress.js'
+import ProcessingDetails from './ProcessingDetails.jsx'
 import { refreshDriveToken } from './driveAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
 import { getSources, getRubric, getConfig, getMe, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, getScanLocations, SESSION_EXPIRED } from './api'
@@ -141,7 +142,9 @@ function queuedProgress(g, elapsed) {
   const pct = Math.round(12 + Math.min(1, done / total) * (95 - 12))
   // Outcome tally, streamed live off the run summary (certifiable/uncertain/error, derived from
   // file_records as each file lands) — so the progress chips show real state, not just a counter.
-  return { phase, files_found: total, files_done: done, current: null, elapsed, pct, outcomes: outcomesFromRun(run) }
+  // `files` carries the per-file results get_scan streams, for the expandable Processing details table.
+  return { phase, files_found: total, files_done: done, current: null, elapsed, pct,
+           outcomes: outcomesFromRun(run), files: (g && g.files) || [] }
 }
 
 // Shown on results views (Overview / Dashboard / Monitor) until the user runs Assess —
@@ -911,6 +914,9 @@ export default function App() {
               ))}
             </div>
           )}
+          {/* Expandable per-file transparency — collapsed by default, so it does not force everyone to
+              watch a scrolling log. Fed by the live file results get_scan streams. */}
+          <ProcessingDetails files={progress.files} processing={progress.outcomes?.processing || 0} />
           {/* Narrate the phase the scanner reports, or say nothing. The old line came from a
               timer, so it could never be absent — and it was wrong whenever the timer and the
               phase disagreed. Silence beats a plausible sentence.
