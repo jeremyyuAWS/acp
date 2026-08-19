@@ -61,7 +61,10 @@ function clearStuckInteraction() {
 export async function signInForScopes(scopes) {
   const attempt = async () => {
     const inst = await getInstance()
-    const res = await inst.loginPopup({ scopes })
+    // Same reasoning as the Google side (SignIn.jsx): MSAL will otherwise reuse the single
+    // signed-in Entra account without asking, so a user whose Microsoft work account differs
+    // from their Google one had no way to say so.
+    const res = await inst.loginPopup({ scopes, prompt: 'select_account' })
     inst.setActiveAccount(res.account)
     const tok = await inst.acquireTokenSilent({ scopes, account: res.account })
       .catch(() => inst.acquireTokenPopup({ scopes }))

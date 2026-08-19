@@ -130,7 +130,16 @@ export default function SignIn({ onSignedIn, notice = null }) {
         }
       },
     })
-    client.requestAccessToken()
+    // ASK FOR THE CHOOSER. Without an explicit prompt, a browser with one signed-in Google
+    // session goes straight through on that account — which is correct for a refresh and wrong
+    // for a sign-in, because it is the one moment the user is choosing WHO to be. It also made
+    // "use my other Google account with my work Microsoft account" impossible without a second
+    // Chrome profile.
+    //
+    // Only at SIGN-IN. driveAuth.refreshDriveToken deliberately keeps `prompt: ''` — a token
+    // refresh mid-scan must never put a chooser in front of someone, and re-picking an account
+    // there would swap the Drive under a running scan.
+    client.requestAccessToken({ prompt: 'select_account' })
   }
 
   // Sign in with Microsoft (Entra) — mirrors the Google button, and additionally captures a

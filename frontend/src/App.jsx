@@ -756,6 +756,24 @@ export default function App() {
           </button>
           <span className="user">{me.email}</span>
           {me.allow?.includes('settings') && <button className="cogbtn" aria-label="Platform settings" title="Platform settings" onClick={() => setSettingsOpen(true)}>⚙</button>}
+          {/* SWITCH ACCOUNT — a full teardown, then the sign-in screen, which now asks Google
+              and Microsoft for an account chooser rather than reusing the browser's single
+              signed-in session.
+
+              It cannot be a lighter-touch "just re-pick the Drive": the ACP identity is the
+              Authorization bearer (api.js sends Google's when present, else Microsoft's) and
+              api/app.py stamps request.state.user_email from it, which is what per-user data
+              isolation keys on. Re-minting only the Drive token would leave you signed in as one
+              account while reading another's Drive, with the scans owned by the first — the
+              wrong half of a switch, and invisible. So this does the same complete teardown as
+              sign out and differs only in saying what it is for. */}
+          <button className="ghost small" title="Sign out and choose a different Google or Microsoft account"
+                  onClick={() => {
+            clearAllTokens()
+            clearActivityStorage()
+            try { sessionStorage.clear() } catch { /* ignore */ }
+            window.location.reload()
+          }}>switch account</button>
           <button className="ghost small" onClick={() => {
             clearAllTokens()
             clearActivityStorage()
