@@ -101,11 +101,22 @@ jobs:
 
       - name: Install tesseract (OCR)
         id: tesseract
-        # Bounded + retried so a slow or unreachable apt mirror can't hang the job. The plain
-        # `apt-get install` stalled for up to an HOUR on a bad mirror on 2026-08-18, blocking every
-        # deploy that gates on this suite. Each attempt is capped (`timeout`) and retried with
-        # backoff; a genuine outage now fails fast after three tries instead of hanging forever.
-        # Same package set as before (recommends kept) — reliability only, no behaviour change.
+        # The logic lives in scripts/install_tesseract.sh (tests/test_install_tesseract.py drives
+        # every branch of it against a stub apt-get), because azure-pipelines.yml needs the same
+        # treatment and a shell ladder buried in YAML cannot be tested.
+        #
+        # WHAT IT IS WORKING AROUND, measured rather than assumed. On 2026-08-19 this step failed
+        # on roughly half of all runners for over an hour, and `-qq` on both halves of
+        # `apt-get update && apt-get install` meant the log never said which one failed. The
+        # timings did: every failure took 5m30s, with retry warnings 100s and 110s apart against
+        # 10s/20s/30s backoff — so each attempt burned exactly the `timeout 90` on `apt-get
+        # update`, and 3x90 + 60 = 330s = 5m30s. `apt-get install` never ran at all.
+        #
+        # So the script tries installing from the index ALREADY ON THE IMAGE first, with no
+        # update: refreshing pulls Packages files for every configured source, while installing
+        # tesseract-ocr pulls a few .debs, and a mirror too congested for the former usually
+        # still serves the latter. Only if that fails does it pay for metadata, and only after
+        # that does it try a different mirror.
         #
         # WHY THIS NO LONGER EXITS 1 HERE, and why that is NOT the job going soft on OCR.
         # On 2026-08-19 the mirror degraded mid-afternoon: at 15:29 three of four shards installed
@@ -121,17 +132,7 @@ jobs:
         # is that you now get "3074 passed, OCR skipped, failed because tesseract was unavailable"
         # instead of a dead job, so a real regression is still visible during an outage.
         continue-on-error: true
-        run: |
-          for i in 1 2 3; do
-            if sudo timeout 90 apt-get update -qq \
-               && sudo DEBIAN_FRONTEND=noninteractive timeout 150 apt-get install -y -qq tesseract-ocr; then
-              exit 0
-            fi
-            echo "::warning::tesseract apt install attempt $i failed or timed out; retrying"
-            sleep $((i * 10))
-          done
-          echo "::error::tesseract install failed after 3 attempts (apt mirror unreachable?)"
-          exit 1
+        run: bash scripts/install_tesseract.sh
         # Turns ON coverage rather than merely adding a dependency. ocr.is_available() gates
         # 1.4.5 / 1.4.9 (images of text) and every test that drives them self-skips without it —
         # so the OCR criteria were never exercised in CI at all, and the skips said so quietly

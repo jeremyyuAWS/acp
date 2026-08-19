@@ -87,8 +87,14 @@ steps:
     # path the tests' capability gates probe. bin/ stays gitignored; this is built, not
     # committed.
 
-  - script: sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr
+  - script: bash scripts/install_tesseract.sh
     displayName: Install tesseract (OCR)
+    # Shares ci.yml's install script, which is the point of it being a script. This step was
+    # the ONLY remaining copy of the unhardened `apt-get update -qq && apt-get install -qq`:
+    # no timeout, no retry, no fallback mirror. That is the exact form that stalled for up to
+    # an hour on 2026-08-18 and that failed half of all runners on 2026-08-19 — so the pipeline
+    # least likely to be watched was carrying the most fragile version of the dependency.
+    #
     # Kept in step with ci.yml, and this is the pipeline that proved why. The corpus
     # regression gate landed with tesseract added to ci.yml only; THIS pipeline runs the same
     # suite without it, ocr.is_available() went false, and 1.4.5 reported "found 0 of 1" —
