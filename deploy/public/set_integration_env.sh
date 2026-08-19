@@ -191,7 +191,13 @@ cat <<NOTE
   keep reporting SharePoint and Tracing as WARN on your laptop no matter what this script set in
   Azure — that is the preflight being honest about what it can see, not a failure. To check the
   DEPLOYED config, use the read-back above, or run the preflight inside the container:
-    az containerapp exec -g $RG -n $APP --command "python scripts/preflight.py --live"
+    az containerapp exec -g $RG -n $APP --command "python /app/scripts/preflight.py --live"
+
+  That path is absolute on purpose. The image's WORKDIR is /app/api (Dockerfile), so a relative
+  "scripts/preflight.py" resolves to /app/api/scripts and is not there. Expect one WARN that is
+  an artifact of the container rather than a finding: "delegated scopes — could not read
+  sharepointScopes.js". Only the BUILT SPA ships in the image (/app/static), not frontend/src,
+  so the preflight cannot read the scope list back from source there. Every other check is real.
 
   SharePoint's Graph scopes are DELEGATED — a person signs in, so nothing headless can verify
   token acquisition. Verify by clicking Connect Microsoft in the app.
