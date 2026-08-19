@@ -1,23 +1,11 @@
 import { useState, useEffect } from 'react'
 import { getSettings, updateSettings } from './api.js'
-import { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } from './scopePresets.js'
-import { TRACKED_17 } from './ruleDetails.js'
+import { SCOPE_PRESETS } from './scopePresets.js'
+import ScopeGrid, { OFFERED, scopeTotalPairs } from './ScopeGrid.jsx'
 
-// The criteria this grid OFFERS. SCOPE_UNIVERSE is every (criterion, format) pair the engine can
-// reach a verdict on — 29 criteria — and that is the right answer to "what could be scoped",
-// which is why it stays the source. It is the wrong answer to "what should this operator be
-// choosing between".
-//
-// Twelve of the 29 are criteria Mova iO does not track: 1.4.2, 1.4.4, 1.4.6, 1.4.8, 1.4.9,
-// 1.4.10, 1.4.12, 2.4.1, 2.4.9, 2.4.10, 3.1.5 and 3.3.2 — AAA rules and viewer behaviours. Every
-// one of them is a row an operator has to read and dismiss before reaching a decision they can
-// act on, on the screen that is meant to be the FIRST thing they do.
-//
-// Filtered rather than a separate list, deliberately: the pairs still come from the generated,
-// CI-guarded universe, so this cannot offer a checkbox the engine has no verdict for. It only
-// narrows. Verified when written that all 17 tracked criteria are present in the universe —
-// none is silently dropped by this filter.
-const OFFERED = SCOPE_UNIVERSE.filter((r) => TRACKED_17.has(r.sc))
+// The criterion × format grid — and OFFERED, the 17 tracked criteria within the CI-guarded verdict
+// universe — now live in ScopeGrid.jsx, shared with the per-user override editor (MyScanScope). See
+// there for the full rationale on why the offered set is derived + filtered, not typed.
 
 // The operator scan scope, as a criterion × format grid.
 //
@@ -43,7 +31,6 @@ const OFFERED = SCOPE_UNIVERSE.filter((r) => TRACKED_17.has(r.sc))
 // operator who ticks nothing while "restrict" is chosen gets told to pick something, instead of
 // silently enabling the whole estate.
 
-const FMT_LABEL = { docx: 'DOCX', xlsx: 'XLSX', pptx: 'PPTX', pdf: 'PDF' }
 const SIM_NOT_WRITTEN =
   'SIM — nothing was written. This demo build has no backend, so the change is local to this browser '
   + 'tab and the platform still holds its previous value. Use a build served by the real API to change it.'
@@ -135,7 +122,7 @@ export default function ScanScope() {
     .filter(([sc, fmts]) => fmts.size && !OFFERED.some((r) => r.sc === sc))
     .map(([sc]) => sc)
     .sort()
-  const total = OFFERED.reduce((n, r) => n + r.formats.length, 0)
+  const total = scopeTotalPairs
 
   const save = async () => {
     // An empty selection under "restrict" would store {} — which the backend reads as NO
@@ -224,55 +211,7 @@ export default function ScanScope() {
               )}
             </span>
           </div>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ borderCollapse: 'collapse', fontSize: 13, width: '100%' }}>
-              <caption className="sronly">
-                Scan scope: tick each criterion and format this engagement assesses.
-              </caption>
-              <thead>
-                <tr>
-                  <th scope="col" style={{ textAlign: 'left', padding: '4px 8px', borderBottom: '1px solid var(--line)' }}>Criterion</th>
-                  {SCOPE_FORMATS.map((f) => (
-                    <th key={f} scope="col" style={{ padding: '4px 8px', borderBottom: '1px solid var(--line)' }}>{FMT_LABEL[f]}</th>
-                  ))}
-                  <th scope="col" style={{ padding: '4px 8px', borderBottom: '1px solid var(--line)' }}>All</th>
-                </tr>
-              </thead>
-              <tbody>
-                {OFFERED.map((row) => (
-                  <tr key={row.sc}>
-                    <th scope="row" style={{ textAlign: 'left', fontWeight: 400, padding: '3px 8px', whiteSpace: 'nowrap' }}>
-                      <b>{row.sc}</b> {row.name} <span className="muted">· {row.level}</span>
-                    </th>
-                    {SCOPE_FORMATS.map((f) => (
-                      <td key={f} style={{ textAlign: 'center', padding: '3px 8px' }}>
-                        {row.formats.includes(f) ? (
-                          <input type="checkbox" checked={has(row.sc, f)} disabled={busy || !canEdit}
-                                 onChange={() => toggle(row.sc, f)}
-                                 aria-label={`${row.sc} ${row.name}, ${FMT_LABEL[f]}`} />
-                        ) : (
-                          // Not a disabled checkbox: the engine has no verdict for this pair, so
-                          // there is nothing to tick. A disabled box reads as "off", which would
-                          // imply a choice was made.
-                          <>
-                            <span aria-hidden="true" className="muted">—</span>
-                            <span className="sronly">{`${FMT_LABEL[f]} not applicable to ${row.sc}`}</span>
-                          </>
-                        )}
-                      </td>
-                    ))}
-                    <td style={{ textAlign: 'center', padding: '3px 8px' }}>
-                      <button className="ghost small" disabled={busy || !canEdit}
-                              onClick={() => toggleRow(row)}
-                              aria-label={`Toggle every format for ${row.sc} ${row.name}`}>
-                        {row.formats.every((f) => has(row.sc, f)) ? 'none' : 'all'}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ScopeGrid has={has} toggle={toggle} toggleRow={toggleRow} busy={busy} canEdit={canEdit} />
         </>
       )}
 

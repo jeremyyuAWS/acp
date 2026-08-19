@@ -25,20 +25,23 @@ describe('the grid offers the tracked criteria only', () => {
   it('filters the universe rather than listing criteria by hand', () => {
     // Filtering keeps the pairs coming from the generated, CI-guarded universe, so this can only
     // NARROW — it cannot offer a checkbox the engine has no verdict for. A hand-written list
-    // could drift into offering one.
-    const s = read('ScanScope.jsx')
+    // could drift into offering one. The offered set + the grid now live in ScopeGrid.jsx, shared
+    // by the admin (ScanScope) and per-user (MyScanScope) editors.
+    const s = read('ScopeGrid.jsx')
     expect(s).toMatch(/const OFFERED = SCOPE_UNIVERSE\.filter\(\(r\) => TRACKED_17\.has\(r\.sc\)\)/)
     expect(s).toContain("import { TRACKED_17 } from './ruleDetails.js'")
   })
 
   it('renders and counts OFFERED, not the whole universe', () => {
     // The count has to move with the rows. A total over 29 above a grid of 17 is the same
-    // unreconcilable-number defect this codebase has fixed three times.
-    const s = read('ScanScope.jsx')
+    // unreconcilable-number defect this codebase has fixed three times. The grid + the derived
+    // total (scopeTotalPairs) live in ScopeGrid; ScanScope consumes the shared count.
+    const s = read('ScopeGrid.jsx')
     expect(s).toMatch(/\{OFFERED\.map\(\(row\) => \(/)
-    expect(s).toMatch(/const total = OFFERED\.reduce/)
+    expect(s).toMatch(/OFFERED\.reduce/)
     expect(s).not.toMatch(/\{SCOPE_UNIVERSE\.map/)
-    expect(s).not.toMatch(/const total = SCOPE_UNIVERSE\.reduce/)
+    expect(s).not.toMatch(/SCOPE_UNIVERSE\.reduce/)
+    expect(read('ScanScope.jsx')).toMatch(/const total = scopeTotalPairs/)
   })
 
   it('drops no tracked criterion — every one is in the universe', () => {

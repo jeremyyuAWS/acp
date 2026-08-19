@@ -8,6 +8,7 @@ import SitePicker from './SitePicker.jsx'
 import Upload from './Upload.jsx'
 import DispositionRules from './DispositionRules.jsx'
 import ScanScope from './ScanScope.jsx'
+import MyScanScope from './MyScanScope.jsx'
 import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
 import { dupeCountOf, duplicateFiles } from './dedupe.js'
@@ -291,6 +292,18 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           <span className="muted"> · criteria and file types, before you scan</span>
         </summary>
         <ScanScope />
+      </details>
+
+      {/* The per-user twin of the scope step (ADR 0035 stage 2): the org scope above is the mandate
+          (owner-only); here any signed-in reviewer widens it for their OWN scans. Collapsed by default
+          so it does not compete with the primary scope step; kept beside it so scope is reasoned about
+          in one place. Widen-only, enforced server-side. */}
+      <details className="panel scopestep">
+        <summary>
+          <b>My scan scope</b>
+          <span className="muted"> · assess more than the org default, for your own scans</span>
+        </summary>
+        <MyScanScope />
       </details>
 
       {/* Estate coverage funnel — discovered → assessment-eligible → remediation-eligible, on the tab
