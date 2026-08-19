@@ -54,6 +54,18 @@ vi.mock('./api.js', () => ({
       source: 'drive', path: '/HR/old.docx', document_exists: true },
   ])),
   approveDisposition: vi.fn(async () => ({ result: 'approved' })),
+  listDispositionAudit: vi.fn(async () => ([
+    { id: 'h1', doc_id: 'sp:1', policy_id: 'p1', action: 'archive', result: 'approved',
+      detail: 'approved by admin — decision recorded, file not touched',
+      ts: '2026-08-18T12:00:00Z', source: 'sharepoint', path: '/Finance/old.docx',
+      document_exists: true, policy_name: 'Archive files not modified for 7 years' },
+    { id: 'h2', doc_id: 'sp:2', policy_id: 'gone', action: 'delete', result: 'rejected',
+      detail: 'declined by admin', ts: '2026-08-17T12:00:00Z', source: 'sharepoint',
+      path: '/Finance/tmp.docx', document_exists: true, policy_name: null },
+    { id: 'h3', doc_id: 'gd:5', policy_id: 'p1', action: 'archive', result: 'applied',
+      detail: 'moved', ts: '2026-08-16T12:00:00Z', source: 'drive', path: '/HR/x.docx',
+      document_exists: true, policy_name: 'Archive files not modified for 7 years' },
+  ])),
   rejectDisposition: vi.fn(async () => ({ result: 'rejected' })),
   getScanTraces: vi.fn(async () => []),
   getScanRemediationDiffs: vi.fn(async () => []),
@@ -353,5 +365,69 @@ describe('the pending-approval queue', () => {
     await click(tab(c, 'Rules'))
     expect(c.textContent).toMatch(/Could not load the approval queue/)
     expect(c.textContent).toMatch(/none of them run without a decision/)
+  })
+})
+
+describe('the lifecycle audit trail', () => {
+  it('lives on Activity, beside what the source has been doing', async () => {
+    const c = await mount()
+    expect(c.textContent).not.toMatch(/Lifecycle decisions/)   // not on Overview
+    await click(tab(c, 'Activity'))
+    expect(c.textContent).toMatch(/Lifecycle decisions/)
+  })
+
+  it('names the rule rather than its id', async () => {
+    // "archive sp:1 under p1" is four ids and an enum — an auditor reading that back cannot
+    // tell what happened.
+    const c = await mount()
+    await click(tab(c, 'Activity'))
+    expect(c.textContent).toMatch(/Archive files not modified for 7 years/)
+    expect(c.textContent).not.toMatch(/under p1/)
+  })
+
+  it('says a deleted rule is gone instead of printing its id as a name', async () => {
+    const c = await mount()
+    await click(tab(c, 'Activity'))
+    expect(c.textContent).toMatch(/no longer configured/)
+  })
+
+  it('scopes to this source and states how many are elsewhere', async () => {
+    const c = await mount()
+    await click(tab(c, 'Activity'))
+    expect(c.textContent).toMatch(/\/Finance\/old\.docx/)
+    expect(c.textContent).not.toMatch(/\/HR\/x\.docx/)      // a Drive row
+    expect(c.textContent).toMatch(/1 more recorded on other sources/)
+  })
+
+  it('says what each outcome MEANT for the file, not just its stored value', async () => {
+    // 'approved' alone does not tell a reader whether anything moved.
+    const c = await mount()
+    await click(tab(c, 'Activity'))
+    expect(c.textContent).toMatch(/decision recorded · file not touched/)
+    expect(c.textContent).toMatch(/declined · file not touched/)
+  })
+
+  it('keeps rejected decisions in the record', async () => {
+    // They leave the queue; they must not leave the trail, or the append-only table has no point.
+    const c = await mount()
+    await click(tab(c, 'Activity'))
+    expect(c.textContent).toMatch(/rejected/)
+  })
+
+  it('says nothing was recorded rather than showing an empty list', async () => {
+    const api = await import('./api.js')
+    api.listDispositionAudit.mockResolvedValueOnce([])
+    const c = await mount()
+    await click(tab(c, 'Activity'))
+    expect(c.textContent).toMatch(/No lifecycle decisions recorded for this source/)
+  })
+
+  it('a failed load does not imply the record is damaged', async () => {
+    const api = await import('./api.js')
+    api.listDispositionAudit.mockRejectedValueOnce(new Error('boom'))
+    const c = await mount()
+    await click(tab(c, 'Activity'))
+    expect(c.textContent).toMatch(/Could not load the lifecycle trail/)
+    expect(c.textContent).toMatch(/append-only/)
   })
 })

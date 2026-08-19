@@ -156,3 +156,72 @@ def test_a_sharepoint_document_cannot_actually_execute(client):
         {"doc_id": "sp:1", "source": "sharepoint", "path": "/x.docx"}, "archive", {}, None)
     assert result == "failed"
     assert "unsupported source" in detail
+
+
+# ── the audit trail ──────────────────────────────────────────────────────────
+#
+# The append-only record of every disposition outcome — pending, approved, rejected, applied,
+# failed. It answers a different question from the queue: not "what needs me now" but "what
+# happened to this file, under which rule, and who decided". Same enrichment, deliberately
+# shared: two endpoints reading disposition_audit and enriching it differently is how one of
+# them ends up missing a field nobody noticed.
+
+def test_the_audit_trail_names_the_rule_not_its_id(client):
+    """"archive sp:1 under p1" is four ids and an enum. An auditor reading that back has no way
+    to tell what happened."""
+    c, st = client
+    _seed(st)
+    c.post("/disposition/approvals/a1/approve?execute=false")
+    row = c.get("/disposition/audit").json()[0]
+    assert row["policy_name"] == "archive-stale"
+    assert row["path"] == "/Finance/old.docx"
+    assert row["source"] == "sharepoint"
+
+
+def test_a_deleted_rule_leaves_the_name_absent_not_faked(client):
+    """Showing the policy_id in the name slot would read as a name. The rule is gone; that is
+    the fact."""
+    c, st = client
+    st.create_disposition_audit("a9", doc_id="sp:1", policy_id="deleted-policy",
+                                action="archive", result="applied", detail="done")
+    row = [r for r in c.get("/disposition/audit").json() if r["id"] == "a9"][0]
+    assert row["policy_name"] is None
+
+
+def test_every_outcome_appears_not_just_the_open_ones(client):
+    """The queue shows what needs a decision; the trail shows what was decided. A rejected row
+    vanishing from the record would defeat the point of an append-only table."""
+    c, st = client
+    _seed(st)
+    c.post("/disposition/approvals/a1/reject")
+    results = [r["result"] for r in c.get("/disposition/audit").json()]
+    assert "rejected" in results
+    assert c.get("/disposition/approvals").json() == []      # gone from the queue…
+    assert results                                            # …still in the trail
+
+
+def test_the_recorded_decision_says_the_file_was_not_touched(client):
+    """The audit record is what a later, separately-authorised run acts on, so it has to say
+    plainly that this decision did not itself move anything."""
+    c, st = client
+    _seed(st)
+    c.post("/disposition/approvals/a1/approve?execute=false")
+    row = c.get("/disposition/audit").json()[0]
+    assert row["result"] == "approved"
+    assert "not touched" in row["detail"]
+
+
+def test_the_trail_is_newest_first_and_bounded(client):
+    c, st = client
+    st.create_disposition_policy("p1", name="x", match="[]", action="archive",
+                                 action_config="{}", requires_approval=True, enabled=True)
+    for i in range(5):
+        st.create_disposition_audit(f"z{i}", doc_id="sp:1", policy_id="p1", action="archive",
+                                    result="applied", detail=f"row {i}")
+    rows = c.get("/disposition/audit?limit=3").json()
+    assert len(rows) == 3
+
+
+def test_an_empty_trail_is_an_empty_list_not_an_error(client):
+    c, _ = client
+    assert c.get("/disposition/audit").json() == []

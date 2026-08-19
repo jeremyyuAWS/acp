@@ -3,7 +3,7 @@ import Drawer from './Drawer.jsx'
 import { retentionOf } from './FileDrawer.jsx'
 import {
   listDispositionPolicies, getInventoryDiff, previewDispositionPolicy,
-  listDispositionApprovals, approveDisposition, rejectDisposition,
+  listDispositionApprovals, approveDisposition, rejectDisposition, listDispositionAudit,
 } from './api.js'
 import {
   filesForSource, runsForSource, inventoryFacts, dispositionRows, dispositionOf,
@@ -68,6 +68,7 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
   const [openRule, setOpenRule] = useState(null)   // policy_id whose matches are expanded
   const [approvals, setApprovals] = useState(null) // null = not loaded; 'error' = failed
   const [deciding, setDeciding] = useState(null)   // audit id mid-decision
+  const [audit, setAudit] = useState(null)         // null = not loaded; 'error' = failed
 
   // Discovery rules are a real backend resource (disposition policies), so they are fetched, not
   // described. A failed fetch says so; it does not fall back to an encouraging empty list, which
@@ -112,6 +113,18 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
     if (tab !== 'Rules') return
     loadApprovals()
   }, [tab, loadApprovals])
+
+  // The lifecycle trail loads with the ACTIVITY tab — that is where "what has this source been
+  // doing" already lives, and a decision recorded in the Rules tab shows up here as history.
+  const loadAudit = useCallback(() => {
+    listDispositionAudit(200)
+      .then((a) => setAudit(Array.isArray(a) ? a : []))
+      .catch(() => setAudit('error'))
+  }, [])
+  useEffect(() => {
+    if (tab !== 'Activity') return
+    loadAudit()
+  }, [tab, loadAudit])
 
   useEffect(() => {
     if (tab !== 'Rules' || !policies || !policies.length) return
@@ -323,6 +336,7 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
                              if (decision === 'approve') await approveDisposition(id, { execute: false })
                              else await rejectDisposition(id)
                              loadApprovals()
+                             setAudit(null)   // force a reload; the trail has a new row now
                            } catch {
                              setApprovals('error')
                            } finally {
@@ -380,6 +394,14 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
               })}
             </div>
           )}
+          <h4 className="drawerh">
+            Lifecycle decisions
+            {Array.isArray(audit) && (
+              <span style={{ float: 'right' }}>{audit.filter((a) => matchesThisSource(a, source)).length}</span>
+            )}
+          </h4>
+          <AuditTrail audit={audit} source={source} />
+
           {onPickFile && mine.length > 0 && (
             <>
               <h4 className="drawerh">Files that could not be read</h4>
@@ -481,6 +503,88 @@ function ApprovalQueue({ approvals, source, deciding, onDecide }) {
       {elsewhere > 0 && (
         <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
           {elsewhere.toLocaleString()} more pending on other sources.
+        </p>
+      )}
+    </>
+  )
+}
+
+// Every disposition outcome, newest first — the append-only record behind the queue. It answers
+// a different question: not "what needs me now" but "what happened to this file, under which
+// rule, and how it ended".
+//
+// Scoped the same way the queue is, and for the same reason: disposition_audit has no source
+// column, so an unscoped render would put the whole estate's history under a heading naming one
+// source. The elsewhere count is stated rather than the rows silently dropped.
+const AUDIT_TONE = {
+  applied: 'ok',
+  approved: 'review',
+  pending_approval: 'review',
+  rejected: 'muted',
+  failed: 'fail',
+}
+// What each outcome MEANT for the file — the column an auditor is actually reading for. Kept
+// beside the raw result rather than replacing it, since the stored value is what the record says.
+const AUDIT_MEANING = {
+  applied: 'carried out',
+  approved: 'decision recorded · file not touched',
+  pending_approval: 'awaiting a decision',
+  rejected: 'declined · file not touched',
+  failed: 'attempted and did not complete',
+}
+
+function AuditTrail({ audit, source }) {
+  if (audit === null) return <p className="muted" style={{ fontSize: 13 }}>Loading…</p>
+  if (audit === 'error') {
+    return (
+      <p style={{ fontSize: 13, color: TONE.fail[0] }}>
+        Could not load the lifecycle trail. The record itself is unaffected — it is append-only
+        and nothing here writes to it.
+      </p>
+    )
+  }
+  const mine = audit.filter((a) => matchesThisSource(a, source))
+  const elsewhere = audit.length - mine.length
+  if (!mine.length) {
+    return (
+      <p className="muted" style={{ fontSize: 13 }}>
+        No lifecycle decisions recorded for this source.
+        {elsewhere > 0 && ` ${elsewhere.toLocaleString()} recorded on other sources.`}
+      </p>
+    )
+  }
+  return (
+    <>
+      <div className="findings">
+        {mine.slice(0, 50).map((a) => (
+          <div key={a.id} style={{ padding: '7px 0', borderBottom: '1px solid var(--line)' }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span className="muted" style={{ fontSize: 12 }}>{a.ts ? fmtWhen(a.ts) : NOT_AVAILABLE}</span>
+              <Pill tone={AUDIT_TONE[a.result] || 'muted'}>{orAbsent(a.result)}</Pill>
+              <span style={{ fontSize: 12.5, flex: 1, minWidth: 0 }}>
+                {a.document_exists === false
+                  ? <span className="muted">document no longer exists ({orAbsent(a.doc_id)})</span>
+                  : orAbsent(a.path || a.doc_id)}
+              </span>
+            </div>
+            <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+              {orAbsent(a.action)} · {AUDIT_MEANING[a.result] || orAbsent(a.detail, '')}
+              {' · rule: '}
+              {/* A deleted rule shows as absent rather than as its id — an id in the name slot
+                  reads as a name. */}
+              {a.policy_name ? <b>{a.policy_name}</b> : <span className="muted">no longer configured</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+      {mine.length > 50 && (
+        <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+          Showing the 50 most recent of {mine.length.toLocaleString()}.
+        </p>
+      )}
+      {elsewhere > 0 && (
+        <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+          {elsewhere.toLocaleString()} more recorded on other sources.
         </p>
       )}
     </>
