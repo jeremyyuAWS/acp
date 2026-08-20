@@ -35,7 +35,9 @@ on:
   workflow_dispatch:
     inputs:
       pin:
-        description: "Commit to deploy (default: current main)"
+        # Any commit-ish: a full or ABBREVIATED sha, a branch, or a tag. It is resolved to a full
+        # sha below before anything consumes it — see "Resolve the pinned ref".
+        description: "Commit to deploy — sha (short ok), branch or tag (default: current main)"
         required: false
         type: string
       blue_green:
@@ -77,6 +79,41 @@ jobs:
       name: production
       url: https://${{ vars.ACP_FQDN }}
     steps:
+      # actions/checkout takes `ref` VERBATIM — a branch, a tag, or a FULL 40-char sha. An
+      # abbreviated sha is none of those, so `pin: e2ac2ab` dies in checkout with a git error
+      # naming the ref and nothing about why it was refused, before a single line of deploy logic
+      # runs. Observed 2026-08-20 on a manual pinned deploy.
+      #
+      # This is the SAME defect redeploy.sh fixed on 2026-07-30, one layer up. That script already
+      # resolves ACP_PIN itself ("RESOLVE whatever was asked for into a full 40-char sha"), and its
+      # comment records the identical failure: a short pin "sailed past this line and died at the
+      # CI gate", naming the wrong cause and inviting ACP_SKIP_CI_GATE=1 as the remedy. The fix was
+      # correct and it did not travel — this job later added a SECOND consumer of the same raw
+      # input, upstream of the normalisation, and re-opened the bug in front of it.
+      #
+      # So resolve ONCE, here, and let both consumers read the resolved value. Done over the API
+      # rather than with git because there is no checkout yet — that is the whole problem.
+      - name: Resolve the pinned ref
+        id: pin
+        if: inputs.pin != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PIN: ${{ inputs.pin }}
+        run: |
+          set -euo pipefail
+          # `commits/{ref}` accepts a short sha, a branch or a tag and answers with the full sha.
+          SHA="$(gh api "repos/${{ github.repository }}/commits/$PIN" --jq .sha || true)"
+          # Checked against the shape checkout needs, not merely against emptiness: `gh api` can
+          # answer 200 with something that is not a sha, and the whole point is that the value
+          # reaching `ref:` is one. Fail HERE, where the message can name the input and what it
+          # accepts, instead of in the checkout error this step exists to prevent.
+          if ! printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::cannot resolve pin '$PIN' to a commit in ${{ github.repository }} — expected a sha (short is fine), a branch, or a tag"
+            exit 1
+          fi
+          echo "pin '$PIN' resolved to $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0          # redeploy.sh pins a sha and clones locally from this checkout
@@ -87,7 +124,9 @@ jobs:
           # A branch ref resolves at checkout time, i.e. AFTER approval, to main's live tip. A
           # manual dispatch pins its own sha (or main). See ACP_PIN below and redeploy.sh's gate,
           # which refuses to ship whatever this resolves to unless its CI is green.
-          ref: ${{ inputs.pin || 'main' }}
+          # The RESOLVED sha, never the raw input. Empty when unpinned — the step above is
+          # skipped — so this falls through to 'main', which is the point of the comment above.
+          ref: ${{ steps.pin.outputs.sha || 'main' }}
 
       # The Office analyser is built from source on every deploy; the image copies the DLLs.
       # setup-dotnet puts the muxer on PATH, which is why redeploy.sh resolves dotnet via PATH
@@ -114,7 +153,9 @@ jobs:
           # A manual dispatch may still pin an explicit sha. The script's CI gate then refuses to
           # ship the resolved commit unless CI is green on it, so pinning the live tip fails CLOSED
           # (a refusal to wait for CI) rather than open (shipping a stale but known-green sha).
-          ACP_PIN: ${{ inputs.pin }}
+          # The resolved sha, so the script and the checkout above cannot pin different commits.
+          # redeploy.sh resolves again and that is fine — resolving a full sha is a no-op.
+          ACP_PIN: ${{ steps.pin.outputs.sha }}
           ACP_BLUE_GREEN: ${{ inputs.blue_green && '1' || '0' }}
         run: bash deploy/public/redeploy.sh
 
