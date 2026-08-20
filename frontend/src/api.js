@@ -340,6 +340,9 @@ export const refreshScanDriveToken = (scanId) => (SIM
   ? sim({ refreshed: true })
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/drive-token`, { method: 'POST', headers: headers() }).then(j))
 export const getScan = (id) => (SIM ? sim(simGetScan(id)) : fetch(`${BASE}/scans/${id}`, { headers: headers() }).then(j))
+// The merged live-assessment snapshot (KPIs + funnel + worker/queue block) for the running screen.
+// SIM has no live pipeline → available:false (the panel renders nothing).
+export const getScanLive = (id) => (SIM ? sim({ available: false }) : fetch(`${BASE}/scans/${id}/live`, { headers: headers() }).then(j))
 export const getInventory = () => (SIM ? sim([]) : fetch(`${BASE}/inventory`, { headers: headers() }).then(j))
 export const reportUrl = (id) => (SIM ? '#' : `${BASE}/scans/${id}/report.pdf`)
 // Fetch the report WITH the auth header (owner-scoped) → blob → download. Replaces the

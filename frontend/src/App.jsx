@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } from 'react'
 import HitlBell from './HitlBell.jsx'
 import { assessmentLine, outcomesFromRun, outcomeChips } from './assessmentProgress.js'
+import LiveAssessmentLive from './LiveAssessmentLive.jsx'
 import ProcessingDetails from './ProcessingDetails.jsx'
 import ScopeFunnel from './ScopeFunnel.jsx'
 import { armNotifyOnComplete, notifyScanComplete, notificationsSupported, notifyPermission } from './scanNotify.js'
@@ -1004,6 +1005,10 @@ export default function App() {
               explained, not glossed over. Same three-denominator inventory EstateCoverage uses. */}
           <ScopeFunnel inventory={progress.inventory} blocked={progress.blocked} />
           <ProcessingDetails files={progress.files} processing={progress.outcomes?.processing || 0} />
+          {/* Live Assessment command center — KPIs + funnel + worker/lane, polled from /scans/{sid}/live.
+              Inert until the endpoint returns an available snapshot, so it is a no-op on backends without
+              it and adds nothing to the panel when there is nothing live to show. */}
+          <LiveAssessmentLive scanId={liveScanId} active={busy} />
           {/* Narrate the phase the scanner reports, or say nothing. The old line came from a
               timer, so it could never be absent — and it was wrong whenever the timer and the
               phase disagreed. Silence beats a plausible sentence.

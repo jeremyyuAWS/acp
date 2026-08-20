@@ -9,7 +9,7 @@
 import { outcomeChips, etaText } from './assessmentProgress.js'
 
 const PHASE_LABEL = {
-  discovering: 'Discovering', reading: 'Reading', assessing: 'Assessing',
+  preparing: 'Preparing', discovering: 'Discovering', reading: 'Reading', assessing: 'Assessing',
   remediating: 'Remediating', finalizing: 'Finalizing', done: 'Complete',
 }
 
