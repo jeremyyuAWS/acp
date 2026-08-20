@@ -31,6 +31,8 @@ const settingsMock = { get: null, put: null }
 vi.mock('./api.js', () => ({
   getSettings: (...a) => settingsMock.get(...a),
   updateSettings: (...a) => settingsMock.put(...a),
+  // The review step names how many lifecycle rules will run during the discovery.
+  listDispositionPolicies: vi.fn(async () => []),
 }))
 
 const { default: ScanScopeWizard } = await import('./ScanScopeWizard.jsx')
