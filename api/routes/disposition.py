@@ -146,6 +146,23 @@ def set_policy_enabled(policy_id: str, enabled: bool, request: Request):
     return core.store.get_disposition_policy(policy_id)
 
 
+def _preview(match: list[dict], action: str, policy_id: str | None) -> dict:
+    """The dry run itself, shared by the saved-policy preview and the draft preview.
+
+    ONE evaluator, deliberately. The rule editor previews a draft as it is typed and the rule list
+    previews the saved rule; were those two implementations, the count a person approved a rule on
+    and the count that rule actually produces could differ — and the entire reason the preview
+    exists is that somebody is deciding on the strength of that number.
+
+    Read-only by construction: reads `documents`, runs `disposition.matches` in Python, writes
+    nothing. No file is touched, no disposition_audit row appended, no policy row created.
+    """
+    docs = core.store.list_all_documents()
+    selected = [d for d in docs if disposition.matches(d, match)]
+    return {"policy_id": policy_id, "action": action,
+            "would_match": len(selected), "documents": selected}
+
+
 @router.post("/disposition/policies/{policy_id}/preview")
 def preview_policy(policy_id: str):
     """Dry run: which documents would this policy select, right now? Never writes
@@ -153,11 +170,169 @@ def preview_policy(policy_id: str):
     policy = core.store.get_disposition_policy(policy_id)
     if policy is None:
         raise HTTPException(404, "policy not found")
-    match = json.loads(policy["match"])
-    docs = core.store.list_all_documents()
-    selected = [d for d in docs if disposition.matches(d, match)]
-    return {"policy_id": policy_id, "action": policy["action"],
-           "would_match": len(selected), "documents": selected}
+    return _preview(json.loads(policy["match"]), policy["action"], policy_id)
+
+
+class PolicyDraft(BaseModel):
+    """An UNSAVED rule — just enough of one to say what it would select."""
+    match: list[dict]
+    action: str
+    action_config: dict = {}
+
+
+@router.post("/disposition/preview")
+def preview_draft(body: PolicyDraft, request: Request):
+    """Dry run a rule that does NOT exist yet: how many documents would `{match, action}` select?
+
+    The saved-policy preview above needs a policy_id, so the rule editor could only show a count
+    AFTER creating the rule — which inverts the order the decision is actually made in. A person
+    writing "everything under /Finance/2019 not modified in five years" needs to know it selects
+    40 files and not 40,000 BEFORE committing to it; a preview that arrives once the row exists is
+    a preview of a decision already taken.
+
+    Read-only by construction, and more strictly so than the saved preview: it creates no policy
+    row, so there is nothing to enable, nothing to execute and nothing left behind when the person
+    closes the editor. It runs the SAME `disposition.matches` over the SAME documents table via
+    `_preview`, so the count shown while typing is the count the saved rule will produce.
+
+    Returns the saved preview's shape with `policy_id: null` — null because this rule has no id,
+    not because one was lost. The key is present so a caller reads both responses one way.
+
+    Admin-gated like the rest of this module, and NOT like `preview_policy`, which carries no gate.
+    The predicate here is CALLER-SUPPLIED: the saved preview can only re-run a predicate an admin
+    already authored and stored, while this route would otherwise let any allow-listed user run an
+    arbitrary predicate over the whole documents table and read the matching rows back. Same
+    refusal shape as its neighbours — 403 "admin access required".
+    """
+    _require_admin(request)
+    if body.action not in disposition.ACTIONS:
+        raise HTTPException(422, f"action must be one of {sorted(disposition.ACTIONS)}")
+    try:
+        disposition.validate_match(body.match)
+        disposition.validate_action_config(body.action, body.action_config)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return _preview(body.match, body.action, None)
+
+
+class PolicyUpdate(BaseModel):
+    """An edit to a saved rule. Every field optional — an omitted field is left as it is.
+
+    `enabled` is DELIBERATELY ABSENT. Arming a rule is its own decision, with its own route
+    (PUT .../enabled) and its own audit line. Folding it into the edit payload would let a save
+    somebody read as "rename this rule" also start it running.
+    """
+    name: str | None = None
+    match: list[dict] | None = None
+    action: str | None = None
+    action_config: dict | None = None
+    requires_approval: bool | None = None
+
+
+def _policy_has_history(policy_id: str) -> bool:
+    """Has this rule already produced a recorded outcome?
+
+    disposition_audit is the complete record of what a rule has done. Every path that acts on a
+    rule appends to it: the execute path writes a row per selected document, and the discovery
+    lifecycle evaluator (handlers._evaluate_discover_lifecycle_rules) writes one beside every
+    lifecycle_status it sets — so a rule cannot have flagged a file without an audit row naming
+    it. Checking this one table is therefore checking every kind of history, not a convenient
+    subset of it.
+
+    ANY result counts, 'rejected' and 'failed' included. doc_has_disposition treats those as
+    non-live so a re-run may propose the document again; that is a different question. The
+    question here is whether a stored record NAMES this rule, and a rejected row names it just as
+    loudly — an auditor reading "rejected: matched delete rule 'stale-finance'" is owed the rule
+    that sentence was written about.
+    """
+    return bool(core.store.list_disposition_audit(policy_id=policy_id, limit=1))
+
+
+@router.put("/disposition/policies/{policy_id}")
+def update_policy(policy_id: str, body: PolicyUpdate, request: Request):
+    """Edit a saved rule. Validated exactly like create, and structurally unable to arm one.
+
+    ── WHAT AN EDIT MAY NOT DO: CHANGE WHAT ALREADY HAPPENED ────────────────────────────────
+    A rule that has run has produced records that name it — disposition_audit rows, and
+    scan_inventory rows whose `lifecycle_rule_id` points at it with a `lifecycle_reason` quoting
+    it by name. Those records carry the rule's ID and nothing else: no column anywhere records
+    WHICH DEFINITION of the rule produced them.
+
+    So editing a definition in place silently rewrites the past. A file flagged "Archive Candidate
+    — matched archive rule 'stale finance'" under a rule that said "not modified in five years"
+    would, after an edit, be read by every future reader as having matched "not modified in 90
+    days". Nothing errors. The tag does not move. The reason string does not change. Only its
+    meaning does — retroactively, for evidence a compliance reviewer is expected to rely on.
+
+    THE RULE THIS ROUTE ENFORCES: edits apply going forward, and existing records keep the
+    definition that produced them.
+
+    Implemented as: a rule that has produced ANY recorded outcome may no longer have its
+    DEFINITION changed (`match`, `action`, `action_config`) — refused with 409. Its `name` and
+    `requires_approval` stay editable, because neither alters which files the rule selected or
+    what it recommended for them. To change what a rule that has run selects, create a new rule
+    and disable the old one: the old rule and its history stay intact and keep meaning what they
+    meant.
+
+    ── WHY NOT VERSIONING, WHICH WOULD BE MORE PERMISSIVE ───────────────────────────────────
+    The alternative is to version the policy and stamp that version onto every record it produces,
+    so an edit makes v2 while existing tags keep pointing at v1. That is the better long-term
+    answer and it is deliberately NOT implemented here, because doing it honestly means adding a
+    version to `disposition_policy` AND `disposition_audit` AND `scan_inventory` — the three
+    places a rule reference is stored — plus a backfill decision for every row already written
+    without one. Versioning only the policy table would be WORSE than not versioning at all: audit
+    rows would still carry a bare ID, so history would still read against whatever version is
+    current, while the schema now claims the problem is solved.
+
+    A rule that has produced nothing has exactly one definition, so the guarantee holds trivially
+    for it — and that is the case the rule editor is in almost every time, since rules are created
+    disabled and are edited before they are ever armed.
+    """
+    _require_admin(request)
+    policy = core.store.get_disposition_policy(policy_id)
+    if policy is None:
+        raise HTTPException(404, "policy not found")
+
+    # Resolve the RESULTING definition (current value wherever the caller omitted a field), then
+    # validate THAT rather than the patch. A patch moving `action` from 'archive' to 'tag' without
+    # supplying action_config has to be judged as the tag policy it produces — which is how "tag
+    # with no tags" is caught here instead of failing silently at execute time.
+    current_match = json.loads(policy.get("match") or "[]")
+    current_cfg = json.loads(policy.get("action_config") or "{}")
+    new_match = current_match if body.match is None else body.match
+    new_action = policy["action"] if body.action is None else body.action
+    new_cfg = current_cfg if body.action_config is None else body.action_config
+
+    if new_action not in disposition.ACTIONS:
+        raise HTTPException(422, f"action must be one of {sorted(disposition.ACTIONS)}")
+    try:
+        disposition.validate_match(new_match)
+        disposition.validate_action_config(new_action, new_cfg)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+    changed = [field for field, before, after in
+               (("match", current_match, new_match),
+                ("action", policy["action"], new_action),
+                ("action_config", current_cfg, new_cfg))
+               if before != after]
+    if changed and _policy_has_history(policy_id):
+        raise HTTPException(409,
+            f"this rule has already run — its {', '.join(changed)} can no longer be changed. "
+            "Files it flagged carry its decision, and no record says which version of the rule "
+            "made that decision, so editing the rule here would change what those records mean. "
+            "Create a new rule with the definition you want and disable this one; its history "
+            "stays intact. (Its name and approval requirement are still editable.)")
+
+    new_name = policy.get("name") if body.name is None else body.name
+    new_req = (bool(policy.get("requires_approval")) if body.requires_approval is None
+               else body.requires_approval)
+    core.store.update_disposition_policy(
+        policy_id, name=new_name, match=json.dumps(new_match), action=new_action,
+        action_config=json.dumps(new_cfg), requires_approval=new_req)
+    core.store.log_decision("admin", "disposition.policy_updated",
+                            detail=f"{new_name}: {', '.join(changed) or 'name/approval only'}")
+    return core.store.get_disposition_policy(policy_id)
 
 
 @router.post("/disposition/policies/{policy_id}/execute")
