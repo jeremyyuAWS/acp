@@ -88,23 +88,37 @@ def test_download_routes_an_sp_item_to_graph(monkeypatch, tmp_path):
     assert log == [], f"the Drive client was called for a SharePoint item: {log}"
 
 
-def test_the_marker_survives_the_assess_round_trip():
-    """THE BUG. The item the worker hands to `_download` must still say it is a SharePoint item.
+def _worker_download_item(inventory_row, source):
+    """Rebuild the item the worker hands `_download`, exactly as handlers does.
 
-    Built the way handlers does it at the assess call site — from the stored inventory row — so
-    this fails for the real reason rather than a re-typed approximation of it.
+    Mirrors the two hops the real code takes — assess builds an analysis item from the stored
+    inventory row, the worker builds a download item from that — because the bug lived in the
+    hops, not in either endpoint.
     """
-    row = _sp_item_from_discovery()
-
-    # handlers._scan_assess builds the analysis item from the inventory row with exactly these keys.
-    analysis_item = {"file": row["file"], "drive_file_id": row.get("drive_file_id"),
-                     "mime": None, "path": row.get("path"), "checksum": row.get("checksum")}
-    # ...and the worker rebuilds the download item from that.
-    download_item = {"name": analysis_item["file"], "id": analysis_item["drive_file_id"]}
+    analysis_item = {"file": inventory_row["file"],
+                     "drive_file_id": inventory_row.get("drive_file_id"),
+                     "mime": None, "path": inventory_row.get("path"),
+                     "checksum": inventory_row.get("checksum"),
+                     "drive_id": inventory_row.get("drive_id")}
+    it = {"name": analysis_item["file"], "id": analysis_item["drive_file_id"]}
     if analysis_item.get("path"):
-        download_item["path"] = analysis_item["path"]
+        it["path"] = analysis_item["path"]
+    if source == "sharepoint" and not analysis_item.get("path"):
+        it["sp"] = True
+        if analysis_item.get("drive_id"):
+            it["driveId"] = analysis_item["drive_id"]
+    return it
 
-    assert download_item.get("sp"), (
+
+def test_the_marker_survives_the_assess_round_trip():
+    """The item the worker hands `_download` still says it is a SharePoint item.
+
+    The marker is DERIVED from the scan's own `source` rather than stored, so it cannot drift out
+    of step with the scan it belongs to — a stored flag and a stored source can disagree; these
+    cannot.
+    """
+    it = _worker_download_item(_sp_item_from_discovery(), "sharepoint")
+    assert it.get("sp"), (
         "the SharePoint marker is lost between discovery and download, so _download falls through "
         "to the Google Drive branch and hands a Graph item id to files().get_media() — every "
         "SharePoint file then records status='error' and reads as 'file unreadable'")
@@ -115,10 +129,52 @@ def test_the_drive_id_survives_too():
 
     Graph item ids are unique only WITHIN a drive. `_sp_download`'s own docstring: asking /me/drive
     for a site's item id "either 404s or, worse, returns a different document that happens to share
-    the id". Analysing the wrong document is a worse failure than the error being fixed here, so
-    the fix has to carry the driveId — and the inventory row does not currently record one.
+    the id". A silently WRONG document is a worse failure than the error being fixed here, so the
+    driveId travels with the marker.
     """
-    row = _sp_item_from_discovery()
-    assert row.get("driveId"), (
-        "the inventory row records no driveId, so a restored SharePoint marker would resolve "
-        "against /me/drive — correct for personal OneDrive, silently wrong for a site drive")
+    it = _worker_download_item(_sp_item_from_discovery(), "sharepoint")
+    assert it.get("driveId") == "b!DRIVE-ID", (
+        "the driveId did not survive, so a restored SharePoint marker resolves against /me/drive — "
+        "correct for personal OneDrive, silently wrong for a site drive")
+
+
+def test_a_onedrive_item_without_a_drive_id_is_still_routed_to_graph():
+    """OneDrive listings genuinely carry no driveId, and must NOT be held back by requiring one.
+
+    `_sp_base`/`_sp_download` read an absent driveId as /me/drive, which is exactly right for a
+    personal OneDrive. Requiring one here would break every OneDrive scan while looking like a
+    safety improvement — the mistake _sp_base's docstring calls out by name.
+    """
+    row = scanner._sp_inventory_row({
+        "id": "01ONEDRIVE0000001", "name": "notes.docx",
+        "file": {"mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+        "parentReference": {"path": "/drive/root:"},          # no driveId — OneDrive
+    })
+    it = _worker_download_item(row, "sharepoint")
+    assert it.get("sp"), "a OneDrive item was not routed to Graph"
+    assert "driveId" not in it, "a driveId was invented for a OneDrive item that has none"
+
+
+def test_a_drive_item_is_not_marked_sharepoint():
+    """The other direction. A Drive scan must keep using the Drive client.
+
+    Asserted because the fix derives the marker from `source`: a derivation that is too eager
+    would send Google Drive files to Graph and break the working path to fix the broken one.
+    """
+    row = scanner._drive_inventory_row({"id": "1AbC", "name": "policy.docx",
+                                        "mimeType": "application/vnd.openxmlformats-officedocument"
+                                                    ".wordprocessingml.document"})
+    it = _worker_download_item(row, "drive")
+    assert not it.get("sp"), "a Google Drive item was routed to Graph"
+
+
+def test_a_local_corpus_item_is_read_from_disk_even_on_a_sharepoint_scan():
+    """`path` wins over the source marker — a local row is read from disk, never fetched.
+
+    The guard exists because the marker is derived from `source`, which is a scan-level fact,
+    while `path` is a per-file one. Without the `not path` clause a local fixture inside a
+    SharePoint-sourced run would be sent to Graph with a filesystem path as its id.
+    """
+    it = _worker_download_item({"file": "f.docx", "path": "/corpus/f.docx"}, "sharepoint")
+    assert it.get("path") == "/corpus/f.docx"
+    assert not it.get("sp"), "a local-path item was routed to Graph"

@@ -125,12 +125,20 @@ def _estate_doc_class(name: str, mime: str | None) -> str:
 
 
 def _inv_row(*, file: str, drive_file_id=None, mime=None, size=None, checksum=None, path=None,
-             created_at=None, source_modified=None, owner=None, parent_folder=None) -> dict:
-    """One store.add_inventory row, with size normalised to KiB and doc_class derived."""
+             created_at=None, source_modified=None, owner=None, parent_folder=None,
+             drive_id=None) -> dict:
+    """One store.add_inventory row, with size normalised to KiB and doc_class derived.
+
+    `drive_id` is the Graph DRIVE a SharePoint/OneDrive item was listed from. It is part of the
+    item's identity, not decoration: Graph item ids are unique only within a drive, so a row
+    carrying `drive_file_id` alone cannot be fetched back reliably (_sp_download). None for every
+    other source, and None for a OneDrive listing, which legitimately has no drive to name.
+    """
     return {"file": file, "drive_file_id": drive_file_id, "mime": mime or None,
             "size_kb": _inv_size_kb(size), "doc_class": _estate_doc_class(file, mime),
             "checksum": checksum, "path": path, "created_at": created_at,
-            "source_modified": source_modified, "owner": owner, "parent_folder": parent_folder}
+            "source_modified": source_modified, "owner": owner, "parent_folder": parent_folder,
+            "drive_id": drive_id}
 
 
 def _drive_inventory_row(f: dict) -> dict:
@@ -154,7 +162,10 @@ def _sp_inventory_row(item: dict) -> dict:
                     mime=fmeta.get("mimeType"), size=item.get("size"),
                     created_at=item.get("createdDateTime"),
                     source_modified=item.get("lastModifiedDateTime"),
-                    owner=owner, parent_folder=parent)
+                    owner=owner, parent_folder=parent,
+                    # The drive half of the item's identity. Absent on a OneDrive listing, which
+                    # has no driveId to give — read downstream as /me/drive, which is right there.
+                    drive_id=(item.get("parentReference") or {}).get("driveId"))
 
 
 def _local_stat_meta(p: Path, corpus: Path) -> dict:

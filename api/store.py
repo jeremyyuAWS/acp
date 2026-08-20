@@ -424,6 +424,12 @@ _SCHEMA = [
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS owner TEXT",
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS parent_folder TEXT",
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS discovered_at TEXT",
+    # The Graph DRIVE the item was listed from. Graph item ids are unique only WITHIN a drive, so
+    # `drive_file_id` alone does not identify a SharePoint item — asking /me/drive for a site's
+    # item id 404s or, worse, returns a different document with the same id (scanner._sp_download).
+    # Null for Drive/local/SMB rows, and null for a OneDrive listing, which legitimately has no
+    # driveId; both mean "no drive to name", which _sp_base already reads as /me/drive.
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS drive_id TEXT",
     # Per-document lifecycle status (PRD §4.3). One of: Active, Archive Candidate, Archived,
     # Delete Candidate, Deleted, Failed, Exempted. Defaults to Active on first discovery; a rule
     # run (Discover) or a manual action moves it. `lifecycle_rule_id`/`lifecycle_reason` record
@@ -922,19 +928,19 @@ class Store:
             for it in items:
                 self._db.execute(cur,
                     "INSERT INTO scan_inventory(scan_id,file,drive_file_id,mime,size_kb,doc_class,"
-                    "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
+                    "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at,drive_id) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
                     "drive_file_id=EXCLUDED.drive_file_id, mime=EXCLUDED.mime, size_kb=EXCLUDED.size_kb, "
                     "doc_class=EXCLUDED.doc_class, checksum=EXCLUDED.checksum, path=EXCLUDED.path, "
                     "created_at=EXCLUDED.created_at, source_modified=EXCLUDED.source_modified, "
-                    "owner=EXCLUDED.owner, parent_folder=EXCLUDED.parent_folder",
+                    "owner=EXCLUDED.owner, parent_folder=EXCLUDED.parent_folder, drive_id=EXCLUDED.drive_id",
                     (scan_id, it.get("file"), it.get("drive_file_id"), it.get("mime"),
                      it.get("size_kb"), it.get("doc_class"), it.get("checksum"), it.get("path"),
                      it.get("created_at"), it.get("source_modified"), it.get("owner"),
-                     it.get("parent_folder"), it.get("discovered_at") or now))
+                     it.get("parent_folder"), it.get("discovered_at") or now, it.get("drive_id")))
 
     _INV_COLS = ("scan_id,file,drive_file_id,mime,size_kb,doc_class,checksum,path,"
-                 "created_at,source_modified,owner,parent_folder,discovered_at,"
+                 "created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
                  "lifecycle_status,lifecycle_rule_id,lifecycle_reason,exclusion_reason")
 
     def list_inventory(self, scan_id: str) -> list[dict]:
