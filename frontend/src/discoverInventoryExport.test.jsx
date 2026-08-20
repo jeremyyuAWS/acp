@@ -145,11 +145,21 @@ describe('DiscoverInventoryExport — taking the inventory out', () => {
     expect(container.textContent).toContain('(not collected)')
   })
 
-  it('confirms what was saved', async () => {
+  it('confirms what was saved, into a live region that was already there', async () => {
     const rec = recorder()
     await render({ run: { id: 's1', discovered_at: '2026-08-19T10:00:00Z' }, rows: ROWS, save: rec.save })
+    // Present and empty BEFORE the click — a live region a screen reader has not been observing
+    // since before the update is one it may never announce.
+    expect(container.querySelector('[role="status"]').textContent).toBe('')
     await clickButton('Export CSV')
     expect(container.querySelector('[role="status"]').textContent).toMatch(/Saved acp-inventory-s1.*2 rows/)
+  })
+
+  it('does not claim a download happened when the save reported it did not', async () => {
+    await render({ run: { id: 's1', discovered_at: '2026-08-19T10:00:00Z' }, rows: ROWS,
+      save: () => false })
+    await clickButton('Export CSV')
+    expect(container.querySelector('[role="status"]').textContent).toBe('')
   })
 })
 

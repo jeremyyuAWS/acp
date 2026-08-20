@@ -49,7 +49,10 @@ export default function DiscoverInventoryExport({
     const opts = { scanId: scanId ?? run?.id ?? null, takenAt: snap.at,
       takenAtSource: snap.source, exportedAt: clock() }
     const out = kind === 'json' ? jsonBlob(list, opts) : csvBlob(list, opts)
-    save(out.blob, out.filename)
+    // Only claim it was saved if the save reported that it was. `saveBlob` returns false when
+    // there is no DOM to hand the blob to, and "Saved acp-inventory-….csv" over a download that
+    // never happened is the same class of untruth the rest of this module exists to avoid.
+    if (save(out.blob, out.filename) === false) return
     setSaved({ kind, filename: out.filename, rowCount: out.rowCount, omitted: out.omitted })
   }
 
@@ -128,12 +131,15 @@ export default function DiscoverInventoryExport({
               This run inventoried no files, so there is nothing to export.
             </p>
           )}
-          {saved && (
-            <p className="muted" role="status" style={{ fontSize: 12, marginTop: 8 }}>
-              Saved {saved.filename} — {nf.format(saved.rowCount)} row
-              {saved.rowCount === 1 ? '' : 's'}.
-            </p>
-          )}
+          {/* Mounted empty rather than conditionally, because a live region a screen reader has
+              not been observing since before the update is one it may never announce — and this
+              is the confirmation that a download the browser gives no other feedback for
+              actually happened. */}
+          <p className="muted" role="status" style={{ fontSize: 12, marginTop: 8 }}>
+            {saved
+              ? `Saved ${saved.filename} — ${nf.format(saved.rowCount)} row${saved.rowCount === 1 ? '' : 's'}.`
+              : ''}
+          </p>
         </>
       )}
     </section>
