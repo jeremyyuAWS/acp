@@ -1,0 +1,148 @@
+# Say it out loud when CI goes red on main, because a skipped deploy is silent.
+#
+# On 2026-08-20 CI failed on main at 22:30. Nothing announced it. deploy.yml gates on
+# `workflow_run.conclusion == 'success'`, so every subsequent deploy resolved to SKIPPED — not
+# failed, skipped, which renders as a grey tick rather than a red cross and reads like "nothing to
+# do". Six commits landed on main over the next hour, each one pushed by someone who watched their
+# own push succeed. Production stayed on the build from 22:25 the whole time, and the way it was
+# eventually discovered was the owner opening the app and asking why none of the work was there.
+#
+# Every fact needed to catch that was in the API from the first minute. Nothing was looking — the
+# same sentence monitor.yml opens with, which is why this file exists beside it rather than inside
+# it: monitor.yml asks "is production alright", and answers on a 30-minute schedule against the
+# deployed app. This asks "did the thing that ships to production just stop", and must answer
+# immediately, because until it does every further push is building on a branch that cannot ship.
+#
+# WHY AN ISSUE, and not an email or a job that simply fails.
+#
+# GitHub already emails the actor on workflow failure. That notification existed on the night this
+# happened and reached nobody who acted on it. Worse, it is addressed to a person — and roughly
+# half the commits on this repo are pushed by automated sessions, which have no inbox.
+#
+# An issue is the one channel BOTH audiences read. The owner sees it in the repo; a session sees it
+# in `list_issues`, which is now a required pre-flight check after #568 — an issue filed six
+# minutes before a push, naming the exact branch, was missed precisely because nothing made
+# sessions look. This closes that loop from the other side: the thing sessions must check is also
+# the thing that gets written to when the build breaks.
+#
+# It is a state mirror, not a log. One open issue is reopened and updated while main is red, and
+# CLOSED AUTOMATICALLY when main goes green — so its existence is the current answer to "can main
+# ship right now", and a repo with no such issue open is a repo that is shipping. A workflow that
+# filed a fresh issue per failure would be a log, and a log with six entries from one outage is
+# noise that teaches people to skim past it.
+
+name: CI alert
+
+on:
+  # Mirrors deploy.yml's trigger EXACTLY, and that is the point rather than a coincidence: this
+  # must fire on precisely the set of runs that gate a deploy. `branches: [main]` filters on the
+  # triggering run's head branch, so a PR's CI completion does not reach here — a red PR is
+  # visible on the PR itself and blocks nothing that ships.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # So the state can be corrected by hand if this workflow is ever itself broken while main is red.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write          # the whole point; nothing else is needed
+
+concurrency:
+  # Two CI runs finishing close together must not race to open two issues, or to have one close the
+  # issue the other just opened. Serialised, and NOT cancel-in-progress: the last completion is the
+  # one whose verdict should win, so every run has to be allowed to finish.
+  group: ci-alert
+  cancel-in-progress: false
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open, update or close the red-main issue
+        uses: actions/github-script@v7
+        env:
+          CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_URL: ${{ github.event.workflow_run.html_url }}
+        with:
+          script: |
+            // A stable marker in the body, not a title match: the title is prose and someone will
+            // reasonably edit it. This is what makes the workflow idempotent.
+            const MARKER = '<!-- acp:ci-red-on-main -->'
+            const conclusion = process.env.CI_CONCLUSION
+            const sha = (process.env.CI_SHA || '').slice(0, 7)
+            const url = process.env.CI_URL
+
+            // A manual dispatch has no triggering run. Treat it as "re-evaluate", not as a
+            // failure — inventing one would be the exact class of false claim this repo works
+            // hardest to avoid.
+            if (!conclusion) {
+              core.notice('Dispatched with no triggering CI run; nothing to assert.')
+              return
+            }
+
+            const { owner, repo } = context.repo
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: 'open', per_page: 100,
+            })
+            const existing = open.find((i) => (i.body || '').includes(MARKER))
+
+            // SUCCESS, CANCELLED and SKIPPED all mean "this run is not evidence main is broken",
+            // but only success is evidence it is FIXED. A cancelled run must not close the issue —
+            // that would mark main shippable on the strength of a run that never finished.
+            if (conclusion === 'success') {
+              if (existing) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: existing.number,
+                  body: `${MARKER}\nCI is green again on \`${sha}\`. Deploys are unblocked, and the next push to main will ship.\n\n[Run](${url})\n\n---\n_Generated by [Claude Code](https://claude.ai/code)_`,
+                })
+                await github.rest.issues.update({
+                  owner, repo, issue_number: existing.number, state: 'closed', state_reason: 'completed',
+                })
+                core.notice(`Closed #${existing.number} — main is green on ${sha}.`)
+              }
+              return
+            }
+
+            if (conclusion !== 'failure' && conclusion !== 'timed_out') {
+              core.notice(`CI concluded '${conclusion}' — not a failure, and not proof of a fix. Leaving the issue state alone.`)
+              return
+            }
+
+            const body = [
+              MARKER,
+              '',
+              `**CI failed on \`main\` at \`${sha}\`, so \`deploy.yml\` will SKIP every deploy until it is green.**`,
+              '',
+              'A skipped deploy is not a red cross — it renders as a grey tick and reads like there was',
+              'nothing to do. Pushes to main will keep succeeding and none of them will reach production.',
+              '',
+              `- Failing run: ${url}`,
+              `- Commit: \`${sha}\``,
+              '',
+              '**Until this closes, main cannot ship.** Fix the failure and push; this issue closes itself',
+              'when a CI run on main succeeds.',
+              '',
+              '---',
+              '_Generated by [Claude Code](https://claude.ai/code)_',
+            ].join('\n')
+
+            if (existing) {
+              // Update in place. One outage is one issue, however many red runs it produces.
+              await github.rest.issues.update({ owner, repo, issue_number: existing.number, body })
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: existing.number,
+                body: `${MARKER}\nStill red — \`${sha}\` also failed. [Run](${url})\n\n---\n_Generated by [Claude Code](https://claude.ai/code)_`,
+              })
+              core.setFailed(`main is still red (${sha}) — see #${existing.number}.`)
+              return
+            }
+
+            const created = await github.rest.issues.create({
+              owner, repo,
+              title: 'CI is red on main — deploys are blocked',
+              body,
+            })
+            core.setFailed(`main is red (${sha}) — opened #${created.data.number}.`)
