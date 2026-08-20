@@ -511,6 +511,23 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   ordinary setup impossible without a second Chrome profile (a personal Google Drive alongside a work
   Microsoft account). The two data connections were always independent (Drive rides `X-Drive-Token`,
   OneDrive/SharePoint rides `X-SP-Token`), so only the missing chooser was in the way — now added for both.
+- **Multiple Platform Admins, not just the single owner** (#534). The admin surfaces (scope editor,
+  platform Settings, access management) were gated to exactly one identity — `ACP_OWNER_EMAIL` — so a
+  second person could sign in and scan but never see the same admin UI. Added `ACP_ADMIN_EMAILS`: a set of
+  additional admins with the same rights. `core.is_admin` is the single source of truth both the SPA flag
+  (`is_scope_owner`, now delegating to it) and the API gate (`_require_admin`) read, so UI and server can't
+  disagree; `email_allowed` admits admins unconditionally; `OWNER_EMAIL` stays the anti-lockout owner.
+  **No-op until configured** (empty `ACP_ADMIN_EMAILS` = today's behaviour). 9 tests. Not RULE_PATHS.
+- **In-app Platform Admin management — owner promotes from Settings → Users** (#535, on #534). Requested so
+  a teammate can be granted the same admin UI without an Azure/env change or redeploy. Three tiers, each
+  rendered distinctly and none editable into an unsafe state: the immutable **owner** (`ACP_OWNER_EMAIL`),
+  **permanent env admins** (`ACP_ADMIN_EMAILS`, "set at deploy", no toggle), and the **owner-managed set**
+  (store `admin_emails`, promote/demote here). `store.get_admins`/`set_admins` mirror the allowlist;
+  `core.is_admin` now unions owner ∪ env ∪ store; `core.is_owner` is the strict root-of-trust check;
+  `GET/PUT /admin/admins` with the PUT **owner-only** (`_require_owner` — an admin can't grant admin nor
+  remove the owner, and the owner/env grants are kept out of the managed set); `/me` + `/config` emit
+  `is_owner` so the SPA shows the promote/demote controls to the owner only. Settings → Users gained admin
+  badges + an owner-only Make/Remove-admin toggle. 7 backend + 3 frontend tests. Not RULE_PATHS.
 
 ## Feature: Local model benchmarking · #4609
 
@@ -2470,3 +2487,10 @@ real extracted content, degrading to the generic note, never a fabricated tree.
   (#4614)**: #525 — scoped CI cancel-in-progress so `main` runs finish and fire their `workflow_run` deploy,
   instead of a newer commit cancelling a run and silently skipping the ship. **Sync marker deliberately NOT
   advanced** (same convention as the prior entries).
+- **2026-08-20 (multi-admin + in-app admin management)** — From a user report that a teammate saw different
+  privileges. Root cause: single-owner admin model (`ACP_OWNER_EMAIL` only). To **Multi-tenancy and the
+  control plane (#4608)**: #534 — `ACP_ADMIN_EMAILS` + `core.is_admin` as the one gate both the SPA flag and
+  the API enforce (no-op until configured); #535 — in-app owner-managed admin promotion from Settings →
+  Users (store-backed set, `is_owner` root-of-trust, owner-only `PUT /admin/admins`, three-tier badges +
+  toggle). Both green, tested (9 + 10 cases), not RULE_PATHS; ship on the next approved prod deploy. **Sync
+  marker deliberately NOT advanced** (same convention as the prior entries).
