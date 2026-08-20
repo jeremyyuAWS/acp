@@ -4,7 +4,7 @@ import { normalizeLive, isNewerFrame } from './liveAssessment.js'
 const full = {
   available: true, active: true, phase: 'assessing', source: 'onedrive', run_id: 'r1',
   totals: { discovered: 819, eligible: 512 },
-  kpis: { completed: 145, processing: 105, need_attention: 22, unable_to_assess: 3 },
+  kpis: { completed: 145, processing: 105, findings_so_far: 47, need_attention: 22, unable_to_assess: 3 },
   outcomes: { passed: 120, review: 22, failed: 3, processing: 105 },
   queue: {
     in_flight: 6, queued: 99, workers: { busy: 6, max: 8, idle: 2 },
@@ -22,9 +22,12 @@ describe('normalizeLive', () => {
     expect(m.phaseLabel).toBe('Assessing')
     expect(m.totals).toEqual({ discovered: 819, eligible: 512 })
     expect(m.kpiCards.map((c) => [c.key, c.value, c.pending])).toEqual([
-      ['completed', 145, false], ['processing', 105, false],
+      ['completed', 145, false], ['processing', 105, false], ['findings_so_far', 47, false],
       ['need_attention', 22, false], ['unable_to_assess', 3, false],
     ])
+    // Provisional (grows during the run → must carry a "so far" qualifier): findings + need-attention.
+    expect(m.kpiCards.filter((c) => c.provisional).map((c) => c.key))
+      .toEqual(['findings_so_far', 'need_attention'])
     expect(m.queue.inFlight).toBe(6)
     expect(m.queue.queued).toBe(99)
     expect(m.queue.workers).toEqual({ busy: 6, max: 8, idle: 2 })
