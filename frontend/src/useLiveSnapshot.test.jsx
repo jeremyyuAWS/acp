@@ -52,6 +52,17 @@ describe('useLiveSnapshot', () => {
     expect(container.textContent).toBe('seq:1 done:10')                       // last good retained
   })
 
+  it('re-polls immediately when the tab becomes visible again (refocus-fresh)', async () => {
+    getScanLive.mockResolvedValue(frame(1, 10))
+    const { root } = createTestRoot()
+    await act(async () => { root.render(createElement(Probe, { scanId: 's1' })) })
+    await flush()
+    const before = getScanLive.mock.calls.length
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+    await flush()
+    expect(getScanLive.mock.calls.length).toBeGreaterThan(before)   // an extra poll, not just the interval
+  })
+
   it('does not poll without a scanId or when inactive', async () => {
     const { root } = createTestRoot()
     await act(async () => { root.render(createElement(Probe, { scanId: null })) })
