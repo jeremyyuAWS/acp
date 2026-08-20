@@ -141,6 +141,40 @@ def test_degraded_reasons_are_machine_readable_tokens(monkeypatch):
         assert token.replace("_", "").isalnum() and token.islower()
 
 
+# ── /readyz vision-engine readiness (GPU model) ──────────────────────────────────────────
+def _mock_vision(monkeypatch, *, available, model="llava:13b", reason=None, zone="local"):
+    import ai
+    monkeypatch.setattr(ai, "vision_is_available", lambda: available, raising=False)
+    monkeypatch.setattr(ai, "vision_unavailable_reason", lambda: reason, raising=False)
+    monkeypatch.setattr(ai, "OLLAMA_VISION_MODEL", model, raising=False)
+    monkeypatch.setattr(ai, "provenance", lambda: {"zone": zone}, raising=False)
+
+
+def test_readyz_reports_vision_engine_readiness(monkeypatch):
+    """/readyz now carries engines.vision so the GPU/vision model's health is visible where the PDF
+    engine's already is — model, zone, and whether it can actually caption."""
+    _mock_vision(monkeypatch, available=True, model="llava:13b", zone="cloud")
+    r = _readyz(monkeypatch, beat=_iso(seconds=5), local_pool=0, pdf_ok=True)
+    v = r["engines"]["vision"]
+    assert v["ready"] is True and v["reason"] is None
+    assert v["model"] == "llava:13b" and v["zone"] == "cloud"
+
+
+def test_readyz_flags_a_missing_vision_model_but_does_not_flip_ready(monkeypatch):
+    """The exact failure we hit live: a typo'd / not-pulled vision model leaves a 'ready' GPU serving
+    no captions. /readyz now surfaces WHY (vision_unavailable_reason names the model + fix). But a
+    missing vision model degrades image alt to human review (ADR 0039) — it is NOT a scan-blocking
+    fault like a missing PDF engine, so it must not flip top-level ready/degraded."""
+    reason = ("the configured vision model 'qwen2.5-vl' is not present at http://gpu "
+              "(available: qwen2.5vl:72b, llama3.1:8b)")
+    _mock_vision(monkeypatch, available=False, model="qwen2.5-vl", reason=reason)
+    r = _readyz(monkeypatch, beat=_iso(seconds=5), local_pool=0, pdf_ok=True)
+    v = r["engines"]["vision"]
+    assert v["ready"] is False and "not present" in v["reason"] and v["model"] == "qwen2.5-vl"
+    # informational only — the deployment is still ready for text/assessment work
+    assert r["ready"] is True and r["degraded"] == []
+
+
 # ── /readyz source readiness (SMB) ───────────────────────────────────────────────────────
 _SMB_ENV = ("ACP_SMB_SHARES", "ACP_SMB_DOMAIN", "ACP_SMB_USERNAME",
             "ACP_SMB_PASSWORD", "ACP_SMB_CREDENTIAL_KV")
