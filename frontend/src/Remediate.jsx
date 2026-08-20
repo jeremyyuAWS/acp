@@ -20,6 +20,7 @@ import { remediableFiles, emptyScopeReason, scopeSummary, ineligibleReason,
          hasDocumentSelection, documentSelection, documentScopeSentence } from './remediableScope.js'
 import { measuredReviewTime, REVIEW_TIME_BASIS } from './reviewerTime.js'
 import { reviewEmptyLine, reviewLeadLine } from './reviewQueueCopy.js'
+import { canClaimLowRisk, unassessedRiskText } from './riskOverUnassessed.js'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
 // (what to fix, prioritized, accept/reject/modify), the HITL queue, and self-remediation.
@@ -711,6 +712,16 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     ? { level: 'med', text: `${publicDocs.length ? 'Public-facing' : 'High-traffic'} content · ${criticalOpen} critical finding${criticalOpen === 1 ? '' : 's'} open · MEDIUM RISK` }
     : criticalOpen > 0
     ? { level: 'med', text: `Internal content · ${criticalOpen} critical finding${criticalOpen === 1 ? '' : 's'} open · MEDIUM RISK` }
+    // BOTH low-risk branches are reached by `criticalOpen === 0`, and zero findings is exactly
+    // what an estate nobody could analyse produces. On 2026-08-19 that rendered "overall risk LOW"
+    // over 22 documents that were never fetched (#481) — absence of evidence as evidence of
+    // absence, in the sentence most likely to end up in a status report.
+    //
+    // Only the REASSURING verdicts are gated. The branches above state findings that were
+    // genuinely found; those stay true with unassessed documents present, and suppressing them
+    // would hide a real problem to avoid an imaginary one.
+    : !canClaimLowRisk(files)
+    ? { level: 'med', text: unassessedRiskText(files) }
     : publicDocs.length
     ? { level: 'low', text: 'Public-facing content · no critical findings · overall risk LOW' }
     : { level: 'low', text: 'Internal content only · overall risk LOW' }

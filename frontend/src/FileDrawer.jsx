@@ -20,6 +20,7 @@ import EvidenceHeader, { fmtEvidence } from './EvidenceHeader.jsx'
 import { confirmCriterion, getFileStatus, getExamined, disposeCriterion, listDispositions } from './api.js'
 import { listScanDecisions } from './api.js'
 import { errorReasonFor, noFindingsLine, looksLikeFetchFailure } from './fileErrorReason.js'
+import { showsAssessmentHero } from './riskOverUnassessed.js'
 import DispositionControl from './DispositionControl.jsx'
 import { isDispositionable, normalizeDisposition, DISPOSITIONABLE_OUTCOMES } from './disposition.js'
 import { statusOf, isUnassessed, STATUS_BADGE, STATUS_TAG_LABEL, NOT_ASSESSED } from './docStatus.js'
@@ -817,6 +818,12 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
       {/* ADR 0026 — the authoritative Accessibility Status hero replaces the client-side Document
           Health header: one backend-driven status surface (decision-first, coverage vs status,
           segmented bar, Why?, one dynamic CTA) that can never disagree with the coverage matrix. */}
+      {/* NOT for a document that produced no assessment. The hero is "the FIRST thing a reviewer
+          reads on a file" (ADR 0026), and over an unreadable one it read "Ready after 8 reviews ·
+          Est. review ~6 min · 12/38 criteria" — a coverage verdict and a time estimate for
+          reviewing findings that do not exist. For those files the first thing should be WHY,
+          which the findings section states from the record (#483). */}
+      {showsAssessmentHero(file) && (
       <AccessibilityStatus scanId={scanId} file={file.file} onModel={setStatusModel} onAction={(state) => {
         // The one CTA is state-matched. Review is the in-place action the drawer already owns; other
         // states hand off to the parent tabs (remediate / report) — wired as those flows adopt it.
@@ -825,6 +832,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           setTimeout(() => document.querySelector('.evcard')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150)
         }
       }} />
+      )}
       <div className="drawerstats">
         <span className="badge" style={{ background: sbg, color: sfg }}>
           {claim === 'has-findings' ? 'needs remediation'
