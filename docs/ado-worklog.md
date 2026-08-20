@@ -1237,6 +1237,17 @@ existing data and the existing decision path; nothing adds a second write path.
   which also replaces the preview's generic "structure not extracted" note *for those findings only*. Built
   fresh in `frontend/` (the dead `frontend-v2` branch was not revived). Cross-session coordinated with this
   session on scope, the stale-branch read, and the honesty tier. Frontend, not RULE_PATHS.
+- **One remediation surface in the file drawer — the Auto-remediate card folded into the status hero**
+  (#469, redesign Phase 1). The document drawer stacked two remediation cards: the ADR-0026 Assessment
+  Coverage hero (coverage bar + "N issues need remediation" + a "Start Remediation" CTA) and, right below,
+  a separate "Auto-remediate" card with its own CTA, its own time estimate, and a findings count that
+  disagreed with the bar — two CTAs, two estimates, three counts, and the hero's CTA wasn't even the real
+  action (the working "Remediate this file now" lived in the lower card). `AccessibilityStatus` gained an
+  `actionSlot` that renders in place of its default CTA; the drawer passes its live remediation control
+  (button + progress + result) into it, so status and action are one card with one CTA. The auto-fixable
+  count is derived from the same `findingAuto` lanes the Findings list uses, so they can't disagree; the
+  standalone reccard and its dead `REC_STYLE`/`MODE_LABEL` constants were removed. Frontend tests; not a
+  RULE_PATHS change.
 
 ## Feature: Estate coverage — three denominators and discovery at scale · #4597
 
@@ -1360,6 +1371,28 @@ three-denominator model (#297, under Documentation).
   that path with the argument. Added `inventory_out` and threaded it into the `_list(...)` call that
   already supports it; a regression test now pins both the signature and the pass-through. `Matrix-Note:
   none`.
+- **Explicit units + one source of truth for the estate numbers** (#471, redesign Phase 0). The Assess
+  results page showed "criteria" as five different things — 14 (agreed scope), 17 (tracked), 20 (document
+  core), ~38 (traced-for-this-file), plus a "16" that was a numerator leaking into denominator position —
+  each internally labelled but reading, unlabelled together, as disagreeing measurements. Rather than force
+  the deliberately-reconciled panels to one number, three unambiguous fixes: the CoverageScorecard
+  remediation tiles printed "6 / 8 / 1" with no denominator (`total={null}`) — now carry the same `/20`
+  core denominator as the assessment tiles ("6 of 20 criteria"); the ConfidenceDashboard's "468 of 1,482
+  criteria" is really criteria × documents, relabelled "criterion checks"; and the duplicate `DOCUMENTS_20`
+  in `assessCoverage.js` (a second hand-maintained copy of the 20 core SCs) now derives from the single
+  `documents20.js` set so "20" can't drift. Deliberately deferred to the visual phase: collapsing the three
+  renderings of the same failure (pass-rate % / master ring / risk 0/100), and the hero frame that makes
+  14/17/20/38 read as different questions. Not a RULE_PATHS change.
+- **Decision-first KPI cards on the results view + drop the duplicate pass-rate** (#488, redesign Phase 2).
+  AssessRunner's four result tiles became four decision KPI cards — documents needing action, findings,
+  ACP-addressable (auto-fix), estimated human effort — every value read from `result` (→ `coreStats`, the
+  one estate lens AssessRunner and RiskScore already share) so they can't disagree with the verdict banner
+  or the "By WCAG criterion" table. The "pass rate %" tile was removed as a third rendering of the same
+  estate failure the master-score ring and risk score already show; documents are now framed as the
+  decision ("need action"), not a pass percentage. Effort renders through the labelled `effort.js` heuristic
+  (`est.` + `EFFORT_BASIS`), never as a measurement. Browser-verified in SIM (139 findings = 57 auto + 82
+  person, 57/139 = 41%, ~48.8 hrs — banner and all four cards agree). The master-ring / risk-score
+  consolidation is a further follow-up. Not a RULE_PATHS change.
 
 ---
 
@@ -1659,6 +1692,25 @@ invariant the redaction tests pin).
   Verified via a standalone vite server from a throwaway `origin/main` worktree, because `preview_start` is
   pinned to the shared checkout — which is 47 commits behind and holds another session's uncommitted
   delivery-log work, so it was deliberately left untouched (see the "preview root" note in CLAUDE.md).
+- **The operator email is out of every Langfuse trace NAME** (#506). The trace name is the label shown in
+  Langfuse's trace/session LIST — a wider-access surface than the app — and it led with the signed-in
+  operator's email on every trace (`jeremy_acp@…onmicrosoft.com · doc-…`, `devamovate@gmail.com · doc-…`,
+  confirmed on live prod data). An identity leak distinct from the PHI/filename guards (an operator email is
+  not a patient name, but it has no business in a shared observability list). Fixed at every name site — file
+  trace, scan, assess, discover; segregation BY operator stays available through `user_id` and the `user:`
+  tag (both filterable), which deliberately keep it. Made the names legible while there: the per-file trace
+  is named for the redacted label, upgraded by `file_assessment_result` to `<label> · ✓/✗ <level>` once
+  assessed, and a `format:` tag was added so the native UI can filter by document type. 79 Langfuse tests
+  green; not a RULE_PATHS change.
+- **Cross-scan document history — "this document over time"** (#507). The session view groups a scan's
+  files, and Langfuse's own UI groups by session too, so neither can answer "how has THIS document trended
+  across scans?". Every file trace already carries a `file:<label>` tag, so that question is exactly the
+  traces with that tag (verified against the live v3 API before building). `lf.fetch_document_history(label)`
+  queries the tag and returns the document's trace across every scan, newest first, PHI-safe (label used
+  as-is, never re-hashed); `GET /scans/{sid}/trace/file/{file}/history` serves it; a `DocumentHistoryPanel`
+  renders a score trajectory (sparkline + "▲ +N since first scan") and a row per scan, each drilling into
+  that scan's trace via a callback (no import cycle with `TracePanel`). Backend + frontend tests; not a
+  RULE_PATHS change.
 
 ## Feature: Scan-run experience — live progress and transparency (Track A)
 
@@ -1667,6 +1719,20 @@ transparent view of a running scan. Six merged slices; the owning session design
 (alongside the Track B pipeline ADR below) and logged the #459 session view, so these scan-progress slices
 are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the program has one.
 
+- **Per-file wall-clock safety net so one stuck document can't stall a run** (#513, reliability — not a
+  Track-A slice). A live prod SharePoint assess sat at "Opening & assessing 0 of 22" for minutes. The
+  analyse path is already well-bounded (download 120s, .NET office CLI 180s, OCR capped at 30 images) and no
+  vision AI runs during assess — so this was cold-start + slow local CPU, not a hang. But "each sub-call is
+  bounded" is not "the file is bounded": any step that ever slips its own timeout, a retry loop, or a future
+  analyser added without one lets ONE document hold its worker forever, which with a small pool stalls the
+  whole scan at 0/N. `_analyse_and_persist_one` now wraps its work in a per-file cap (`ACP_SCAN_FILE_TIMEOUT_S`,
+  default 600s; 0 disables): past the cap the file is recorded as an error and the worker freed, so the scan
+  always drains and finalizes. Safe against the finalize trigger (the caller's `count_files_done` runs after
+  it returns; the error row counts toward the total, so a timed-out LAST file still finalizes; `save_file_result`
+  upserts, so a late orphan thread just replaces the row). Diagnosed live via the Langfuse traces — which also
+  surfaced that per-file scores land only at finalize, so mid-run "0 scored in Langfuse" is expected. Tests;
+  not a RULE_PATHS change. It is a safety net, explicitly NOT a speed-up — a cold, image-heavy local-CPU scan
+  is slow because the work is heavy; the speed levers are the in-tenant GPU AI lane and worker concurrency.
 - **Outcome-oriented progress line** (#452, slice 1). The live line was implementation-centric — "Reading
   files · 145/250 · Document2.pptx" — naming one worker's current file while the fan-out processes many at
   once, so the filename was never an honest signal. Replaced by a pure, tested view-model
@@ -1726,6 +1792,61 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   analyse (CPU + GPU) — bottleneck starred, so the next Track B step (splitting the bottleneck stage into its
   own bounded pool) is chosen from data. Companion to #467; `--json` / `--provider` flags, most-recent scan
   by default.
+
+## Feature: Certification report as an audit artifact
+
+Turned the per-scan certification PDF (`api/report.py`) from a scan summary into an audit artifact an
+auditor can trust and reproduce. The backlog (docs/TODO.md P4) had drifted stale — most items had
+already shipped and the file never said so — so this began by reconciling it against the code, then
+built the genuine remainder. Every figure is a real, recomputable count or a ratio shown with its
+basis; where a denominator is not tracked the number is omitted, not invented (ADR 0016).
+
+- **Reconciled the stale P4 backlog against `report.py`** (#497). Struck the items already shipped —
+  R1 evidence appendix, R2 decision block, R3 why-certifiable prose, R4 chain-of-custody digest, R6
+  richer inventory, R7 score explanation, R-A scope-of-assertion, R-B audit-log excerpt — each with
+  its rendering code named. Left R5/R9–R15/R-C–R-E open honestly rather than claim them done. The
+  section had described the report as "a scan summary, not yet an audit artifact"; that was no longer
+  true and the file was the last place saying so.
+- **POUR — pass rate by WCAG principle** (#496). Groups evaluated criteria under Perceivable /
+  Operable / Understandable / Robust (the SC's leading digit) and shows the pass rate per principle.
+  Deterministic and honest by construction: the four principles partition the evaluated set exactly
+  (a test pins `sum(evaluated) == the report's own evaluated count`), and it is a pass rate *among
+  evaluated checks* — explicitly not a conformance percentage. Not-evaluated and review-only criteria
+  are excluded; a principle with nothing evaluated shows "—", never a fabricated 0%.
+- **Provenance — method, pipeline, reproduce, supersedes** (#498, R11/R12/R-D/R-E). A "how this
+  result was produced" section carrying the scan's real counts (criteria evaluated, deterministic vs
+  AI-assisted split, approvals, fixes re-validated), the pipeline in order, a **reproduce** line
+  ("re-run against rubric hash `<h>` → same findings"), and a **supersedes** line naming the previous
+  scan of the estate — the last two rendered only when their datum exists.
+- **Human review & assurance — KPI + honest ratios** (#500, R9/R10). Review outcomes
+  (reviewed / approved / rejected) counted from the immutable `decision_log`, deduped per
+  (file, criterion) so they can never disagree with the sign-off shown elsewhere; a deterministic ÷
+  evaluated assurance ratio; and effort as fixes-cleared ÷ findings *with that basis named*. The
+  "cleared ÷ attempted" ratio is deliberately omitted — only re-scan-cleared fixes are recorded, so
+  the attempted denominator is not tracked and inventing it would be dishonest.
+- **Independent-verification steps + POUR bar chart** (#503, R13). Per document format actually in
+  the scan, the mainstream tool and checks that let an auditor confirm the result themselves (Word /
+  PowerPoint / Excel Accessibility Checker; Acrobat or NVDA/VoiceOver for PDF) — generic per format,
+  never a claim about a specific document. Plus the POUR rates drawn as bars beside the table.
+- **Auditor's guide to reading the report** (#504). New doc `docs/certification-report-for-auditors.md`
+  — leads with the one thing not to misread (a score of 100 = "no blocking findings among the criteria
+  evaluated", not "WCAG 2.1 AA conformant"), maps every section to what it does and does not let you
+  conclude, and closes with three ways to trust it without trusting us (recompute the digest,
+  reproduce the findings, verify a document by hand). Distinct from `conformance-report.md`, which is
+  ACP's own platform-UI VPAT.
+
+## Feature: Structural evidence renderers (Remediate preview)
+
+Document-structure findings showed a generic "structure not extracted" note; these surface the real
+extracted structure as review evidence, computed on demand via owner-scoped endpoints (the geometry
+pattern) so they need no rule-path edit, DB migration or diff-pipeline change. docx-only and honest —
+real extracted content, degrading to the generic note, never a fabricated tree.
+
+- **Table-header association evidence** (#493) — the final tier-1 renderer. Parses the docx
+  `<w:tbl>`/`<w:tr>`/`<w:tc>` and shows the real cell grid with the header row highlighted, stating
+  plainly whether that row is *marked* as a header (`<w:tblHeader>`) or only reads as one — the exact
+  association a screen reader needs, and what the 1.3.1 fix adds. Completes the set with reading-order
+  (#490) and heading-outline (#492).
 
 ## Open items (backlog candidates)
 
@@ -2195,3 +2316,23 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   SMB config). A self-contained health/readiness surface — distinct from the SMB source discovery/transport
   program (#388–#397/#419) still left to its owning session. **Sync marker deliberately NOT advanced** (same
   convention as the prior entries).
+- **2026-08-20 (certification report as an audit artifact)** — Two new Features. To **Certification report
+  as an audit artifact**: the P4 backlog reconcile (#497) and the genuine remainder — POUR by principle
+  (#496), provenance/reproduce/supersedes (#498), human-review KPI + honest ratios (#500),
+  independent-verification steps + POUR bar (#503), and the auditor's guide doc (#504). To **Structural
+  evidence renderers**: the table-header association renderer (#493), completing the tier-1 set with #490/#492.
+  All report.py / store.py / doc_structure.py / docs — no rule-path files, no other session's surfaces. One
+  overnight autonomous session, each PR merged green. (The frontend CI briefly went red on a date time-bomb in
+  `wizardScopeCoverage.test.jsx` at the Aug 19→20 rollover; another session's #505 fixed it first, so this
+  session's duplicate fix was dropped.) **Sync marker deliberately NOT advanced** (same convention).
+- **2026-08-20 (Langfuse polish + assess redesign + scan safety net)** — Six PRs merged today. To
+  **Observability — AI tracing and cost (Langfuse)**: #506 (operator email out of every trace NAME + legible
+  verdict names + `format:` tag) and #507 (cross-scan "this document over time" history). To **Estate
+  coverage (#4597)**: #471 (redesign Phase 0 — explicit units + one source of truth for the estate numbers)
+  and #488 (Phase 2 — decision-first KPI cards + drop the duplicate pass-rate). To **Remediate review queue
+  (#4598)**: #469 (Phase 1 — the Auto-remediate card folded into the status hero, one CTA). To **Scan-run
+  experience (Track A)**: #513 (per-file wall-clock safety net so one stuck document can't stall a run —
+  diagnosed live from the Langfuse traces during a real prod SharePoint assess that was cold-start slow, not
+  hung). Test hygiene #505 (the wizard date time-bomb) was already recorded by the entry above and is not
+  re-logged as a Task. **Sync marker still NOT advanced** (`fad0dfbe`, same convention as the prior entries):
+  the large delta since it remains other sessions' undocumented feature work, left for them to characterise.
