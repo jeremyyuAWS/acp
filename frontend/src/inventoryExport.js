@@ -106,8 +106,6 @@ export const FORBIDDEN = Object.freeze([
   'drive_write_url', 'blob_url', 'severity', 'wcag', 'rule_id',
 ])
 
-const COLUMN_BY_KEY = new Map(COLUMNS.map((c) => [c.key, c]))
-
 /** Never dropped, however empty: a table with no identity column is not a table. */
 const ALWAYS_KEEP = new Set(['file'])
 
@@ -163,8 +161,8 @@ const RISKY_PREFIX = /^[=+\-@\t\r]/
 const neutralise = (s) => (RISKY_PREFIX.test(s) ? `'${s}` : s)
 
 /** One value as it appears in a CSV field, before quoting. */
-export function csvValue(v, { missing = MISSING } = {}) {
-  if (isMissing(v)) return missing
+export function csvValue(v) {
+  if (isMissing(v)) return MISSING
   if (typeof v === 'number') return String(v)
   if (typeof v === 'boolean') return v ? 'true' : 'false'
   return neutralise(String(v))
@@ -184,10 +182,10 @@ const quote = (s) => (NEEDS_QUOTE.test(s) ? `"${s.replace(/"/g, '""')}"` : s)
  * CRLF line endings, per RFC 4180 and because Excel on Windows is the destination that punishes
  * bare LF.
  */
-export function toCsv(input, { takenAt = null, scanId = null, columns } = {}) {
+export function toCsv(input, { takenAt = null, scanId = null } = {}) {
   const rows = normalizeRows(input) || []
   const decorated = rows.map((r) => decorate(r, { takenAt, scanId }))
-  const sel = selectColumns(decorated, columns ? { columns } : undefined)
+  const sel = selectColumns(decorated)
   const lines = [sel.columns.map((c) => quote(c.header)).join(',')]
   decorated.forEach((r) => {
     lines.push(sel.columns.map((c) => quote(csvValue(r[c.key]))).join(','))
@@ -210,10 +208,10 @@ function decorate(row, { takenAt, scanId }) {
 /** The JSON form: the same rows, plus the manifest that says what this file is and is not.
  *  `null` here means exactly what `MISSING` means in the CSV, natively. */
 export function toJson(input, { takenAt = null, takenAtSource = null, scanId = null,
-  exportedAt = null, columns } = {}) {
+  exportedAt = null } = {}) {
   const rows = normalizeRows(input) || []
   const decorated = rows.map((r) => decorate(r, { takenAt, scanId }))
-  const sel = selectColumns(decorated, columns ? { columns } : undefined)
+  const sel = selectColumns(decorated)
   return {
     artifact: 'acp-discovery-inventory',
     version: 1,
@@ -243,17 +241,17 @@ export function toJson(input, { takenAt = null, takenAtSource = null, scanId = n
   }
 }
 
-// A filename an operator can still identify a year later: which run, and as of when. `takenAt`
-// null becomes `time-not-recorded` rather than the export time — the filename must not assert a
-// snapshot instant the backend never persisted.
-// Dots are dropped along with separators, not merely the slashes: a scan id is hex or a uuid, so
-// nothing legitimate is lost, and `../..` sanitised to `..-..` is a filename that still reads as
-// a traversal attempt to whoever receives the file.
+// Dots are dropped along with the separators, not merely the slashes: a scan id is hex or a uuid,
+// so nothing legitimate is lost, and `../..` sanitised to `..-..` is a filename that still reads
+// as a traversal attempt to whoever receives the file.
 const SAFE = (s) => String(s ?? '').replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
 const compact = (iso) => {
   const t = Date.parse(iso)
   return Number.isFinite(t) ? new Date(t).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z') : null
 }
+/** A filename an operator can still identify a year later: which run, and as of when. A null
+ *  `takenAt` becomes `time-not-recorded` rather than the export time — the filename must not
+ *  assert a snapshot instant the backend never persisted. */
 export function exportFilename({ scanId = null, takenAt = null, ext = 'csv' } = {}) {
   const when = takenAt ? compact(takenAt) : null
   return ['acp-inventory', SAFE(scanId) || 'unknown-scan', when || 'time-not-recorded']
@@ -267,31 +265,27 @@ export function csvBlob(input, opts = {}) {
   // The BOM is what makes Excel read UTF-8 rather than the local ANSI codepage; without it a
   // customer's non-ASCII filenames arrive mojibaked in the tool most of them will open this in.
   return { blob: new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }),
-    filename: exportFilename({ ...opts, ext: 'csv' }), omitted, columns, rowCount, text: csv }
+    filename: exportFilename({ ...opts, ext: 'csv' }), omitted, columns, rowCount }
 }
 
 export function jsonBlob(input, opts = {}) {
-  const doc = toJson(input, opts)
-  const text = JSON.stringify(doc, null, 2)
-  return { blob: new Blob([text], { type: 'application/json;charset=utf-8' }),
-    filename: exportFilename({ ...opts, ext: 'json' }), omitted: doc.omitted_columns,
-    columns: doc.columns, rowCount: doc.row_count, text, doc }
+  const manifest = toJson(input, opts)
+  return { blob: new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json;charset=utf-8' }),
+    filename: exportFilename({ ...opts, ext: 'json' }), omitted: manifest.omitted_columns,
+    columns: manifest.columns, rowCount: manifest.row_count }
 }
 
 /** Hand a blob to the browser as a download. Split out so the exporters above stay pure and the
  *  component can inject a stub in tests. */
-export function saveBlob(blob, filename, { doc = typeof document === 'undefined' ? null : document } = {}) {
-  if (!doc) return false
+export function saveBlob(blob, filename, { dom = typeof document === 'undefined' ? null : document } = {}) {
+  if (!dom) return false
   const url = URL.createObjectURL(blob)
-  const a = doc.createElement('a')
+  const a = dom.createElement('a')
   a.href = url
   a.download = filename
-  doc.body.appendChild(a)
+  dom.body.appendChild(a)
   a.click()
   a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
   return true
 }
-
-/** Column metadata by key, for a UI that wants to explain a column. */
-export const columnNote = (key) => COLUMN_BY_KEY.get(key)?.note ?? null
