@@ -20,6 +20,23 @@ def test_zone_local_vs_cloud():
     assert providers.zone_for_url("https://acp-ollama.eastus2.azurecontainerapps.io") == "cloud"
 
 
+def test_provenance_zone_is_derived_from_zone_for_url_single_source(monkeypatch):
+    """ai.provenance() must not reimplement the zone test — it derives the governance zone from
+    providers.zone_for_url, so /config (provenance) and the per-call trace can never disagree about
+    whether a document left the network. Pin them together across a local and a cloud endpoint, so a
+    future edit to one implementation alone fails here rather than shipping a divergent PHI signal."""
+    import ai
+    for url in ("http://10.0.0.5:11434", "https://acp-ollama.eastus2.azurecontainerapps.io",
+                "http://analysis.corp.internal:11434", "https://api.openai.com"):
+        monkeypatch.setattr(ai, "OLLAMA_BASE_URL", url)
+        assert ai.provenance()["zone"] == providers.zone_for_url(url)
+    # …and the two named outcomes explicitly, so the guard fails loudly if the shared helper changes.
+    monkeypatch.setattr(ai, "OLLAMA_BASE_URL", "http://localhost:11434")
+    assert ai.provenance()["zone"] == "local"
+    monkeypatch.setattr(ai, "OLLAMA_BASE_URL", "https://api.openai.com")
+    assert ai.provenance()["zone"] == "cloud"
+
+
 def test_ollama_adapter_posts_images_and_normalizes(monkeypatch):
     seen = {}
 

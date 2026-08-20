@@ -31,8 +31,9 @@ CLOUD_PROVIDERS = ("azure_openai", "openai", "anthropic", "gemini", "bedrock")
 
 def zone_for_url(base_url: str) -> str:
     """'local' when the endpoint is on your own infrastructure (localhost / private ranges /
-    internal DNS) — no document leaves your network — else 'cloud'. Kept identical to
-    `ai.provenance()` so the governance zone stays truthful no matter which module reports it."""
+    internal DNS) — no document leaves your network — else 'cloud'. The SINGLE source of truth for
+    the governance zone: `ai.provenance()` calls this rather than reimplementing the test, so
+    `/config` and the per-call trace can never disagree about whether a document left the network."""
     host = (urlparse(base_url or "").hostname or "").lower()
     local = (
         host in ("localhost", "127.0.0.1", "::1", "")
