@@ -695,6 +695,28 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     } finally { setReportBusy(false) }
   }
 
+  // R20 · CSV companion — same data as the PDF (shared buildRemediationModel), machine-readable.
+  const downloadRemediationCsvReport = async () => {
+    setReportBusy(true); setReportErr(null)
+    try {
+      const sid = run?.id
+      const [diffs, fixes] = await Promise.all([
+        getScanRemediationDiffs(sid).catch(() => []),
+        getAppliedFixes(sid).catch(() => []),
+      ])
+      const diffsByFile = {}
+      ;(diffs || []).forEach((d) => { (diffsByFile[d.file] = diffsByFile[d.file] || []).push(d) })
+      const { downloadRemediationCsv } = await import('./remediationCsv.js')
+      downloadRemediationCsv({
+        files, diffsByFile, appliedFixes: fixes || [], reviewByFile,
+        scanId: sid, level: run?.target || 'AA', org: run?.org || '',
+        generatedAt: new Date().toISOString(), cappedAt: APPLIED_FIX_CAP,
+      })
+    } catch (e) {
+      setReportErr(`CSV not generated: ${e?.message || e}`)
+    } finally { setReportBusy(false) }
+  }
+
   // A review decision the server refused. Loud, and sticky until the next attempt.
   const [actError, setActError] = useState(null)
   const [reviewStats, setReviewStats] = useState(null)
@@ -1007,6 +1029,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           <button className="exportbtn" onClick={downloadRemediationReport} disabled={reportBusy}
                   title="A signed record of every change applied, with a checkbox per item and how to verify it in Word / PowerPoint / Excel / Acrobat on Mac and Windows">
             {reportBusy ? 'Generating…' : '⤓ Remediation report (PDF)'}
+          </button>
+          <button className="exportbtn" onClick={downloadRemediationCsvReport} disabled={reportBusy}
+                  title="The same changes as a machine-readable CSV — one row per document × criterion, for pulling into your own tracker">
+            {reportBusy ? 'Generating…' : '⤓ Changes (CSV)'}
           </button>
           {reportErr && <span style={{ fontSize: 12, color: '#A32D2D' }} role="alert">⚠ {reportErr}</span>}
           <div className="triagesum">
