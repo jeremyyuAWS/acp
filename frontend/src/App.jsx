@@ -6,7 +6,7 @@ import ScopeFunnel from './ScopeFunnel.jsx'
 import { armNotifyOnComplete, notifyScanComplete, notificationsSupported, notifyPermission } from './scanNotify.js'
 import { refreshDriveToken } from './driveAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, getScanLocations, SESSION_EXPIRED } from './api'
+import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, getScanLocations, SESSION_EXPIRED } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -28,13 +28,11 @@ import Overview from './Overview.jsx'
 import AssessRunner from './AssessRunner.jsx'
 import AssessScope from './AssessScope.jsx'
 import ScopeRules from './ScopeRules.jsx'
-import CoverageScorecard from './CoverageScorecard.jsx'
-import ConfidenceDashboard from './ConfidenceDashboard.jsx'
-import AccessibilityStatus from './AccessibilityStatus.jsx'
-import RiskScore from './RiskScore.jsx'
+import AssessSummary from './AssessSummary.jsx'
 import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
 import Dashboard from './Dashboard.jsx'
+import { CAPABILITY_FALLBACK, ASSESSMENT_FALLBACK } from './capability.js'
 import Remediate from './Remediate.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
 import ScanReviewModal from './ScanReviewModal.jsx'
@@ -189,6 +187,27 @@ export default function App() {
   const [scan, setScan] = useState(null)
   const [justAssessed, setJustAssessed] = useState(null) // scan id assessed this session (optimistic)
   const [assessPhase, setAssessPhase] = useState('idle') // AssessRunner phase: idle | running | done
+
+  // The two capability tables `AssessSummary` counts over. Held HERE rather than fetched inside
+  // the summary so the component stays pure — its own test forbids it deriving anything, because a
+  // component that recomputes is how a fifth denominator arrives.
+  //
+  // The fallbacks are the synchronous default, exactly as AssessRunner uses them: they mirror the
+  // Python tables verbatim and are CI-locked to them, so the numbers are right before the fetch
+  // resolves and right after. A failed fetch leaves the fallback in place rather than emptying the
+  // map — an empty capability map would read every criterion as "no method", which is the same
+  // false verdict as a zero.
+  const [cap, setCap] = useState(CAPABILITY_FALLBACK)
+  const [assessment, setAssessment] = useState(ASSESSMENT_FALLBACK)
+  useEffect(() => {
+    let on = true
+    getCapability().then((r) => {
+      if (!on) return
+      if (r?.capability) setCap(r.capability)
+      if (r?.assessment) setAssessment(r.assessment)
+    }).catch(() => { /* the fallbacks stand */ })
+    return () => { on = false }
+  }, [])
   const [scanLoading, setScanLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
@@ -737,7 +756,12 @@ export default function App() {
     acc[action] = (acc[action] || 0) + 1; acc.total += 1
     return acc
   }, { auto: 0, assisted: 0, review: 0, archive: 0, keep: 0, manual: 0, total: 0 })
-  const placeholder = loaded ? <EmptyState onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onFileTypeChange={setFileTypeConfig} /> : <Loading />
+  // OV-02: one action, no numbers. EmptyState no longer configures anything — the criteria
+  // and file-type pickers it used to render belong after an inventory exists, in Assess,
+  // where the eligible-file count can be shown against them.
+  const placeholder = loaded
+    ? <EmptyState onGoToSource={() => { setView('integrations'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
+    : <Loading />
   // The scan panel renders inside whichever view is open, so scope its narration to that view
   // when the view is a pipeline step that owns scan phases. The view ids ARE the step names in
   // PHASE_STEP ('discover', 'assess'); anything else is a non-step view and narrates the job.
@@ -1043,8 +1067,25 @@ export default function App() {
                 above still pretended to be working. assessPhase tracks AssessRunner's actual
                 idle/running/done state (via onPhase), so results now appear exactly when the
                 animation finishes — same instant a real assessment would land. */}
-            {assessed && assessPhase === 'done' && <><AccessibilityStatus scanId={run.id} onAction={(state) => { setView(state === 'ready_for_certification' || state === 'certified' ? 'publish' : 'remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><ConfidenceDashboard scanId={run.id} /><CoverageScorecard files={files} /><RuleBreakdown scanId={run.id} files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
-            {assessed && assessPhase === 'done' && <RiskScore run={run} files={files} />}
+            {/* ONE summary, where four panels used to lead with four counts of "problems" over
+                four unstated denominators. `AccessibilityStatus` (13 needing remediation),
+                `ConfidenceDashboard` (189 unresolved — which is 176 + 13 restated),
+                `CoverageScorecard` (5/20, a capability fact that does not change when you run
+                anything) and `RiskScore` (the score) came out. The components still exist:
+                AccessibilityStatus is the per-file hero inside FileDrawer, where its denominator
+                is one document and therefore unambiguous.
+
+                RiskScore left with the score it renders. `100 − Σ severity_weight`, floored at 0,
+                averaged across documents: unresolved review items and criteria with no method
+                both weigh ZERO, so a document with forty findings awaiting a person scores 100
+                and reads "compliant". That is the score being structurally unable to tell
+                "checked and passed" from "not checked" — the one distinction this product
+                exists to make. It returns when a written, versioned weighting exists that cannot
+                report "good" while a critical finding is unresolved.
+
+                `RuleBreakdown` and `Dashboard` stay: they are the by-criterion detail beneath the
+                summary, not a second scoreboard above it. */}
+            {assessed && assessPhase === 'done' && <><AssessSummary files={files} cap={cap} assessment={assessment} onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><RuleBreakdown scanId={run.id} files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
           </>
         ) : placeholder)}
 

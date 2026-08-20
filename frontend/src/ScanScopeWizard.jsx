@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, Fragment } from 'react'
 import { getSettings, updateSettings, getScanLocations, setScanLocations,
-         listFolders, listSpFolders } from './api.js'
+         listFolders, listSpFolders, listDispositionPolicies } from './api.js'
 import { scopeFooterPart, blockedReason } from './wizardScopeReady.js'
+import { METADATA_ONLY_TITLE, METADATA_ONLY_BODY, lifecycleRuleSummary } from './discoveryPromise.js'
 import FolderPicker from './FolderPicker.jsx'
 import { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } from './scopePresets.js'
 import { TRACKED_17, RULE_DETAILS } from './ruleDetails.js'
@@ -318,6 +319,26 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
     return () => { alive = false }
   }, [])
 
+  // The lifecycle rules that will run DURING this discovery, loaded so the review step can name
+  // how many. `_evaluate_discover_lifecycle_rules` tags matched files as archive/delete candidates
+  // as part of the run, and Assess then excludes those by default — so the rule set in force is
+  // part of what the operator is authorising, not a separate Settings concern.
+  //
+  // Stays `null` on failure, exactly as it starts. A load error must not render "None enabled":
+  // that sentence claims no file will be tagged, and a failed read is not evidence for it (the
+  // #517 `by_age` distinction — a missing answer is not a measured zero).
+  const [policies, setPolicies] = useState(null)
+  useEffect(() => {
+    // Only where the review step renders. The endpoint is admin-only, so mounting the wizard as a
+    // settings panel would spend a guaranteed 403 on an answer nothing on that screen shows.
+    if (!showStartButton) return undefined
+    let alive = true
+    Promise.resolve(listDispositionPolicies())
+      .then((rows) => { if (alive && Array.isArray(rows)) setPolicies(rows) })
+      .catch(() => { /* the row is omitted; nothing here blocks a scan */ })
+    return () => { alive = false }
+  }, [showStartButton])
+
   // What this EXACT scope covered last time, matched on the whole frozen boundary — locations,
   // carve-outs and criteria together, in the shape scanner records them. Recomputed on every
   // render rather than memoised: `scans` is one user's run list and the match is a few string
@@ -330,6 +351,9 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
     { folders, excluded }, locKey)
 
   const profile = profileFor(restrict, sel)
+
+  // `null` until the rules are known — the review step renders no row rather than a wrong one.
+  const rules = lifecycleRuleSummary(policies)
 
   // The selection the summary and format cards reason about: the real `sel` under restrict, or the
   // full grid when "Everything supported" is chosen (so all four cards read as on).
@@ -750,7 +774,27 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
           no later step to defer it to. */}
       {showStartButton && (
         <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '12px 14px' }}>
-          <div style={{ fontSize: 13, fontWeight: 650, marginBottom: 8 }}>Ready to scan</div>
+          {/* "discover", not "scan". The button below has said "Start discovery" since #532; the
+              heading above it still said scan, which is the word this product uses for the
+              expensive, content-reading thing. Two names for one action on one screen. */}
+          <div style={{ fontSize: 13, fontWeight: 650, marginBottom: 8 }}>Ready to discover</div>
+
+          {/* THE PROMISE, stated where it is being made. Under ADR 0020 discovery opens no file —
+              the single strongest claim ACP makes about a customer's drive, and until now visible
+              nowhere at the moment somebody authorises a run against it. */}
+          <div className="discover-promise"
+               style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 10,
+                        padding: '8px 10px', borderRadius: 8, background: 'var(--bg)',
+                        border: '1px solid var(--line)' }}>
+            <span aria-hidden="true" style={{ fontSize: 13, lineHeight: 1.3 }}>🔒</span>
+            <div>
+              <div style={{ fontSize: 12.5, fontWeight: 650 }}>{METADATA_ONLY_TITLE}</div>
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 2, lineHeight: 1.5 }}>
+                {METADATA_ONLY_BODY}
+              </div>
+            </div>
+          </div>
+
           <dl style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 14px',
                        margin: 0, fontSize: 12.5 }}>
             {locKey && (
@@ -783,6 +827,22 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                 Formats and WCAG criteria are chosen in Assess, from this inventory.
               </div>
             </dd>
+            {/* DS-07: the rule set is persisted with the run so results can be traced to the exact
+                rules used. Naming the count HERE is what makes that traceable from the operator's
+                side — an inventory looks identical whether two rules ran or none, so a tag found
+                later is only attributable if the count was visible when the run was authorised.
+                Omitted entirely while unknown; see `lifecycleRuleSummary`. */}
+            {rules && (
+              <>
+                <dt className="muted">Lifecycle rules</dt>
+                <dd style={{ margin: 0 }}>
+                  {rules.line}
+                  <div className="muted" style={{ fontSize: 11.5, marginTop: 2, lineHeight: 1.45 }}>
+                    {rules.detail}
+                  </div>
+                </dd>
+              </>
+            )}
           </dl>
           {/* Below the contract, not inside it: this is evidence ABOUT the scope, not part of it.
               `aria-live` because it changes as the scope does, and a count whose boundary silently

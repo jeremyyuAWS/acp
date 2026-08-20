@@ -1,23 +1,61 @@
-import ScanSetup from './ScanSetup.jsx'
-
-// The screen before anything has been scanned — and, until now, the one place the product
-// explained itself instead of asking anything.
+// The screen before anything has been discovered — one prompt, and no numbers.
 //
-// It held three boxes describing Discover, Assess and Remediate. The nav already names those
-// three stages, so the boxes restated the tabs directly above them while the decision that
-// actually shapes every one of those stages — what to assess — was made two screens away, at
-// the top of Discover.
+// It used to render ScanSetup: the format and criterion picker, in full, as the first thing an
+// operator saw. That was a deliberate improvement on what came before it (three boxes explaining
+// the tabs), and the Discover/Assess redesign makes it wrong for two separate reasons.
 //
-// That is backwards for the first thing an operator sees. "Configure once, the pipeline
-// inherits it" is already true architecturally: `scan_scope` is gated once inside
-// `_rule_outcome`, so assess, remediate and publish all inherit it. It just was not true of the
-// first screen, which asked for nothing and then scanned everything.
-export default function EmptyState({ onScan, busy, hasDriveToken, hasSPToken = false, onFileTypeChange }) {
+// IT ASKS BEFORE THERE IS ANYTHING TO ASK ABOUT. The criteria that matter are the ones that apply
+// to documents you actually hold, and nobody knows what those are until an inventory exists. The
+// PRD puts the order back: source -> discover -> then choose what to assess, against the real
+// inventory, with a live eligible count beside it (AssessScope + ScopeImpact already do this).
+//
+// AND IT WAS A THIRD WRITER OF `scan_scope`. AssessScope's header already records two controls
+// "that did not know about each other"; the wizard's copy went in #532, and this was the last one.
+// One store, one writer, on the screen that has the information to fill it in.
+//
+// What is left is OV-02: a single "Go to Source" action and NO zero-valued cards. The empty
+// dashboard is the specific thing being avoided — a grid of 0s reads as a completed run that
+// found nothing, which is the same false-verdict family as #479/#483/#491/#502/#514. The three
+// stage lines below are orientation, deliberately without counts.
+export default function EmptyState({ onGoToSource }) {
   return (
-    <div className="empty">
-      <ScanSetup onScan={onScan} busy={busy}
-                 hasDriveToken={hasDriveToken} hasSPToken={hasSPToken}
-                 onFileTypeChange={onFileTypeChange} />
+    <div className="panel emptystate">
+      <svg className="emptystate-icon" width="44" height="44" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"
+           aria-hidden="true">
+        <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.5h7A1.5 1.5 0 0 1 19 10v7a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 17z" />
+        <path d="M8.5 13.5h7" />
+      </svg>
+
+      <h2 className="emptystate-h">No assessment has run yet</h2>
+      <p className="muted emptystate-p">
+        This report fills in once an assessment completes. Connect a source and choose the folders
+        ACP should inventory to get started.
+      </p>
+
+      <div className="emptystate-cta">
+        <button type="button" onClick={() => onGoToSource?.()}>Go to Source</button>
+      </div>
+
+      {/* Orientation, not a scoreboard: what the three stages DO, with no counts attached. */}
+      <div className="emptystate-steps">
+        <div>
+          <div className="emptystate-stepn">1 · Source</div>
+          <div className="muted emptystate-stepd">Connect a drive and pick the folders in scope.</div>
+        </div>
+        <div>
+          <div className="emptystate-stepn">2 · Discover</div>
+          <div className="muted emptystate-stepd">Inventory every file from metadata. Nothing is opened.</div>
+        </div>
+        <div>
+          <div className="emptystate-stepn">3 · Assess</div>
+          <div className="muted emptystate-stepd">Choose document types and WCAG criteria, then run.</div>
+        </div>
+      </div>
+
+      <p className="muted emptystate-foot">
+        Discovery results appear on the Discover tab — they never populate this report.
+      </p>
     </div>
   )
 }

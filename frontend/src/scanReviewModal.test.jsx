@@ -28,6 +28,8 @@ vi.mock('./api.js', () => ({
   setScanLocations: vi.fn(async () => ({ ok: true })),
   listFolders: vi.fn(async () => ({ folders: [] })),
   listSpFolders: vi.fn(async () => ({ drive_id: 'd', folders: [] })),
+  // The review step names how many lifecycle rules will run during the discovery.
+  listDispositionPolicies: vi.fn(async () => []),
 }))
 
 const { default: ScanReviewModal, scanSourceLabel } = await import('./ScanReviewModal.jsx')
