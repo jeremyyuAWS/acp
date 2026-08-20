@@ -6,6 +6,16 @@ running in **West US 2** while `acp-app` runs in **East US 2**.
 **Status:** plan (no infra created). Verified against the live Azure subscription
 `AZLABSV2.0-Sandbox(POC)` (`8fab0f8f-…`) on 2026-08-20.
 
+## Decision (2026-08-20): **Path A**
+
+The co-location approach is **Path A** — GPU in **East US** on **external ingress** — which fixes the
+cross-country egress and latency while `zone` remains `cloud`. **Path B is not pursued.** Per
+**ADR 0039**, the temporary pilot explicitly accepts `zone: cloud` / single-region risk, so Path B's
+app relocation to earn a `zone: local` badge is unwarranted for the pilot; a `zone: local` design
+belongs to the customer-production contract, against the customer's SLA. Path A is model-agnostic — the
+same pattern deploys the T4 today and the A100 later (pending Deva + a production subscription), changing
+only the image and the workload-profile type.
+
 ---
 
 ## Key finding from the pre-flight checks (this corrects the first draft)
