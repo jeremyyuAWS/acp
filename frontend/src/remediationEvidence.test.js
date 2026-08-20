@@ -3,6 +3,7 @@ import {
   findingSc, natureOfSc, natureOf, isContrastFinding,
   parseHexes, contrastRatio, contrastEvidence, changeSentence, passesAA,
   isAltTextFinding, altEvidence, isMetadataFinding, metadataEvidence,
+  isReadingOrderFinding, readingOrderEvidence,
 } from './remediationEvidence.js'
 
 describe('remediationEvidence — success-criterion NATURE (fixes the copy bug)', () => {
@@ -123,5 +124,14 @@ describe('remediationEvidence — adaptive alt-text and metadata evidence (real 
     expect(metadataEvidence({ rule_id: '3.1.2', after: 'fr' }).label).toBe('Language of parts')
     expect(metadataEvidence({ rule_id: '1.4.3', after: '#000000' })).toBeNull() // not metadata
     expect(metadataEvidence({ rule_id: '2.4.2' })).toBeNull()                     // nothing proposed
+  })
+  it('readingOrderEvidence returns the ordered floating items from the finding proposals', () => {
+    expect(isReadingOrderFinding({ rule_id: '1.3.2' })).toBe(true)
+    expect(isReadingOrderFinding({ rule_id: '2.4.6' })).toBe(false)
+    const f = { rule_id: '1.3.2', proposals: [{ seq: 2, text: 'Sidebar note' }, { seq: 1, text: 'Pull quote' }, { seq: 3, text: '' }] }
+    expect(readingOrderEvidence(f)).toEqual({ items: ['Pull quote', 'Sidebar note'] })  // sorted by seq; blanks dropped
+    expect(readingOrderEvidence({ rule_id: '1.3.2', proposals: [] })).toBeNull()
+    expect(readingOrderEvidence({ rule_id: '1.3.2' })).toBeNull()                         // no proposals → honest fallback
+    expect(readingOrderEvidence({ rule_id: '1.1.1', proposals: [{ seq: 1, text: 'x' }] })).toBeNull() // not 1.3.2
   })
 })

@@ -316,4 +316,14 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(container.textContent).toContain('Document title — after')
     expect(container.textContent).toContain('Q3 Report')
   })
+
+  it('shows a numbered reading-order sequence for a 1.3.2 finding', async () => {
+    await render({ queue: [{ id: 1, file: 'a.docx', title: 'DOCX · Meaningful sequence', rule_id: '1.3.2', hasProposal: true, after: 'x',
+      proposals: [{ seq: 1, text: 'Pull quote at the top' }, { seq: 2, text: 'Sidebar callout' }] }], decisions: {} })
+    const ol = container.querySelector('ol')
+    expect(ol).toBeTruthy()                                     // a real ordered list, not the generic note
+    expect(ol.querySelectorAll('li').length).toBe(2)
+    expect(ol.textContent).toContain('Pull quote at the top')
+    expect(ol.textContent).toContain('Sidebar callout')
+  })
 })
