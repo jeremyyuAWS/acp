@@ -61,7 +61,7 @@ def _enqueue_analysis(scan_id: str, source: str, items: list[dict], *, ai: bool,
                 "incremental": incremental,
                 "items": [{"file": it["file"], "drive_file_id": it.get("drive_file_id"),
                            "mime": it.get("mime"), "path": it.get("path"),
-                           "checksum": it.get("checksum"),
+                           "checksum": it.get("checksum"), "drive_id": it.get("drive_id"),
                            "shadow_candidate": name_counts[_logical_name(it["file"])] > 1,
                            "exclude_remediated": exclude_remediated} for it in chunk],
             }, scan_id=scan_id)
@@ -70,7 +70,7 @@ def _enqueue_analysis(scan_id: str, source: str, items: list[dict], *, ai: bool,
             core.store.enqueue_job("scan_file", {
                 "scan_id": scan_id, "source": source, "file": it["file"],
                 "drive_file_id": it.get("drive_file_id"), "mime": it.get("mime"), "path": it.get("path"),
-                "checksum": it.get("checksum"),
+                "checksum": it.get("checksum"), "drive_id": it.get("drive_id"),
                 "shadow_candidate": name_counts[_logical_name(it["file"])] > 1,
                 "exclude_remediated": exclude_remediated,
                 "ai": ai, "pii": pii, "user": user, "incremental": incremental}, scan_id=scan_id)
@@ -1034,6 +1034,10 @@ def _scan_discover(payload: dict, job: dict) -> None:
     # inventory row's `mime` column, along with the source metadata each listing now surfaces.
     norm = [{"file": it["name"], "drive_file_id": it.get("id"), "mime": it.get("mime"),
              "path": it.get("path"), "checksum": it.get("checksum"),
+             # THE DRIVE THE ITEM WAS LISTED FROM. _sp_list carries this per file precisely
+             # because Graph item ids are unique only within a drive; dropping it here is what
+             # sent every SharePoint file down _download's Google-Drive branch.
+             "drive_id": it.get("driveId"),
              "source_modified": it.get("source_modified"),
              "source_mime": it.get("source_mime"), "created_at": it.get("created_at"),
              "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
@@ -1054,7 +1058,11 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 "doc_class": _cls.classify_from_metadata(it["file"], it.get("source_mime"))["doc_class"],
                 "checksum": it.get("checksum"), "path": it.get("path"),
                 "created_at": it.get("created_at"), "source_modified": it.get("source_modified"),
-                "owner": it.get("owner"), "parent_folder": it.get("parent_folder")}
+                "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
+                # Carried into the row because Assess rebuilds its download work from the
+                # INVENTORY, not from `norm` — so anything the download needs has to survive
+                # the round trip through the table.
+                "drive_id": it.get("drive_id")}
                for it in norm] + inventory
         _dedupe_inventory_files(inv)
         if inv:
@@ -1164,7 +1172,8 @@ def _scan_assess(payload: dict, job: dict) -> None:
         src_mime = r.get("mime")
         items.append({"file": r["file"], "drive_file_id": r.get("drive_file_id"),
                       "mime": src_mime if src_mime in _EXPORT_MAP else None,
-                      "path": r.get("path"), "checksum": r.get("checksum")})
+                      "path": r.get("path"), "checksum": r.get("checksum"),
+                      "drive_id": r.get("drive_id")})
     _enqueue_analysis(scan_id, source, items, ai=ai, pii=pii, user=user,
                       incremental=incremental, exclude_remediated=exclude_rem,
                       force_batch=bool(params.get("batch")))
@@ -1177,6 +1186,8 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
     (ADR 0008). A
     fetch/analyse failure is recorded as an 'error' file so the scan still finalizes."""
     from scanner import _download, analyse_and_assess
+    import time as _time
+    import stage_timing as _st
     name = item["file"]
     checksum = item.get("checksum")
     drive_file_id = item.get("drive_file_id")
@@ -1193,6 +1204,7 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
         dedup = core.store.find_prior_analysis(user, drive_file_id, checksum, rubric_hash)
     tmp = _Path(_tempfile.mkdtemp(prefix="acp-scanone-"))
     fdict = pinfo = None
+    _timings = _st.ScanTimings()          # ADR 0037 Step 0 — measure download vs analyse (side-channel)
     try:
         if dedup:
             dedup_of = dedup.pop("dedup_of", None)
@@ -1257,12 +1269,26 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                     it["mime"] = item["mime"]
                 if item.get("path"):                       # local source — read from disk
                     it["path"] = item["path"]
+                # SHAREPOINT GOES THROUGH GRAPH, NOT THE DRIVE CLIENT. Derived from the scan's own
+                # `source` rather than carried as a flag: a stored marker can drift out of step
+                # with the scan it belongs to, and this cannot. Without it `_download` fell through
+                # to files().get_media() with a Graph item id and every SharePoint file recorded
+                # status='error' — surfacing as "could not analyse — file unreadable" for files
+                # that were never fetched at all.
+                if source == "sharepoint" and not item.get("path"):
+                    it["sp"] = True
+                    # May be absent for a OneDrive listing, which genuinely has no driveId;
+                    # _sp_download reads that as /me/drive, which is correct there and ONLY there.
+                    if item.get("drive_id"):
+                        it["driveId"] = item["drive_id"]
+                _dl_t0 = _time.monotonic()
                 _download(it, tmp, svc, sp_token=toks.get("sp"))
                 # ADR 0020 §1 — cache the source bytes for a later Assess phase (best-effort,
                 # never blocks the scan). Dedup'd files skip this branch entirely: their bytes
                 # live under the PRIOR scan's key, which the stage-3 reader will fall back to.
                 from scanner import cache_source_bytes
                 cache_source_bytes(tmp, name, scan_id, user)
+                _timings.add("download", _time.monotonic() - _dl_t0)   # ADR 0037 Step 0
                 # Stop BEFORE the expensive analysis. This file shares its logical name with
                 # another discovered file and carries ACP's in-document stamp, so it is our own
                 # remediated copy shadowing its source. Scanning it ran the Office/PDF engine,
@@ -1288,7 +1314,9 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                     # scan_id threads the per-rule progress line through. This is the PRODUCTION
                     # fan-out path (ADR 0007) — run_scan's in-process pool is the local one — so
                     # without it the line works in development and is silent where users are.
+                    _an_t0 = _time.monotonic()
                     fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii, scan_id=scan_id)
+                    _timings.add("analyse", _time.monotonic() - _an_t0)   # ADR 0037 Step 0
             except Exception as e:
                 # A credential failure is true of the whole scan, so it is named once, acted on
                 # once, and every remaining file skips its doomed download (drive_auth_failure).
@@ -1326,6 +1354,15 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
         if pinfo:
             fdict["pii"] = pinfo
         core.store.save_file_result(scan_id, fdict, now)
+        # ADR 0037 Step 0 — record this file's stage timing (side-channel, best-effort: a timing write
+        # must never fail the scan). Skipped when nothing was measured — the reuse/dedup path downloads
+        # and analyses nothing, so it has no timing to record.
+        try:
+            _t = _timings.as_dict()
+            if _t.get("totals_s"):
+                core.store.record_file_timing(scan_id, name, _t)
+        except Exception:
+            pass
         # Document-centric layer (ADR 0003, Phase 1): every scan upserts the long-lived
         # document row (api/documents.py), independent of file_records' per-scan snapshot.
         # Defensively wrapped -- must never break the scan pipeline itself, only lose this

@@ -11,6 +11,7 @@ import { coreStats } from './coreStats.js'
 // loosening someone else's assertion to accommodate this change.
 import { scOfWcag } from './coreStats.js'
 import { SCOPE_SCS, SCOPE_SIZE, SCOPE_LABEL } from './activeScope.js'
+import { fmtEffort, estimateEffortMin, EFFORT_BASIS } from './effort.js'
 
 // Re-assess the whole estate against a chosen WCAG 2.1 conformance level. A finding blocks
 // conformance when its level is at or below the target (A ⊆ AA ⊆ AAA), so the numbers
@@ -485,28 +486,43 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                 </div>
               </div>
             )}
-            <div className="assesstiles">
-              <div className="atile" title={`Documents with zero blocking findings at WCAG 2.1 ${result.level} — they pass as-is`}>
-                <b style={{ color: '#3B6D11' }}>{result.conformant.toLocaleString()}</b>
-                <span>documents pass <span className="muted">· of {result.total.toLocaleString()}</span></span>
-              </div>
-              <div className="atile" title={`Documents with at least one finding that blocks WCAG 2.1 ${result.level} conformance — one blocking finding fails the whole document`}>
-                <b style={{ color: '#854F0B' }}>{result.failing.toLocaleString()}</b>
-                <span>documents blocked <span className="muted">· of {result.total.toLocaleString()}</span></span>
-              </div>
-              <div className="atile" title={`${result.conformant.toLocaleString()} of ${result.total.toLocaleString()} documents pass — the estate's pass rate at this level`}>
-                <b style={{ color: '#1F5FA8' }}>{result.pct}%</b>
-                <span>pass rate at {result.level}</span>
-              </div>
-              {/* Name the denominator. A scan stored before the scope narrowing landed has no
-                  scopeTotal/scopeLabel, so fall back to the active scope rather than to the
-                  older "the 20 shown in the table below" — that sentence is what the table
-                  below stopped being true of. */}
-              <div className="atile" title={`${result.coreFindings.toLocaleString()} findings across ${result.coreCriteria.toLocaleString()} of the ${result.scopeTotal ?? SCOPE_SIZE} WCAG criteria in this engagement's ${result.scopeLabel || SCOPE_LABEL} at ${result.level}. ${result.coreAutoFix.toLocaleString()} can be fixed automatically from the Remediate tab; the rest need a person. Counted over the same list the "By WCAG criterion" table below defaults to, so the two reconcile.`}>
-                <b>{result.coreFindings.toLocaleString()}</b>
-                <span>issues found <span className="muted">· across {result.coreCriteria.toLocaleString()} criteria · {result.coreAutoFix.toLocaleString()} auto-fixable, {(result.coreFindings - result.coreAutoFix).toLocaleString()} need review</span></span>
-              </div>
-            </div>
+            {/* Four decision-first KPI cards. Every number is read from `result` (→ coreStats, the
+                one estate lens AssessRunner + RiskScore share), so they cannot disagree with the
+                verdict above or the "By WCAG criterion" table below. The old "pass rate %" tile is
+                deliberately GONE: it was a third rendering of the same estate failure already shown
+                as the master-score ring and the risk score below — the duplication the redesign
+                removes. Documents are now framed as "need action" (the decision), not "pass %". */}
+            {(() => {
+              const person = result.coreFindings - result.coreAutoFix
+              const addrPct = result.coreFindings ? Math.round((result.coreAutoFix / result.coreFindings) * 100) : 0
+              const effortMin = estimateEffortMin({ auto: result.coreAutoFix, person })
+              const denom = result.scopeTotal ?? SCOPE_SIZE
+              const scopeLbl = result.scopeLabel || SCOPE_LABEL
+              return (
+                <div className="assesstiles">
+                  {/* KPI 1 — documents requiring action (the decision), not a pass rate */}
+                  <div className="atile" title={`${result.failing.toLocaleString()} of ${result.total.toLocaleString()} documents have at least one finding that blocks WCAG 2.1 ${result.level}; ${result.conformant.toLocaleString()} pass as-is.`}>
+                    <b style={{ color: result.failing ? '#854F0B' : '#3B6D11' }}>{result.failing.toLocaleString()}<span className="atile-den"> / {result.total.toLocaleString()}</span></b>
+                    <span>documents need action <span className="muted">· {result.conformant.toLocaleString()} currently pass</span></span>
+                  </div>
+                  {/* KPI 2 — findings, with their criteria denominator */}
+                  <div className="atile" title={`${result.coreFindings.toLocaleString()} findings across ${result.coreCriteria.toLocaleString()} of the ${denom} WCAG criteria in your ${scopeLbl}. Counted over the same list the "By WCAG criterion" table below defaults to, so the two reconcile.`}>
+                    <b>{result.coreFindings.toLocaleString()}</b>
+                    <span>findings <span className="muted">· across {result.coreCriteria.toLocaleString()} of {denom} criteria</span></span>
+                  </div>
+                  {/* KPI 3 — ACP-addressable (deterministic auto-fix) */}
+                  <div className="atile" title={`${result.coreAutoFix.toLocaleString()} of ${result.coreFindings.toLocaleString()} findings ACP can fix automatically (deterministic) from the Remediate tab; the remaining ${person.toLocaleString()} need a person.`}>
+                    <b style={{ color: '#3B6D11' }}>{result.coreAutoFix.toLocaleString()}<span className="atile-den"> · {addrPct}%</span></b>
+                    <span>ACP fixes automatically <span className="muted">· {person.toLocaleString()} need a person</span></span>
+                  </div>
+                  {/* KPI 4 — estimated human effort (planning heuristic; est./EFFORT_BASIS per effort.js) */}
+                  <div className="atile" title={EFFORT_BASIS}>
+                    <b style={{ color: '#854F0B' }}>{fmtEffort(effortMin)}</b>
+                    <span>human effort <span className="muted">· {person.toLocaleString()} findings need review</span></span>
+                  </div>
+                </div>
+              )
+            })()}
             <p className="muted assessnote">{note}</p>
             <div style={{ marginTop: 8 }}><TraceChip scanId={runId} kind="session" label="View this scan's traces" /></div>
           </div>

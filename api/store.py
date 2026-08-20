@@ -158,6 +158,13 @@ _SCHEMA = [
     # Idempotent, and readers accept both tokens anyway, so a rollback to an older image
     # (which would write the old token again) degrades to mixed rows, not wrong counts.
     "UPDATE scan_rule_traces SET outcome='NOT_EVALUATED' WHERE outcome='NOT_APPLICABLE'",
+    # ADR 0037 Step 0 — per-file stage timings (download vs analyse), a SIDE-CHANNEL kept entirely off
+    # the scoring path: written best-effort AFTER save_file_result, read only by /scans/{id}/timings.
+    # Idempotent per file (same PK discipline as file_records) so a retried job re-writes, never doubles.
+    """CREATE TABLE IF NOT EXISTS file_stage_timings (
+      scan_id TEXT, file TEXT, timings TEXT,
+      PRIMARY KEY (scan_id, file)
+    )""",
     """CREATE TABLE IF NOT EXISTS hitl_queue (
       id TEXT PRIMARY KEY,
       created_at TEXT,
@@ -417,6 +424,12 @@ _SCHEMA = [
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS owner TEXT",
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS parent_folder TEXT",
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS discovered_at TEXT",
+    # The Graph DRIVE the item was listed from. Graph item ids are unique only WITHIN a drive, so
+    # `drive_file_id` alone does not identify a SharePoint item — asking /me/drive for a site's
+    # item id 404s or, worse, returns a different document with the same id (scanner._sp_download).
+    # Null for Drive/local/SMB rows, and null for a OneDrive listing, which legitimately has no
+    # driveId; both mean "no drive to name", which _sp_base already reads as /me/drive.
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS drive_id TEXT",
     # Per-document lifecycle status (PRD §4.3). One of: Active, Archive Candidate, Archived,
     # Delete Candidate, Deleted, Failed, Exempted. Defaults to Active on first discovery; a rule
     # run (Discover) or a manual action moves it. `lifecycle_rule_id`/`lifecycle_reason` record
@@ -486,6 +499,10 @@ from assessment_policy import (  # noqa: F401,E402  (re-export)
     _split_sc_counts, _file_format, _extract_sc, _pages_csv,
 )
 
+# WCAG's four top-level principles, keyed by the leading digit of a success-criterion number
+# (1.x.x Perceivable · 2.x.x Operable · 3.x.x Understandable · 4.x.x Robust). Used to group
+# evaluated criteria into a per-principle pass rate for the certification report (backlog R8).
+_WCAG_PRINCIPLE = {"1": "Perceivable", "2": "Operable", "3": "Understandable", "4": "Robust"}
 
 
 # `from assessment_policy import X` binds a VALUE, not a reference — so any global that module
@@ -915,19 +932,19 @@ class Store:
             for it in items:
                 self._db.execute(cur,
                     "INSERT INTO scan_inventory(scan_id,file,drive_file_id,mime,size_kb,doc_class,"
-                    "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
+                    "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at,drive_id) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
                     "drive_file_id=EXCLUDED.drive_file_id, mime=EXCLUDED.mime, size_kb=EXCLUDED.size_kb, "
                     "doc_class=EXCLUDED.doc_class, checksum=EXCLUDED.checksum, path=EXCLUDED.path, "
                     "created_at=EXCLUDED.created_at, source_modified=EXCLUDED.source_modified, "
-                    "owner=EXCLUDED.owner, parent_folder=EXCLUDED.parent_folder",
+                    "owner=EXCLUDED.owner, parent_folder=EXCLUDED.parent_folder, drive_id=EXCLUDED.drive_id",
                     (scan_id, it.get("file"), it.get("drive_file_id"), it.get("mime"),
                      it.get("size_kb"), it.get("doc_class"), it.get("checksum"), it.get("path"),
                      it.get("created_at"), it.get("source_modified"), it.get("owner"),
-                     it.get("parent_folder"), it.get("discovered_at") or now))
+                     it.get("parent_folder"), it.get("discovered_at") or now, it.get("drive_id")))
 
     _INV_COLS = ("scan_id,file,drive_file_id,mime,size_kb,doc_class,checksum,path,"
-                 "created_at,source_modified,owner,parent_folder,discovered_at,"
+                 "created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
                  "lifecycle_status,lifecycle_rule_id,lifecycle_reason,exclusion_reason")
 
     def list_inventory(self, scan_id: str) -> list[dict]:
@@ -1244,6 +1261,36 @@ class Store:
                 "SELECT files,certifiable,uncertain,error,avg_score FROM scan_runs WHERE id=%s", (scan_id,))
             return self._db.fetchone(cur) or {}
 
+    def record_file_timing(self, scan_id: str, file: str, rollup: dict) -> None:
+        """Persist one file's per-stage timing (ADR 0037 Step 0). A SIDE-CHANNEL — the caller wraps this
+        best-effort so a timing write can never fail the scan. Idempotent (upsert on scan_id,file), the
+        same retry discipline as file_records, so a re-run re-writes rather than doubling."""
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO file_stage_timings(scan_id,file,timings) VALUES(%s,%s,%s) "
+                "ON CONFLICT(scan_id,file) DO UPDATE SET timings=EXCLUDED.timings",
+                (scan_id, file, _json.dumps(rollup or {})))
+
+    def scan_timings(self, scan_id: str) -> dict:
+        """The per-scan stage-timing rollup (ADR 0037 Step 0): merge every file's timing and summarize —
+        totals, counts, per-stage average seconds, and the bottleneck stage. A scan that ran before this
+        shipped (or one still early) reports zeros and bottleneck=None, never a fabricated number."""
+        import json as _json
+        from stage_timing import merge_rollups, summarize
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT timings FROM file_stage_timings WHERE scan_id=%s", (scan_id,))
+            rows = self._db.fetchall(cur)
+        rollups = []
+        for r in rows or []:
+            try:
+                rollups.append(_json.loads(r["timings"]) if r.get("timings") else {})
+            except Exception:                     # a corrupt row must not sink the whole rollup
+                continue
+        out = summarize(merge_rollups(rollups))
+        out["files_timed"] = len(rollups)
+        return out
+
     def pii_summary(self, sid: str | None = None) -> dict:
         """Sensitive-data rollup: docs affected, total items, and per-type counts.
         Scoped to one scan when sid is given, else across all scans."""
@@ -1291,10 +1338,11 @@ class Store:
     # reset-completeness test (test_reset_leaves_no_customer_data) fails closed if a data table
     # is left out.
     _ANALYTICS_TABLES = ["scan_runs", "file_records", "issue_records", "scan_rule_traces",
-                         "scan_file_manifests", "scan_inventory", "file_tags", "scan_decisions",
-                         "pii_findings", "hitl_queue", "hitl_events", "disposition_audit",
-                         "decision_log", "inventory", "jobs", "documents", "org_memory",
-                         "remediation_state", "remediation_diff", "applied_fixes", "ai_calls"]
+                         "file_stage_timings", "scan_file_manifests", "scan_inventory", "file_tags",
+                         "scan_decisions", "pii_findings", "hitl_queue", "hitl_events",
+                         "disposition_audit", "decision_log", "inventory", "jobs", "documents",
+                         "org_memory", "remediation_state", "remediation_diff", "applied_fixes",
+                         "ai_calls"]
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
@@ -2477,7 +2525,7 @@ class Store:
             f = per_file.setdefault(t["file"], {
                 "file": t["file"], "evaluated": 0, "not_evaluated": 0, "failing": 0,
                 "review": 0, "findings": 0, "not_evaluated_criteria": [],
-                "review_criteria": [], "by_mode": {},
+                "review_criteria": [], "by_mode": {}, "principles": {},
             })
             outcome = t.get("outcome")
             # Both tokens: a scan run before the rename, or by a rolled-back image, wrote the
@@ -2501,6 +2549,15 @@ class Store:
             f["evaluated"] += 1
             mode = (rules.get(t["rule_id"], {}) or {}).get("fix_mode", "unknown")
             f["by_mode"][mode] = f["by_mode"].get(mode, 0) + 1
+            # POUR (R8): group each evaluated criterion under its WCAG principle (the SC's leading
+            # digit). This is a pass rate AMONG EVALUATED checks only — not-evaluated and review
+            # criteria never enter it, so it can never be read as a full-conformance percentage.
+            principle = _WCAG_PRINCIPLE.get((t["rule_id"] or "").split(".")[0])
+            if principle:
+                pc = f["principles"].setdefault(principle, {"evaluated": 0, "passed": 0})
+                pc["evaluated"] += 1
+                if outcome == "PASS":
+                    pc["passed"] += 1
             if outcome == "FAIL":
                 f["failing"] += 1
                 f["findings"] += t.get("finding_count") or 0
@@ -2517,6 +2574,7 @@ class Store:
                 per_file = {fn: v for fn, v in per_file.items() if fn in selection}
 
         docs = []
+        principle_tot: dict[str, dict] = {}
         for f in sorted(per_file.values(), key=lambda x: x["file"]):
             remediated = {a["sc"] for a in evidence.get(f["file"], {}).get("applied", [])}
             f["remediated"] = len(remediated)
@@ -2524,7 +2582,21 @@ class Store:
             f["approvals"] = approvals.get(f["file"], 0)
             f["not_evaluated_criteria"] = sorted(f["not_evaluated_criteria"])
             f["review_criteria"] = sorted(f["review_criteria"])
+            # Fold this document's per-principle tallies into the estate total, then drop the
+            # per-doc copy so the returned document rows stay the shape existing callers expect.
+            for name, pc in f.pop("principles", {}).items():
+                agg = principle_tot.setdefault(name, {"evaluated": 0, "passed": 0})
+                agg["evaluated"] += pc["evaluated"]
+                agg["passed"] += pc["passed"]
             docs.append(f)
+
+        # All four principles, canonical order; one with nothing evaluated stays in the list with
+        # evaluated=0 so the report can render "—" rather than silently dropping a principle.
+        principles = [
+            {"principle": name,
+             "evaluated": principle_tot.get(name, {}).get("evaluated", 0),
+             "passed": principle_tot.get(name, {}).get("passed", 0)}
+            for name in ("Perceivable", "Operable", "Understandable", "Robust")]
 
         scope_modes: dict[str, int] = {}
         not_evaluated_union: set[str] = set()
@@ -2571,6 +2643,9 @@ class Store:
             },
             "approvals_total": sum(approvals.values()),
             "remediated_total": sum(d["remediated"] for d in docs),
+            # POUR per-principle pass rate (R8) — evaluated + passed counted from the same traces;
+            # the report renders passed/evaluated with its basis, never a bare percentage.
+            "principles": principles,
         }
 
     def get_trace_row(self, scan_id: str, file: str, rule_id: str) -> dict | None:

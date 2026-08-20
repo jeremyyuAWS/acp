@@ -18,6 +18,9 @@ import PdfImageContrastCheck from './PdfImageContrastCheck.jsx'
 import AccessibilityStatus from './AccessibilityStatus.jsx'
 import EvidenceHeader, { fmtEvidence } from './EvidenceHeader.jsx'
 import { confirmCriterion, getFileStatus, getExamined, disposeCriterion, listDispositions } from './api.js'
+import { listScanDecisions } from './api.js'
+import { errorReasonFor, noFindingsLine, looksLikeFetchFailure } from './fileErrorReason.js'
+import { showsAssessmentHero } from './riskOverUnassessed.js'
 import DispositionControl from './DispositionControl.jsx'
 import { isDispositionable, normalizeDisposition, DISPOSITIONABLE_OUTCOMES } from './disposition.js'
 import { statusOf, isUnassessed, STATUS_BADGE, STATUS_TAG_LABEL, NOT_ASSESSED } from './docStatus.js'
@@ -416,6 +419,15 @@ const STATE_NOTE = {
 
 export default function FileDrawer({ file, onClose, context = 'full', overrideOwner = null, delegatedFrom = null, decision = null, aiEnabled = true, scanId = null, readOnly = false }) {
   const [explanations, setExplanations] = useState({})
+  // WHY this document failed, read from the immutable decision log. handlers records the verbatim
+  // exception per file (`scan.file_error`); the drawer showed a generic "file unreadable" instead,
+  // and on 2026-08-19 that sentence sent a whole investigation at 22 documents whose only problem
+  // was that the download had been routed to the wrong API (#481).
+  //
+  // Fetched ONLY for a document that actually failed: the log is a per-scan list, and pulling it
+  // for every drawer open would cost a request per document to answer a question almost none of
+  // them are asking. null = not fetched or nothing recorded, and the copy says which.
+  const [errReason, setErrReason] = useState(null)
   // The coverage table shows exactly the criteria in the agreed scope — the list this engagement
   // certifies against, and the same one the estate panel defaults to. No "show all" escape hatch
   // in a per-document record; the criteria it drops are named beneath the table instead.
@@ -667,6 +679,20 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
 
   if (!file) return null
   const st = statusOf(file)
+
+  // Pull the recorded reason once, and only for a document that failed. Guarded on `st` so the
+  // request never fires for the overwhelming majority of drawers; guarded on `alive` so a fast
+  // close cannot set state on an unmounted drawer.
+  useEffect(() => {
+    if (st !== 'unanalysable' || !scanId || !file?.file) { setErrReason(null); return undefined }
+    let alive = true
+    Promise.resolve(listScanDecisions(scanId))
+      .then((rows) => { if (alive) setErrReason(errorReasonFor(rows, file.file)) })
+      // A failed lookup must read as "not recorded", never as a fabricated cause — the copy
+      // distinguishes the two, so leaving it null is the honest outcome here.
+      .catch(() => { if (alive) setErrReason(null) })
+    return () => { alive = false }
+  }, [st, scanId, file?.file])
   // What this drawer may claim about findings — reconciled with the hero card below, so the
   // badge can never contradict the coverage panel it sits under.
   const claim = findingsClaim(st, file, statusModel)
@@ -792,6 +818,12 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
       {/* ADR 0026 — the authoritative Accessibility Status hero replaces the client-side Document
           Health header: one backend-driven status surface (decision-first, coverage vs status,
           segmented bar, Why?, one dynamic CTA) that can never disagree with the coverage matrix. */}
+      {/* NOT for a document that produced no assessment. The hero is "the FIRST thing a reviewer
+          reads on a file" (ADR 0026), and over an unreadable one it read "Ready after 8 reviews ·
+          Est. review ~6 min · 12/38 criteria" — a coverage verdict and a time estimate for
+          reviewing findings that do not exist. For those files the first thing should be WHY,
+          which the findings section states from the record (#483). */}
+      {showsAssessmentHero(file) && (
       <AccessibilityStatus scanId={scanId} file={file.file} onModel={setStatusModel} onAction={(state) => {
         // The one CTA is state-matched. Review is the in-place action the drawer already owns; other
         // states hand off to the parent tabs (remediate / report) — wired as those flows adopt it.
@@ -800,6 +832,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           setTimeout(() => document.querySelector('.evcard')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150)
         }
       }} />
+      )}
       <div className="drawerstats">
         <span className="badge" style={{ background: sbg, color: sfg }}>
           {claim === 'has-findings' ? 'needs remediation'
@@ -960,7 +993,15 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
 
       <h4 className="drawerh">Findings {issues.length > 0 && <span className="muted">({issues.length})</span>}</h4>
       {issues.length === 0 ? (
-        <p className="muted">{st === 'unanalysable' ? 'Could not analyse — file unreadable.' : 'No findings — clean.'}</p>
+        <p className="muted">
+          {noFindingsLine(st, errReason)}
+          {/* One orienting clause, never a replacement for the reason itself. Without it the
+              default reading of "could not process" is "this document is broken", which is the
+              reading that sent people to inspect files that were never fetched. */}
+          {st === 'unanalysable' && looksLikeFetchFailure(errReason) && (
+            <span> This looks like a problem reaching the source, not with the document itself.</span>
+          )}
+        </p>
       ) : (
         <>
           <div className="findings">

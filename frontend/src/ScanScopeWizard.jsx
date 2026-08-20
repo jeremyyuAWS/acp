@@ -1,10 +1,12 @@
-import { useState, useEffect, Fragment } from 'react'
+import { useState, useEffect, useMemo, Fragment } from 'react'
 import { getSettings, updateSettings, getScanLocations, setScanLocations,
          listFolders, listSpFolders } from './api.js'
 import FolderPicker from './FolderPicker.jsx'
 import { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } from './scopePresets.js'
 import { TRACKED_17, RULE_DETAILS } from './ruleDetails.js'
 import { ASSESSMENT_FALLBACK, assessmentFor } from './capability.js'
+import { reusableScopes, describeScope, whenLabel } from './recentScopes.js'
+import { lastRunOfScope, coverageSentence } from './scopeHistory.js'
 
 // ── Scan-scope WIZARD (Phase 1) ─────────────────────────────────────────────────────────────────
 //
@@ -25,8 +27,10 @@ import { ASSESSMENT_FALLBACK, assessmentFor } from './capability.js'
 // backend) is the "can ACP determine compliance?" answer, and a pair absent there, or marked
 // 'human', yields no verdict a tester could act on. Those pairs are OFFERED but NOT READY: we grey
 // them out and take them out of selection so nobody scopes a scan around a cell that returns nothing.
-// A cell is READY when its assessment lane is 'auto' (🟢 certifies pass & fail) or 'review' (🟡
+// A cell is READY when its assessment lane is 'auto' (🟢 automated) or 'review' (🟡
 // detects, human confirms). Both produce a result; only 'human'/absent do not.
+const STEPS = ['Drive locations', 'Formats & criteria', 'Review']
+
 const laneOf = (sc, f) => assessmentFor(ASSESSMENT_FALLBACK, f, sc)   // 'auto' | 'review' | 'human' | null
 const isReady = (sc, f) => laneOf(sc, f) === 'auto' || laneOf(sc, f) === 'review'
 
@@ -189,8 +193,9 @@ export function locationsKeyFor(source, { hasDrive = false, hasSP = false } = {}
 }
 
 export default function ScanScopeWizard({ onStartScan, showStartButton = false,
-                                          canEditScope = true, rememberDefault = true,
-                                          source = 'all', hasDrive = false, hasSP = false }) {
+                                          canEditScope = true, rememberDefault = false,
+                                          source = 'all', hasDrive = false, hasSP = false,
+                                          scans = [] }) {
   // ── FOLDER SCOPE (PRD §6, step 1) ──────────────────────────────────────────────────────────
   //
   // WHOSE ANSWER IS THIS? The Sources card stores a folder set per CONNECTION; this wizard
@@ -203,13 +208,26 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   // somebody deliberately diverges them, and the run records its own scope regardless
   // (scan_runs.scope is frozen at scan start, ADR 0035).
   //
-  // It is also the rule this screen already teaches for criteria — "Remember these selections for
-  // my next scan" is the same opt-in write-back — so it is one concept, not two.
+  // The criteria half now follows the SAME rule, which it did not before: "Remember these
+  // selections" was opt-OUT and on by default, so a one-off narrow criteria choice was written to
+  // the platform default for everyone unless somebody noticed a ticked box and unticked it. That
+  // is the identical failure the folder half is careful about — a one-off quietly becoming
+  // configuration — with the defaults the wrong way round. Both are now explicit, off by default,
+  // and shown only once the run actually differs from what is stored.
   const locKey = locationsKeyFor(source, { hasDrive, hasSP })
   const [folders, setFolders] = useState([])
   const [excluded, setExcluded] = useState([])
   const [savedFolders, setSavedFolders] = useState(null)   // null = not loaded yet
-  const [pickerOpen, setPickerOpen] = useState(false)
+  // THREE STEPS, because one panel asking for folders, formats, criteria and engine switches at
+  // once makes every decision compete with every other. The order is deliberate: where, then what,
+  // then confirm — folders decide which estate is judged, criteria only decide how each document
+  // in it is judged, so asking criteria first invites tuning 53 checks over the wrong half of a
+  // Drive. Progressive disclosure, not more surface.
+  const [step, setStep] = useState(1)
+  // "Entire source" vs "Specific folders" is asked EXPLICITLY rather than inferred from an empty
+  // selection. Empty and everything look identical otherwise, and the reassuring reading of a
+  // blank list is the wrong one — the same rule the picker and the source card already follow.
+  const [scopeMode, setScopeMode] = useState('all')   // 'all' | 'some'
   const [saveFolders, setSaveFolders] = useState(false)    // write back to the card, off by default
 
   useEffect(() => {
@@ -220,12 +238,27 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
       const inc = (r.locations || {})[locKey] || []
       const exc = ((r.locations || {})._exclude || {})[locKey] || []
       setFolders(inc); setExcluded(exc); setSavedFolders(inc)
+      if (inc.length) setScopeMode('some')
     }).catch(() => { if (alive) setSavedFolders([]) })
     return () => { alive = false }
   }, [locKey])
 
   // Diverging from the card is legitimate — it is what "this run only" means — but it must be
   // SAID. An unremarked difference between the card and the run is the whole failure mode.
+  // The inline picker seeds its own selection from `initial` at MOUNT, so anything that replaces
+  // the selection from outside it (choosing "Entire source", applying a recent scope) has to
+  // remount it. Without this the browser keeps showing the previous chips while the wizard state
+  // says something else — two answers to "what am I about to scan?" on one screen, which is the
+  // failure the two-column layout exists to remove.
+  const [pickerSeed, setPickerSeed] = useState(0)
+  const chooseAll = () => { setScopeMode('all'); setFolders([]); setExcluded([]); setPickerSeed((n) => n + 1) }
+
+  // The same component serves two surfaces: the scan-launch modal (stepped) and the Settings
+  // scope editor (one panel, no start button). Stepping the editor would hide half its controls
+  // behind a flow that has nowhere to go.
+  const atStep = (n) => !showStartButton || step === n
+
+
   const foldersDiffer = savedFolders !== null
     && JSON.stringify(folders.map((f) => f.id).sort())
        !== JSON.stringify((savedFolders || []).map((f) => f.id).sort())
@@ -245,6 +278,32 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   const [msg, setMsg] = useState('')
   const [remember, setRemember] = useState(rememberDefault)
 
+  // ── REUSE A SCOPE YOU HAVE ACTUALLY RUN ────────────────────────────────────────────────────
+  // Derived from `scan_runs.scope`, not from a saved-scopes store. A saved scope is a claim about
+  // what WILL be covered; a run's frozen scope is a record of what WAS, and only the second can be
+  // checked. Reusing one also keeps the two runs comparable — a diff cannot tell a document that
+  // got worse from a document measured against fewer criteria unless both boundaries agree.
+  const reusable = useMemo(() => reusableScopes(scans, locKey), [scans, locKey])
+  const [reusedKey, setReusedKey] = useState(null)
+
+  const applyScope = (e) => {
+    setFolders(e.folders)
+    // Carve-outs are carried over even though the run recorded only their IDS. Dropping them
+    // would WIDEN this scan while the control the user clicked was labelled as a narrowing; the
+    // name is what is missing, so the chip says that rather than printing a raw Drive id.
+    setExcluded(e.excluded.map((f) => ({ id: f.id, name: f.name || 'folder not named on that run' })))
+    setScopeMode(e.folders.length ? 'some' : 'all')
+    setPickerSeed((n) => n + 1)
+    // Round-tripped through the SAME parser the stored scope uses, so a reused scope and a saved
+    // one cannot normalise differently — and readyOnly drops pairs this release cannot assess, so
+    // an old scope does not resurrect a cell that would return nothing.
+    const parsed = e.scanScope ? parseStoredScope(JSON.stringify(e.scanScope)) : null
+    setRestrict(Boolean(parsed))
+    setSel(parsed ? readyOnly(parsed) : {})
+    setReusedKey(e.key)
+    setMsg('')
+  }
+
   useEffect(() => {
     let alive = true
     getSettings().then((s) => {
@@ -259,6 +318,14 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
     }).catch(() => { /* the panel still renders; a save reports the real failure */ })
     return () => { alive = false }
   }, [])
+
+  // What this EXACT scope covered last time, matched on the whole frozen boundary — locations,
+  // carve-outs and criteria together, in the shape scanner records them. Recomputed on every
+  // render rather than memoised: `scans` is one user's run list and the match is a few string
+  // comparisons, and a stale memo here would caption one boundary's count with another's, which
+  // is the precise failure this is meant to prevent.
+  const lastRun = lastRunOfScope(scans,
+    { folders, excluded, scan_scope: restrict ? toPayload(sel) : null }, locKey)
 
   const profile = profileFor(restrict, sel)
 
@@ -483,6 +550,16 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
 
   const profileLabel = (PROFILES.find((p) => p.id === profile) || {}).label || 'Custom scope'
 
+  // One line answering "what am I about to run?", visible at every step. Locations first because
+  // that is the decision the count will later be a count OF.
+  const footerSummary = [
+    locKey ? (folders.length
+      ? `${folders.length} folder${folders.length === 1 ? '' : 's'}${excluded.length ? ` · ${excluded.length} excluded` : ''}`
+      : 'Entire source') : null,
+    `${nFormats} format${nFormats === 1 ? '' : 's'}`,
+    profileLabel,
+  ].filter(Boolean).join(' · ')
+
   return (
     <div>
       <p style={{ fontSize: 13, margin: '0 0 4px' }}>
@@ -503,12 +580,53 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
         </p>
       )}
 
+      {/* ── Stepper ─────────────────────────────────────────────────────────── */}
+      {/* Numbered, not just visually distinct: a step count is the cheapest way to say "there is
+          an end to this" to somebody looking at a dense configuration screen for the first time. */}
+      {showStartButton && (
+        <ol style={{ display: 'flex', gap: 0, listStyle: 'none', margin: '0 0 14px', padding: 0,
+                     fontSize: 12.5, alignItems: 'center' }}>
+          {STEPS.map((label, i) => {
+            const n = i + 1
+            const on = step === n
+            const done = step > n
+            return (
+              <li key={label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                {i > 0 && <span aria-hidden="true" className="muted"
+                                style={{ margin: '0 10px' }}>──</span>}
+                <button type="button"
+                        // Going BACK by clicking a completed step is free; jumping forward is not
+                        // offered, because a later step summarises choices the earlier ones make.
+                        disabled={!done}
+                        onClick={() => done && setStep(n)}
+                        aria-current={on ? 'step' : undefined}
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, font: 'inherit',
+                                 background: 'none', border: 'none', padding: 0,
+                                 cursor: done ? 'pointer' : 'default',
+                                 color: on ? 'var(--ink)' : 'var(--muted)',
+                                 fontWeight: on ? 650 : 400 }}>
+                  <span aria-hidden="true" style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 20, height: 20, borderRadius: 999, fontSize: 11.5, fontWeight: 600,
+                    border: `1px solid ${on || done ? '#6D28D9' : 'var(--line)'}`,
+                    background: on ? '#6D28D9' : 'transparent',
+                    color: on ? '#fff' : (done ? '#6D28D9' : 'var(--muted)') }}>
+                    {done ? '✓' : n}
+                  </span>
+                  {label}
+                </button>
+              </li>
+            )
+          })}
+        </ol>
+      )}
+
       {/* ── 0. Drive locations (PRD §6 step 1) ──────────────────────────────── */}
       {/* FIRST, because it is the question with the largest effect on what a scan means: criteria
           decide how each document is judged, folders decide which estate is being judged at all.
           Asking it after the criteria invites someone to tune 53 checks and then discover they
           were tuning them over the wrong half of the Drive. */}
-      {locKey && (
+      {atStep(1) && locKey && (
         <>
           <div style={{ margin: '4px 0', fontSize: 12, fontWeight: 700, letterSpacing: '.04em',
                         color: 'var(--muted)' }}>
@@ -517,35 +635,103 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
           <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>
             Choose which locations ACP should assess. Subfolders are included unless you exclude them.
           </div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center',
-                        marginBottom: 8 }}>
-            {savedFolders === null ? (
-              <span className="muted" style={{ fontSize: 12.5 }}>Loading…</span>
-            ) : folders.length === 0 ? (
-              // Said out loud rather than left blank. "Nothing selected" and "everything" look the
-              // same on screen otherwise, and the reassuring reading of a blank row is the wrong one.
-              <span style={{ fontSize: 12.5 }}>
-                <b>Entire source</b> — every accessible folder
-              </span>
-            ) : (
-              <>
-                {folders.map((f) => (
-                  <span key={f.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
-                    fontSize: 11.5, background: '#F1EFF3', border: '1px solid var(--line)',
-                    borderRadius: 999, padding: '2px 8px' }}>📁 {f.name}</span>
-                ))}
-                {excluded.map((f) => (
-                  <span key={f.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
-                    fontSize: 11.5, background: '#FBF0F0', border: '1px solid var(--line)',
-                    borderRadius: 999, padding: '2px 8px' }}>🚫 except {f.name}</span>
-                ))}
-              </>
-            )}
-            <button className="linklike" type="button" style={{ fontSize: 12 }}
-                    disabled={busy} onClick={() => setPickerOpen(true)}>
-              {folders.length ? 'Change…' : 'Choose folders…'}
-            </button>
+
+          {/* REUSE A SCOPE YOU HAVE ACTUALLY RUN. Offered before the radio group because for a
+              recurring audit it answers the whole wizard in one click — and because a shortcut
+              placed after the thing it shortcuts is a shortcut nobody takes.
+              These come from `scan_runs.scope`, the boundary each run FROZE at scan start, so
+              every entry is a record of what was covered rather than a claim about what would be.
+              A run with no recorded scope is deliberately absent: NULL means unknown, and applying
+              unknown would apply as "everything". */}
+          {reusable.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.04em',
+                            color: 'var(--muted)', marginBottom: 6 }}>
+                REUSE A RECENT SCOPE
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {reusable.map((e) => {
+                  const on = reusedKey === e.key
+                  return (
+                    <button key={e.key} type="button" disabled={busy} aria-pressed={on}
+                            onClick={() => applyScope(e)}
+                            style={{ textAlign: 'left', cursor: 'pointer', font: 'inherit',
+                                     border: `1px solid ${on ? '#6D28D9' : 'var(--line)'}`,
+                                     background: on ? '#F3EEFC' : 'var(--surface)', color: 'inherit',
+                                     borderRadius: 10, padding: '7px 10px', flex: '1 1 240px' }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 600 }}>{describeScope(e)}</div>
+                      <div className="muted" style={{ fontSize: 11.5 }}>
+                        Last run {whenLabel(e.at)}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+              {reusedKey && (
+                // Applying one is not the end of the decision, it is the start: the browser below
+                // now shows what was applied, and saying so is what stops "reused" being taken for
+                // "verified". Anything reused is still editable, and still frozen fresh at start.
+                <div role="status" aria-live="polite" className="muted"
+                     style={{ fontSize: 11.5, marginTop: 6 }}>
+                  Applied to this run — check the locations and criteria below before starting.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* The two answers, as an explicit choice. Inferring "entire source" from an empty
+              selection means the most consequential scope decision is made by NOT clicking. */}
+          <div role="radiogroup" aria-label="What to assess"
+               style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+            {[['all', 'Entire connected source', 'Every accessible folder'],
+              ['some', 'Specific folders', 'Assess only selected projects or departments']]
+              .map(([id, title, hint]) => {
+                const on = scopeMode === id
+                return (
+                  <button key={id} type="button" role="radio" aria-checked={on} disabled={busy}
+                          onClick={() => (id === 'all' ? chooseAll() : setScopeMode('some'))}
+                          style={{ flex: '1 1 200px', textAlign: 'left', cursor: 'pointer',
+                                   border: `1px solid ${on ? '#6D28D9' : 'var(--line)'}`,
+                                   background: on ? '#F3EEFC' : 'var(--surface)', color: 'inherit',
+                                   borderRadius: 10, padding: '10px 12px', font: 'inherit' }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{title}</div>
+                    <div className="muted" style={{ fontSize: 11.5 }}>{hint}</div>
+                  </button>
+                )
+              })}
           </div>
+
+          {/* THE BROWSER IS ON THE PAGE, not behind a "Choose folders…" link into a modal.
+              The link version made the two halves of one decision sequential: you picked inside a
+              dialog, saved, closed it, and only then read a row of chips on the screen underneath.
+              The scope you were assembling was never visible while you were assembling it, and it
+              became visible at exactly the point it had stopped being cheap to change. Inline and
+              two-column, every tick moves a chip that is already on screen — an over-wide
+              selection is something you SEE rather than something the count tells you afterwards,
+              which is the whole shape of the defect this screen exists to prevent. */}
+          {savedFolders === null ? (
+            <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>Loading…</div>
+          ) : scopeMode === 'all' ? (
+            // Said out loud rather than left blank. "Nothing selected" and "everything" look the
+            // same on screen otherwise, and the reassuring reading of a blank row is the wrong one.
+            <div style={{ fontSize: 12.5, marginBottom: 8 }}>
+              <b>Entire source</b> — every accessible folder
+            </div>
+          ) : (
+            <div style={{ marginBottom: 8 }}>
+              <FolderPicker
+                layout="inline"
+                key={`${locKey}:${pickerSeed}`}
+                rootName={locKey === 'drive' ? 'My Drive' : 'OneDrive'}
+                lister={locKey === 'drive' ? listFolders : (parent) => listSpFolders(parent)}
+                initial={folders}
+                initialExclude={excluded}
+                // It has no Save of its own: the wizard footer is the only footer on this screen,
+                // and a second commit button next to it would make "saved" ambiguous. So the
+                // picker reports as you tick.
+                onChange={(inc, exc) => { setFolders(inc); setExcluded(exc || []) }} />
+            </div>
+          )}
 
           {/* Divergence from the connection default is allowed — that is what "this run" means —
               but never silent: an unremarked difference between the card and the run is the exact
@@ -562,20 +748,26 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
             </div>
           )}
 
-          {pickerOpen && (
-            <FolderPicker
-              title="Folders to scan"
-              rootName={locKey === 'drive' ? 'My Drive' : 'OneDrive'}
-              lister={locKey === 'drive' ? listFolders : (parent) => listSpFolders(parent)}
-              initial={folders}
-              initialExclude={excluded}
-              onConfirm={(inc, exc) => { setFolders(inc); setExcluded(exc || []); setPickerOpen(false) }}
-              onClose={() => setPickerOpen(false)} />
-          )}
         </>
       )}
 
+      {/* A source with no folder hierarchy to narrow — a local corpus, or a connector that is not
+          signed in. Step 1 still SAYS something: a blank first page with a Continue button under
+          it is a dead end that reads as a broken screen, and it also hides the fact that this run
+          will cover everything. */}
+      {atStep(1) && !locKey && (
+        <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '12px 14px',
+                      fontSize: 12.5, lineHeight: 1.5 }}>
+          <b>Entire connected source</b>
+          <div className="muted" style={{ marginTop: 4 }}>
+            This source has no folder hierarchy to narrow, so every accessible file is in scope.
+            Connect Google Drive or OneDrive to choose specific folders.
+          </div>
+        </div>
+      )}
+
       {/* ── 1. Scan profile ─────────────────────────────────────────────────── */}
+      {atStep(2) && (<>
       <div style={{ margin: '12px 0 4px', fontSize: 12, fontWeight: 700, letterSpacing: '.04em', color: 'var(--muted)' }}>
         SCAN PROFILE
       </div>
@@ -616,9 +808,20 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                     aria-label={`${FMT_LABEL[f]} — ${FMT_COUNT[f]} supported criteria`}
                     disabled={busy || !canEdit} onClick={() => toggleFormat(f)}
                     style={{ flex: '1 1 90px', cursor: 'pointer', textAlign: 'center',
+                             position: 'relative',
+                             // Selected = white with a purple BORDER and a tick, not a purple
+                             // fill. Filling every selected card made four equally-important
+                             // choices compete with each other and with the profile cards above;
+                             // the state is just as legible from the border, and the panel stops
+                             // shouting.
                              border: `2px solid ${on ? '#6D28D9' : 'var(--line)'}`,
-                             background: on ? '#F3EEFC' : 'var(--surface)', color: 'inherit',
+                             background: 'var(--surface)', color: 'inherit',
+                             opacity: FMT_COUNT[f] ? 1 : 0.55,
                              borderRadius: 10, padding: '12px 8px', font: 'inherit' }}>
+              {on && (
+                <span aria-hidden="true" style={{ position: 'absolute', top: 5, right: 7,
+                                                  color: '#6D28D9', fontSize: 12 }}>✓</span>
+              )}
               <div style={{ fontSize: 15, fontWeight: 700 }}>{FMT_LABEL[f]}</div>
               <div className="muted" style={{ fontSize: 11.5 }}>{FMT_COUNT[f]} supported criteria</div>
             </button>
@@ -638,9 +841,14 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
       </p>
 
       {/* ── 4. Customize criteria and combinations (collapsed) ──────────────── */}
-      <details style={{ borderTop: '1px solid var(--line)', marginTop: 8 }}>
+      {/* OPEN ONLY ON PURPOSE. A recommended profile already answers this question, so the full
+          criterion x format matrix is expert surface that every first-time user was made to scroll
+          past before they could start a basic scan. `open` follows the Custom profile, so choosing
+          Custom reveals it without a second click and choosing a preset never does. */}
+      <details open={profile === 'custom'}
+               style={{ borderTop: '1px solid var(--line)', marginTop: 8 }}>
         <summary style={{ padding: '8px 0', cursor: 'pointer', fontSize: 13, userSelect: 'none' }}>
-          Customize criteria and combinations
+          View or customize criteria
         </summary>
         <div style={{ paddingBottom: 8 }}>
           {/* Preset quick-picks + running count */}
@@ -682,22 +890,22 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
 
           {/* ── Readiness legend ────────────────────────────────────────────────
               What each cell state means, so a tester knows what is theirs to try. Keyed on the
-              CI-locked assessment axis (capability.js): 🟢 auto certifies, 🟡 review detects, and
+              CI-locked assessment axis (capability.js): 🟢 automated, 🟡 review required, and
               a criterion×format ACP can't assess yet is greyed and can't be selected. */}
           <div role="note" aria-label="Readiness legend"
                style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', alignItems: 'center',
                         fontSize: 11.5, color: 'var(--muted)', margin: '0 2px 8px' }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
               <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: 3, border: '2px solid #3B6D11', display: 'inline-block' }} />
-              Ready — ACP certifies pass &amp; fail
+              Automated — ACP evaluates this combination
             </span>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
               <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: 3, border: '2px solid #B45309', display: 'inline-block' }} />
-              Ready — ACP detects, you confirm
+              Review required — ACP detects evidence, a person decides
             </span>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
               <span aria-hidden="true" style={{ color: 'var(--muted)', opacity: 0.6 }}>◌</span>
-              Not ready yet — greyed, can't be selected
+              Not currently supported — greyed, can't be selected
             </span>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
               <span aria-hidden="true" className="muted" style={{ opacity: 0.45 }}>·</span>
@@ -782,10 +990,10 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                               }
                               if (!isReady(row.sc, f)) {
                                 return (
-                                  <td key={f} title={`Not ready yet — ACP can't certify ${row.sc} for ${FMT_LABEL[f]} in this release`}
+                                  <td key={f} title={`Not currently supported — ${row.sc} on ${FMT_LABEL[f]} is not evaluated in this release`}
                                       style={{ ...CELL, background: 'var(--surface)', opacity: 0.9 }}>
                                     <span aria-hidden="true" style={{ color: 'var(--muted)', opacity: 0.6, fontSize: 12 }}>◌</span>
-                                    <span className="sronly">{`${FMT_LABEL[f]}: Not ready yet for ${row.sc} — cannot be selected`}</span>
+                                    <span className="sronly">{`${FMT_LABEL[f]}: not currently supported for ${row.sc} — cannot be selected`}</span>
                                   </td>
                                 )
                               }
@@ -794,7 +1002,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                               const accent = lane === 'auto' ? '#3B6D11' : '#B45309'
                               return (
                                 <td key={f} title={lane === 'auto'
-                                      ? `Ready — ACP certifies ${row.sc} pass & fail for ${FMT_LABEL[f]}`
+                                      ? `Automated — ACP evaluates ${row.sc} for ${FMT_LABEL[f]}`
                                       : `Ready — ACP detects ${row.sc} for ${FMT_LABEL[f]}, you confirm`}
                                     style={{ ...CELL, background: on ? '#F3EEFC' : 'transparent' }}>
                                   <input type="checkbox" checked={on} disabled={busy || !canEdit}
@@ -827,19 +1035,114 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
         </div>
       </details>
 
+      </>)}
+
+      {/* ── 3. Review ───────────────────────────────────────────────────────── */}
+      {/* A scope CONTRACT: what is about to be covered, stated once, in the order it was decided.
+          Still no ESTIMATED file count. A number invented here would be the one thing on this
+          screen a reader would most reasonably trust, and under ADR 0020 a Discover run IS the
+          listing — so an estimate is not a cheap preview of an expensive operation, it is very
+          nearly the operation run twice, producing a SECOND number for the same estate at a
+          different moment under a different cap. Two numbers that can disagree, both correct, is
+          the 2026-07-30 defect (scanScope.js).
+          What IS shown is a number that was actually measured: what THIS EXACT SCOPE covered the
+          last time it ran, matched on the whole frozen boundary and captioned with its date. When
+          no such run exists the line says so and stops — inventing a figure for precisely the case
+          with no evidence behind it would be the least checkable number on the screen. */}
+      {showStartButton && step === 3 && (
+        <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '12px 14px' }}>
+          <div style={{ fontSize: 13, fontWeight: 650, marginBottom: 8 }}>Ready to scan</div>
+          <dl style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 14px',
+                       margin: 0, fontSize: 12.5 }}>
+            {locKey && (
+              <>
+                <dt className="muted">Drive locations</dt>
+                <dd style={{ margin: 0 }}>
+                  {folders.length === 0
+                    ? 'Entire connected source'
+                    : `${folders.length} folder${folders.length === 1 ? '' : 's'}, including subfolders`}
+                </dd>
+              </>
+            )}
+            {excluded.length > 0 && (
+              <>
+                <dt className="muted">Excluded</dt>
+                <dd style={{ margin: 0 }}>
+                  {excluded.map((f) => f.name).join(', ')}
+                </dd>
+              </>
+            )}
+            <dt className="muted">Formats</dt>
+            <dd style={{ margin: 0 }}>
+              {activeFormats.length ? activeFormats.map((f) => FMT_LABEL[f]).join(', ') : 'None selected'}
+            </dd>
+            <dt className="muted">Criteria</dt>
+            <dd style={{ margin: 0 }}>{profileLabel}</dd>
+            <dt className="muted">Executable checks</dt>
+            <dd style={{ margin: 0 }}>
+              {chosen} supported combination{chosen === 1 ? '' : 's'}
+              {unsupported > 0 && (
+                <span className="muted"> · {unsupported} unsupported will not be evaluated</span>
+              )}
+            </dd>
+          </dl>
+          {/* Below the contract, not inside it: this is evidence ABOUT the scope, not part of it.
+              `aria-live` because it changes as the scope does, and a count whose boundary silently
+              moved underneath it is the failure mode this whole screen is built against. */}
+          <div role="status" aria-live="polite" className="muted"
+               style={{ fontSize: 12, marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--line)' }}>
+            {coverageSentence(lastRun, lastRun ? whenLabel(lastRun.at) : '')}
+          </div>
+        </div>
+      )}
+
       {/* ── 5/7. Footer ─────────────────────────────────────────────────────── */}
       {showStartButton ? (
         <>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, margin: '12px 0 0' }}>
-            <input type="checkbox" checked={remember} disabled={busy}
-                   onChange={(e) => setRemember(e.target.checked)} />
-            Remember these selections for my next scan
-          </label>
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
-            <button className="ghost small" type="button" disabled={busy} onClick={() => onStartScan?.({ cancel: true })}>Cancel</button>
-            <button type="button" disabled={busy} onClick={startScan}>
-              {busy ? 'Saving…' : 'Start scan →'}
-            </button>
+          {/* THE CRITERIA WRITE-BACK, now symmetric with the folder one directly above it.
+              It used to read "Remember these selections for my next scan", be ticked by DEFAULT,
+              and appear on every run. Three things were wrong with that. It is not "my next scan"
+              — `scan_scope` is the platform default and applies to everyone. Being on by default
+              made a one-off narrowing into permanent configuration unless somebody noticed a
+              ticked box, which is the exact failure the folder half is careful about, with the
+              default the wrong way round. And a checkbox that is always there is a checkbox people
+              tick without reading; appearing only once the run actually DIFFERS from what is
+              stored makes its absence a signal too.
+              Hidden for a non-owner rather than shown and ignored: PUT /settings is admin-only, so
+              offering it to a read-only account promises a write that 403s. */}
+          {step === 3 && dirty && canEdit && (
+            <div style={{ margin: '12px 0 0' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                <input type="checkbox" checked={remember} disabled={busy}
+                       onChange={(e) => setRemember(e.target.checked)} />
+                Also save these criteria as the platform default
+              </label>
+              <div className="muted" style={{ fontSize: 11.5, marginLeft: 24 }}>
+                Applies to every later scan, for everyone. This run uses them either way.
+              </div>
+            </div>
+          )}
+
+          {/* Sticky footer: the running scope stays visible while the folder tree or the criterion
+              matrix scrolls, so the primary action never leaves the screen and the summary never
+              stops answering "what am I about to run?". */}
+          <div style={{ position: 'sticky', bottom: 0, background: 'var(--surface)',
+                        borderTop: '1px solid var(--line)', marginTop: 12, paddingTop: 10,
+                        display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="muted" style={{ fontSize: 12.5 }}>{footerSummary}</span>
+            <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button className="ghost small" type="button" disabled={busy}
+                      onClick={() => (step === 1 ? onStartScan?.({ cancel: true }) : setStep(step - 1))}>
+                {step === 1 ? 'Cancel' : '← Back'}
+              </button>
+              {step < 3 ? (
+                <button type="button" disabled={busy} onClick={() => setStep(step + 1)}>Continue →</button>
+              ) : (
+                <button type="button" disabled={busy} onClick={startScan}>
+                  {busy ? 'Saving…' : 'Start scan →'}
+                </button>
+              )}
+            </span>
           </div>
         </>
       ) : (

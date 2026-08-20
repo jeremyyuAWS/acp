@@ -194,7 +194,8 @@ export default function App() {
   const [view, setView] = useState('overview')
   const [decisions, setDecisions] = useState({})
   const [triage, setTriage] = useState({})              // per-scan triage, lifted from Remediate for time-travel
-  const savedDecRef = useRef({ scanId: null, decisions: {}, triage: {} })  // last-persisted snapshot
+  const [assignees, setAssignees] = useState({})        // per-file assignee ({file: email}) for the "Assigned to me" inbox filter (#417 backend)
+  const savedDecRef = useRef({ scanId: null, decisions: {}, triage: {}, assignees: {} })  // last-persisted snapshot
   const hydratingRef = useRef(false)                    // suppress the save effect during hydration
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [scanList, setScanList] = useState([])
@@ -405,7 +406,7 @@ export default function App() {
   // state; and `justAssessed` is compared by id (`justAssessed === run?.id`), so a value left
   // over from another scan can never match. Add to this function only what does NOT self-correct.
   const resetScanScopedState = () => {
-    setDecisions({}); setTriage({})
+    setDecisions({}); setTriage({}); setAssignees({})
     setCertifiedDocs([]); setPublishedFiles([])
   }
 
@@ -476,18 +477,19 @@ export default function App() {
     let cancelled = false
     getDecisions(sid).then((d) => {
       if (cancelled) return
-      const dec = {}, tri = {}
+      const dec = {}, tri = {}, asg = {}
       Object.entries(d || {}).forEach(([file, m]) => {
         if (m.action) { try { dec[file] = JSON.parse(m.action) } catch { /* ignore */ } }
         if (m.triage) tri[file] = m.triage
+        if (m.assignee) asg[file] = m.assignee
       })
       hydratingRef.current = true
-      savedDecRef.current = { scanId: sid, decisions: dec, triage: tri }
-      setDecisions(dec); setTriage(tri)
+      savedDecRef.current = { scanId: sid, decisions: dec, triage: tri, assignees: asg }
+      setDecisions(dec); setTriage(tri); setAssignees(asg)
     }).catch(() => {
       hydratingRef.current = true
-      savedDecRef.current = { scanId: sid, decisions: {}, triage: {} }
-      setDecisions({}); setTriage({})
+      savedDecRef.current = { scanId: sid, decisions: {}, triage: {}, assignees: {} }
+      setDecisions({}); setTriage({}); setAssignees({})
     })
     return () => { cancelled = true }
   }, [scan?.run?.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -505,9 +507,12 @@ export default function App() {
     new Set([...Object.keys(prev.triage), ...Object.keys(triage)]).forEach((f) => {
       if (prev.triage[f] !== triage[f]) items.push({ file: f, kind: 'triage', value: triage[f] ?? null })
     })
+    new Set([...Object.keys(prev.assignees || {}), ...Object.keys(assignees)]).forEach((f) => {
+      if ((prev.assignees || {})[f] !== assignees[f]) items.push({ file: f, kind: 'assignee', value: assignees[f] ?? null })
+    })
     if (items.length) saveDecisionsBatch(sid, items).catch(() => {})
-    savedDecRef.current = { scanId: sid, decisions: { ...decisions }, triage: { ...triage } }
-  }, [decisions, triage]) // eslint-disable-line react-hooks/exhaustive-deps
+    savedDecRef.current = { scanId: sid, decisions: { ...decisions }, triage: { ...triage }, assignees: { ...assignees } }
+  }, [decisions, triage, assignees]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // A per-scan request 404'd (api.js dispatches this before any caller's .catch can eat it).
   // Say so, then move the user to a scan they CAN load — an unexplained empty score is the
@@ -1040,7 +1045,7 @@ export default function App() {
           </>
         ) : placeholder)}
 
-        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id).then(setScan).catch(() => {})} onHitlCount={setHitlCount} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /> : placeholder)}
+        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} assignees={assignees} setAssignees={setAssignees} myEmail={me?.email} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id).then(setScan).catch(() => {})} onHitlCount={setHitlCount} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /> : placeholder)}
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
 
@@ -1110,6 +1115,7 @@ export default function App() {
             : (pendingScan.source === 'all' || s.type === 'google_drive')))
             .reduce((a, s) => a + (s.files || 0), 0)}
           hasDrive={hasDriveToken} hasSP={hasSPToken} canEditScope={scopeOwner !== false}
+          scans={scanList}
           onConfirm={(runScope) => { const { source, folder } = pendingScan; setPendingScan(null); doScan(source, folder, runScope) }}
           onCancel={() => setPendingScan(null)} />
       )}

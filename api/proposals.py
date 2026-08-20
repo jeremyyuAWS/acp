@@ -1131,7 +1131,11 @@ def propose_reading_order(path, ext: str) -> list[dict]:
             proposed_value=f"Move this text into the body at its intended reading position: “{excerpt}”",
             rationale="a screen reader follows the document's linear order, so anchored text is spoken "
                       "out of sequence; placing it inline where it visually belongs fixes the order",
-            source="floating text detected in the document (deterministic)"), "sc": "1.3.2"})
+            source="floating text detected in the document (deterministic)"),
+            "sc": "1.3.2",
+            # The box's own text and its position in the anchor-order sequence, carried plainly so the
+            # review card can render the reading order as a numbered list (a screen reader's real order).
+            "text": excerpt, "seq": i})
     return out
 
 
