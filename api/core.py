@@ -89,16 +89,33 @@ ADMIN_EMAILS = {
 }
 
 
+def is_owner(email: str | None) -> bool:
+    """The single protected owner (ACP_OWNER_EMAIL) — the root of trust that manages who else is an
+    admin, and the one identity that can never be demoted or removed. True for everyone only when no
+    owner is configured (local dev / demo / no-auth)."""
+    if not OWNER_EMAIL:
+        return True
+    return (email or "").strip().lower() == OWNER_EMAIL
+
+
 def is_admin(email: str | None) -> bool:
     """May this identity use the platform-admin surfaces (scope editor, platform Settings, access
-    management)? True for the protected OWNER_EMAIL, any ACP_ADMIN_EMAILS entry, or — when no owner
-    is configured at all (local dev / demo / no-auth) — everyone. This is the single source of truth
-    both the SPA flag (is_scope_owner) and the API gate (_require_admin) consult, so they can never
-    disagree about who is an admin."""
+    management)? True for the protected OWNER_EMAIL, any ACP_ADMIN_EMAILS entry (env, permanent), any
+    email the owner promoted from Settings (store `admin_emails`), or — when no owner is configured at
+    all (local dev / demo / no-auth) — everyone. This is the single source of truth both the SPA flag
+    (is_scope_owner) and the API gate (_require_admin) consult, so they can never disagree about who
+    is an admin."""
     if not OWNER_EMAIL:
         return True
     e = (email or "").strip().lower()
-    return e == OWNER_EMAIL or e in ADMIN_EMAILS
+    if not e:
+        return False
+    if e == OWNER_EMAIL or e in ADMIN_EMAILS:
+        return True
+    try:
+        return e in get_store().get_admins()
+    except Exception:
+        return False
 
 
 def email_allowed(email: str) -> bool:

@@ -34,6 +34,17 @@ def _require_admin(request: Request) -> None:
         raise HTTPException(403, "admin access required")
 
 
+def _require_owner(request: Request) -> None:
+    """Owner-only gate — stricter than _require_admin. Managing WHO is an admin is the root-of-trust
+    action, so only the protected OWNER_EMAIL may promote/demote admins; an admin cannot grant admin
+    (nor remove the owner). No-op when no owner is configured (local dev without auth)."""
+    if not core.OWNER_EMAIL:
+        return
+    email = (getattr(request.state, "user_email", None) or "").lower()
+    if not core.is_owner(email):
+        raise HTTPException(403, "owner access required")
+
+
 @router.post("/admin/reset")
 def admin_reset(request: Request,
                 scope: str = Query("all", pattern="^(all|grafana|langfuse)$"),
@@ -154,6 +165,38 @@ def set_allowlist(body: dict, request: Request):
     core.store.log_decision("admin", "settings.allowlist",
                             detail=f"test-user list set to {len(saved)} email(s)")
     return {"emails": saved, "owner": core.OWNER_EMAIL}
+
+
+@router.get("/admin/admins")
+def get_admins():
+    """Who holds Platform Admin. Three tiers, so the UI can render each correctly:
+      owner       — ACP_OWNER_EMAIL, immutable (root of trust, can never be demoted).
+      env_admins  — ACP_ADMIN_EMAILS, permanent (set at deploy, not removable from the UI).
+      admins      — the owner-managed set (store), promotable/demotable right here.
+    Whether THIS caller may EDIT the managed set is the `is_owner` flag on GET /me — the PUT is
+    owner-only and enforces it regardless."""
+    return {"owner": core.OWNER_EMAIL,
+            "env_admins": sorted(core.ADMIN_EMAILS),
+            "admins": core.store.get_admins()}
+
+
+@router.put("/admin/admins")
+def set_admins(body: dict, request: Request):
+    """Replace the owner-managed admin set. OWNER-ONLY (managing admins is the root-of-trust action,
+    stricter than the admin-gated allowlist). The owner and env admins are never stored here and
+    can't be demoted through this path."""
+    _require_owner(request)
+    emails = body.get("emails", [])
+    if not isinstance(emails, list):
+        raise HTTPException(400, "emails must be a list of strings")
+    # The owner and env-admins are grants from elsewhere; keep them out of the managed set so the
+    # list stays exactly "who the owner promoted" and a redundant entry can't imply it's removable.
+    drop = {core.OWNER_EMAIL, *core.ADMIN_EMAILS}
+    emails = [e for e in emails if (e or "").strip().lower() not in drop]
+    saved = core.store.set_admins(emails)
+    core.store.log_decision("admin", "settings.admins",
+                            detail=f"platform-admin set to {len(saved)} email(s)")
+    return {"owner": core.OWNER_EMAIL, "env_admins": sorted(core.ADMIN_EMAILS), "admins": saved}
 
 
 @router.put("/workers")
@@ -360,6 +403,12 @@ def config(request: Request = None):
                                if (_ident := getattr(getattr(request, "state", None), "user_email", None))
                                or not core.OWNER_EMAIL
                                else None),
+            # Strict owner flag (root of trust) — gates the owner-only "who is an admin" controls in
+            # Settings, above the admin-level is_scope_owner. Same PRE-auth None caveat as above.
+            "is_owner": (core.is_owner(_ident)
+                         if (_ident := getattr(getattr(request, "state", None), "user_email", None))
+                         or not core.OWNER_EMAIL
+                         else None),
             "langfuse_trace_base": (f"{lf_host}/project/{lf_project}/traces" if lf_host else None)}
 
 
