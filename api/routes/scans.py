@@ -321,6 +321,20 @@ def get_scan_accessibility_status(sid: str, request: Request, prefix: str | None
     return _status.scan_status(core.store, sid, path_prefix=prefix or None)
 
 
+@router.get("/scans/{sid}/live")
+def get_live_snapshot(sid: str, request: Request):
+    """The authoritative live-run snapshot for the Assess running screen (Live Assessment Experience
+    PRD §8): the reconciled file-outcome KPIs (read from the SAME run summary the final cert uses, so
+    running can never disagree with final), the eligible denominator, and — when the queue layer is
+    present — the live worker/queue block, as ONE owner-scoped object the running screen consumes and
+    reconnects against. Always 200: an unknown or foreign scan returns {"available": false} so the
+    screen degrades rather than erroring."""
+    import datetime as _dt
+    import live_snapshot as _ls
+    return _ls.build_snapshot(core.store, sid, owner=_owner(request),
+                              now_iso=_dt.datetime.now(_dt.timezone.utc).isoformat())
+
+
 @router.get("/scans/{sid}/files/{filename:path}/examined")
 def get_examined_counts(sid: str, filename: str, request: Request):
     """Engine-reported examined-element counts for one document (ADR 0026 Epic 2): the classify()
