@@ -1078,8 +1078,13 @@ export default function App() {
                 Rendered only before a run. Afterwards the results answer a different question and
                 the re-run control lives with them, inside AssessRunner - which is why `controlled`
                 hides the runner's pre-run band but not its results. */}
+            {/* discoveredAt takes fmtStamp, NOT the raw column. AssessSetup interpolates the value
+                straight into "From discovery run {discoveredAt}" and formats nothing, so passing
+                run.completed_at printed an ISO timestamp across the top of the screen. fmtStamp
+                also returns null for a missing value, which is exactly the prop's "omit rather
+                than invent" contract — so the `|| null` this used to carry is redundant. */}
             {assessPhase === 'idle' && !assessed && (
-              <AssessSetup discoveredAt={run.completed_at || null} busy={busy}
+              <AssessSetup discoveredAt={fmtStamp(run?.completed_at)} busy={busy}
                            onRun={(decided) => assessStart.current?.(decided)} />
             )}
             <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy}

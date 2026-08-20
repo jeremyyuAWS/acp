@@ -134,13 +134,26 @@ describe('App composes the Assess tab the way the board specifies', () => {
   it('shows the pre-run screen only before a run, never beside the results', () => {
     // Both guards matter and they are different: assessPhase covers the run in flight, `assessed`
     // covers a scan assessed in an earlier session that this browser is reopening.
-    expect(app()).toMatch(/assessPhase === 'idle' && !assessed && \([\s\S]{0,200}?<AssessSetup/)
+    // The window has to clear the explanatory comment that sits between the guard and the mount.
+    // The quantifier is LAZY, so this still matches the nearest AssessSetup after the guard — it
+    // proves the guard immediately precedes the mount, not merely that both exist in the file.
+    expect(app()).toMatch(/assessPhase === 'idle' && !assessed && \([\s\S]{0,600}?<AssessSetup/)
   })
 
-  it('passes the discovery timestamp, and passes nothing when there is none', () => {
-    // AssessSetup omits the header line entirely rather than inventing a date, so the `|| null`
-    // is load-bearing: `undefined` would be a prop React drops, and the component's default would
-    // still be null — but an empty string would render as a line with no date in it.
-    expect(app()).toMatch(/discoveredAt=\{run\.completed_at \|\| null\}/)
+  it('passes the discovery timestamp FORMATTED, never the raw column', () => {
+    // This assertion previously pinned `discoveredAt={run.completed_at || null}` and passed while
+    // the screen was wrong. AssessSetup interpolates the value straight into "From discovery run
+    // {discoveredAt}" and formats nothing, so the raw column rendered an ISO timestamp across the
+    // top of the Assess tab. Pinning the prop EXPRESSION is not the same as pinning that the value
+    // is presentable — this now requires the formatter.
+    expect(app()).toMatch(/discoveredAt=\{fmtStamp\(/)
+    expect(app()).not.toMatch(/discoveredAt=\{run\??\.?completed_at/)
+  })
+
+  it('formats it with the same helper the rest of the run header uses', () => {
+    // Not a second date format invented for one screen: fmtStamp is what the run-info bar and the
+    // time-travel banner already print, and it returns null for a missing value — which is exactly
+    // AssessSetup's "omitted renders no line at all rather than an invented one" contract.
+    expect(app()).toMatch(/function fmtStamp\(iso\) \{\n\s*if \(!iso\) return null/)
   })
 })
