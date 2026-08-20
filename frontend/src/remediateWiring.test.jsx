@@ -104,13 +104,14 @@ describe('the per-item four reach the detail pane, beside their subject', () => 
   // so that test did its job and is replaced rather than deleted: the same four names are still
   // asserted, in the opposite direction.
   //
-  // R4, R7 and R10 answer a question about ONE finding or ONE document, so a page-level mount
+  // R7 and R10 answer a question about ONE finding or ONE document, so a page-level mount
   // would have no subject. They are injected into RemediationInbox's detail pane through a render
   // prop, which keeps the composition with Remediate rather than making the inbox — already the
-  // page's hardest state — the place every future panel lands.
+  // page's hardest state — the place every future panel lands. (R4 — the "Preview one fix" stepper —
+  // was dropped by Deva and confirmed by Jeremy; see issue #568.)
   const rem = () => code('Remediate.jsx')
 
-  for (const name of ['RemediationFixPreview', 'RemediationDocProgress', 'DocumentAudit']) {
+  for (const name of ['RemediationDocProgress', 'DocumentAudit']) {
     it(`renders ${name} for the selected finding`, () => {
       const s = rem()
       expect(s).toMatch(new RegExp(`import ${name} from '\\./${name}\\.jsx'`))
@@ -142,7 +143,7 @@ describe('the per-item four reach the detail pane, beside their subject', () => 
     const inbox = code('RemediationInbox.jsx')
     expect(inbox).toMatch(/renderDetailExtra = null/)
     expect(inbox).toMatch(/renderDetailExtra \? renderDetailExtra\(selected\) : null/)
-    for (const name of ['RemediationFixPreview', 'RemediationDocProgress', 'DocumentAudit']) {
+    for (const name of ['RemediationDocProgress', 'DocumentAudit']) {
       expect(inbox, `${name} must not be imported by the inbox`).not.toMatch(
         new RegExp(`import ${name} from`))
     }

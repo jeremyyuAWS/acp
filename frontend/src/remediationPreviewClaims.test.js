@@ -15,8 +15,6 @@ import { dirname, join } from 'node:path'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const FILES = [
-  'fixPreview.js',
-  'RemediationFixPreview.jsx',
   'docRemediationProgress.js',
   'RemediationDocProgress.jsx',
 ]
@@ -49,16 +47,6 @@ describe('ADR 0010 — the drive claim', () => {
     }
   })
 
-  it('the destination sentence is driven by the setting, not hard-coded', () => {
-    const s = read('fixPreview.js')
-    expect(s).toMatch(/driveMirror\.enabled/)
-    // Unread is its own branch, before the on/off branches.
-    expect(s).toMatch(/enabled\s*==\s*null/)
-    expect(s).toMatch(/known:\s*false/)
-    // The folder is echoed from the setting; "Remediated" is never typed in as a literal.
-    expect(s).toMatch(/driveMirror\.folder/)
-    expect(withoutComments(s)).not.toMatch(/['"“]Remediated['"”]/)
-  })
 })
 
 describe('ADR 0020 — Discover lists, it does not read', () => {
@@ -92,31 +80,10 @@ describe('ADR 0020 — Discover lists, it does not read', () => {
   })
 })
 
-describe('the spec’s decision rule — no generic Approve/Reject', () => {
-  // docs/remediate-redesign-spec.md, change #5: "Remediation-specific decision actions (no generic
-  // Approve/Reject)" and "Replace ambiguous 'Reject' with the specific action."
-  it('the pattern bites (positive control)', () => {
-    const sample = '<button>Approve</button><button>Reject</button>'
-    expect(/>\s*(Approve|Reject)\s*</.test(sample)).toBe(true)
-  })
-
-  it('R4 renders no bare Approve or Reject control', () => {
-    const s = withoutComments(read('RemediationFixPreview.jsx'))
-    expect(s).not.toMatch(/>\s*(Approve|Reject)\s*</)
-    expect(s).not.toMatch(/label:\s*['"](Approve|Reject)['"]/)
-    // The specific actions the spec names instead.
-    expect(s).toMatch(/Approve this wording/)
-    expect(s).toMatch(/Mark resolved manually/)
-    expect(s).toMatch(/Not applicable/)
-  })
-})
-
-describe('R4 builds on the grounded renderer, not the illustrative one', () => {
-  it('uses GroundedBeforeAfter and imports nothing from BeforeAfter.jsx', () => {
+describe('the preview modules build on the grounded renderer, not the illustrative one', () => {
+  it('none imports BeforeAfter.jsx or calls baFor', () => {
     // BeforeAfter.jsx's baFor() returns hand-written per-criterion markup ("3.1 : 1 · fails AA", a
     // "West / 38%" table) that belongs to no real document. It must not reach the remediation path.
-    const s = read('RemediationFixPreview.jsx')
-    expect(s).toMatch(/from '\.\/GroundedBeforeAfter\.jsx'/)
     for (const [name, src] of sources) {
       // Comments stripped: these modules explain in prose WHY baFor is unusable, and naming it
       // there is the opposite of calling it.

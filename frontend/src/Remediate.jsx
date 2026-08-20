@@ -14,7 +14,6 @@ import CloseoutPanel from './CloseoutPanel.jsx'
 // The per-ITEM three, injected into the inbox's detail pane rather than mounted on the page:
 // each answers a question about ONE finding or ONE document, and a page-level copy would have no
 // subject. R8 is page-level because a failure list is a property of the run.
-import RemediationFixPreview from './RemediationFixPreview.jsx'
 import RemediationDocProgress from './RemediationDocProgress.jsx'
 import DocumentAudit from './DocumentAudit.jsx'
 import FixOutcomes from './FixOutcomes.jsx'
@@ -966,7 +965,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           <RemediationInbox
             renderDetailExtra={(sel) => (sel ? (
               <>
-                <RemediationFixPreview finding={sel} scanId={sel.scanId || run?.id} cap={cap} />
                 <RemediationDocProgress queue={inboxQueue} file={sel.file} decisions={decisions} />
                 <DocumentAudit scanId={sel.scanId || run?.id} file={sel.file} />
               </>
