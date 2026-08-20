@@ -88,6 +88,14 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   estate: the first scan discovered **39 of ~158** files, and the same index was measured climbing
   39 → 157 → 158 as it caught up (library `ItemCount` = 374 proved the upload was complete; 39 ≪ the
   200-file cap ruled that out). Filed as GH #333, with the recovery confirmed and commented there.
+- **Carried the drive identity to the download, so SharePoint files are fetched at all** (#481). The files
+  were never "unreadable" — they were never **fetched**. `handlers`' `norm` dropped `driveId` from the
+  scanner record, so the inventory row stored no drive identity, so nothing downstream marked the item as
+  SharePoint, so `_download` fell through to the Google Drive branch and handed a Graph item id to
+  `files().get_media()` — which raised, was caught, and recorded `status='error'` (the catch-all the UI
+  renders as "file unreadable") for **every** SharePoint/OneDrive file in a fan-out scan. A regression, not a
+  gap (`_sp_list` carries `driveId` per file for exactly this). The fix threads `driveId` through `norm` so
+  the download routes to Graph. Paired with #483, which stopped the drawer mislabelling the symptom.
 
 ## Feature: Operator scan scope · #4601
 
@@ -1190,6 +1198,37 @@ existing data and the existing decision path; nothing adds a second write path.
   that were **opened and failed**, not on every non-certifiable file — an ADR 0020 Discover-only row means
   "nobody looked yet." Does not fix *why* those files are unreadable (an ingest failure, still open).
   Frontend, not RULE_PATHS.
+- **Said WHY a document failed, from the record — stopped guessing "unreadable"** (#483). The `#479` follow-up
+  that closed the ingest half. `handlers` records the verbatim per-file exception (`scan.file_error`) and
+  `GET /decisions` returns it, but the drawer showed a generic sentence: on 2026-08-19 "Could not analyse —
+  file unreadable" was displayed over 22 SharePoint documents that had **never been fetched** (#481) — sending
+  the investigation at the documents while the bug sat in download routing. Since `status='error'` is a
+  catch-all over the whole download+analyse block, "could not *analyse*" claims a step that may never have run
+  and "unreadable" blames a document that may be fine. The drawer now shows the recorded reason instead of
+  guessing. Frontend, not RULE_PATHS.
+- **"Assigned to me" inbox filter + assign action (wires #417)** (#482). #417's backend added a per-file
+  assignee axis (`assessment_policy.assignments` / `files_assigned_to`, persisted as a `scan_decision`
+  `kind='assignee'`) but nothing in the UI read or set it — the mockup's "Assigned to me" filter was unbuilt.
+  Wired end to end, mirroring the triage plumbing: `App.jsx` holds a parallel `assignees` ({file: email})
+  state hydrated from `getDecisions(kind='assignee')` and persisted via `saveDecisionsBatch`, an assign
+  action on the row, and the filter over the inbox. Frontend, not RULE_PATHS.
+- **Keyboard + screen-reader accessibility for the review queue** (#484). An accessibility-remediation tool
+  should itself be operable by keyboard and screen reader; the queue was mouse-first (rows click-only, no
+  spoken feedback on auto-advance). Adds **roving tabindex** on the rows (one Tab lands on the selected
+  finding; Up/Down or j/k step selection, Home/End jump to the ends, focus following the move — the whole
+  queue worked in one tab stop, no mouse) plus live-region announcements when the workspace auto-advances
+  after a decision. Frontend, not RULE_PATHS.
+- **Adaptive evidence for alt-text and metadata findings** (#485). #433 gave *contrast* findings a grounded
+  before/after; every other finding fell back to a generic value diff. Adds two purpose-built,
+  **real-data-only** renderers — the two finding types where the backing data actually exists — leaving the
+  structural ones (heading outline, reading order, table headers) on the honest generic note until the finding
+  exposes document-structure data (ADR 0016, same tier as the page pager). **Alt text (1.1.1):** the affected
+  image beside its old vs new alt — the real `Thumbnail` render, cropped to the flagged object only where a
+  bounding box exists (the plain page otherwise; it never invents a location), with the finding's own
+  before/after alt strings. **Metadata (2.4.2 title / 3.1.1–3.1.2 language):** the real before→after value,
+  which also replaces the preview's generic "structure not extracted" note *for those findings only*. Built
+  fresh in `frontend/` (the dead `frontend-v2` branch was not revived). Cross-session coordinated with this
+  session on scope, the stale-branch read, and the honesty tier. Frontend, not RULE_PATHS.
 
 ## Feature: Estate coverage — three denominators and discovery at scale · #4597
 
@@ -2131,3 +2170,14 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   count is gated on files opened-and-failed, not every non-certifiable file. To **Scan-run experience
   (Track A)**: #478 — `read_timings.py`, the stdlib CLI that reads #467's per-stage rollup so the next Track B
   step is chosen from data. **Sync marker deliberately NOT advanced** (same convention as the prior entries).
+- **2026-08-19 (SharePoint-fetch root cause + Remediate: honesty, assignee, a11y, adaptive evidence)** — One
+  root-cause chain plus three Remediate features. To **SharePoint as a document source (#4600)**: #481 — the
+  driveId was dropped in `norm`, so SharePoint files routed to the Drive download branch and every one recorded
+  `status='error'`; they were never fetched, not unreadable. To **Remediate review queue (#4598)**: #483 (the
+  #479 follow-up — the drawer now shows the *recorded* per-file reason instead of guessing "unreadable", the
+  copy that had been shown over #481's 22 never-fetched SP docs), #482 ("Assigned to me" filter + assign,
+  wiring #417's backend), #484 (keyboard + screen-reader operability for the queue — roving tabindex + auto-
+  advance announcements), and #485 (adaptive per-finding evidence — real-data-only alt-text + metadata
+  renderers, structural findings deferred to a backend data effort; cross-session coordinated with this
+  session on scope and the honesty tier). **Sync marker deliberately NOT advanced** (same convention as the
+  prior entries).
