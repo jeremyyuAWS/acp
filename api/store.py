@@ -2513,12 +2513,24 @@ class Store:
         # reads the log) can never disagree. Distinct per (file, criterion): re-approving the
         # same finding is one approval, not two.
         approved: set[tuple] = set()
+        # Human-review outcomes for the assurance KPI (R9), counted the same immutable-log way as
+        # approvals and deduped the same per (file, criterion) way — a re-review of one finding is
+        # one outcome, not two. approved/rejected/skipped map to hitl.{status}; only the resolved
+        # outcomes are counted (a pending item has no decision to report).
+        review_seen: dict[str, set[tuple]] = {"approved": set(), "rejected": set(), "skipped": set()}
         for d in self.list_decisions(scan_id, limit=1000):
-            if d.get("action") == "hitl.approved" and d.get("file"):
+            act = d.get("action") or ""
+            if act == "hitl.approved" and d.get("file"):
                 approved.add((d["file"], d.get("rule_id") or ""))
+            if act.startswith("hitl.") and d.get("file"):
+                kind = act.split(".", 1)[1]
+                if kind in review_seen:
+                    review_seen[kind].add((d["file"], d.get("rule_id") or ""))
         approvals: dict[str, int] = {}
         for file, _rule in approved:
             approvals[file] = approvals.get(file, 0) + 1
+        review_counts = {k: len(v) for k, v in review_seen.items()}
+        review_counts["reviewed"] = sum(review_counts.values())
 
         per_file: dict[str, dict] = {}
         for t in traces:
@@ -2646,6 +2658,9 @@ class Store:
             # POUR per-principle pass rate (R8) — evaluated + passed counted from the same traces;
             # the report renders passed/evaluated with its basis, never a bare percentage.
             "principles": principles,
+            # Human-review outcomes (R9) — approved / rejected / skipped, plus their sum "reviewed",
+            # each deduped per (file, criterion) from the immutable decision_log.
+            "review": review_counts,
         }
 
     def get_trace_row(self, scan_id: str, file: str, rule_id: str) -> dict | None:
