@@ -262,4 +262,41 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(container.textContent).toContain('Nothing in this view is assigned to you')
     expect(btnByText('Show all')).toBeTruthy()
   })
+
+  // ── Keyboard + screen-reader accessibility of the review queue ──
+  const liveRegion = () => container.querySelector('[aria-live="polite"]')
+  const queueList = () => container.querySelector('[aria-label^="Findings"]')
+  const key = async (el, k) => { await act(async () => { el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true })) }) }
+
+  it('announces the selected finding and its N-of-M place in a polite live region', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    // Needs review holds id1 (auto-fix) + id2 (AI draft); document sort → id1 first.
+    expect(liveRegion().getAttribute('role')).toBe('status')
+    expect(liveRegion().textContent).toContain('Finding 1 of 2')
+    expect(liveRegion().textContent).toContain('Heading contrast is too low')
+    expect(liveRegion().textContent).toContain('a-brief.docx')
+  })
+
+  it('uses a roving tabindex — only the selected row is a Tab stop', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    const rows = [...container.querySelectorAll('.rinbox-row')]
+    expect(rows.find((r) => r.getAttribute('aria-current') === 'true').tabIndex).toBe(0)
+    expect(rows.find((r) => r.getAttribute('aria-current') !== 'true').tabIndex).toBe(-1)
+  })
+
+  it('ArrowDown moves the selection to the next finding and re-announces it', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    expect(detailHeading()).toBe('Heading contrast is too low')       // id1
+    await key(queueList(), 'ArrowDown')
+    expect(detailHeading()).toBe('Image needs alt text')              // id2
+    expect(liveRegion().textContent).toContain('Finding 2 of 2')
+  })
+
+  it('keyboard navigation (j/k) moves focus to the newly-selected row', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    await key(queueList(), 'j')                                        // vim-style down
+    const focused = container.querySelector('[aria-current="true"]')
+    expect(document.activeElement).toBe(focused)
+    expect(focused.textContent).toContain('Image needs alt text')     // advanced to id2
+  })
 })

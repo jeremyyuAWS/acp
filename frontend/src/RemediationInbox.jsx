@@ -53,8 +53,15 @@ function QueueRow({ f, decisions, selected, onSelect, showFile = true }) {
   return (
     <button
       type="button"
+      id={`rinbox-row-${f.id}`}
       onClick={() => onSelect(f.id)}
       aria-current={selected ? 'true' : undefined}
+      // Roving tabindex: only the selected row is a Tab stop; Arrow/j-k keys move between rows (handled
+      // on the list container), so a keyboard user reaches the queue in ONE tab and steps through it.
+      tabIndex={selected ? 0 : -1}
+      // A clean spoken label — the issue, its document, and the remediation state — instead of the
+      // raw concatenation of the visible chips.
+      aria-label={`${r.issue}, ${r.file}${r.location ? `, ${r.location}` : ''}${r.laneShort ? ` — ${r.laneShort}` : ''}`}
       className="rinbox-row"
       style={{
         display: 'flex', gap: 10, width: '100%', textAlign: 'left', cursor: 'pointer',
@@ -481,6 +488,32 @@ export default function RemediationInbox({
   const goPrev = () => { if (curIdx > 0) setSelectedId(visIds[curIdx - 1]) }
   const goNext = () => { if (curIdx >= 0 && curIdx < visIds.length - 1) setSelectedId(visIds[curIdx + 1]) }
 
+  // ── Keyboard navigation + screen-reader support for the queue ──
+  // The queue is operable end to end without a mouse: one Tab lands on the selected row (roving
+  // tabindex on QueueRow), then Up/Down (or j/k) step the selection and Home/End jump to the ends. A
+  // polite live region announces the moved-to finding and its N-of-M place — and the SAME announcement
+  // fires on the auto-advance after a decision, so a screen-reader user always knows where the
+  // workspace just went. (An accessibility tool should itself be exemplary here.)
+  const listRef = useRef(null)   // the queue's scroll container; catches key events bubbling from the rows
+  const kbNavRef = useRef(false) // set when the selection moved by keyboard, so focus follows it
+  const onQueueKey = (e) => {
+    const k = e.key
+    if (k === 'ArrowDown' || k === 'j') { e.preventDefault(); kbNavRef.current = true; goNext() }
+    else if (k === 'ArrowUp' || k === 'k') { e.preventDefault(); kbNavRef.current = true; goPrev() }
+    else if (k === 'Home') { e.preventDefault(); if (visIds.length) { kbNavRef.current = true; setSelectedId(visIds[0]) } }
+    else if (k === 'End') { e.preventDefault(); if (visIds.length) { kbNavRef.current = true; setSelectedId(visIds[visIds.length - 1]) } }
+  }
+  // Move focus to the newly-selected row ONLY when the change came from the keyboard, so a mouse click
+  // (or the auto-advance after a decision) never yanks focus out from under the reviewer.
+  useEffect(() => {
+    if (!kbNavRef.current) return
+    kbNavRef.current = false
+    listRef.current?.querySelector('[aria-current="true"]')?.focus()
+  }, [selectedId])
+  const announce = visIds.length === 0
+    ? 'No findings in this view.'
+    : (selected ? `Finding ${position} of ${visIds.length}: ${rowModel(selected, decisions).issue}, in ${selected.file}.` : '')
+
   // The two workspace panes, defined once and placed differently per layout (side by side, stacked,
   // or guided-only). The layout toggle sits on the guided header — the pane that is always shown.
   const guidedHeader = (
@@ -515,6 +548,12 @@ export default function RemediationInbox({
 
   return (
     <div className="rinbox-wrap">
+      {/* Screen-reader announcer: the selected finding and its place in the queue, updated on every
+          selection change — manual, keyboard, or the auto-advance after a decision. Visually hidden. */}
+      <div aria-live="polite" role="status"
+           style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>
+        {announce}
+      </div>
       {/* Dark app header (mockup): the section title + the workflow-status tabs as the page's top
           chrome — one lens on where every finding sits in the pipeline (Inbox → In progress →
           Ready to validate → Blocked → Done), spanning the three panes below. */}
@@ -585,7 +624,8 @@ export default function RemediationInbox({
             <span className="muted" style={{ fontSize: 11.5, fontWeight: 600 }}>{prog.resolved} of {prog.total} reviewed</span>
           </div>
         </div>
-        <div style={{ flex: '1 1 auto', overflowY: 'auto' }}>
+        <div ref={listRef} onKeyDown={onQueueKey} aria-label="Findings — use Up and Down arrow keys to move between them"
+             style={{ flex: '1 1 auto', overflowY: 'auto' }}>
           {visible.length === 0 ? (
             <p className="muted" style={{ padding: 16, fontSize: 13 }}>
               {assignedOnly
