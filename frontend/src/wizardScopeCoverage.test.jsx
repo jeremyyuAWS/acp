@@ -43,7 +43,12 @@ const { default: ScanScopeWizard } = await import('./ScanScopeWizard.jsx')
 const HR = { id: 'hr', name: 'HR' }
 const FIN = { id: 'fin', name: 'Finance' }
 const runOf = (over) => ({
-  id: 'r1', completed_at: '2026-08-18T10:00:00Z', source: 'drive', files: 240,
+  // Relative to "now" (~2h ago → whenLabel renders "today"/"yesterday", which the date-label test
+  // below matches). This was a hardcoded '2026-08-18' that read as "yesterday" on the 19th but
+  // aged into the absolute "Aug 18" on the 20th, turning whenLabel absolute and reddening the
+  // whole frontend suite for everyone — a fixed calendar date in a wall-clock assertion is a
+  // time bomb. Overridable per-test (the different-boundary case passes its own date).
+  id: 'r1', completed_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), source: 'drive', files: 240,
   scope: { kind: 'folder', folders: [HR] }, ...over,
 })
 
