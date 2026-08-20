@@ -724,6 +724,16 @@ export const getFileGeometry = (scanId, file, locator) => (SIM || !scanId || !fi
       .then(d => (d && d.bbox) || null)
       .catch(() => null))
 
+// The docx heading outline {before,after} for a heading finding's Structure evidence — computed on
+// demand from the document (mirrors getFileGeometry). null when unavailable (non-docx, <2 headings,
+// already-clean outline, or any failure), so the card degrades to the honest generic note.
+export const getHeadingOutline = (scanId, file) => (SIM || !scanId || !file
+  ? sim(null)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/heading-outline`, { headers: headers() })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => (d && d.outline) || null)
+      .catch(() => null))
+
 // ADR 0024 Tier B.1 — render-verified 1.4.3-hybrid contrast, ON DEMAND. With no locator the
 // backend re-derives every text-over-picture/gradient shape and MEASURES each from real pixels,
 // returning {measured:true, worst_ratio, any_fail_aa, shapes:[…], checked, total} or an honest

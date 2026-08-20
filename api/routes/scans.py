@@ -1241,6 +1241,28 @@ def get_file_geometry(scan_id: str, filename: str, request: Request,
     return {"bbox": _geom.shape_bbox(data, ext, locator)}
 
 
+@router.get("/scans/{scan_id}/files/{filename:path}/heading-outline")
+def get_heading_outline(scan_id: str, filename: str, request: Request):
+    """The docx heading outline `{before,after}` for a heading finding's Structure evidence — the
+    document's real styled headings in order, and a never-skip correction of them. docx-only (a PDF
+    exposes heading PRESENCE, not an extractable outline, exactly as geometry is pptx/xlsx-only).
+    Owner-scoped and non-blocking: any other format, a doc with fewer than two headings, or an
+    outline that already nests correctly returns `{"outline": null}` — a 200 with nothing, so the
+    card degrades to the honest generic note rather than erroring. Honesty (ADR 0016): real extracted
+    headings + a deterministic renumber, never a fabricated tree."""
+    owner = _owner(request)
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    ext = os.path.splitext(filename)[1].lower()
+    if ext != ".docx":
+        return {"outline": None}
+    data = _source_bytes_for_render(request, scan_id, filename, owner)
+    if not data:
+        return {"outline": None}
+    import doc_structure as _ds
+    return {"outline": _ds.heading_outline(data, ext)}
+
+
 # A reviewer opening one 1.4.3-hybrid card shouldn't trigger dozens of slide renders; bound the
 # work per request (the OCR-cap precedent). A deck with more hybrid shapes than this reports the
 # cap honestly (`checked` < `total`) rather than silently covering only some.
