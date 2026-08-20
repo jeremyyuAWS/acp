@@ -690,19 +690,41 @@ def discover_span(trace, engine: str):
         return _Noop()
 
 
-def assess_span(trace, level: str):
+def assess_span(trace, level: str, *, blocking: bool = False, findings: bool = False):
     """The Assess phase span on a file's trace — rule_spans (above) attach as its
     children, exactly as they did on the old per-document span. Deterministic id
     per (trace, level): re-running Assess (another click, a worker retry, the
     trace-chip rebuild) upserts THIS span rather than appending an identical
-    sibling; assessing at a different WCAG level still gets its own span."""
+    sibling; assessing at a different WCAG level still gets its own span.
+
+    Carries a LEVEL so a non-conformant document stands out in the trace list/timeline instead of
+    looking identical to a clean one: ERROR when a finding blocks conformance (`blocking`), WARNING
+    when there are findings that don't block (review only), DEFAULT when clean. Rule-level spans
+    already flag each individual failure (see rule_spans / _level_for); this is the file-level roll-up."""
     if isinstance(trace, _Noop):
         return _Noop()
+    lvl = "ERROR" if blocking else ("WARNING" if findings else "DEFAULT")
     try:
         return trace.span(id=_det_id(trace.id, "assess", level),
-                          name=f"Assess · WCAG 2.1 {level}")
+                          name=f"Assess · WCAG 2.1 {level}", level=lvl)
     except Exception:
         return _Noop()
+
+
+def file_error_span(trace, reason: str | None):
+    """An ERROR-level span marking a file that could not be assessed — a fetch/parse failure, an
+    unreadable document, or a per-file timeout (handlers' wall-clock safety net). Makes a failed
+    file visible in its trace and filterable by level in the Langfuse list, instead of looking like
+    a clean discover-only trace. `reason` is a short status string — never document content."""
+    if isinstance(trace, _Noop):
+        return
+    try:
+        s = trace.span(id=_det_id(getattr(trace, "id", ""), "file-error"),
+                       name="⚠ Could not assess this file", level="ERROR",
+                       status_message=(str(reason)[:200] if reason else "error"))
+        s.end(output={"status": "error", "reason": (str(reason)[:200] if reason else "error")})
+    except Exception:
+        pass
 
 
 def remediate_span(trace, drive_write_url: str | None, *, fixes_applied: int | None = None,

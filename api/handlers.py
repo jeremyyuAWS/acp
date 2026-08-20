@@ -1240,6 +1240,14 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                 "drive_file_id": item.get("drive_file_id")}, now)
         except Exception:
             pass
+        # Flag the timed-out file ERROR in its trace (item 2), so it stands out in Langfuse instead
+        # of looking like a clean discover-only trace. Best-effort.
+        try:
+            import lf as _lf2
+            _lf2.file_error_span(_lf2.file_trace(scan_id, name, user=user),
+                                 f"exceeded per-file limit {cap}s")
+        except Exception:
+            pass
         return
     if "error" in outcome:
         raise outcome["error"]   # preserve the impl's original error propagation
@@ -1463,6 +1471,17 @@ def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _l
         dspan.end(output={"engine": fdict["engine"], "sensitive_data": (pinfo or {}).get("total", 0),
                           **({"duplicate_of": dedup_of} if dedup_of else {}),
                           **({"reused_from_scan": reused_from_scan} if reused_from_scan else {})})
+        # Item 1 — write this file's ASSESS result to its trace NOW (not only in the finalize
+        # batch), so scores show up in Langfuse as the scan progresses. Item 2 — a file that could
+        # not be assessed gets an ERROR-level span so it stands out in the trace list instead of
+        # looking like a clean discover-only trace. Both best-effort — tracing never breaks a scan.
+        try:
+            if str(fdict.get("status")) in ("error", "unanalysable"):
+                _lf.file_error_span(ftrace, fdict.get("error") or fdict.get("status"))
+            else:
+                _emit_realtime_file_assess(scan_id, name, _assess_level(scan_id), user=user)
+        except Exception:
+            pass
     finally:
         _shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1645,6 +1664,78 @@ def _scan_finalize(payload: dict, job: dict) -> None:
     core.clear_scan_tokens(scan_id)
 
 
+def _assess_level(scan_id: str) -> str:
+    """The WCAG conformance target this scan is assessed against — the deferred-Assess param when
+    present, else the AA legal default. Used to write per-file assess results in real time."""
+    try:
+        lvl = _json.loads(core.store.get_setting(f"assess_params:{scan_id}") or "{}").get("level")
+        if lvl:
+            return str(lvl)
+    except Exception:
+        pass
+    return "AA"
+
+
+def _file_assess_from_traces(rule_rows: list[dict], level: str):
+    """(sc_counts, outcomes, conformant) for ONE file from its scan_rule_traces rows — the same
+    reduction ensure_assess_trace does per file, factored out so the real-time and finalize paths
+    cannot diverge. `conformant` = no FAIL at or below the target WCAG level."""
+    RANK = {"A": 1, "AA": 2, "AAA": 3}
+    target = RANK.get(str(level).upper(), 2)
+    sc_counts: dict[str, int] = {}
+    outcomes: dict[str, int] = {}
+    blocking = False
+    for r in rule_rows:
+        oc = r.get("outcome") or "NOT_EVALUATED"
+        outcomes[oc] = outcomes.get(oc, 0) + 1
+        if r.get("outcome") == "FAIL":
+            sc_counts[r["rule_id"]] = r.get("finding_count") or 1
+            if RANK.get((r.get("level") or "A").upper(), 1) <= target:
+                blocking = True
+    return sc_counts, outcomes, (not blocking)
+
+
+def _emit_file_assess(scan_id: str, fname: str, level: str, *, sc_counts, outcomes, conformant,
+                      score, pii_payload, remediation, user=None) -> None:
+    """Write ONE file's assessment to its Langfuse trace: the Assess span (level-flagged so a
+    non-conformant file stands out), its per-rule ✓/✗ children, the file score, and the trace-level
+    verdict/output. Shared by the finalize pass (ensure_assess_trace) and the real-time per-file
+    path so both write identically; Langfuse upserts by id, so calling it twice just refreshes."""
+    import lf as _lf
+    from store import RULE_CATALOG
+    ftrace = _lf.file_trace(scan_id, fname, user=user)
+    aspan = _lf.assess_span(ftrace, level, blocking=(not conformant), findings=bool(sc_counts))
+    if sc_counts:
+        _lf.rule_spans(aspan, sc_counts, RULE_CATALOG, filename=fname, scan_id=scan_id, user=user)
+    aspan.end(output={"conformant": conformant, "failing_criteria": len(sc_counts or {})})
+    _lf.file_score(scan_id, fname, score)
+    _lf.file_assessment_result(scan_id, fname, score=score, conformant=conformant, level=level,
+                               failing_criteria=sc_counts, outcomes=outcomes,
+                               pii=pii_payload, remediation=remediation)
+
+
+def _emit_realtime_file_assess(scan_id: str, fname: str, level: str, user=None) -> None:
+    """Item 1: write a file's assessment to its trace as soon as it is scored, so scores appear in
+    Langfuse AS a scan runs instead of only in one batch at finalize (the mid-run blind spot).
+    Minimal on purpose — score / conformance / failing criteria / per-check breakdown from the
+    file's own rule traces; the finalize pass adds PII + the complete record and upserts over it.
+    Best-effort: observability must never break the scan, and it does no work when tracing is off."""
+    import lf as _lf
+    if not _lf.enabled():
+        return
+    rows = core.store.get_scan_traces(scan_id, file=fname)
+    if not rows:
+        return   # not scored yet (discover-only / errored) — nothing to assess
+    rec = core.store.get_file_record(scan_id, fname) or {}
+    sc_counts, outcomes, conformant = _file_assess_from_traces(rows, level)
+    remediation = {"remediated": bool(rec.get("remediated_at")),
+                   "written_back": bool(rec.get("drive_write_url")),
+                   "published": bool(rec.get("published_at"))}
+    _emit_file_assess(scan_id, fname, level, sc_counts=sc_counts, outcomes=outcomes,
+                      conformant=conformant, score=rec.get("score"), pii_payload=None,
+                      remediation=remediation, user=user)
+
+
 def ensure_assess_trace(scan_id: str, level: str = "AA") -> None:
     """Write the WCAG assessment to each file's OWN Langfuse trace (file-centric tracing —
     see lf.file_trace): an 'Assess' span per file, with that file's per-rule ✓/✗ outcomes
@@ -1694,12 +1785,10 @@ def ensure_assess_trace(scan_id: str, level: str = "AA") -> None:
             e["critical"] = True
     for f in (res or {}).get("files", []):
         fname = f["file"]
-        ftrace = _lf.file_trace(scan_id, fname, user=owner)
-        aspan = _lf.assess_span(ftrace, level)
-        sc_counts = by_file.get(fname)
+        sc_counts = by_file.get(fname) or {}
         if sc_counts:
-            _lf.rule_spans(aspan, sc_counts, RULE_CATALOG, filename=fname, scan_id=scan_id, user=owner)
             conformant = fname not in blocking_files
+            # Seed a remediation_state row for every violation newly seen at Assess time.
             ident = identities.get(fname) or {}
             try:
                 doc_id = resolve_doc_id(source, ident.get("drive_file_id"), fname, ident.get("checksum"))
@@ -1709,8 +1798,6 @@ def ensure_assess_trace(scan_id: str, level: str = "AA") -> None:
                 pass
         else:
             conformant = not bool(f.get("issues"))
-        aspan.end(output={"conformant": conformant, "failing_criteria": len(sc_counts or {})})
-        _lf.file_score(scan_id, fname, f.get("score"))
         pe = pii_by_file.get(fname)
         pii_payload = ({"flagged": True, "types": sorted(pe["types"]),
                         "findings": pe["findings"], "critical": pe["critical"]}
@@ -1718,14 +1805,13 @@ def ensure_assess_trace(scan_id: str, level: str = "AA") -> None:
         remediation = {"remediated": bool(f.get("remediated_at")),
                        "written_back": bool(f.get("drive_write_url")),
                        "published": bool(f.get("published_at"))}
-        # Trace-level verdict for the session list: score + conformance + failing WCAG criteria,
-        # the full per-check pass/fail/review/not-evaluated breakdown, a PII flag, and remediation
-        # status. Structured only — no document content (see lf.file_assessment_result).
-        _lf.file_assessment_result(scan_id, fname, score=f.get("score"),
-                                   conformant=conformant, level=level,
-                                   failing_criteria=sc_counts,
-                                   outcomes=outcomes_by_file.get(fname),
-                                   pii=pii_payload, remediation=remediation)
+        # The Assess span (level-flagged), per-rule ✓/✗ children, file score, and the trace-level
+        # verdict — the SAME emit the real-time per-file path uses, so a scan's finalize pass and
+        # its incremental writes can never disagree. Structured only (see lf.file_assessment_result).
+        _emit_file_assess(scan_id, fname, level, sc_counts=sc_counts,
+                          outcomes=outcomes_by_file.get(fname), conformant=conformant,
+                          score=f.get("score"), pii_payload=pii_payload,
+                          remediation=remediation, user=owner)
     _lf.flush()
 
 
