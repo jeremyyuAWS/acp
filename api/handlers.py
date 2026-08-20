@@ -134,7 +134,14 @@ def _scan(payload: dict, job: dict) -> None:
     scan_id = payload.get("scan_id") or job.get("scan_id")
     if not scan_id:
         raise FatalJobError("scan job missing scan_id")
-    source = payload.get("source", "local")
+    # Fail closed on a missing source rather than defaulting to 'local'. 'local' scans the bundled
+    # test corpus, not the production estate — a source-less job silently defaulting to it produces a
+    # small scan that lands as 'latest' and collapses every dashboard/report/selector (the exact
+    # fingerprint the production probe caught). The route always sets a source, so this only fires on
+    # a malformed/legacy job, where a loud failure beats scanning test files.
+    source = payload.get("source")
+    if not source:
+        raise FatalJobError("scan job missing source")
     ai = bool(payload.get("ai", True))
     effective_ai = ai and core.store.get_ai_enabled()
 
