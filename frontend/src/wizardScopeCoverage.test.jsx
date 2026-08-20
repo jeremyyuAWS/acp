@@ -65,14 +65,11 @@ async function mount(scans = []) {
 
 const btn = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent))
 const chip = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent) && b.hasAttribute('aria-pressed'))
-const toReview = async (c) => {
-  for (let i = 0; i < 2; i++) {
-    const cont = btn(c, /Continue/)
-    if (!cont) break
-    // eslint-disable-next-line no-await-in-loop
-    await act(async () => { cont.click() })
-  }
-}
+// The review summary is on the same screen as the scope now (PRD DISC-01 collapsed the three
+// steps to one), so there is nowhere to walk to. Kept as a no-op rather than deleted at every call
+// site: the tests still read as "choose a scope, then look at what it says about it", which is the
+// sequence they are about.
+const toReview = async () => {}
 
 describe('there is still no invented pre-scan estimate', () => {
   it('says the count is determined at scan time when this scope has no history', async () => {
@@ -130,9 +127,9 @@ describe('a measured number, matched on the whole boundary', () => {
     await act(async () => { chip(c, /HR/).click() })
     await toReview(c)
     expect(c.textContent).toMatch(/240 documents/)
-    // Back to step 1, switch to the Finance scope, forward again.
-    await act(async () => { btn(c, /Back/).click() })
-    await act(async () => { btn(c, /Back/).click() })
+    // No Back — one screen. Switching the scope must move the number underneath it just the same,
+    // which is the whole point: a count that outlives the scope it measured is the stale-number
+    // defect this line exists to prevent.
     await act(async () => { chip(c, /Finance/).click() })
     await toReview(c)
     expect(c.textContent).toMatch(/12 documents/)

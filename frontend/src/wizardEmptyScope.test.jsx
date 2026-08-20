@@ -43,7 +43,10 @@ async function mount() {
 }
 
 const btn = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent))
-const continueBtn = (c) => btn(c, /Continue/)
+// The primary action. Was Continue when Discover had three steps; it is Start discovery now
+// (PRD DISC-01 collapsed it to one). What is guarded is unchanged: the action is blocked
+// while 'Specific folders' is chosen with none selected, and it says why.
+const continueBtn = (c) => btn(c, /Start discovery/)
 const modeBtn = (c, label) => [...c.querySelectorAll('[role="radio"]')]
   .find((b) => b.textContent.includes(label))
 
@@ -54,12 +57,12 @@ async function chooseSpecificFolders(c) {
 }
 
 describe('narrowing with nothing selected', () => {
-  it('disables Continue instead of scanning everything', async () => {
+  it('disables the primary action instead of scanning everything', async () => {
     const c = await mount()
     await chooseSpecificFolders(c)
     const b = continueBtn(c)
-    expect(b, 'there is no Continue button to assert about').toBeTruthy()
-    expect(b.disabled, 'Continue is live over an empty "Specific folders" selection').toBe(true)
+    expect(b, 'there is no primary action to assert about').toBeTruthy()
+    expect(b.disabled, 'the primary action is live over an empty "Specific folders" selection').toBe(true)
   })
 
   it('says why, rather than leaving a dead button', async () => {
@@ -85,16 +88,16 @@ describe('narrowing with nothing selected', () => {
 })
 
 describe('the states that must stay available', () => {
-  it('Continue works in "Entire source", where empty is the honest answer', async () => {
+  it('the primary action works in "Entire source", where empty is the honest answer', async () => {
     // The control. If the block fired here it would be unusable, and this is also the assertion
     // that proves the disabled cases above are not just "the button is always disabled".
     const c = await mount()
     const m = modeBtn(c, 'Entire connected source')
     if (m) await act(async () => { m.click() })
-    expect(continueBtn(c).disabled, 'Continue is blocked in the entire-source mode').toBe(false)
+    expect(continueBtn(c).disabled, 'the primary action is blocked in the entire-source mode').toBe(false)
   })
 
-  it('Continue returns as soon as a folder is ticked', async () => {
+  it('the primary action returns as soon as a folder is ticked', async () => {
     const c = await mount()
     await chooseSpecificFolders(c)
     expect(continueBtn(c).disabled).toBe(true)
@@ -107,7 +110,7 @@ describe('the states that must stay available', () => {
     expect(box, 'the folder checkbox is not on screen — the test cannot exercise selection')
       .toBeTruthy()
     await act(async () => { box.click() })
-    expect(continueBtn(c).disabled, 'Continue stayed blocked after a folder was selected')
+    expect(continueBtn(c).disabled, 'the primary action stayed blocked after a folder was selected')
       .toBe(false)
   })
 })

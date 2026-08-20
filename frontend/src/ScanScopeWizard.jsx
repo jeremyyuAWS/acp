@@ -2,8 +2,6 @@ import { useState, useEffect, useMemo, Fragment } from 'react'
 import { getSettings, updateSettings, getScanLocations, setScanLocations,
          listFolders, listSpFolders } from './api.js'
 import { scopeFooterPart, blockedReason } from './wizardScopeReady.js'
-import { ASSESSED_ROW_LABEL, assessedFormatsLine, OTHER_TYPES_NOTE,
-         footerFormatsPart } from './assessedFormats.js'
 import FolderPicker from './FolderPicker.jsx'
 import { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } from './scopePresets.js'
 import { TRACKED_17, RULE_DETAILS } from './ruleDetails.js'
@@ -326,7 +324,10 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   // comparisons, and a stale memo here would caption one boundary's count with another's, which
   // is the precise failure this is meant to prevent.
   const lastRun = lastRunOfScope(scans,
-    { folders, excluded, scan_scope: restrict ? toPayload(sel) : null }, locKey)
+    // Folders only. PRD 5.1 — a reused Discover scope restores source and folders, never the
+    // criteria that run happened to use; those are Assess's, and carrying them here is what
+    // made the recent-scope cards read as "Entire source · 16 criteria".
+    { folders, excluded }, locKey)
 
   const profile = profileFor(restrict, sel)
 
@@ -498,38 +499,8 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
     </button>
   )
 
-  // Persist the scope. Returns true when the platform accepted (or was cleared), false when it was
-  // refused or only simulated — the caller uses that to decide whether "Start scan" proceeds.
-  const save = async () => {
-    if (restrict && chosen === 0) { setMsg(EMPTY_GUARD); return false }
-    setBusy(true); setMsg('')
-    try {
-      const payload = restrict ? toPayload(sel) : ''
-      const res = await updateSettings({ scan_scope: payload })
-      if (res?.simulated) { setMsg(SIM_NOT_WRITTEN); return false }
-      // Trust the SERVER's echo, not the request.
-      const back = res?.scan_scope ?? ''
-      setSaved(back)
-      const reparsed = parseStoredScope(back)
-      setRestrict(Boolean(reparsed))
-      setSel(reparsed || {})
-      setMsg(restrict
-        ? `✓ Scope saved — ${chosen} supported checks in scope.`
-        : '✓ Scope cleared — every criterion the engine supports is assessed.')
-      return true
-    } catch (e) {
-      const m = String(e?.message || e)
-      if (m.includes('403')) { setForbidden(true); setMsg('Owner-only — this account cannot change the scope.') }
-      else setMsg(`Could not save: ${m}`)
-      return false
-    } finally { setBusy(false) }
-  }
 
   const startScan = async () => {
-    if (restrict && chosen === 0) { setMsg(EMPTY_GUARD); return }
-    // "Remember" persists this scope as the platform default for next time; either way the scan
-    // runs. A read-only account cannot persist, so it just starts with the scope already stored.
-    if (remember && canEdit) { await save() }
     // Explicit write-back only. A one-off narrow scan must not quietly reconfigure the connection:
     // every later scheduled scan would then cover less, and it would look like configuration
     // somebody chose on purpose.
@@ -560,10 +531,13 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   // with no explanation is its own defect, and the reason is the thing the user has to act on.
   const blocked = locKey ? blockedReason(scopeMode, folders) : null
 
+  // Locations, and nothing else. It read "Entire source · 4 formats assessed · Custom scope" —
+  // two thirds of which described a decision this screen no longer makes. A summary naming the
+  // criteria profile on a screen with no criteria control is the contradiction #502 fixed for the
+  // folder half, in the other direction.
   const footerSummary = [
     locKey ? scopeFooterPart(scopeMode, folders, excluded) : null,
-    footerFormatsPart(nFormats),
-    profileLabel,
+    'all file types',
   ].filter(Boolean).join(' · ')
 
   return (
@@ -579,12 +553,6 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
         </span>
       </p>
 
-      {!canEdit && (
-        <p role="status" style={{ fontSize: 13, background: '#FBF1DF', border: '1px solid #EAD9BF',
-                                  borderRadius: 8, padding: '10px 12px', color: '#6B4A0B' }}>
-          🔒 <b>Read-only.</b> Scope is set by your workspace owner — this scan uses the shared scope.
-        </p>
-      )}
 
       {/* ── Stepper ─────────────────────────────────────────────────────────── */}
       {/* Numbered, not just visually distinct: a step count is the cheapest way to say "there is
@@ -829,29 +797,6 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
       {/* ── 5/7. Footer ─────────────────────────────────────────────────────── */}
       {showStartButton ? (
         <>
-          {/* THE CRITERIA WRITE-BACK, now symmetric with the folder one directly above it.
-              It used to read "Remember these selections for my next scan", be ticked by DEFAULT,
-              and appear on every run. Three things were wrong with that. It is not "my next scan"
-              — `scan_scope` is the platform default and applies to everyone. Being on by default
-              made a one-off narrowing into permanent configuration unless somebody noticed a
-              ticked box, which is the exact failure the folder half is careful about, with the
-              default the wrong way round. And a checkbox that is always there is a checkbox people
-              tick without reading; appearing only once the run actually DIFFERS from what is
-              stored makes its absence a signal too.
-              Hidden for a non-owner rather than shown and ignored: PUT /settings is admin-only, so
-              offering it to a read-only account promises a write that 403s. */}
-          {dirty && canEdit && (
-            <div style={{ margin: '12px 0 0' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-                <input type="checkbox" checked={remember} disabled={busy}
-                       onChange={(e) => setRemember(e.target.checked)} />
-                Also save these criteria as the platform default
-              </label>
-              <div className="muted" style={{ fontSize: 11.5, marginLeft: 24 }}>
-                Applies to every later scan, for everyone. This run uses them either way.
-              </div>
-            </div>
-          )}
 
           {/* Sticky footer: the running scope stays visible while the folder tree or the criterion
               matrix scrolls, so the primary action never leaves the screen and the summary never
@@ -876,14 +821,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
             </span>
           </div>
         </>
-      ) : (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
-          <button className="ghost small" type="button" onClick={save} disabled={busy || !canEdit || !dirty}>
-            {busy ? 'Saving…' : 'Save as reusable scope'}
-          </button>
-          {!dirty && <span className="muted" style={{ fontSize: 12 }}>No unsaved changes</span>}
-        </div>
-      )}
+      ) : null}
 
       {msg && <p role="status" aria-live="polite"
                  style={{ margin: '10px 0 0', fontSize: 13, color: msgColor(msg) }}>{msg}</p>}

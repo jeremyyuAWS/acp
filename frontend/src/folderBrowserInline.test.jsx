@@ -240,12 +240,12 @@ describe('step 1 of the wizard mounts the browser inline', () => {
     await act(async () => { btn(c, /Specific folders/).click() })
     await act(async () => { byLabel(c, /Select HR/).click() })
     for (let i = 0; i < 2; i++) {
-      const cont = btn(c, /Continue/)
+      const cont = null   // one screen — nothing to advance through
       if (!cont) break
       // eslint-disable-next-line no-await-in-loop
       await act(async () => { cont.click() })
     }
-    await act(async () => { btn(c, /Start scan/).click() })
+    await act(async () => { btn(c, /Start discovery/).click() })
     expect(seen[0].folders.map((f) => f.id)).toEqual(['hr'])
   })
 })

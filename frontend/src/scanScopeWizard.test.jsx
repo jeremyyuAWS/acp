@@ -79,68 +79,40 @@ describe('the wizard chrome', () => {
 // ── the Customize reveal wraps the existing grid ────────────────────────────────────────────────
 // ── owning its own state: picking a profile loads it ────────────────────────────────────────────
 describe('scope state', () => {
-  it('renders the footer only with showStartButton, and starts a scan on confirm', async () => {
-    // The launch surface is now three steps, so Start lives on the last one. The intent of this
-    // test — the footer exists with showStartButton, and confirming dispatches onStartScan — is
-    // unchanged; it just has to walk there, which is what a user does too.
+  it('renders the footer with showStartButton, and starts discovery on confirm', async () => {
+    // Same guarantee as before — the footer exists and confirming dispatches onStartScan — but
+    // there is nothing to walk through now. One question, one screen, one action.
     const started = vi.fn()
     const c = await render({ showStartButton: true, onStartScan: started })
-    const cont = () => [...c.querySelectorAll('button')].find((b) => /Continue/.test(b.textContent))
-    expect(cont(), 'no Continue control on step 1').toBeTruthy()
-    await click(cont())
-    await click(cont())
-    const startBtn = [...c.querySelectorAll('button')].find((b) => /Start scan/.test(b.textContent))
-    expect(startBtn).toBeTruthy()
-    // The criteria write-back is NOT here: this run matches the stored scope, so there is nothing
-    // to write and a checkbox offering to write it would be a control that does nothing. It
-    // appears only on divergence — see "the criteria write-back is opt-in and only on divergence".
-    expect(c.textContent).not.toMatch(/save these criteria as the platform default/)
+    expect([...c.querySelectorAll('button')].some((b) => /Continue/.test(b.textContent)),
+      'a Continue control survived the collapse to one step').toBe(false)
+    const startBtn = [...c.querySelectorAll('button')].find((b) => /Start discovery/.test(b.textContent))
+    expect(startBtn, 'no Start discovery control').toBeTruthy()
+    // "discovery", not "scan": this lists the estate and opens no file — the WCAG work is Assess's.
+    expect(c.textContent).not.toMatch(/Start scan/)
     await click(startBtn)
     expect(started).toHaveBeenCalled()
   })
 
-  it('shows one step at a time, so the matrix is not in front of a first-time user', async () => {
-    // The point of the restructure. Everything at once is what made a basic scan require
-    // scrolling past expert configuration.
+  it('offers NO format or WCAG control — the phase-1 exit condition', async () => {
+    // Was "shows one step at a time, so the matrix is not in front of a first-time user", when
+    // this was a layout preference. It is a rule now (PRD DISC-01), so the assertion is inverted
+    // and kept: Discover asks where to inventory and nothing else. The formats and criteria live
+    // in Assess, against the inventory this produces.
     const c = await render({ showStartButton: true })
     expect(c.textContent).toMatch(/DRIVE LOCATIONS|Entire connected source/)
-    expect(c.textContent).not.toMatch(/FILE FORMATS/)
+    for (const gone of [/FILE FORMATS/, /SCAN PROFILE/, /supported checks selected/,
+                        /Customize/, /Not supported/]) {
+      expect(c.textContent, `a format/criteria control is back on Discover: ${gone}`)
+        .not.toMatch(gone)
+    }
+    // And it says what the run WILL cover, so "no format control" cannot be read as "no formats".
+    expect(c.textContent).toMatch(/All file types will be inventoried/)
   })
 
-  it('has no footer when standalone, but offers "Save as reusable scope"', async () => {
-    const c = await render()
-    expect([...c.querySelectorAll('button')].some((b) => /Start scan/.test(b.textContent))).toBe(false)
-    expect([...c.querySelectorAll('button')].some((b) => /Save as reusable scope/.test(b.textContent))).toBe(true)
-  })
 })
 
 // ── owner-only: a non-owner (canEditScope=false) gets a read-only wizard + a clear note ──────────
-describe('read-only for a non-owner', () => {
-  it('renders the owner note and disables every scope control when canEditScope is false', async () => {
-    const c = await render({ canEditScope: false })
-    // The note is up front (role=status), names it read-only, and points at the workspace owner —
-    // scope is owner-only (PUT /settings is owner-gated), so a non-owner is told before they edit.
-    const note = [...c.querySelectorAll('[role="status"]')]
-      .find((n) => /Read-only/i.test(n.textContent))
-    expect(note, 'no read-only owner note').toBeTruthy()
-    expect(note.textContent).toMatch(/owner/i)
-    // Profile pills and format cards are disabled — the scope cannot be changed here.
-    for (const r of byRole(c, 'radio')) expect(r.disabled).toBe(true)
-    const formatCards = byRole(c, 'checkbox')
-      .filter((e) => /supported criteria/.test(e.getAttribute('aria-label') || ''))
-    expect(formatCards.length).toBe(4)
-    for (const card of formatCards) expect(card.disabled).toBe(true)
-    // Every criterion×format cell input in the grid is disabled too.
-    for (const b of cellBoxes(c)) expect(b.disabled).toBe(true)
-  })
-
-  it('leaves the controls editable when canEditScope is true (the default, fail-open)', async () => {
-    const c = await render({ canEditScope: true })
-    expect([...c.querySelectorAll('[role="status"]')].some((n) => /Read-only/i.test(n.textContent))).toBe(false)
-    for (const r of byRole(c, 'radio')) expect(r.disabled).toBe(false)
-  })
-})
-
 // ── Phase 2: the redesigned matrix (sticky, principle groups, column/row/group controls, cells,
 //    search + filters) ─────────────────────────────────────────────────────────────────────────
 const detailsOf = (c) => [...c.querySelectorAll('details')]

@@ -64,7 +64,7 @@ async function toStart(c) {
     // eslint-disable-next-line no-await-in-loop
     await act(async () => { cont.click() })
   }
-  return btn(c, /Start scan/)
+  return btn(c, /Start discovery/)
 }
 
 describe('the card seeds the wizard', () => {
