@@ -11,6 +11,13 @@ import ManualWork from './ManualWork.jsx'
 import RemediationVerify from './RemediationVerify.jsx'
 import DeliveryPanel from './DeliveryPanel.jsx'
 import CloseoutPanel from './CloseoutPanel.jsx'
+// The per-ITEM three, injected into the inbox's detail pane rather than mounted on the page:
+// each answers a question about ONE finding or ONE document, and a page-level copy would have no
+// subject. R8 is page-level because a failure list is a property of the run.
+import RemediationFixPreview from './RemediationFixPreview.jsx'
+import RemediationDocProgress from './RemediationDocProgress.jsx'
+import DocumentAudit from './DocumentAudit.jsx'
+import FixOutcomes from './FixOutcomes.jsx'
 import { autoFixRows, matchesWorkflow } from './remediationInboxModel.js'
 import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
@@ -840,6 +847,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           defaults ON and a copy IS written into the customer's own drive. */}
       <DeliveryPanel files={files} />
 
+      {/* R8 · when a fix fails. Page-level, because "what did not work in this run" is a property
+          of the run rather than of whichever finding happens to be selected. It reads its own
+          decisions and jobs, so it needs only the scan. */}
+      <FixOutcomes scanId={run?.id} files={files} cap={cap} />
+
       {/* R12 · close the loop. */}
       <CloseoutPanel docs={files}
                      onReverify={() => onRefresh && onRefresh()}
@@ -923,7 +935,20 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         {inboxQueue.length === 0 ? (
           <p className="muted">{reviewEmptyLine(files, { totalHitl, acted })}</p>
         ) : (
+          // R4, R7 and R10 ride in the detail pane, beside the finding they describe. `sel` is
+          // null when nothing is selected and each component self-guards on that, so an empty
+          // selection renders an empty pane rather than three frames of nothing.
+          //
+          // A LINE comment, not {/* */}: this is an expression position, not a children position,
+          // and a JSX comment here is a parse error. Second time tonight.
           <RemediationInbox
+            renderDetailExtra={(sel) => (sel ? (
+              <>
+                <RemediationFixPreview finding={sel} scanId={sel.scanId || run?.id} cap={cap} />
+                <RemediationDocProgress queue={inboxQueue} file={sel.file} decisions={decisions} />
+                <DocumentAudit scanId={sel.scanId || run?.id} file={sel.file} />
+              </>
+            ) : null)}
             queue={inboxQueue}
             decisions={inboxDecisions}
             scanId={run?.id}

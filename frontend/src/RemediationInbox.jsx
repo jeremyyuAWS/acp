@@ -387,6 +387,14 @@ export default function RemediationInbox({
   queue = [], decisions = {}, onDecide, onOpenWord, onRecheck,
   initialSort = 'priority', initialTab = 'needs-review', scanId = null, initialLayout = null,
   assignees = {}, myEmail = null, onAssign,
+  // The per-ITEM board components (R4 fix preview, R7 per-document progress, R10 audit trail)
+  // belong beside the selected finding, but this component must not import them: it already owns
+  // the hardest state on the page, and three more imports would make it the place every future
+  // panel lands. A render prop keeps the composition with the parent, which owns the page.
+  //
+  // Called with the selected finding, or null when nothing is selected — the callee decides what
+  // an empty selection means rather than this component guessing on its behalf.
+  renderDetailExtra = null,
 }) {
   const [selectedId, setSelectedId] = useState(null)
   const [tab, setTab] = useState(initialTab)
@@ -535,11 +543,14 @@ export default function RemediationInbox({
     </div>
   )
   const guidedBody = (
-    <DetailPane f={selected} decisions={decisions} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
-                matchingCount={matchingCount} onApplyToMatching={applyToMatching}
-                scanId={selected?.scanId || scanId}
-                draft={selected ? (drafts[selected.id] ?? null) : null}
-                onDraftChange={(v) => selected && setDrafts((d) => ({ ...d, [selected.id]: v }))} />
+    <>
+      <DetailPane f={selected} decisions={decisions} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
+                  matchingCount={matchingCount} onApplyToMatching={applyToMatching}
+                  scanId={selected?.scanId || scanId}
+                  draft={selected ? (drafts[selected.id] ?? null) : null}
+                  onDraftChange={(v) => selected && setDrafts((d) => ({ ...d, [selected.id]: v }))} />
+      {renderDetailExtra ? renderDetailExtra(selected) : null}
+    </>
   )
   const previewHeader = (
     <div style={{ flex: '0 0 auto', padding: '10px 12px', borderBottom: '1px solid var(--line,#e2dce4)', fontSize: 13, fontWeight: 700 }}>Document preview</div>

@@ -99,24 +99,52 @@ describe('what this commit deliberately did NOT do', () => {
   })
 })
 
-describe('the per-item four are still unmounted, and that is recorded', () => {
-  // R4 preview, R7 per-document progress and R10 audit are per-FINDING and per-DOCUMENT, so they
-  // belong in the detail view rather than the page. They are not mounted yet.
+describe('the per-item four reach the detail pane, beside their subject', () => {
+  // These four were the "still unmounted, and that is recorded" cases. They have now been wired,
+  // so that test did its job and is replaced rather than deleted: the same four names are still
+  // asserted, in the opposite direction.
   //
-  // Written down rather than left implicit, for exactly the reason this whole file exists: an
-  // unmounted component reads as shipped on every status list. When they are wired, this case goes
-  // — its failure is the reminder to delete it, not a regression.
-  const PENDING = ['RemediationFixPreview', 'RemediationDocProgress', 'DocumentAudit', 'FixOutcomes']
+  // R4, R7 and R10 answer a question about ONE finding or ONE document, so a page-level mount
+  // would have no subject. They are injected into RemediationInbox's detail pane through a render
+  // prop, which keeps the composition with Remediate rather than making the inbox — already the
+  // page's hardest state — the place every future panel lands.
+  const rem = () => code('Remediate.jsx')
 
-  it('names them, so they cannot be mistaken for done', () => {
-    const s = code('Remediate.jsx')
-    const mounted = PENDING.filter((n) => new RegExp(`<${n}[\\s/>]`).test(s))
-    expect(mounted, 'if these are now mounted, delete this test').toEqual([])
+  for (const name of ['RemediationFixPreview', 'RemediationDocProgress', 'DocumentAudit']) {
+    it(`renders ${name} for the selected finding`, () => {
+      const s = rem()
+      expect(s).toMatch(new RegExp(`import ${name} from '\\./${name}\\.jsx'`))
+      expect(s).toMatch(new RegExp(`<${name}[\\s/>]`))
+    })
+  }
+
+  it('mounts FixOutcomes (R8) at PAGE level, not per finding', () => {
+    // "What did not work in this run" is a property of the run, not of whichever finding happens
+    // to be selected — so it must not be inside the detail-pane render prop.
+    const s = rem()
+    expect(s).toMatch(/<FixOutcomes scanId=\{run\?\.id\}/)
+    // Sliced between two anchors rather than matched on indentation — a reformat must not silently
+    // turn this into a test that finds nothing and therefore asserts nothing.
+    const from = s.indexOf('renderDetailExtra=')
+    const to = s.indexOf('queue={inboxQueue}', from)
+    expect(from, 'renderDetailExtra found').toBeGreaterThan(-1)
+    expect(to, 'end of the detail-pane block found').toBeGreaterThan(from)
+    expect(s.slice(from, to)).not.toMatch(/<FixOutcomes/)
   })
 
-  it('but they DO exist on disk, so the gap is wiring and not authorship', () => {
-    for (const n of PENDING) {
-      expect(read(`${n}.jsx`).length, `${n}.jsx has content`).toBeGreaterThan(500)
+  it('guards the empty selection rather than rendering three empty frames', () => {
+    expect(rem()).toMatch(/renderDetailExtra=\{\(sel\) => \(sel \?/)
+  })
+
+  it('the inbox takes the components from its parent instead of importing them', () => {
+    // A render prop, so RemediationInbox gains no new imports. If it starts importing board
+    // components directly, it becomes the default home for every future panel.
+    const inbox = code('RemediationInbox.jsx')
+    expect(inbox).toMatch(/renderDetailExtra = null/)
+    expect(inbox).toMatch(/renderDetailExtra \? renderDetailExtra\(selected\) : null/)
+    for (const name of ['RemediationFixPreview', 'RemediationDocProgress', 'DocumentAudit']) {
+      expect(inbox, `${name} must not be imported by the inbox`).not.toMatch(
+        new RegExp(`import ${name} from`))
     }
   })
 })
