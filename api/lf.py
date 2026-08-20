@@ -154,44 +154,6 @@ class _Noop:
     def flush(self): pass
 
 
-def scan_trace(scan_id: str, source: str, n_files: int, ai_enabled: bool = True,
-               user: str | None = None, deep_scan: bool = False):
-    """Create a Langfuse trace for one scan run, with a human-readable name.
-
-    user — the signed-in person's email (GIS). Sets the Langfuse trace user_id so
-    traces group by who ran the scan; falls back to 'demo' for the keyless demo.
-    deep_scan — whether PII detection ran. When off, the trace is a plain "Discover"
-    (Step 1) and carries no per-file spans; when on it's "Discover + Deep scan" (1–2)."""
-    lf = _lf()
-    if lf is None:
-        return _Noop()
-    src = _SOURCE_LABEL.get(source, source)
-    mode = "AI-assisted" if ai_enabled else "Deterministic (no AI)"
-    who = user or "demo"
-    label = "Scan (Deep)" if deep_scan else "Scan"
-    # The name must not lead with the operator email (identity leak in the trace list); segregation
-    # by user stays available through user_id (Langfuse's Users view) and the user: tag.
-    name = f"{label} · {n_files} document{'s' if n_files != 1 else ''} · {src}"
-    return lf.trace(
-        id=scan_id,
-        name=name,
-        user_id=who,
-        metadata={
-            "what": (f"Discovered + deep-scanned (PII) {n_files} documents" if deep_scan
-                     else f"Discovered {n_files} documents (deep scan off)"),
-            "deep_scan": deep_scan,
-            "source": src,
-            "documents": n_files,
-            "mode": mode,
-            "ai_enabled": ai_enabled,
-            "run_by": who,
-        },
-        tags=["accessibility-scan", ("deep-scan" if deep_scan else "discover-only"),
-              f"source:{source}", f"user:{who}",
-              "ai-assisted" if ai_enabled else "deterministic"],
-    )
-
-
 def file_span(trace, filename: str, engine: str):
     """A child span for one document. The name is just the filename (readable)."""
     if isinstance(trace, _Noop):
@@ -295,99 +257,6 @@ def pii_span(file_span_, pinfo: dict, filename: str | None = None):
     )
     s.end(output={"found": summary,
                   "examples_masked": {f["type"]: f["samples"] for f in findings}})
-
-
-def error_span(file_span_, rule_id: str, error_msg: str):
-    """A rule that could not be evaluated (engine error) — flagged ERROR."""
-    if isinstance(file_span_, _Noop):
-        return
-    s = file_span_.span(name=f"⚠ Could not check rule {rule_id}", level="ERROR",
-                        status_message="The engine could not evaluate this rule")
-    s.end(output={"outcome": "ERROR", "error": error_msg})
-
-
-def finish_scan_trace(trace, scan_id: str, summary: dict, *, source: str, ai_enabled: bool,
-                      pii_docs: int = 0, pii_total: int = 0) -> None:
-    """Close out a scan trace with a plain-language summary + a 0–100 score, so a
-    non-technical viewer sees the outcome at a glance."""
-    if isinstance(trace, _Noop):
-        return
-    files = summary.get("files", 0)
-    err = summary.get("error", 0)
-    src = _SOURCE_LABEL.get(source, source)
-    # The scan trace reports DISCOVERY + deep-scan only. The compliance score and the
-    # ready-to-certify / need-fixing conformance counts belong to the Assess trace
-    # (written on demand), so they are deliberately not attached here.
-    sentence = (f"Scanned {files} documents from {src}"
-                + (f", {err} could not be opened" if err else "") + ".")
-    if pii_docs:
-        sentence += (f" ⚠ {pii_docs} document{'s' if pii_docs != 1 else ''} "
-                     f"contain sensitive data ({pii_total} item{'s' if pii_total != 1 else ''}).")
-    trace.update(output={
-        "summary": sentence,
-        "documents_scanned": files,
-        "could_not_open": err,
-        "documents_with_sensitive_data": pii_docs,
-        "sensitive_items_found": pii_total,
-        "mode": "AI-assisted" if ai_enabled else "Deterministic (no AI)",
-    })
-
-
-# ── Fan-out helpers: spans/finish referencing a trace by id (ADR 0007) ─────────
-def file_span_for(scan_id: str, filename: str, engine: str):
-    """A file span on an EXISTING trace, addressed by id — for the fan-out path
-    where each file is processed in its own job (no shared in-process handle)."""
-    lf = _lf()
-    if lf is None:
-        return _Noop()
-    return lf.trace(id=scan_id).span(name=_doc_label(filename),
-                                     input={"document": _doc_label(filename), "checked_with": engine})
-
-
-def finish_scan_trace_by_id(scan_id: str, summary: dict, *, source: str, ai_enabled: bool,
-                            pii_docs: int = 0, pii_total: int = 0) -> None:
-    """finish_scan_trace addressed by trace id (fan-out finalize job)."""
-    lf = _lf()
-    if lf is None:
-        return
-    finish_scan_trace(lf.trace(id=scan_id), scan_id, summary, source=source,
-                      ai_enabled=ai_enabled, pii_docs=pii_docs, pii_total=pii_total)
-
-
-# ── Assessment trace — written when the user runs Assess (NOT during the scan) ──
-def open_assess_trace(scan_id: str, level: str, n_files: int, user: str | None = None):
-    """A SEPARATE Langfuse trace for the WCAG rule assessment. The scan trace covers
-    discovery + deep-scan (PII); the per-rule ✓/✗ assessment lives here, emitted only
-    when the user explicitly runs Assess."""
-    lf = _lf()
-    if lf is None:
-        return _Noop()
-    return lf.trace(
-        id=f"{scan_id}-assess",
-        # No operator email in the name (identity leak in the trace list); user_id carries it.
-        name=f"Assess · WCAG 2.1 {level} · {n_files} document{'s' if n_files != 1 else ''}",
-        user_id=user or "demo",
-        tags=["accessibility-assessment", f"level:{level}", f"user:{user or 'demo'}"],
-        metadata={"scan_id": scan_id, "level": level, "documents": n_files},
-    )
-
-
-def finish_assess_trace(trace, summary: dict, *, scan_id: str | None = None,
-                        score: float | None = None) -> None:
-    """Close the Assess trace with the conformance summary + the compliance score
-    (the score lives here, not on the Scan trace)."""
-    if isinstance(trace, _Noop):
-        return
-    trace.update(output=summary)
-    lf = _lf()
-    if lf and scan_id and score is not None:
-        try:
-            lf.score(trace_id=f"{scan_id}-assess", name="compliance_score",
-                     value=float(score),
-                     comment=f"WCAG 2.1 {summary.get('level', 'AA')} · "
-                             f"{score}% of documents conformant")
-        except Exception:
-            pass
 
 
 def flush():
@@ -875,8 +744,8 @@ def discover_file_spans(scan_id: str, items, user: str | None = None) -> int:
 
 def file_score(scan_id: str, file: str, score: float | None) -> None:
     """Attach this file's own compliance score to its trace — replaces the old scan-wide
-    aggregate score (finish_assess_trace's lf.score call), which has no natural home once
-    there's no single Assess trace; a per-file score is arguably more useful anyway."""
+    aggregate score, which had no natural home once there's no single Assess trace;
+    a per-file score is arguably more useful anyway."""
     if score is None:
         return
     lf = _lf()
