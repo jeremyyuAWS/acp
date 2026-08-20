@@ -309,11 +309,29 @@ def readyz():
     except Exception as exc:  # pragma: no cover - defensive: a source probe must not break /readyz
         smb_ready = {"ready": False, "error": f"{exc.__class__.__name__}: {exc}"}
 
+    # Vision/GPU readiness — reported INFORMATIONALLY (like sources.smb), NOT folded into `degraded`.
+    # A text-only or AI-off deployment is not "degraded" for lacking a vision model, and image findings
+    # degrade safely to human review when vision is down (ADR 0039) — so a missing vision model is not a
+    # scan-blocking fault the way a missing PDF engine is. But it is otherwise INVISIBLE until a scan
+    # silently produces no alt drafts. This surfaces `vision_unavailable_reason` — which names the exact
+    # cause (endpoint unreachable, or the configured model not present: a typo, a failed pull, or a stale
+    # admin override pinning a torn-down pod's model) AND the fix — so a monitor / the AI-settings UI
+    # catches it up front. Probed via ai's memoised tags cache (no per-request network hit); defended so
+    # a vision probe can never 500 /readyz.
+    try:
+        import ai as _ai
+        vision = {"ready": _ai.vision_is_available(),
+                  "reason": _ai.vision_unavailable_reason(),
+                  "model": _ai.OLLAMA_VISION_MODEL,
+                  "zone": _ai.provenance().get("zone")}
+    except Exception as exc:  # pragma: no cover - defensive: a vision probe must not break /readyz
+        vision = {"ready": False, "reason": f"{exc.__class__.__name__}: {exc}"}
+
     return {
         "ready": not degraded,
         "degraded": degraded,
         "workers": {**workers, "local_pool": local_pool, "can_run_scans": can_run_scans},
-        "engines": {"pdf": pdf},
+        "engines": {"pdf": pdf, "vision": vision},
         "sources": {"smb": smb_ready},
         "service": "acp",
     }
