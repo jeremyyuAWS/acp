@@ -57,10 +57,12 @@ would leave the approved region (worse than the degradation).
 take the app down until a replica reschedules.
 **Recovery:**
 1. Ensure replicas are scaling: `az containerapp show -n acp-app -g mdk-accessibility --query "properties.template.scale"` (min 1 / max 3 today — consider raising **min to ≥2**).
-2. If a full-region event: no standby region exists today (Phase 2). Recovery = wait for the region, or
-   redeploy the image to another compliant US region and re-point DNS (manual, not pre-built).
-**Phase-0 fix (do proactively):** enable **zone redundancy** on the env and set **min replicas ≥ 2** —
-this removes the single-AZ SPOF cheaply and is the highest-ROI resilience step (see ADR 0039 Tier 2).
+2. If a full-region event: no standby region exists today. Recovery = wait for the region, or redeploy
+   the image to another compliant US region and re-point DNS (manual, not pre-built).
+**Pilot stance (per ADR 0039):** single-AZ / regional downtime is an **accepted, explicitly-deferred
+risk** for the temporary pilot — zone redundancy and multi-region failover are **customer-production**
+deliverables, designed against the customer's SLA/RTO/RPO, not engineered here. Do **not** partially
+enable zone redundancy on the pilot; keep the manual redeploy above as the documented recovery.
 
 ### 3. Worker tier down
 **Symptom:** scans accepted but never progress; `/readyz` `degraded` lists `no_workers` or
@@ -85,11 +87,31 @@ zone redundancy.
 | AI provenance / zone | `GET /config` → `.ai` | which GPU/models, and `zone` (local vs cloud) |
 | Estate collapse monitor | `GET /monitor/estate` (keyed) | did the newest scan collapse; backlog size |
 
-## Known SPOFs & Phase-0 hardening (cheapest first)
-1. **App env not zone-redundant** → enable zone redundancy + **min replicas ≥ 2**. *(Highest ROI.)*
-2. **Store has no tested restore path** → verify backup + restore before real PHI. *(Highest severity.)*
-3. **GPU `min=max=1`, single region, no second vision endpoint** → accept the defer-to-human floor for
-   the pilot; add a real vision fallback only if availability becomes a requirement (ADR 0039 Tier 1).
+## Pilot posture (per ADR 0039 — two contracts)
+
+This is the **temporary Movate-hosted pilot**. Per ADR 0039, cross-AZ availability and stateful-service
+redundancy are **explicitly deferred to the customer-hosted production deployment** — they are *not*
+partially engineered now. The pilot accepts single-region / single-zone risk while preserving functional
+safety. The honest one-line summary:
+
+> **Vision failures degrade; core-infrastructure failures may cause temporary downtime.**
+> In every case ACP never fabricates evidence and never emits a false accessibility PASS.
+
+### Accepted pilot risks — deliberately NOT engineered now (customer-production deliverables)
+- **App env not zone-redundant** (`zoneRedundant=false`, min 1 replica): a single-AZ or regional event
+  can cause **temporary downtime**. Accepted for the pilot; zone-redundant App/Worker belongs to customer
+  production.
+- **GPU `min=max=1`, single region, no second vision endpoint**: an A100/GPU outage → **defer-to-human**.
+  Accepted; GPU-continuity-to-SLA belongs to customer production.
+- **Single-region stateful services** (Postgres/Redis/Blob): recovery is via backups, not live
+  redundancy. Zone-resilient stateful services belong to customer production.
+
+### Pilot must-haves — genuinely needed now
+1. **Tested backup + restore for the store, verified BEFORE real PHI.** *(Highest severity — this is the
+   pilot's actual safety net, and it is a pilot deliverable, not a deferred one.)*
+2. **Durable job retry after transient failures** (#347) — confirm it is active so a transient compute
+   blip does not lose in-flight scans.
+3. **This runbook kept current, and a named on-call** who can execute the manual recovery.
 
 ## What NOT to do
 - Do not repoint any PHI-touching endpoint outside the compliant US geography, even to restore service.
