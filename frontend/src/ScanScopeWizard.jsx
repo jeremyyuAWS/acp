@@ -607,8 +607,14 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
               selection means the most consequential scope decision is made by NOT clicking. */}
           <div role="radiogroup" aria-label="What to assess"
                style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+            {/* "Inventory", not "Assess". This screen sets the DISCOVERY boundary — what gets
+                listed — and the assessment boundary is chosen later, in Assess, against the
+                inventory this produces. The hint used to read "Assess only selected projects or
+                departments", which invited a folder choice to be read as a decision about what
+                gets scored. It predates the split: #532 stripped the format and criterion pickers
+                out of this screen and left the copy behind. */}
             {[['all', 'Entire connected source', 'Every accessible folder'],
-              ['some', 'Specific folders', 'Assess only selected projects or departments']]
+              ['some', 'Specific folders', 'Inventory only selected projects or departments']]
               .map(([id, title, hint]) => {
                 const on = scopeMode === id
                 return (

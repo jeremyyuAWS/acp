@@ -128,3 +128,25 @@ describe('the wizard actually says it', () => {
       .not.toMatch(/catch\(\(\) => setPolicies\(\[\]\)\)/)
   })
 })
+
+describe('the scope screen sets a discovery boundary, not an assessment one', () => {
+  // The wizard chooses WHERE ACP inventories. What gets scored against WCAG is chosen later, in
+  // Assess, against the inventory this produces. Copy here that says "assess" invites a folder
+  // choice to be read as a decision about scoring — the conflation the Discover/Assess split
+  // removed, left behind by #532 when it stripped the format and criterion pickers out.
+  //
+  // Found by diffing the shipped screen against the approved design board rather than by a test
+  // failing: nothing was broken, the screen simply described itself as the wrong stage.
+  const src = () => read('ScanScopeWizard.jsx')
+
+  it('offers to INVENTORY the selected folders, not to assess them', () => {
+    expect(src()).toMatch(/'Inventory only selected projects or departments'/)
+    expect(src(), 'the scope choice still describes itself as assessment')
+      .not.toMatch(/'Assess only selected/)
+  })
+
+  it('still says what selecting a folder actually covers', () => {
+    // The recursion promise is the other half of the boundary and has to survive the rewording.
+    expect(read('FolderPicker.jsx')).toMatch(/all subfolders, recursively/)
+  })
+})
