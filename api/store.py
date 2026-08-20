@@ -3837,6 +3837,19 @@ class Store:
         self.set_setting("allowed_emails", ",".join(clean))
         return clean
 
+    def get_admins(self) -> list[str]:
+        """Runtime-editable additional Platform Admins (managed from Settings → Users), lowercased.
+        Distinct from the env grants: ACP_OWNER_EMAIL (the immutable owner) and ACP_ADMIN_EMAILS
+        (permanent, set at deploy) are NOT stored here — this is only the UI-managed set the owner
+        can promote/demote. `core.is_admin` unions all three."""
+        raw = self.get_setting("admin_emails", "") or ""
+        return [e.strip().lower() for e in raw.split(",") if e.strip()]
+
+    def set_admins(self, emails: list[str]) -> list[str]:
+        clean = sorted({e.strip().lower() for e in (emails or []) if e and "@" in e})
+        self.set_setting("admin_emails", ",".join(clean))
+        return clean
+
     def list_ai_provider_configs(self) -> list[dict]:
         """All configured AI gateway providers (ADR 0019 §6) — NON-SECRET config only. There is
         no key column: `key_secret_ref` names the environment/Key-Vault secret the adapter reads

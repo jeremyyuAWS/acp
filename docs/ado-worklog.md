@@ -511,6 +511,23 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   ordinary setup impossible without a second Chrome profile (a personal Google Drive alongside a work
   Microsoft account). The two data connections were always independent (Drive rides `X-Drive-Token`,
   OneDrive/SharePoint rides `X-SP-Token`), so only the missing chooser was in the way — now added for both.
+- **Multiple Platform Admins, not just the single owner** (#534). The admin surfaces (scope editor,
+  platform Settings, access management) were gated to exactly one identity — `ACP_OWNER_EMAIL` — so a
+  second person could sign in and scan but never see the same admin UI. Added `ACP_ADMIN_EMAILS`: a set of
+  additional admins with the same rights. `core.is_admin` is the single source of truth both the SPA flag
+  (`is_scope_owner`, now delegating to it) and the API gate (`_require_admin`) read, so UI and server can't
+  disagree; `email_allowed` admits admins unconditionally; `OWNER_EMAIL` stays the anti-lockout owner.
+  **No-op until configured** (empty `ACP_ADMIN_EMAILS` = today's behaviour). 9 tests. Not RULE_PATHS.
+- **In-app Platform Admin management — owner promotes from Settings → Users** (#535, on #534). Requested so
+  a teammate can be granted the same admin UI without an Azure/env change or redeploy. Three tiers, each
+  rendered distinctly and none editable into an unsafe state: the immutable **owner** (`ACP_OWNER_EMAIL`),
+  **permanent env admins** (`ACP_ADMIN_EMAILS`, "set at deploy", no toggle), and the **owner-managed set**
+  (store `admin_emails`, promote/demote here). `store.get_admins`/`set_admins` mirror the allowlist;
+  `core.is_admin` now unions owner ∪ env ∪ store; `core.is_owner` is the strict root-of-trust check;
+  `GET/PUT /admin/admins` with the PUT **owner-only** (`_require_owner` — an admin can't grant admin nor
+  remove the owner, and the owner/env grants are kept out of the managed set); `/me` + `/config` emit
+  `is_owner` so the SPA shows the promote/demote controls to the owner only. Settings → Users gained admin
+  badges + an owner-only Make/Remove-admin toggle. 7 backend + 3 frontend tests. Not RULE_PATHS.
 
 ## Feature: Local model benchmarking · #4609
 
@@ -882,6 +899,11 @@ reach production, safely.
   `/readyz`. Deliberately **not** folded into `degraded`: a deployment that scans only Drive/SharePoint
   legitimately has no SMB config, so an unconfigured SMB source must not flip `ready`. Touches
   `api/routes/system.py` + a readiness test — not RULE_PATHS.
+- **Stopped main CI runs cancelling each other, which skipped deploys** (#525). The CI concurrency group was
+  cancelling an in-progress run when a newer commit landed on `main` — but `deploy.yml` fires on that run's
+  `workflow_run: completed`, so a cancelled run never fired the deploy, and a merge could silently not ship.
+  Scoped the cancel-in-progress behaviour so `main` runs are allowed to finish (and trigger their deploy)
+  rather than being pre-empted. `Matrix-Note: none` — CI config only.
 
 - **Stopped a collapsed scan from hijacking every view — selector half** (#520). The production
   monitor's `newest scan is full-size` probe fired on prod ("newest has 5 documents but a recent scan
@@ -1644,8 +1666,13 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   user gets without touching anything is the plainest one (nothing skipped, nothing inferred) and the
   toggles read as additions to a known baseline. Incremental remains available for fast re-scans once a
   baseline exists.
+- **Discover asks only WHERE to inventory — formats/criteria move to Assess** (#532, PRD DISC-01). Discover's
+  wizard no longer carries scan profiles, format cards, or the criterion × format matrix; those controls
+  belong to Assess, where the deep evaluation actually happens. Discover is now a scope-only step (which
+  source, which folders), matching the phase-1 exit contract "no format/SC controls in Discover" — a cleaner
+  split between *what estate to catalogue* (Discover) and *how to judge it* (Assess).
 
-## Feature: Observability — AI tracing and cost (Langfuse)
+## Feature: Observability — AI tracing and cost (Langfuse) · #4697
 
 The scan / assess / remediate lifecycle was already traced, but the AI calls themselves were recorded as
 cost-less, detached spans, and one decision surface had no trace at all. An audit first established the
@@ -1780,7 +1807,7 @@ invariant the redaction tests pin).
   `discover_run_trace` no-email guard. −133 lines; full backend job green (`api/lf.py` is not a RULE_PATHS
   file, so no Matrix-Note). The live per-file model is untouched.
 
-## Feature: Scan-run experience — live progress and transparency (Track A)
+## Feature: Scan-run experience — live progress and transparency (Track A) · #4696
 
 The scan progress panel rebuilt from an implementation-centric spinner into an outcome-oriented,
 transparent view of a running scan. Six merged slices; the owning session designed the "Track A" program
@@ -1891,7 +1918,7 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   against WCAG and remediated), and the bare list next to the wrong count invited the reassuring guess "all of
   them." Now stated plainly (same honesty family as #479/#483/#491/#502).
 
-## Feature: Certification report as an audit artifact
+## Feature: Certification report as an audit artifact · #4698
 
 Turned the per-scan certification PDF (`api/report.py`) from a scan summary into an audit artifact an
 auditor can trust and reproduce. The backlog (docs/TODO.md P4) had drifted stale — most items had
@@ -1933,7 +1960,7 @@ basis; where a denominator is not tracked the number is omitted, not invented (A
   reproduce the findings, verify a document by hand). Distinct from `conformance-report.md`, which is
   ACP's own platform-UI VPAT.
 
-## Feature: Structural evidence renderers (Remediate preview)
+## Feature: Structural evidence renderers (Remediate preview) · #4699
 
 Document-structure findings showed a generic "structure not extracted" note; these surface the real
 extracted structure as review evidence, computed on demand via owner-scoped endpoints (the geometry
@@ -1945,6 +1972,17 @@ real extracted content, degrading to the generic note, never a fabricated tree.
   plainly whether that row is *marked* as a header (`<w:tblHeader>`) or only reads as one — the exact
   association a screen reader needs, and what the 1.3.1 fix adds. Completes the set with reading-order
   (#490) and heading-outline (#492).
+
+- **Trace environment + outcome tags on file traces** (#537, P1). Two Langfuse-logging fixes for a shared
+  project. (1) Every trace is stamped with an ENVIRONMENT (production / staging / demo) — set on the SDK
+  client from `ACP_ENV` / `LANGFUSE_TRACING_ENVIRONMENT`, defaulting to `production`, sanitised to
+  Langfuse-safe chars so a stray value can't 400 every trace, and passed via try/except so an older SDK
+  still constructs — so a shared project's traces separate instead of mingling under `default` (what the
+  live traces showed). (2) File traces carry OUTCOME tags at assess time (`result:fail|needs-review|pass`,
+  `pii:flagged`) so the native Langfuse list filters by result and PII, not only document + format; one
+  authoritative `set_outcome_tags` update re-includes the base + rule-fail tags (Langfuse replaces a
+  trace's tags). Categories/counts only, never a value — the PHI guard holds. `api/lf.py` + `api/handlers.py`,
+  not RULE_PATHS; 176 langfuse/assess tests green, redaction guards green.
 
 ## Open items (backlog candidates)
 
@@ -2454,3 +2492,22 @@ real extracted content, degrading to the generic note, never a fabricated tree.
   report/structural set) was not re-logged. **Sync marker still NOT advanced** (`fad0dfbe`, same convention):
   the delta still contains other sessions' undocumented Aug-19 feature work, and #526 (ADR 0039 regional
   resilience) + #527 (Open-in-Langfuse link) landed mid-write — both other sessions', left for their owners.
+- **2026-08-20 (Discover scope-only + CI-cancel fix)** — To **Discover & Assess lifecycle rules (#4618)**:
+  #532 — Discover's wizard is now scope-only (which source / which folders); scan profiles, format cards and
+  the criterion × format matrix moved to Assess (PRD DISC-01 phase-1 exit). To **Continuous deployment
+  (#4614)**: #525 — scoped CI cancel-in-progress so `main` runs finish and fire their `workflow_run` deploy,
+  instead of a newer commit cancelling a run and silently skipping the ship. **Sync marker deliberately NOT
+  advanced** (same convention as the prior entries).
+- **2026-08-20 (multi-admin + in-app admin management)** — From a user report that a teammate saw different
+  privileges. Root cause: single-owner admin model (`ACP_OWNER_EMAIL` only). To **Multi-tenancy and the
+  control plane (#4608)**: #534 — `ACP_ADMIN_EMAILS` + `core.is_admin` as the one gate both the SPA flag and
+  the API enforce (no-op until configured); #535 — in-app owner-managed admin promotion from Settings →
+  Users (store-backed set, `is_owner` root-of-trust, owner-only `PUT /admin/admins`, three-tier badges +
+  toggle). Both green, tested (9 + 10 cases), not RULE_PATHS; ship on the next approved prod deploy. **Sync
+  marker deliberately NOT advanced** (same convention as the prior entries).
+- **2026-08-20 (trace env + outcome tags)** — To **Observability — AI tracing and cost (#4697)**: #537 —
+  stamp each trace with its ENVIRONMENT (so a shared Langfuse project's prod/staging/demo traces separate
+  instead of mingling under `default`) and tag file traces with the assess OUTCOME (`result:*`, `pii:flagged`)
+  so the native list filters by result and PII. PHI guard intact (categories/counts only). Not RULE_PATHS.
+  #538 (ADO Feature-ID binding) is itself a delivery-log edit, so no entry. **Sync marker deliberately NOT
+  advanced** (same convention as the prior entries).

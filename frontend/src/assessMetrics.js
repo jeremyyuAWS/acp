@@ -264,8 +264,11 @@ export function assessMetrics(files, { cap, assessment, criteria = SCOPE_SCS, le
     documentsSelected: files.length,
     documentsAssessed: assessed.length,
     documentsNeedingAttention: attention.size,
-    // Named, not just counted: a file ACP could not open is excluded from every other number on
-    // the screen, so the screen has to say which and why.
+    // Named, not just counted. A file ACP could not open contributes to no other number here — but
+    // "excluded" is the wrong word for it and the screen no longer uses it: nothing excluded these,
+    // the scope selected them and the run could not read them. Discovery is metadata-only and never
+    // opens a file, so this is the earliest point the failure could be known, which makes it a
+    // result rather than a filter. The screen has to say which files and why.
     documentsUnopened: unopened.map((r) => ({ file: r.file, name: r.name, reason: r.reason })),
     // The worklist, already ordered. Handed out rather than recomputed by the caller, so the
     // summary's totals and the rows beneath it can never come from two different passes.
