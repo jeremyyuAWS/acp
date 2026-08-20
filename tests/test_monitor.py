@@ -338,16 +338,25 @@ def test_the_parser_matches_what_real_git_actually_prints():
         parents, _, rest = block.partition("\x01")
         lines = [l for l in rest.splitlines() if l.strip()]
         subject, paths = lines[0], lines[1:]
-        is_merge = len(parents.split()) > 1
-        # A NON-merge commit always touches a file, so an empty parse there is the format change
-        # this test exists to catch — a false GREEN that would make every commit look cosmetic.
+        # ASK GIT, rather than assume. "Every commit touches a file" is very nearly true and the
+        # exceptions are real git objects, not parser faults:
         #
-        # A MERGE can legitimately parse empty: `git merge X` where the branch already contains
-        # everything in X still writes a commit, and its first-parent diff is empty. `be37038` on
-        # main is exactly that, and it is a real state rather than a parser fault — the classifier
-        # below is asked for a verdict on it either way. Requiring paths here made a normal git
-        # object fail the build and, through deploy.yml's success gate, stopped main deploying.
-        if not is_merge:
+        #   * a merge whose first-parent diff is empty — `git merge X` when the branch already
+        #     contains X still writes a commit (be37038 on main);
+        #   * a `--allow-empty` commit, which this repo now uses to ANNOUNCE a claim on a file
+        #     before starting work, so other sessions can see it (f03a96a on main).
+        #
+        # Both made a normal git object fail the build and, through deploy.yml's success gate,
+        # stopped main deploying. Enumerating exception TYPES is how this gets fixed twice; asking
+        # git whether the commit actually changed anything is the general answer, and it keeps the
+        # guard EXACT — if git says files changed and the parser found none, that is still a
+        # failure, which is the format change this test exists to catch.
+        sha = subject.split()[0]
+        changed = _sp.run(["git", "-C", repo, "diff-tree", "--no-commit-id", "--name-only",
+                           "-r", "--first-parent", sha],
+                          capture_output=True, text=True, timeout=30)
+        git_says_empty = changed.returncode == 0 and not changed.stdout.strip()
+        if not git_says_empty:
             assert paths, f"no paths parsed for {subject!r}"
         saw_paths += 1 if paths else 0
         # The subject must never leak into the path list — the other half of a format change.
