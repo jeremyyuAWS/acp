@@ -124,10 +124,19 @@ export function documentRow(f, { cap, assessment, criteria = SCOPE_SCS, level = 
                     fixMode: modeFor(cap, fmt, sc) })
   }
 
+  // The severity mix of the findings a PERSON has to deal with, separately from the mix
+  // overall. The ordering rests on this: ten auto-fixable criticals cost nobody an afternoon.
+  const bySeverityHuman = { CRITICAL: 0, SERIOUS: 0, MODERATE: 0, MINOR: 0, UNKNOWN: 0 }
+  for (const x of findings) if (!x.auto) bySeverityHuman[x.severity]++
+
   return {
     file: f.file || name, name, fmt, opened: true,
-    findings, totalFindings: findings.length, bySeverity,
+    findings, totalFindings: findings.length, bySeverity, bySeverityHuman,
     autoFixAvailable: autoFix, humanReviewRequired: findings.length - autoFix,
+    // Does this document need a person at all? A row where everything is deterministic is real
+    // work for the machine and none for the reader, and the worklist says so rather than making
+    // them open it to find out.
+    needsPerson: findings.length - autoFix > 0,
     criteriaFailing: [...new Set(findings.map((x) => x.sc))].sort(),
     criteriaEvaluated: [...criteriaEvaluated].sort(),
     unassessableCriteria: criteriaUnable.sort(),
@@ -143,20 +152,36 @@ export function documentRow(f, { cap, assessment, criteria = SCOPE_SCS, level = 
 // defect in miniature, so this weight orders rows and is never rendered as a number.
 const SORT_WEIGHT = { CRITICAL: 1000, SERIOUS: 100, MODERATE: 10, MINOR: 1, UNKNOWN: 1 }
 
+const weigh = (mix) => SEVERITIES.reduce((a, s) => a + mix[s] * SORT_WEIGHT[s], 0)
+                       + mix.UNKNOWN * SORT_WEIGHT.UNKNOWN
+
 /**
- * The worklist: one row per document, worst first.
+ * The worklist: one row per document, ordered by what needs a PERSON.
  *
- * Ordered by severity weight rather than raw count, so one critical finding outranks six minors.
- * Unopened files sort last — they hold no work, and putting them at the top of a worklist would
- * make the first thing a person sees the one thing they cannot act on.
+ * Three keys, in this order:
+ *
+ *   1. the severity mix of findings needing a person — the only genuinely scarce resource here;
+ *   2. the severity mix overall, so two documents that need equal attention order sensibly;
+ *   3. the name, so the order is stable rather than incidental.
+ *
+ * This is deliberately not "worst first". A document holding ten auto-fixable critical findings
+ * ranks BELOW one holding a single serious finding that needs judgement, because after remediation
+ * runs the first document is clean and the second still needs somebody. Nothing is hidden by this:
+ * an auto-fixable critical is still shown, still red, and still counted in every total — it simply
+ * stops occupying the top of a list of things to do.
+ *
+ * Unopened files sort last. They hold no work at all, and putting them first would make the very
+ * first row the one thing a reader cannot act on.
  */
 export function documentRows(files, opts = {}) {
   if (!Array.isArray(files)) return null
   const rows = files.map((f) => documentRow(f, opts)).filter(Boolean)
-  const rank = (r) => (r.opened
-    ? SEVERITIES.reduce((a, s) => a + r.bySeverity[s] * SORT_WEIGHT[s], 0)
-    : -1)
-  return rows.sort((a, b) => rank(b) - rank(a) || a.name.localeCompare(b.name))
+  return rows.sort((a, b) => {
+    if (!a.opened || !b.opened) return (a.opened ? 0 : 1) - (b.opened ? 0 : 1)
+    return weigh(b.bySeverityHuman) - weigh(a.bySeverityHuman)
+        || weigh(b.bySeverity) - weigh(a.bySeverity)
+        || a.name.localeCompare(b.name)
+  })
 }
 
 /**
@@ -166,7 +191,10 @@ export function documentRows(files, opts = {}) {
  * documents, so a rule-first worklist would ask one person to open the same document five times.
  * Within a file, the grouping is what tells the fixer what kind of work the next twenty minutes is.
  *
- * Ordered by worst severity, then by criterion number so two equally bad groups order stably.
+ * Ordered by what needs a PERSON first, then by worst severity, then by criterion number so two
+ * equally placed groups order stably. Same reason as the worklist: a criterion ACP fixes
+ * deterministically is one button in remediation, so it belongs below the ones somebody has to
+ * think about — even when it is the more severe of the two.
  */
 export function findingsByCriterion(row) {
   if (!row || !row.opened) return null
@@ -185,8 +213,11 @@ export function findingsByCriterion(row) {
     return i < 0 ? SEVERITIES.length : i
   }))
   return [...by.values()]
-    .map((g) => ({ ...g, severity: SEVERITIES[worst(g)] || 'UNKNOWN', level: g.findings[0].level }))
-    .sort((a, b) => worst(a) - worst(b) || a.sc.localeCompare(b.sc, undefined, { numeric: true }))
+    .map((g) => ({ ...g, severity: SEVERITIES[worst(g)] || 'UNKNOWN', level: g.findings[0].level,
+                   needsPerson: g.humanReviewRequired > 0 }))
+    .sort((a, b) => (b.needsPerson ? 1 : 0) - (a.needsPerson ? 1 : 0)
+                 || worst(a) - worst(b)
+                 || a.sc.localeCompare(b.sc, undefined, { numeric: true }))
 }
 
 export function assessMetrics(files, { cap, assessment, criteria = SCOPE_SCS, level = 'AA', notStarted } = {}) {

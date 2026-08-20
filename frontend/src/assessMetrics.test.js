@@ -16,7 +16,8 @@
  * partition has to be visible to the reader, not only to whoever reads the query.
  */
 import { describe, it, expect } from 'vitest'
-import { assessMetrics, statusOf, reconcile, coverageSentence, SEVERITIES } from './assessMetrics.js'
+import { assessMetrics, statusOf, reconcile, coverageSentence, SEVERITIES,
+         findingsByCriterion } from './assessMetrics.js'
 import { findingLevel } from './findingLevel.js'
 
 // Two criteria, so a "no method" case is expressible without inventing a third.
@@ -296,5 +297,69 @@ describe('what this module refuses to compute', () => {
     expect(keys, 'a score is back').not.toMatch(/score/i)
     expect(keys, 'a percentage is back').not.toMatch(/pct|percent/i)
     expect(keys, 'an effort estimate is back').not.toMatch(/hours|minutes|effort|eta/i)
+  })
+})
+
+describe('what needs a person comes first', () => {
+  // The ordering principle, and it is deliberately NOT "worst first". A finding ACP fixes
+  // deterministically costs a human nothing — one button in remediation and it is gone. A finding
+  // needing judgement costs attention, which is the only scarce thing on this screen. So the list
+  // leads with what needs somebody and sinks what does not.
+  //
+  // Nothing is hidden by this. An auto-fixable critical is still shown, still red, still counted
+  // in every total; it simply stops occupying the top of a list of things to do.
+  const auto = (sev) => finding('1.3.1', sev)      // deterministic on docx
+  const person = (sev) => finding('1.1.1', sev)    // 'assisted' on docx — a draft, so a person
+
+  it('ranks one serious finding needing a person above ten auto-fixable criticals', () => {
+    const m = run([
+      doc('machine.docx', Array.from({ length: 10 }, () => auto('CRITICAL'))),
+      doc('human.docx', [person('SERIOUS')]),
+    ])
+    expect(m.rows.map((r) => r.name)).toEqual(['human.docx', 'machine.docx'])
+  })
+
+  it('still orders by severity among documents that all need a person', () => {
+    const m = run([
+      doc('minor.docx', [person('MINOR')]),
+      doc('critical.docx', [person('CRITICAL')]),
+      doc('moderate.docx', [person('MODERATE')]),
+    ])
+    expect(m.rows.map((r) => r.name)).toEqual(['critical.docx', 'moderate.docx', 'minor.docx'])
+  })
+
+  it('does not hide the auto-fixable work it deprioritises', () => {
+    const m = run([doc('machine.docx', [auto('CRITICAL')]), doc('human.docx', [person('MINOR')])])
+    const machine = m.rows.find((r) => r.name === 'machine.docx')
+    expect(machine.bySeverity.CRITICAL, 'a deprioritised finding stopped being counted').toBe(1)
+    expect(m.totalFindings).toBe(2)
+  })
+
+  it('marks whether a document needs a person at all', () => {
+    const m = run([doc('machine.docx', [auto('CRITICAL')]), doc('human.docx', [person('MINOR')])])
+    expect(m.rows.find((r) => r.name === 'machine.docx').needsPerson).toBe(false)
+    expect(m.rows.find((r) => r.name === 'human.docx').needsPerson).toBe(true)
+  })
+
+  it('sorts a file that never opened last — it holds no work at all', () => {
+    const m = run([
+      doc('locked.docx', [], { status: 'error' }),
+      doc('machine.docx', [auto('MINOR')]),
+      doc('human.docx', [person('MINOR')]),
+    ])
+    expect(m.rows.map((r) => r.name)).toEqual(['human.docx', 'machine.docx', 'locked.docx'])
+  })
+
+  it('applies the same rule to the criterion groups inside one file', () => {
+    const row = run([doc('a.docx', [auto('CRITICAL'), person('MINOR')])]).rows[0]
+    const groups = findingsByCriterion(row)
+    expect(groups.map((g) => g.sc), 'an auto-fixable group outranked one needing a person')
+      .toEqual(['1.1.1', '1.3.1'])
+    expect(groups[0].needsPerson).toBe(true)
+    expect(groups[1].needsPerson).toBe(false)
+  })
+
+  it('returns no groups for a file that never opened', () => {
+    expect(findingsByCriterion(run([doc('x.docx', [], { status: 'error' })]).rows[0])).toBeNull()
   })
 })
