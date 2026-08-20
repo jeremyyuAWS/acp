@@ -29,6 +29,16 @@ const listScanDecisions = vi.fn(async () => ([
 // imports is stubbed inert, and the one under test is spied. Enumerated rather than proxied:
 // vitest inspects the module namespace, which a Proxy cannot stand in for.
 const inert = async () => null
+// A REAL status model, because a null one renders nothing and the hero assertion below would then
+// pass with the gate removed — a test that cannot fail. This is the shape derive_file_status
+// returns for a file with review work outstanding: it produces "Ready after 8 reviews" and
+// "Est. review ~6 min", the two strings seen over an unreadable document in production.
+const STATUS_MODEL = {
+  available: true, state: 'ready_after_review', needs_review: 8, resolved: 4, in_scope: 38,
+  documents: 1, not_automatically_assessable: 26, est_review_secs: 360,
+  coverage: { evaluable: 12, total: 38 },
+  segments: {}, criteria: [],
+}
 vi.mock('./api.js', () => ({
   SIM: false,
   listScanDecisions: (...a) => listScanDecisions(...a),
@@ -49,7 +59,7 @@ vi.mock('./api.js', () => ({
   getEstate: inert, getExamined: inert, getFileContent: inert, getFileContrast: inert,
   getFileGeometry: inert, getFilePage: inert, getFilePdfContrast: inert,
   getFileRemediationDiffs: inert, getFileRemediationState: inert, getFileResize: inert,
-  getFileStatus: inert, getFileThumbnail: inert, getFileTraceData: inert,
+  getFileStatus: async () => STATUS_MODEL, getFileThumbnail: inert, getFileTraceData: inert,
   getHitlAnalytics: inert, getInventoryDiff: inert, getJob: inert, getJobs: inert,
   getMyScope: inert, getQueueJob: inert, getRemediationStatus: inert, getRubric: inert,
   getRules: inert, getScan: inert, getScanAiCalls: inert, getScanDiff: inert,
@@ -115,6 +125,27 @@ describe('a document that failed', () => {
     listScanDecisions.mockRejectedValueOnce(new Error('network'))
     const c = await open(failed)
     expect(c.textContent).toMatch(/No reason was recorded/)
+  })
+})
+
+describe('the coverage + estimate hero', () => {
+  // The other half of the same defect: over an unreadable document the hero read "Ready after 8
+  // reviews · Est. review ~6 min · 12/38 criteria" — a time estimate for reviewing findings that
+  // do not exist. Asserted at the DOM because the unit case in riskOverUnassessed.test.js can only
+  // prove the predicate, not that the drawer honours it.
+  it('renders for a document that WAS assessed', async () => {
+    // The control. Asserting only the absence would pass if the hero never rendered at all —
+    // which is exactly how the first version of this test fooled itself.
+    const c = await open(healthy)
+    expect(c.textContent, 'the hero does not render even for an assessed document')
+      .toMatch(/Ready after 8 reviews/)
+    expect(c.textContent).toMatch(/Est\. review/)
+  })
+
+  it('is not rendered for a document that could not be processed', async () => {
+    const c = await open(failed)
+    expect(c.textContent, 'a review estimate over an unreadable document').not.toMatch(/Est\. review/)
+    expect(c.textContent, 'a readiness verdict over an unreadable document').not.toMatch(/Ready after/)
   })
 })
 
