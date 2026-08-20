@@ -882,6 +882,11 @@ reach production, safely.
   `/readyz`. Deliberately **not** folded into `degraded`: a deployment that scans only Drive/SharePoint
   legitimately has no SMB config, so an unconfigured SMB source must not flip `ready`. Touches
   `api/routes/system.py` + a readiness test — not RULE_PATHS.
+- **Stopped main CI runs cancelling each other, which skipped deploys** (#525). The CI concurrency group was
+  cancelling an in-progress run when a newer commit landed on `main` — but `deploy.yml` fires on that run's
+  `workflow_run: completed`, so a cancelled run never fired the deploy, and a merge could silently not ship.
+  Scoped the cancel-in-progress behaviour so `main` runs are allowed to finish (and trigger their deploy)
+  rather than being pre-empted. `Matrix-Note: none` — CI config only.
 
 - **Stopped a collapsed scan from hijacking every view — selector half** (#520). The production
   monitor's `newest scan is full-size` probe fired on prod ("newest has 5 documents but a recent scan
@@ -1644,6 +1649,11 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   user gets without touching anything is the plainest one (nothing skipped, nothing inferred) and the
   toggles read as additions to a known baseline. Incremental remains available for fast re-scans once a
   baseline exists.
+- **Discover asks only WHERE to inventory — formats/criteria move to Assess** (#532, PRD DISC-01). Discover's
+  wizard no longer carries scan profiles, format cards, or the criterion × format matrix; those controls
+  belong to Assess, where the deep evaluation actually happens. Discover is now a scope-only step (which
+  source, which folders), matching the phase-1 exit contract "no format/SC controls in Discover" — a cleaner
+  split between *what estate to catalogue* (Discover) and *how to judge it* (Assess).
 
 ## Feature: Observability — AI tracing and cost (Langfuse)
 
@@ -2454,3 +2464,9 @@ real extracted content, degrading to the generic note, never a fabricated tree.
   report/structural set) was not re-logged. **Sync marker still NOT advanced** (`fad0dfbe`, same convention):
   the delta still contains other sessions' undocumented Aug-19 feature work, and #526 (ADR 0039 regional
   resilience) + #527 (Open-in-Langfuse link) landed mid-write — both other sessions', left for their owners.
+- **2026-08-20 (Discover scope-only + CI-cancel fix)** — To **Discover & Assess lifecycle rules (#4618)**:
+  #532 — Discover's wizard is now scope-only (which source / which folders); scan profiles, format cards and
+  the criterion × format matrix moved to Assess (PRD DISC-01 phase-1 exit). To **Continuous deployment
+  (#4614)**: #525 — scoped CI cancel-in-progress so `main` runs finish and fire their `workflow_run` deploy,
+  instead of a newer commit cancelling a run and silently skipping the ship. **Sync marker deliberately NOT
+  advanced** (same convention as the prior entries).
