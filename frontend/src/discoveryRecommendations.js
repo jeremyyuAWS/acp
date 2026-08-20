@@ -53,7 +53,6 @@ export const FORMAT_BUCKETS = [
   ['other', 'Other', false],
 ]
 const FORMAT_LABEL = new Map(FORMAT_BUCKETS.map(([k, label]) => [k, label]))
-const FORMAT_ASSESSABLE = new Map(FORMAT_BUCKETS.map(([k, , a]) => [k, a]))
 
 export const formatLabel = (key) => FORMAT_LABEL.get(key) || 'Other'
 
