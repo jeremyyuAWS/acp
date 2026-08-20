@@ -386,6 +386,28 @@ def _scope_section(files, facts, h2, body, cell, muted) -> list:
     return el
 
 
+def _pour_bars(principles) -> Drawing:
+    """The per-principle pass rate as horizontal bars — the visual twin of the POUR table, on the
+    exact same numbers. Only principles with something evaluated get a bar (a 0-evaluated principle
+    has no rate to draw, and the table already shows it as '—')."""
+    rows = [p for p in principles if p.get("evaluated", 0)]
+    h = max(60, 24 * len(rows) + 16)
+    d = Drawing(440, h)
+    bar_x, bar_w = 118, 232
+    y = h - 18
+    for p in rows:
+        ev, ps = p["evaluated"], p["passed"]
+        frac = ps / ev if ev else 0
+        d.add(String(0, y + 2, p.get("principle", ""), fontName="Helvetica", fontSize=8.5, fillColor=PLUM))
+        d.add(Rect(bar_x, y, bar_w, 10, fillColor=CARD, strokeColor=LINE, strokeWidth=0.5))
+        if frac:
+            d.add(Rect(bar_x, y, bar_w * frac, 10, fillColor=GREEN, strokeColor=None))
+        d.add(String(bar_x + bar_w + 6, y + 2, f"{ps}/{ev} ({round(100 * frac)}%)",
+                     fontName="Helvetica", fontSize=8, fillColor=MUTED))
+        y -= 24
+    return d
+
+
 def _pour_section(facts, h2, body, cell, muted) -> list:
     """Pass rate by WCAG principle — POUR (backlog R8).
 
@@ -420,6 +442,62 @@ def _pour_section(facts, h2, body, cell, muted) -> list:
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ZEBRA]),
         ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+    el.append(t)
+    el.append(Spacer(1, 6))
+    el.append(_pour_bars(principles))       # the same rates, drawn — a reviewer reads bars faster
+    el.append(Spacer(1, 8))
+    return el
+
+
+# GENERIC, per-format independent-verification steps (backlog R13). Deliberately NOT doc-specific:
+# these tell an auditor how to confirm the result themselves with a mainstream tool, and must stay
+# true of every document of that format — so they name the tool and the checks, never a claim about
+# a particular file. Keyed by the uppercased extension _fmt() returns.
+_MANUAL_VERIFY = {
+    "DOCX": ("Microsoft Word → Review → Check Accessibility",
+             "Confirm no errors under Missing Alternative Text, Table Header Row, or Document Title; "
+             "the checker should report no accessibility issues."),
+    "PPTX": ("Microsoft PowerPoint → Review → Check Accessibility",
+             "Confirm each slide's reading order (Home → Arrange → Selection Pane) and that every "
+             "image carries alt text."),
+    "XLSX": ("Microsoft Excel → Review → Check Accessibility",
+             "Confirm each data table has a header row and that sheet tabs have meaningful names."),
+    "PDF": ("Adobe Acrobat Pro → Accessibility → Accessibility Check (or read it with NVDA on "
+            "Windows / VoiceOver on macOS)",
+            "Confirm the document is Tagged and declares a Title, a Language and a logical reading "
+            "order; with a screen reader, confirm headings and alt text are announced."),
+}
+
+
+def _manual_verification_section(files, h2, body, cell, muted) -> list:
+    """How to independently verify this result (backlog R13). For each document format actually in
+    this scan, the mainstream tool and the checks that let an auditor confirm the finding themselves
+    — generic per format, never a claim about a specific document. Rendered only for formats present."""
+    fmts = []
+    for f in files:
+        k = _fmt(f)
+        if k in _MANUAL_VERIFY and k not in fmts:
+            fmts.append(k)
+    if not fmts:
+        return []
+    el = [Paragraph("How to verify this independently", h2)]
+    el.append(Paragraph(
+        "This report is machine-generated evidence; it is stronger when you can reproduce it. For "
+        "each document format in this scan, here is how to confirm the result with a mainstream "
+        "tool — the steps are generic to the format, not tied to any one document.", muted))
+    el.append(Spacer(1, 6))
+    label = {"DOCX": "Word", "PPTX": "PowerPoint", "XLSX": "Excel", "PDF": "PDF"}
+    rows = [["Format", "Tool", "What to confirm"]]
+    for k in fmts:
+        tool, steps = _MANUAL_VERIFY[k]
+        rows.append([Paragraph(f"<b>{label.get(k, k)}</b>", cell),
+                     Paragraph(_esc(tool), cell), Paragraph(_esc(steps), cell)])
+    t = Table(rows, colWidths=[0.9 * inch, 2.5 * inch, 3.0 * inch], repeatRows=1)
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 8.5), ("TEXTCOLOR", (0, 0), (-1, 0), MUTED),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, LINE), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ZEBRA]),
+        ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
     el.append(t)
     el.append(Spacer(1, 8))
     return el
@@ -1190,6 +1268,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
 
     # ── Human review & assurance (R9/R10) ────────────────────────────────────
     el.extend(_assurance_section(facts, h2, body, cell, _muted))
+
+    # ── How to verify this independently (R13) ───────────────────────────────
+    el.extend(_manual_verification_section(files, h2, body, cell, _muted))
 
     # ── AI governance & provenance (ADR 0019 §4/§7) ──────────────────────────
     # The network-boundary + cost attestation enterprise procurement asks for, from the real

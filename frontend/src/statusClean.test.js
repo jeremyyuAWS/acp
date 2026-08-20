@@ -20,8 +20,12 @@ describe('FileDrawer renders a clean file honestly (no self-contradiction)', () 
     // does not trip it.
     expect(src).not.toMatch(/\{st === 'clean' && file\.score === null/)
   })
-  it('suppresses the auto-remediate recommendation card when there are no findings', () => {
-    expect(src).toMatch(/file\.rec && issues\.length > 0 && \(\(\) =>/)
+  it('suppresses the remediation action when there are no findings', () => {
+    // The remediation action now lives INSIDE the status hero as its `actionSlot` (the merge that
+    // removed the separate "Auto-remediate" card). The no-findings suppression moved with it: the
+    // slot builder returns null on an empty findings list, so a clean file shows no remediate CTA.
+    expect(src).toMatch(/actionSlot=\{\(\(\) =>/)
+    expect(src).toMatch(/if \(!scanId \|\| !r \|\| issues\.length === 0/)
   })
 })
 

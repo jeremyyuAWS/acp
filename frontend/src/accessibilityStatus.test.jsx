@@ -77,6 +77,19 @@ describe('AccessibilityStatus (ADR 0026 hero)', () => {
     expect(onAction).toHaveBeenCalledWith('ready_after_review')
   })
 
+  it('actionSlot replaces the default CTA so status + action are one card (drawer merge)', async () => {
+    // The FileDrawer passes its live "Remediate this file now" control as actionSlot, instead of
+    // rendering a second "Auto-remediate" card below with its own CTA. When a slot is given the
+    // default CTA must NOT also render — otherwise the two-CTA redundancy is back.
+    getFileStatus.mockResolvedValue(READY_AFTER)
+    ;({ container, root } = createTestRoot())
+    const slot = createElement('button', { className: 'my-remediate' }, '⚡ Remediate this file now')
+    await act(async () => { root.render(createElement(AccessibilityStatus, { scanId: 's1', file: 'f.pdf', actionSlot: slot })) })
+    await settle()
+    expect(container.querySelector('.acstatus-action .my-remediate')).not.toBeNull()  // the slot renders
+    expect(container.querySelector('.acstatus-cta')).toBeNull()                        // and the default CTA does not
+  })
+
   it('a clean doc reads "Ready for certification" with the no-gaps trust sentence', async () => {
     getFileStatus.mockResolvedValue({
       available: true, in_scope: 20, coverage: { evaluable: 20, total: 20 }, resolved: 20,

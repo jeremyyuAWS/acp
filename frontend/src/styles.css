@@ -1803,6 +1803,11 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
   background: var(--acc, #2563eb); color: #fff; font: inherit; font-weight: 700; font-size: 13px; cursor: pointer; }
 .acstatus-cta:hover { filter: brightness(1.05); }
 .acstatus-cta:focus-visible { outline: 2px solid var(--acc, #2563eb); outline-offset: 2px; }
+/* The caller-supplied action area (FileDrawer's live remediation control), rendered inside the
+   status card in place of the default CTA so status + action read as one card. */
+.acstatus-action { margin-top: 11px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.rem-actionlead { margin: 0; font-size: 13px; color: var(--ink); }
+.rem-actionlead b { font-weight: 700; }
 
 /* Three review types — each section header is the contract for the work beneath it. */
 .rc-type { margin-top: 20px; }

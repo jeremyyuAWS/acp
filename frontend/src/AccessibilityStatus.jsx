@@ -69,7 +69,10 @@ function estimateLabel(secs) {
 
 // One component, every scope (ADR 0026 PR 3): pass `file` for the per-file card, omit it for the
 // scan roll-up (per-file models summed server-side — the levels reconcile by construction).
-export default function AccessibilityStatus({ scanId, file, onAction, onModel }) {
+// `actionSlot` lets a container render its OWN action inside this card in place of the default
+// state-matched CTA — the FileDrawer passes its live "Remediate this file now" control so the
+// coverage status and the remediation action are ONE card, not two stacked ones with two CTAs.
+export default function AccessibilityStatus({ scanId, file, onAction, onModel, actionSlot = null }) {
   const [m, setM] = useState(null)
   const [why, setWhy] = useState(false)
 
@@ -178,12 +181,16 @@ export default function AccessibilityStatus({ scanId, file, onAction, onModel })
         </>
       )}
 
-      {/* One dynamic, state-matched CTA — the workflow launcher */}
-      {!loading && m.cta && (
-        <button type="button" className="acstatus-cta" onClick={() => onAction && onAction(m.state)}>
-          {m.cta}
-        </button>
-      )}
+      {/* One action area. The caller's own control wins when provided (the drawer's live
+          remediation button + progress), so status and action never split into two cards;
+          otherwise the default dynamic, state-matched CTA launches the next step. */}
+      {!loading && (actionSlot != null
+        ? <div className="acstatus-action">{actionSlot}</div>
+        : (m.cta && (
+          <button type="button" className="acstatus-cta" onClick={() => onAction && onAction(m.state)}>
+            {m.cta}
+          </button>
+        )))}
     </div>
   )
 }

@@ -28,6 +28,7 @@
 // "include subfolders" toggle: it would be a choice whose wrong answer silently under-reports.
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { listFolders } from './api.js'
+import { INCOMPLETE_LINE } from './wizardScopeReady.js'
 
 function FolderIcon() {
   return (
@@ -46,6 +47,10 @@ export default function FolderPicker({
   initialExclude = [],
   title = 'Choose folders to scan',
   layout = 'modal',
+  // The caller declares whether an empty selection is a legitimate 'everything' (a source
+  // card's default) or an unfinished narrowing (the wizard's 'Specific folders'). Asked,
+  // never inferred: the two look identical here and only the caller knows which it meant.
+  requireSelection = false,
 }) {
   const [stack, setStack] = useState([{ id: 'root', name: rootName }])
   const [folders, setFolders] = useState([])
@@ -240,9 +245,20 @@ export default function FolderPicker({
   // blank picker is the wrong one.
   const chips = (
     picked.length === 0 && excluded.length === 0 ? (
-      <div className="muted" style={{ fontSize: 12.5 }}>
-        Nothing selected — this {inline ? 'scan covers' : 'source scans'} <strong>all of {rootName}</strong>.
-      </div>
+      // Two opposite meanings for the same empty list, told apart by whether the CALLER claimed to
+      // be narrowing. On a source card no selection is the connection's default and genuinely does
+      // scan everything. In the wizard's "Specific folders" mode it is an unfinished decision, and
+      // rendering "covers all of OneDrive" there authorised the whole estate in the name of a
+      // restriction (#501's failed folder list is one way to arrive here without noticing).
+      requireSelection ? (
+        <div style={{ fontSize: 12.5, color: '#854F0B' }}>
+          <strong>{INCOMPLETE_LINE}</strong>
+        </div>
+      ) : (
+        <div className="muted" style={{ fontSize: 12.5 }}>
+          Nothing selected — this {inline ? 'scan covers' : 'source scans'} <strong>all of {rootName}</strong>.
+        </div>
+      )
     ) : (
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
         {!inline && <span className="muted" style={{ fontSize: 12.5 }}>Scanning:</span>}
