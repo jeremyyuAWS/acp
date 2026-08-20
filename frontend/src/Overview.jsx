@@ -22,6 +22,7 @@ import { reconcileBuckets } from './estateFunnel.js'
 import { reconciliationInputs } from './reconciliationInputs.js'
 import { assessMetrics } from './assessMetrics.js'
 import AssertionScope from './AssertionScope.jsx'
+import NextStep from './NextStep.jsx'
 import { CORE_SCS } from './activeScope.js'
 
 // The estate dashboard — doubles as the exportable compliance report.
@@ -144,6 +145,11 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   // An em dash, never a zero. "0 findings" over an estate nobody assessed is the same false
   // verdict as a completed run that found nothing - the distinction this product exists to make.
   const tile = (v) => (v == null ? '\u2014' : v.toLocaleString())
+  // Undecided lifecycle recommendations, for the NEXT panel's backlog line. NULL when the bucket
+  // was never measured — "0 awaiting" from an unread column would quietly close a loop nobody
+  // actually closed.
+  const lifecycleBucket = rec ? rec.rows.find((r) => r.key === 'lifecycle') : null
+  const lifecycleAwaiting = lifecycleBucket && lifecycleBucket.measured ? lifecycleBucket.value : null
 
   const stages = [
     { label: 'Discover', v: n, go: 'discover' },
@@ -367,6 +373,15 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           reconciliation use, so the exclusion count here cannot disagree with the bucket that
           produced it. */}
       <AssertionScope run={run} fileCount={n} coreScs={CORE_SCS} rec={rec} />
+
+      {/* SO WHAT NOW (board 7). The only panel on this screen with a primary action; everything
+          else reports. Fed the same `metrics` as the tiles, so the count it acts on is the count
+          shown above it, and the same `rec` for the lifecycle backlog. */}
+      <NextStep metrics={metrics}
+                awaiting={lifecycleAwaiting}
+                onRemediate={() => onGo && onGo('remediate')}
+                onExport={() => openReport(run.id)}
+                onReviewLifecycle={() => onGo && onGo('discover')} />
 
       {/* Whole-estate coverage: the three denominators (discovered / assessment-eligible /
           remediation-eligible) as a funnel + format composition + capability-status split, from the
