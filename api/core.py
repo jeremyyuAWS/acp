@@ -79,15 +79,36 @@ ALLOWED_EMAILS = {
 # to ACP_OWNER_EMAIL, else the first ACP_ALLOWED_EMAILS entry.
 OWNER_EMAIL = (os.environ.get("ACP_OWNER_EMAIL", "").strip().lower()
                or (sorted(ALLOWED_EMAILS)[0] if ALLOWED_EMAILS else ""))
+# Additional Platform Admins beyond the single protected OWNER_EMAIL. They get the SAME admin
+# rights — the scope editor, platform Settings (AI mode, Drive mirror, worker pool, reset), and
+# access management — so a team can have more than one admin instead of everything routing through
+# one person. Unlike OWNER_EMAIL these are NOT the anti-lockout owner: they can be removed. Comma-
+# separated; case-insensitive; empty by default (a fresh deploy still has exactly one owner).
+ADMIN_EMAILS = {
+    e.strip().lower() for e in os.environ.get("ACP_ADMIN_EMAILS", "").split(",") if e.strip()
+}
+
+
+def is_admin(email: str | None) -> bool:
+    """May this identity use the platform-admin surfaces (scope editor, platform Settings, access
+    management)? True for the protected OWNER_EMAIL, any ACP_ADMIN_EMAILS entry, or — when no owner
+    is configured at all (local dev / demo / no-auth) — everyone. This is the single source of truth
+    both the SPA flag (is_scope_owner) and the API gate (_require_admin) consult, so they can never
+    disagree about who is an admin."""
+    if not OWNER_EMAIL:
+        return True
+    e = (email or "").strip().lower()
+    return e == OWNER_EMAIL or e in ADMIN_EMAILS
 
 
 def email_allowed(email: str) -> bool:
-    """True if an email may use the app: the protected owner, the runtime test-user list
-    managed from Settings → Test users, or an allowed domain. ACP_ALLOWED_EMAILS is a
+    """True if an email may use the app: the protected owner (or an additional admin), the runtime
+    test-user list managed from Settings → Test users, or an allowed domain. ACP_ALLOWED_EMAILS is a
     one-time SEED for that list (see seed_allowlist_once), NOT a separate permanent grant
-    — so a user removed from the list is genuinely revoked."""
+    — so a user removed from the list is genuinely revoked. Admins are always admitted: an admin who
+    could not sign in would be a contradiction."""
     email = (email or "").lower()
-    if email and email == OWNER_EMAIL:
+    if email and (email == OWNER_EMAIL or email in ADMIN_EMAILS):
         return True
     try:
         if email in get_store().get_allowlist():
@@ -99,15 +120,14 @@ def email_allowed(email: str) -> bool:
 
 def is_scope_owner(email: str | None) -> bool:
     """May this identity edit the scan scope? Scope writes go through PUT /settings, which is
-    owner-only (_require_admin on OWNER_EMAIL), so this is the same gate the API enforces — it
-    exists so the SPA can hide the scope editor for non-owners POST-auth instead of letting a
-    non-owner attempt a write that the server will 403.
+    admin-only (_require_admin), so this is the same gate the API enforces — it exists so the SPA can
+    hide the scope editor for non-admins POST-auth instead of letting a non-admin attempt a write
+    that the server will 403.
 
-    True when the verified email is the owner (case-insensitive) OR when no owner is configured
+    Delegates to is_admin(), so additional Platform Admins (ACP_ADMIN_EMAILS) — not just the single
+    owner — get the editor. Name kept for SPA/`/me` compatibility. True when no owner is configured
     (local dev / demo / no-auth — _require_admin is a no-op there, so everyone may edit)."""
-    if not OWNER_EMAIL:
-        return True
-    return (email or "").strip().lower() == OWNER_EMAIL
+    return is_admin(email)
 
 
 def seed_allowlist_once(st: Store) -> None:
