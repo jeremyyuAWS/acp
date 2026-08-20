@@ -1727,6 +1727,61 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   own bounded pool) is chosen from data. Companion to #467; `--json` / `--provider` flags, most-recent scan
   by default.
 
+## Feature: Certification report as an audit artifact
+
+Turned the per-scan certification PDF (`api/report.py`) from a scan summary into an audit artifact an
+auditor can trust and reproduce. The backlog (docs/TODO.md P4) had drifted stale — most items had
+already shipped and the file never said so — so this began by reconciling it against the code, then
+built the genuine remainder. Every figure is a real, recomputable count or a ratio shown with its
+basis; where a denominator is not tracked the number is omitted, not invented (ADR 0016).
+
+- **Reconciled the stale P4 backlog against `report.py`** (#497). Struck the items already shipped —
+  R1 evidence appendix, R2 decision block, R3 why-certifiable prose, R4 chain-of-custody digest, R6
+  richer inventory, R7 score explanation, R-A scope-of-assertion, R-B audit-log excerpt — each with
+  its rendering code named. Left R5/R9–R15/R-C–R-E open honestly rather than claim them done. The
+  section had described the report as "a scan summary, not yet an audit artifact"; that was no longer
+  true and the file was the last place saying so.
+- **POUR — pass rate by WCAG principle** (#496). Groups evaluated criteria under Perceivable /
+  Operable / Understandable / Robust (the SC's leading digit) and shows the pass rate per principle.
+  Deterministic and honest by construction: the four principles partition the evaluated set exactly
+  (a test pins `sum(evaluated) == the report's own evaluated count`), and it is a pass rate *among
+  evaluated checks* — explicitly not a conformance percentage. Not-evaluated and review-only criteria
+  are excluded; a principle with nothing evaluated shows "—", never a fabricated 0%.
+- **Provenance — method, pipeline, reproduce, supersedes** (#498, R11/R12/R-D/R-E). A "how this
+  result was produced" section carrying the scan's real counts (criteria evaluated, deterministic vs
+  AI-assisted split, approvals, fixes re-validated), the pipeline in order, a **reproduce** line
+  ("re-run against rubric hash `<h>` → same findings"), and a **supersedes** line naming the previous
+  scan of the estate — the last two rendered only when their datum exists.
+- **Human review & assurance — KPI + honest ratios** (#500, R9/R10). Review outcomes
+  (reviewed / approved / rejected) counted from the immutable `decision_log`, deduped per
+  (file, criterion) so they can never disagree with the sign-off shown elsewhere; a deterministic ÷
+  evaluated assurance ratio; and effort as fixes-cleared ÷ findings *with that basis named*. The
+  "cleared ÷ attempted" ratio is deliberately omitted — only re-scan-cleared fixes are recorded, so
+  the attempted denominator is not tracked and inventing it would be dishonest.
+- **Independent-verification steps + POUR bar chart** (#503, R13). Per document format actually in
+  the scan, the mainstream tool and checks that let an auditor confirm the result themselves (Word /
+  PowerPoint / Excel Accessibility Checker; Acrobat or NVDA/VoiceOver for PDF) — generic per format,
+  never a claim about a specific document. Plus the POUR rates drawn as bars beside the table.
+- **Auditor's guide to reading the report** (#504). New doc `docs/certification-report-for-auditors.md`
+  — leads with the one thing not to misread (a score of 100 = "no blocking findings among the criteria
+  evaluated", not "WCAG 2.1 AA conformant"), maps every section to what it does and does not let you
+  conclude, and closes with three ways to trust it without trusting us (recompute the digest,
+  reproduce the findings, verify a document by hand). Distinct from `conformance-report.md`, which is
+  ACP's own platform-UI VPAT.
+
+## Feature: Structural evidence renderers (Remediate preview)
+
+Document-structure findings showed a generic "structure not extracted" note; these surface the real
+extracted structure as review evidence, computed on demand via owner-scoped endpoints (the geometry
+pattern) so they need no rule-path edit, DB migration or diff-pipeline change. docx-only and honest —
+real extracted content, degrading to the generic note, never a fabricated tree.
+
+- **Table-header association evidence** (#493) — the final tier-1 renderer. Parses the docx
+  `<w:tbl>`/`<w:tr>`/`<w:tc>` and shows the real cell grid with the header row highlighted, stating
+  plainly whether that row is *marked* as a header (`<w:tblHeader>`) or only reads as one — the exact
+  association a screen reader needs, and what the 1.3.1 fix adds. Completes the set with reading-order
+  (#490) and heading-outline (#492).
+
 ## Open items (backlog candidates)
 
 - **The docx header/footer parity audit is complete.** All six body-only content checks now read
@@ -2195,3 +2250,12 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   SMB config). A self-contained health/readiness surface — distinct from the SMB source discovery/transport
   program (#388–#397/#419) still left to its owning session. **Sync marker deliberately NOT advanced** (same
   convention as the prior entries).
+- **2026-08-20 (certification report as an audit artifact)** — Two new Features. To **Certification report
+  as an audit artifact**: the P4 backlog reconcile (#497) and the genuine remainder — POUR by principle
+  (#496), provenance/reproduce/supersedes (#498), human-review KPI + honest ratios (#500),
+  independent-verification steps + POUR bar (#503), and the auditor's guide doc (#504). To **Structural
+  evidence renderers**: the table-header association renderer (#493), completing the tier-1 set with #490/#492.
+  All report.py / store.py / doc_structure.py / docs — no rule-path files, no other session's surfaces. One
+  overnight autonomous session, each PR merged green. (The frontend CI briefly went red on a date time-bomb in
+  `wizardScopeCoverage.test.jsx` at the Aug 19→20 rollover; another session's #505 fixed it first, so this
+  session's duplicate fix was dropped.) **Sync marker deliberately NOT advanced** (same convention).
