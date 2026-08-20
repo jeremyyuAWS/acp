@@ -530,6 +530,25 @@ def file_trace_data(sid: str, filename: str, level: str = Query("AA")):
     return {"status": "ok", "trace": data}
 
 
+# MUST be registered BEFORE open_file_trace (its {filename:path} is a greedy catch-all that also
+# matches ".../{file}/history"). `filename` here is the trace-facing document LABEL (what the trace
+# panel holds as `document`), not a raw filename — lf.fetch_document_history uses it as-is.
+@router.get("/scans/{sid}/trace/file/{filename:path}/history")
+def file_trace_history(sid: str, filename: str):
+    """CROSS-SCAN history for one document: its trace in every scan it appears in, newest first —
+    the "this document over time" view Langfuse's own session-grouped UI cannot give. Honest states
+    like the /data route: {status: not_configured | pending | ok}. Public — read-only."""
+    import lf as _lf
+    if core.store.get_scan(sid) is None:
+        raise HTTPException(404, "scan not found")
+    if not _lf.enabled():
+        return {"status": "not_configured"}
+    data = _lf.fetch_document_history(filename)
+    if data is None:
+        return {"status": "pending"}
+    return {"status": "ok", "history": data}
+
+
 @router.get("/scans/{sid}/trace/file/{filename:path}")
 def open_file_trace(sid: str, filename: str, level: str = Query("AA")):
     """Reliable 'View trace' target for ONE file — its Discover/Assess/Remediate spans

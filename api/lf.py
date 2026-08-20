@@ -1095,3 +1095,48 @@ def fetch_session(scan_id: str, limit: int = 500) -> dict | None:
         "rollup": rollup,
         "files": rows[:limit],
     }
+
+
+# ── Cross-scan document history — "this document over time" ────────────────────
+# Every file trace carries a `file:<label>` tag (see _file_tags), so the same document across
+# DIFFERENT scans is exactly the set of traces with that tag. Langfuse's own UI groups by session
+# (one scan), never across scans by document, so this is the view it can't give: a document's score
+# and failing-criteria trajectory over successive scans. Fetched with ACP's own keys; PHI-safe (the
+# label is already an HMAC, the operator email is never read).
+def fetch_document_history(doc_label: str, limit: int = 20) -> dict | None:
+    """A document's trace across every scan it appears in, newest first.
+
+    `doc_label` is the trace-facing label (the `_doc_label` value, e.g. 'doc-3f9a2c.docx') — the
+    SAME string the trace input's `document` field and the `file:` tag hold, NOT a raw filename, so
+    it is used as-is and never re-hashed. Returns None when tracing isn't configured or the fetch
+    errors; a document with a single scan simply comes back with one row."""
+    if not _ENABLED or not doc_label:
+        return None
+    try:
+        import urllib.parse
+
+        import httpx
+        tag = urllib.parse.quote(f"file:{doc_label}", safe="")
+        r = httpx.get(f"{_HOST.rstrip('/')}/api/public/traces?tags={tag}&limit={int(limit)}",
+                      auth=(_PK, _SK), timeout=8.0)
+        if r.status_code != 200:
+            return None
+        data = r.json() or {}
+    except Exception:
+        return None
+    traces = [t for t in (data.get("data") or []) if isinstance(t, dict)]
+    rows = []
+    fmt = None
+    for t in traces:
+        tin = t.get("input") if isinstance(t.get("input"), dict) else {}
+        out = t.get("output") if isinstance(t.get("output"), dict) else {}
+        fmt = fmt or (tin or {}).get("format")
+        rows.append({
+            "scan_id": t.get("sessionId"),
+            "trace_id": t.get("id"),
+            "timestamp": t.get("timestamp"),
+            "result": out or None,
+        })
+    # newest first — the trajectory reads top-to-bottom as "most recent back to first seen"
+    rows.sort(key=lambda x: x.get("timestamp") or "", reverse=True)
+    return {"document": doc_label, "format": fmt, "total": len(rows), "scans": rows}
