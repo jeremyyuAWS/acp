@@ -687,6 +687,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                 layout="inline"
                 key={`${locKey}:${pickerSeed}`}
                 rootName={locKey === 'drive' ? 'My Drive' : 'OneDrive'}
+                sourceName={locKey === 'drive' ? 'Google Drive' : 'SharePoint'}
                 lister={locKey === 'drive' ? listFolders : (parent) => listSpFolders(parent)}
                 initial={folders}
                 initialExclude={excluded}
