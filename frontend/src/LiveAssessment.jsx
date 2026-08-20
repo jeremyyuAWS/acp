@@ -37,7 +37,10 @@ export default function LiveAssessment({ snapshot }) {
     <section className="live-assessment" role="region" aria-label="Live assessment"
       style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <header style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-        <h3 style={{ margin: 0, fontSize: 16 }}>{m.phaseLabel || 'Assessing'}</h3>
+        {/* Announce PHASE transitions to screen readers (preparing → assessing → finalizing → complete).
+            aria-live sits on the phase only, not the KPI counts — phases change rarely and meaningfully,
+            so this informs without the every-2s spam a live region over the numbers would produce. */}
+        <h3 style={{ margin: 0, fontSize: 16 }} aria-live="polite">{m.phaseLabel || 'Assessing'}</h3>
         {m.active && <span aria-hidden style={{ width: 8, height: 8, borderRadius: '50%',
           background: '#2F7D51', display: 'inline-block' }} />}
         {m.totals.discovered > 0 && (
