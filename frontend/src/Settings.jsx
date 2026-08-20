@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { resetDemoData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, getAiStatus } from './api.js'
+import { resetDemoData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, getAiStatus, getAdmins, setAdmins, getMe } from './api.js'
 import { SIM } from './sim.js'
 
 // What a write is allowed to claim when the API layer marked its own answer `simulated`.
@@ -317,7 +317,7 @@ import { useDialog } from './a11y.js'
 // the scoring rules (Rubric), the validation coverage (WCAG 2.1 + 2.2 matrix), and
 // the business ontology/taxonomy — i.e. the configuration an admin owns, kept out
 // of the day-to-day workflow tabs.
-function AllowList() {
+export function AllowList() {
   const [emails, setEmails] = useState([])
   const [owner, setOwner] = useState('')
   const [domains, setDomains] = useState([])
@@ -336,6 +336,12 @@ function AllowList() {
   const [gEmail, setGEmail] = useState('')
   const [gBusy, setGBusy] = useState(false)
   const [gMsg, setGMsg] = useState('')
+  // Platform-admin management. `admins` = owner-managed set (promotable/demotable here); `envAdmins`
+  // = permanent grants (ACP_ADMIN_EMAILS, set at deploy); `canManageAdmins` = this user is the owner
+  // (only the owner may promote/demote — the API enforces it regardless of the UI).
+  const [admins, setAdminsState] = useState([])
+  const [envAdmins, setEnvAdmins] = useState([])
+  const [canManageAdmins, setCanManageAdmins] = useState(false)
 
   useEffect(() => {
     getAllowlist()
@@ -345,7 +351,21 @@ function AllowList() {
       })
       .catch(() => setMsg('Could not load the test-user list.'))
       .finally(() => setLoaded(true))
+    getAdmins()
+      .then((d) => { setAdminsState(d.admins || []); setEnvAdmins(d.env_admins || []) })
+      .catch(() => {})
+    getMe().then((m) => { if (typeof m?.is_owner === 'boolean') setCanManageAdmins(m.is_owner) }).catch(() => {})
   }, [])
+
+  // Promote/demote a test user to Platform Admin. Owner-only; optimistic-with-rollback so the
+  // list can't assert a grant the server rejected (the PUT is owner-only and 403s otherwise).
+  const toggleAdmin = (email) => {
+    const next = admins.includes(email) ? admins.filter((a) => a !== email) : [...admins, email]
+    const prev = admins
+    setAdminsState(next)
+    setAdmins(next).then((d) => setAdminsState(d.admins || next))
+      .catch(() => { setAdminsState(prev); setMsg('Could not change admin — owner only.') })
+  }
 
   const invite = () => {
     const e = inviteEmail.trim().toLowerCase()
@@ -522,10 +542,25 @@ function AllowList() {
         )}
         {emails.map((e) => {
           const isOwner = e === owner
+          const isEnvAdmin = envAdmins.includes(e)   // permanent, set at deploy — not editable here
+          const isAdmin = isOwner || isEnvAdmin || admins.includes(e)
+          const adminBadge = (label, title) => (
+            <span title={title} style={{ fontSize: 11.5, fontWeight: 600, color: '#1D4ED8', background: '#E5EEF8', border: '1px solid #C7D7F0', borderRadius: 20, padding: '3px 9px', whiteSpace: 'nowrap' }}>🛡 {label}</span>
+          )
           return (
             <div key={e} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 11px', borderRadius: 9, background: 'var(--surface)', border: '1px solid var(--line)' }}>
-              <span aria-hidden="true" style={{ width: 30, height: 30, borderRadius: '50%', background: isOwner ? '#854F0B' : '#6D28D9', color: '#fff', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{avatar(e)}</span>
+              <span aria-hidden="true" style={{ width: 30, height: 30, borderRadius: '50%', background: isOwner ? '#854F0B' : (isAdmin ? '#1D4ED8' : '#6D28D9'), color: '#fff', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{avatar(e)}</span>
               <span style={{ fontSize: 14, flex: 1, wordBreak: 'break-all' }}>{e}</span>
+              {/* Admin badge: owner and env-admins are permanent; a promoted admin shows a plain badge. */}
+              {!isOwner && isEnvAdmin && adminBadge('admin · set at deploy', 'Platform Admin via ACP_ADMIN_EMAILS — permanent, managed at deploy time')}
+              {!isOwner && !isEnvAdmin && admins.includes(e) && adminBadge('admin', 'Platform Admin — full admin rights')}
+              {/* Owner-only promote/demote, for ordinary test users (not the owner, not env-admins). */}
+              {canManageAdmins && !isOwner && !isEnvAdmin && (
+                <button className="ghost small" onClick={() => toggleAdmin(e)}
+                        aria-label={`${admins.includes(e) ? 'Remove admin from' : 'Make admin'} ${e}`}>
+                  {admins.includes(e) ? 'Remove admin' : 'Make admin'}
+                </button>
+              )}
               {isOwner
                 ? <span title="The owner can’t be removed — anti-lockout safety" style={{ fontSize: 11.5, fontWeight: 600, color: '#854F0B', background: '#FBF1DF', border: '1px solid #EAD9BF', borderRadius: 20, padding: '3px 9px', whiteSpace: 'nowrap' }}>🔒 owner</span>
                 : <button className="ghost small" onClick={() => remove(e)} aria-label={`Remove ${e}`}>Remove</button>}

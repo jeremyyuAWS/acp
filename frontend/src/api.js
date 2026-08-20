@@ -397,6 +397,14 @@ export const getAllowlist = () => (SIM
 export const setAllowlist = (emails) => (SIM
   ? sim({ emails })
   : fetch(`${BASE}/admin/allowlist`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ emails }) }).then(j))
+// Platform-admin management (owner-only PUT). `admins` is the owner-managed set; `env_admins` are
+// permanent (ACP_ADMIN_EMAILS, set at deploy); `owner` is immutable.
+export const getAdmins = () => (SIM
+  ? sim({ owner: 'demo@sim', env_admins: [], admins: [] })
+  : fetch(`${BASE}/admin/admins`, { headers: headers() }).then(j))
+export const setAdmins = (emails) => (SIM
+  ? sim({ owner: 'demo@sim', env_admins: [], admins: emails })
+  : fetch(`${BASE}/admin/admins`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ emails }) }).then(j))
 // Invite a tester as an Entra B2B guest AND add them to the allowlist in one step (ADR 0033).
 // Owner-only; the endpoint 409s (and the UI hides) unless the guest-invite credential is configured.
 export const inviteTester = (email) => (SIM
