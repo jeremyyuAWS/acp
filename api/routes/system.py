@@ -19,17 +19,19 @@ _SECRET_REF_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,64}$")
 
 
 def _require_admin(request: Request) -> None:
-    """Owner-only gate for platform-mutating admin endpoints. The SPA hides these
+    """Platform-admin gate for platform-mutating admin endpoints. The SPA hides these
     behind the Platform Admin role, but the API must enforce it too — any
     allow-listed user could otherwise flip platform settings (AI mode, Drive
     mirror, worker pool, data reset) with a direct call. Admin = the protected
-    OWNER_EMAIL, the same identity the allowlist can never drop (anti-lockout).
-    No-op when no owner is configured (local dev without auth)."""
+    OWNER_EMAIL (the anti-lockout identity the allowlist can never drop) OR any
+    ACP_ADMIN_EMAILS entry — the same `core.is_admin` set the SPA's is_scope_owner
+    flag reads, so UI and API never disagree. No-op when no owner is configured
+    (local dev without auth)."""
     if not core.OWNER_EMAIL:
         return
     email = (getattr(request.state, "user_email", None) or "").lower()
-    if email != core.OWNER_EMAIL:
-        raise HTTPException(403, "admin (owner) access required")
+    if not core.is_admin(email):
+        raise HTTPException(403, "admin access required")
 
 
 @router.post("/admin/reset")
