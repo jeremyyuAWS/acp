@@ -18,11 +18,14 @@ import { scopeChip, scopeSentence, isNarrowScope } from './scanScope.js'
 import ScanScopeChip from './ScanScopeChip.jsx'
 import EstateCoverage from './EstateCoverage.jsx'
 import AssessmentReconciliation from './AssessmentReconciliation.jsx'
+import { reconcileBuckets } from './estateFunnel.js'
+import { reconciliationInputs } from './reconciliationInputs.js'
+import { assessMetrics } from './assessMetrics.js'
 
 // The estate dashboard — doubles as the exportable compliance report.
 export default function Overview({ run, files, trend, trendDates, onGo, scanList = [], onPickScan, me,
                                    onScan, busy = false, hasDriveToken = false, hasSPToken = false,
-                                   onFileTypeChange }) {
+                                   onFileTypeChange, cap, assessment }) {
   // Real signed-in org (email domain) — the hardcoded demo org only ever shows in SIM.
   const orgName = SIM ? IDENTITY.org : (me?.email?.split('@')[1]?.replace(/\.[^.]+$/, '') || me?.name || 'your organisation')
   const [on, setOn] = useState(false)
@@ -127,6 +130,18 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const auditReady = (analysed && n && run.certifiable != null) ? Math.round((run.certifiable / n) * 100) : null
   const auditReadyLabel = auditReady == null ? '—' : `${auditReady}%`
   const maxN = Math.max(1, n)
+
+  // ── The four headline tiles (board 7) ───────────────────────────────────────────────────────
+  // Read, never derived. `rec` is the SAME call AssessmentReconciliation makes below, so the two
+  // are one computation and the tiles cannot disagree with the partition that explains them.
+  // `metrics` is the module the Assess tab's summary uses, so one run cannot report two different
+  // findings totals depending on which tab you are standing on.
+  const rec = reconcileBuckets(run?.scope?.inventory, reconciliationInputs(run, files))
+  const assessedBucket = rec ? rec.rows.find((r) => r.key === 'assessed') : null
+  const metrics = assessMetrics(files, { cap, assessment })
+  // An em dash, never a zero. "0 findings" over an estate nobody assessed is the same false
+  // verdict as a completed run that found nothing - the distinction this product exists to make.
+  const tile = (v) => (v == null ? '\u2014' : v.toLocaleString())
 
   const stages = [
     { label: 'Discover', v: n, go: 'discover' },
@@ -294,11 +309,19 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         </details>
       )}
       <div ref={reportRef}>
+      {/* The four the board specifies. `certifiable` and `audit-ready` came out with them: both
+          are the score in other clothes, and #545 removed the score because severity weighting
+          cannot tell "checked and passed" from "not checked". This screen exports as the
+          compliance report, so a removed verdict must not survive here. */}
       <div className="metrics">
-        <div className="metric"><span>documents</span><b>{n.toLocaleString()}</b></div>
-        <div className="metric"><span>certifiable</span><b style={{ color: '#3B6D11' }}>{run.certifiable ?? '—'}</b></div>
-        <div className="metric" title="Documents with an open finding and a remediation action — auto-fix, review, or manual rebuild (matches the Remediate tab). A document with no findings is never counted here."><span>need remediation</span><b style={{ color: '#854F0B' }}>{needFix}</b></div>
-        <div className="metric" title={auditReady == null ? 'Not computable yet — no document in this scan has been analysed, so there is no measured share to report' : 'Share of documents that are certifiable today (certifiable ÷ total)'}><span>audit-ready</span><b>{auditReadyLabel}</b></div>
+        <div className="metric" title="Every file discovery listed from metadata, before any document-type or lifecycle filter. The panel below partitions exactly this number.">
+          <span>files discovered</span><b>{tile(rec ? rec.discovered : null)}</b></div>
+        <div className="metric" title="Documents this run opened and scored against the selected WCAG criteria. The gap to the discovered total is itemised in the panel below.">
+          <span>assessed against WCAG</span><b>{tile(assessedBucket ? assessedBucket.value : null)}</b></div>
+        <div className="metric" title="Assessed documents carrying at least one unresolved finding. A document with no findings is never counted here."
+             ><span>documents need action</span><b style={{ color: '#854F0B' }}>{tile(metrics ? metrics.documentsNeedingAttention : null)}</b></div>
+        <div className="metric" title="Unresolved findings across all assessed documents — the same total the Assess tab reports for this run.">
+          <span>findings</span><b>{tile(metrics ? metrics.totalFindings : null)}</b></div>
       </div>
       {/* WHAT THE COUNT COUNTS. Discover has said this since scanScope.js; the Overview did not,
           and it is the screen where two scans get compared. On 2026-07-30 a folder scan of "UTSW

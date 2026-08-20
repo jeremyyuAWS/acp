@@ -270,8 +270,14 @@ describe('analysedCount separates documents we opened from documents we merely l
 // that all 258 documents were checked and none passed, which is a stronger claim than the data
 // supports, and a blank tile is not an improvement on it.
 describe('Overview reports absent values as absent, not as zero', () => {
-  it('renders an em dash for certifiable rather than nothing at all', () => {
-    expect(overviewSrc).toMatch(/certifiable<\/span><b[^>]*>\{run\.certifiable \?\? '—'\}/)
+  it('renders an em dash for an unmeasured headline tile rather than a zero', () => {
+    // Re-pointed when board 7 replaced the four tiles. The invariant is unchanged and is the
+    // reason this test exists: an absent measurement must not render as a measured zero. It moved
+    // from `run.certifiable ?? '—'` to the shared `tile()` helper, which now guards all four.
+    expect(overviewSrc).toMatch(/const tile = \(v\) => \(v == null \? '\\u2014' : v\.toLocaleString\(\)\)/)
+    // and every tile goes through it — a tile that reads a value directly bypasses the guard
+    expect(overviewSrc).toMatch(/<span>files discovered<\/span><b>\{tile\(/)
+    expect(overviewSrc).toMatch(/<span>findings<\/span><b>\{tile\(/)
   })
 
   it('computes audit-ready only when something was actually analysed', () => {
@@ -456,9 +462,12 @@ describe('the Overview totals count the documents the Overview lists', () => {
     // The four tiles, the donut, the funnel and the score bands are six answers to "how many
     // documents"; they came from two different populations.
     const html = screen()
-    expect(html).toMatch(/documents 3\b/)
-    expect(html).toMatch(/certifiable 2\b/)
-    expect(html).toMatch(/audit-ready 67%/)
+    // Board 7 replaced the four tiles. This run's scope carries no inventory, so the two estate
+    // tiles have nothing to report — and report nothing, rather than claiming discovery found 0.
+    expect(html).toMatch(/files discovered —/)
+    expect(html).toMatch(/assessed against WCAG —/)
+    // The invariant this test was written for is the line below, and it is untouched: the donut,
+    // the funnel and the tiles must all describe ONE population.
     expect(statusSegments(SCAN_12F2_RUN, SCAN_12F2_FILES).reduce((a, s) => a + s.value, 0))
       .toBe(SCAN_12F2_RUN.files)
   })

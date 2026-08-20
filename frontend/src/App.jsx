@@ -1050,7 +1050,7 @@ export default function App() {
         {/* onScan/busy/tokens are threaded so Overview can offer the scan-scope editor after a
             scan exists. Before one, `placeholder` (EmptyState → ScanSetup) is the whole screen;
             without these the editor would still be reachable exactly once per workspace. */}
-        {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} me={me} onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onFileTypeChange={setFileTypeConfig} /> : assessGate) : placeholder)}
+        {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} me={me} onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onFileTypeChange={setFileTypeConfig} cap={cap} assessment={assessment} /> : assessGate) : placeholder)}
 
         {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
           scanId={run?.id}

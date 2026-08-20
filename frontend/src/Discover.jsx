@@ -7,7 +7,6 @@ import FolderPicker from './FolderPicker.jsx'
 import SitePicker from './SitePicker.jsx'
 import Upload from './Upload.jsx'
 import DispositionRules from './DispositionRules.jsx'
-import ScanScope from './ScanScope.jsx'
 import MyScanScope from './MyScanScope.jsx'
 import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
@@ -308,23 +307,22 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
 
   return (
     <>
-      {/* Scan scope, ABOVE the scan controls, because that is the order the decision happens in:
-          what to assess is chosen BEFORE discovery runs, not corrected afterwards in an admin
-          screen nobody opens. In frontend/ this panel lives behind Platform settings -> Scan
-          scope; that is the right place for a rarely-touched platform default and the wrong one
-          for a per-engagement choice the operator makes every time.
+      {/* REMOVED: the "1 · Choose what to assess · criteria and file types, before you scan" panel.
+          Discover asks ONE question — WHERE to inventory. Which document types and which WCAG
+          criteria are Assess's question, and AssessSetup now owns both on the Assess tab, so this
+          asked the same thing twice with two answers.
 
-          Open by default only until an estate exists. `files.length === 0` is the pre-discovery
-          state, and it is exactly when the choice is both consequential and free — narrowing
-          after a scan means the results on screen no longer match the scope beside them. Once
-          files are in, it collapses to a summary line and stays one click away. */}
-      <details className="panel scopestep" open={files.length === 0}>
-        <summary>
-          <b>1 · Choose what to assess</b>
-          <span className="muted"> · criteria and file types, before you scan</span>
-        </summary>
-        <ScanScope />
-      </details>
+          Worse, it asked at the wrong stage. Criteria and formats do not scope DISCOVERY at all —
+          discovery is metadata-only (ADR 0020) and lists every file regardless — so "before you
+          scan" invited a reader to believe a criterion choice here narrowed what got listed. That
+          is the same Discover/Assess conflation #532 began removing and #549 fixed in the wizard
+          hint, still live on the tab itself.
+
+          The FILE is left in place, but be clear about its state: ScanScope.jsx is now mounted
+          NOWHERE. It is not behind Platform settings — scopeStep.test.js pins that Settings must
+          not carry it, precisely so one setting never has two editors. Deleting it is a separate
+          decision from removing this panel, so it is flagged rather than taken here, and
+          scopeStep.test.js records the orphan so it cannot be mistaken for live code. */}
 
       {/* The per-user twin of the scope step (ADR 0035 stage 2): the org scope above is the mandate
           (owner-only); here any signed-in reviewer widens it for their OWN scans. Collapsed by default

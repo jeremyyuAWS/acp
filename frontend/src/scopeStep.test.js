@@ -22,31 +22,60 @@ describe('v2: scan scope is a pre-discovery step', () => {
     expect(existsSync(join(HERE, 'scanScope.test.jsx'))).toBe(true)
   })
 
-  it('renders inside Discover, not Settings', () => {
+  // SUPERSEDED 2026-08-20. The three cases here pinned ScanScope's PLACEMENT on the Discover tab
+  // — imported there, above the estate bar, open before an estate exists. That placement was the
+  // v2 change when this file was written, and the product has since moved past it.
+  //
+  // Discover asks ONE question: WHERE to inventory. Which document types and which WCAG criteria
+  // are Assess's question, and AssessSetup owns both there now. Keeping the picker on Discover
+  // asked the same thing twice with two answers — and asked it at a stage where it does not
+  // apply, since discovery is metadata-only (ADR 0020) and lists every file whatever the criteria
+  // say. #532 began removing that conflation and #549 fixed the wizard hint; this was the last
+  // of it, still live on the tab itself.
+  //
+  // What replaces them below is not a loosening. The removal is pinned in both directions, and
+  // the two guards that were never about placement — no second editor in Settings, and the grid
+  // stays generated — are kept exactly as they were.
+
+  it('no longer asks the assess question on the discovery tab', () => {
+    // COMMENTS STRIPPED FIRST. The comment explaining the removal necessarily quotes the copy
+    // being removed, so a whole-file ban matches its own protected explanation and fails on
+    // correct code — testing the vocabulary instead of the claim. The claim is about what the
+    // component RENDERS, so the assertions run against the source with comments removed.
     const d = read('Discover.jsx')
-    expect(d).toContain("import ScanScope from './ScanScope.jsx'")
-    expect(d).toMatch(/<ScanScope\s*\/>/)
-    // Deliberately NOT also in Settings: two editors of one setting is how an operator ends up
-    // reading a stale value in one place after saving in the other. Front and centre means
-    // moved, not duplicated.
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')     // JSX comments
+      .replace(/\/\*[\s\S]*?\*\//g, '')           // block comments
+      .replace(/^\s*\/\/.*$/gm, '')                // line comments
+    expect(d).not.toMatch(/<ScanScope\s*\/>/)
+    expect(d).not.toContain("import ScanScope from './ScanScope.jsx'")
+    // The copy went with it. "before you scan" was the part that actively misled: it invited a
+    // criterion choice to be read as narrowing what discovery would list.
+    expect(d).not.toContain('criteria and file types, before you scan')
+    expect(d).not.toContain('1 · Choose what to assess')
+    // The stripper must not be what makes this pass — if it ate the whole file, every negative
+    // assertion above would hold vacuously.
+    expect(d).toContain('export default function Discover')
+    expect(d.length).toBeGreaterThan(2000)
+  })
+
+  it('still has exactly one editor for the setting, and it is not Settings', () => {
+    // Unchanged guard, and it is why the component was not simply relocated: two editors of one
+    // setting is how an operator reads a stale value in one place after saving in the other.
     expect(read('Settings.jsx')).not.toContain('ScanScope')
   })
 
-  it('sits above the estate bar, so the choice precedes the scan', () => {
-    const d = read('Discover.jsx')
-    const scope = d.indexOf('<ScanScope')
-    const estate = d.indexOf('className="estatebar"')
-    expect(scope).toBeGreaterThan(-1)
-    expect(estate).toBeGreaterThan(-1)
-    expect(scope, 'the scope step must render before the scan controls').toBeLessThan(estate)
-  })
-
-  it('is open before an estate exists and collapsed after', () => {
-    // The whole point of "pre-discovery": open when the choice is free, collapsed once results
-    // are on screen, because narrowing afterwards leaves the scope disagreeing with the numbers
-    // beside it. A hard-coded `open` would nag forever; no `open` would hide it exactly when it
-    // matters most.
-    expect(read('Discover.jsx')).toMatch(/<details[^>]*open=\{files\.length === 0\}/)
+  it('records that ScanScope.jsx is now mounted nowhere', () => {
+    // Deliberately asserted rather than left implicit. The component is orphaned: no screen
+    // renders it. That is a real state, and an unmounted component is exactly the thing that
+    // reads as shipped on a status list while rendering for nobody — so it is written down here
+    // instead of being discovered again in six weeks.
+    //
+    // Deleting it is a SEPARATE decision from removing the panel and has not been taken. When it
+    // is, this case goes with the file.
+    const mounts = ['Discover.jsx', 'Overview.jsx', 'Settings.jsx', 'App.jsx', 'ScanSetup.jsx']
+      .filter((f) => existsSync(join(HERE, f)))
+      .filter((f) => /<ScanScope\s*\/>/.test(read(f)))
+    expect(mounts).toEqual([])
   })
 
   it('keeps the grid derived — v2 imports the generated module, never a literal', () => {
