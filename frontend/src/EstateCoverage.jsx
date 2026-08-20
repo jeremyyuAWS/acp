@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { estateModel, statusFiles, formatBytes, STATUS_SORTS } from './estateFunnel.js'
+import { Bars } from './charts.jsx'
 
 // Estate coverage from a scan report's `scope.inventory` — the funnel, format composition, and
 // capability-status split, rendered from REAL discovery data (the illustrative dashboard artifact
@@ -59,6 +60,32 @@ export default function EstateCoverage({ report, inventory, progress }) {
       </p>
 
       {/* Funnel */}
+      {/* How long since anything touched these files.
+          Rendered only when the scan carries `by_age` — a report written before that aggregation
+          existed has no age data, and zeros would assert an estate with nothing old in it.
+          This is the RETENTION question rather than the accessibility one, which is why it spans
+          the whole estate (an untouched .mov is a delete candidate too) and why the numbers feed
+          the disposition rules rather than the funnel. */}
+      {m.age && (
+        <>
+          <h4 style={{ margin: '0 0 8px', fontSize: 13, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--muted-fg,#8a8f98)' }}>
+            Last modified
+          </h4>
+          <Bars items={m.age} cols="130px 1fr 60px" />
+          <p className="muted" style={{ fontSize: 11.5, margin: '6px 0 18px', lineHeight: 1.5 }}>
+            Across every discovered file, not only the assessable ones — age is a retention
+            question.{' '}
+            {m.truncated && 'The listing hit its cap, so each band is a floor. '}
+            {!m.ageReconciles && (
+              // Built to sum to `discovered`, so a mismatch means the two numbers came from
+              // different places. Said out loud rather than leaving a reader to add up bars that
+              // do not reach the headline.
+              <strong>These bands do not add up to the discovered total — treat them as indicative.</strong>
+            )}
+          </p>
+        </>
+      )}
+
       <h4 style={{ margin: '0 0 8px', fontSize: 13, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--muted-fg,#8a8f98)' }}>Coverage funnel</h4>
       <div style={{ display: 'grid', gap: 6, marginBottom: 22 }}>
         {m.funnel.map((s, i) => (
