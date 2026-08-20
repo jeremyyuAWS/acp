@@ -3,6 +3,7 @@ import Thumbnail from './Thumbnail.jsx'
 import { locationLabel } from './remediationInboxModel.js'
 import { natureOf, contrastEvidence, metadataEvidence, readingOrderEvidence, findingSc } from './remediationEvidence.js'
 import HeadingOutline from './HeadingOutline.jsx'
+import TableStructure from './TableStructure.jsx'
 import GroundedBeforeAfter from './GroundedBeforeAfter.jsx'
 
 // The third pane of the remediation workspace: a CONTEXTUAL PREVIEW of the actual document.
@@ -248,8 +249,16 @@ function StructureNote({ f, scanId = null }) {
   // While it loads, or when no outline is available (non-docx, <2 headings, already clean), HeadingOutline
   // renders the generic note above as its fallback — never a fabricated outline.
   const sc = findingSc(f)
-  if (sc === '1.3.1' || sc === '2.4.6') {
+  if (sc === '2.4.6') {
     return <HeadingOutline scanId={scanId} file={f?.file} wcag={wcag} fallback={genericNote} />
+  }
+  // 1.3.1 covers heading hierarchy AND table-header association: try the heading outline first, then the
+  // table structure, then the honest generic note. Each renderer degrades to the next when it has nothing.
+  if (sc === '1.3.1') {
+    return (
+      <HeadingOutline scanId={scanId} file={f?.file} wcag={wcag}
+        fallback={<TableStructure scanId={scanId} file={f?.file} wcag={wcag} fallback={genericNote} />} />
+    )
   }
   return genericNote
 }

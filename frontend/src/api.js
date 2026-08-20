@@ -734,6 +734,16 @@ export const getHeadingOutline = (scanId, file) => (SIM || !scanId || !file
       .then(d => (d && d.outline) || null)
       .catch(() => null))
 
+// The docx table(s) with header-row associations for a 1.3.1 finding's Structure evidence — computed
+// on demand (mirrors getHeadingOutline). null when unavailable (non-docx, no qualifying table, or any
+// failure), so the card degrades to the honest generic note.
+export const getTableStructure = (scanId, file) => (SIM || !scanId || !file
+  ? sim(null)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/table-structure`, { headers: headers() })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => (d && d.tables) || null)
+      .catch(() => null))
+
 // ADR 0024 Tier B.1 — render-verified 1.4.3-hybrid contrast, ON DEMAND. With no locator the
 // backend re-derives every text-over-picture/gradient shape and MEASURES each from real pixels,
 // returning {measured:true, worst_ratio, any_fail_aa, shapes:[…], checked, total} or an honest
