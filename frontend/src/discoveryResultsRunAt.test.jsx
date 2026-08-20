@@ -28,6 +28,16 @@ const FILES = [
   { file: 'b.pdf', name: 'b.pdf', status: 'done' },
 ]
 
+// The header now takes an `inventorySnapshot()` result, not a pre-formatted string: the module
+// resolves the instant AND says which record it came from, so the component can show provenance
+// without deciding a date format.
+const SNAP = (absolute, extra = {}) => ({
+  recorded: true, absolute, label: 'recorded when discovery finished', stale: false, ...extra,
+})
+// `recorded: false` is a real answer and must render as one — it means nobody persisted the
+// instant, never that the inventory is current.
+const NOT_RECORDED = { recorded: false, absolute: null, label: null, stale: false }
+
 let container, root
 const mount = async (props) => {
   ;({ container, root } = createTestRoot())
@@ -41,16 +51,16 @@ afterEach(() => unmountAll())
 
 describe('Discovery results header states when the inventory was taken', () => {
   it('prints the run stamp beside the scope', async () => {
-    const t = await mount({ scopeLine: 'SharePoint / OneDrive · 2 folders', runAt: 'Aug 20, 2026, 4:04 PM PDT' })
+    const t = await mount({ scopeLine: 'SharePoint / OneDrive · 2 folders', runAt: SNAP('Aug 20, 2026, 4:04 PM PDT') })
     expect(t).toContain('SharePoint / OneDrive · 2 folders')
-    expect(t).toContain('run Aug 20, 2026, 4:04 PM PDT')
+    expect(t).toContain('listed Aug 20, 2026, 4:04 PM PDT')
   })
 
   it('renders NO date at all when the run cannot be dated', async () => {
-    const t = await mount({ scopeLine: 'SharePoint / OneDrive · 2 folders', runAt: null })
+    const t = await mount({ scopeLine: 'SharePoint / OneDrive · 2 folders', runAt: NOT_RECORDED })
     expect(t).toContain('SharePoint / OneDrive · 2 folders')
     // Not "run", not a separator left dangling, and above all not a manufactured date.
-    expect(t).not.toMatch(/\brun\s/)
+    expect(t).not.toMatch(/\blisted\s/)
     expect(t).not.toContain('· ·')
     // Nothing that looks like a date reached the header — in EITHER shape. A mutation that filled
     // the gap with `new Date().toLocaleDateString()` produced "8/20/2026", which a month-name-only
@@ -61,15 +71,15 @@ describe('Discovery results header states when the inventory was taken', () => {
   })
 
   it('prints the stamp alone when there is no recorded scope', async () => {
-    const t = await mount({ scopeLine: null, runAt: 'Aug 20, 2026, 4:04 PM PDT' })
-    expect(t).toContain('run Aug 20, 2026, 4:04 PM PDT')
+    const t = await mount({ scopeLine: null, runAt: SNAP('Aug 20, 2026, 4:04 PM PDT') })
+    expect(t).toContain('listed Aug 20, 2026, 4:04 PM PDT')
     // No leading separator with nothing before it.
-    expect(t).not.toMatch(/·\s*run Aug/)
+    expect(t).not.toMatch(/·\s*listed Aug/)
   })
 
   it('renders neither when neither is known', async () => {
-    const t = await mount({ scopeLine: null, runAt: null })
-    expect(t).not.toMatch(/\brun\s/)
+    const t = await mount({ scopeLine: null, runAt: NOT_RECORDED })
+    expect(t).not.toMatch(/\blisted\s/)
     expect(t).toContain('DISCOVERY RESULTS')      // the screen itself still renders
   })
 })
@@ -88,8 +98,26 @@ describe('the stamp is formatted by the caller, in the app-wide format', () => {
     expect(s).not.toMatch(/Intl\.DateTimeFormat/)
   })
 
-  it('App formats it with fmtStamp, the same helper the run header uses', () => {
-    expect(read('App.jsx')).toMatch(/runAt=\{fmtStamp\(run\?\.completed_at\)\}/)
+  it('App resolves it through discoverRunTime, never from completed_at directly', () => {
+    // THE BUG THIS REPLACES. `run.completed_at` is written at ASSESS finalize (ADR 0020), so it is
+    // NULL on a discover-only run — the exact screen this line lives on — and afterwards dates the
+    // assessment rather than the listing. resolveInventoryTime prefers the real run-level stamp,
+    // falls back to the newest per-file stamp, and takes completed_at only last, labelled as the
+    // upper bound it is.
+    const app = read('App.jsx')
+    expect(app).toMatch(/runAt=\{inventorySnapshot\(/)
+    expect(app).not.toMatch(/runAt=\{fmtStamp\(/)
+  })
+
+  it('shows the stale-snapshot warning the resolver computes', async () => {
+    const t = await mount({ scopeLine: null, runAt: SNAP('Aug 1, 2026, 9:00 AM PDT', { stale: true }) })
+    expect(t).toContain('this snapshot is over a day old')
+  })
+
+  it('does not cry stale on a fresh snapshot', async () => {
+    // Guards the case above from passing on a component that warns unconditionally.
+    const t = await mount({ scopeLine: null, runAt: SNAP('Aug 20, 2026, 4:04 PM PDT') })
+    expect(t).not.toContain('over a day old')
   })
 
   it('Discover forwards it rather than deriving its own', () => {

@@ -118,12 +118,22 @@ export default function DiscoveryResults({
             worse than one that gives no date at all — this estate gets re-scanned, and an
             undated inventory reads exactly like a current one.
 
-            `runAt` arrives already formatted. This component prints strings and does not own a
-            date format; the caller uses the same fmtStamp the run header and the Assess screen
-            use, so the product has one stamp format rather than one per screen. */}
-        {(scopeLine || runAt) && (
-          <span className="muted" style={{ fontSize: 12.5 }}>
-            {scopeLine}{scopeLine && runAt ? ' · ' : ''}{runAt ? `run ${runAt}` : ''}
+            `runAt` is an `inventorySnapshot()` from discoverRunTime.js — resolved, formatted and
+            SOURCED. This component still owns no date format; it renders what that module
+            resolved, and hangs the provenance off the title so a reader can find out which of the
+            three records dated their inventory.
+
+            It used to take a plain string built from `run.completed_at`, which was wrong in a way
+            no test caught: under ADR 0020 that column is written at ASSESS finalize, so it is
+            NULL on a discover-only run — the exact screen this line lives on — and afterwards
+            dates the assessment rather than the listing. `resolveInventoryTime` prefers the real
+            run-level stamp, falls back to the newest per-file stamp, and accepts completed_at
+            only last, labelled as the upper bound it is. */}
+        {(scopeLine || (runAt && runAt.recorded)) && (
+          <span className="muted" style={{ fontSize: 12.5 }} title={runAt && runAt.recorded ? runAt.label : undefined}>
+            {scopeLine}{scopeLine && runAt && runAt.recorded ? ' · ' : ''}
+            {runAt && runAt.recorded ? `listed ${runAt.absolute}` : ''}
+            {runAt && runAt.recorded && runAt.stale ? ' · this snapshot is over a day old' : ''}
           </span>
         )}
       </div>
