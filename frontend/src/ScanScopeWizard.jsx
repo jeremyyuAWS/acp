@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo, Fragment } from 'react'
 import { getSettings, updateSettings, getScanLocations, setScanLocations,
          listFolders, listSpFolders } from './api.js'
 import { scopeFooterPart, blockedReason } from './wizardScopeReady.js'
+import { ASSESSED_ROW_LABEL, assessedFormatsLine, OTHER_TYPES_NOTE,
+         footerFormatsPart } from './assessedFormats.js'
 import FolderPicker from './FolderPicker.jsx'
 import { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } from './scopePresets.js'
 import { TRACKED_17, RULE_DETAILS } from './ruleDetails.js'
@@ -562,7 +564,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
 
   const footerSummary = [
     locKey ? scopeFooterPart(scopeMode, folders, excluded) : null,
-    `${nFormats} format${nFormats === 1 ? '' : 's'}`,
+    footerFormatsPart(nFormats),
     profileLabel,
   ].filter(Boolean).join(' · ')
 
@@ -1089,9 +1091,16 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                 </dd>
               </>
             )}
-            <dt className="muted">Formats</dt>
+            {/* Not "Formats". The scan walks EVERYTHING — scanner._sp_list builds `est_files` from
+                every item and only the six supported extensions become documents — so a bare list
+                of four beside a count of the estate leaves the reader to guess which population
+                the four apply to, and the reassuring guess is "all of them". */}
+            <dt className="muted">{ASSESSED_ROW_LABEL}</dt>
             <dd style={{ margin: 0 }}>
-              {activeFormats.length ? activeFormats.map((f) => FMT_LABEL[f]).join(', ') : 'None selected'}
+              {assessedFormatsLine(activeFormats, FMT_LABEL)}
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 2, lineHeight: 1.45 }}>
+                {OTHER_TYPES_NOTE}
+              </div>
             </dd>
             <dt className="muted">Criteria</dt>
             <dd style={{ margin: 0 }}>{profileLabel}</dd>
