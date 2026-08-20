@@ -26,6 +26,9 @@ const VISUAL = {
 }
 // A structure/metadata finding: missing document title — no page/locator/thumb, so no visual anchor.
 const STRUCTURAL = { id: 2, file: 'annual-report.docx', rule_id: '2.4.2', severity: 'SERIOUS', after: 'Annual Report 2026' }
+// A structural finding we genuinely CANNOT represent (no document-structure data on the finding) —
+// reading order (1.3.2): its Structure view must fall back to the honest "not extracted" note.
+const READING_ORDER = { id: 3, file: 'flow.pdf', rule_id: '1.3.2', severity: 'SERIOUS' }
 
 describe('RemediationPreview — adaptive view modes', () => {
   it('renders the Visual · Properties mode switcher for a visible finding (no Structure mode)', async () => {
@@ -72,19 +75,29 @@ describe('RemediationPreview — adaptive view modes', () => {
     expect(container.textContent).not.toContain('nothing here is fetched or inferred')
   })
 
-  it('offers a Structure mode for a structure/metadata finding with an HONEST, non-fabricated note', async () => {
-    await render({ finding: STRUCTURAL })
+  it('offers a Structure mode with an HONEST, non-fabricated note for structure we cannot represent', async () => {
+    await render({ finding: READING_ORDER })                      // 1.3.2 — no structure data to draw
     expect(tab('Structure')).toBeTruthy()
     await click(tab('Structure'))
     // Names the criterion and states plainly that structure is computed during assessment, not drawn.
     expect(container.textContent).toContain('document-structure finding')
-    expect(container.textContent).toContain('WCAG 2.4.2')
+    expect(container.textContent).toContain('WCAG 1.3.2')
     expect(container.textContent).toContain('computed during assessment')
     expect(container.textContent).toContain('not yet extracted for preview')
     // Honesty: no fabricated tag tree / reading-order artefact is rendered.
     expect(container.textContent).not.toContain('reading order:')
     expect(container.querySelector('ol')).toBeNull()
     expect(container.querySelector('ul')).toBeNull()
+  })
+
+  it('a metadata finding (2.4.2 title) shows its real before→after value in Structure, not the generic note', async () => {
+    await render({ finding: STRUCTURAL })                         // 2.4.2 — the title property IS the change
+    await click(tab('Structure'))
+    expect(container.textContent).toContain('Document title — before')
+    expect(container.textContent).toContain('(not set)')
+    expect(container.textContent).toContain('Document title — after')
+    expect(container.textContent).toContain('Annual Report 2026')
+    expect(container.textContent).not.toContain('not yet extracted for preview')  // we DO have this one
   })
 
   it('Structure finding still exposes its metadata honestly in Properties', async () => {

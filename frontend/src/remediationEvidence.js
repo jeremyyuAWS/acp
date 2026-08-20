@@ -124,3 +124,31 @@ export function changeSentence(finding) {
   if (before != null && before !== '') return `Changed from “${String(before)}” to “${String(after)}”.`
   return `Proposed value: “${String(after)}”.`
 }
+
+// ── Alt text (1.1.1) ──────────────────────────────────────────────────────────────────────────
+// The image is on the page and the fix is its alt string, so the evidence pairs the rendered image
+// with the old vs new alt — both real (the finding carries the image and its before/after alt), never
+// invented. Returns null (→ generic fallback) when this isn't an alt finding or nothing is proposed yet.
+const ALT_SCS = new Set(['1.1.1'])
+export const isAltTextFinding = (f) => ALT_SCS.has(findingSc(f))
+export function altEvidence(finding) {
+  if (!isAltTextFinding(finding)) return null
+  const afterAlt = finding?.after ?? finding?.proposals?.[0]?.proposed_value ?? null
+  if (afterAlt == null || afterAlt === '') return null
+  const beforeAlt = finding?.before ?? null   // usually empty/absent — the missing alt IS the defect
+  return { beforeAlt, afterAlt }
+}
+
+// ── Document metadata (2.4.2 title, 3.1.1/3.1.2 language) ─────────────────────────────────────
+// A document PROPERTY, not something on the page — so #433 classifies it structural. Its evidence is
+// the property's real before→after value (a labelled diff), which is the "meaningful representation,
+// not an empty box" a structural finding should still show. null → generic fallback.
+const METADATA_LABELS = { '2.4.2': 'Document title', '3.1.1': 'Language', '3.1.2': 'Language of parts' }
+export const isMetadataFinding = (f) => !!METADATA_LABELS[findingSc(f)]
+export function metadataEvidence(finding) {
+  const label = METADATA_LABELS[findingSc(finding)]
+  if (!label) return null
+  const after = finding?.after ?? finding?.proposals?.[0]?.proposed_value ?? null
+  if (after == null || after === '') return null
+  return { label, before: finding?.before ?? null, after }
+}

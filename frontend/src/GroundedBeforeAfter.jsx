@@ -1,4 +1,5 @@
-import { contrastEvidence, fmtRatio, passesAA } from './remediationEvidence.js'
+import { contrastEvidence, altEvidence, metadataEvidence, fmtRatio, passesAA } from './remediationEvidence.js'
+import Thumbnail from './Thumbnail.jsx'
 
 // The honest "before → after" the reviewer judges a remediation-inbox fix by. This is the piece the
 // redesign is built around: hex values and ratios PROVE the rule passed, but they don't let a normal
@@ -54,7 +55,7 @@ function TextState({ label, value, tag }) {
   )
 }
 
-export default function GroundedBeforeAfter({ finding }) {
+export default function GroundedBeforeAfter({ finding, scanId = null }) {
   const ev = contrastEvidence(finding)
   if (ev) {
     return (
@@ -75,6 +76,40 @@ export default function GroundedBeforeAfter({ finding }) {
       </div>
     )
   }
+  // Alt text (1.1.1): the affected image beside its old vs new alt. The image is the real render
+  // (Thumbnail — cropped to the flagged object where a bounding box exists, the plain page otherwise;
+  // it never invents a location); the alt strings are the finding's own before/after.
+  const alt = altEvidence(finding)
+  if (alt) {
+    return (
+      <div className="ba-evidence ba-alt" style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        {scanId && finding?.file && (
+          <div style={{ flex: '0 0 auto', maxWidth: 180 }}>
+            <Thumbnail scanId={scanId} file={finding.file} page={finding.page || 1}
+                       locator={finding.locator || finding.proposals?.[0]?.locator || null} maxHeight={140} />
+          </div>
+        )}
+        <div style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <TextState label="Alt text — before" value={alt.beforeAlt == null || alt.beforeAlt === '' ? '(no alt text)' : alt.beforeAlt} tag="before" />
+          <TextState label="Alt text — after" value={alt.afterAlt} tag="after" />
+        </div>
+      </div>
+    )
+  }
+
+  // Document metadata (title / language): the property's real before → after value — a meaningful
+  // representation of a structural finding, not an empty "it isn't on the page" box.
+  const meta = metadataEvidence(finding)
+  if (meta) {
+    return (
+      <div className="ba-evidence ba-meta" style={{ display: 'flex', gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
+        <TextState label={`${meta.label} — before`} value={meta.before == null || meta.before === '' ? '(not set)' : meta.before} tag="before" />
+        <span aria-hidden="true" style={{ flex: '0 0 auto', alignSelf: 'center', fontSize: 18, color: 'var(--muted,#8a8f98)' }}>→</span>
+        <TextState label={`${meta.label} — after`} value={meta.after} tag="after" />
+      </div>
+    )
+  }
+
   // Non-contrast: the literal before → after the finding carries (e.g. old vs new alt text, a title).
   const before = finding?.before ?? null
   const after = finding?.after ?? finding?.proposals?.[0]?.proposed_value ?? null

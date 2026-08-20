@@ -299,4 +299,21 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(document.activeElement).toBe(focused)
     expect(focused.textContent).toContain('Image needs alt text')     // advanced to id2
   })
+
+  // ── Adaptive evidence per finding type (alt text, metadata) in the decision pane ──
+  it('shows alt-text evidence (old → new alt) for a 1.1.1 finding', async () => {
+    await render({ queue: [{ id: 1, file: 'a.docx', title: 'DOCX · Image needs alt text', rule_id: '1.1.1', hasProposal: true, before: '', after: 'A bar chart of Q3 revenue' }], decisions: {} })
+    expect(container.textContent).toContain('Alt text — before')
+    expect(container.textContent).toContain('(no alt text)')          // the missing alt IS the defect
+    expect(container.textContent).toContain('Alt text — after')
+    expect(container.textContent).toContain('A bar chart of Q3 revenue')
+  })
+
+  it('shows a metadata before/after for a document-title (2.4.2) finding', async () => {
+    await render({ queue: [{ id: 1, file: 'a.docx', title: 'DOCX · Document has no title', rule_id: '2.4.2', hasProposal: true, before: null, after: 'Q3 Report' }], decisions: {} })
+    expect(container.textContent).toContain('Document title — before')
+    expect(container.textContent).toContain('(not set)')
+    expect(container.textContent).toContain('Document title — after')
+    expect(container.textContent).toContain('Q3 Report')
+  })
 })

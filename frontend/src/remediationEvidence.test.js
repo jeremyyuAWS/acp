@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   findingSc, natureOfSc, natureOf, isContrastFinding,
   parseHexes, contrastRatio, contrastEvidence, changeSentence, passesAA,
+  isAltTextFinding, altEvidence, isMetadataFinding, metadataEvidence,
 } from './remediationEvidence.js'
 
 describe('remediationEvidence — success-criterion NATURE (fixes the copy bug)', () => {
@@ -101,5 +102,26 @@ describe('remediationEvidence — the plain "What ACP changed" sentence', () => 
 
   it('is null when there is no proposed value to describe', () => {
     expect(changeSentence({ rule_id: '1.1.1' })).toBeNull()
+  })
+})
+
+describe('remediationEvidence — adaptive alt-text and metadata evidence (real values only)', () => {
+  it('altEvidence pairs old/new alt for a 1.1.1 finding; null otherwise', () => {
+    expect(isAltTextFinding({ rule_id: '1.1.1' })).toBe(true)
+    expect(isAltTextFinding({ rule_id: '1.4.3' })).toBe(false)
+    expect(altEvidence({ rule_id: '1.1.1', before: '', after: 'A bar chart of Q3 revenue' }))
+      .toEqual({ beforeAlt: '', afterAlt: 'A bar chart of Q3 revenue' })
+    expect(altEvidence({ rule_id: '1.1.1', proposals: [{ proposed_value: 'Company logo' }] }).afterAlt).toBe('Company logo')
+    expect(altEvidence({ rule_id: '1.1.1' })).toBeNull()              // nothing proposed yet → nothing to show
+    expect(altEvidence({ rule_id: '2.4.2', after: 'x' })).toBeNull() // not an alt finding
+  })
+  it('metadataEvidence labels the title/language property with its before→after', () => {
+    expect(isMetadataFinding({ rule_id: '2.4.2' })).toBe(true)
+    expect(metadataEvidence({ rule_id: '2.4.2', before: null, after: 'Q3 Report' }))
+      .toEqual({ label: 'Document title', before: null, after: 'Q3 Report' })
+    expect(metadataEvidence({ rule_id: '3.1.1', after: 'en' }).label).toBe('Language')
+    expect(metadataEvidence({ rule_id: '3.1.2', after: 'fr' }).label).toBe('Language of parts')
+    expect(metadataEvidence({ rule_id: '1.4.3', after: '#000000' })).toBeNull() // not metadata
+    expect(metadataEvidence({ rule_id: '2.4.2' })).toBeNull()                     // nothing proposed
   })
 })
