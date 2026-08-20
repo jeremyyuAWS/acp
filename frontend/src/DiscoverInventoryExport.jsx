@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { inventorySnapshot } from './discoverRunTime.js'
-import { csvBlob, jsonBlob, saveBlob } from './inventoryExport.js'
+import { csvBlob, jsonBlob, saveBlob, toCsv } from './inventoryExport.js'
 
 // The Discover results block that dates the inventory and lets an operator take it out of ACP.
 //
@@ -54,9 +54,10 @@ export default function DiscoverInventoryExport({
   }
 
   // Computed for the on-screen note without downloading anything, so the reader can see which
-  // columns dropped out before they commit to a file.
+  // columns dropped out before they commit to a file. `toCsv`, not `csvBlob` — a preview that
+  // allocated a Blob on every render would be building a file nobody asked for.
   const preview = useMemo(
-    () => (unread ? null : csvBlob(list, { scanId: scanId ?? run?.id ?? null, takenAt: snap.at })),
+    () => (unread ? null : toCsv(list, { scanId: scanId ?? run?.id ?? null, takenAt: snap.at })),
     [list, scanId, run, snap.at, unread],
   )
 
