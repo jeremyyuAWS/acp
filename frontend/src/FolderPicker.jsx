@@ -29,6 +29,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { listFolders } from './api.js'
 import { INCOMPLETE_LINE } from './wizardScopeReady.js'
+import { excludeUnder, checkboxState, sizeHint, SIZE_HINT_BASIS } from './folderTree.js'
 
 function FolderIcon() {
   return (
@@ -101,9 +102,13 @@ export default function FolderPicker({
   const toggle = (f) => setPicked((s) => (s.some((p) => p.id === f.id)
     ? s.filter((p) => p.id !== f.id)
     : [...s, { id: f.id, name: f.name }]))
+  // `under` is the included ancestor this carve-out narrows, read from the LIVE breadcrumb at the
+  // moment of exclusion. You can only exclude while drilling inside an included folder, so it is
+  // exact here and unknowable later — which is what makes tri-state possible without the tree.
+  // Additive: the backend reads id/name and ignores the rest.
   const toggleExclude = (f) => setExcluded((s) => (s.some((p) => p.id === f.id)
     ? s.filter((p) => p.id !== f.id)
-    : [...s, { id: f.id, name: f.name }]))
+    : [...s, { id: f.id, name: f.name, under: excludeUnder(stack, isPicked) }]))
   // Clearing the inclusions clears the carve-outs with them. An exclusion whose parent is gone is
   // not a narrower scope, it is a false line on the review step: the chip says "except Archive"
   // with nothing included for Archive to be an exception to. The backend already drops that pair
@@ -212,11 +217,18 @@ export default function FolderPicker({
             // different targets. One control doing both is the picker bug where opening a
             // folder to look inside it silently changes what you are about to scan.
             const st = rowState(f)
+            const tri = checkboxState(f, { picked, excluded, inherited, isExcluded })
             return (
               <input type="checkbox" checked={st.checked} onChange={st.onToggle}
+                     // `indeterminate` has no HTML attribute — it exists only on the DOM node, so
+                     // it is set through a ref callback rather than declared here.
+                     ref={(el) => { if (el) el.indeterminate = tri === 'partial' }}
+                     aria-checked={tri === 'partial' ? 'mixed' : undefined}
                      aria-label={inherited
                        ? `${st.checked ? 'Exclude' : 'Include'} ${f.name}`
-                       : `Select ${f.name}`}
+                       : tri === 'partial'
+                         ? `${f.name} — included, with a carve-out inside`
+                         : `Select ${f.name}`}
                      style={{ cursor: 'pointer' }} />
             )
           })()}
@@ -233,6 +245,14 @@ export default function FolderPicker({
                 </span>
               )}
             </span>
+            {/* Size, where the provider gives one. "items", never "files": Graph's childCount
+                counts subfolders too and does not recurse, and Google Drive returns no count at
+                all. A number that means a different thing per provider on the screen that decides
+                what gets scanned is worse than no number. */}
+            {sizeHint(f) && (
+              <span className="muted" style={{ fontSize: 11.5, marginRight: 8 }}
+                    title={SIZE_HINT_BASIS}>{sizeHint(f)}</span>
+            )}
             <span style={{ color: 'var(--ink)', fontSize: 15 }}>›</span>
           </button>
         </div>
@@ -308,12 +328,15 @@ export default function FolderPicker({
   if (inline) {
     return (
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-        <div style={{ flex: '2 1 300px', minWidth: 0 }}>
+        {/* 65/35. It was 2:1 on a 300px/220px basis, which lands near 62/38 once free space is
+            shared out — the browser is where the work happens, so it takes the extra. Bases keep
+            the wrap point sane on a narrow screen rather than letting either column collapse. */}
+        <div style={{ flex: '65 1 320px', minWidth: 0 }}>
           {breadcrumb}
           {filterBox}
           {list}
         </div>
-        <div style={{ flex: '1 1 220px', minWidth: 0 }} role="region" aria-label="Current scope">
+        <div style={{ flex: '35 1 240px', minWidth: 0 }} role="region" aria-label="Current scope">
           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
                         gap: 8, marginBottom: 8 }}>
             <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.04em',
