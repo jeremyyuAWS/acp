@@ -30,6 +30,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { listFolders } from './api.js'
 import { INCOMPLETE_LINE } from './wizardScopeReady.js'
 import { excludeUnder, checkboxState, sizeHint, SIZE_HINT_BASIS } from './folderTree.js'
+import { friendlyFolderError, actionLabel, SKELETON_ROWS } from './folderErrorCopy.js'
 
 function FolderIcon() {
   return (
@@ -52,6 +53,9 @@ export default function FolderPicker({
   // card's default) or an unfinished narrowing (the wizard's 'Specific folders'). Asked,
   // never inferred: the two look identical here and only the caller knows which it meant.
   requireSelection = false,
+  // Named in the error sentence, so a reader with several connections wired up knows
+  // WHICH one failed. Defaults to the neutral phrase rather than guessing a provider.
+  sourceName = 'the source',
 }) {
   const [stack, setStack] = useState([{ id: 'root', name: rootName }])
   const [folders, setFolders] = useState([])
@@ -184,21 +188,56 @@ export default function FolderPicker({
     <div style={{ minHeight: 140, maxHeight: inline ? 260 : 300, overflowY: 'auto',
                   border: '1px solid var(--line)', borderRadius: 10, marginBottom: 14 }}>
       {loading && (
-        <div style={{ padding: '32px 0', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
-          Loading…
-        </div>
-      )}
-      {err && (
-        <div style={{ padding: '20px 18px', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-          <span style={{ fontSize: 18, lineHeight: 1 }}>⚠️</span>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)', marginBottom: 4 }}>
-              Could not load folders
+        // Skeleton ROWS, not a centred "Loading…" in an otherwise empty bordered box. That box is
+        // the same space where "No subfolders here" appears, so an empty one reads as a stated
+        // absence — and a reader who concludes a folder has nothing in it stops narrowing.
+        <div aria-busy="true" aria-live="polite" style={{ padding: 6 }}>
+          <span className="sronly">Loading folders from {sourceName}…</span>
+          {Array.from({ length: SKELETON_ROWS }, (_, i) => (
+            <div key={i} aria-hidden="true"
+                 style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px' }}>
+              <span style={{ width: 14, height: 14, borderRadius: 3, background: 'var(--line)' }} />
+              <span style={{ height: 10, borderRadius: 5, background: 'var(--line)',
+                             // Varied widths so it reads as content arriving rather than as a
+                             // progress bar that is stuck.
+                             width: `${52 - (i % 3) * 11}%`, opacity: 1 - i * 0.13 }} />
             </div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>{err}</div>
-          </div>
+          ))}
         </div>
       )}
+      {err && (() => {
+        // The raw provider error used to be the whole message. It read as a broken product, leaked
+        // drive ids and internal URL shape onto the screen, and told nobody what to do. It is now
+        // classified into an actionable sentence, with the original one disclosure away — see
+        // folderErrorCopy.js for why the cause is classified rather than assumed.
+        const e = friendlyFolderError(err, sourceName)
+        return (
+          <div role="alert" style={{ padding: '20px 18px', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+            <span style={{ fontSize: 18, lineHeight: 1 }} aria-hidden="true">⚠️</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)', marginBottom: 4 }}>
+                {e.title}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }}>{e.body}</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+                <button type="button" className="ghost small" onClick={() => load(current.id)}>
+                  {actionLabel(e.action)}
+                </button>
+              </div>
+              <details style={{ marginTop: 10 }}>
+                <summary style={{ cursor: 'pointer', fontSize: 11.5, color: 'var(--muted)' }}>
+                  Technical details
+                </summary>
+                {/* Kept verbatim and kept REACHABLE. Hiding it entirely would cost the support
+                    conversation the only thing that identifies the failure — the point is that it
+                    is not the first thing a compliance officer reads. */}
+                <pre style={{ fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                              margin: '6px 0 0', color: 'var(--muted)' }}>{err}</pre>
+              </details>
+            </div>
+          </div>
+        )
+      })()}
       {!loading && !err && shown.length === 0 && (
         // "Nothing here matches your filter" and "this folder has no subfolders" are different
         // facts, and reading the first as the second is how somebody concludes a folder does not

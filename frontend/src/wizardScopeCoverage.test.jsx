@@ -97,10 +97,22 @@ describe('a measured number, matched on the whole boundary', () => {
     await act(async () => { chip(c, /HR/).click() })
     await toReview(c)
     expect(c.textContent).toMatch(/240 documents/)
-    // WHEN it was measured, without pinning the wording to the wall clock — whenLabel returns
-    // "today"/"yesterday" near the present and a date beyond it, and that boundary is covered
-    // against an injected `now` in recentScopes.test.js rather than against the real one here.
-    expect(c.textContent).toMatch(/this exact scope \((today|yesterday|\d+ \w+)\) covered/)
+    // WHEN it was measured — asserted as "there is a date here", not as a format.
+    //
+    // This line has now failed twice for reasons that were never about the code. First it pinned
+    // "18 Aug" and got "yesterday". The replacement allowed `\d+ \w+`, which passed only while the
+    // fixture was recent enough to take whenLabel's "today"/"yesterday" branch — once it aged past
+    // yesterday the date branch rendered "Aug 18" and the test broke, a day after it was written.
+    //
+    // Two independent hazards, and the second is the one the fix missed: whenLabel ends in
+    // `toLocaleDateString(undefined, ...)`, so the day/month ORDER follows the runtime locale —
+    // "Aug 18" here, "18 Aug" under en-GB. Any pattern that spells the date out is a test about
+    // the CI runner's locale and clock.
+    //
+    // The guarantee worth holding is that the sentence names a time and a count together; a reader
+    // given the count alone cannot tell whether it is current. `whenLabel` itself is pinned against
+    // an INJECTED `now` in recentScopes.test.js, which is where a format belongs.
+    expect(c.textContent).toMatch(/Last run of this exact scope \(.+?\) covered 240 documents/)
   })
 
   it('does NOT borrow a count from a run with a different boundary', () => {
