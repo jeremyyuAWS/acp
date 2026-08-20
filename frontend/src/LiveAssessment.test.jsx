@@ -51,6 +51,13 @@ describe('LiveAssessment', () => {
     expect(t).not.toMatch(/discharge\.pdf/)           // frozen current is cleared
   })
 
+  it('puts aria-live on the phase (announce transitions), not on the churning KPI counts', () => {
+    const { container, root } = createTestRoot()
+    act(() => root.render(createElement(LiveAssessment, { snapshot: SNAP })))
+    const h3 = container.querySelector('h3')
+    expect(h3.getAttribute('aria-live')).toBe('polite')
+  })
+
   it('renders nothing when there is no active/available snapshot', () => {
     expect(render({ snapshot: { available: false } }).textContent).toBe('')
     expect(render({ snapshot: null }).textContent).toBe('')
