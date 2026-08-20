@@ -42,8 +42,16 @@ const { default: ScanScopeWizard } = await import('./ScanScopeWizard.jsx')
 
 const HR = { id: 'hr', name: 'HR' }
 const FIN = { id: 'fin', name: 'Finance' }
+// A few hours ago, computed at load — NOT a hardcoded calendar date. whenLabel renders "today"/
+// "yesterday" for a recent run and an absolute date beyond that; this test asserts the recent path,
+// so its fixture must stay recent as the wall clock advances. A fixed date here time-bombs: it was
+// "yesterday" the day it was written and rendered as an absolute "Aug 18" two days later, failing the
+// regex below through nothing but the passage of time. The absolute-date boundary is covered against
+// an injected `now` in recentScopes.test.js. (Date.now is deterministic enough here: any value < 2
+// days old lands in the today/yesterday window the assertion accepts.)
+const RECENT = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString()
 const runOf = (over) => ({
-  id: 'r1', completed_at: '2026-08-18T10:00:00Z', source: 'drive', files: 240,
+  id: 'r1', completed_at: RECENT, source: 'drive', files: 240,
   scope: { kind: 'folder', folders: [HR] }, ...over,
 })
 
