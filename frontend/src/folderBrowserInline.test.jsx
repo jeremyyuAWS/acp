@@ -47,6 +47,9 @@ vi.mock('./api.js', () => ({
     ? { folders: [{ id: 'hr', name: 'HR' }, { id: 'fin', name: 'Finance' }] }
     : { folders: [{ id: 'arch', name: 'Archive' }] })),
   listSpFolders: vi.fn(async () => ({ drive_id: 'd', folders: [] })),
+  // Discovery-time lifecycle rules, read by the review step so it can name how many will
+  // run. Empty is the honest default here: these fixtures configure no rule.
+  listDispositionPolicies: vi.fn(async () => []),
 }))
 
 const { default: FolderPicker } = await import('./FolderPicker.jsx')
