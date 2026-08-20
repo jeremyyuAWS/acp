@@ -87,7 +87,7 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 // tab. Both OPTIONAL: every existing caller and test constructs Discover without them, and the
 // ad-hoc panel simply does not render when `me` is absent rather than throwing.
 export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null, onCertified,
-  hasSPToken = false }) {
+  hasSPToken = false, runAt = null }) {
   const [sel, setSel] = useState(null)
   const [showPicker, setShowPicker] = useState(false)   // Drive folder picker modal (Choose folder to scan)
   const [showSites, setShowSites] = useState(false)     // SharePoint site picker modal
@@ -424,7 +424,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           so, the acknowledgement that gates Assess, and the reconciliation that shows every
           discovered file landing in exactly one bucket. Sections whose data has not reached this
           screen render NOTHING — never a zero. */}
-      <DiscoveryResults files={estateFiles} inventory={scope?.inventory || null} scopeLine={scopeLine}
+      <DiscoveryResults files={estateFiles} inventory={scope?.inventory || null} scopeLine={scopeLine} runAt={runAt}
                         acknowledged={ackRecs} onAcknowledge={setAckRecs}
                         overrides={assessAnyway} onOverridesChange={setAssessAnyway}
                         actor={me?.email || me?.name || null} scanId={scanId} />

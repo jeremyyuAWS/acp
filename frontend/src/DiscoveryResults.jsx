@@ -76,7 +76,7 @@ const Reconciliation = ({ id, heading, note, rec, renderLabel }) => (
 )
 
 export default function DiscoveryResults({
-  files = null, inventory = null, scopeLine = null, policies = null, reasonOf = undefined,
+  files = null, inventory = null, scopeLine = null, runAt = null, policies = null, reasonOf = undefined,
   acknowledged = false, onAcknowledge = null,
   overrides: overridesProp, onOverridesChange,
   onExport = null, actor = null, scanId = null,
@@ -112,9 +112,20 @@ export default function DiscoveryResults({
         <h2 id="discres-h" style={{ margin: 0, fontSize: 14, fontWeight: 600, color: 'var(--muted)' }}>
           DISCOVERY RESULTS
         </h2>
-        {/* The boundary the counts below are counts OF. Omitted, never guessed, when the scan
-            recorded no scope — "no scope recorded" is not evidence of a whole-estate scan. */}
-        {scopeLine && <span className="muted" style={{ fontSize: 12.5 }}>{scopeLine}</span>}
+        {/* The boundary the counts below are counts OF, and WHEN they were counted. Both are
+            omitted rather than guessed: "no scope recorded" is not evidence of a whole-estate
+            scan, and a results header that invented today's date for an undateable run would be
+            worse than one that gives no date at all — this estate gets re-scanned, and an
+            undated inventory reads exactly like a current one.
+
+            `runAt` arrives already formatted. This component prints strings and does not own a
+            date format; the caller uses the same fmtStamp the run header and the Assess screen
+            use, so the product has one stamp format rather than one per screen. */}
+        {(scopeLine || runAt) && (
+          <span className="muted" style={{ fontSize: 12.5 }}>
+            {scopeLine}{scopeLine && runAt ? ' · ' : ''}{runAt ? `run ${runAt}` : ''}
+          </span>
+        )}
       </div>
       <p className="muted" style={{ margin: '6px 0 0', lineHeight: 1.5 }}>
         Metadata for every file in scope. Discovery reads names, paths, sizes and dates — no file
