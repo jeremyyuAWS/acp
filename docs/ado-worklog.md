@@ -1681,24 +1681,24 @@ brought AI-call fidelity up to date and two extended it to the newest surfaces. 
 count / token number / model id / zone / cost — never prompt, completion, note, or filename (the PHI
 invariant the redaction tests pin).
 
-- **AI calls are Langfuse generations, not spans, carrying model + tokens + cost** (#368, G1). Added an
+- **AI calls are Langfuse generations, not spans, carrying model + tokens + cost · #4705** (#368, G1). Added an
   `lf.generation()` helper (no-op when disabled) and switched `trace_ai_call` to it; token counts come from
   the provider results. They were logged as `.span()`, so per-call token usage and cost never reached the
   trace — only the `ai_calls` DB table had them.
-- **Those generations nest under the file's own trace** (#368, G2). They were top-level `ai:{surface}`
+- **Those generations nest under the file's own trace · #4706** (#368, G2). They were top-level `ai:{surface}`
   traces grouped only by scan session, so a file's Discover/Assess/Remediate trace never showed its own
   model calls; now they hang on `_trace_id(scan_id, file)` when known, with session grouping preserved.
-- **Provider / zone / cost carried into the trace** (#368, G3). `ai._trace_ai` already computed them for the
+- **Provider / zone / cost carried into the trace · #4707** (#368, G3). `ai._trace_ai` already computed them for the
   `ai_calls` row but the `lf` signature dropped them at the boundary; widened so trace and ledger agree.
-- **Remediation span carries fix / skip counts** (#368, G4). `remediate_span` recorded only the Drive URL;
+- **Remediation span carries fix / skip counts · #4708** (#368, G4). `remediate_span` recorded only the Drive URL;
   the per-rule applied/skipped counts already existed in `_remediate_file` and are now passed through.
-- **Cloud-vision token usage surfaces as generation `usage`** (#372, N1). Widened `providers._result` and
+- **Cloud-vision token usage surfaces as generation `usage` · #4709** (#372, N1). Widened `providers._result` and
   each adapter (Azure, OpenAI, Anthropic, RunPod, Ollama) to carry prompt/completion tokens, threaded
   through `ai.py` — so cloud-vision generations carry real token usage, not just cost.
-- **The disposition / pending-approval queue is now traced** (#371, N2). `routes/disposition.py` was the one
+- **The disposition / pending-approval queue is now traced · #4710** (#371, N2). `routes/disposition.py` was the one
   untraced decision surface; a new `trace_disposition_decision` (status / action / policy-id / `reason_chars`
   count / HMAC doc label) mirrors the HITL decision span at every point a disposition is recorded.
-- **Per-file traces carry the document + assessment result, not an empty shell** (#403). Every trace in the
+- **Per-file traces carry the document + assessment result, not an empty shell · #4711** (#403). Every trace in the
   Langfuse session view read "no input or output": `file_trace` set a name/tags/metadata but never
   trace-level `input`/`output`, and only the child spans carried data — which the session LIST view does not
   surface (the $0.00 cost is correct: deterministic local checks have no per-token cost). `file_trace` now
@@ -1706,14 +1706,14 @@ invariant the redaction tests pin).
   conformant / level / failing WCAG criteria + counts, called per file in `ensure_assess_trace`. Strictly
   structured (docs/audit-langfuse-phi.md) — no document content, no raw filename; a test asserts the data
   lands AND carries no free text.
-- **Traces gain a PII flag, remediation status, and the full per-check breakdown** (#406). Extends #403's
+- **Traces gain a PII flag, remediation status, and the full per-check breakdown · #4712** (#406). Extends #403's
   trace output with `checks` = the whole {PASS/FAIL/REVIEW/NOT_EVALUATED: count} breakdown (not just
   failures, from the `get_scan_traces` rows already fetched); `pii` = {flagged, types, findings, critical}
   where `types` are CATEGORIES (`us_ssn`, `email_address`) — the same `sensitive_data_types` the PII span
   already emits, never a value; and `remediation` = {remediated, written_back, published} booleans off the
   file record. New kwargs optional (backward-compatible); the category-not-value invariant is pinned by
   test, and the no-free-text / redacts-filenames guards stay green.
-- **Upgraded the deployed Langfuse v2 → v3 so the Session view scales** (ops + #447). With #403/#406
+- **Upgraded the deployed Langfuse v2 → v3 so the Session view scales · #4713** (ops + #447). With #403/#406
   enriching every per-file trace, a real 44-document scan exposed the OSS limit: the v2 instance
   (`langfuse/langfuse:2` on a single Postgres) rendered every trace in a session at once and **hung** on
   large scans — individual traces opened fine, the aggregate Session view did not. v3 moves the trace
@@ -1726,7 +1726,7 @@ invariant the redaction tests pin).
   scale on a live scan. Old v2 app deleted; its trace data (not migrated — deliberate start-fresh) still
   sits in the shared Postgres. **#447** adds `deploy/langfuse-v3/` (compose + provision/cutover scripts +
   a runbook) so the hand-provisioned migration is reproducible and reversible. No app code changed.
-- **View a document's Langfuse trace INSIDE AccessOps, with no Langfuse login** (#454). The "📊 View
+- **View a document's Langfuse trace INSIDE AccessOps, with no Langfuse login · #4714** (#454). The "📊 View
   trace" chips deep-linked to Langfuse, which meant a login — and verification against the live v3
   instance found the built-in "make the trace public" path does not give a usable no-login view on this
   build: the `public` flag works at the data layer (public trace → `200` unauthenticated, non-public →
@@ -1741,7 +1741,7 @@ invariant the redaction tests pin).
   bigger, aggregate surface). Registered the `/data` route BEFORE the greedy `{filename:path}` catch-all
   so Starlette's first-match doesn't shadow it — the same catch-all already shadows the pre-existing
   `/exists` route, left as-is since the SPA tolerates it. Backend + frontend tests; not a RULE_PATHS change.
-- **View a whole scan's traces INSIDE AccessOps — the session view (#459, follow-up to #454)**. The
+- **View a whole scan's traces INSIDE AccessOps — the session view (#459, follow-up to #454) · #4715**. The
   whole-scan *session* deferred by #454: the aggregate that hung Langfuse's own UI on large scans (the
   reason for the v2→v3 move). `lf.fetch_session` fetches the scan's Langfuse session with ACP's own keys
   and returns a PHI-safe per-file list + a scan-level rollup (documents / assessed / conformant / avg score
@@ -1755,7 +1755,7 @@ invariant the redaction tests pin).
   types:[…]}` (not `{present, types:{}}`), so neither had shown on real traces; corrected the panel against
   the actual `file_assessment_result` output and fixed the SIM/fixtures that had reinforced the wrong shape.
   Backend + frontend tests; not a RULE_PATHS change.
-- **Browser-verified the session view end to end** (no commit — testing, 2026-08-19). Drove the merged
+- **Browser-verified the session view end to end · #4716** (no commit — testing, 2026-08-19). Drove the merged
   `origin/main` build in SIM mode and confirmed at the DOM: the Overview "📊 trace" chip opens the in-app
   `SessionPanel` (accessible name *"…inside AccessOps (no Langfuse login)"*); its rollup reads 3 documents /
   2 assessed / 1 conformant / 75 avg / 1 with-failures / 1 with-PII, with a document showing the honest
@@ -1765,7 +1765,7 @@ invariant the redaction tests pin).
   Verified via a standalone vite server from a throwaway `origin/main` worktree, because `preview_start` is
   pinned to the shared checkout — which is 47 commits behind and holds another session's uncommitted
   delivery-log work, so it was deliberately left untouched (see the "preview root" note in CLAUDE.md).
-- **The operator email is out of every Langfuse trace NAME** (#506). The trace name is the label shown in
+- **The operator email is out of every Langfuse trace NAME · #4717** (#506). The trace name is the label shown in
   Langfuse's trace/session LIST — a wider-access surface than the app — and it led with the signed-in
   operator's email on every trace (`jeremy_acp@…onmicrosoft.com · doc-…`, `devamovate@gmail.com · doc-…`,
   confirmed on live prod data). An identity leak distinct from the PHI/filename guards (an operator email is
@@ -1775,7 +1775,7 @@ invariant the redaction tests pin).
   is named for the redacted label, upgraded by `file_assessment_result` to `<label> · ✓/✗ <level>` once
   assessed, and a `format:` tag was added so the native UI can filter by document type. 79 Langfuse tests
   green; not a RULE_PATHS change.
-- **Cross-scan document history — "this document over time"** (#507). The session view groups a scan's
+- **Cross-scan document history — "this document over time" · #4718** (#507). The session view groups a scan's
   files, and Langfuse's own UI groups by session too, so neither can answer "how has THIS document trended
   across scans?". Every file trace already carries a `file:<label>` tag, so that question is exactly the
   traces with that tag (verified against the live v3 API before building). `lf.fetch_document_history(label)`
@@ -1784,7 +1784,7 @@ invariant the redaction tests pin).
   renders a score trajectory (sparkline + "▲ +N since first scan") and a row per scan, each drilling into
   that scan's trace via a callback (no import cycle with `TracePanel`). Backend + frontend tests; not a
   RULE_PATHS change.
-- **Live per-file assess scores on the trace as a scan runs + file-level severity** (#518). Two Langfuse
+- **Live per-file assess scores on the trace as a scan runs + file-level severity · #4719** (#518). Two Langfuse
   logging fixes (P0 from the polish list). (1) A file's score / conformance / failing criteria / per-check
   breakdown now lands on its trace the moment it's scored (`_emit_realtime_file_assess`, right after
   `save_file_result` persists), not only in the finalize batch — mid-run traces read empty before, which was
@@ -1795,7 +1795,7 @@ invariant the redaction tests pin).
   non-blocking findings / DEFAULT when clean, and a file that couldn't be assessed (parse/fetch error,
   unreadable, or the #513 per-file timeout) gets an ERROR span with reason only, never content. Not a
   RULE_PATHS change.
-- **Removed the dead scan/assess-trace functions superseded by the per-file model** (#524). The pre-per-file
+- **Removed the dead scan/assess-trace functions superseded by the per-file model · #4720** (#524). The pre-per-file
   scan/assess tracing API (`scan_trace`, `error_span`, `file_span_for`, `open_assess_trace`,
   `finish_assess_trace`, `finish_scan_trace_by_id`, `finish_scan_trace`) was orphaned when `4b0ebce3` moved
   tracing to one-trace-per-file — that commit removed every call site but left the seven functions behind.
@@ -1814,7 +1814,7 @@ transparent view of a running scan. Six merged slices; the owning session design
 (alongside the Track B pipeline ADR below) and logged the #459 session view, so these scan-progress slices
 are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the program has one.
 
-- **Per-file wall-clock safety net so one stuck document can't stall a run** (#513, reliability — not a
+- **Per-file wall-clock safety net so one stuck document can't stall a run · #4721** (#513, reliability — not a
   Track-A slice). A live prod SharePoint assess sat at "Opening & assessing 0 of 22" for minutes. The
   analyse path is already well-bounded (download 120s, .NET office CLI 180s, OCR capped at 30 images) and no
   vision AI runs during assess — so this was cold-start + slow local CPU, not a hang. But "each sub-call is
@@ -1828,66 +1828,66 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   surfaced that per-file scores land only at finalize, so mid-run "0 scored in Langfuse" is expected. Tests;
   not a RULE_PATHS change. It is a safety net, explicitly NOT a speed-up — a cold, image-heavy local-CPU scan
   is slow because the work is heavy; the speed levers are the in-tenant GPU AI lane and worker concurrency.
-- **Outcome-oriented progress line** (#452, slice 1). The live line was implementation-centric — "Reading
+- **Outcome-oriented progress line · #4722** (#452, slice 1). The live line was implementation-centric — "Reading
   files · 145/250 · Document2.pptx" — naming one worker's current file while the fan-out processes many at
   once, so the filename was never an honest signal. Replaced by a pure, tested view-model
   (`assessmentProgress.js`) that turns the live payload into how much is done, how fast, and how long is
   left — a statement about the **run**, not one worker.
-- **Live outcome chips** (#455, slice 2). Adds WHAT is emerging from the run — "97 passed · 23 need review ·
+- **Live outcome chips · #4723** (#455, slice 2). Adds WHAT is emerging from the run — "97 passed · 23 need review ·
   7 failed · 105 processing" — streamed as files land. No backend change: `get_scan`'s run summary already
   carries certifiable/uncertain/error derived live from `file_records` (the same source `finalize_scan_run`
   aggregates), so the live chips and the final numbers cannot diverge.
-- **Expandable "Processing details" table** (#458, slice 3a). A collapsed-by-default per-file table — each
+- **Expandable "Processing details" table · #4724** (#458, slice 3a). A collapsed-by-default per-file table — each
   landed file with its format, result (Passed / Needs review / Failed / Queued) and score, filterable by
   All / Findings / Failed / Completed. Transparency for technical users without forcing everyone to watch a
   scrolling event log; fed entirely by the `file_records` that already stream.
-- **Live scope funnel** (#460, slice 3b). Answers, inline and mid-scan, why a 250-file selection assesses
+- **Live scope funnel · #4725** (#460, slice 3b). Answers, inline and mid-scan, why a 250-file selection assesses
   fewer: "250 discovered · 214 assessable · 25 metadata-only · 11 unsupported · 5 couldn't open". Reuses the
   three-denominator inventory (`estateFunnel.statusRows` over `inventory.by_status`) — the SAME numbers
   EstateCoverage shows on Discover/Overview (#4597), never a second count that could disagree; `blocked`
   (password-protected / couldn't-open) surfaced separately since those files are eligible.
-- **Folders as step 1 of the scan wizard** (#461). `ScanScopeWizard` owned the evaluation scope (criteria +
+- **Folders as step 1 of the scan wizard · #4726** (#461). `ScanScopeWizard` owned the evaluation scope (criteria +
   formats) but never asked WHICH folders — folder choice lived only on the Sources card, so the wizard tuned
   ~50 checks without saying which half of the Drive they applied to. The folder step now goes **first**,
   seeded from the source. The load-bearing decision is the precedence rule: the card holds a folder set per
   **connection**, the wizard chooses one per **run**; the card seeds the wizard (so they agree unless
   diverged), a change applies to THIS run only, and write-back to the card is an explicit tick shown only
   once they differ — closing the 2026-07-30 config-vs-run boundary-mismatch class one level up.
-- **"Notify me when complete"** (#463, slice 3c). The scan runs server-side and the banner is non-modal, so
+- **"Notify me when complete" · #4727** (#463, slice 3c). The scan runs server-side and the banner is non-modal, so
   a user could always work elsewhere; this arms a browser notification that pings the outcome when the scan
   finishes ("145 of 250 assessed · 23 need review"). `scanNotify.js` asks permission once, only on opt-in.
-- **Three-step scan wizard with progressive disclosure** (#470). The scan modal was a folder selector, scan
+- **Three-step scan wizard with progressive disclosure · #4728** (#470). The scan modal was a folder selector, scan
   configurator, WCAG matrix and engine panel all at once; #461 put folders first but *inside* that same dense
   panel, which made it worse. Rebuilt as **three steps — Drive locations → Formats & criteria → Review** —
   folders first because they decide which estate is judged, criteria only how each document in it is judged
   (asking criteria first invites tuning 53 checks over the wrong half of a Drive).
-- **Two-column folder browser inline in step 1** (#472). Step 1 embeds the picker — tree on the left, CURRENT
+- **Two-column folder browser inline in step 1 · #4729** (#472). Step 1 embeds the picker — tree on the left, CURRENT
   SCOPE on the right, both visible at once — replacing the "Choose folders…" link into a modal. One
   implementation, two layouts: `FolderPicker` grows `layout="inline"`; the Sources card and Discover keep the
   modal. Adds a folder-scoped, honestly-labelled filter box.
-- **Reuse a recent scope, symmetric criteria write-back** (#473). Step 1 offers the boundaries this user has
+- **Reuse a recent scope, symmetric criteria write-back · #4730** (#473). Step 1 offers the boundaries this user has
   **actually run**, derived from `scan_runs.scope` rather than a new saved-scopes store — a run's frozen scope
   is a record of what WAS covered, and only that can be re-offered. Runs with no recorded scope are refused
   (NULL is unknown, and applying unknown applies as *everything*), as are cross-family scopes and the wizard's
   own default; carve-outs carry through by id, labelled, not dropped.
-- **Review step reports what this exact scope covered last time** (#474). Deliberately **not** a live pre-scan
+- **Review step reports what this exact scope covered last time · #4731** (#474). Deliberately **not** a live pre-scan
   estimate: under ADR 0020 a Discover run *is* the listing, so an estimate is nearly the operation run twice,
   and it would put a second number for the same estate on screen under a different cap — the 2026-07-30 defect
   again. Instead the review step reports a number that was **measured** — what this exact scope covered on its
   last run.
-- **Per-stage timing instrumentation (ADR 0037 Step 0)** (#467). The measure-first first step of the Track B
+- **Per-stage timing instrumentation (ADR 0037 Step 0) · #4732** (#467). The measure-first first step of the Track B
   pipeline design: `stage_timing.py` (pure — `ScanTimings` monotonic-clock accumulator, `merge_rollups` /
   `bottleneck` / `summarize`) times each file's scan by stage (download vs analyse) into its own
   `file_stage_timings` table, surfaced as a per-scan rollup (totals, per-stage average, bottleneck stage). A
   strict **side-channel** — every function is total (malformed input dropped, never raised), so timing can
   never disturb the scoring path it measures. No behaviour change; it exists so the staged speed-up is tuned
   from real numbers, not guesses.
-- **`read_timings.py` — read a scan's per-stage rollup** (#478). A stdlib-only CLI over `GET
+- **`read_timings.py` — read a scan's per-stage rollup · #4733** (#478). A stdlib-only CLI over `GET
   /scans/{id}/timings` (signed-in session token) that prints where a scan spent its time — download (I/O) vs
   analyse (CPU + GPU) — bottleneck starred, so the next Track B step (splitting the bottleneck stage into its
   own bounded pool) is chosen from data. Companion to #467; `--json` / `--provider` flags, most-recent scan
   by default.
-- **Honest folder sizes and exact carve-out state in the picker** (#512, wizard-review item 4). Each folder
+- **Honest folder sizes and exact carve-out state in the picker · #4734** (#512, wizard-review item 4). Each folder
   now shows a real item count only where the source can actually report one — SharePoint's `folder.childCount`
   — and shows nothing where it genuinely can't (Google Drive's `/folders` returns id + name, no count),
   instead of a reassuring invented "~120 files." A carve-out (excluding a child of an included folder) records
@@ -1895,7 +1895,7 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   picker can state without a whole-tree walk; everything else stays binary, because an unexpanded folder with
   unknown descendants is "not looked inside," not "partially selected." `indeterminate` (no HTML attribute) set
   via ref and mirrored to `aria-checked="mixed"`.
-- **Folder-load failures are recoverable and classified, not a raw Graph error** (#511, wizard-review item 2).
+- **Folder-load failures are recoverable and classified, not a raw Graph error · #4735** (#511, wizard-review item 2).
   A failed folder list used to dump `Microsoft Graph error: 400 Bad Request` with an internal URL and drive id
   on screen — reads as broken, leaks internals, says nothing to do. The cause is now CLASSIFIED, not assumed:
   401/403/expired → "needs to be re-authorised" + Reconnect; 400/404 → "moved or deleted," explicitly NOT a
@@ -1903,12 +1903,12 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   would have been *actionable and wrong* here — the 400 came from a URL we built ourselves (#501), not an
   expired token — so an invented cause is worse than a stated one (same family as #483's "stop guessing
   unreadable"). No ids or URLs surfaced.
-- **Scope correctness: composite folder ids split, empty folders don't mean the estate** (#501 + #502). #501 —
+- **Scope correctness: composite folder ids split, empty folders don't mean the estate · #4736** (#501 + #502). #501 —
   the picker sends SharePoint back a composite `drive::folder` id; the download path now splits it so SP files
   are addressed correctly. #502 — an empty "Specific folders" selection was silently applying as the WHOLE
   estate (unknown → everything, the 2026-07-30 defect class); it is now an explicit empty scope, not a
   wildcard.
-- **Wizard step 1 leads with the decision; the review step names the format population** (#509 + #514,
+- **Wizard step 1 leads with the decision; the review step names the format population · #4737** (#509 + #514,
   wizard-review items 1/3 + a labelling fix). #509 — three "recent scope" cards sat above the mode selector,
   a scan-history browser in front of the decision offering a competing set of scope answers; now a collapsed
   `<details>` placed AFTER the selection (they all read as duplicates only because every recorded run was
@@ -1926,34 +1926,34 @@ already shipped and the file never said so — so this began by reconciling it a
 built the genuine remainder. Every figure is a real, recomputable count or a ratio shown with its
 basis; where a denominator is not tracked the number is omitted, not invented (ADR 0016).
 
-- **Reconciled the stale P4 backlog against `report.py`** (#497). Struck the items already shipped —
+- **Reconciled the stale P4 backlog against `report.py` · #4738** (#497). Struck the items already shipped —
   R1 evidence appendix, R2 decision block, R3 why-certifiable prose, R4 chain-of-custody digest, R6
   richer inventory, R7 score explanation, R-A scope-of-assertion, R-B audit-log excerpt — each with
   its rendering code named. Left R5/R9–R15/R-C–R-E open honestly rather than claim them done. The
   section had described the report as "a scan summary, not yet an audit artifact"; that was no longer
   true and the file was the last place saying so.
-- **POUR — pass rate by WCAG principle** (#496). Groups evaluated criteria under Perceivable /
+- **POUR — pass rate by WCAG principle · #4739** (#496). Groups evaluated criteria under Perceivable /
   Operable / Understandable / Robust (the SC's leading digit) and shows the pass rate per principle.
   Deterministic and honest by construction: the four principles partition the evaluated set exactly
   (a test pins `sum(evaluated) == the report's own evaluated count`), and it is a pass rate *among
   evaluated checks* — explicitly not a conformance percentage. Not-evaluated and review-only criteria
   are excluded; a principle with nothing evaluated shows "—", never a fabricated 0%.
-- **Provenance — method, pipeline, reproduce, supersedes** (#498, R11/R12/R-D/R-E). A "how this
+- **Provenance — method, pipeline, reproduce, supersedes · #4740** (#498, R11/R12/R-D/R-E). A "how this
   result was produced" section carrying the scan's real counts (criteria evaluated, deterministic vs
   AI-assisted split, approvals, fixes re-validated), the pipeline in order, a **reproduce** line
   ("re-run against rubric hash `<h>` → same findings"), and a **supersedes** line naming the previous
   scan of the estate — the last two rendered only when their datum exists.
-- **Human review & assurance — KPI + honest ratios** (#500, R9/R10). Review outcomes
+- **Human review & assurance — KPI + honest ratios · #4741** (#500, R9/R10). Review outcomes
   (reviewed / approved / rejected) counted from the immutable `decision_log`, deduped per
   (file, criterion) so they can never disagree with the sign-off shown elsewhere; a deterministic ÷
   evaluated assurance ratio; and effort as fixes-cleared ÷ findings *with that basis named*. The
   "cleared ÷ attempted" ratio is deliberately omitted — only re-scan-cleared fixes are recorded, so
   the attempted denominator is not tracked and inventing it would be dishonest.
-- **Independent-verification steps + POUR bar chart** (#503, R13). Per document format actually in
+- **Independent-verification steps + POUR bar chart · #4742** (#503, R13). Per document format actually in
   the scan, the mainstream tool and checks that let an auditor confirm the result themselves (Word /
   PowerPoint / Excel Accessibility Checker; Acrobat or NVDA/VoiceOver for PDF) — generic per format,
   never a claim about a specific document. Plus the POUR rates drawn as bars beside the table.
-- **Auditor's guide to reading the report** (#504). New doc `docs/certification-report-for-auditors.md`
+- **Auditor's guide to reading the report · #4743** (#504). New doc `docs/certification-report-for-auditors.md`
   — leads with the one thing not to misread (a score of 100 = "no blocking findings among the criteria
   evaluated", not "WCAG 2.1 AA conformant"), maps every section to what it does and does not let you
   conclude, and closes with three ways to trust it without trusting us (recompute the digest,
@@ -1967,7 +1967,7 @@ extracted structure as review evidence, computed on demand via owner-scoped endp
 pattern) so they need no rule-path edit, DB migration or diff-pipeline change. docx-only and honest —
 real extracted content, degrading to the generic note, never a fabricated tree.
 
-- **Table-header association evidence** (#493) — the final tier-1 renderer. Parses the docx
+- **Table-header association evidence · #4744** (#493) — the final tier-1 renderer. Parses the docx
   `<w:tbl>`/`<w:tr>`/`<w:tc>` and shows the real cell grid with the header row highlighted, stating
   plainly whether that row is *marked* as a header (`<w:tblHeader>`) or only reads as one — the exact
   association a screen reader needs, and what the 1.3.1 fix adds. Completes the set with reading-order
