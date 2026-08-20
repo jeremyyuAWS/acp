@@ -386,6 +386,45 @@ def _scope_section(files, facts, h2, body, cell, muted) -> list:
     return el
 
 
+def _pour_section(facts, h2, body, cell, muted) -> list:
+    """Pass rate by WCAG principle — POUR (backlog R8).
+
+    WCAG groups its success criteria under four principles (Perceivable / Operable /
+    Understandable / Robust), split here by the leading digit of each SC number. Per principle,
+    this shows how many of the criteria ACP actually EVALUATED (a validator ran and returned PASS
+    or FAIL) passed. Deterministic and honest by construction: not-evaluated and review-only
+    criteria are excluded, so this is a pass rate among evaluated checks — NOT a conformance
+    percentage. Rendered only when something was evaluated; a principle with nothing evaluated
+    shows "—" rather than a misleading 0%.
+    """
+    principles = (facts or {}).get("principles") or []
+    if sum(p.get("evaluated", 0) for p in principles) == 0:
+        return []
+    el = [Paragraph("Pass rate by WCAG principle", h2)]
+    el.append(Paragraph(
+        "WCAG groups its criteria under four principles — Perceivable, Operable, Understandable, "
+        "Robust. Of the criteria ACP <i>evaluated</i> for these documents (a validator ran and "
+        "returned pass or fail), the share that passed, per principle. Not-evaluated and "
+        "review-only criteria are excluded, so this is a pass rate among evaluated checks — "
+        "<b>not</b> a statement of WCAG 2.1 AA conformance.", muted))
+    el.append(Spacer(1, 8))
+    rows = [["Principle", "Evaluated", "Passed", "Pass rate"]]
+    for p in principles:
+        ev, ps = p.get("evaluated", 0), p.get("passed", 0)
+        rate = f"{ps}/{ev} ({round(100 * ps / ev)}%)" if ev else "—"
+        rows.append([Paragraph(_esc(p.get("principle", "")), cell), ev, ps, rate])
+    t = Table(rows, colWidths=[2.4 * inch, 1.1 * inch, 1.0 * inch, 1.5 * inch], repeatRows=1)
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 8.5), ("TEXTCOLOR", (0, 0), (-1, 0), MUTED),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, LINE), ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ZEBRA]),
+        ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+    el.append(t)
+    el.append(Spacer(1, 8))
+    return el
+
+
 def _work_by_category_section(evidence: list, h2, body, cell, muted) -> list:
     """What changed, grouped the way a person reads a document — Images, Tables, Reading Order —
     not by WCAG id (backlog: the human-task view). An executive or the ops person who did the
@@ -1034,6 +1073,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
 
     # ── Scope of assertion / negative assurance (R-A) ────────────────────────
     el.extend(_scope_section(files, facts, h2, body, cell, _muted))
+
+    # ── Pass rate by WCAG principle / POUR (R8) ──────────────────────────────
+    el.extend(_pour_section(facts, h2, body, cell, _muted))
 
     # ── Remediation evidence appendix (backlog R1) ───────────────────────────
     # Applied-and-verified fixes vs proposals awaiting approval, kept strictly apart.
