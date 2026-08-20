@@ -384,6 +384,13 @@ export const setAllowlist = (emails) => (SIM
 export const inviteTester = (email) => (SIM
   ? sim({ email, emails: ['demo@sim', email], status: 'PendingAcceptance' })
   : fetch(`${BASE}/admin/invite`, { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ email }) }).then(j))
+// The immutable decision log for one scan (system.py GET /decisions). The drawer reads the
+// `scan.file_error` rows out of it to say WHY a document failed, instead of guessing "unreadable"
+// — handlers records the verbatim exception per file and nothing was showing it.
+export const listScanDecisions = (scanId, limit = 500) => (SIM
+  ? sim([])
+  : fetch(`${BASE}/decisions?scan_id=${encodeURIComponent(scanId)}&limit=${limit}`,
+          { headers: headers() }).then(j).catch(() => []))
 // Per-scan decision snapshots (PRD: time-travel) — restore/persist triage + action decisions.
 export const getDecisions = (scanId) => (SIM
   ? sim({})
