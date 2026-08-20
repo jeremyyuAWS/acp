@@ -61,7 +61,7 @@ def _enqueue_analysis(scan_id: str, source: str, items: list[dict], *, ai: bool,
                 "incremental": incremental,
                 "items": [{"file": it["file"], "drive_file_id": it.get("drive_file_id"),
                            "mime": it.get("mime"), "path": it.get("path"),
-                           "checksum": it.get("checksum"),
+                           "checksum": it.get("checksum"), "drive_id": it.get("drive_id"),
                            "shadow_candidate": name_counts[_logical_name(it["file"])] > 1,
                            "exclude_remediated": exclude_remediated} for it in chunk],
             }, scan_id=scan_id)
@@ -70,7 +70,7 @@ def _enqueue_analysis(scan_id: str, source: str, items: list[dict], *, ai: bool,
             core.store.enqueue_job("scan_file", {
                 "scan_id": scan_id, "source": source, "file": it["file"],
                 "drive_file_id": it.get("drive_file_id"), "mime": it.get("mime"), "path": it.get("path"),
-                "checksum": it.get("checksum"),
+                "checksum": it.get("checksum"), "drive_id": it.get("drive_id"),
                 "shadow_candidate": name_counts[_logical_name(it["file"])] > 1,
                 "exclude_remediated": exclude_remediated,
                 "ai": ai, "pii": pii, "user": user, "incremental": incremental}, scan_id=scan_id)
@@ -1034,6 +1034,10 @@ def _scan_discover(payload: dict, job: dict) -> None:
     # inventory row's `mime` column, along with the source metadata each listing now surfaces.
     norm = [{"file": it["name"], "drive_file_id": it.get("id"), "mime": it.get("mime"),
              "path": it.get("path"), "checksum": it.get("checksum"),
+             # THE DRIVE THE ITEM WAS LISTED FROM. _sp_list carries this per file precisely
+             # because Graph item ids are unique only within a drive; dropping it here is what
+             # sent every SharePoint file down _download's Google-Drive branch.
+             "drive_id": it.get("driveId"),
              "source_modified": it.get("source_modified"),
              "source_mime": it.get("source_mime"), "created_at": it.get("created_at"),
              "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
@@ -1054,7 +1058,11 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 "doc_class": _cls.classify_from_metadata(it["file"], it.get("source_mime"))["doc_class"],
                 "checksum": it.get("checksum"), "path": it.get("path"),
                 "created_at": it.get("created_at"), "source_modified": it.get("source_modified"),
-                "owner": it.get("owner"), "parent_folder": it.get("parent_folder")}
+                "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
+                # Carried into the row because Assess rebuilds its download work from the
+                # INVENTORY, not from `norm` — so anything the download needs has to survive
+                # the round trip through the table.
+                "drive_id": it.get("drive_id")}
                for it in norm] + inventory
         _dedupe_inventory_files(inv)
         if inv:
@@ -1164,7 +1172,8 @@ def _scan_assess(payload: dict, job: dict) -> None:
         src_mime = r.get("mime")
         items.append({"file": r["file"], "drive_file_id": r.get("drive_file_id"),
                       "mime": src_mime if src_mime in _EXPORT_MAP else None,
-                      "path": r.get("path"), "checksum": r.get("checksum")})
+                      "path": r.get("path"), "checksum": r.get("checksum"),
+                      "drive_id": r.get("drive_id")})
     _enqueue_analysis(scan_id, source, items, ai=ai, pii=pii, user=user,
                       incremental=incremental, exclude_remediated=exclude_rem,
                       force_batch=bool(params.get("batch")))
@@ -1260,6 +1269,18 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                     it["mime"] = item["mime"]
                 if item.get("path"):                       # local source — read from disk
                     it["path"] = item["path"]
+                # SHAREPOINT GOES THROUGH GRAPH, NOT THE DRIVE CLIENT. Derived from the scan's own
+                # `source` rather than carried as a flag: a stored marker can drift out of step
+                # with the scan it belongs to, and this cannot. Without it `_download` fell through
+                # to files().get_media() with a Graph item id and every SharePoint file recorded
+                # status='error' — surfacing as "could not analyse — file unreadable" for files
+                # that were never fetched at all.
+                if source == "sharepoint" and not item.get("path"):
+                    it["sp"] = True
+                    # May be absent for a OneDrive listing, which genuinely has no driveId;
+                    # _sp_download reads that as /me/drive, which is correct there and ONLY there.
+                    if item.get("drive_id"):
+                        it["driveId"] = item["drive_id"]
                 _dl_t0 = _time.monotonic()
                 _download(it, tmp, svc, sp_token=toks.get("sp"))
                 # ADR 0020 §1 — cache the source bytes for a later Assess phase (best-effort,
