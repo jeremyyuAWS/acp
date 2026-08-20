@@ -1,98 +1,113 @@
 # ADR 0039 — Regional resilience & failover strategy
 
-Status: **Proposed** (design + one verified finding; no infra change)
+Status: **Accepted** — pilot posture set 2026-08-20 (revised to distinguish pilot vs. customer-production contracts)
 Date: 2026-08-20
 Related: ADR 0022 (provider seam + vision fallback floor), ADR 0027 (GPU vision lane),
-`api/ai.py:_vision_generate`, `api/providers.py:active_vision_provider`/`local_vision_provider`,
-the `/readyz` readiness surface (#487), `scripts/preflight.py` (#450).
+job retry + dead-letter (#347), `api/ai.py:_vision_generate`,
+`api/providers.py:active_vision_provider`/`local_vision_provider`, `/readyz` (#487),
+`scripts/preflight.py` (#450).
 
 ## Context
 
-ACP today is a **single-customer PHI pilot** (UTSW). The topology is already partially cross-region:
-`acp-app` runs in **East US 2**; the vision GPU (`acp-ollama-gpu`, a single warm T4, `min=max=1`
-replica) runs in **West US 2**. The question raised: should we build a multi-region fallback so GPUs /
-services keep working if a region fails?
+ACP runs under **two very different infrastructure contracts**, and conflating them is the error this
+ADR exists to prevent:
 
-The answer has to distinguish **failure domains** — they have very different blast radius, cost, and
-difficulty — and it has to be grounded in what the code *actually* does on failure, not what we assume.
+- the **temporary pilot** — a Movate-hosted, cost-optimized environment for a single customer (UTSW), and
+- **customer production** — a future customer-controlled Azure environment governed by the customer's SLA.
+
+Resilience decisions that are correct for one are wrong for the other. The question raised — "should we
+build multi-region / cross-AZ failover?" — has to be answered *per contract*, and grounded in what the
+code actually does on failure.
 
 ### Verified current-state finding (tested, not assumed)
 
 A behavioral test of the vision fallback (`ADR 0022`) was run against the real provider-selection code
-(`api/providers.py`, `api/ai.py`), faking the provider responses (no network):
+(no network, faked responses):
 
-- **Current production topology** — active provider = `ollama`, `OLLAMA_BASE_URL` = the West US 2 GPU.
-  When the GPU is unreachable, `_vision_generate` returns **`None`** → the finding **defers to a human**.
-  **No CPU fallback draft is produced.** The fallback branch is gated on `active provider != "ollama"`,
-  so it is skipped whenever the active provider *is* ollama (which it is in prod).
-- **RunPod topology** — active = a distinct GPU provider that fails, *plus* a separate local Ollama:
-  the fallback **does** engage and returns a degraded draft.
-- **Why the difference:** `local_vision_provider()` is built from `OLLAMA_BASE_URL`. In the cloud that
-  URL *is* the GPU, so the "local CPU floor" is the **same endpoint** — not an independent CPU. The
-  floor is only real when `OLLAMA_BASE_URL` points at a genuinely separate local Ollama (the
-  keyless/self-hosted topology).
+- **Current topology** — active provider `ollama`, `OLLAMA_BASE_URL` = the GPU. GPU unreachable →
+  `_vision_generate` returns **`None`** → the finding **defers to a human**. **No CPU fallback draft.**
+  The fallback branch is gated on `active provider != "ollama"`, so it is skipped in prod.
+- The CPU floor only engages with a *distinct* GPU provider **plus** a genuinely separate local Ollama;
+  `local_vision_provider()` is built from the same `OLLAMA_BASE_URL`, which in the cloud *is* the GPU.
 
-**Conclusion:** in the current cloud config there is **no vision redundancy**. A GPU/region outage
-degrades **safely** (human review carries the load; nothing fabricated, no broken scan) but **not to a
-CPU draft**. This corrects an earlier informal claim that a GPU outage "falls back to CPU."
+**Conclusion:** there is no vision redundancy today. A GPU outage degrades safely (defer-to-human;
+nothing fabricated; scan not broken) but not to a CPU draft. This corrects an earlier informal claim.
 
-Two facts bound the blast radius and make this acceptable as a pilot posture:
-- The GPU serves **only** vision alt-text (SC 1.1.1). **Assessment/scanning is pure CPU** — a GPU
-  outage does not stop discovery, assessment, or the non-vision remediations.
-- Degradation is safe-by-design (defer-to-human), consistent with the "never fabricate alt" rule.
+## Two deployment contracts
+
+| Pilot environment | Customer production |
+|---|---|
+| Temporary Movate-hosted environment | Customer-controlled Azure environment |
+| Cost-optimized, single-region | Zone-redundant App and Worker |
+| A100 is a degradable dependency | GPU continuity designed to customer SLA |
+| Manual recovery acceptable | Tested automated recovery |
+| Backups and runbook | Zone-resilient PostgreSQL, Redis and Blob |
+| No cross-AZ SLA | Availability defined by customer requirements |
+| PHI controls still mandatory | Customer residency and security policies govern |
 
 ## Decision
 
-Adopt **tiered, phased, PHI-constrained graceful degradation** — **not** full active-active
-multi-region — sized to a pilot and grown by failure domain, cheapest-and-most-likely first.
+> For the temporary pilot, ACP accepts single-region and single-zone infrastructure risk while
+> preserving functional safety: infrastructure failures may interrupt service or route vision-dependent
+> remediation to human review, but they must never fabricate evidence or produce an accessibility PASS.
+> Cross-AZ availability and stateful-service redundancy are deferred to the customer-hosted production
+> deployment, where they will be designed against the customer's SLA, RTO, RPO and PHI-residency
+> requirements.
 
-### Tier 1 — Vision / GPU (stateless, degradable)
-Already degrades safely (defer-to-human). This is the cheapest tier to make *redundant* if vision
-*availability* becomes a requirement, via **one** of:
-- bake a genuinely separate **CPU Ollama into the app container** as a real floor (so the ADR-0022
-  fallback has somewhere independent to go), or
-- stand up a **second warm GPU endpoint** in another compliant region, health-probe-selected.
-Neither exists today; do this only when the pilot SLA asks for vision availability, not before.
+### Pilot posture (explicit)
+- **Single-region** App, Worker, and data services (App/Worker/data in East US 2; the A100 vision
+  service in East US — same US-East geography; the A100 is a *degradable* dependency, so its separation
+  is acceptable).
+- **One East US A100** vision service. *(Interim until A100 is provisioned: the existing West US 2 T4 —
+  A100 is `0/0` quota on the current sandbox subscription and requires Deva's approval + a production
+  subscription; see the GPU co-location runbook.)*
+- **A100 failure → affected vision drafts defer to humans.** Discovery, assessment, and deterministic
+  remediation continue.
+- **Durable jobs retry safely** after transient compute failures (retry + dead-letter, #347).
+- **Backups plus a documented manual-recovery procedure** (`docs/runbooks/failure-recovery.md`).
+- **No promise of uninterrupted service** during an AZ or regional outage.
+- **PHI controls remain mandatory.**
+- **Cross-AZ availability and stateful-service redundancy are explicitly deferred** — *not* partially
+  engineered now.
 
-### Tier 2 — App / compute (near-stateless)
-Do the **availability-zone** fix first: a *single-AZ* outage is far more likely than a whole-region
-one, and Container Apps covers it cheaply with **zone redundancy + ≥2 replicas** within the region.
-The GPU's `min=max=1` is a literal SPOF; the app should not share that shape. **Multi-region app
-failover (Front Door + standby) is deferred** — a bigger lift than the risk warrants for a pilot.
+### Customer production (deferred design — built against the customer's requirements)
+- **Zone-redundant App and Worker.**
+- **GPU continuity designed to the customer SLA.**
+- **Tested automated recovery.**
+- **Zone-resilient PostgreSQL, Redis, and Blob.**
+- **Availability defined by customer requirements** (SLA / RTO / RPO).
+- **Customer residency and security policies govern.**
 
-### Tier 3 — Data / state (stateful)
-**Defer.** Cross-region replication of the store is where multi-region gets genuinely hard and
-expensive (consistency, failover, and PHI residency). For a pilot, **single region + solid backups +
-a documented recovery runbook** beats a half-built active-active nobody can confidently fail over.
+## The honest failure statement
 
-### Overriding gate — PHI residency
-Any failover region **must** stay inside the customer's compliant geography (US-East for UTSW today).
-A failover that spills PHI into a non-approved region is **worse than the downtime it prevents**.
-Failover regions are chosen by compliance first, GPU availability second.
+**Vision failures degrade; core-infrastructure failures may cause temporary downtime.**
 
-## Phased plan
+- **GPU / A100 failure** → vision drafting degrades: affected images route to human review; the system
+  stays up; scanning, assessment, and deterministic remediation continue.
+- **App / PostgreSQL / regional failure** → the pilot may be **temporarily unavailable**; recovery is via
+  backups + the documented manual procedure. This is acceptable and expected for a temporary pilot, and
+  **must be stated to the customer** — not implied to be seamless.
 
-- **Phase 0 (now — no new spend):** this ADR (state the real degradation to the customer as the
-  interim SLA); enable **zone redundancy + ≥2 app replicas**; record the GPU as a known SPOF; keep a
-  one-page failure/recovery runbook (what degrades, what stays up, how to fail the GPU over by env var).
-- **Phase 1 (if vision availability matters):** a *real* vision fallback — a separate in-container CPU
-  Ollama **or** a second warm GPU endpoint, selected on the `/readyz` health signal.
-- **Phase 2 (production / SLA-driven):** multi-region app + data failover — a scoped project, gated on
-  the PHI-residency design, justified by scale/SLA, not by a pilot.
+In **every** failure mode the functional-safety invariant holds, independent of infrastructure: ACP
+**never fabricates evidence and never emits a false accessibility PASS.** Degradation is always toward
+*more* human involvement, never toward an unearned green.
 
 ## Consequences
 
-- **Honest interim posture:** a GPU or West-US-2 outage means vision drafting is **degraded (all images
-  route to human review), not down**. Scanning and assessment continue. This is defensible for a pilot
-  but **must be stated to the customer**, not implied to be seamless.
-- **The "CPU fallback floor" must be qualified** wherever it is described: it is topology-dependent and
-  **not active** in the current cloud deployment.
-- **Cheapest real win is AZ-redundancy + testing the fallback you have** — not a second region.
-- No infra is created by this ADR; it sets the strategy and the sequencing.
+- The pilot's availability posture is honest and defensible: functional safety is absolute; uptime is
+  best-effort single-region. The distinction from customer production is documented, so no one carries a
+  pilot assumption into a production SLA (or vice versa).
+- The "CPU fallback floor" must be qualified wherever described — topology-dependent, not active in the
+  current cloud config.
+- Customer-production HA (zone redundancy, stateful replication, automated recovery) is a **separate,
+  SLA-driven project**, deferred here on purpose.
 
 ## Alternatives considered
 
-- **Full active-active multi-region now.** Rejected for a single-customer pilot: high ongoing cost,
-  large ops/PHI attack surface, and a resilience level the SLA does not require. Premature.
-- **Assume the ADR-0022 CPU floor already covers GPU outage.** Rejected — the behavioral test shows it
-  does **not** in the current topology. Designing on the assumption would have shipped a false SLA.
+- **Partially engineer cross-AZ resilience in the pilot now** (enable zone redundancy + ≥2 replicas).
+  **Rejected in this revision:** for a temporary Movate-hosted pilot it is premature cost/complexity;
+  explicit deferral to the customer-production contract is cleaner and more honest.
+- **Full active-active multi-region now.** Rejected — a resilience level the pilot SLA does not require,
+  with a large PHI attack surface.
+- **Assume the ADR-0022 CPU floor covers GPU outage.** Rejected — the behavioral test shows it does not
+  in the current topology; designing on the assumption would ship a false SLA.
