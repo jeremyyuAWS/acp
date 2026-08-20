@@ -425,6 +425,56 @@ def _pour_section(facts, h2, body, cell, muted) -> list:
     return el
 
 
+def _provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, muted) -> list:
+    """How this result was produced — method, pipeline & reproducibility (backlog R11 / R12 / R-D /
+    R-E). Every figure is COUNTED from the same facts the rest of the report uses; a stage whose
+    count is not derivable is named without a number, never with a fabricated one. The reproduce
+    line renders only with a stamped rubric hash, the supersedes line only when a previous scan of
+    this estate exists — otherwise each is silently omitted (ADR 0016)."""
+    f = facts or {}
+    docs = f.get("documents") or []
+    evaluated = sum(d.get("evaluated", 0) for d in docs)
+    findings = sum(d.get("findings", 0) for d in docs)
+    by_mode = (f.get("scope") or {}).get("by_mode") or {}
+    auto, ai = by_mode.get("auto", 0), by_mode.get("ai-assisted", 0)
+    approvals, remediated = f.get("approvals_total", 0), f.get("remediated_total", 0)
+    if not evaluated and not findings:
+        return []                       # nothing was measured — there is no method to narrate
+    el = [Paragraph("How this result was produced", h2)]
+    # R11 — the method, carried by THIS scan's real counts.
+    el.append(Paragraph(
+        "Each document was checked by ACP's deterministic engine, with AI-assisted review for the "
+        "semantic criteria a rule cannot decide alone; every applied fix was re-checked by "
+        "re-scanning the corrected file, and AI-generated content was queued for human approval "
+        "before it counted. For this scan: "
+        f"<b>{evaluated}</b> criteria evaluated across <b>{len(docs)}</b> document(s) — "
+        f"<b>{auto}</b> by the deterministic engine, <b>{ai}</b> AI-assisted; "
+        f"<b>{approvals}</b> human approval(s); <b>{remediated}</b> fix(es) applied and "
+        "re-scan-validated.", body))
+    el.append(Spacer(1, 6))
+    # R12 — the pipeline in order, each count from the same sources as above.
+    stages = [f"scanned <b>{len(docs)}</b>", f"evaluated <b>{evaluated}</b>",
+              f"<b>{findings}</b> finding(s)", f"<b>{ai}</b> AI-assisted",
+              f"<b>{approvals}</b> approval(s)", f"<b>{remediated}</b> remediated &amp; re-validated",
+              f"<b>{cert}</b>/<b>{total}</b> certifiable"]
+    el.append(Paragraph("<b>Pipeline.</b> " + "  →  ".join(stages), cell))
+    el.append(Spacer(1, 6))
+    # R-D — reproduce from the stamped ruleset. Same inputs, same findings.
+    rubric = meta.get("hash") if meta else None
+    if rubric:
+        el.append(Paragraph(
+            f"<b>Reproduce.</b> Re-run this scan against rubric hash <b>{_esc(str(rubric)[:32])}…</b> "
+            "(the stamped ruleset); the same documents yield the same findings.", muted))
+    # R-E — supersedes, only when a previous scan of this estate exists.
+    prev_at = (diff or {}).get("prev_at")
+    if prev_at:
+        el.append(Paragraph(
+            f"<b>Supersedes.</b> This result supersedes the previous scan of this estate "
+            f"({_esc(str(prev_at)[:10])}).", muted))
+    el.append(Spacer(1, 8))
+    return el
+
+
 def _work_by_category_section(evidence: list, h2, body, cell, muted) -> list:
     """What changed, grouped the way a person reads a document — Images, Tables, Reading Order —
     not by WCAG id (backlog: the human-task view). An executive or the ops person who did the
@@ -1086,6 +1136,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     # The per-finding detail (with WCAG ids, before/after and sign-off) follows for the auditor.
     el.extend(_work_by_category_section(evidence or [], h2, body, cell, _muted))
     el.extend(_evidence_section(evidence or [], h2, body, cell, foot_style))
+
+    # ── How this result was produced — method, pipeline & reproducibility (R11/R12/R-D/R-E) ──
+    el.extend(_provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, _muted))
 
     # ── AI governance & provenance (ADR 0019 §4/§7) ──────────────────────────
     # The network-boundary + cost attestation enterprise procurement asks for, from the real
