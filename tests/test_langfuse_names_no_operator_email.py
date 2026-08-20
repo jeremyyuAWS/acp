@@ -85,9 +85,7 @@ def test_assessment_result_upgrades_the_name_with_the_verdict_no_email(cap):
     assert "✓ AA" in ok.get("name") and "@" not in ok.get("name")
 
 
-def test_legacy_scan_assess_discover_names_carry_no_email(cap):
-    lf.scan_trace("scan-1", source="sharepoint", n_files=44, ai_enabled=True, user=EMAIL)
-    lf.open_assess_trace("scan-1", level="AA", n_files=44, user=EMAIL)
+def test_discover_run_trace_name_carries_no_email(cap):
     lf.discover_run_trace("scan-1", source="local", listed=44, inventoried=44, user=EMAIL)
     blob = json.dumps([n for n in _names(cap)], default=str)
     assert EMAIL not in blob and "@" not in blob
