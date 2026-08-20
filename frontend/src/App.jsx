@@ -737,7 +737,12 @@ export default function App() {
     acc[action] = (acc[action] || 0) + 1; acc.total += 1
     return acc
   }, { auto: 0, assisted: 0, review: 0, archive: 0, keep: 0, manual: 0, total: 0 })
-  const placeholder = loaded ? <EmptyState onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onFileTypeChange={setFileTypeConfig} /> : <Loading />
+  // OV-02: one action, no numbers. EmptyState no longer configures anything — the criteria
+  // and file-type pickers it used to render belong after an inventory exists, in Assess,
+  // where the eligible-file count can be shown against them.
+  const placeholder = loaded
+    ? <EmptyState onGoToSource={() => { setView('integrations'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
+    : <Loading />
   // The scan panel renders inside whichever view is open, so scope its narration to that view
   // when the view is a pipeline step that owns scan phases. The view ids ARE the step names in
   // PHASE_STEP ('discover', 'assess'); anything else is a non-step view and narrates the job.

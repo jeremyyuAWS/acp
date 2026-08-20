@@ -495,13 +495,20 @@ describe('App renders the gate once and routes every entry point through it', ()
   })
 
   it('wires onScan={requestScan} at every entry point, not doScan', () => {
-    for (const entry of ['<EmptyState', '<Overview', '<Integrations', '<Discover']) {
-      // Not asserting per-component here (they share one prop name); instead prove no entry point
-      // is wired straight to doScan anymore.
-      expect(entry).toBeTruthy()
+    // REWRITTEN — the loop this replaces asserted `expect('<EmptyState').toBeTruthy()`, i.e. that
+    // a string literal is truthy. It passed for every possible state of the app, including one
+    // where every entry point was wired straight to doScan. The count beside it (>= 4) was the
+    // only real assertion, and a count is exactly what a legitimate change breaks: EmptyState
+    // stopped being a scan entry point entirely when it became the Go-to-Source screen.
+    //
+    // So assert the thing itself — each component that STILL launches a scan carries
+    // onScan={requestScan} — and that EmptyState no longer does.
+    for (const entry of ['Overview', 'Integrations', 'Discover']) {
+      const tag = new RegExp(`<${entry}\\b[^>]*onScan=\\{requestScan\\}`, 's')
+      expect(code, `${entry} does not route its scan through the gate`).toMatch(tag)
     }
+    expect(code, 'EmptyState is a scan entry point again').not.toMatch(/<EmptyState[^>]*onScan=/s)
     expect(code).not.toMatch(/onScan=\{doScan\}/)
-    expect((code.match(/onScan=\{requestScan\}/g) || []).length).toBeGreaterThanOrEqual(4)
   })
 })
 

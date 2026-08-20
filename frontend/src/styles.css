@@ -2383,3 +2383,23 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 
 .scoperules-elig { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
 .scoperules-elign { font-size: 14px; }
+
+/* ── First-run Overview (EmptyState.jsx) ──────────────────────────────────────────────────────
+   One prompt and no numbers. The rules here exist so the state cannot drift back into a
+   dashboard: it is centred, it has a single action, and it carries no count anywhere. */
+.emptystate { display: flex; flex-direction: column; align-items: center; text-align: center;
+  padding: 64px 20px; }
+.emptystate-icon { color: #b9b1bd; }
+.emptystate-h { margin: 16px 0 0; font-size: 19px; font-weight: 600; color: var(--ink); }
+.emptystate-p { max-width: 430px; margin: 8px 0 0; line-height: 1.55; }
+.emptystate-cta { margin-top: 22px; }
+.emptystate-steps { display: flex; gap: 26px; margin-top: 34px; padding-top: 22px;
+  border-top: 1px solid var(--line); width: 100%; max-width: 720px; justify-content: center;
+  text-align: left; }
+.emptystate-steps > div { flex: 1; }
+.emptystate-stepn { font-size: 12.5px; font-weight: 600; }
+.emptystate-stepd { font-size: 12px; margin-top: 3px; line-height: 1.45; }
+.emptystate-foot { font-size: 12px; margin: 26px 0 0; }
+@media (max-width: 640px) {
+  .emptystate-steps { flex-direction: column; gap: 14px; }
+}
