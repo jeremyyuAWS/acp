@@ -76,20 +76,24 @@ export default function ScanReviewModal({
            style={{ background: 'var(--surface, #fff)', color: 'inherit', borderRadius: 12,
                     width: 'min(940px, 100%)', maxHeight: '90vh', overflowY: 'auto',
                     boxShadow: '0 12px 40px rgba(0,0,0,.3)', padding: '20px 26px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
+          {/* Still "scan", not "assessment". This action LISTS the estate and opens no file —
+              `_defer_analysis_to_assess()` defaults to on (ADR 0020), so the WCAG analysis runs
+              later, at Assess. Naming it an assessment would assert one that has not happened. */}
           <h3 style={{ margin: 0, fontSize: 16 }}>New scan</h3>
           <button className="ghost small" aria-label="Close" onClick={() => onCancel?.()}
                   style={{ marginLeft: 'auto' }}>×</button>
         </div>
-
-        {/* 1. Sources included — informational */}
-        <div className="scanmodal-sec">
-          <div className="scanmodal-head">Sources included</div>
-          <div style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span className="pulsedot" aria-hidden="true" />
-            {label}{folder ? ' · selected folder' : ''}
-          </div>
-        </div>
+        {/* One line of orientation in place of a titled section. "Sources included" was a heading,
+            a rule and a status dot spent on a single fact, above the decision the user came for;
+            the fact survives, the chrome does not. */}
+        <p className="muted" style={{ fontSize: 12.5, margin: '0 0 12px',
+                                      display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span className="pulsedot" aria-hidden="true" />
+          {label}{folder ? ' · selected folder' : ''}
+          <span aria-hidden="true">·</span>
+          Choose where and what ACP should evaluate.
+        </p>
 
         {/* 2. Scan behaviour is NOT here any more, and that is the point.
             PII scan, Durable scan, Skip Remediated/ and Incremental scan were four engine switches
@@ -106,7 +110,9 @@ export default function ScanReviewModal({
 
         {/* 3. Formats & WCAG criteria + estimate + the wizard's confirm/cancel footer */}
         <div className="scanmodal-sec">
-          <div className="scanmodal-head">Formats &amp; WCAG criteria</div>
+          {/* No heading. This titled the entire body "Formats & WCAG criteria" while the user was
+              on step 1, DRIVE LOCATIONS — naming a later step's subject as the current one. The
+              wizard's own stepper says which step this is, and says it correctly. */}
           <div className="scanmodal-est muted">
             {hasEstimate ? (
               <>
