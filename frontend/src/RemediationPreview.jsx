@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import Thumbnail from './Thumbnail.jsx'
 import { locationLabel } from './remediationInboxModel.js'
-import { natureOf, contrastEvidence, metadataEvidence, readingOrderEvidence } from './remediationEvidence.js'
+import { natureOf, contrastEvidence, metadataEvidence, readingOrderEvidence, findingSc } from './remediationEvidence.js'
+import HeadingOutline from './HeadingOutline.jsx'
 import GroundedBeforeAfter from './GroundedBeforeAfter.jsx'
 
 // The third pane of the remediation workspace: a CONTEXTUAL PREVIEW of the actual document.
@@ -200,7 +201,7 @@ function Properties({ f, fmt }) {
 // Structure mode — offered only for a structure/metadata finding. Deliberately does NOT draw a tag
 // tree or reading-order diagram: that data is computed during assessment and not re-extracted for
 // preview, so an invented one would be fiction (ADR 0016). We name the criterion and say so plainly.
-function StructureNote({ f }) {
+function StructureNote({ f, scanId = null }) {
   const wcag = wcagCode(f)
   // A metadata finding (document title / language) DOES have a meaningful representation — the
   // property's real before→after value — so show that instead of the generic "not extracted" note.
@@ -227,7 +228,7 @@ function StructureNote({ f }) {
       </div>
     )
   }
-  return (
+  const genericNote = (
     <div className="muted" style={{ display: 'grid', placeItems: 'center', textAlign: 'center', padding: '28px 18px',
                                     border: '1px dashed var(--line,#e2dce4)', borderRadius: 10, minHeight: 160 }}>
       <div style={{ maxWidth: 380 }}>
@@ -243,6 +244,14 @@ function StructureNote({ f }) {
       </div>
     </div>
   )
+  // Heading findings (1.3.1 / 2.4.6): fetch the real docx heading outline and show before → corrected.
+  // While it loads, or when no outline is available (non-docx, <2 headings, already clean), HeadingOutline
+  // renders the generic note above as its fallback — never a fabricated outline.
+  const sc = findingSc(f)
+  if (sc === '1.3.1' || sc === '2.4.6') {
+    return <HeadingOutline scanId={scanId} file={f?.file} wcag={wcag} fallback={genericNote} />
+  }
+  return genericNote
 }
 
 export default function RemediationPreview({ finding, scanId = null, embedded = false }) {
@@ -316,7 +325,7 @@ export default function RemediationPreview({ finding, scanId = null, embedded = 
         </div>
         <div style={{ marginTop: 12 }}>
           {activeMode === 'properties' && <Properties f={finding} fmt={fmt} />}
-          {activeMode === 'structure' && <StructureNote f={finding} />}
+          {activeMode === 'structure' && <StructureNote f={finding} scanId={scanId} />}
           {activeMode === 'visual' && (
             <>
               <Zoomable zoom={zoom}><PageView f={finding} scanId={scanId} /></Zoomable>
