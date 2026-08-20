@@ -121,13 +121,21 @@ export function appliedStateOf(finding) {
  *
  *  `driveMirror` is `{ enabled, folder }` from GET /settings, or **null when it has not been read**.
  *  Unread is not "off": it returns `known:false` and the caller says nothing about the destination.
- *  What is unconditional — a copy is produced, the original is untouched — is stated either way. */
+ *  What is unconditional — a copy is produced, the original is untouched — is stated either way.
+ *
+ *  The mirror sentence is scoped to drive-sourced documents on purpose: `_remediate_file` requires a
+ *  `drive_file_id` and a Drive token (handlers.py), so the setting being on does not by itself mean
+ *  THIS document gets mirrored. PR #558's `deliveryPolicy.js` is the fuller treatment of the same
+ *  ground truth and should replace this block once it lands — see the PR body. */
 export function destinationOf(driveMirror = null) {
   const always = 'Applying the fix writes a corrected copy. The original document is not modified.'
   if (!driveMirror || driveMirror.enabled == null) return { known: false, always, drive: null }
   if (driveMirror.enabled) {
     const where = driveMirror.folder ? `the “${driveMirror.folder}” folder` : 'the mirror folder'
-    return { known: true, always, drive: `A copy is also written to ${where} in the source drive.` }
+    return {
+      known: true, always,
+      drive: `For a document taken from the connected drive, a copy is also written to ${where} there.`,
+    }
   }
   return { known: true, always, drive: 'The copy stays in ACP’s own storage; the source drive is not written to.' }
 }

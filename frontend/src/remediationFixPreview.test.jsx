@@ -83,7 +83,7 @@ describe('RemediationFixPreview — what applying it does (ADR 0010)', () => {
     const t = c.textContent
     expect(t).toContain('The original document is not modified.')
     expect(c.querySelector('.fixpreview-dest-drive').textContent)
-      .toMatch(/copy is also written to the “Remediated” folder in the source drive/)
+      .toMatch(/connected drive, a copy is also written to the “Remediated” folder there/)
     expect(t).not.toMatch(NEVER)
   })
 

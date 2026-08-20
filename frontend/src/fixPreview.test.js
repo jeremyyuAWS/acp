@@ -126,11 +126,11 @@ describe('destinationOf — ADR 0010', () => {
     // get_drive_mirror_enabled() defaults TRUE, so this is the DEFAULT deployment, not the exception.
     const d = destinationOf({ enabled: true, folder: 'Remediated' })
     expect(d.known).toBe(true)
-    expect(d.drive).toMatch(/“Remediated” folder in the source drive/)
+    expect(d.drive).toMatch(/connected drive, a copy is also written to the “Remediated” folder there/)
   })
 
   it('with the mirror on but no folder name it does not invent one', () => {
-    expect(destinationOf({ enabled: true }).drive).toMatch(/the mirror folder in the source drive/)
+    expect(destinationOf({ enabled: true }).drive).toMatch(/a copy is also written to the mirror folder there/)
   })
 
   it('only with the mirror explicitly OFF does it say the source drive is untouched', () => {
