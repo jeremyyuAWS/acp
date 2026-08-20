@@ -1655,7 +1655,7 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   source, which folders), matching the phase-1 exit contract "no format/SC controls in Discover" — a cleaner
   split between *what estate to catalogue* (Discover) and *how to judge it* (Assess).
 
-## Feature: Observability — AI tracing and cost (Langfuse)
+## Feature: Observability — AI tracing and cost (Langfuse) · #4697
 
 The scan / assess / remediate lifecycle was already traced, but the AI calls themselves were recorded as
 cost-less, detached spans, and one decision surface had no trace at all. An audit first established the
@@ -1790,7 +1790,7 @@ invariant the redaction tests pin).
   `discover_run_trace` no-email guard. −133 lines; full backend job green (`api/lf.py` is not a RULE_PATHS
   file, so no Matrix-Note). The live per-file model is untouched.
 
-## Feature: Scan-run experience — live progress and transparency (Track A)
+## Feature: Scan-run experience — live progress and transparency (Track A) · #4696
 
 The scan progress panel rebuilt from an implementation-centric spinner into an outcome-oriented,
 transparent view of a running scan. Six merged slices; the owning session designed the "Track A" program
@@ -1901,7 +1901,7 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   against WCAG and remediated), and the bare list next to the wrong count invited the reassuring guess "all of
   them." Now stated plainly (same honesty family as #479/#483/#491/#502).
 
-## Feature: Certification report as an audit artifact
+## Feature: Certification report as an audit artifact · #4698
 
 Turned the per-scan certification PDF (`api/report.py`) from a scan summary into an audit artifact an
 auditor can trust and reproduce. The backlog (docs/TODO.md P4) had drifted stale — most items had
@@ -1943,7 +1943,7 @@ basis; where a denominator is not tracked the number is omitted, not invented (A
   reproduce the findings, verify a document by hand). Distinct from `conformance-report.md`, which is
   ACP's own platform-UI VPAT.
 
-## Feature: Structural evidence renderers (Remediate preview)
+## Feature: Structural evidence renderers (Remediate preview) · #4699
 
 Document-structure findings showed a generic "structure not extracted" note; these surface the real
 extracted structure as review evidence, computed on demand via owner-scoped endpoints (the geometry
