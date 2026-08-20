@@ -961,6 +961,20 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
             action=chosen.get("action"), result="pending_approval", detail=reason)
 
 
+def _mark_discovered(scan_id: str) -> None:
+    """Record the run-level discovery-completion instant, and never fail discovery over it.
+
+    The inventory is already written by the time this runs. Losing the timestamp costs a date on
+    a screen; raising here would lose the inventory the job just spent the estate's listing budget
+    producing — the same fail-quiet contract the Langfuse discover trace already follows, and for
+    the same reason. A run that misses the stamp still reads correctly: the frontend falls
+    back to the newest per-file `scan_inventory.discovered_at`."""
+    try:
+        core.store.mark_discovery_complete(scan_id)
+    except Exception:
+        pass
+
+
 def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, actor: str | None) -> None:
     """Persist the per-file discovery inventory and evaluate the lifecycle (archival/deletion) rules
     over it — the shared post-discovery step so a scan marks Archive/Delete candidates regardless of
@@ -970,12 +984,19 @@ def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, acto
     eligibility count reads) unpopulated. Both are fixed by routing every path through here.
 
     Idempotent: add_inventory de-dupes on (scan_id, file) and the rule evaluation is candidate-first
-    and guarded (doc_has_disposition), so a re-run adds nothing. Never executes a Drive move/delete."""
+    and guarded (doc_has_disposition), so a re-run adds nothing. Never executes a Drive move/delete.
+    mark_discovery_complete is set-once for the same reason, so a re-run does not re-date the
+    snapshot either."""
     from scanner import _dedupe_inventory_files
     _dedupe_inventory_files(inv)
     if inv:
         core.store.add_inventory(scan_id, inv)
     _evaluate_discover_lifecycle_rules(scan_id, source, actor)
+    # The discovery phase is over: the inventory is persisted and the lifecycle rules have run.
+    # Stamp WHEN, because every count taken from this inventory is only true as of this instant
+    # and nothing else on scan_runs records it — completed_at is the end of ASSESS. Stamped after
+    # the writes above so it dates an inventory that exists rather than one that was attempted.
+    _mark_discovered(scan_id)
 
 
 @handler("scan_discover")
@@ -1079,6 +1100,13 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # before the no-assessable-items short-circuit below because a rule may match a
         # non-scannable estate row (old media to archive, a /tmp file to flag for deletion).
         _evaluate_discover_lifecycle_rules(scan_id, source, user)
+        # THIS is where an ADR 0020 run's discovery ends — the estate is listed, the inventory is
+        # persisted, the lifecycle rules have run, and nothing further happens until somebody
+        # triggers Assess. The run stays at status='discovered' with completed_at NULL, possibly
+        # forever, so without this stamp there is no record of when its inventory was taken and every
+        # count rendered from that inventory is a snapshot with no date. Set-once (see the store),
+        # so a re-delivered discover job does not move it.
+        _mark_discovered(scan_id)
         # Discover-phase tracing (lf.discover_run_trace). Until this call, an ADR 0020
         # Discover-only run emitted NOTHING to Langfuse: the "Discover" span lives on the analyse
         # path, which under this ADR runs at Assess time, so the phase that lists the estate and

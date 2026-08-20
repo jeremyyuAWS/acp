@@ -106,6 +106,23 @@ _SCHEMA = [
     # found one. NULL on scans predating this column — the UI must treat that as "unknown scope"
     # and say nothing rather than guessing "whole Drive".
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS scope TEXT",
+    # WHEN the discovery phase finished — the instant the inventory describes.
+    #
+    # `completed_at` cannot answer this under ADR 0020. A Discover-only run stops at
+    # status='discovered' and completed_at stays NULL until somebody runs Assess and the run
+    # finalizes; previous_run_for_source already documents that and works around it with
+    # COALESCE(completed_at, started_at). `started_at` is not the answer either — it is when the
+    # LISTING BEGAN, which on a large estate is a long way from when the inventory was complete,
+    # and it is written even for a run that then died mid-listing.
+    #
+    # So an inventory had no date of its own at the run grain, and every count rendered from it
+    # was a snapshot presented without its instant. This is that instant, stamped once, when the
+    # inventory has been persisted and the lifecycle rules have run.
+    #
+    # NULL on runs discovered before this column existed. A reader must treat that as "not
+    # recorded" — the newest scan_inventory.discovered_at is the honest derivation for those, and
+    # the frontend does exactly that rather than dating them to the render.
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS discovered_at TEXT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS size_kb INT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS pages INT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS sheets INT",
@@ -943,6 +960,60 @@ class Store:
                      it.get("created_at"), it.get("source_modified"), it.get("owner"),
                      it.get("parent_folder"), it.get("discovered_at") or now, it.get("drive_id")))
 
+    def mark_discovery_complete(self, scan_id: str, at: str | None = None) -> str | None:
+        """Stamp WHEN this run's discovery finished — the instant its inventory describes.
+
+        SET ONCE. A re-delivered discover job, or a re-list of the same scan, must not move the
+        snapshot instant forward: `add_inventory` deliberately preserves each row's original
+        `discovered_at` through its ON CONFLICT, and a run-level stamp that drifted while the
+        per-file stamps did not would make the two disagree about the same event. The write is
+        therefore guarded on the column still being NULL, in one statement, so two workers racing
+        the same scan cannot both win.
+
+        Returns the value now stored (the existing one when it was already set), or None if the
+        run does not exist — so a caller can log what it actually recorded rather than what it
+        offered.
+
+        This is NOT `completed_at`. That is the whole scan finishing, which under ADR 0020 is the
+        end of ASSESS and may be days later or never. Discovery is its own phase and gets its own
+        timestamp; see the migration comment for why neither existing column could answer.
+        """
+        at = at or self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE scan_runs SET discovered_at=%s WHERE id=%s AND discovered_at IS NULL",
+                (at, scan_id))
+            self._db.execute(cur, "SELECT discovered_at FROM scan_runs WHERE id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+        return (row or {}).get("discovered_at")
+
+    def get_discovery_completed_at(self, scan_id: str) -> str | None:
+        """The instant this run's inventory describes, falling back for runs discovered before
+        the column existed.
+
+        The fallback is the NEWEST `scan_inventory.discovered_at`. That is real persisted data —
+        written per file by `add_inventory` at the moment the batch landed, and never overwritten
+        by a re-list — so its maximum is when the inventory was last added to. Derived, not
+        invented: nothing here reads a clock.
+
+        None means nobody recorded it. A caller must render that as unknown; it is not evidence
+        that the scan is recent.
+
+        MAX over TEXT is a lexical maximum, which is the instant maximum only while the values
+        share a format. They do: every row `add_inventory` writes without an explicit stamp gets
+        `_now()`, a UTC `datetime.isoformat()`, and the discover path never supplies one. Said out
+        loud because a connector that ever started carrying its own offset-bearing stamp would
+        break the ordering quietly — the frontend compares parsed instants for that reason.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT discovered_at FROM scan_runs WHERE id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+            if row and row.get("discovered_at"):
+                return row["discovered_at"]
+            self._db.execute(cur,
+                "SELECT MAX(discovered_at) AS at FROM scan_inventory WHERE scan_id=%s", (scan_id,))
+            return (self._db.fetchone(cur) or {}).get("at")
+
     _INV_COLS = ("scan_id,file,drive_file_id,mime,size_kb,doc_class,checksum,path,"
                  "created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
                  "lifecycle_status,lifecycle_rule_id,lifecycle_reason,exclusion_reason")
@@ -1674,6 +1745,17 @@ class Store:
             # to a dict (or None) by _fill_run_aggregate above.
             _scope = run.get("scope")
             run["scan_scope"] = _scope.get("scan_scope") if isinstance(_scope, dict) else None
+            # WHEN this run's inventory was taken. The column is stamped at discovery for every
+            # run from here on; for a run discovered BEFORE it existed it is NULL, and the newest
+            # per-file `scan_inventory.discovered_at` is the honest derivation — real persisted
+            # data, not a clock read at request time. Filled here so the Discover header can date
+            # its counts from `GET /scans/{id}` alone, without first paging the whole inventory.
+            # Still None when neither exists, which the caller must render as "not recorded"
+            # rather than as a fresh scan.
+            if not run.get("discovered_at"):
+                self._db.execute(cur,
+                    "SELECT MAX(discovered_at) AS at FROM scan_inventory WHERE scan_id=%s", (sid,))
+                run["discovered_at"] = (self._db.fetchone(cur) or {}).get("at")
             return {"run": run, "files": files}
 
     def get_scan_scope(self, scan_id: str) -> dict[str, frozenset[str]] | None:
