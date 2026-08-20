@@ -27,8 +27,7 @@ import Monitor from './Monitor.jsx'
 import Publish from './Publish.jsx'
 import Overview from './Overview.jsx'
 import AssessRunner from './AssessRunner.jsx'
-import AssessScope from './AssessScope.jsx'
-import ScopeRules from './ScopeRules.jsx'
+import AssessSetup from './AssessSetup.jsx'
 import AssessSummary from './AssessSummary.jsx'
 import AssessWorklist from './AssessWorklist.jsx'
 import RunDetails from './RunDetails.jsx'
@@ -210,6 +209,11 @@ export default function App() {
   // whole row, so the drill-down is real today rather than a button that goes nowhere; the
   // dedicated findings-by-criterion view replaces this when it lands.
   const [assessFile, setAssessFile] = useState(null)
+  // AssessRunner still owns the run; AssessSetup owns the button that starts it. The runner hands
+  // its start function here on mount. Stable identity via useCallback, so registering does not
+  // re-fire on every render of this very large component.
+  const assessStart = useRef(null)
+  const registerAssessStart = useCallback((fn) => { assessStart.current = fn }, [])
   const [cap, setCap] = useState(CAPABILITY_FALLBACK)
   const [assessment, setAssessment] = useState(ASSESSMENT_FALLBACK)
   useEffect(() => {
@@ -1065,19 +1069,22 @@ export default function App() {
                 the Core-17 WCAG picker, with a live eligible-file count, written to scan_scope as
                 the single authority for the format axis. Collapsed by default so it does not
                 displace the run button, and left one click away for when the scope needs changing. */}
-            <details className="panel scopestep assessscopestep">
-              <summary><b>Choose what to assess</b><span className="muted"> · document types &amp; WCAG criteria, before you run</span></summary>
-              <AssessScope />
-            </details>
-            {/* Per-file WCAG scope rules (Discover/Assess PRD §4.4 / AC-09): admins assess
-                different parts of the estate against different Core-17 subsets, with union /
-                override precedence. Collapsed alongside the assess-scope picker so it is one
-                click away without displacing the run button. */}
-            <details className="panel scopestep scoperulesstep">
-              <summary><b>WCAG scope rules</b><span className="muted"> · per-folder / owner / department WCAG subsets, with overrides</span></summary>
-              <ScopeRules />
-            </details>
-            <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy} onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase} />
+            {/* THE PRE-RUN SCREEN (approved board 2). It replaces the two collapsed scope panels
+                that used to sit here. The board's footer removes the WCAG scope-rules panel
+                outright, and AssessScope's document-type and criterion pickers are rows on this
+                screen now - so keeping either would be the same question asked twice, in two
+                places, with two answers.
+
+                Rendered only before a run. Afterwards the results answer a different question and
+                the re-run control lives with them, inside AssessRunner - which is why `controlled`
+                hides the runner's pre-run band but not its results. */}
+            {assessPhase === 'idle' && !assessed && (
+              <AssessSetup discoveredAt={run.completed_at || null} busy={busy}
+                           onRun={(decided) => assessStart.current?.(decided)} />
+            )}
+            <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy}
+                          controlled onReady={registerAssessStart}
+                          onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase} />
             {/* Gated on assessPhase === 'done', not just `assessed` — `assessed` flips true the
                 instant Assess is clicked (before AssessRunner's own progress animation even
                 starts), so the results below were popping in fully-populated while the bar
