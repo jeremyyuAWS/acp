@@ -9,7 +9,7 @@ afterEach(unmountAll)
 const SNAP = {
   available: true, active: true, phase: 'assessing',
   totals: { discovered: 819, eligible: 512 },
-  kpis: { completed: 145, processing: 105, need_attention: 22, unable_to_assess: 3 },
+  kpis: { completed: 145, processing: 105, findings_so_far: 47, need_attention: 22, unable_to_assess: 3 },
   queue: {
     in_flight: 6, queued: 99, workers: { busy: 6, max: 8, idle: 2 },
     current: { file: 'discharge.pdf', criterion: '1.4.3', text: 'Assessing discharge.pdf for 1.4.3  (+5 more in progress)' },
@@ -31,6 +31,8 @@ describe('LiveAssessment', () => {
     expect(t).toMatch(/819 discovered/)
     expect(t).toMatch(/512 assessable/)
     expect(t).toMatch(/145/)                          // completed
+    expect(t).toMatch(/47/)                           // findings so far
+    expect(t).toMatch(/so far/i)                       // provisional qualifier — never reads as final
     expect(t).toMatch(/6.*in.?flight/i)
     expect(t).toMatch(/99.*queued/i)
     expect(t).toMatch(/6 \/ 8 workers busy/)

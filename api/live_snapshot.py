@@ -113,9 +113,17 @@ def build_snapshot(store, scan_id: str, owner: str | None = None, now_iso: str |
     state = (run.get("status") or "").strip().lower() or "running"
     phase = _phase(state, eligible, completed)
 
-    # Named, not faked — each needs live job-queue state or a separate trace pass this module does not
-    # do. The queue layer (below) supplies the first three when present, leaving only the finding count.
-    pending = ["queued", "throughput", "findings_so_far", "workers"]
+    # Findings confirmed so far — a lightweight SUM over the SAME FAIL traces the report totals, so it
+    # reconciles with the final cert and stays cheap to poll (PRD §9). A finding COUNT, distinct from
+    # the file-outcome buckets above. Degrades to None (not a fake 0) if the store can't supply it.
+    _fc = getattr(store, "live_findings_count", None)
+    findings_so_far = _fc(scan_id) if callable(_fc) else None
+
+    # Named, not faked — each needs live job-queue state this module does not do. The queue layer
+    # (below) supplies queued / throughput / workers when present.
+    pending = ["queued", "throughput", "workers"]
+    if findings_so_far is None:
+        pending.append("findings_so_far")
 
     snap = {
         "available": True,
@@ -139,10 +147,13 @@ def build_snapshot(store, scan_id: str, owner: str | None = None, now_iso: str |
         "sequence": completed,
         "generated_at": now_iso,
     }
+    # Confirmed findings so far — a finding count reconciled with the final cert (added only when the
+    # store can supply it; otherwise it stays named in kpis_pending, never a fake 0).
+    if findings_so_far is not None:
+        snap["kpis"]["findings_so_far"] = findings_so_far
 
     # Fold in the live worker/queue/lane block when the queue layer is present. Its authoritative
-    # leased/queued split and per-worker activity supply the KPIs this persisted-results module can't,
-    # so those drop out of `kpis_pending` (leaving only the per-finding count).
+    # leased/queued split and per-worker activity supply the KPIs this persisted-results module can't.
     queue = _live_queue_block(store, scan_id)
     if queue is not None:
         snap["queue"] = queue

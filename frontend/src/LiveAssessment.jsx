@@ -12,10 +12,14 @@ const CARD = {
 }
 const KIND_COLOR = { ok: '#2F7D51', warn: '#9a5312', bad: '#b3261e', muted: '#5b6774' }
 
-function Kpi({ label, value, pending, accent }) {
+function Kpi({ label, value, pending, accent, provisional }) {
+  // A provisional count grows during the run — the "so far" qualifier (in the label and the
+  // accessible name) stops a mid-run number from reading as the final total (ADR 0016 / PRD §4.3).
   return (
-    <div style={CARD} role="group" aria-label={label}>
-      <div style={{ fontSize: 12, color: 'var(--muted,#5b6774)', letterSpacing: '.02em' }}>{label}</div>
+    <div style={CARD} role="group" aria-label={provisional ? `${label}, so far` : label}>
+      <div style={{ fontSize: 12, color: 'var(--muted,#5b6774)', letterSpacing: '.02em' }}>
+        {label}{provisional && <span style={{ color: 'var(--faint,#8a95a1)', fontWeight: 600 }}> · so far</span>}
+      </div>
       <div style={{ fontSize: 24, fontWeight: 800, color: accent || 'var(--ink,#111820)',
                     fontVariantNumeric: 'tabular-nums' }}>
         {pending ? <span aria-label="still computing" title="still computing">—</span> : value}
@@ -46,7 +50,7 @@ export default function LiveAssessment({ snapshot }) {
       {/* KPI cards — completed / processing / need-attention / unable-to-assess */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
         {m.kpiCards.map((c) => (
-          <Kpi key={c.key} label={c.label} value={c.value} pending={c.pending}
+          <Kpi key={c.key} label={c.label} value={c.value} pending={c.pending} provisional={c.provisional}
             accent={c.key === 'need_attention' ? KIND_COLOR.warn
               : c.key === 'unable_to_assess' ? KIND_COLOR.bad : null} />
         ))}
