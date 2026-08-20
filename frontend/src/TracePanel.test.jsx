@@ -10,7 +10,11 @@ import { createTestRoot, unmountAll } from './testRoots.js'
 // strips it, and the panel is given no field to print it from).
 
 let mockResult
-vi.mock('./api.js', () => ({ getFileTraceData: (...a) => { mockCalls.push(a); return Promise.resolve(mockResult) } }))
+let mockLfUrl = 'https://lf.example/project/p/traces/s1::doc-3f9a2c.docx'
+vi.mock('./api.js', () => ({
+  getFileTraceData: (...a) => { mockCalls.push(a); return Promise.resolve(mockResult) },
+  openTraceUrl: () => mockLfUrl,
+}))
 let mockCalls = []
 
 const { default: TracePanel } = await import('./TracePanel.jsx')
@@ -49,6 +53,19 @@ describe('TracePanel', () => {
     expect(text).not.toContain('@')
     // it fetched for the right scan + file
     expect(mockCalls[0]).toEqual(['s1', 'doc-3f9a2c.docx'])
+    // the secondary "Open in Langfuse" link points at the deep-link URL, opens a new tab
+    const lf = [...c.querySelectorAll('a')].find((a) => /Open in Langfuse/.test(a.textContent))
+    expect(lf).toBeTruthy()
+    expect(lf.getAttribute('href')).toBe(mockLfUrl)
+    expect(lf.getAttribute('target')).toBe('_blank')
+  })
+
+  it('omits the "Open in Langfuse" link when no deep-link is configured', async () => {
+    mockLfUrl = null
+    mockResult = { status: 'ok', trace: { document: 'doc-x.docx', format: 'docx', result: null, observations: [] } }
+    const c = await mount()
+    expect([...c.querySelectorAll('a')].some((a) => /Open in Langfuse/.test(a.textContent))).toBe(false)
+    mockLfUrl = 'https://lf.example/project/p/traces/s1::doc-3f9a2c.docx'   // restore for other tests
   })
 
   it('shows an honest "still recording" state with a Retry when the trace is pending', async () => {

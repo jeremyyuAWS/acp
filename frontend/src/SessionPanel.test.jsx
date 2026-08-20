@@ -12,6 +12,7 @@ let mockSession, mockFile
 vi.mock('./api.js', () => ({
   getSessionTraceData: () => Promise.resolve(mockSession),
   getFileTraceData: (...a) => { fileCalls.push(a); return Promise.resolve(mockFile) },
+  openTraceUrl: () => 'https://lf.example/project/p/sessions/scan-cur',
 }))
 let fileCalls = []
 
