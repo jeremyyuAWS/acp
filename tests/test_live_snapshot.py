@@ -15,16 +15,21 @@ import live_snapshot  # noqa: E402
 
 class _FakeStore:
     """Mirrors get_scan's real contract: it returns {"run": <summary>, "files": [...]}, not the flat
-    summary — build_snapshot must unwrap it."""
-    def __init__(self, run):
+    summary — build_snapshot must unwrap it. live_findings_count returns None unless a value is set,
+    so the "store can't supply findings" degrade path is testable."""
+    def __init__(self, run, findings=None):
         self._run = run
+        self._findings = findings
 
     def get_scan(self, sid, owner=None):
         return {"run": self._run, "files": []}
 
+    def live_findings_count(self, sid):
+        return self._findings
 
-def _snap(run, now="2026-08-20T20:00:00Z"):
-    return live_snapshot.build_snapshot(_FakeStore(run), "s1", owner="o", now_iso=now)
+
+def _snap(run, now="2026-08-20T20:00:00Z", findings=None):
+    return live_snapshot.build_snapshot(_FakeStore(run, findings), "s1", owner="o", now_iso=now)
 
 
 # ── the fixed mapping (outcomesFromRun's), onto the PRD KPIs ──────────────────
@@ -81,14 +86,22 @@ def test_unknown_scan_degrades_not_raises():
 
 
 def test_pending_kpis_are_named_not_invented(monkeypatch):
-    # Force the no-queue-layer path deterministically (whether api/live_queue.py is importable in this
-    # env or not): with no queue block, all four unsupplied KPIs stay named, none faked.
+    # Force the no-queue-layer path AND no findings source: with neither, all four unsupplied KPIs
+    # stay named, none faked (findings=None keeps findings_so_far in pending, not a fake 0).
     monkeypatch.setattr(live_snapshot, "_live_queue_block", lambda store, sid: None)
     snap = _snap({"status": "running", "files": 10, "files_done": 1,
-                  "certifiable": 1, "uncertain": 0, "error": 0})
+                  "certifiable": 1, "uncertain": 0, "error": 0}, findings=None)
     assert set(snap["kpis_pending"]) == {"queued", "throughput", "findings_so_far", "workers"}
     assert "findings_so_far" not in snap["kpis"]      # a finding count is not faked from file buckets
     assert "queue" not in snap                        # no queue layer → no fabricated block
+
+
+def test_findings_so_far_added_when_the_store_supplies_it(monkeypatch):
+    monkeypatch.setattr(live_snapshot, "_live_queue_block", lambda store, sid: None)
+    snap = _snap({"status": "running", "files": 10, "files_done": 4,
+                  "certifiable": 2, "uncertain": 1, "error": 1}, findings=9)
+    assert snap["kpis"]["findings_so_far"] == 9        # real count, in the KPI set
+    assert "findings_so_far" not in snap["kpis_pending"]
 
 
 def test_queue_layer_is_folded_in_when_present(monkeypatch):
@@ -124,3 +137,21 @@ def test_snapshot_tally_reconciles_with_the_run_summary(isolated_store):
     assert snap["outcomes"]["passed"] == run["certifiable"] == 1
     assert snap["outcomes"]["review"] == run["uncertain"] == 1
     assert snap["outcomes"]["failed"] == run["error"] == 1
+
+
+def test_findings_count_reconciles_with_the_report_source(isolated_store):
+    # live_findings_count sums the SAME FAIL traces get_certification_facts totals into the report's
+    # finding count — so the running "findings so far" lands on the final cert's finding total.
+    s = isolated_store
+    sid = "recon2"
+    s.init_scan_run(sid, "drive", 1, "2026-08-20T00:00:00Z", "default", "rh",
+                    owner="o@x.com", status="running")
+    s.save_file_result(sid, {"file": "a.docx", "engine": "office", "status": "fail", "score": 60,
+                             "compliant": 0, "skipped_rules": 0,
+                             "issues": [{"ruleId": "1.1.1", "wcag": "SC_1_1_1", "severity": "SERIOUS", "detail": "d"},
+                                        {"ruleId": "2.4.2", "wcag": "SC_2_4_2", "severity": "SERIOUS", "detail": "d"}]},
+                       "2026-08-20T00:00:01Z")
+    report_findings = sum(int(d.get("findings", 0)) for d in s.get_certification_facts(sid)["documents"])
+    assert s.live_findings_count(sid) == report_findings > 0
+    snap = live_snapshot.build_snapshot(s, sid, owner="o@x.com")
+    assert snap["kpis"]["findings_so_far"] == report_findings
