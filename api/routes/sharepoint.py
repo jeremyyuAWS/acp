@@ -85,13 +85,26 @@ def sp_folders(request: Request, drive_id: str = "", parent: str = "root", site:
     """
     token = _token(request)
     try:
-        did = drive_id or scanner._sp_default_drive(token, site or None)
+        # `parent` comes back to us in the SAME `<driveId>/<itemId>` form this endpoint mints
+        # below — the picker sends the id of the folder you clicked, and that id is a pair. It was
+        # passed through whole, so drilling into any folder built
+        # `/drives/{d}/items/{d}/{item}/children` and Graph answered 400 Bad Request, with the
+        # drive id visibly twice in the URL. The ROOT listing worked ("root" has no "/"), which is
+        # why this survived review: the picker opened fine and failed on the first click.
+        #
+        # The rule it broke: the ids an endpoint hands out must be valid inputs to that same
+        # endpoint. Split on the first "/" exactly as scanner's root parser does (scanner.py's
+        # `partition("/")`) — neither a Graph drive id nor an item id contains one.
+        parent_drive, _, parent_item = parent.partition("/") if "/" in parent else ("", "", parent)
+        # The drive embedded in `parent` wins: it is the drive that item actually lives in, so a
+        # stale or absent `drive_id` query param cannot send the lookup at the wrong library.
+        did = parent_drive or drive_id or scanner._sp_default_drive(token, site or None)
         if not did:
             raise HTTPException(status_code=404,
                                 detail="no document library found for that site or user")
         return {"drive_id": did, "parent": parent,
                 "folders": [{**f, "id": f"{did}/{f['id']}", "item_id": f["id"]}
-                            for f in scanner._sp_folders(token, did, parent)]}
+                            for f in scanner._sp_folders(token, did, parent_item)]}
     except HTTPException:
         raise
     except PermissionError as e:
