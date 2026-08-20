@@ -1180,6 +1180,16 @@ existing data and the existing decision path; nothing adds a second write path.
   refreshes when a decision or auto-fix acknowledgement changes the count (the old `queue.length` keying
   missed those). A source guard blocks a regression to `queue.length`. Cross-session hand-off from the
   state-model owner's session (who owned the `onHitlCount` seam but was blocked). Frontend; suite green (2092).
+- **Stopped claiming every fix was applied over files nobody could read** (#479). From production: a drawer
+  read "Could not analyse — file unreadable" while the Review queue on the same screen read "All clear" and
+  "every fix was applied automatically." The counts were correct (the HITL queue *was* empty), but a file
+  that could not be opened had no fix applied — **skipped was reported as done**. The copy moved into
+  `reviewQueueCopy.js` and the caveat is now appended to whichever base sentence renders (rather than living
+  inside one branch of a ternary — the defect's shape): "All clear" is **withheld** rather than qualified,
+  "every fix was applied automatically" is **replaced** rather than decorated. The count is gated on files
+  that were **opened and failed**, not on every non-certifiable file — an ADR 0020 Discover-only row means
+  "nobody looked yet." Does not fix *why* those files are unreadable (an ingest failure, still open).
+  Frontend, not RULE_PATHS.
 
 ## Feature: Estate coverage — three denominators and discovery at scale · #4597
 
@@ -1664,6 +1674,11 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   strict **side-channel** — every function is total (malformed input dropped, never raised), so timing can
   never disturb the scoring path it measures. No behaviour change; it exists so the staged speed-up is tuned
   from real numbers, not guesses.
+- **`read_timings.py` — read a scan's per-stage rollup** (#478). A stdlib-only CLI over `GET
+  /scans/{id}/timings` (signed-in session token) that prints where a scan spent its time — download (I/O) vs
+  analyse (CPU + GPU) — bottleneck starred, so the next Track B step (splitting the bottleneck stage into its
+  own bounded pool) is chosen from data. Companion to #467; `--json` / `--provider` flags, most-recent scan
+  by default.
 
 ## Open items (backlog candidates)
 
@@ -2110,3 +2125,9 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   to their owning streams:** #419 (SMB walk/read logic, ADR 0036) belongs to the multi‑session SMB source
   program (#388–#397) this log already defers to its owner; #476 is a trivial `.gitignore` chore. **Sync
   marker deliberately NOT advanced** (same convention as the prior entries).
+- **2026-08-19 (remediation-honesty fix + timing reader)** — To **Remediate review queue (#4598)**: #479 —
+  stopped the Review queue claiming "every fix was applied automatically" over files that could not be read
+  (skipped was being reported as done); the caveat is now appended to whatever the queue renders, and the
+  count is gated on files opened-and-failed, not every non-certifiable file. To **Scan-run experience
+  (Track A)**: #478 — `read_timings.py`, the stdlib CLI that reads #467's per-stage rollup so the next Track B
+  step is chosen from data. **Sync marker deliberately NOT advanced** (same convention as the prior entries).
