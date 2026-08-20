@@ -588,5 +588,45 @@ flowchart LR
 
 ---
 
+## 12. Confirmed technical contract (for the deck)
+
+Answers to the questions that recur when scoping the pilot as a production contract, each verified
+against `origin/main` with file:line anchors. **Re‑verify before each presentation — the code moves.**
+
+**Model naming — get this right on the slides.** The deployed vision models are **moondream** (the
+local CPU floor default, `ai.py:30`) and **Qwen2.5‑VL** (GPU / cloud, `providers.py:531`,
+`deploy/public/gpu_up.sh:69`). **It is not LLaVA** — "llava‑class" appears only as a descriptive term in
+code comments; `llava:7b` exists solely in a **bake‑off benchmark** script (`deploy/gpu/pull_models.sh`),
+never the production deploy. The text model is **`llama3.2`** (`ai.py:24`), **not `llama3.1:8b`** — the
+latter survives only as the local `docker‑compose` default (`deploy/compose/docker-compose.yml:65`) and in
+historical OOM comments.
+
+| # | Question | Confirmed answer | Anchor |
+|---|---|---|---|
+| 1 | Alt‑text drafts for every image, or only missing/inadequate? | **Only missing or inadequate.** Vision is gated by `_is_junk_descr(descr)` (empty / generic auto‑name / filename) — the *same predicate the 1.1.1 detector uses*, so an adequately‑described image is never re‑described. | `remediate_office.py:370,147` |
+| 2 | Decorative classification + chart interpretation in SC 1.1.1? | **Both, yes.** Decorative = marker (`is_decorative`) + heuristic `infer_decorative` (name/size/pixel), surfaced as a Low‑confidence, human‑confirmed "Mark as decorative" proposal, never auto. Charts = native Office charts read from embedded OOXML data and stated exactly (**no vision, no confabulation**, ADR 0016); only flattened chart *images* fall back to vision. | `remediate_office.py:396–460`; `chart_data.py` |
+| 3 | Scanned PDF — vision on every page, or pages selected by raster/OCR? | **Neither as phrased.** Vision is driven by **tagged `/Figure` elements lacking `/Alt`**, page rendered at **150 DPI**, OCR‑anchored, capped at **25 figures/doc**. A scanned = **untagged** PDF gets **no per‑page vision**: `_looks_scanned` (≤5 chars over first 3 pages) only *classifies* it (adds OCR, drops TEXT) and routes it to **human structural tagging**. No raster/OCR pass selects pages for vision. | `remediate_pdf.py:7,29`; `capabilities.py:159–185` |
+| 4 | Scanned‑PDF vision — assessment evidence only, or remediation artifacts? | **Remediation artifacts, and only for tagged PDFs.** For a tagged PDF, vision writes `/Alt` and proposes reading order (1.3.2, human‑confirmed). A scanned/untagged PDF gets **neither** automatically — classified and routed to human tagging. | `remediate_pdf.py:193`; `ai.py:999` |
+| 5 | HTML in the UTSW pilot scope, or merely engine‑supported? | **Engine‑supported, but in neither shipped scope preset.** HTML has detectors across many SCs, but **both** `acp-core-17` and `engagement-14` are **Office/PDF only — HTML in neither**; the pilot is framed as a SharePoint Office/PDF engagement. **This is a SOW decision** — confirm against the #285 pilot‑scope mapping before asserting it as contract. | `assessment_policy.py:399,100+` |
+| 6 | Is `llama3.1:8b` on the same T4 in the proposed Azure config? | **No, on two counts.** `gpu_up.sh` pulls **only the vision model** onto the T4 (`ACP_GPU_VISION_MODEL:-qwen2.5vl:7b`) — no text model. Text (`llama3.2`) runs on the in‑process CPU Ollama floor, not the T4. | `deploy/public/gpu_up.sh:69,236`; `ai.py:24` |
+
+**7 — Cost / queue‑latency limits.**
+
+| Control | Value | Source |
+|---|---|---|
+| Vision figures per PDF | **25** (`_VISION_MAX_FIGURES`) | `remediate_pdf.py` |
+| Vision images per Office doc | **25** (`_VISION_MAX_IMAGES`) | `remediate_office.py:184` |
+| PDF page render | **150 DPI** (`_RENDER_SCALE`) | `remediate_pdf.py` |
+| Min image size (skip spacers) | **64 bytes** (`_MIN_IMG_BYTES`) | `remediate_office.py` |
+| Ollama vision timeout | **120 s** (`OLLAMA_VISION_TIMEOUT`) | `ai.py:40` |
+| RunPod (serverless GPU) vision timeout | **240 s** (`RUNPOD_VISION_TIMEOUT`) | `ai.py:45` |
+| Availability probe / cold‑start | **3 s / 90 s** (`OLLAMA_PROBE_TIMEOUT` / `OLLAMA_COLD_START_TIMEOUT`) | `ai.py:49–50` |
+
+> **Caveat on Q7:** these are per‑document caps, render DPI, and timeouts. There is **no max‑pixel‑dimension
+> downscale on the image sent to the model** — the 96 px / 320 px resizes are for HITL card thumbnails only
+> (`proposals.py:129`). Do not claim an input‑image size cap on the slides; it isn't in the code.
+
+---
+
 *Grounded in `origin/main`. Re‑verify container sizes with `az containerapp list -g mdk-accessibility`
 and ADR numbers against `docs/adr/` before presenting — the topology moves.*
