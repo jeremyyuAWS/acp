@@ -379,6 +379,7 @@ function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
 export default function RemediationInbox({
   queue = [], decisions = {}, onDecide, onOpenWord, onRecheck,
   initialSort = 'priority', initialTab = 'needs-review', scanId = null, initialLayout = null,
+  assignees = {}, myEmail = null, onAssign,
 }) {
   const [selectedId, setSelectedId] = useState(null)
   const [tab, setTab] = useState(initialTab)
@@ -386,6 +387,7 @@ export default function RemediationInbox({
   const [search, setSearch] = useState('')
   const [collapsed, setCollapsed] = useState({}) // file -> true when a document group is collapsed
   const [drafts, setDrafts] = useState({}) // finding id -> reviewer-edited proposed value (null until edited)
+  const [assignedOnly, setAssignedOnly] = useState(false) // "Assigned to me" filter — files whose assignee is myEmail
 
   // Workspace layout + pane sizes, restored from the reviewer's last session (localStorage).
   const [layout, setLayout] = useState(() => {
@@ -414,12 +416,20 @@ export default function RemediationInbox({
   const counts = useMemo(() => workflowCounts(queue, decisions), [queue, decisions])
   const prog = useMemo(() => progress(queue, decisions), [queue, decisions])
 
+  // Findings whose FILE is assigned to the current reviewer — mirrors the backend's
+  // files_assigned_to(decisions, email): an empty/absent email matches nothing (never "everything").
+  const assignedToMe = (f) => !!myEmail && assignees[f.file] === myEmail
+  const myAssignedCount = useMemo(
+    () => (myEmail ? queue.filter(assignedToMe).length : 0),
+    [queue, assignees, myEmail]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase()
     const filtered = queue.filter((f) => matchesWorkflow(f, tab, decisions) &&
+      (!assignedOnly || assignedToMe(f)) &&
       (!q || rowModel(f, decisions).issue.toLowerCase().includes(q) || String(f.file).toLowerCase().includes(q)))
     return sortQueue(filtered, sort)
-  }, [queue, tab, sort, search, decisions])
+  }, [queue, tab, sort, search, decisions, assignedOnly, assignees, myEmail]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep a valid selection: default to the first unresolved visible row.
   useEffect(() => {
@@ -540,6 +550,35 @@ export default function RemediationInbox({
               {SORTS.map((s) => <option key={s} value={s}>{SORT_LABEL[s]}</option>)}
             </select>
           </div>
+          {/* "Assigned to me" filter + a context assign chip for the selected document. Mirrors the
+              #417 backend (files_assigned_to); shown only for a signed-in reviewer with an assign
+              action, so it is never a dead control. Assigning is per-DOCUMENT (a file's whole set of
+              findings), which is how the backend keys the assignee. */}
+          {myEmail && onAssign && (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+              <button type="button" onClick={() => setAssignedOnly((v) => !v)} aria-pressed={assignedOnly}
+                      title="Show only findings in documents assigned to you"
+                      style={{ fontSize: 11.5, fontWeight: 600, padding: '3px 10px', borderRadius: 20, cursor: 'pointer',
+                               border: `1px solid ${assignedOnly ? 'transparent' : 'var(--line,#e2dce4)'}`,
+                               background: assignedOnly ? 'var(--accent,#3b6fd6)' : 'var(--bg,#fff)',
+                               color: assignedOnly ? '#fff' : 'inherit' }}>
+                Assigned to me{myAssignedCount > 0 ? ` (${myAssignedCount})` : ''}
+              </button>
+              {selected && (assignees[selected.file] === myEmail
+                ? <button type="button" onClick={() => onAssign(selected.file, null)}
+                          title={`Unassign ${selected.file} from you`}
+                          style={{ fontSize: 11.5, padding: '3px 10px', borderRadius: 20, cursor: 'pointer',
+                                   border: '1px solid var(--line,#e2dce4)', background: 'var(--bg,#fff)', color: 'inherit' }}>
+                    ✓ Assigned to you
+                  </button>
+                : <button type="button" onClick={() => onAssign(selected.file, myEmail)}
+                          title={`Assign ${selected.file} to you`}
+                          style={{ fontSize: 11.5, padding: '3px 10px', borderRadius: 20, cursor: 'pointer',
+                                   border: '1px solid var(--line,#e2dce4)', background: 'var(--bg,#fff)', color: 'var(--muted,#5b6774)' }}>
+                    + Assign to me
+                  </button>)}
+            </div>
+          )}
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
             {/* "reviewed" (a decision is recorded), NOT "resolved" — an approved fix awaiting the
                 re-scan is reviewed but not yet Completed, so this never contradicts the tab counts. */}
@@ -548,7 +587,11 @@ export default function RemediationInbox({
         </div>
         <div style={{ flex: '1 1 auto', overflowY: 'auto' }}>
           {visible.length === 0 ? (
-            <p className="muted" style={{ padding: 16, fontSize: 13 }}>Nothing here. {tab !== 'needs-review' && <button className="linklike" onClick={() => setTab('needs-review')}>Back to Needs review</button>}</p>
+            <p className="muted" style={{ padding: 16, fontSize: 13 }}>
+              {assignedOnly
+                ? <>Nothing in this view is assigned to you. <button className="linklike" onClick={() => setAssignedOnly(false)}>Show all</button></>
+                : <>Nothing here. {tab !== 'needs-review' && <button className="linklike" onClick={() => setTab('needs-review')}>Back to Needs review</button>}</>}
+            </p>
           ) : groups.map((g) => (
             // A document with a SINGLE finding needs no expandable group header — the row itself
             // names the file. Only multi-finding documents get the collapsible 📄 header, so the file
