@@ -296,6 +296,20 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .sp-row-score { font-size: 13px; font-weight: 700; color: var(--ink); }
 .sp-row-ok { color: #1E6B37; font-weight: 700; }
 .sp-row-bad { color: #9A2727; font-weight: 700; }
+
+/* Cross-scan document history (DocumentHistoryPanel). */
+.tp-history-btn { margin-top: 12px; background: none; border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 12px; font: inherit; font-size: 12.5px; font-weight: 600; color: var(--plum, #46303F);
+  cursor: pointer; }
+.tp-history-btn:hover { background: #faf7fd; border-color: #D9CCF2; }
+.dh-trend { display: flex; align-items: flex-end; gap: 14px; margin: 6px 0 4px; }
+.dh-spark { display: flex; align-items: flex-end; gap: 4px; height: 48px; flex: 0 0 auto; }
+.dh-bar { width: 12px; min-height: 4px; background: #C9B8E0; border-radius: 2px 2px 0 0; }
+.dh-delta { font-size: 13px; font-weight: 700; }
+.dh-delta-up { color: #1E6B37; }
+.dh-delta-down { color: #9A2727; }
+.dh-delta-flat { color: var(--muted); }
+.dh-row-current { border-color: #D9CCF2; background: #faf7fd; }
 .rulebreak .rulerows { display: flex; flex-direction: column; gap: 7px; margin-top: 6px; }
 .rulerow { display: grid; grid-template-columns: minmax(170px, 1.3fr) 2fr minmax(135px, auto); align-items: center; gap: 12px; }
 .rulemeta { font-size: 12.5px; display: flex; align-items: center; gap: 6px; min-width: 0; }

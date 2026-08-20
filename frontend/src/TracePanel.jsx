@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import Drawer from './Drawer.jsx'
+import DocumentHistoryPanel from './DocumentHistoryPanel.jsx'
 import { getFileTraceData } from './api.js'
 
 // In-app Langfuse trace viewer. Renders a file's trace INSIDE ACP — score, PII,
@@ -106,6 +107,8 @@ function Timeline({ observations }) {
 
 export default function TracePanel({ scanId, file, onClose }) {
   const [state, setState] = useState({ loading: true })
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [nestedScan, setNestedScan] = useState(null)   // a scan opened from the history drill-in
 
   const load = useCallback(() => {
     setState({ loading: true })
@@ -122,7 +125,10 @@ export default function TracePanel({ scanId, file, onClose }) {
   const title = trace?.document || file || 'Trace'
   const subtitle = trace ? [trace.format, 'observability trace'].filter(Boolean).join(' · ') : 'observability trace'
 
+  const docLabel = trace?.document || file
+
   return (
+    <>
     <Drawer title={title} subtitle={subtitle} onClose={onClose}>
       <div className="tp-body">
         {state.loading && <div className="muted">Loading trace…</div>}
@@ -141,11 +147,28 @@ export default function TracePanel({ scanId, file, onClose }) {
         {!state.loading && state.status === 'ok' && trace && (
           <>
             <ResultSummary result={trace.result} />
+            {docLabel && (
+              <button type="button" className="tp-history-btn" onClick={() => setHistoryOpen(true)}
+                      title="See this document's score and findings across every scan it appears in">
+                📈 History across scans
+              </button>
+            )}
             <div className="tp-section-h">Timeline</div>
             <Timeline observations={trace.observations} />
           </>
         )}
       </div>
     </Drawer>
+    {historyOpen && (
+      <DocumentHistoryPanel scanId={scanId} docLabel={docLabel}
+                            onOpenScan={(sid) => setNestedScan(sid)}
+                            onClose={() => setHistoryOpen(false)} />
+    )}
+    {/* Drill-in from the history list — this component rendering itself for another scan (no
+        import cycle: DocumentHistoryPanel hands back the scan id, TracePanel opens it). */}
+    {nestedScan && (
+      <TracePanel scanId={nestedScan} file={docLabel} onClose={() => setNestedScan(null)} />
+    )}
+    </>
   )
 }

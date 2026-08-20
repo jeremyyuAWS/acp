@@ -184,6 +184,24 @@ export const getSessionTraceData = (scanId) => {
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/trace/session/data`, { headers: headers() })
     .then(j).catch(() => ({ status: 'pending' }))
 }
+// One document's trace across EVERY scan it appears in — the "this document over time" view
+// Langfuse's session-grouped UI can't give (DocumentHistoryPanel). `docLabel` is the trace-facing
+// label (TracePanel's trace.document), not a raw filename. Same {status} contract; SIM canned.
+export const getDocumentHistory = (scanId, docLabel) => {
+  if (SIM) return sim({ status: 'ok', history: {
+    document: docLabel || 'doc-3f9a2c.docx', format: 'docx', total: 3,
+    scans: [
+      { scan_id: 'scan-cur', trace_id: `scan-cur::${docLabel}`, timestamp: '2026-08-19T17:04:10Z',
+        result: { score: 82, conformant: false, level: 'AA', failing_criteria: { '1.4.3': 1 } } },
+      { scan_id: 'h3', trace_id: `h3::${docLabel}`, timestamp: '2026-06-10T09:00:00Z',
+        result: { score: 71, conformant: false, level: 'AA', failing_criteria: { '1.1.1': 2, '1.4.3': 1 } } },
+      { scan_id: 'h2', trace_id: `h2::${docLabel}`, timestamp: '2026-06-03T09:00:00Z',
+        result: { score: 60, conformant: false, level: 'AA', failing_criteria: { '1.1.1': 3, '1.3.1': 2, '1.4.3': 1 } } },
+    ] } })
+  if (!scanId || !docLabel) return Promise.resolve({ status: 'not_configured' })
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/trace/file/${encodeURIComponent(docLabel)}/history`, { headers: headers() })
+    .then(j).catch(() => ({ status: 'pending' }))
+}
 // Sensitive-data (PII) findings for a scan (ADR 0006) — rollup + per-type counts (masked).
 export const getScanPii = (scanId) => (SIM
   ? sim({ summary: { documents: 6, items: 23, by_type: [
