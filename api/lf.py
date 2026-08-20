@@ -19,6 +19,16 @@ _PK   = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
 _SK   = os.environ.get("LANGFUSE_SECRET_KEY", "")
 _ENABLED = bool(_HOST and _PK and _SK)
 
+# The Langfuse ENVIRONMENT stamped on every trace (a first-class, filterable field — the live
+# traces showed it defaulting to "default"), so production / staging / demo traces separate in one
+# project instead of mingling. Set per deployment via ACP_ENV (or the SDK's own
+# LANGFUSE_TRACING_ENVIRONMENT); defaults to "production" because a deployment with real Langfuse
+# keys + host is a real one — staging and demo override it. Lowercased + sanitised to the
+# characters Langfuse accepts so a stray value can't make the client reject every trace.
+import re as _re
+_ENV = (os.environ.get("LANGFUSE_TRACING_ENVIRONMENT") or os.environ.get("ACP_ENV") or "production").strip().lower()
+_ENV = _re.sub(r"[^a-z0-9_-]", "-", _ENV)[:40] or "production"
+
 _client = None
 
 # Friendly source labels for trace names/summaries.
@@ -115,6 +125,27 @@ def _file_tags(file: str, user: str | None) -> list[str]:
     return tags
 
 
+def set_outcome_tags(scan_id: str, file: str, user: str | None, *, result: str,
+                     pii_flagged: bool = False, failing_rule_ids=()) -> None:
+    """Stamp the file trace's OUTCOME on its tags at assess time — `result:fail|needs-review|pass`
+    and `pii:flagged` — so the native Langfuse list can filter by outcome (all failing documents,
+    all with PII), not only by document/format. One authoritative update, and Langfuse REPLACES a
+    trace's tags, so it must carry EVERYTHING the trace should keep: the base tags (accessibility-
+    file / user / file / format) and the per-rule `rule-fail:<id>` tags, or those would be dropped.
+    Categories and counts only — never a value (docs/audit-langfuse-phi.md)."""
+    lf = _lf()
+    if lf is None:
+        return
+    tags = _file_tags(file, user) + [f"rule-fail:{r}" for r in failing_rule_ids]
+    tags.append(f"result:{result}")
+    if pii_flagged:
+        tags.append("pii:flagged")
+    try:
+        lf.trace(id=_trace_id(scan_id, file)).update(tags=tags)
+    except Exception:
+        pass
+
+
 def _det_id(*parts) -> str:
     """Deterministic observation/score id from stable parts. Langfuse upserts
     observations and scores by id, so re-emitting the same logical span (an Assess
@@ -137,7 +168,12 @@ def _lf():
         return None
     if _client is None:
         from langfuse import Langfuse  # lazy — import only when creds present
-        _client = Langfuse(public_key=_PK, secret_key=_SK, host=_HOST)
+        # `environment` stamps every trace (item: prod/staging/demo separation). Passed via **kw so
+        # an older SDK that doesn't accept it still constructs — the field just stays "default".
+        try:
+            _client = Langfuse(public_key=_PK, secret_key=_SK, host=_HOST, environment=_ENV)
+        except TypeError:
+            _client = Langfuse(public_key=_PK, secret_key=_SK, host=_HOST)
     return _client
 
 

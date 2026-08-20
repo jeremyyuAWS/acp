@@ -1719,6 +1719,15 @@ def _emit_file_assess(scan_id: str, fname: str, level: str, *, sc_counts, outcom
     _lf.file_assessment_result(scan_id, fname, score=score, conformant=conformant, level=level,
                                failing_criteria=sc_counts, outcomes=outcomes,
                                pii=pii_payload, remediation=remediation)
+    # Outcome tags so the native Langfuse list filters by result / PII, not only document + format.
+    # result:fail when a finding blocks conformance; needs-review when there are findings or review
+    # items that don't block; pass when clean. This is the authoritative tag write (it re-includes
+    # the base + rule-fail tags, since Langfuse replaces a trace's tags).
+    result = ("fail" if not conformant
+              else "needs-review" if (sc_counts or (outcomes or {}).get("REVIEW")) else "pass")
+    _lf.set_outcome_tags(scan_id, fname, user, result=result,
+                         pii_flagged=bool(pii_payload and pii_payload.get("flagged")),
+                         failing_rule_ids=list((sc_counts or {}).keys()))
 
 
 def _emit_realtime_file_assess(scan_id: str, fname: str, level: str, user=None) -> None:
