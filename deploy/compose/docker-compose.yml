@@ -13,6 +13,10 @@
 #
 # See README.md in this folder for the two build prerequisites (the .NET Office
 # CLI and the vendored Python PDF engine) the acp-app image needs.
+#
+# Plus one service that is NOT in that stack and does not start with `docker compose up`:
+#   test      backend suite — the CI toolchain, on your working tree. `--profile test`.
+# See "Running the backend suite" in README.md.
 
 name: acp
 
@@ -154,6 +158,68 @@ services:
     ports:
       - "${LANGFUSE_PORT:-3001}:3000"
 
+  # NOT part of the stack above either, and for the same reason the azp-agent below is here:
+  # one compose file per machine beats two. `--profile test` keeps it out of
+  # `docker compose up`, so a developer bringing up the platform never starts a test runner.
+  #
+  # WHAT IT IS FOR. `python -m pytest tests/` on a host missing the toolchain exits 1 with
+  # dozens of failures across ~8 modules, every one of them an absent dependency (dotnet,
+  # pdfplumber, langfuse, tesseract) rather than repo breakage. That has cost real time
+  # repeatedly — on 2026-08-19 a session reported "32 pre-existing test failures" and carried
+  # the claim through four PRs before it turned out to be its own venv. This service is the
+  # answer to "is it me or is it the repo", and deploy/test/Dockerfile records what CI installs
+  # and why.
+  #
+  # NOT A RUNTIME IMAGE. acp-app above builds deploy/public/Dockerfile, which ships compiled
+  # engines, a built SPA and no test dependencies. This builds deploy/test/Dockerfile, which
+  # ships the .NET SDK and tests/requirements.txt and no application code at all.
+  test:
+    profiles: ["test"]
+    build:
+      context: ../..                       # repo root — the Dockerfile reads requirements + csprojs
+      dockerfile: deploy/test/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Wired the same way acp-app is, so a test that wants Postgres finds it at the same URL
+      # the app uses. MEASURED CAVEAT, so nobody reads more into this than is there: nothing in
+      # tests/ currently opens a live Postgres connection. `grep -rln "DATABASE_URL\|psycopg"
+      # tests/` returns one file, tests/test_db_pool.py, and it injects a FAKE psycopg2 into
+      # sys.modules rather than connecting. Every store in the suite is SQLite on a temp path
+      # (see tests/conftest.py). The dependency is here because the stack's database belongs in
+      # the picture and a suite that grows into it should not need a compose edit — not because
+      # removing it would turn anything red today.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-acpadmin}:${POSTGRES_PASSWORD:-acp_local_dev}@db:5432/acpdb?sslmode=disable
+      # No secrets, and nothing that changes what the suite asserts. The Ollama-backed tests
+      # self-skip when no model answers — which is what ci.yml does too ("Ollama-backed tests
+      # self-skip here, so no model is needed and none is installed"), so pointing this at the
+      # ollama service would make the local run diverge from the gate rather than converge on it.
+    volumes:
+      # THE REPO ITSELF, read-write. This is the whole design: the image carries the toolchain,
+      # the mount carries the code, so the suite runs against the working tree — uncommitted
+      # edits included — and a source change needs no rebuild.
+      #
+      # Read-write is required, not convenience. pytest writes __pycache__; the entrypoint
+      # compiles the Office CLI into the gitignored spike/dotnet/**/bin/; and
+      # tests/test_scope_presets_frontend_sync.py deliberately corrupts a generated file and
+      # restores it in a finally, because a --check that cannot fail is indistinguishable from
+      # one that passed.
+      #
+      # It also means `.git` is visible, which five test modules and two of the four checks
+      # need. Those checks read HISTORY: run them against a `--depth 1` clone and
+      # gen_progress_log.py finds no commits to inspect and passes VACUOUSLY (ci.yml sets
+      # fetch-depth: 0 for exactly this). Measured here: on a shallow clone,
+      # test_generation_succeeds_over_this_repos_real_history fails with "the generator produced
+      # an empty log over real history"; after `git fetch --unshallow`, it passes.
+      - ../..:/app
+      # NuGet + pip caches survive `docker compose down`, so a rebuilt image does not re-pull.
+      - acp-test-nuget:/root/.nuget/packages
+    working_dir: /app
+    # No `ports`, no `restart`. It is a one-shot command runner, not a service: it must exit
+    # with the suite's status and stay exited.
+    init: true
+
   # NOT part of the stack above, and started separately — `docker compose --profile ci up -d`.
   # It shares nothing with the app services; it is only here so there is one compose file per
   # machine rather than two. See ../agent/README.md for what to do on the Azure DevOps side
@@ -188,3 +254,4 @@ volumes:
   acp-ollama:
   acp-db:
   acp-azp-work:
+  acp-test-nuget:

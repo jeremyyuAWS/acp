@@ -15,6 +15,7 @@ docker compose up --build
 | `grafana` | http://localhost:3000 | 10-panel ACP dashboard, anonymous viewer |
 | `langfuse` | http://localhost:3001 | LLM tracing; self-register on first visit |
 | `db` | localhost:5432 | Postgres 16 — `acpdb` + `langfusedb` |
+| `test` | — | backend suite in the CI toolchain; `--profile test`, does not start with `up` |
 
 ## One build prerequisite
 
@@ -38,6 +39,118 @@ engine directly, and a scan of the bundled corpus exercises all three analysers:
 ```bash
 curl -s localhost:8077/readyz | jq .engines
 ```
+
+## Running the backend suite
+
+`pytest tests/` on a host without the full toolchain exits 1 with dozens of failures
+across ~8 modules, and **none of them are repo breakage** — dotnet, pdfplumber, langfuse,
+tesseract and friends are simply absent. That misreading has cost real time: on 2026-08-19
+a session reported "32 pre-existing test failures" and carried the claim through four PRs
+before it turned out to be its own venv. The `test` service is the answer to "is it me or
+is it the repo".
+
+It is behind the `test` profile, so it never starts with `docker compose up`. It builds
+`deploy/test/Dockerfile` — the CI toolchain, nothing else — and **bind-mounts this repo at
+`/app`**, so it runs your working tree, uncommitted edits included. No rebuild for a source
+change; rebuild only when `api/requirements.txt`, `tests/requirements.txt`, a `.csproj` or
+the Dockerfile itself moves.
+
+**The suite:**
+
+```bash
+cd deploy/compose
+docker compose --profile test run --rm test
+```
+
+**All four backend checks** — which is what CI's "Backend suite" job actually is:
+
+```bash
+docker compose --profile test run --rm test acp-checks
+```
+
+`pytest tests/` is only the first of the four. The other three (`gen_matrix_coverage.py
+--check`, `gen_todo_status.py --check`, `gen_progress_log.py --check`) parse the repo rather
+than test it, and the last one is the one that bites, because nothing local prompts you for
+it: it fails when a commit touches `RULE_PATHS` — the bare prefix `api/remediate` matches
+both `remediate_office.py` and `remediate_pdf.py` — without a `Matrix-Note:` trailer in its
+message. `acp-checks` runs all four and reports each, rather than short-circuiting on the
+first red. To check a whole branch the way a PR does, rather than only your last commit:
+
+```bash
+docker compose --profile test run --rm -e BASE_REF=main test acp-checks
+```
+
+Anything after the service name is the command, so a subset works the usual way:
+
+```bash
+docker compose --profile test run --rm test python -m pytest tests/test_alt_validator.py -q
+docker compose --profile test run --rm test bash          # a shell in the toolchain
+```
+
+### What it measures, exactly
+
+Measured on 2026-08-20 at `233e132`, serially, inside the image:
+
+```
+3425 passed, 38 skipped, 9 warnings   —   exit 0
+gen_matrix_coverage.py --check        —   exit 0
+gen_todo_status.py --check            —   exit 0
+gen_progress_log.py --check           —   exit 0
+```
+
+**Zero failed, zero errored.** The 38 skips are not the image falling short, and they are
+worth knowing one by one, because an image that silently skips part of the suite while
+printing green is worse than no image at all:
+
+| Skips | Reason | Runnable here? |
+|-------|--------|----------------|
+| 36 | `tests/test_rule_contract.py` — the rule's source is partner/vendored code (`digital-accessibility/…`, `deploy/public/vendor/worker-python/…`) that is not in this repo | **No, by design.** These skip on CI too; the paths do not exist on a clean checkout. |
+| 2 | `tests/test_remediation_capability.py` — no local Ollama text/vision model answering | **No, deliberately.** ci.yml: "Ollama-backed tests self-skip here … so no model is needed and none is installed." Wiring the `ollama` service in would make this run diverge from the gate, not converge on it. |
+
+Two things the image does NOT contain, both because CI does not either:
+
+- **LibreOffice.** `tests/test_render_page.py` asserts the no-soffice contract directly
+  (`render.can_render(".pptx") is (render._soffice() is not None)`), so installing it would
+  exercise a different branch than the gate does.
+- **The `worker-python` PDF engine as a separate checkout.** It has been vendored in-repo at
+  `engine/pdf-analyser/` since ADR 0029, so `PDF_OK` is true from the mount and the PDF
+  suites run. (`tests/conftest.py`'s docstring still describes the old out-of-repo
+  arrangement; `tests/engines.py` is the current word.)
+
+### One requirement on your checkout: full history
+
+Clone normally. On a `--depth 1` clone the guards go **vacuous rather than red** —
+`gen_progress_log.py --check` finds no commits to inspect and passes, which is why ci.yml
+sets `fetch-depth: 0` explicitly. Measured: on a shallow clone,
+`test_generation_succeeds_over_this_repos_real_history` fails with "the generator produced
+an empty log over real history"; after `git fetch --unshallow` it passes. If you cloned
+shallow:
+
+```bash
+git fetch --unshallow
+```
+
+### Postgres
+
+The service `depends_on` `db`, so Postgres is healthy before the suite starts and reachable
+at the same `DATABASE_URL` the app uses. Measured caveat, so nobody reads more into that
+than is there: **nothing in `tests/` currently opens a live Postgres connection.**
+`grep -rln "DATABASE_URL\|psycopg" tests/` returns one file, `tests/test_db_pool.py`, and it
+injects a fake `psycopg2` into `sys.modules` rather than connecting; every store in the suite
+is SQLite on a temp path (`tests/conftest.py`). The dependency is wired because the stack's
+database belongs in the picture, not because removing it would turn anything red today.
+
+### Notes
+
+- The Office analyser CLI is built by the container's entrypoint, on first run, from the
+  mounted source — into the gitignored `spike/dotnet/AcpScan.Cli/bin/Release/net10.0/`, which
+  is the exact path `tests/engines.py` probes. Later runs reuse it. Force a rebuild with
+  `-e ACP_REBUILD_ENGINE=1`. Built from the mount rather than baked into the image on
+  purpose: a baked DLL would keep passing after the analysers changed underneath it.
+- Build output is written into your tree as root, since the container runs as root. It is all
+  gitignored (`bin/`, `obj/`, `__pycache__`), but `sudo` may be needed to delete it.
+- No secrets are in this image and none should be added. `.env.example` is the pattern for
+  anything configurable.
 
 ## First-run Langfuse wiring (one time)
 
