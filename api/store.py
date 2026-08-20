@@ -499,6 +499,10 @@ from assessment_policy import (  # noqa: F401,E402  (re-export)
     _split_sc_counts, _file_format, _extract_sc, _pages_csv,
 )
 
+# WCAG's four top-level principles, keyed by the leading digit of a success-criterion number
+# (1.x.x Perceivable · 2.x.x Operable · 3.x.x Understandable · 4.x.x Robust). Used to group
+# evaluated criteria into a per-principle pass rate for the certification report (backlog R8).
+_WCAG_PRINCIPLE = {"1": "Perceivable", "2": "Operable", "3": "Understandable", "4": "Robust"}
 
 
 # `from assessment_policy import X` binds a VALUE, not a reference — so any global that module
@@ -2521,7 +2525,7 @@ class Store:
             f = per_file.setdefault(t["file"], {
                 "file": t["file"], "evaluated": 0, "not_evaluated": 0, "failing": 0,
                 "review": 0, "findings": 0, "not_evaluated_criteria": [],
-                "review_criteria": [], "by_mode": {},
+                "review_criteria": [], "by_mode": {}, "principles": {},
             })
             outcome = t.get("outcome")
             # Both tokens: a scan run before the rename, or by a rolled-back image, wrote the
@@ -2545,6 +2549,15 @@ class Store:
             f["evaluated"] += 1
             mode = (rules.get(t["rule_id"], {}) or {}).get("fix_mode", "unknown")
             f["by_mode"][mode] = f["by_mode"].get(mode, 0) + 1
+            # POUR (R8): group each evaluated criterion under its WCAG principle (the SC's leading
+            # digit). This is a pass rate AMONG EVALUATED checks only — not-evaluated and review
+            # criteria never enter it, so it can never be read as a full-conformance percentage.
+            principle = _WCAG_PRINCIPLE.get((t["rule_id"] or "").split(".")[0])
+            if principle:
+                pc = f["principles"].setdefault(principle, {"evaluated": 0, "passed": 0})
+                pc["evaluated"] += 1
+                if outcome == "PASS":
+                    pc["passed"] += 1
             if outcome == "FAIL":
                 f["failing"] += 1
                 f["findings"] += t.get("finding_count") or 0
@@ -2561,6 +2574,7 @@ class Store:
                 per_file = {fn: v for fn, v in per_file.items() if fn in selection}
 
         docs = []
+        principle_tot: dict[str, dict] = {}
         for f in sorted(per_file.values(), key=lambda x: x["file"]):
             remediated = {a["sc"] for a in evidence.get(f["file"], {}).get("applied", [])}
             f["remediated"] = len(remediated)
@@ -2568,7 +2582,21 @@ class Store:
             f["approvals"] = approvals.get(f["file"], 0)
             f["not_evaluated_criteria"] = sorted(f["not_evaluated_criteria"])
             f["review_criteria"] = sorted(f["review_criteria"])
+            # Fold this document's per-principle tallies into the estate total, then drop the
+            # per-doc copy so the returned document rows stay the shape existing callers expect.
+            for name, pc in f.pop("principles", {}).items():
+                agg = principle_tot.setdefault(name, {"evaluated": 0, "passed": 0})
+                agg["evaluated"] += pc["evaluated"]
+                agg["passed"] += pc["passed"]
             docs.append(f)
+
+        # All four principles, canonical order; one with nothing evaluated stays in the list with
+        # evaluated=0 so the report can render "—" rather than silently dropping a principle.
+        principles = [
+            {"principle": name,
+             "evaluated": principle_tot.get(name, {}).get("evaluated", 0),
+             "passed": principle_tot.get(name, {}).get("passed", 0)}
+            for name in ("Perceivable", "Operable", "Understandable", "Robust")]
 
         scope_modes: dict[str, int] = {}
         not_evaluated_union: set[str] = set()
@@ -2615,6 +2643,9 @@ class Store:
             },
             "approvals_total": sum(approvals.values()),
             "remediated_total": sum(d["remediated"] for d in docs),
+            # POUR per-principle pass rate (R8) — evaluated + passed counted from the same traces;
+            # the report renders passed/evaluated with its basis, never a bare percentage.
+            "principles": principles,
         }
 
     def get_trace_row(self, scan_id: str, file: str, rule_id: str) -> dict | None:
