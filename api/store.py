@@ -919,6 +919,29 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur, "UPDATE scan_runs SET status=%s WHERE id=%s", (status, scan_id))
 
+    def set_scan_files(self, scan_id: str, files: int) -> None:
+        """Re-point a run's `files` total at the population THIS phase actually enqueued.
+
+        `files` is written once at init_scan_run, from the DISCOVERED count, because at discover
+        time that is the only population there is. Assess then narrows it — dropping every
+        non-assessable inventory row, and by default every row a lifecycle rule flagged for
+        archive/deletion — and enqueues only the remainder. Left alone, `files` still describes
+        the wider population while `files_done` counts the narrower one, so `files - files_done`
+        silently reports deliberately-excluded files as "not started". The frontend reads exactly
+        that difference to decide a run is PARTIALLY COMPLETE, which made the most likely cause of
+        a "partially completed" screen a lifecycle rule doing its job.
+
+        ASSIGNMENT, NEVER ACCUMULATION. A second assess over the same scan re-enters this path;
+        `files` must then describe that run's population, not the sum of both. `SET files=%s` is
+        an assignment, so a re-assess that enqueues fewer files reports fewer — which is what
+        makes the number mean "selected for THIS assess" rather than "ever selected".
+
+        Deliberately NOT folded into init_scan_run: discover's own count is correct for discover,
+        and a run that is discovered but never assessed must keep it.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "UPDATE scan_runs SET files=%s WHERE id=%s", (files, scan_id))
+
     def add_inventory(self, scan_id: str, items: list[dict]) -> None:
         """Persist the Discover-phase inventory (ADR 0020 / lifecycle PRD) — source metadata
         only, no file opened. Idempotent per (scan_id, file) so a re-listed discover doesn't
@@ -4555,6 +4578,69 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur, "UPDATE disposition_policy SET enabled=%s WHERE policy_id=%s",
                              (int(enabled), policy_id))
+
+    def update_disposition_policy(self, policy_id: str, *, name: str, match: str, action: str,
+                                  action_config: str, requires_approval: bool) -> None:
+        """Overwrite a saved rule's editable columns. NEVER touches `enabled`.
+
+        That omission is the safety property, not an oversight. `enabled` is what decides whether a
+        rule runs at all, and it has its own route and its own audit line
+        (set_disposition_policy_enabled). If an edit could also set it, a save a person read as
+        "fix the folder path" would be capable of arming the rule at the same time — and the whole
+        posture of this feature is that rules are created disabled and armed by a separate,
+        deliberate act.
+
+        The caller (routes/disposition.update_policy) decides whether the edit is ALLOWED — a rule
+        that has already produced audit records may no longer change its definition, because
+        nothing records which definition produced them. This method is the write, not the policy.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE disposition_policy SET name=%s, match=%s, action=%s, action_config=%s, "
+                "requires_approval=%s WHERE policy_id=%s",
+                (name, match, action, action_config, int(requires_approval), policy_id))
+
+    def merge_scan_scope(self, scan_id: str, facts: dict) -> None:
+        """Merge `facts` into an existing run's `scan_runs.scope` JSON, leaving every other key be.
+
+        Read-modify-write rather than a targeted column, because `scope` IS a JSON blob — that is
+        how `skipped_out_of_scope`, `excluded` and `inventory` all ride along without a migration
+        (see init_scan_run). This is the same shelf, written at a later moment: discovery records
+        what it covered at discover time, and the facts Assess learns (what its lifecycle rules
+        held back) can only be recorded once Assess has run.
+
+        ONLY WRITES WHAT IT IS GIVEN. A key the caller does not pass is not touched and not
+        defaulted — an absent count must stay absent, because a reader distinguishes "this run
+        did not record that" from "this run measured zero", and collapsing the first into the
+        second is a reassuring answer to a question nobody asked.
+
+        Returns quietly, changing nothing, when the run does not exist or its scope is unreadable.
+        An unreadable scope is already a loss; overwriting it with a fresh dict holding only these
+        three keys would turn that into the loss of the discovery boundary as well.
+        """
+        if not facts:
+            return
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT scope FROM scan_runs WHERE id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+            if row is None:
+                return
+            raw = row.get("scope")
+            if isinstance(raw, dict):
+                scope = dict(raw)
+            elif raw:
+                try:
+                    scope = _json.loads(raw)
+                except Exception:
+                    return          # unreadable is unknown — never overwrite it with a guess
+                if not isinstance(scope, dict):
+                    return
+            else:
+                scope = {}
+            scope.update(facts)
+            self._db.execute(cur, "UPDATE scan_runs SET scope=%s WHERE id=%s",
+                             (_json.dumps(scope), scan_id))
 
     def list_all_documents(self) -> list[dict]:
         """Every document row -- used only by the disposition preview evaluator, which

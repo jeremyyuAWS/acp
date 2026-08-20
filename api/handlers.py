@@ -1152,14 +1152,34 @@ def _scan_assess(payload: dict, job: dict) -> None:
     import estate_inventory as _est
     from scanner import EXPORT_MAP as _EXPORT_MAP
     items = []
+    # ── What the lifecycle rules held back, COUNTED WHERE THE HOLDING BACK HAPPENS ────────────
+    # These three are the run's own record of its lifecycle exclusion, persisted onto scope below.
+    # Counted here, at the decision, rather than re-derived afterwards from the inventory: this is
+    # the same discipline `skipped_out_of_scope` follows in scanner._list — the count is made by
+    # the code that did the dropping, so it cannot disagree with what the run actually enqueued.
+    #
+    #   lifecycle_flagged   every flagged file, ANY format — the estate-wide fact.
+    #   eligible_excluded   the ASSESSABLE subset actually held back. Disjoint from the
+    #                       "no test exists" population by construction, because it is counted
+    #                       only after the assessable gate above has already passed.
+    #   overridden          flagged files an authorized override assessed anyway. They ARE
+    #                       assessed, so they belong to the assessed bucket, never to a sixth one.
+    lifecycle_flagged = 0
+    eligible_excluded = 0
+    overridden = 0
     for r in inv:
+        lc = r.get("lifecycle_status")
+        flagged = lc in core.store.LIFECYCLE_EXCLUDED_DEFAULT
+        if flagged:
+            # Counted BEFORE the assessable gate: a flagged .png was never assessable, but it is
+            # still a file a lifecycle rule flagged, and the estate-wide total says so.
+            lifecycle_flagged += 1
         if _est.classify({"name": r.get("file"), "mimeType": r.get("mime")})["status"] != _est.ASSESSABLE:
             continue
         # Phase C3 (PRD §4.5) — a file a lifecycle rule flagged for archive/deletion is excluded
         # from Assess by default. Either way the assess record retains the lifecycle status + the
         # exclusion reason that applied when this run was created (status/rule/reason preserved).
-        lc = r.get("lifecycle_status")
-        if lc in core.store.LIFECYCLE_EXCLUDED_DEFAULT:
+        if flagged:
             base = r.get("lifecycle_reason")
             if include_flagged:
                 excl = (f"included in Assess despite lifecycle status '{lc}' (authorized override)"
@@ -1167,12 +1187,14 @@ def _scan_assess(payload: dict, job: dict) -> None:
                 core.store.set_lifecycle_status(scan_id, r["file"], lc,
                                                 rule_id=r.get("lifecycle_rule_id"), reason=base,
                                                 exclusion_reason=excl)
+                overridden += 1
             else:
                 excl = (f"excluded from Assess: lifecycle status '{lc}'"
                         + (f" — {base}" if base else ""))
                 core.store.set_lifecycle_status(scan_id, r["file"], lc,
                                                 rule_id=r.get("lifecycle_rule_id"), reason=base,
                                                 exclusion_reason=excl)
+                eligible_excluded += 1
                 continue
         # `mime` on the analysis item is the Google-native EXPORT selector, NOT the stored source
         # MIME — feeding a real "application/pdf" here would KeyError in _download's EXPORT_MAP.
@@ -1181,6 +1203,39 @@ def _scan_assess(payload: dict, job: dict) -> None:
                       "mime": src_mime if src_mime in _EXPORT_MAP else None,
                       "path": r.get("path"), "checksum": r.get("checksum"),
                       "drive_id": r.get("drive_id")})
+    # ── PERSIST THE EXCLUSION ONTO THE RUN ───────────────────────────────────────────────────
+    # Recorded on `scan_runs.scope`, beside `skipped_out_of_scope`, because it is the same kind of
+    # fact: part of the boundary of what this run covered. Without it the Overview reconciliation
+    # can only say "not recorded" for this bucket, permanently — the panel already reads these
+    # exact keys and has nothing to read.
+    #
+    # A ZERO HERE IS A MEASUREMENT, and that is the only reason writing zeros is allowed. This
+    # code ran, walked every inventory row, and found none flagged. A run that never reached this
+    # point (a Discover that was never assessed) writes NOTHING, so its scope carries no such key
+    # and a reader correctly sees "not recorded" rather than a reassuring 0. merge_scan_scope
+    # touches only the keys handed to it, so nothing else on the scope is disturbed.
+    core.store.merge_scan_scope(scan_id, {
+        "lifecycle_excluded": lifecycle_flagged,
+        "lifecycle_eligible_excluded": eligible_excluded,
+        "lifecycle_overridden": overridden,
+    })
+    # ── THE RUN'S TOTAL IS THE POPULATION ASSESS ACTUALLY ENQUEUED ───────────────────────────
+    # `files` was written once, at init_scan_run, from the DISCOVERED count — correct then,
+    # because at discover time that is the only population there is. The loop above has since
+    # narrowed it twice: non-assessable rows are dropped, and by default so is every row a
+    # lifecycle rule flagged. Only `items` was ever enqueued.
+    #
+    # Left unwritten, `files` keeps describing the wider population while `files_done` counts the
+    # narrower one, so `files - files_done` reports deliberately-excluded files as NOT STARTED.
+    # That difference is what the frontend reads to call a run partially complete — so with the
+    # old numbers the likeliest cause of a "partially completed" screen was a lifecycle rule doing
+    # exactly what it was asked to. After this write, `files - files_done` means precisely
+    # "selected for THIS assess and never started".
+    #
+    # Written HERE, with `items` in hand and immediately before the fan-out, so no worker can bump
+    # files_done against a total that is still the discovered one. Assignment, not accumulation: a
+    # re-assess re-enters this path and must describe ITS OWN population, not the sum of both runs.
+    core.store.set_scan_files(scan_id, len(items))
     _enqueue_analysis(scan_id, source, items, ai=ai, pii=pii, user=user,
                       incremental=incremental, exclude_remediated=exclude_rem,
                       force_batch=bool(params.get("batch")))
