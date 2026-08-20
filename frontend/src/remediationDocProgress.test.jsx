@@ -95,15 +95,34 @@ describe('RemediationDocProgress — the pipeline', () => {
 })
 
 describe('RemediationDocProgress — the terminal states read differently', () => {
-  it('a finished document says so', async () => {
+  it('a document whose fixes all cleared says exactly that', async () => {
     const c = await mount({
       queue: [F({ id: 1, status: 'verified' }), F({ id: 2, status: 'verified' })],
       file: 'Q3-plan.docx',
     })
     expect(c.querySelector('.docprog-headline').textContent)
-      .toBe('All 2 findings on this document are through the pipeline.')
+      .toBe('All 2 findings on this document are confirmed by re-scan.')
     expect(c.querySelector('.docprog-remaining')).toBeNull()
     expect(c.querySelectorAll('.docprog-stage.current').length).toBe(0)
+    // The whole bar is the confirmed segment; nothing settled.
+    expect(c.querySelector('.docprog-bar-confirmed').style.width).toBe('100%')
+    expect(c.querySelector('.docprog-bar-settled').style.width).toBe('0%')
+  })
+
+  it('a document that finished with NO fix written does not read as fixed', async () => {
+    // Every finding rejected. It is through the pipeline, and nothing was remediated. The headline
+    // must name the split, and the bar must not be a solid block of success.
+    const c = await mount({
+      queue: [F({ id: 1 }), F({ id: 2 })],
+      file: 'Q3-plan.docx',
+      decisions: { 1: { state: 'rejected' }, 2: { state: 'rejected' } },
+    })
+    const t = c.querySelector('.docprog-headline').textContent
+    expect(t).toBe('All 2 findings on this document are through the pipeline — 0 confirmed by re-scan, 2 settled without a fix.')
+    expect(c.querySelector('.docprog-bar-confirmed').style.width).toBe('0%')
+    expect(c.querySelector('.docprog-bar-settled').style.width).toBe('100%')
+    expect(c.querySelector('.docprog-bar').getAttribute('aria-label'))
+      .toBe('0 of 2 findings confirmed by re-scan, 2 settled without a fix')
   })
 
   it('a document where everything is blocked is NOT reported as finished', async () => {

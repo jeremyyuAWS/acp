@@ -26,11 +26,17 @@ const TONE = {
 function Bar({ p }) {
   // Only ever drawn from a real fraction. `pct` is null when there is nothing to take a fraction of.
   if (p.pct == null) return null
+  // Two segments, because "through the pipeline" is not "fixed": a confirmed fix and a finding
+  // settled without one are both terminal, and a solid green bar for a document whose findings were
+  // all rejected would be the picture saying something the counts below it do not.
+  const settled = p.done - p.confirmed
+  const seg = (n) => `${(n / p.total) * 100}%`
   return (
     <div className="docprog-bar" role="img"
-         aria-label={`${p.done} of ${p.total} findings are through the pipeline`}
-         style={{ height: 6, borderRadius: 999, background: 'var(--surface-2,#f6f5f8)', overflow: 'hidden', margin: '8px 0 10px' }}>
-      <div style={{ width: `${p.pct}%`, height: '100%', background: 'var(--ok-ink,#217a3b)' }} />
+         aria-label={`${p.confirmed} of ${p.total} findings confirmed by re-scan, ${settled} settled without a fix`}
+         style={{ display: 'flex', height: 6, borderRadius: 999, background: 'var(--surface-2,#f6f5f8)', overflow: 'hidden', margin: '8px 0 10px' }}>
+      <div className="docprog-bar-confirmed" style={{ width: seg(p.confirmed), background: 'var(--ok-ink,#217a3b)' }} />
+      <div className="docprog-bar-settled" style={{ width: seg(settled), background: '#b3aeb8' }} />
     </div>
   )
 }
@@ -86,7 +92,12 @@ export default function RemediationDocProgress({ queue, file = null, decisions =
         {allBlocked(p)
           ? `All ${p.total} finding${p.total === 1 ? '' : 's'} on this document are blocked — none can be remediated as they stand.`
           : p.complete
-            ? `All ${p.total} finding${p.total === 1 ? '' : 's'} on this document are through the pipeline.`
+            // "Through the pipeline" is not "fixed". When some of them left it without a fix
+            // written, the headline names that split rather than letting the total imply success.
+            ? (p.confirmed === p.total
+              ? `All ${p.total} finding${p.total === 1 ? '' : 's'} on this document are confirmed by re-scan.`
+              : `All ${p.total} finding${p.total === 1 ? '' : 's'} on this document are through the pipeline — `
+                + `${p.confirmed} confirmed by re-scan, ${p.done - p.confirmed} settled without a fix.`)
             : `${p.done} of ${p.total} finding${p.total === 1 ? '' : 's'} through the pipeline`}
       </p>
       {remaining && (
