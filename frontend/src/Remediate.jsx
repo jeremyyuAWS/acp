@@ -282,7 +282,7 @@ function VerifyState({ state, pct, remaining, ready, latest }) {
 // readOnly: time-travel replay — historical scans are for looking, not enqueuing
 // real remediation jobs against (decisions stay editable: per-scan decision saves
 // are the time-travel feature itself).
-export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, aiEnabled = true, readOnly = false, onRefresh, onHitlCount, onNavigate }) {
+export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, assignees = {}, setAssignees, myEmail = null, aiEnabled = true, readOnly = false, onRefresh, onHitlCount, onNavigate }) {
   const [queue, setQueue] = useState([])
   // The master/detail RemediationInbox owns its own view state (search, tabs, sort, selection),
   // so the old accordion/prefs plumbing (single-open openId, the search/severity/criterion/group
@@ -883,6 +883,13 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               // resolution, so it never blocks certification and leaves the coverage denominator.
               else if (d.state === 'not_applicable') act(f.id, 'approved', null, undefined, 'out_of_scope')
             }}
+            assignees={assignees}
+            myEmail={myEmail}
+            onAssign={(file, email) => setAssignees?.((a) => {
+              const next = { ...a }
+              if (email) next[file] = email; else delete next[file]
+              return next
+            })}
           />
         )}
       </section>

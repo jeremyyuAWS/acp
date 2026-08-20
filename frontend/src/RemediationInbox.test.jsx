@@ -222,4 +222,44 @@ describe('RemediationInbox — workflow-status queue', () => {
     // …and the widened inbox width is persisted.
     expect(Number(localStorage.getItem('acp.remediate.leftW'))).toBeGreaterThan(before)
   })
+
+  // ── "Assigned to me" filter (#417 backend: per-file assignee) ──
+  const hasBtn = (t) => [...container.querySelectorAll('button')].some((b) => b.textContent.includes(t))
+
+  it('shows the "Assigned to me" control only when a signed-in reviewer + assign action are wired', async () => {
+    await render({ queue: QUEUE, decisions: {} })                    // no myEmail / onAssign → dead control avoided
+    expect(hasBtn('Assigned to me')).toBe(false)
+    await render({ queue: QUEUE, decisions: {}, myEmail: 'me@x.com', onAssign: () => {} })
+    expect(hasBtn('Assigned to me')).toBe(true)
+  })
+
+  it('assigns the selected document to the reviewer via onAssign(file, myEmail)', async () => {
+    const calls = []
+    await render({ queue: QUEUE, decisions: {}, myEmail: 'me@x.com', onAssign: (f, e) => calls.push([f, e]) })
+    // Default selection is id1 (a-brief.docx), unassigned → the chip offers "+ Assign to me".
+    await click(btnByText('Assign to me'))
+    expect(calls).toEqual([['a-brief.docx', 'me@x.com']])
+  })
+
+  it('"Assigned to me" narrows the queue to documents assigned to the reviewer', async () => {
+    const Q = [
+      { id: 1, file: 'a.docx', title: 'DOCX · Alpha', hasProposal: true, after: 'x' },   // needs-review, assigned
+      { id: 2, file: 'b.docx', title: 'DOCX · Beta', hasProposal: true, after: 'y' },     // needs-review, NOT assigned
+    ]
+    await render({ queue: Q, decisions: {}, myEmail: 'me@x.com', assignees: { 'a.docx': 'me@x.com' }, onAssign: () => {} })
+    let rows = [...container.querySelectorAll('.rinbox-row')].map((r) => r.textContent)
+    expect(rows.some((t) => t.includes('Alpha'))).toBe(true)
+    expect(rows.some((t) => t.includes('Beta'))).toBe(true)
+    await click(btnByText('Assigned to me'))                          // "Assigned to me (1)"
+    rows = [...container.querySelectorAll('.rinbox-row')].map((r) => r.textContent)
+    expect(rows.some((t) => t.includes('Alpha'))).toBe(true)          // assigned → stays
+    expect(rows.some((t) => t.includes('Beta'))).toBe(false)          // unassigned → filtered out
+  })
+
+  it('shows an honest empty state when nothing in view is assigned to the reviewer', async () => {
+    await render({ queue: QUEUE, decisions: {}, myEmail: 'me@x.com', assignees: {}, onAssign: () => {} })
+    await click(btnByText('Assigned to me'))
+    expect(container.textContent).toContain('Nothing in this view is assigned to you')
+    expect(btnByText('Show all')).toBeTruthy()
+  })
 })
