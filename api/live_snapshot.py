@@ -160,3 +160,18 @@ def build_snapshot(store, scan_id: str, owner: str | None = None, now_iso: str |
         pending = [k for k in pending if k not in ("queued", "throughput", "workers")]
     snap["kpis_pending"] = pending
     return snap
+
+
+def snapshot_signature(snap: dict) -> str:
+    """A stable content signature for change-detection on the event stream (Live Assessment PRD §8):
+    everything a consumer reacts to, EXCEPT `generated_at` — which changes on every build and would
+    make every frame look new, defeating the emit-only-on-change rule. Two snapshots with the same
+    signature are the same state. Deterministic and total (never raises)."""
+    import json as _json
+    if not snap:
+        return ""
+    keyed = {k: v for k, v in snap.items() if k != "generated_at"}
+    try:
+        return _json.dumps(keyed, sort_keys=True, default=str)
+    except Exception:
+        return repr(sorted((k, str(v)) for k, v in keyed.items()))

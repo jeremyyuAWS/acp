@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import RedirectResponse, Response, StreamingResponse
 
 import core
 from scanner import run_scan
@@ -333,6 +333,62 @@ def get_live_snapshot(sid: str, request: Request):
     import live_snapshot as _ls
     return _ls.build_snapshot(core.store, sid, owner=_owner(request),
                               now_iso=_dt.datetime.now(_dt.timezone.utc).isoformat())
+
+
+# Server-Sent-Events stream tuning. Interval: how often the server re-reads the run's state (§9 asks
+# for 500–2000ms batching — 1s sits in that band). Heartbeat: idle intervals between comment frames
+# that keep the connection warm without a data frame. Max iters: a safety ceiling (~30 min) so a run
+# that never terminates can't hold a socket forever — the client (SSE) auto-reconnects and resumes.
+_STREAM_INTERVAL_S = 1.0
+_HEARTBEAT_EVERY = 15
+_MAX_STREAM_ITERS = 1800
+
+
+@router.get("/scans/{sid}/events")
+async def stream_live_events(sid: str, request: Request):
+    """Server-Sent-Events stream of the live-run snapshot (Live Assessment Experience PRD §8): the SAME
+    authoritative object /scans/{sid}/live returns, PUSHED as it changes instead of polled. The server
+    tails the run's persisted state; a `data:` frame is emitted only when the snapshot's content
+    changes (generated_at aside), a comment frame keeps the connection warm between changes, and the
+    stream sends a final frame then closes when the run reaches a terminal state (or the client
+    disconnects, or the safety ceiling trips). Owner-scoped. Reconnect is free: SSE auto-reconnects and
+    the first frame is the current snapshot, carrying the same `sequence` the client dedupes on. No
+    worker changes — reconciles with /live by construction (same builder)."""
+    import asyncio
+    import datetime as _dt
+    import json as _json
+    import live_snapshot as _ls
+
+    owner = _owner(request)
+
+    async def _gen():
+        last_sig = None
+        idle = 0
+        for _ in range(_MAX_STREAM_ITERS):
+            if await request.is_disconnected():
+                return
+            now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+            # build_snapshot is sync DB work — run it off the event loop so one stream can't block others.
+            snap = await asyncio.to_thread(_ls.build_snapshot, core.store, sid, owner, now)
+            sig = _ls.snapshot_signature(snap)
+            if sig != last_sig:
+                last_sig = sig
+                idle = 0
+                yield f"data: {_json.dumps(snap)}\n\n"
+            else:
+                idle += 1
+                if idle >= _HEARTBEAT_EVERY:
+                    idle = 0
+                    yield ": keep-alive\n\n"
+            # Terminal: an unknown/foreign scan, or a run no longer active — the final frame is already
+            # out, so close. The client sees the terminal snapshot and stops reconnecting.
+            if not snap.get("available") or not snap.get("active"):
+                return
+            await asyncio.sleep(_STREAM_INTERVAL_S)
+
+    return StreamingResponse(_gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
+                                      "X-Accel-Buffering": "no"})
 
 
 @router.get("/scans/{sid}/files/{filename:path}/examined")
