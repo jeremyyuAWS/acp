@@ -28,7 +28,7 @@ function Kpi({ label, value, pending, accent, provisional }) {
   )
 }
 
-export default function LiveAssessment({ snapshot }) {
+export default function LiveAssessment({ snapshot, throughput }) {
   const m = normalizeLive(snapshot)
   if (!m.available) return null
 
@@ -46,6 +46,17 @@ export default function LiveAssessment({ snapshot }) {
         {m.totals.discovered > 0 && (
           <span style={{ fontSize: 13, color: 'var(--muted,#5b6774)' }}>
             {m.totals.discovered} discovered · {m.totals.eligible} assessable
+          </span>
+        )}
+        {/* Rolling throughput + calibrated ETA range (PRD §4.2/4.3). While calibrating we say
+            "estimating…" rather than a swinging single number; the ETA is a RANGE reflecting real
+            recent-speed variability, and it never appears on a stalled run. */}
+        {m.active && throughput && (throughput.ratePerMin != null || throughput.calibrating) && (
+          <span style={{ fontSize: 13, color: 'var(--faint,#8a95a1)' }}>
+            {throughput.ratePerMin != null ? `${throughput.ratePerMin}/min` : ''}
+            {throughput.etaText
+              ? `${throughput.ratePerMin != null ? ' · ' : ''}${throughput.etaText}`
+              : (throughput.calibrating ? `${throughput.ratePerMin != null ? ' · ' : ''}estimating…` : '')}
           </span>
         )}
       </header>
