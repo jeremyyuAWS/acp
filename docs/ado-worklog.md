@@ -1973,6 +1973,17 @@ real extracted content, degrading to the generic note, never a fabricated tree.
   association a screen reader needs, and what the 1.3.1 fix adds. Completes the set with reading-order
   (#490) and heading-outline (#492).
 
+- **Trace environment + outcome tags on file traces** (#537, P1). Two Langfuse-logging fixes for a shared
+  project. (1) Every trace is stamped with an ENVIRONMENT (production / staging / demo) — set on the SDK
+  client from `ACP_ENV` / `LANGFUSE_TRACING_ENVIRONMENT`, defaulting to `production`, sanitised to
+  Langfuse-safe chars so a stray value can't 400 every trace, and passed via try/except so an older SDK
+  still constructs — so a shared project's traces separate instead of mingling under `default` (what the
+  live traces showed). (2) File traces carry OUTCOME tags at assess time (`result:fail|needs-review|pass`,
+  `pii:flagged`) so the native Langfuse list filters by result and PII, not only document + format; one
+  authoritative `set_outcome_tags` update re-includes the base + rule-fail tags (Langfuse replaces a
+  trace's tags). Categories/counts only, never a value — the PHI guard holds. `api/lf.py` + `api/handlers.py`,
+  not RULE_PATHS; 176 langfuse/assess tests green, redaction guards green.
+
 ## Open items (backlog candidates)
 
 - **The docx header/footer parity audit is complete.** All six body-only content checks now read
@@ -2494,3 +2505,9 @@ real extracted content, degrading to the generic note, never a fabricated tree.
   Users (store-backed set, `is_owner` root-of-trust, owner-only `PUT /admin/admins`, three-tier badges +
   toggle). Both green, tested (9 + 10 cases), not RULE_PATHS; ship on the next approved prod deploy. **Sync
   marker deliberately NOT advanced** (same convention as the prior entries).
+- **2026-08-20 (trace env + outcome tags)** — To **Observability — AI tracing and cost (#4697)**: #537 —
+  stamp each trace with its ENVIRONMENT (so a shared Langfuse project's prod/staging/demo traces separate
+  instead of mingling under `default`) and tag file traces with the assess OUTCOME (`result:*`, `pii:flagged`)
+  so the native list filters by result and PII. PHI guard intact (categories/counts only). Not RULE_PATHS.
+  #538 (ADO Feature-ID binding) is itself a delivery-log edit, so no entry. **Sync marker deliberately NOT
+  advanced** (same convention as the prior entries).
