@@ -117,6 +117,21 @@ Two things the image does NOT contain, both because CI does not either:
   suites run. (`tests/conftest.py`'s docstring still describes the old out-of-repo
   arrangement; `tests/engines.py` is the current word.)
 
+### Two tests reach the network
+
+`tests/test_redeploy_pin_resolution.py` runs the real `deploy/public/redeploy.sh` with stubbed
+`az`/`gh`, and the script does a genuine `git fetch origin` before it resolves the pin. The two
+tests gate on an origin remote *existing*, not on it being reachable, so on a machine that
+cannot reach `github.com` — offline, or behind a proxy the container does not inherit — they
+fail rather than skip:
+
+```
+fatal: unable to access 'https://github.com/jeremyyuAWS/acp/': …
+```
+
+Nothing else in the suite needs the network. Ollama and Langfuse are absent on purpose (above),
+and every other fixture is built on disk.
+
 ### One requirement on your checkout: full history
 
 Clone normally. On a `--depth 1` clone the guards go **vacuous rather than red** —
@@ -130,15 +145,34 @@ shallow:
 git fetch --unshallow
 ```
 
-### Postgres
+### Postgres — up, but NOT wired into the suite
 
-The service `depends_on` `db`, so Postgres is healthy before the suite starts and reachable
-at the same `DATABASE_URL` the app uses. Measured caveat, so nobody reads more into that
-than is there: **nothing in `tests/` currently opens a live Postgres connection.**
-`grep -rln "DATABASE_URL\|psycopg" tests/` returns one file, `tests/test_db_pool.py`, and it
-injects a fake `psycopg2` into `sys.modules` rather than connecting; every store in the suite
-is SQLite on a temp path (`tests/conftest.py`). The dependency is wired because the stack's
-database belongs in the picture, not because removing it would turn anything red today.
+The service `depends_on` `db`, so Postgres is healthy before the suite starts and reachable at
+`db:5432`. **`DATABASE_URL` is deliberately not set**, and that is not an oversight.
+
+`api/store.py` picks its adapter from that one variable —
+`_PgAdapter(_DATABASE_URL) if _DATABASE_URL else _SQLiteAdapter(...)` — so exporting it does
+not "let the tests that want Postgres find it". It moves the **whole suite** onto Postgres, and
+the suite's fixtures assume a private database per test (`tests/conftest.py` hands every
+`Store` a fresh temp SQLite file). A single shared Postgres collides on primary keys.
+
+Measured both ways, since this service originally did set it:
+
+| | Result |
+|---|---|
+| `DATABASE_URL` unset | **3425 passed, 38 skipped, 0 failed** — exit 0 |
+| `DATABASE_URL` → the `db` service | **240 failed**, 3180 passed, 38 skipped, 5 errors — exit 1 |
+
+Isolated to one module with no other load, to be sure it was the variable and not the
+contention: `tests/test_remediated_download_isolation.py` is 5 passed / exit 0 unset, and
+1 passed + 4 errors / exit 1 set, with
+`psycopg2.errors.UniqueViolation: duplicate key value violates unique constraint
+"scan_runs_pkey"`.
+
+CI has no Postgres at all, so leaving it unset is also what makes this run agree with the gate.
+If you are writing a test that genuinely needs Postgres, set the variable for that run only
+(`docker compose --profile test run --rm -e DATABASE_URL=… test …`) and expect the rest of the
+suite to be red in that run.
 
 ### Notes
 

@@ -24,7 +24,12 @@ run() {  # run <label> <cmd...>
   if "$@"; then
     NAMES+=("$label"); STATUS+=("PASS")
   else
-    NAMES+=("$label"); STATUS+=("FAIL (exit $?)"); failed=1
+    # $? FIRST, before anything else runs. `STATUS+=("FAIL (exit $?)")` reads the status of the
+    # array append that precedes it, not of the command — it printed "FAIL (exit 0)" over a
+    # genuinely failing pytest run the first time this script was used. Same family as the
+    # `cmd | tail; echo $?` trap CLAUDE.md documents: a status that is always 0 is not a status.
+    local rc=$?
+    NAMES+=("$label"); STATUS+=("FAIL (exit $rc)"); failed=1
   fi
 }
 
