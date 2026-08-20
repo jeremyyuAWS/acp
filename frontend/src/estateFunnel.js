@@ -170,3 +170,211 @@ export function estateModel(inv, progress = {}) {
     ageReconciles: ageBandsReconcile(inv),
   }
 }
+
+// ── WHAT WAS ASSESSED, AND WHAT WAS NOT ──────────────────────────────────────────────────────
+//
+// The headline numbers on the Overview ("12,408 discovered", "7,946 assessed") are two counts of
+// two populations, and a reader has no way to check the gap between them. This is that gap, drawn
+// as a PARTITION: every discovered file lands in exactly one bucket, the buckets are printed with
+// their arithmetic, and the arithmetic either reaches the discovered total or the screen says it
+// does not. That is what makes the row of numbers auditable rather than merely plausible.
+//
+// PRECEDENCE. A file can qualify for more than one reason — an .xlsx flagged for archive review in
+// a run that did not select Excel qualifies for both `lifecycle` and `type`. It is counted ONCE,
+// under the reason that came first:
+//
+//     lifecycle  >  type  >  no_test  >  unreadable  >  assessed
+//
+// Lifecycle wins over document type because it is the earlier decision: a file flagged for
+// archive/deletion review is skipped by Assess before the type selection is ever consulted.
+//
+// The buckets are DISJOINT BY CONSTRUCTION except for that one pair: `no_test` covers exactly the
+// formats that are not assessment-eligible, `type` covers only assessment-eligible formats, and
+// `unreadable`/`assessed` are counted from the file rows of the run itself. Where the aggregates
+// cannot prove disjointness (lifecycle vs type — the inventory reports each as a marginal, and a
+// marginal cannot be decomposed) the OVERLAP IS REPORTED rather than assumed away: the sum runs
+// past `discovered` and the panel says so. See `ageBandsReconcile` above for the same discipline
+// applied to the age bands.
+//
+// A MISSING INPUT IS NEVER A MEASURED ZERO. Each bucket is `null` when this scan does not carry
+// what it needs — `null`, not 0, exactly as `ageRows` returns null rather than a row of zeros.
+// A null bucket leaves the sum short, and a short sum is stated as a shortfall; it is never
+// silently absorbed into a neighbour, which is the failure that makes a partition look complete
+// while it is guessing.
+//
+// One thing this module deliberately does NOT do: derive any bucket as "discovered minus the
+// others". A residual bucket makes the reconciliation trivially true, and a check that cannot fail
+// is indistinguishable from a check that passed.
+
+// Display order — the order the design board reads them: the reassuring number first, with the
+// exclusions under it, qualifying it.
+export const BUCKET_ORDER = ['assessed', 'lifecycle', 'type', 'no_test', 'unreadable']
+
+// Resolution order — which reason wins when a file qualifies for several. Exported so a consumer
+// (or a test) can state the rule rather than re-derive it from prose.
+export const BUCKET_PRECEDENCE = ['lifecycle', 'type', 'no_test', 'unreadable', 'assessed']
+
+// Wording is load-bearing here. `lifecycle` says RECOMMENDATION, never "archived" or "deleted":
+// the system has written a tag proposing a disposition, and nothing has been moved or removed.
+// Describing a recommendation as a completed action is the one sentence on this screen that could
+// send somebody looking for a file that is still exactly where they left it.
+export const BUCKET_META = {
+  assessed: {
+    label: 'Assessed',
+    note: 'a selected document type, no lifecycle flag, and at least one selected criterion applies',
+    color: '#3B6D11',
+  },
+  lifecycle: {
+    label: 'Not eligible — lifecycle',
+    note: 'carries an archive-or-delete recommendation awaiting a decision — a tag was written, no file was moved or deleted',
+    color: '#8a6d1f',
+  },
+  type: {
+    label: 'Not eligible — type',
+    note: 'a testable document type this run did not select',
+    color: '#6B8FC7',
+  },
+  no_test: {
+    label: 'Not eligible — no test exists',
+    note: 'images, audio, video, and formats ACP cannot open for any accessibility criterion',
+    color: '#B9B1BD',
+  },
+  unreadable: {
+    label: 'Not eligible — access or error',
+    note: 'could not be read when its content was needed',
+    color: '#A32D2D',
+  },
+}
+
+/** A finite, non-negative count, or null. Anything else — undefined, NaN, a string, a negative —
+ *  is NOT a measurement and must never be rendered as one. */
+function count(v) {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : null
+}
+
+/**
+ * Partition the discovered estate into the five buckets, with the arithmetic exposed.
+ *
+ * `inv` is the scan's `scope.inventory` (api/estate_inventory.summarize output). `opts` carries the
+ * facts the inventory alone cannot know, each optional and each null when unmeasured:
+ *
+ *   typeNotSelected     — discovery's own count of files dropped for their document type
+ *                         (`scope.skipped_out_of_scope`). Wins over the derivation below when
+ *                         present: it was counted by the process that did the dropping.
+ *   selectedFormats     — the document types this run assessed. An ARRAY of format keys, or `null`
+ *                         for "no type narrowing was in force" (frozenScope.scanDocTypes's own
+ *                         contract), which is a measured zero rather than a missing answer. Absent
+ *                         entirely (undefined) → unknown → the bucket stays null.
+ *   lifecycleExcluded   — assessment-eligible files this run skipped because a lifecycle rule
+ *                         flagged them (the backend's `lifecycle_eligible_excluded`: the flagged
+ *                         subset whose format had a lane, so it never overlaps `no_test`).
+ *   lifecycleOverridden — flagged files an authorized override assessed anyway. A FOOTNOTE, never a
+ *                         bucket: they were assessed, so they are already inside `assessed`.
+ *   unreadable          — files opened and refused (docStatus 'unanalysable').
+ *   assessed            — files this run actually opened and scored.
+ *
+ * Returns null when there is no inventory to partition, so a caller renders nothing at all rather
+ * than an empty frame. Otherwise:
+ *
+ *   { discovered, rows, total, complete, unaccounted, overlap, reconciles, truncated, overridden }
+ *
+ * `rows` are in BUCKET_ORDER, each {key, label, note, color, value, measured, share}. `total` sums
+ * only the MEASURED rows. `unaccounted` is `discovered − total`: positive means files in no bucket,
+ * negative means buckets that double-count. `reconciles` is true only when every bucket was
+ * measured AND they sum to exactly the discovered total — the one claim the panel may make with a
+ * tick.
+ */
+export function reconcileBuckets(inv, opts = {}) {
+  const discovered = (inv && inv.discovered) || 0
+  if (!discovered) return null
+  const o = opts || {}
+
+  // Files with no applicable accessibility test at all. Counted as `discovered − assessment
+  // eligible` — the same subtraction api/estate_inventory.funnel_facts makes for the conformance
+  // report — and clamped so it can never read negative on a stale or partial summary.
+  const byStatus = (inv && inv.by_status) || null
+  let eligible = count(inv && inv.assessment_eligible)
+  if (eligible == null && byStatus) eligible = count(byStatus.assessable)
+  const noTest = eligible == null ? null : Math.max(0, discovered - eligible)
+
+  // Assessment-eligible files in a document type this run did not select.
+  //
+  // A DIRECT COUNT WINS over a derivation. Discovery already counts the files its file-type scope
+  // dropped (`scope.skipped_out_of_scope`, scanner._list) — that is this bucket, counted by the
+  // process that did the dropping. The by_format derivation below is the fallback for scans that
+  // carry a frozen criterion scope but no such counter.
+  const byFormat = (inv && inv.by_format) || null
+  const sel = o.selectedFormats
+  let type = count(o.typeNotSelected)
+  if (type != null) {
+    // nothing further — a measured drop needs no derivation
+  } else if (sel === null) {
+    // "No narrowing was in force" is a fact about the run, not an absent one: nothing was dropped
+    // for its type. Distinct from `undefined`, which is a scan that never recorded its scope.
+    type = 0
+  } else if (Array.isArray(sel) && byFormat) {
+    const keep = new Set(sel)
+    type = ASSESSABLE_FORMATS.reduce((n, f) => n + (keep.has(f) ? 0 : (byFormat[f] || 0)), 0)
+    // by_format counts ACP's own excluded output under its real format, so this can overshoot the
+    // eligible population by the excluded files of a deselected type. Clamped, never negative.
+    if (eligible != null) type = Math.min(type, eligible)
+  }
+
+  const values = {
+    assessed: count(o.assessed),
+    lifecycle: count(o.lifecycleExcluded),
+    type,
+    no_test: noTest,
+    unreadable: count(o.unreadable),
+  }
+
+  const rows = BUCKET_ORDER.map((key) => {
+    const v = values[key]
+    return {
+      key,
+      label: BUCKET_META[key].label,
+      note: BUCKET_META[key].note,
+      color: BUCKET_META[key].color,
+      value: v,
+      measured: v != null,
+      // A percentage never travels without its denominator — the panel renders this as
+      // "x% of <discovered>". An unmeasured bucket has NO share; it does not have a share of zero.
+      share: v == null ? null : v / discovered,
+    }
+  })
+
+  const measured = rows.filter((r) => r.measured)
+  const total = measured.reduce((n, r) => n + r.value, 0)
+  const complete = measured.length === rows.length
+  const unaccounted = discovered - total
+  return {
+    discovered,
+    rows,
+    total,
+    complete,
+    unaccounted,
+    overlap: unaccounted < 0,
+    reconciles: complete && unaccounted === 0,
+    truncated: isTruncated(inv),
+    // Flagged files assessed anyway under an authorized override. Reported beside the lifecycle
+    // row so the pair reads "343 held back, 9 let through", never as a sixth bucket.
+    overridden: count(o.lifecycleOverridden),
+  }
+}
+
+/** Do the buckets account for every discovered file? Mirrors `ageBandsReconcile`: true when there
+ *  is nothing to check, so a caller's warning fires on a real mismatch and not on absence. */
+export function bucketsReconcile(inv, opts = {}) {
+  const rec = reconcileBuckets(inv, opts)
+  return rec ? rec.reconciles : true
+}
+
+/** The sum, written out: "7,946 + 343 + 3,092 + 980 + 47". Only the measured buckets appear —
+ *  printing a `0` for an unmeasured one is the lie this module is arranged against. Null when
+ *  there is nothing measured to add up. */
+export function bucketEquation(rec) {
+  if (!rec) return null
+  const measured = rec.rows.filter((r) => r.measured)
+  if (!measured.length) return null
+  return measured.map((r) => r.value.toLocaleString()).join(' + ')
+}

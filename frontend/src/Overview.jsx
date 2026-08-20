@@ -17,6 +17,7 @@ import PiiPanel from './PiiPanel.jsx'
 import { scopeChip, scopeSentence, isNarrowScope } from './scanScope.js'
 import ScanScopeChip from './ScanScopeChip.jsx'
 import EstateCoverage from './EstateCoverage.jsx'
+import AssessmentReconciliation from './AssessmentReconciliation.jsx'
 
 // The estate dashboard — doubles as the exportable compliance report.
 export default function Overview({ run, files, trend, trendDates, onGo, scanList = [], onPickScan, me,
@@ -327,6 +328,13 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           Findings, certifiable and audit-ready describe the analysed documents only.
         </p>
       )}
+
+      {/* THE IDENTITY BEHIND THE TILES. "12,408 discovered" and "7,946 assessed" are two counts of
+          two populations, and nothing on this screen used to explain the distance between them —
+          a reader could only take it on trust. This partitions the discovered estate into five
+          mutually exclusive buckets and prints the addition, so the gap is auditable instead of
+          plausible. Self-guarding: it renders nothing at all without an inventory to partition. */}
+      <AssessmentReconciliation run={run} files={files} />
 
       {/* Whole-estate coverage: the three denominators (discovered / assessment-eligible /
           remediation-eligible) as a funnel + format composition + capability-status split, from the
