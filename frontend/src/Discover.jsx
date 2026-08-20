@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import WindowedRows from './WindowedRows.jsx'
 import FileDrawer, { retentionOf } from './FileDrawer.jsx'
@@ -15,6 +15,10 @@ import { dupeCountOf, duplicateFiles } from './dedupe.js'
 import { scopeSentence, isNarrowScope } from './scanScope.js'
 import EstateCoverage from './EstateCoverage.jsx'
 import { estateProgressFromFiles } from './estateProgress.js'
+import DiscoveryResults from './DiscoveryResults.jsx'
+import { acknowledgementSummary } from './discoveryRecommendations.js'
+import { loadDiscoveryInventory, mergeLifecycle } from './discoveryInventory.js'
+import { getScanInventory } from './api.js'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
@@ -104,6 +108,30 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // any stored setting. Document TYPE is no longer a Discover concern — that decision moved to
   // Assess (AssessScope), so Discover shows the whole discovered estate.
   const [loc, setLoc] = useState({ source: 'all', path: '' })
+  // Discovery-results acknowledgement (design board DiscoverResults, DX-07) and the per-file
+  // "assess anyway" overrides it summarises. Both live here rather than inside DiscoveryResults so
+  // the acknowledgement can GATE the Assess button at the foot of this tab — an acknowledgement
+  // that does not gate anything is a checkbox, not a control.
+  const [ackRecs, setAckRecs] = useState(false)
+  const [assessAnyway, setAssessAnyway] = useState([])
+  // The per-file lifecycle columns the recommendation surface is made of. They are NOT on
+  // `GET /scans/{id}` (it reads file_records, which has no such columns) — they live on
+  // scan_inventory, behind `GET /scans/{id}/inventory`. So Discover reads that route itself.
+  //
+  // `null` covers three states that must all render the same way: not asked yet, still loading,
+  // and the read failed. None of them is evidence that no file was tagged, so all three leave the
+  // file rows un-merged and the whole recommendation surface ABSENT. A failed read that fell back
+  // to "0 tagged for archive review" would be indistinguishable from a clean estate.
+  const [inv, setInv] = useState(null)
+  useEffect(() => {
+    let live = true
+    setInv(null)      // a new scan invalidates the previous read the instant the id changes
+    if (!scanId) return undefined
+    loadDiscoveryInventory(scanId, getScanInventory).then((r) => { if (live) setInv(r) })
+    return () => { live = false }
+  }, [scanId])
+  // Un-merged when the read has not completed — mergeLifecycle passes `files` straight through.
+  const estateFiles = useMemo(() => mergeLifecycle(files, inv), [files, inv])
 
   // The folder portion of a file's path, when it carries one — real scans name files by path
   // (`HR/policies/leave.docx`), SIM by bare filename. Empty string when there is no folder.
@@ -174,6 +202,10 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   const sfMatch = matchesFilters(sf, SF_FACETS, (f) => f.file)
   const pendingActions = actionable.length - dcount('accepted') - dcount('override')
   const acceptAll = () => setDecisions((s) => { const n = { ...s }; actionable.forEach((f) => { if (!n[f.file]) n[f.file] = { state: 'accepted' } }); return n })
+  // What the acknowledgement covers — null when the lifecycle rule pass did not reach this screen
+  // or matched nothing, in which case there is nothing to acknowledge and nothing to gate.
+  const recsToAck = acknowledgementSummary(estateFiles, assessAnyway)
+  const needsAck = !!recsToAck && !ackRecs
 
   // Inventory/Classify/Action are no longer formally separated tabs — one dept-grouped
   // list shows the file, its classification tags (colorful pills), and its lifecycle
@@ -387,6 +419,16 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           time and mark matched files as candidates; Assess excludes them by default. */}
       <DispositionRules />
 
+      {/* Discovery results (approved board `DiscoverResults.dc.html`): what the run found, what it
+          could not read, which files a lifecycle rule recommended for review and which rule said
+          so, the acknowledgement that gates Assess, and the reconciliation that shows every
+          discovered file landing in exactly one bucket. Sections whose data has not reached this
+          screen render NOTHING — never a zero. */}
+      <DiscoveryResults files={estateFiles} inventory={scope?.inventory || null} scopeLine={scopeLine}
+                        acknowledged={ackRecs} onAcknowledge={setAckRecs}
+                        overrides={assessAnyway} onOverridesChange={setAssessAnyway}
+                        actor={me?.email || me?.name || null} scanId={scanId} />
+
       {files.length === 0 ? (
         <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Sources.</p>
       ) : (() => {
@@ -502,8 +544,20 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           ) : (
             <span className="muted" style={{ fontSize: 13, color: '#3B6D11' }}>✓ All recommendations decided — done here? Continue →</span>
           )}
-          <button onClick={() => onAdvance?.()} disabled={pendingActions > 0}
-                  title={pendingActions > 0 ? `${pendingActions} action${pendingActions === 1 ? '' : 's'} still pending — accept or override each row, or use "Accept all recommendations"` : undefined}>
+          {/* DX-07 — the discovery-results acknowledgement GATES Assess. Only ever a gate when
+              there is something to acknowledge: with no lifecycle recommendations on screen
+              `recsToAck` is null and this button behaves exactly as it did before. */}
+          {needsAck && (
+            <span className="muted" style={{ fontSize: 13 }} role="status">
+              Approve the {recsToAck.total.toLocaleString()} discovery recommendation{recsToAck.total === 1 ? '' : 's'} above to continue
+            </span>
+          )}
+          <button onClick={() => onAdvance?.()} disabled={pendingActions > 0 || needsAck}
+                  title={pendingActions > 0
+                    ? `${pendingActions} action${pendingActions === 1 ? '' : 's'} still pending — accept or override each row, or use "Accept all recommendations"`
+                    : needsAck
+                      ? `${recsToAck.total} discovery recommendation${recsToAck.total === 1 ? '' : 's'} need your approval — tick "I approve these recommendations" in Discovery results`
+                      : undefined}>
             Assess — score vs WCAG →
           </button>
         </div>
