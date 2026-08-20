@@ -120,6 +120,26 @@ export function remediationWork(files, { cap, assessment, criteria, level = 'AA'
   if (!all) return null
 
   const rows = all.filter((r) => r.opened)
+  // NOTHING OPENED IS NOT ZERO FINDINGS. A document discovery listed but Assess never opened has
+  // no verdict — it is not a document with nothing wrong. Without this guard the panel rendered
+  // "0 + 0 + 0 + 0 + 0 = 0 findings" and "the same 0 findings the assessment counted" over an
+  // estate nobody assessed, which reads as a clean bill of health and is the single most
+  // damaging thing this screen could print.
+  //
+  // An assessed estate that genuinely has no findings is a DIFFERENT case and still renders: the
+  // discriminator is whether any document was opened, not whether any finding was found.
+  //
+  // The guard is `all.length && !rows.length`, NOT `!rows.length`, and the difference is a third
+  // state the original two did not name:
+  //
+  //   absent run          null / a 403 body            → null (already handled above)
+  //   real run, EMPTY estate   zero files discovered    → renders 0s, which is TRUE of it
+  //   real run, estate NOT ASSESSED   files, none opened → this line
+  //
+  // The middle case is deliberate and tested ("distinguishes that from a real run over an empty
+  // estate"); zero files means zero findings and saying so is honest. The third case is the one
+  // that was wrong.
+  if (all.length && !rows.length) return null
   const lanes = {}
   for (const k of WORK_LANES) lanes[k] = emptyLane()
 

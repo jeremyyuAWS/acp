@@ -67,6 +67,16 @@ export function verifyState(files, { cap, assessment, criteria, level = 'AA',
   const all = documentRows(files, { cap, assessment, criteria, level })
   if (!all) return null
 
+  // Same rule as remediationWork: nothing OPENED is not "nothing to verify". A discovered but
+  // unassessed estate produced "confirmed cleared 0 · applied but not confirmed 0 · not yet
+  // remediated 0", which reads as a completed verification that found everything clean. The
+  // discriminator is whether any document was opened, not whether any finding was found — an
+  // assessed estate with no findings is a real result and still renders.
+  // `all.length &&` for the same reason as remediationWork: a real run over a genuinely EMPTY
+  // estate may report zeros, because zero files honestly means zero findings. What must not
+  // render is an estate that HAS documents none of which was ever opened.
+  if (all.length && !all.some((r) => r.opened)) return null
+
   const raw = new Map()
   for (const f of files) raw.set(f.file || f.name || '', f)
 
