@@ -458,6 +458,15 @@ under-proves *why to trust it*. Most of the data already exists; the work is
 **consolidating it into one downloadable per-document certificate**, not new
 detection.
 
+**Reconciled 2026-08-19 against `api/report.py`.** Most of this section has since shipped —
+the flagship **R1** and quick-wins **R2 / R3 / R4 / R6 / R7 / R8** plus **R-A / R-B**, each struck
+below with its rendering code named. The report is no longer "a scan summary": it carries the
+certification-decision block, per-issue evidence appendix with sign-off, scope-of-assertion,
+chain-of-custody digest, richer inventory, and the POUR breakdown. The genuine remainder is the
+honesty-gated KPI/assurance work (**R9 / R10**), the methodology/timeline narratives (**R11 / R12**),
+and the larger dependency-bearing items (**R13–R15 / R-C–R-E**) — none verified in this pass, so
+none struck.
+
 **Hard rule for this whole section (ADR 0016 / `4fc6bc1`):** every number is a
 real, derivable ratio shown with its basis, or it is omitted. NO fabricated
 percentages ("96% effort saved", "AI 92%", invented "4.2s avg"). A fabricated
@@ -476,18 +485,18 @@ per-document certificate renderer alongside it).
 ### Flagship
 | # | Item | Value | Effort | Notes |
 |---|---|---|---|---|
-| R1 | **Per-issue Remediation Evidence Portfolio** (consolidates the "per-issue appendix" + "before/after gallery" + "AI reasoning" asks). One mini-section per finding: thumbnail, WCAG + plain-English issue, **before → after**, AI recommendation **+ its rationale/OCR-grounding**, human decision (approved/edited/rejected), validation PASS, timestamp/reviewer/trace-id. | Highest — turns summary → audit artifact | M · 2–3 d | All data exists (`remediation_diff` + `applied_fixes` + `hitl_queue` + `decision_log`). Render into the PDF (`report.py`) and/or a per-doc HTML→PDF. Scope to remediated/failing findings, not all 87 SCs. |
+| ~~R1~~ | ~~**Per-issue Remediation Evidence Portfolio**~~ — **SHIPPED**: `_evidence_section` ("the audit artifact", backlog R1) in `report.py` renders one mini-section per finding — before→after, source, and the immutable sign-off ("what changed, and on whose authority"). Applied-and-verified fixes are kept strictly apart from proposals awaiting approval. | Highest — turns summary → audit artifact | ~~M · 2–3 d~~ DONE | All data exists (`remediation_diff` + `applied_fixes` + `hitl_queue` + `decision_log`). |
 
 ### Quick wins — data exists, mostly presentation (each XS–S)
 | # | Item | Notes |
 |---|---|---|
-| R2 | **Certification-decision block** at the top of each document (Status 🟢 CERTIFIABLE / WCAG 2.1 AA / date / reviewer / remediations applied / validation PASS / risk). | The first thing an exec reads. "Digital signature" must be a **real** SHA-256 of the artifact/bytes, never decorative. |
-| R3 | **Why-certifiable prose** — one sentence replacing bare "100%": "meets all *evaluated* AA criteria after remediation + re-scan validation; no blocking findings remain." | Cheap, high trust. Pair with R-A (scope). |
-| R4 | **Certification-metadata / chain-of-custody** section — surface prominently (not buried in the header): document SHA-256, scan SHA-256, rubric version + hash, model version, validator version, timestamp, reviewer. | Partly exists (scan hash + rubric version). Enterprise-critical; low effort. |
-| R5 | **AI reasoning inline** — show the fix rationale / OCR-grounding / confidence *basis* (not a number). | **Now shipped as data** via the proposal lane (`proposals[].rationale`, `describe_image_structured` grounding, `confidence.js` basis) — just render it. |
-| R6 | **Richer file inventory** — per file: ✓ Certified · N detected · N remediated · N remaining · N human approvals · validation PASS. | `report.py` inventory today shows only Status/Score/Findings. |
-| R7 | **Explain the score** — "100 = no blocking findings remain, all required remediations re-scan-validated, AA-certifiable." | One line. |
-| R8 | **POUR (Perceivable/Operable/Understandable/Robust) breakdown** — real per-principle pass ratios. | Deterministic → honest by construction. |
+| ~~R2~~ | ~~**Certification-decision block**~~ — **SHIPPED** | `_decision_block` (backlog R2/R3), rendered first ("Certification decision (R2)"). Carries a **real** recomputable SHA-256 content digest (`_content_digest`), never decorative. |
+| ~~R3~~ | ~~**Why-certifiable prose**~~ — **SHIPPED** | The plain-language WHY is the executive verdict rendered under the decision block (`_decision_block` docstring, R2/R3); status labels reframed away from a bare "100%". |
+| ~~R4~~ | ~~**Certification-metadata / chain-of-custody**~~ — **SHIPPED** | Recomputable SHA-256 content digest (`_content_digest`: scan id, rubric hash, target, per-file scores) + the "Scope & methodology" section; "results are reproducible from the stamped rubric hash." |
+| R5 | **AI reasoning inline** — show the fix rationale / OCR-grounding / confidence *basis* (not a number). | **Shipped as data** via the proposal lane (`proposals[].rationale`, `describe_image_structured` grounding, `confidence.js` basis) — rendering into the appendix not separately re-verified in the 2026-08-19 pass. |
+| ~~R6~~ | ~~**Richer file inventory**~~ — **SHIPPED** | "File inventory (R6)" table now carries File · Type · Extent · Status · Score · Findings · **Fixed · Open · Approvals** per document. |
+| ~~R7~~ | ~~**Explain the score**~~ — **SHIPPED** | The scope section states it explicitly — "A score of 100 therefore means: no blocking findings among the criteria ACP evaluated … not a statement that the document conforms to WCAG 2.1 AA." |
+| ~~R8~~ | ~~**POUR breakdown**~~ — **SHIPPED** (#496) | `_pour_section` renders the per-principle pass rate among evaluated criteria; the four principles partition the evaluated set exactly (pinned by test). Deterministic → honest by construction. |
 
 ### Honesty-gated — agree only if computed from real data
 | # | Item | Guardrail |
@@ -507,8 +516,8 @@ per-document certificate renderer alongside it).
 ### My additions (review, 2026-07-09) — weighted toward *auditor* trust
 | # | Item | Why |
 |---|---|---|
-| R-A | **Scope-of-assertion / negative-assurance statement** (HIGH). Per document: "N of 87 SCs auto-validated, M human-reviewed, K not-applicable-to-this-format, and these SCs were NOT evaluated (captions, timing, keyboard-trap, …)." | The single most important auditor-trust item and an over-claim guard: prevents "100%" being mis-read as full WCAG conformance. On-brand with the certifiable/uncertain/unanalysable distinction already in `report.py`. |
-| R-B | **Immutable audit-log excerpt** — render this document's `decision_log` rows inline (who approved what, when, with the approved value). | The evidence backbone that directly answers "can I trust this." Data already immutable + append-only. |
+| ~~R-A~~ | ~~**Scope-of-assertion / negative-assurance statement**~~ — **SHIPPED** | `_scope_section` ("What this report covers · and what it does not", R-A) states validator-set size vs the full 87, per-document evaluated / not-evaluated / by-mode, the criteria never run, the file types never opened, and the whole-estate funnel — the over-claim guard against a "100%" misread. |
+| ~~R-B~~ | ~~**Immutable audit-log excerpt**~~ — **SHIPPED** | The evidence appendix renders each fix's sign-off inline from the immutable `decision_log` — "{decision} by {reviewer} · {when} UTC", with the approved value — under "what changed, and on whose authority". |
 | R-C | **Per-fix assurance-level disclosure** — distinguish deterministic-and-re-scan-cleared vs AI-generated-and-human-approved vs AI-generated-and-re-scan-validated-but-not-human-confirmed. | Uses the proposal lane's `validated`/`subjective` signals + `remediation_state`; tells the reader exactly what assurance each fix carries instead of a flat "PASS". |
 | R-D | **Reproduce-this-result instructions** — "re-run: POST /scans with rubric hash `<h>`; expect identical findings." | Pairs with R4 chain-of-custody; makes reproducibility actionable, not just asserted. |
 | R-E | **"Supersedes" lineage** — "this certificate supersedes cert `<id>` from `<date>`" (per-document version chain). | Extends the estate-level velocity section already in `report.py` to a per-document custody chain. |
