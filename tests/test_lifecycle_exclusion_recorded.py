@@ -236,6 +236,80 @@ def test_the_merge_leaves_an_unreadable_scope_alone(isolated_store):
         assert st._db.fetchone(cur)["scope"] == "{not json"
 
 
+# ── The run's TOTAL is the population Assess enqueued, not the one Discover listed ───────────
+#
+# `scan_runs.files` is written once, at init_scan_run, from the DISCOVERED count. _scan_assess
+# then narrows that twice — non-assessable rows are dropped, and by default so is every
+# lifecycle-flagged row — and enqueues only the remainder. Left unwritten, `files` describes the
+# wider population while `files_done` counts the narrower one, so `files - files_done` reports
+# deliberately-excluded files as NOT STARTED.
+#
+# That difference is what the frontend's statusOf reads to call a run PARTIALLY COMPLETE. Under
+# the old numbers the likeliest cause of a "partially completed" screen was a lifecycle rule doing
+# exactly what it was asked to — a run that is not partial at all. A partial run reading as
+# complete, or a complete one as partial, is the failure the results redesign exists to prevent.
+
+def test_the_total_counts_what_assess_enqueued_not_what_discover_listed(isolated_store,
+                                                                       monkeypatch):
+    """THE LOAD-BEARING CASE. Four files discovered; a rule flags two, and one is an image that
+    was never assessable — exactly one file is enqueued. `files` must say 1."""
+    st = isolated_store
+    _wire(monkeypatch, st)
+    _policy(st, "archive-old", "archive", ARCHIVE_FOLDER)
+    _discover()
+    assert st.get_scan("s1")["run"]["files"] == 4       # discover's count, correct for discover
+    _assess()
+
+    run = st.get_scan("s1")["run"]
+    assert _enqueued(st) == {"new.docx"}
+    assert run["files"] == 1, "files must describe what Assess enqueued, not what Discover listed"
+    # The number the screen actually reads. Under the old behaviour this was 4 - 0 = 4, so a run
+    # with nothing outstanding claimed four files had never been started.
+    assert run["files"] - (run["files_done"] or 0) == 1
+
+
+def test_a_non_assessable_row_is_not_counted_as_never_started_either(isolated_store, monkeypatch):
+    """No lifecycle rule at all. The image is still dropped — for its format — and must not be
+    left inside the total as a file waiting to be assessed."""
+    st = isolated_store
+    _wire(monkeypatch, st)
+    _discover()
+    _assess()
+
+    run = st.get_scan("s1")["run"]
+    assert _enqueued(st) == {"old.docx", "older.docx", "new.docx"}
+    assert run["files"] == 3
+
+
+def test_re_assessing_re_points_the_total_and_never_accumulates(isolated_store, monkeypatch):
+    """A second assess over the same scan re-enters this path. The total must describe THAT run's
+    population — not the sum of both, and not the first run's answer left stale.
+
+    Run twice with DIFFERENT populations, so the assertion can tell assignment from accumulation
+    AND from staleness: 3 under the override, then 1 without it. Accumulation would give 4; a
+    write that never happened the second time would leave 3."""
+    st = isolated_store
+    _wire(monkeypatch, st)
+    _policy(st, "archive-old", "archive", ARCHIVE_FOLDER)
+    _discover()
+
+    _assess(include_lifecycle_flagged=True)             # override pulls the two flagged docx back
+    assert st.get_scan("s1")["run"]["files"] == 3
+
+    _assess()                                           # default: the two flagged docx held back
+    assert st.get_scan("s1")["run"]["files"] == 1
+
+
+def test_a_run_that_was_never_assessed_keeps_discovers_count(isolated_store, monkeypatch):
+    """init_scan_run is deliberately unchanged. Discover's count is correct for discover, and a
+    run that is discovered but never assessed must keep it rather than report nothing."""
+    st = isolated_store
+    _wire(monkeypatch, st)
+    _policy(st, "archive-old", "archive", ARCHIVE_FOLDER)
+    _discover()                                         # no _assess()
+    assert st.get_scan("s1")["run"]["files"] == 4
+
+
 def _enqueued(st):
     """Filenames Assess actually enqueued for analysis — the run's own answer to what it assessed,
     read from the job queue rather than from the counter under test."""

@@ -1219,6 +1219,23 @@ def _scan_assess(payload: dict, job: dict) -> None:
         "lifecycle_eligible_excluded": eligible_excluded,
         "lifecycle_overridden": overridden,
     })
+    # ── THE RUN'S TOTAL IS THE POPULATION ASSESS ACTUALLY ENQUEUED ───────────────────────────
+    # `files` was written once, at init_scan_run, from the DISCOVERED count — correct then,
+    # because at discover time that is the only population there is. The loop above has since
+    # narrowed it twice: non-assessable rows are dropped, and by default so is every row a
+    # lifecycle rule flagged. Only `items` was ever enqueued.
+    #
+    # Left unwritten, `files` keeps describing the wider population while `files_done` counts the
+    # narrower one, so `files - files_done` reports deliberately-excluded files as NOT STARTED.
+    # That difference is what the frontend reads to call a run partially complete — so with the
+    # old numbers the likeliest cause of a "partially completed" screen was a lifecycle rule doing
+    # exactly what it was asked to. After this write, `files - files_done` means precisely
+    # "selected for THIS assess and never started".
+    #
+    # Written HERE, with `items` in hand and immediately before the fan-out, so no worker can bump
+    # files_done against a total that is still the discovered one. Assignment, not accumulation: a
+    # re-assess re-enters this path and must describe ITS OWN population, not the sum of both runs.
+    core.store.set_scan_files(scan_id, len(items))
     _enqueue_analysis(scan_id, source, items, ai=ai, pii=pii, user=user,
                       incremental=incremental, exclude_remediated=exclude_rem,
                       force_batch=bool(params.get("batch")))

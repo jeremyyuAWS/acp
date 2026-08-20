@@ -919,6 +919,29 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur, "UPDATE scan_runs SET status=%s WHERE id=%s", (status, scan_id))
 
+    def set_scan_files(self, scan_id: str, files: int) -> None:
+        """Re-point a run's `files` total at the population THIS phase actually enqueued.
+
+        `files` is written once at init_scan_run, from the DISCOVERED count, because at discover
+        time that is the only population there is. Assess then narrows it — dropping every
+        non-assessable inventory row, and by default every row a lifecycle rule flagged for
+        archive/deletion — and enqueues only the remainder. Left alone, `files` still describes
+        the wider population while `files_done` counts the narrower one, so `files - files_done`
+        silently reports deliberately-excluded files as "not started". The frontend reads exactly
+        that difference to decide a run is PARTIALLY COMPLETE, which made the most likely cause of
+        a "partially completed" screen a lifecycle rule doing its job.
+
+        ASSIGNMENT, NEVER ACCUMULATION. A second assess over the same scan re-enters this path;
+        `files` must then describe that run's population, not the sum of both. `SET files=%s` is
+        an assignment, so a re-assess that enqueues fewer files reports fewer — which is what
+        makes the number mean "selected for THIS assess" rather than "ever selected".
+
+        Deliberately NOT folded into init_scan_run: discover's own count is correct for discover,
+        and a run that is discovered but never assessed must keep it.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "UPDATE scan_runs SET files=%s WHERE id=%s", (files, scan_id))
+
     def add_inventory(self, scan_id: str, items: list[dict]) -> None:
         """Persist the Discover-phase inventory (ADR 0020 / lifecycle PRD) — source metadata
         only, no file opened. Idempotent per (scan_id, file) so a re-listed discover doesn't
