@@ -1263,6 +1263,28 @@ def get_heading_outline(scan_id: str, filename: str, request: Request):
     return {"outline": _ds.heading_outline(data, ext)}
 
 
+@router.get("/scans/{scan_id}/files/{filename:path}/table-structure")
+def get_table_structure(scan_id: str, filename: str, request: Request):
+    """The docx table(s) as `{tables:[{rows, headerRow, headerMarked, truncated}]}` for a
+    header-association finding's (1.3.1) Structure evidence — real cell text, which row is the header,
+    and whether that row is actually marked so a screen reader announces it. docx-only, owner-scoped,
+    non-blocking: any other format, or a doc with no qualifying (multi-row, multi-column) table,
+    returns `{"tables": null}` (a 200) so the card degrades to the honest generic note. Honesty
+    (ADR 0016): extracted table content only — no fabricated grid, no invented header."""
+    owner = _owner(request)
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    ext = os.path.splitext(filename)[1].lower()
+    if ext != ".docx":
+        return {"tables": None}
+    data = _source_bytes_for_render(request, scan_id, filename, owner)
+    if not data:
+        return {"tables": None}
+    import doc_structure as _ds
+    result = _ds.table_structure(data, ext)
+    return {"tables": (result or {}).get("tables") if result else None}
+
+
 # A reviewer opening one 1.4.3-hybrid card shouldn't trigger dozens of slide renders; bound the
 # work per request (the OCR-cap precedent). A deck with more hybrid shapes than this reports the
 # cap honestly (`checked` < `total`) rather than silently covering only some.
