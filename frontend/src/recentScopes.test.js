@@ -132,16 +132,18 @@ describe('carve-outs survive the round trip', () => {
 describe('the label names the whole boundary', () => {
   const entry = (scope) => reusableScopes([run('a', '2026-08-18T10:00:00Z', 'drive', scope)], 'drive')[0]
 
-  it('says where AND what', () => {
+  it('says WHERE, and no longer says what', () => {
+    // It used to name both halves — "HR, Finance · 1 criteria". Discover does not choose criteria
+    // any more (PRD DISC-01), and a reused Discover scope restores folders only (PRD 5.1), so the
+    // criteria half would describe something this screen cannot set and will not carry back.
+    //
+    // Asserted as an ABSENCE rather than deleted, because that is the guard that matters: three
+    // entire-source runs rendered as "· 16 criteria", "· 15", "· 17" — indistinguishable in the
+    // only dimension Discover decides.
     const t = describeScope(entry({ folders: [HR, FIN], scan_scope: { '1.1.1': ['pdf'] } }))
     expect(t).toMatch(/HR, Finance/)
-    expect(t).toMatch(/1 criteria/)
-  })
-
-  it('says "Everything supported" rather than leaving the criteria half blank', () => {
-    // A blank half reads as "no criteria", which is the opposite of what an unrestricted scope
-    // means — the same inversion the empty folder selection has.
-    expect(describeScope(entry({ folders: [HR] }))).toMatch(/Everything supported/)
+    expect(t, 'the criteria clause is back on a Discover scope label').not.toMatch(/criteria/i)
+    expect(t).not.toMatch(/Everything supported/)
   })
 
   it('names the carve-out when the run recorded names', () => {

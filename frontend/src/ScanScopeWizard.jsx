@@ -2,8 +2,6 @@ import { useState, useEffect, useMemo, Fragment } from 'react'
 import { getSettings, updateSettings, getScanLocations, setScanLocations,
          listFolders, listSpFolders } from './api.js'
 import { scopeFooterPart, blockedReason } from './wizardScopeReady.js'
-import { ASSESSED_ROW_LABEL, assessedFormatsLine, OTHER_TYPES_NOTE,
-         footerFormatsPart } from './assessedFormats.js'
 import FolderPicker from './FolderPicker.jsx'
 import { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } from './scopePresets.js'
 import { TRACKED_17, RULE_DETAILS } from './ruleDetails.js'
@@ -32,7 +30,8 @@ import { lastRunOfScope, coverageSentence } from './scopeHistory.js'
 // them out and take them out of selection so nobody scopes a scan around a cell that returns nothing.
 // A cell is READY when its assessment lane is 'auto' (🟢 automated) or 'review' (🟡
 // detects, human confirms). Both produce a result; only 'human'/absent do not.
-const STEPS = ['Drive locations', 'Formats & criteria', 'Review']
+// No stepper. Discover asks ONE question — where should ACP inventory? — and a progress
+// rail across a single step is chrome implying choices that are no longer here.
 
 const laneOf = (sc, f) => assessmentFor(ASSESSMENT_FALLBACK, f, sc)   // 'auto' | 'review' | 'human' | null
 const isReady = (sc, f) => laneOf(sc, f) === 'auto' || laneOf(sc, f) === 'review'
@@ -221,12 +220,9 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   const [folders, setFolders] = useState([])
   const [excluded, setExcluded] = useState([])
   const [savedFolders, setSavedFolders] = useState(null)   // null = not loaded yet
-  // THREE STEPS, because one panel asking for folders, formats, criteria and engine switches at
-  // once makes every decision compete with every other. The order is deliberate: where, then what,
-  // then confirm — folders decide which estate is judged, criteria only decide how each document
-  // in it is judged, so asking criteria first invites tuning 53 checks over the wrong half of a
-  // Drive. Progressive disclosure, not more surface.
-  const [step, setStep] = useState(1)
+  // ONE STEP. Three existed because this panel asked for folders, formats, criteria and engine
+  // switches at once and each decision competed with the others. Two of those are Assess's
+  // question now (PRD DISC-01), leaving a single one — where should ACP inventory?
   // "Entire source" vs "Specific folders" is asked EXPLICITLY rather than inferred from an empty
   // selection. Empty and everything look identical otherwise, and the reassuring reading of a
   // blank list is the wrong one — the same rule the picker and the source card already follow.
@@ -256,10 +252,10 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   const [pickerSeed, setPickerSeed] = useState(0)
   const chooseAll = () => { setScopeMode('all'); setFolders([]); setExcluded([]); setPickerSeed((n) => n + 1) }
 
-  // The same component serves two surfaces: the scan-launch modal (stepped) and the Settings
-  // scope editor (one panel, no start button). Stepping the editor would hide half its controls
-  // behind a flow that has nowhere to go.
-  const atStep = (n) => !showStartButton || step === n
+  // Kept as an identity so the remaining call sites read unchanged. There is one step now: the
+  // scope. Left in place rather than inlined because the regions it wraps are long, and silently
+  // dropping a gate is the kind of edit that disappears in review.
+  const atStep = () => true
 
 
   const foldersDiffer = savedFolders !== null
@@ -328,7 +324,10 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   // comparisons, and a stale memo here would caption one boundary's count with another's, which
   // is the precise failure this is meant to prevent.
   const lastRun = lastRunOfScope(scans,
-    { folders, excluded, scan_scope: restrict ? toPayload(sel) : null }, locKey)
+    // Folders only. PRD 5.1 — a reused Discover scope restores source and folders, never the
+    // criteria that run happened to use; those are Assess's, and carrying them here is what
+    // made the recent-scope cards read as "Entire source · 16 criteria".
+    { folders, excluded }, locKey)
 
   const profile = profileFor(restrict, sel)
 
@@ -500,38 +499,8 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
     </button>
   )
 
-  // Persist the scope. Returns true when the platform accepted (or was cleared), false when it was
-  // refused or only simulated — the caller uses that to decide whether "Start scan" proceeds.
-  const save = async () => {
-    if (restrict && chosen === 0) { setMsg(EMPTY_GUARD); return false }
-    setBusy(true); setMsg('')
-    try {
-      const payload = restrict ? toPayload(sel) : ''
-      const res = await updateSettings({ scan_scope: payload })
-      if (res?.simulated) { setMsg(SIM_NOT_WRITTEN); return false }
-      // Trust the SERVER's echo, not the request.
-      const back = res?.scan_scope ?? ''
-      setSaved(back)
-      const reparsed = parseStoredScope(back)
-      setRestrict(Boolean(reparsed))
-      setSel(reparsed || {})
-      setMsg(restrict
-        ? `✓ Scope saved — ${chosen} supported checks in scope.`
-        : '✓ Scope cleared — every criterion the engine supports is assessed.')
-      return true
-    } catch (e) {
-      const m = String(e?.message || e)
-      if (m.includes('403')) { setForbidden(true); setMsg('Owner-only — this account cannot change the scope.') }
-      else setMsg(`Could not save: ${m}`)
-      return false
-    } finally { setBusy(false) }
-  }
 
   const startScan = async () => {
-    if (restrict && chosen === 0) { setMsg(EMPTY_GUARD); return }
-    // "Remember" persists this scope as the platform default for next time; either way the scan
-    // runs. A read-only account cannot persist, so it just starts with the scope already stored.
-    if (remember && canEdit) { await save() }
     // Explicit write-back only. A one-off narrow scan must not quietly reconfigure the connection:
     // every later scheduled scan would then cover less, and it would look like configuration
     // somebody chose on purpose.
@@ -562,10 +531,13 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   // with no explanation is its own defect, and the reason is the thing the user has to act on.
   const blocked = locKey ? blockedReason(scopeMode, folders) : null
 
+  // Locations, and nothing else. It read "Entire source · 4 formats assessed · Custom scope" —
+  // two thirds of which described a decision this screen no longer makes. A summary naming the
+  // criteria profile on a screen with no criteria control is the contradiction #502 fixed for the
+  // folder half, in the other direction.
   const footerSummary = [
     locKey ? scopeFooterPart(scopeMode, folders, excluded) : null,
-    footerFormatsPart(nFormats),
-    profileLabel,
+    'all file types',
   ].filter(Boolean).join(' · ')
 
   return (
@@ -581,12 +553,6 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
         </span>
       </p>
 
-      {!canEdit && (
-        <p role="status" style={{ fontSize: 13, background: '#FBF1DF', border: '1px solid #EAD9BF',
-                                  borderRadius: 8, padding: '10px 12px', color: '#6B4A0B' }}>
-          🔒 <b>Read-only.</b> Scope is set by your workspace owner — this scan uses the shared scope.
-        </p>
-      )}
 
       {/* ── Stepper ─────────────────────────────────────────────────────────── */}
       {/* Numbered, not just visually distinct: a step count is the cheapest way to say "there is
@@ -594,39 +560,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
       {showStartButton && (
         <ol style={{ display: 'flex', gap: 0, listStyle: 'none', margin: '0 0 14px', padding: 0,
                      fontSize: 12.5, alignItems: 'center' }}>
-          {STEPS.map((label, i) => {
-            const n = i + 1
-            const on = step === n
-            const done = step > n
-            return (
-              <li key={label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                {i > 0 && <span aria-hidden="true" className="muted"
-                                style={{ margin: '0 10px' }}>──</span>}
-                <button type="button"
-                        // Going BACK by clicking a completed step is free; jumping forward is not
-                        // offered, because a later step summarises choices the earlier ones make.
-                        disabled={!done}
-                        onClick={() => done && setStep(n)}
-                        aria-current={on ? 'step' : undefined}
-                        style={{ display: 'flex', alignItems: 'center', gap: 6, font: 'inherit',
-                                 background: 'none', border: 'none', padding: 0,
-                                 cursor: done ? 'pointer' : 'default',
-                                 color: on ? 'var(--ink)' : 'var(--muted)',
-                                 fontWeight: on ? 650 : 400 }}>
-                  <span aria-hidden="true" style={{
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    width: 20, height: 20, borderRadius: 999, fontSize: 11.5, fontWeight: 600,
-                    border: `1px solid ${on || done ? '#6D28D9' : 'var(--line)'}`,
-                    background: on ? '#6D28D9' : 'transparent',
-                    color: on ? '#fff' : (done ? '#6D28D9' : 'var(--muted)') }}>
-                    {done ? '✓' : n}
-                  </span>
-                  {label}
-                </button>
-              </li>
-            )
-          })}
-        </ol>
+          </ol>
       )}
 
       {/* ── 0. Drive locations (PRD §6 step 1) ──────────────────────────────── */}
@@ -785,276 +719,20 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
         </div>
       )}
 
-      {/* ── 1. Scan profile ─────────────────────────────────────────────────── */}
-      {atStep(2) && (<>
-      <div style={{ margin: '12px 0 4px', fontSize: 12, fontWeight: 700, letterSpacing: '.04em', color: 'var(--muted)' }}>
-        SCAN PROFILE
-      </div>
-      <div role="radiogroup" aria-label="Scan profile"
-           style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {PROFILES.map((p) => {
-          const on = profile === p.id
-          return (
-            <button key={p.id} type="button" role="radio" aria-checked={on}
-                    disabled={busy || !canEdit} title={p.hint}
-                    onClick={() => selectProfile(p.id)}
-                    style={{ flex: '1 1 140px', textAlign: 'left', cursor: 'pointer',
-                             border: `1px solid ${on ? '#6D28D9' : 'var(--line)'}`,
-                             background: on ? '#F3EEFC' : 'var(--surface)', color: 'inherit',
-                             borderRadius: 10, padding: '8px 10px', font: 'inherit' }}>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>
-                {p.label}{p.tag && <span className="muted" style={{ fontWeight: 400 }}> — {p.tag}</span>}
-              </div>
-              <div className="muted" style={{ fontSize: 11.5 }}>{p.hint}</div>
-            </button>
-          )
-        })}
-      </div>
+      {/* The scan profiles, format cards and criterion × format matrix USED TO BE HERE.
+          They are Assess's question now (PRD DISC-01). Discover answers one — where should ACP
+          inventory? — and every readable file inside that boundary is listed whatever its type
+          (DISC-02). Asking for formats here made a discovery boundary and an assessment boundary
+          look like a single decision, and invited reading a format selection as a filter on what
+          gets FOUND.
 
-      {/* ── 2. File formats ─────────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, margin: '16px 0 4px' }}>
-        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.04em', color: 'var(--muted)' }}>FILE FORMATS</span>
-        <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          <button className="ghost small" type="button" disabled={busy || !canEdit} onClick={selectAllFormats}>Select all</button>
-          <button className="ghost small" type="button" disabled={busy || !canEdit} onClick={clearAllFormats}>Clear all</button>
-        </span>
-      </div>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {SCOPE_FORMATS.map((f) => {
-          const on = formatActive(f)
-          return (
-            <button key={f} type="button" role="checkbox" aria-checked={on}
-                    aria-label={`${FMT_LABEL[f]} — ${FMT_COUNT[f]} supported criteria`}
-                    disabled={busy || !canEdit} onClick={() => toggleFormat(f)}
-                    style={{ flex: '1 1 90px', cursor: 'pointer', textAlign: 'center',
-                             position: 'relative',
-                             // Selected = white with a purple BORDER and a tick, not a purple
-                             // fill. Filling every selected card made four equally-important
-                             // choices compete with each other and with the profile cards above;
-                             // the state is just as legible from the border, and the panel stops
-                             // shouting.
-                             border: `2px solid ${on ? '#6D28D9' : 'var(--line)'}`,
-                             background: 'var(--surface)', color: 'inherit',
-                             opacity: FMT_COUNT[f] ? 1 : 0.55,
-                             borderRadius: 10, padding: '12px 8px', font: 'inherit' }}>
-              {on && (
-                <span aria-hidden="true" style={{ position: 'absolute', top: 5, right: 7,
-                                                  color: '#6D28D9', fontSize: 12 }}>✓</span>
-              )}
-              <div style={{ fontSize: 15, fontWeight: 700 }}>{FMT_LABEL[f]}</div>
-              <div className="muted" style={{ fontSize: 11.5 }}>{FMT_COUNT[f]} supported criteria</div>
-            </button>
-          )
-        })}
-      </div>
-
-      {/* ── 3. Summary line ─────────────────────────────────────────────────── */}
-      <p role="status" aria-live="polite" style={{ fontSize: 13, margin: '12px 0 2px' }}>
-        <b>{profileLabel}</b> · {nFormats} format{nFormats !== 1 ? 's' : ''} · {chosen} supported checks selected
-        {hidden.length > 0 && (
-          <span className="muted"> · <b title={`Not shown: ${hidden.join(', ')}`}>{hidden.length} outside the tracked list</b></span>
-        )}
-      </p>
-      <p className="muted" style={{ fontSize: 12, margin: '0 0 4px' }}>
-        {unsupported} unsupported combination{unsupported !== 1 ? 's' : ''} will not be evaluated
-      </p>
-
-      {/* ── 4. Customize criteria and combinations (collapsed) ──────────────── */}
-      {/* OPEN ONLY ON PURPOSE. A recommended profile already answers this question, so the full
-          criterion x format matrix is expert surface that every first-time user was made to scroll
-          past before they could start a basic scan. `open` follows the Custom profile, so choosing
-          Custom reveals it without a second click and choosing a preset never does. */}
-      <details open={profile === 'custom'}
-               style={{ borderTop: '1px solid var(--line)', marginTop: 8 }}>
-        <summary style={{ padding: '8px 0', cursor: 'pointer', fontSize: 13, userSelect: 'none' }}>
-          View or customize criteria
-        </summary>
-        <div style={{ paddingBottom: 8 }}>
-          {/* Preset quick-picks + running count */}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '0 0 8px', flexWrap: 'wrap' }}>
-            <button className="ghost small" type="button" disabled={busy || !canEdit}
-                    onClick={() => applyPreset('acp-core-17')}>Core 17</button>
-            <button className="ghost small" type="button" disabled={busy || !canEdit}
-                    onClick={() => applyPreset('engagement-14')}>Engagement 14</button>
-            <button className="ghost small" type="button" disabled={busy || !canEdit || chosen === 0}
-                    onClick={() => { setSel({}); setRestrict(true); setMsg('') }}>Clear selection</button>
-            <span className="muted" style={{ fontSize: 12, marginLeft: 'auto' }}>
-              {chosen} supported checks selected
-            </span>
-          </div>
-
-          {/* ── Search + filters ────────────────────────────────────────────── */}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '0 0 6px' }}>
-            <input type="search" value={query} onChange={(e) => setQuery(e.target.value)}
-                   placeholder="Search criterion id or name" aria-label="Search criteria"
-                   style={{ flex: '1 1 200px', minWidth: 160, font: 'inherit', fontSize: 13,
-                            border: '1px solid var(--line)', borderRadius: 8, padding: '5px 10px',
-                            background: 'var(--surface)', color: 'inherit' }} />
-            {chip('Selected only', fSelected, () => setFSelected((v) => !v))}
-            {chip('Level A', fLevels.has('A'), () => toggleLevel('A'))}
-            {chip('Level AA', fLevels.has('AA'), () => toggleLevel('AA'))}
-            {chip('Supported by all selected formats', fSupportedAll, () => setFSupportedAll((v) => !v),
-              { title: activeFormats.length ? `Rows supporting every selected format (${activeFormats.map((f) => FMT_LABEL[f]).join(', ')})` : 'Rows supporting every selected format' })}
-            {FIX_ORDER.map((m) => chip(FIX_LABEL[m], fModes.has(m), () => toggleMode(m),
-              { title: `Fix mode: ${FIX_LABEL[m]}` }))}
-          </div>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', margin: '0 0 8px' }}>
-            <span className="muted" role="status" aria-live="polite" style={{ fontSize: 12 }}>
-              Showing {visibleRows.length} of {OFFERED.length} criteria
-            </span>
-            {anyFilter && (
-              <button className="ghost small" type="button" onClick={clearFilters}>Clear filters</button>
-            )}
-          </div>
-
-          {/* ── Readiness legend ────────────────────────────────────────────────
-              What each cell state means, so a tester knows what is theirs to try. Keyed on the
-              CI-locked assessment axis (capability.js): 🟢 automated, 🟡 review required, and
-              a criterion×format ACP can't assess yet is greyed and can't be selected. */}
-          <div role="note" aria-label="Readiness legend"
-               style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', alignItems: 'center',
-                        fontSize: 11.5, color: 'var(--muted)', margin: '0 2px 8px' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: 3, border: '2px solid #3B6D11', display: 'inline-block' }} />
-              Automated — ACP evaluates this combination
-            </span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: 3, border: '2px solid #B45309', display: 'inline-block' }} />
-              Review required — ACP detects evidence, a person decides
-            </span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <span aria-hidden="true" style={{ color: 'var(--muted)', opacity: 0.6 }}>◌</span>
-              Not currently supported — greyed, can't be selected
-            </span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <span aria-hidden="true" className="muted" style={{ opacity: 0.45 }}>·</span>
-              Not supported for that format
-            </span>
-          </div>
-
-          {/* ── The matrix (sticky header + criterion column) ───────────────── */}
-          <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 360,
-                        border: '1px solid var(--line)', borderRadius: 8 }}>
-            <table style={{ borderCollapse: 'separate', borderSpacing: 0, fontSize: 13, width: '100%' }}>
-              <caption className="sronly">
-                Scan scope: tick each criterion and format this scan assesses. Rows are grouped by
-                WCAG principle. Pairs ACP cannot assess yet are marked Not ready and cannot be
-                selected; pairs the engine has no verdict for are marked Not supported.
-              </caption>
-              <thead>
-                <tr>
-                  <th scope="col" style={STICKY_CORNER}>Criterion</th>
-                  {SCOPE_FORMATS.map((f) => {
-                    const st = colState(f)
-                    return (
-                      <th key={f} scope="col" style={STICKY_TOP}>
-                        <div style={{ fontWeight: 700 }}>{FMT_LABEL[f]}</div>
-                        <button type="button" role="checkbox" aria-checked={ariaChecked(st)}
-                                disabled={busy || !canEdit || colRows(f).length === 0}
-                                onClick={() => toggleColumn(f)}
-                                aria-label={`Select ${FMT_LABEL[f]} for all ${colRows(f).length} visible criteria`}
-                                title={`Toggle ${FMT_LABEL[f]} down the visible rows`}
-                                style={selMini(st)}>{st === 'all' ? 'Clear' : 'All'}</button>
-                      </th>
-                    )
-                  })}
-                  <th scope="col" style={STICKY_TOP}>Row</th>
-                </tr>
-              </thead>
-              <tbody>
-                {groups.map((g) => {
-                  const gst = groupState(g.rows)
-                  return (
-                    <Fragment key={g.digit}>
-                      <tr>
-                        <td colSpan={SCOPE_FORMATS.length + 2} style={GROUP_ROW}>
-                          <span style={{ position: 'sticky', left: 0, display: 'inline-flex',
-                                         alignItems: 'center', gap: 8 }}>
-                            <button type="button" role="checkbox" aria-checked={ariaChecked(gst)}
-                                    disabled={busy || !canEdit}
-                                    onClick={() => setGroup(g.rows, gst !== 'all')}
-                                    aria-label={`Select all criteria in ${g.name}`}
-                                    style={selMini(gst)}>{gst === 'all' ? 'None' : 'All'}</button>
-                            <b>{g.name}</b>
-                            <span className="muted" style={{ fontWeight: 400 }}>· {g.rows.length}</span>
-                          </span>
-                        </td>
-                      </tr>
-                      {g.rows.map((row) => {
-                        const rst = rowState(row)
-                        const rowNotReady = row.ready.length === 0   // no format ACP can assess yet
-                        return (
-                          <tr key={row.sc}>
-                            <th scope="row" style={{ ...STICKY_LEFT, opacity: rowNotReady ? 0.55 : 1 }}>
-                              <b>{row.sc}</b> {row.name} <span className="muted">· {row.level}</span>
-                              {rowNotReady && (
-                                <span title="No format ACP can assess for this criterion yet"
-                                      style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 600, letterSpacing: '.02em',
-                                               color: 'var(--muted)', border: '1px solid var(--line)',
-                                               borderRadius: 999, padding: '0 6px' }}>NOT READY</span>
-                              )}
-                            </th>
-                            {SCOPE_FORMATS.map((f) => {
-                              // Three states: not supported (engine has no verdict) · not ready
-                              // (engine reaches it but ACP can't yet ASSESS it — greyed, disabled) ·
-                              // ready (selectable checkbox, tinted by assessment lane).
-                              if (!row.formats.includes(f)) {
-                                return (
-                                  <td key={f} title="Not supported for this format"
-                                      style={{ ...CELL, background: 'var(--surface)' }}>
-                                    <span aria-hidden="true" className="muted" style={{ opacity: 0.45 }}>·</span>
-                                    <span className="sronly">{`${FMT_LABEL[f]}: Not supported for ${row.sc}`}</span>
-                                  </td>
-                                )
-                              }
-                              if (!isReady(row.sc, f)) {
-                                return (
-                                  <td key={f} title={`Not currently supported — ${row.sc} on ${FMT_LABEL[f]} is not evaluated in this release`}
-                                      style={{ ...CELL, background: 'var(--surface)', opacity: 0.9 }}>
-                                    <span aria-hidden="true" style={{ color: 'var(--muted)', opacity: 0.6, fontSize: 12 }}>◌</span>
-                                    <span className="sronly">{`${FMT_LABEL[f]}: not currently supported for ${row.sc} — cannot be selected`}</span>
-                                  </td>
-                                )
-                              }
-                              const on = has(row.sc, f)
-                              const lane = laneOf(row.sc, f)        // 'auto' | 'review'
-                              const accent = lane === 'auto' ? '#3B6D11' : '#B45309'
-                              return (
-                                <td key={f} title={lane === 'auto'
-                                      ? `Automated — ACP evaluates ${row.sc} for ${FMT_LABEL[f]}`
-                                      : `Ready — ACP detects ${row.sc} for ${FMT_LABEL[f]}, you confirm`}
-                                    style={{ ...CELL, background: on ? '#F3EEFC' : 'transparent' }}>
-                                  <input type="checkbox" checked={on} disabled={busy || !canEdit}
-                                         onChange={() => toggle(row.sc, f)}
-                                         style={{ accentColor: accent }}
-                                         aria-label={`${row.sc} ${row.name}, ${FMT_LABEL[f]} — ${lane === 'auto' ? 'ready, certifies' : 'ready, detect and confirm'}`} />
-                                </td>
-                              )
-                            })}
-                            <td style={CELL}>
-                              <button type="button" role="checkbox" aria-checked={ariaChecked(rst)}
-                                      disabled={busy || !canEdit || rowNotReady} onClick={() => toggleRow(row)}
-                                      aria-label={`Select every format for ${row.sc} ${row.name}`}
-                                      style={{ ...selMini(rst), ...(rowNotReady ? { opacity: 0.4, cursor: 'not-allowed' } : {}) }}>{rst === 'all' ? 'None' : 'All'}</button>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </Fragment>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-          {visibleRows.length === 0 && (
-            <p className="muted" role="status" style={{ fontSize: 13, margin: '8px 2px 0' }}>
-              No criteria match these filters. <button className="ghost small" type="button" onClick={clearFilters}>Clear filters</button>
-            </p>
-          )}
-        </div>
-      </details>
-
-      </>)}
+          DELETED rather than moved, on the product owner's call that per-criterion-per-format
+          scope is not used. The matrix could express "1.4.3 on PDF but not on DOCX"; `AssessScope`
+          cannot, and does not need to. What Assess has instead is stronger for the question people
+          actually ask: document-type chips, the Core-17 picker writing the same
+          `settings.scan_scope` this component used to write, and `ScopeImpact` giving a live
+          eligible-FILE count with per-criterion coverage-gap warnings — counted against the real
+          inventory rather than against catalog cells. */}
 
       {/* ── 3. Review ───────────────────────────────────────────────────────── */}
       {/* A scope CONTRACT: what is about to be covered, stated once, in the order it was decided.
@@ -1068,7 +746,9 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
           last time it ran, matched on the whole frozen boundary and captioned with its date. When
           no such run exists the line says so and stops — inventing a figure for precisely the case
           with no evidence behind it would be the least checkable number on the screen. */}
-      {showStartButton && step === 3 && (
+      {/* The scope restated as a contract, on the same screen that chose it — there is
+          no later step to defer it to. */}
+      {showStartButton && (
         <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '12px 14px' }}>
           <div style={{ fontSize: 13, fontWeight: 650, marginBottom: 8 }}>Ready to scan</div>
           <dl style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 14px',
@@ -1091,25 +771,17 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                 </dd>
               </>
             )}
-            {/* Not "Formats". The scan walks EVERYTHING — scanner._sp_list builds `est_files` from
-                every item and only the six supported extensions become documents — so a bare list
-                of four beside a count of the estate leaves the reader to guess which population
-                the four apply to, and the reassuring guess is "all of them". */}
-            <dt className="muted">{ASSESSED_ROW_LABEL}</dt>
+            {/* #514 put the assessed-formats row here, correctly for a Discover step that still
+                chose formats. It no longer does, so the row moves with the decision: what this run
+                settles is what gets INVENTORIED, and that is everything readable in the boundary
+                above (PRD DISC-02). What gets EVALUATED is chosen in Assess, against this
+                inventory — said here so the two are not silently conflated again. */}
+            <dt className="muted">File types</dt>
             <dd style={{ margin: 0 }}>
-              {assessedFormatsLine(activeFormats, FMT_LABEL)}
+              All file types will be inventoried
               <div className="muted" style={{ fontSize: 11.5, marginTop: 2, lineHeight: 1.45 }}>
-                {OTHER_TYPES_NOTE}
+                Formats and WCAG criteria are chosen in Assess, from this inventory.
               </div>
-            </dd>
-            <dt className="muted">Criteria</dt>
-            <dd style={{ margin: 0 }}>{profileLabel}</dd>
-            <dt className="muted">Executable checks</dt>
-            <dd style={{ margin: 0 }}>
-              {chosen} supported combination{chosen === 1 ? '' : 's'}
-              {unsupported > 0 && (
-                <span className="muted"> · {unsupported} unsupported will not be evaluated</span>
-              )}
             </dd>
           </dl>
           {/* Below the contract, not inside it: this is evidence ABOUT the scope, not part of it.
@@ -1125,29 +797,6 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
       {/* ── 5/7. Footer ─────────────────────────────────────────────────────── */}
       {showStartButton ? (
         <>
-          {/* THE CRITERIA WRITE-BACK, now symmetric with the folder one directly above it.
-              It used to read "Remember these selections for my next scan", be ticked by DEFAULT,
-              and appear on every run. Three things were wrong with that. It is not "my next scan"
-              — `scan_scope` is the platform default and applies to everyone. Being on by default
-              made a one-off narrowing into permanent configuration unless somebody noticed a
-              ticked box, which is the exact failure the folder half is careful about, with the
-              default the wrong way round. And a checkbox that is always there is a checkbox people
-              tick without reading; appearing only once the run actually DIFFERS from what is
-              stored makes its absence a signal too.
-              Hidden for a non-owner rather than shown and ignored: PUT /settings is admin-only, so
-              offering it to a read-only account promises a write that 403s. */}
-          {step === 3 && dirty && canEdit && (
-            <div style={{ margin: '12px 0 0' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-                <input type="checkbox" checked={remember} disabled={busy}
-                       onChange={(e) => setRemember(e.target.checked)} />
-                Also save these criteria as the platform default
-              </label>
-              <div className="muted" style={{ fontSize: 11.5, marginLeft: 24 }}>
-                Applies to every later scan, for everyone. This run uses them either way.
-              </div>
-            </div>
-          )}
 
           {/* Sticky footer: the running scope stays visible while the folder tree or the criterion
               matrix scrolls, so the primary action never leaves the screen and the summary never
@@ -1158,33 +807,21 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
             <span className="muted" style={{ fontSize: 12.5 }}>{footerSummary}</span>
             <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
               <button className="ghost small" type="button" disabled={busy}
-                      onClick={() => (step === 1 ? onStartScan?.({ cancel: true }) : setStep(step - 1))}>
-                {step === 1 ? 'Cancel' : '← Back'}
+                      onClick={() => onStartScan?.({ cancel: true })}>
+                Cancel
               </button>
-              {step < 3 ? (
-                // Blocked rather than silently reinterpreted. An enabled Continue over an empty
-                // "Specific folders" selection authorises the whole estate — the run the footer
-                // and the scope panel both used to describe as "Entire source" while the user was
-                // looking at a screen that said they were narrowing.
-                <button type="button" disabled={busy || !!blocked} title={blocked || undefined}
-                        onClick={() => setStep(step + 1)}>Continue →</button>
-              ) : (
-                <button type="button" disabled={busy || !!blocked} title={blocked || undefined}
-                        onClick={startScan}>
-                  {busy ? 'Saving…' : 'Start scan →'}
-                </button>
-              )}
+              {/* One action, and it says what actually happens: this LISTS the estate and opens
+                  no file (`_defer_analysis_to_assess()` defaults on, ADR 0020) — the WCAG work
+                  runs later, in Assess. Blocked while the scope is unfinished, carrying the reason
+                  (#502). */}
+              <button type="button" disabled={busy || !!blocked} title={blocked || undefined}
+                      onClick={startScan}>
+                {busy ? 'Saving…' : 'Start discovery →'}
+              </button>
             </span>
           </div>
         </>
-      ) : (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
-          <button className="ghost small" type="button" onClick={save} disabled={busy || !canEdit || !dirty}>
-            {busy ? 'Saving…' : 'Save as reusable scope'}
-          </button>
-          {!dirty && <span className="muted" style={{ fontSize: 12 }}>No unsaved changes</span>}
-        </div>
-      )}
+      ) : null}
 
       {msg && <p role="status" aria-live="polite"
                  style={{ margin: '10px 0 0', fontSize: 13, color: msgColor(msg) }}>{msg}</p>}

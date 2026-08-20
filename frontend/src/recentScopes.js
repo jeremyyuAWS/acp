@@ -120,9 +120,11 @@ export function describeScope(entry) {
       // what is missing is only its name, and a reader who is told that can go and look.
       : `except ${entry.excluded.length} folder${entry.excluded.length === 1 ? '' : 's'} (not named on that run)`)
   }
-  parts.push(entry.scanScope
-    ? `${Object.keys(entry.scanScope).length} criteria`
-    : 'Everything supported')
+  // NO CRITERIA CLAUSE. It used to append "16 criteria" / "Everything supported", which is what
+  // made three entire-source runs render as "Entire source · 16 criteria", "· 15", "· 17" —
+  // indistinguishable in the only dimension Discover now decides, and describing a choice this
+  // screen no longer offers. A reused Discover scope restores source and folders only (PRD 5.1);
+  // the criteria that run happened to use are Assess's, and are not carried back.
   return parts.join(' · ')
 }
 
