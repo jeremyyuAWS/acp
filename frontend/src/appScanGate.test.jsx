@@ -85,7 +85,10 @@ describe('the universal scan gate (App)', () => {
     const d = dialog(c)
     expect(d).toBeTruthy()
     expect(d.getAttribute('aria-label')).toBe('New scan')
-    expect(d.textContent).toMatch(/Formats & WCAG criteria/)
+    // The "Formats & WCAG criteria" heading is gone (it named step 2's subject while the
+    // user was on step 1). This assertion was a proxy for "the review modal opened" — so
+    // assert the estimate line, which is the modal's own content and is step-independent.
+    expect(d.textContent).toMatch(/Document count is determined when the scan starts|documents in/)
     // …and nothing has been dispatched.
     expect(startScanQueued).not.toHaveBeenCalled()
   })

@@ -74,7 +74,10 @@ const scopePanel = (c) => c.querySelector('[role="region"][aria-label="Current s
 describe('the shortcuts that are offered', () => {
   it('lists the boundaries this user has actually run, newest first', async () => {
     const c = await mount()
-    expect(c.textContent).toMatch(/REUSE A RECENT SCOPE/)
+    // The block is now a collapsed disclosure BELOW the selection rather than a row of cards above
+    // it — past scopes are an accelerator, not the decision the user came to make.
+    expect(c.textContent).toMatch(/Use a recent scope/)
+    expect(c.querySelector('details'), 'the recent scopes are no longer collapsed').toBeTruthy()
     expect(chip(c, /HR/), 'no chip for the HR run').toBeTruthy()
     expect(chip(c, /Finance/), 'no chip for the Finance run').toBeTruthy()
   })
@@ -97,12 +100,16 @@ describe('the shortcuts that are offered', () => {
   it('offers nothing when no run recorded a scope', async () => {
     // NULL is unknown, not "the whole Drive". A chip here would apply as everything.
     const c = await mount({ scans: [{ id: 'x', completed_at: '2026-08-18T10:00:00Z', source: 'drive', scope: null }] })
-    expect(c.textContent).not.toMatch(/REUSE A RECENT SCOPE/)
+    // Asserted against the CURRENT label. The old all-caps heading no longer exists anywhere, so
+    // matching on it would have passed whatever the block did — a check that cannot fail.
+    expect(c.textContent).not.toMatch(/Use a recent scope/)
   })
 
   it('offers nothing from the other source family', async () => {
     const c = await mount({ source: 'sharepoint', hasDrive: false, hasSP: true })
-    expect(c.textContent).not.toMatch(/REUSE A RECENT SCOPE/)
+    // Asserted against the CURRENT label. The old all-caps heading no longer exists anywhere, so
+    // matching on it would have passed whatever the block did — a check that cannot fail.
+    expect(c.textContent).not.toMatch(/Use a recent scope/)
   })
 })
 
@@ -150,7 +157,8 @@ describe('applying one', () => {
   it('says the reuse is a starting point, not a verification', async () => {
     const c = await mount()
     await act(async () => { chip(c, /HR/).click() })
-    expect(c.textContent).toMatch(/check the locations and criteria below/i)
+    // "above" now: the selection is above the disclosure, not below it.
+    expect(c.textContent).toMatch(/check the locations and criteria above/i)
   })
 })
 

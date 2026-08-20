@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo, Fragment } from 'react'
 import { getSettings, updateSettings, getScanLocations, setScanLocations,
          listFolders, listSpFolders } from './api.js'
 import { scopeFooterPart, blockedReason } from './wizardScopeReady.js'
+import { ASSESSED_ROW_LABEL, assessedFormatsLine, OTHER_TYPES_NOTE,
+         footerFormatsPart } from './assessedFormats.js'
 import FolderPicker from './FolderPicker.jsx'
 import { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } from './scopePresets.js'
 import { TRACKED_17, RULE_DETAILS } from './ruleDetails.js'
@@ -562,7 +564,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
 
   const footerSummary = [
     locKey ? scopeFooterPart(scopeMode, folders, excluded) : null,
-    `${nFormats} format${nFormats === 1 ? '' : 's'}`,
+    footerFormatsPart(nFormats),
     profileLabel,
   ].filter(Boolean).join(' · ')
 
@@ -642,48 +644,6 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
             Choose which locations ACP should assess. Subfolders are included unless you exclude them.
           </div>
 
-          {/* REUSE A SCOPE YOU HAVE ACTUALLY RUN. Offered before the radio group because for a
-              recurring audit it answers the whole wizard in one click — and because a shortcut
-              placed after the thing it shortcuts is a shortcut nobody takes.
-              These come from `scan_runs.scope`, the boundary each run FROZE at scan start, so
-              every entry is a record of what was covered rather than a claim about what would be.
-              A run with no recorded scope is deliberately absent: NULL means unknown, and applying
-              unknown would apply as "everything". */}
-          {reusable.length > 0 && (
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.04em',
-                            color: 'var(--muted)', marginBottom: 6 }}>
-                REUSE A RECENT SCOPE
-              </div>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {reusable.map((e) => {
-                  const on = reusedKey === e.key
-                  return (
-                    <button key={e.key} type="button" disabled={busy} aria-pressed={on}
-                            onClick={() => applyScope(e)}
-                            style={{ textAlign: 'left', cursor: 'pointer', font: 'inherit',
-                                     border: `1px solid ${on ? '#6D28D9' : 'var(--line)'}`,
-                                     background: on ? '#F3EEFC' : 'var(--surface)', color: 'inherit',
-                                     borderRadius: 10, padding: '7px 10px', flex: '1 1 240px' }}>
-                      <div style={{ fontSize: 12.5, fontWeight: 600 }}>{describeScope(e)}</div>
-                      <div className="muted" style={{ fontSize: 11.5 }}>
-                        Last run {whenLabel(e.at)}
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-              {reusedKey && (
-                // Applying one is not the end of the decision, it is the start: the browser below
-                // now shows what was applied, and saying so is what stops "reused" being taken for
-                // "verified". Anything reused is still editable, and still frozen fresh at start.
-                <div role="status" aria-live="polite" className="muted"
-                     style={{ fontSize: 11.5, marginTop: 6 }}>
-                  Applied to this run — check the locations and criteria below before starting.
-                </div>
-              )}
-            </div>
-          )}
 
           {/* The two answers, as an explicit choice. Inferring "entire source" from an empty
               selection means the most consequential scope decision is made by NOT clicking. */}
@@ -729,6 +689,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                 layout="inline"
                 key={`${locKey}:${pickerSeed}`}
                 rootName={locKey === 'drive' ? 'My Drive' : 'OneDrive'}
+                sourceName={locKey === 'drive' ? 'Google Drive' : 'SharePoint'}
                 lister={locKey === 'drive' ? listFolders : (parent) => listSpFolders(parent)}
                 initial={folders}
                 initialExclude={excluded}
@@ -740,6 +701,55 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                 // picker reports as you tick.
                 onChange={(inc, exc) => { setFolders(inc); setExcluded(exc || []) }} />
             </div>
+          )}
+
+          {/* Past scopes are an ACCELERATOR, not the decision. They used to sit at the top of this
+              step, above the mode selector, which put a scan-history browser in front of the thing
+              the user came here to choose — and offered a second, competing set of scope answers
+              two inches above "Entire connected source / Specific folders".
+
+              Collapsed and placed after the selection, so it is reachable when wanted and silent
+              when not. Not a nested modal: this dialog is already a modal, and a modal inside a
+              modal loses the reader's place.
+
+              These come from `scan_runs.scope`, the boundary each run FROZE at scan start, so every
+              entry is a record of what was covered rather than a claim about what would be. A run
+              with no recorded scope is deliberately absent: NULL means unknown, and applying
+              unknown would apply as "everything". */}
+          {reusable.length > 0 && (
+            <details style={{ marginBottom: 10 }}>
+              <summary style={{ cursor: 'pointer', fontSize: 12.5, color: 'var(--muted)' }}>
+                Use a recent scope
+                <span style={{ marginLeft: 6 }}>{reusable.length} available</span>
+              </summary>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                {reusable.map((e) => {
+                  const on = reusedKey === e.key
+                  return (
+                    <button key={e.key} type="button" disabled={busy} aria-pressed={on}
+                            onClick={() => applyScope(e)}
+                            style={{ textAlign: 'left', cursor: 'pointer', font: 'inherit',
+                                     border: `1px solid ${on ? '#6D28D9' : 'var(--line)'}`,
+                                     background: on ? '#F3EEFC' : 'var(--surface)', color: 'inherit',
+                                     borderRadius: 10, padding: '7px 10px', flex: '1 1 240px' }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 600 }}>{describeScope(e)}</div>
+                      <div className="muted" style={{ fontSize: 11.5 }}>
+                        Last run {whenLabel(e.at)}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+              {reusedKey && (
+                // Applying one is not the end of the decision, it is the start: the browser above
+                // now shows what was applied, and saying so is what stops "reused" being taken for
+                // "verified". Anything reused is still editable, and still frozen fresh at start.
+                <div role="status" aria-live="polite" className="muted"
+                     style={{ fontSize: 11.5, marginTop: 6 }}>
+                  Applied to this run — check the locations and criteria above before starting.
+                </div>
+              )}
+            </details>
           )}
 
           {/* Divergence from the connection default is allowed — that is what "this run" means —
@@ -1081,9 +1091,16 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                 </dd>
               </>
             )}
-            <dt className="muted">Formats</dt>
+            {/* Not "Formats". The scan walks EVERYTHING — scanner._sp_list builds `est_files` from
+                every item and only the six supported extensions become documents — so a bare list
+                of four beside a count of the estate leaves the reader to guess which population
+                the four apply to, and the reassuring guess is "all of them". */}
+            <dt className="muted">{ASSESSED_ROW_LABEL}</dt>
             <dd style={{ margin: 0 }}>
-              {activeFormats.length ? activeFormats.map((f) => FMT_LABEL[f]).join(', ') : 'None selected'}
+              {assessedFormatsLine(activeFormats, FMT_LABEL)}
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 2, lineHeight: 1.45 }}>
+                {OTHER_TYPES_NOTE}
+              </div>
             </dd>
             <dt className="muted">Criteria</dt>
             <dd style={{ margin: 0 }}>{profileLabel}</dd>

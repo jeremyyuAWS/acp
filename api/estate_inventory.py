@@ -20,6 +20,7 @@ can be unit-tested without a Drive. `scanner` imports THIS, never the reverse.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 # ── Capability status taxonomy ────────────────────────────────────────────────────────────────
@@ -110,6 +111,63 @@ def classify(f: dict) -> dict:
     }
 
 
+# ── Age bands ─────────────────────────────────────────────────────────────────────────────────
+# How long since each file was touched, aggregated over the WHOLE listing.
+#
+# `modified` already existed — but only on `_sample_meta`, which is capped at `sample_per_status`
+# rows per status. A distribution built from that cap would be a histogram of at most 200 files per
+# bucket presented as the estate, and it would look right: plausible shape, confident bars, wrong
+# denominator. That is the failure this module's own header exists to prevent ("unsupported reads
+# as passed by omission"), in a new place. So the bands are counted here, over every row.
+#
+# Ages are the retention question, not the accessibility one: a file nobody has opened in five
+# years is a DELETE decision, which is what `DispositionRules` and `retentionOf` already act on.
+AGE_BANDS = (
+    ("lt_1y", "Under 1 year", 365),
+    ("y1_3", "1–3 years", 3 * 365),
+    ("y3_5", "3–5 years", 5 * 365),
+    ("gt_5y", "Over 5 years", None),      # the open-ended tail
+)
+AGE_UNKNOWN = "unknown"                   # no usable timestamp — stated, never folded into a band
+
+
+def _parse_iso(value):
+    """A Drive/Graph RFC-3339 timestamp, or None. Never raises, never guesses.
+
+    Graph returns `2026-08-19T10:00:00Z`; Drive returns the same shape. `fromisoformat` handles the
+    offset forms and, from 3.11, the trailing Z — the replace keeps it working if that changes.
+    """
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def age_band(modified, now=None) -> str:
+    """Which band a file's last-modified timestamp falls in, or AGE_UNKNOWN.
+
+    `now` is injectable, and every caller in this module passes one. A distribution that reads the
+    wall clock is a distribution whose tests pass until they do not — the exact shape that broke a
+    frontend date assertion in this repo the day after it was written.
+
+    A timestamp in the FUTURE (clock skew on the source, or a mis-set modified date) bands as
+    "under 1 year" rather than as unknown: it is a real file with a real, if implausible, date, and
+    the youngest band is the honest home for it.
+    """
+    dt = _parse_iso(modified)
+    if dt is None:
+        return AGE_UNKNOWN
+    now = now or datetime.now(timezone.utc)
+    days = (now - dt).days
+    for key, _label, upper in AGE_BANDS:
+        if upper is None or days < upper:
+            return key
+    return AGE_BANDS[-1][0]
+
+
 def _sample_meta(f: dict) -> dict:
     """Triage metadata for a drill-down sample row, pulled from the raw Drive file. Only the capped
     sample carries this (never all 30k) — size to sort biggest-first, owner to group, shared to flag
@@ -126,7 +184,8 @@ def _sample_meta(f: dict) -> dict:
             "modified": f.get("modifiedTime")}
 
 
-def summarize(files: list[dict], *, truncated: bool = False, sample_per_status: int = 200) -> dict:
+def summarize(files: list[dict], *, truncated: bool = False, sample_per_status: int = 200,
+              now: datetime | None = None) -> dict:
     """The whole-estate summary the dashboard funnel and composition read.
 
     `files` is the raw Drive listing (every type, folders already removed by the caller — a folder
@@ -147,12 +206,19 @@ def summarize(files: list[dict], *, truncated: bool = False, sample_per_status: 
     """
     by_format: dict[str, int] = {}
     by_status: dict[str, int] = {}
+    by_age: dict[str, int] = {}
+    # One `now` for the whole listing. Reading the clock per file would let a long scan straddle a
+    # band boundary and produce counts that do not reconcile with each other.
+    now = now or datetime.now(timezone.utc)
     samples: dict[str, list[dict]] = {}
     pairs = [(classify(f), f) for f in files if f.get("mimeType") != FOLDER_MIME]
     rows = [r for r, _ in pairs]
     for r, f in pairs:
         by_format[r["format"]] = by_format.get(r["format"], 0) + 1
         by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+        # Over every row, not over the capped sample — see the AGE_BANDS comment.
+        band = age_band(f.get("modifiedTime"), now)
+        by_age[band] = by_age.get(band, 0) + 1
         bucket = samples.setdefault(r["status"], [])
         if len(bucket) < sample_per_status:
             bucket.append({"id": r["id"], "name": r["name"], "format": r["format"], **_sample_meta(f)})
@@ -161,6 +227,10 @@ def summarize(files: list[dict], *, truncated: bool = False, sample_per_status: 
         "assessment_eligible": by_status.get(ASSESSABLE, 0),
         "by_format": by_format,
         "by_status": by_status,
+        # Bands sum to `discovered` by construction — every row lands in exactly one, including
+        # AGE_UNKNOWN. A consumer can therefore reconcile them, which is the point of counting
+        # unknown rather than dropping it.
+        "by_age": by_age,
         "samples": samples,
         "sample_cap": sample_per_status,
         "truncated": bool(truncated),
