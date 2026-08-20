@@ -861,6 +861,14 @@ reach production, safely.
   reachable endpoint's baked vision model was shadowed by the container VOLUME and produced nothing for 45
   days with no error. A new `_probe_ollama_vision` reuses the runtime's own `ai.vision_unavailable_reason()`,
   so preflight and a real scan agree. `Matrix-Note: none` — deploy/preflight tooling only.
+- **Surfaced SMB source readiness on `/readyz`** (#487). `describe_smb_readiness()` (config-only, no network)
+  already answered "can an SMB scan even be attempted?" but was reachable by no route, so the guard it was
+  written to be — a health check / Content-Sources surface that fails with a clear reason instead of starting
+  a scan that returns an empty estate — never ran. Wired into `GET /readyz` as an informational
+  `sources.smb` block, imported lazily (as the scanner does) and defended so a source probe can never 500
+  `/readyz`. Deliberately **not** folded into `degraded`: a deployment that scans only Drive/SharePoint
+  legitimately has no SMB config, so an unconfigured SMB source must not flip `ready`. Touches
+  `api/routes/system.py` + a readiness test — not RULE_PATHS.
 
 ## Feature: Release Center · #4599
 
@@ -2181,3 +2189,9 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   renderers, structural findings deferred to a backend data effort; cross-session coordinated with this
   session on scope and the honesty tier). **Sync marker deliberately NOT advanced** (same convention as the
   prior entries).
+- **2026-08-19 (SMB readiness on /readyz)** — To **Continuous deployment (#4614)**: #487 — wired the existing
+  `describe_smb_readiness()` into `GET /readyz` as an informational `sources.smb` block (defended so a source
+  probe can't 500 it; not folded into `degraded`, since a Drive/SharePoint-only deployment legitimately has no
+  SMB config). A self-contained health/readiness surface — distinct from the SMB source discovery/transport
+  program (#388–#397/#419) still left to its owning session. **Sync marker deliberately NOT advanced** (same
+  convention as the prior entries).
