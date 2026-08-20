@@ -20,10 +20,16 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const code = (f) => readFileSync(join(HERE, f), 'utf8')
   .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n')
 
-describe('the first screen asks before it scans', () => {
-  it('renders the configurator, not an explainer', () => {
+describe('the first screen no longer asks before it scans', () => {
+  // REVERSED, deliberately. This block used to assert that EmptyState rendered ScanSetup — the
+  // configurator — because that beat the three explainer boxes it replaced. The Discover/Assess
+  // redesign moves the question instead of the answer: criteria are chosen in Assess, against a
+  // real inventory, so asking on the FIRST screen asks before the information exists (OV-02).
+  // The old assertion is not merely stale, it is now the regression, which is why it inverts
+  // rather than being deleted.
+  it('renders neither the configurator nor the explainer boxes', () => {
     const s = code('EmptyState.jsx')
-    expect(s).toMatch(/<ScanSetup\b/)
+    expect(s, 'the pre-inventory configurator is back').not.toMatch(/<ScanSetup\b/)
     expect(s, 'the Discover/Assess/Remediate boxes are back').not.toContain('onboarding-step')
   })
 
@@ -32,8 +38,12 @@ describe('the first screen asks before it scans', () => {
     expect(readFileSync(join(HERE, 'styles.css'), 'utf8')).not.toContain('.onboarding-step {')
   })
 
-  it('gets the SharePoint token, so the source line can be honest', () => {
-    expect(code('App.jsx')).toMatch(/<EmptyState [^>]*hasSPToken=\{hasSPToken\}/)
+  it('needs no source tokens, because it starts no scan', () => {
+    // It used to take hasDriveToken/hasSPToken so its source line could be honest about what was
+    // connected. It offers one action now — Go to Source — so there is nothing for a token to
+    // qualify, and passing one would be state the screen cannot use.
+    expect(code('App.jsx')).not.toMatch(/<EmptyState [^>]*hasSPToken=/)
+    expect(code('App.jsx')).toMatch(/<EmptyState onGoToSource=/)
   })
 })
 

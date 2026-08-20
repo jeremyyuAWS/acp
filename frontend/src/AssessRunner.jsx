@@ -333,7 +333,11 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   const note = result && (result.level === 'A'
     ? 'Level A is the floor — only must-have criteria block conformance.'
     : result.level === 'AA'
-      ? 'Level AA is the legal target for ADA Title II, the EAA and Section 508 — Level A + AA findings both count.'
+      // The legal claim ("the legal target for ADA Title II, the EAA and Section 508") was removed
+      // on the product owner's call. What is left is the fact this screen can actually stand
+      // behind: which findings count at this target. Which regulation applies to a given customer
+      // is not something an assessment run knows.
+      ? 'At Level AA both Level A and Level AA findings count towards conformance.'
       : 'Level AAA is the enhanced bar — every A, AA and AAA finding counts, so conformance is strictest here.')
 
   const pct = phase === 'running' ? Math.round((progress / Math.max(1, assessN, docs.length)) * 100) : 0
@@ -378,7 +382,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
       </div>
 
       <p className="muted" style={{ fontSize: 12, margin: '4px 0 0', lineHeight: 1.5 }}>
-        Scored against <b>WCAG 2.1 Level {level}</b>{level === 'AA' ? ' — the legal target for ADA / EAA / 508' : ''}, derived
+        Scored against <b>WCAG 2.1 Level {level}</b>, derived
         from the <b>{ruleCount}</b> success criteria you selected in your {SCOPE_LABEL}. A finding blocks conformance when its
         criterion is at or below Level {level}. All {assessN} {deferredPending ? 'discovered' : 'parsable'} files are assessed.
       </p>

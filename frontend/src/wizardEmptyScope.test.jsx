@@ -27,6 +27,9 @@ vi.mock('./api.js', () => ({
   setScanLocations: vi.fn(async () => ({ ok: true })),
   listFolders: vi.fn(async () => ({ folders: [{ id: 'fin', name: 'Finance' }] })),
   listSpFolders: vi.fn(async () => ({ drive_id: 'd', folders: [] })),
+  // Discovery-time lifecycle rules, read by the review step so it can name how many will
+  // run. Empty is the honest default here: these fixtures configure no rule.
+  listDispositionPolicies: vi.fn(async () => []),
 }))
 
 const { default: ScanScopeWizard } = await import('./ScanScopeWizard.jsx')
