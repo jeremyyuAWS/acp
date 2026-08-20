@@ -21,6 +21,8 @@ import AssessmentReconciliation from './AssessmentReconciliation.jsx'
 import { reconcileBuckets } from './estateFunnel.js'
 import { reconciliationInputs } from './reconciliationInputs.js'
 import { assessMetrics } from './assessMetrics.js'
+import AssertionScope from './AssertionScope.jsx'
+import { CORE_SCS } from './activeScope.js'
 
 // The estate dashboard — doubles as the exportable compliance report.
 export default function Overview({ run, files, trend, trendDates, onGo, scanList = [], onPickScan, me,
@@ -358,6 +360,13 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           mutually exclusive buckets and prints the addition, so the gap is auditable instead of
           plausible. Self-guarding: it renders nothing at all without an inventory to partition. */}
       <AssessmentReconciliation run={run} files={files} />
+
+      {/* WHAT THE NUMBERS ABOVE ARE A CLAIM ABOUT (board 7). This screen exports as the compliance
+          report, and a report that states findings without stating its own boundary is exactly the
+          document an auditor should not be handed. Fed the SAME `rec` the tiles and the
+          reconciliation use, so the exclusion count here cannot disagree with the bucket that
+          produced it. */}
+      <AssertionScope run={run} fileCount={n} coreScs={CORE_SCS} rec={rec} />
 
       {/* Whole-estate coverage: the three denominators (discovered / assessment-eligible /
           remediation-eligible) as a funnel + format composition + capability-status split, from the
