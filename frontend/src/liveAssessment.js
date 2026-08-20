@@ -13,11 +13,18 @@ const PHASE_LABEL = {
   remediating: 'Remediating', finalizing: 'Finalizing', done: 'Complete',
 }
 
+// The running-screen KPI cards: [key, label, provisional], in display order.
+// `findings_so_far` is supplied by the snapshot backend once a run has produced findings (it starts in
+// `kpis_pending`), so it shows a pending dash until then and resolves automatically.
+// `provisional` marks a count that GROWS during the run and must never be read as the final total
+// (ADR 0016 / PRD §4.3 — "label 'so far', never presented as final"). The component renders a "so far"
+// qualifier on these so a mid-run "Findings 42" can't be mistaken for the finished number.
 const KPI_DEFS = [
-  ['completed', 'Completed'],
-  ['processing', 'Processing'],
-  ['need_attention', 'Need attention'],
-  ['unable_to_assess', 'Unable to assess'],
+  ['completed', 'Completed', false],
+  ['processing', 'Processing', false],
+  ['findings_so_far', 'Findings', true],
+  ['need_attention', 'Need attention', true],
+  ['unable_to_assess', 'Unable to assess', false],
 ]
 
 const n = (x) => (typeof x === 'number' && x >= 0 ? Math.round(x) : 0)
@@ -59,11 +66,13 @@ export function normalizeLive(raw) {
   }
   const pending = new Set(Array.isArray(raw.kpis_pending) ? raw.kpis_pending : [])
   const kpis = raw.kpis || {}
-  const kpiCards = KPI_DEFS.map(([key, label]) => ({
+  const kpiCards = KPI_DEFS.map(([key, label, provisional]) => ({
     key, label,
     value: n(kpis[key]),
     // A KPI is "pending" (show a spinner/dash, not 0) when the backend flags it not-yet-computed.
     pending: pending.has(key),
+    // A provisional KPI grows during the run and must carry a "so far" qualifier (never read as final).
+    provisional: !!provisional,
   }))
   const queue = normalizeQueue(raw.queue)
   const warnings = []
