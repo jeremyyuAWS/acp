@@ -51,6 +51,19 @@ describe('LiveAssessment', () => {
     expect(t).not.toMatch(/discharge\.pdf/)           // frozen current is cleared
   })
 
+  it('shows rolling throughput + the ETA range when calibrated', () => {
+    const t = render({ snapshot: SNAP,
+      throughput: { ratePerMin: 18, etaText: 'about 5–8 min left', calibrating: false } }).textContent
+    expect(t).toMatch(/18\/min/)
+    expect(t).toMatch(/5–8 min left/)
+  })
+
+  it('says "estimating…" while calibrating — never a single swinging number', () => {
+    const t = render({ snapshot: SNAP,
+      throughput: { ratePerMin: null, etaText: null, calibrating: true } }).textContent
+    expect(t).toMatch(/estimating/i)
+  })
+
   it('puts aria-live on the phase (announce transitions), not on the churning KPI counts', () => {
     const { container, root } = createTestRoot()
     act(() => root.render(createElement(LiveAssessment, { snapshot: SNAP })))
