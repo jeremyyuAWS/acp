@@ -673,6 +673,19 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   folder-level source scope; §1 diagram + deps gained the in-tenant Azure T4 and the v3 VM; §11 added the
   flat-worker-pool concurrency weakness with **ADR 0037** named as the committed-but-unbuilt fix. §2–§7 core
   reviewed and already current. Docs-only, not RULE_PATHS.
+- **ADR 0038 — pausable/resumable scans** (#495). Design for the deliberately-deferred Track A Pause control:
+  a large scan can be stopped mid-run and resumed exactly where it left off, without re-reading the files
+  already done. Reuses the scan's existing stop-and-checkpoint machinery so a pause loses no completed work,
+  and calls out the one hazard by name — a paused scan must not be mistaken for a crashed one — with a test to
+  guard it. Design only; the control itself was held back until this backend exists, rather than shipping a
+  button that only looks like it pauses. Docs-only, not RULE_PATHS.
+- **§12 "Confirmed technical contract" for the pilot deck** (#519). Gathered the confirmed facts about how ACP
+  runs — where documents are processed, what stays on the customer's own infrastructure, how the GPU vision
+  path works — into one contract section a customer's security reviewer can be handed, each claim cited to
+  origin/main rather than to intent. Docs-only, not RULE_PATHS.
+- **GPU/vision production-contract answers** (#521). Plain answers to seven production-readiness questions on
+  the GPU/vision lane (the in-tenant Azure T4, the ollama-on-GPU path, what the pre-flight probe actually
+  verifies), each cited to the code as it stands on origin/main rather than to plan. Docs-only, not RULE_PATHS.
 
 ## Feature: docx Core-17 criterion coverage · #4610
 
@@ -869,6 +882,26 @@ reach production, safely.
   `/readyz`. Deliberately **not** folded into `degraded`: a deployment that scans only Drive/SharePoint
   legitimately has no SMB config, so an unconfigured SMB source must not flip `ready`. Touches
   `api/routes/system.py` + a readiness test — not RULE_PATHS.
+
+- **Stopped a collapsed scan from hijacking every view — selector half** (#520). The production
+  monitor's `newest scan is full-size` probe fired on prod ("newest has 5 documents but a recent scan
+  had 22"): every dashboard, report and selector defaults to the latest scan, so a degenerate small
+  scan on top makes the whole app show a shrunken estate. `App.jsx` picked `list_scans()[0]` blindly;
+  it now picks the newest scan that is NOT collapsed (new pure `pickDefaultScan`), falling back to the
+  most recent full-size one. Mirrors the probe's own definition exactly — `files < 0.5 × the biggest
+  of the last 10 siblings` — so the app's default and the probe agree on "collapsed." Conservative:
+  it only skips a scan under half its biggest recent sibling, so a legitimately small estate (no
+  larger sibling) is never hidden. Frontend-only; 7 tests. Hardens the SELECTOR, not the source.
+- **Stopped a collapsed scan from being created — source half** (#522). The upstream cause: `local`
+  scans the bundled test corpus, not the estate, yet was the SILENT default for a source-less scan
+  (`POST /scans` `Query("local")` and the worker's `payload.get("source", "local")`) — so a stray
+  request produced a small corpus scan that landed as "latest", the exact fingerprint. The scheduled
+  sweep's fallback-to-local was already fixed; this closed the on-demand door: `source` is now
+  required (a source-less request is a 422, never a corpus scan) and the worker fails closed
+  (`FatalJobError`, mirroring the missing-`scan_id` guard). `?source=local` stays valid for dev/tests
+  — only the silent default is gone. A caller audit first confirmed nothing relied on it (frontend,
+  e2e and the one test-caller all pass a source explicitly); the full suite passed unchanged. Touches
+  `api/routes/scans.py` + `api/handlers.py` — not RULE_PATHS.
 
 ## Feature: Release Center · #4599
 
@@ -1393,6 +1426,19 @@ three-denominator model (#297, under Documentation).
   (`est.` + `EFFORT_BASIS`), never as a measurement. Browser-verified in SIM (139 findings = 57 auto + 82
   person, 57/139 = 41%, ~48.8 hrs — banner and all four cards agree). The master-ring / risk-score
   consolidation is a further follow-up. Not a RULE_PATHS change.
+- **"Last modified" age distribution over the whole estate — the retention question** (#515 backend + #517
+  frontend). Discover could say what share of an estate is assessable; it could not say how much of it anyone
+  still touches — the retention question, the one with a delete decision attached. `modified` existed only
+  inside `_sample_meta` (≤200 rows/status), so a histogram off it would be ≤200 files presented as the estate —
+  "unsupported reads as passed by omission" wearing a new hat. So the bands are aggregated in `summarize()`
+  over the FULL listing: four bands (<1y, 1–3y, 3–5y, >5y) plus an explicit **`unknown`** that is counted,
+  never folded or dropped, so the bands sum to `discovered` and reconcile; banded across every file type, not
+  just assessable formats (an old .mov nobody's opened in five years is exactly the delete candidate this is
+  for); one injectable `now` for the whole listing so a long scan can't straddle a boundary (the exact shape
+  that broke a frontend date assertion in this repo). Frontend refuses two quiet lies: a **missing** `by_age`
+  (every pre-aggregation report) renders no panel rather than five measured-looking zeros, and the ordinal
+  buckets are fixed youngest→oldest with "no date recorded" last, never sorted largest-first like the format
+  composition. No new chart component — reuses `Bars` (ordered, null=not-measured). Not a RULE_PATHS change.
 
 ---
 
@@ -1711,6 +1757,28 @@ invariant the redaction tests pin).
   renders a score trajectory (sparkline + "▲ +N since first scan") and a row per scan, each drilling into
   that scan's trace via a callback (no import cycle with `TracePanel`). Backend + frontend tests; not a
   RULE_PATHS change.
+- **Live per-file assess scores on the trace as a scan runs + file-level severity** (#518). Two Langfuse
+  logging fixes (P0 from the polish list). (1) A file's score / conformance / failing criteria / per-check
+  breakdown now lands on its trace the moment it's scored (`_emit_realtime_file_assess`, right after
+  `save_file_result` persists), not only in the finalize batch — mid-run traces read empty before, which was
+  the blind spot debugging the live cold-start SharePoint run (#513). The finalize pass still upserts the
+  complete record (PII, remediation); both share `_emit_file_assess`, so real-time and finalize can't diverge;
+  best-effort, no DB reads when tracing is off. (2) File-level SEVERITY so problems stand out in the trace
+  list, not just the per-rule children: `assess_span` is ERROR for a non-conformant file / WARNING for
+  non-blocking findings / DEFAULT when clean, and a file that couldn't be assessed (parse/fetch error,
+  unreadable, or the #513 per-file timeout) gets an ERROR span with reason only, never content. Not a
+  RULE_PATHS change.
+- **Removed the dead scan/assess-trace functions superseded by the per-file model** (#524). The pre-per-file
+  scan/assess tracing API (`scan_trace`, `error_span`, `file_span_for`, `open_assess_trace`,
+  `finish_assess_trace`, `finish_scan_trace_by_id`, `finish_scan_trace`) was orphaned when `4b0ebce3` moved
+  tracing to one-trace-per-file — that commit removed every call site but left the seven functions behind.
+  Re-verified zero live callers across `api/`, `scripts/`, `tests/` on origin/main with word-boundary grep
+  (counting callers, not substrings — `scan_trace` appears inside `finish_scan_trace_by_id`, `finish_scan_trace`
+  inside its own `_by_id` wrapper), confirmed with the thread owner that `finish_scan_trace` wasn't being kept
+  as deliberate public API, and removed all seven plus the two dead section-header comments and a docstring
+  reference to the deleted `finish_assess_trace`. Trimmed the one test that exercised them, keeping its live
+  `discover_run_trace` no-email guard. −133 lines; full backend job green (`api/lf.py` is not a RULE_PATHS
+  file, so no Matrix-Note). The live per-file model is untouched.
 
 ## Feature: Scan-run experience — live progress and transparency (Track A)
 
@@ -1792,6 +1860,36 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   analyse (CPU + GPU) — bottleneck starred, so the next Track B step (splitting the bottleneck stage into its
   own bounded pool) is chosen from data. Companion to #467; `--json` / `--provider` flags, most-recent scan
   by default.
+- **Honest folder sizes and exact carve-out state in the picker** (#512, wizard-review item 4). Each folder
+  now shows a real item count only where the source can actually report one — SharePoint's `folder.childCount`
+  — and shows nothing where it genuinely can't (Google Drive's `/folders` returns id + name, no count),
+  instead of a reassuring invented "~120 files." A carve-out (excluding a child of an included folder) records
+  its ancestor on the exclusion, which makes "included, with something carved out" an exact fact the drill-only
+  picker can state without a whole-tree walk; everything else stays binary, because an unexpanded folder with
+  unknown descendants is "not looked inside," not "partially selected." `indeterminate` (no HTML attribute) set
+  via ref and mirrored to `aria-checked="mixed"`.
+- **Folder-load failures are recoverable and classified, not a raw Graph error** (#511, wizard-review item 2).
+  A failed folder list used to dump `Microsoft Graph error: 400 Bad Request` with an internal URL and drive id
+  on screen — reads as broken, leaks internals, says nothing to do. The cause is now CLASSIFIED, not assumed:
+  401/403/expired → "needs to be re-authorised" + Reconnect; 400/404 → "moved or deleted," explicitly NOT a
+  reconnect prompt. The load-bearing judgement: the obvious rewrite ("your connection may need refreshing")
+  would have been *actionable and wrong* here — the 400 came from a URL we built ourselves (#501), not an
+  expired token — so an invented cause is worse than a stated one (same family as #483's "stop guessing
+  unreadable"). No ids or URLs surfaced.
+- **Scope correctness: composite folder ids split, empty folders don't mean the estate** (#501 + #502). #501 —
+  the picker sends SharePoint back a composite `drive::folder` id; the download path now splits it so SP files
+  are addressed correctly. #502 — an empty "Specific folders" selection was silently applying as the WHOLE
+  estate (unknown → everything, the 2026-07-30 defect class); it is now an explicit empty scope, not a
+  wildcard.
+- **Wizard step 1 leads with the decision; the review step names the format population** (#509 + #514,
+  wizard-review items 1/3 + a labelling fix). #509 — three "recent scope" cards sat above the mode selector,
+  a scan-history browser in front of the decision offering a competing set of scope answers; now a collapsed
+  `<details>` placed AFTER the selection (they all read as duplicates only because every recorded run was
+  entire-source), and a band of single-fact header chrome removed. #514 — the review step listed "Formats:
+  DOCX, XLSX, PPTX, PDF" next to a "22 documents" count drawn from a different population; a scan has three
+  populations (everything discovered, the supported document types, the formats chosen — the only ones judged
+  against WCAG and remediated), and the bare list next to the wrong count invited the reassuring guess "all of
+  them." Now stated plainly (same honesty family as #479/#483/#491/#502).
 
 ## Feature: Certification report as an audit artifact
 
@@ -2336,3 +2434,23 @@ real extracted content, degrading to the generic note, never a fabricated tree.
   hung). Test hygiene #505 (the wizard date time-bomb) was already recorded by the entry above and is not
   re-logged as a Task. **Sync marker still NOT advanced** (`fad0dfbe`, same convention as the prior entries):
   the large delta since it remains other sessions' undocumented feature work, left for them to characterise.
+- **2026-08-20 (collapsed-scan probe fixes)** — To **Continuous deployment to Azure (#4614)**: the two halves
+  of the `newest scan is full-size` probe failure caught on prod — the selector hardening (#520, default to
+  the newest non-collapsed scan) and the source fail-closed (#522, require an explicit scan source so `local`
+  is no longer a silent default). The scheduled-sweep fallback was already fixed; these close the selector and
+  on-demand doors. Investigation-led: verified the sweep bug was already closed and ran a caller audit before
+  changing the API contract. **Sync marker still NOT advanced** (same convention).
+- **2026-08-20 (scan-wizard/picker hardening + estate retention + trace polish + dead-code prune)** — Added
+  the day's remaining undocumented work, mapped to four existing Features. To **Scan-run experience (Track A)**:
+  the folder-picker honesty pass (#512), recoverable/classified folder-load failures (#511), scope-correctness
+  fixes (#501 composite id + #502 empty-folders), and the wizard step-1 declutter + format-population labelling
+  (#509 + #514). The collapsed-scan probe fixes (#520/#522) are logged separately by the entry above (#531),
+  under #4614 — not re-logged here. To **Estate coverage (#4597)**: the whole-estate "last modified"
+  age/retention distribution (#515 backend + #517 frontend). To **Observability — Langfuse**: live per-file
+  assess scores + file-level severity (#518) and the dead scan/assess-trace-function prune (#524 — this
+  session's own work, seven orphaned functions removed, −133 lines, zero live callers re-verified). To
+  **Documentation**: ADR 0038 pausable/resumable scans (#495), the pilot-deck technical contract (#519), and
+  the GPU/vision production-contract answers (#521). Already-logged work (#506/#507/#513/#504/#505 and the
+  report/structural set) was not re-logged. **Sync marker still NOT advanced** (`fad0dfbe`, same convention):
+  the delta still contains other sessions' undocumented Aug-19 feature work, and #526 (ADR 0039 regional
+  resilience) + #527 (Open-in-Langfuse link) landed mid-write — both other sessions', left for their owners.

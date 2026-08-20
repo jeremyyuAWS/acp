@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import Drawer from './Drawer.jsx'
 import TracePanel from './TracePanel.jsx'
-import { getSessionTraceData } from './api.js'
+import { getSessionTraceData, openTraceUrl } from './api.js'
 
 // In-app view of a whole SCAN's session — every file's trace as one list, with a scan-level
 // rollup on top. This is the aggregate that hung Langfuse's own UI on large scans (the reason
@@ -96,6 +96,15 @@ export default function SessionPanel({ scanId, onClose }) {
                 <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
                   Showing the first {sess.files.length} of {sess.total} documents (worst-scoring first).
                 </div>
+              )}
+              {/* Advanced: the whole scan's session in Langfuse's own UI (requires a Langfuse
+                  login). The in-app rollup above is the no-login primary. */}
+              {openTraceUrl(scanId, 'session') && (
+                <a className="tp-langfuse-link" href={openTraceUrl(scanId, 'session')}
+                   target="_blank" rel="noopener noreferrer"
+                   title="Open this scan's session in Langfuse's own UI — requires a Langfuse login">
+                  Open in Langfuse ↗ <span className="muted">· advanced</span>
+                </a>
               )}
             </>
           )}

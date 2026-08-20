@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import Drawer from './Drawer.jsx'
 import DocumentHistoryPanel from './DocumentHistoryPanel.jsx'
-import { getFileTraceData } from './api.js'
+import { getFileTraceData, openTraceUrl } from './api.js'
 
 // In-app Langfuse trace viewer. Renders a file's trace INSIDE ACP — score, PII,
 // remediation and the Discover→Assess→Remediate timeline — from a PHI-safe payload the
@@ -155,6 +155,16 @@ export default function TracePanel({ scanId, file, onClose }) {
             )}
             <div className="tp-section-h">Timeline</div>
             <Timeline observations={trace.observations} />
+            {/* Secondary, advanced path: the raw trace in Langfuse's own UI (full span tree). Needs
+                a Langfuse login — the in-app view above is the no-login primary. Only shown when a
+                Langfuse deep-link is configured. */}
+            {openTraceUrl(scanId, 'file', docLabel) && (
+              <a className="tp-langfuse-link" href={openTraceUrl(scanId, 'file', docLabel)}
+                 target="_blank" rel="noopener noreferrer"
+                 title="Open the raw trace in Langfuse's own UI — full span tree, requires a Langfuse login">
+                Open in Langfuse ↗ <span className="muted">· advanced</span>
+              </a>
+            )}
           </>
         )}
       </div>

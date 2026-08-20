@@ -302,6 +302,11 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
   padding: 6px 12px; font: inherit; font-size: 12.5px; font-weight: 600; color: var(--plum, #46303F);
   cursor: pointer; }
 .tp-history-btn:hover { background: #faf7fd; border-color: #D9CCF2; }
+/* Secondary "Open in Langfuse" link — deliberately quiet: the in-app view is the primary,
+   this is the advanced raw-trace path for engineers already logged into Langfuse. */
+.tp-langfuse-link { display: inline-block; margin-top: 16px; font-size: 12px; font-weight: 600;
+  color: var(--muted); text-decoration: none; }
+.tp-langfuse-link:hover { color: var(--plum, #46303F); text-decoration: underline; }
 .dh-trend { display: flex; align-items: flex-end; gap: 14px; margin: 6px 0 4px; }
 .dh-spark { display: flex; align-items: flex-end; gap: 4px; height: 48px; flex: 0 0 auto; }
 .dh-bar { width: 12px; min-height: 4px; background: #C9B8E0; border-radius: 2px 2px 0 0; }

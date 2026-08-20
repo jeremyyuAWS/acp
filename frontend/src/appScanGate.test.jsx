@@ -110,10 +110,9 @@ describe('the universal scan gate (App)', () => {
     expect(startScan).not.toHaveBeenCalled()
     // Durable is off by default and no longer togglable here, so a confirm takes the non-queued
     // path. Three steps now, so walk to Start the way a user does.
-    const cont = () => [...dialog(c).querySelectorAll('button')].find((b) => /Continue/.test(b.textContent))
-    await click(cont())
-    await click(cont())
-    const start = [...dialog(c).querySelectorAll('button')].find((b) => /Start scan/.test(b.textContent))
+    // One screen now (PRD DISC-01) — no Continue to walk. The guarantee is unchanged: nothing
+    // scans until the gate is confirmed.
+    const start = [...dialog(c).querySelectorAll('button')].find((b) => /Start discovery/.test(b.textContent))
     expect(start).toBeTruthy()
     await click(start)
     // Confirm dispatched the scan (source 'all' for "Re-scan all sources") and closed the gate.

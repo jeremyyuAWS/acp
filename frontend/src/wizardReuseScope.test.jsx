@@ -82,14 +82,6 @@ describe('the shortcuts that are offered', () => {
     expect(chip(c, /Finance/), 'no chip for the Finance run').toBeTruthy()
   })
 
-  it('names both halves of the boundary on the chip', async () => {
-    // A reader given locations without criteria cannot reconstruct what was measured, which is
-    // why the run records the two together.
-    const c = await mount()
-    expect(chip(c, /HR/).textContent).toMatch(/Everything supported/)
-    expect(chip(c, /Finance/).textContent).toMatch(/1 criteria/)
-  })
-
   it('says the carve-out is there without printing a raw id', async () => {
     const c = await mount()
     const t = chip(c, /HR/).textContent
@@ -139,19 +131,11 @@ describe('applying one', () => {
       // eslint-disable-next-line no-await-in-loop
       await act(async () => { cont.click() })
     }
-    await act(async () => { btn(c, /Start scan/).click() })
+    await act(async () => { btn(c, /Start discovery/).click() })
     expect(seen[0].folders.map((f) => f.id)).toEqual(['hr'])
     // Carried, not dropped. Dropping it would widen the run behind a control labelled as a
     // narrowing — and the review step would still have said "1 excluded".
     expect(seen[0].exclude.map((f) => f.id)).toEqual(['arch'])
-  })
-
-  it('applies the reused criteria too', async () => {
-    const c = await mount()
-    await act(async () => { chip(c, /Finance/).click() })
-    await act(async () => { btn(c, /Continue/).click() })
-    // Step 2 now reflects a restricted scope rather than "everything supported".
-    expect(c.textContent).not.toMatch(/53 supported checks selected/)
   })
 
   it('says the reuse is a starting point, not a verification', async () => {
@@ -159,54 +143,5 @@ describe('applying one', () => {
     await act(async () => { chip(c, /HR/).click() })
     // "above" now: the selection is above the disclosure, not below it.
     expect(c.textContent).toMatch(/check the locations and criteria above/i)
-  })
-})
-
-describe('the criteria write-back is opt-in and only on divergence', () => {
-  async function toReview(c) {
-    for (let i = 0; i < 2; i++) {
-      const cont = btn(c, /Continue/)
-      if (!cont) break
-      // eslint-disable-next-line no-await-in-loop
-      await act(async () => { cont.click() })
-    }
-  }
-
-  it('is absent when this run matches what is stored', async () => {
-    // A control that is always there is a control people tick without reading; its ABSENCE is
-    // itself the signal that nothing would be written.
-    const c = await mount()
-    await toReview(c)
-    expect(c.textContent).not.toMatch(/save these criteria as the platform default/)
-  })
-
-  it('appears once the criteria differ, unticked, and says who it affects', async () => {
-    const c = await mount()
-    await act(async () => { chip(c, /Finance/).click() })
-    await toReview(c)
-    const box = [...c.querySelectorAll('input[type="checkbox"]')].pop()
-    expect(c.textContent).toMatch(/save these criteria as the platform default/)
-    expect(box.checked, 'the platform-wide write-back is ticked by default').toBe(false)
-    // "my next scan" was a misdescription: scan_scope is the platform default for everyone.
-    expect(c.textContent).toMatch(/for everyone/)
-  })
-
-  it('does not write the platform default unless it is ticked', async () => {
-    // The load-bearing one. A one-off narrowing must not become configuration for the tenant.
-    updateSettings.mockClear()
-    const c = await mount()
-    await act(async () => { chip(c, /Finance/).click() })
-    await toReview(c)
-    await act(async () => { btn(c, /Start scan/).click() })
-    expect(updateSettings).not.toHaveBeenCalled()
-  })
-
-  it('is not offered at all to an account that cannot write it', async () => {
-    // PUT /settings is admin-only. Showing the box to a read-only account promises a write that
-    // 403s after the modal has closed.
-    const c = await mount({ canEditScope: false })
-    await act(async () => { chip(c, /Finance/).click() })
-    await toReview(c)
-    expect(c.textContent).not.toMatch(/save these criteria as the platform default/)
   })
 })

@@ -100,26 +100,30 @@ describe('a format the scanner cannot produce a row for', () => {
   })
 })
 
-describe('the wizard actually uses this', () => {
+describe('the wizard no longer carries this — Discover does not choose formats', () => {
   const src = read('ScanScopeWizard.jsx')
 
-  it('labels the review row with the assessed/remediated wording', () => {
-    expect(src).toMatch(/\{ASSESSED_ROW_LABEL\}/)
-    expect(src, 'the bare "Formats" label is back').not.toMatch(/<dt className="muted">Formats<\/dt>/)
+  // #514 put "WCAG assessed & remediated" in the Discover review step, correctly for a step that
+  // still chose formats. Discover does not (PRD DISC-01), so the row moved out with the decision.
+  //
+  // The MODULE stays and its unit cases above stay with it: the wording is right and is what the
+  // Assess-side review step should use. What changes is which surface consults it — so these
+  // assertions invert from "the wizard uses this" to "the wizard must not", which is the guard
+  // that actually protects the split.
+
+  it('has no assessed-formats row', () => {
+    expect(src, 'the assessed-formats row is back on Discover').not.toMatch(/ASSESSED_ROW_LABEL/)
+    expect(src).not.toMatch(/OTHER_TYPES_NOTE/)
   })
 
-  it('shows what happens to the other file types', () => {
-    expect(src).toMatch(/\{OTHER_TYPES_NOTE\}/)
+  it('has no formats clause in its footer', () => {
+    expect(src, 'the footer names formats again').not.toMatch(/footerFormatsPart/)
   })
 
-  it('routes the footer through the assessed wording', () => {
-    expect(src).toMatch(/footerFormatsPart\(nFormats\)/)
-  })
-
-  it('counts the same formats in both places, so they cannot disagree', () => {
-    // nFormats and activeFormats are both SCOPE_FORMATS.filter(formatActive); if one ever stops
-    // being, the footer and the review row start describing different runs.
-    expect(src).toMatch(/const nFormats = SCOPE_FORMATS\.filter\(formatActive\)\.length/)
-    expect(src).toMatch(/const activeFormats = SCOPE_FORMATS\.filter\(formatActive\)/)
+  it('says what it DOES settle instead — every file type', () => {
+    // Absence alone would be satisfied by a screen that says nothing about file types at all,
+    // which reads as "some filter applied, unstated". Discover inventories everything and says so.
+    expect(src).toMatch(/All file types will be inventoried/)
+    expect(src).toMatch(/chosen in Assess/)
   })
 })

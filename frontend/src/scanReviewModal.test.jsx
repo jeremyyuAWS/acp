@@ -47,7 +47,7 @@ async function mount(props = {}) {
 }
 const click = async (el) => { await act(async () => { el.click() }); await act(async () => { await Promise.resolve() }) }
 const dialog = (c) => c.querySelector('[role="dialog"]')
-const startBtn = (c) => [...dialog(c).querySelectorAll('button')].find((b) => /Start scan/.test(b.textContent))
+const startBtn = (c) => [...dialog(c).querySelectorAll('button')].find((b) => /Start discovery/.test(b.textContent))
 const cancelBtn = (c) => [...dialog(c).querySelectorAll('button')].find((b) => b.textContent.trim() === 'Cancel')
 
 describe('scanSourceLabel — accurate per source, not "everything is Google Drive"', () => {
@@ -151,23 +151,21 @@ describe('ScanReviewModal — the engine switches are not on this surface', () =
     // The props are deliberately still in the signature: App passes them, and removing them from
     // both sides at once would make this change bigger than it needs to be.
     const c = await mount({ source: 'drive', estCount: 3, ...BEHAVIOR })
-    // Was asserted through the "Formats & WCAG criteria" heading, which is gone — it titled the
-    // body with step 2's subject while the user was on step 1. That heading was only ever a proxy
-    // for "the modal rendered with these props", so assert THAT: the wizard is mounted and usable.
+    // This has now lost two proxies in a row — first the "Formats & WCAG criteria" heading (#509),
+    // then the Continue control, both of which were only ever standing in for "the modal rendered
+    // with these props". Assert the thing itself: the wizard's own primary action is on screen.
     expect(dialog(c).textContent).toMatch(/documents in/)
-    expect([...dialog(c).querySelectorAll('button')].some((b) => /Continue/.test(b.textContent)),
-      'the wizard did not mount, so the props were not accepted after all').toBe(true)
+    expect(startBtn(c), 'the wizard did not mount, so the props were not accepted after all')
+      .toBeTruthy()
   })
 })
 
 describe('ScanReviewModal — confirm / cancel', () => {
-  it('mounts the wizard and runs onConfirm on Start scan', async () => {
-    // Three steps now, so Start is on the last one — walk there, as a user does.
+  it('mounts the wizard and runs onConfirm on Start discovery', async () => {
+    // One screen (PRD DISC-01) — Start is right there. The guarantee is unchanged: confirming in
+    // the wizard reaches the modal's onConfirm.
     const onConfirm = vi.fn()
     const c = await mount({ source: 'drive', estCount: 5, onConfirm })
-    const cont = () => [...dialog(c).querySelectorAll('button')].find((b) => /Continue/.test(b.textContent))
-    await click(cont())
-    await click(cont())
     const start = startBtn(c)
     expect(start).toBeTruthy()
     await click(start)
