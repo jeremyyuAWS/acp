@@ -35,21 +35,37 @@ on:
   # zero runs for half an hour across two pushes and a close/reopen, while a scheduled cron in
   # the same repo queued normally. There was no way to ask for the answer.
   #
-  # It also fixes a gap the `concurrency` block below creates. `cancel-in-progress: true` is
-  # right for a PR — a new push should supersede the old run — but the group is keyed on the ref,
-  # so several merges to main in quick succession cancel each other's runs. Three merges landed
-  # that way today (75d04de, 0e8f55d, 5e38f10) and NONE of them has a completed CI run on main;
-  # each was cancelled by the next. A dispatch is how you get that answer back afterwards,
-  # instead of waiting for an unrelated push to happen to validate the accumulated state.
+  # It USED TO cover a gap the `concurrency` block below created: with a blanket
+  # `cancel-in-progress: true`, several merges to main in quick succession cancelled each other's
+  # runs (75d04de, 0e8f55d, 5e38f10 — none with a completed CI run on main), and a dispatch was the
+  # only way to get the answer back. That is fixed at the source now — cancellation is conditional
+  # on the ref, so main queues instead of cancelling. The dispatch stays for the OTHER reason above,
+  # which the fix does not address: when GitHub simply stops delivering events.
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  # A new push to a PR supersedes the in-flight run for that PR.
+  # A new push to a PR supersedes the in-flight run for that PR — on MAIN it must not.
+  #
+  # The group is keyed on the ref, so with a blanket `cancel-in-progress: true` several merges in
+  # quick succession cancelled each OTHER'S runs on main. The comment above records that happening
+  # (75d04de, 0e8f55d, 5e38f10 — none with a completed CI run). It costs more than a missing record:
+  #
+  #   deploy.yml fires on `workflow_run: [CI] completed` and its `if` requires that run to have
+  #   concluded 'success'. A CANCELLED run is neither success nor failure, so the deploy is SKIPPED —
+  #   and main's newest commit does not ship. 13 of the last 30 deploy runs were skipped this way,
+  #   and on 2026-08-20 the tip sat undeployed for exactly this reason.
+  #
+  # It self-heals on the next merge (deploy.yml checks out CURRENT main, not the triggering sha),
+  # which is precisely why it is easy to miss: the drift is real but transient, and the last commit
+  # of the day is the one left behind.
+  #
+  # So: supersede on a PR, queue on main. Serial CI runs on main cost runner minutes; a commit that
+  # silently never deploys costs a confused user comparing two builds.
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   backend:
