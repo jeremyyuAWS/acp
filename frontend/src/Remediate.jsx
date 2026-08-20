@@ -3,6 +3,14 @@ import ScopeBanner from './ScopeBanner.jsx'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
 import RemediationInbox from './RemediationInbox.jsx'
+// The approved-board core (R2/R3, R5, R6, R9, R11, R12). Every one of these shipped to main
+// unmounted; this is the pass that puts them on the screen they were written for.
+import RemediationWork from './RemediationWork.jsx'
+import RemediationApprovals from './RemediationApprovals.jsx'
+import ManualWork from './ManualWork.jsx'
+import RemediationVerify from './RemediationVerify.jsx'
+import DeliveryPanel from './DeliveryPanel.jsx'
+import CloseoutPanel from './CloseoutPanel.jsx'
 import { autoFixRows, matchesWorkflow } from './remediationInboxModel.js'
 import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
@@ -283,7 +291,7 @@ function VerifyState({ state, pct, remaining, ready, latest }) {
 // readOnly: time-travel replay — historical scans are for looking, not enqueuing
 // real remediation jobs against (decisions stay editable: per-scan decision saves
 // are the time-travel feature itself).
-export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, assignees = {}, setAssignees, myEmail = null, aiEnabled = true, readOnly = false, onRefresh, onHitlCount, onNavigate }) {
+export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, assignees = {}, setAssignees, myEmail = null, aiEnabled = true, readOnly = false, onRefresh, onHitlCount, onNavigate, cap = null, assessment = null }) {
   const [queue, setQueue] = useState([])
   // The master/detail RemediationInbox owns its own view state (search, tabs, sort, selection),
   // so the old accordion/prefs plumbing (single-open openId, the search/severity/criterion/group
@@ -795,6 +803,48 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           ? <button className="rem-hero-cta" disabled={primary.disabled} onClick={primary.onClick}>{primary.label}</button>
           : remStarted ? <span className="rh-done">All caught up ✓</span> : null}
       </section>
+
+      {/* ══ THE APPROVED BOARD CORE ══════════════════════════════════════════════════════════
+          R2/R3, R5, R6, R9, R11, R12, in the board's order. Each one self-guards: given nothing
+          measurable it renders nothing rather than a frame of zeros, so a run that has not reached
+          a stage simply has no panel for it.
+
+          They sit ABOVE the Review queue deliberately. The board's argument is that a reader must
+          see how the work DIVIDES — what ACP fixes without asking, what needs a decision, what only
+          a person can do — before being handed a queue of it. A queue first invites the reader to
+          treat every item as the same kind of work, which is the thing the lanes exist to deny.
+
+          The pre-existing hero, Review queue and charts below are untouched. Mounting ten
+          components and deleting the screen they replace are two changes; doing both at once makes
+          a regression impossible to attribute. The removal is its own commit. */}
+
+      {/* R2 · the work, partitioned once — and R3, the deterministic batch inside it. */}
+      <RemediationWork files={files} cap={cap} assessment={assessment} />
+
+      {/* R5 · the approval queue. Fed the SAME pending queue the Review section below reads, so
+          the two cannot disagree about what is waiting; the handlers are the existing ones. */}
+      <RemediationApprovals items={queue}
+                            onApprove={(id, value, meta) => act(id, 'approved', value, meta && meta.approvedValues)}
+                            onReject={(id) => act(id, 'rejected')} />
+
+      {/* R6 · the manual lane — work ACP cannot do at all, derived from the capability lanes
+          rather than a hardcoded list. */}
+      <ManualWork files={files} cap={cap} assessment={assessment} />
+
+      {/* R9 · verification. Did the fixes actually hold? A remediation nobody re-checked is a
+          claim, not a result. */}
+      <RemediationVerify files={files} cap={cap} assessment={assessment} />
+
+      {/* R11 · delivery — where the fixed files go. It reads the Drive-mirror setting itself and
+          states the destination as a function of that setting, because under ADR 0010 the mirror
+          defaults ON and a copy IS written into the customer's own drive. */}
+      <DeliveryPanel files={files} />
+
+      {/* R12 · close the loop. */}
+      <CloseoutPanel docs={files}
+                     onReverify={() => onRefresh && onRefresh()}
+                     onReview={() => { const el = document.getElementById('rem-review'); if (el) el.scrollIntoView({ behavior: 'smooth' }) }}
+                     onPublish={() => onNavigate && onNavigate('publish')} />
 
       {/* ── HUMAN REVIEW (§3) — the only section that needs interaction, so it dominates,
           directly under the hero. Each card carries its own badge (§4) and a

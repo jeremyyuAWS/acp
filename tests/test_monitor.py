@@ -324,23 +324,41 @@ def test_the_parser_matches_what_real_git_actually_prints():
     """
     import subprocess as _sp
     repo = str(Path(__file__).resolve().parent.parent)
+    # %p is the parent list, so a MERGE is identifiable from the record itself rather than by
+    # pattern-matching its subject line — see the empty-merge case below.
     out = _sp.run(["git", "-C", repo, "log", "-m", "--first-parent", "--name-only",
-                   "--format=%x00%h %s", "-20", "origin/main"],
+                   "--format=%x00%p%x01%h %s", "-20", "origin/main"],
                   capture_output=True, text=True, timeout=60)
     if out.returncode != 0 or not out.stdout.strip():
         pytest.skip("no origin/main in this checkout")
     blocks = [b for b in out.stdout.split("\x00") if b.strip()]
     assert blocks, "the NUL record separator did not split the log"
+    saw_paths = 0
     for block in blocks:
-        lines = [l for l in block.splitlines() if l.strip()]
+        parents, _, rest = block.partition("\x01")
+        lines = [l for l in rest.splitlines() if l.strip()]
         subject, paths = lines[0], lines[1:]
-        # Every commit in this repo touches at least one file, and none of the paths may be the
-        # subject line leaking through — the bug a format change would actually cause.
-        assert paths, f"no paths parsed for {subject!r}"
+        is_merge = len(parents.split()) > 1
+        # A NON-merge commit always touches a file, so an empty parse there is the format change
+        # this test exists to catch — a false GREEN that would make every commit look cosmetic.
+        #
+        # A MERGE can legitimately parse empty: `git merge X` where the branch already contains
+        # everything in X still writes a commit, and its first-parent diff is empty. `be37038` on
+        # main is exactly that, and it is a real state rather than a parser fault — the classifier
+        # below is asked for a verdict on it either way. Requiring paths here made a normal git
+        # object fail the build and, through deploy.yml's success gate, stopped main deploying.
+        if not is_merge:
+            assert paths, f"no paths parsed for {subject!r}"
+        saw_paths += 1 if paths else 0
+        # The subject must never leak into the path list — the other half of a format change.
         assert not any(p.startswith(subject[:8]) for p in paths)
+    # The exemption above must not become the rule: if NOTHING parsed a path, the format really
+    # did change and every commit merely looked like an empty merge.
+    assert saw_paths, "no commit in the last 20 parsed any path at all"
     # And the classifier returns a real bool for every one of them.
-    assert all(isinstance(M._touches_image([l for l in b.splitlines() if l.strip()][1:]), bool)
-               for b in blocks)
+    assert all(isinstance(M._touches_image(
+        [l for l in b.partition("\x01")[2].splitlines() if l.strip()][1:]), bool)
+        for b in blocks)
 
 
 def test_the_local_compose_stack_is_not_the_production_image(monkeypatch, rep):
