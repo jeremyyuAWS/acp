@@ -2094,6 +2094,22 @@ class Store:
                     (scan_id,))
             return self._db.fetchall(cur)
 
+    def live_findings_count(self, scan_id: str) -> int:
+        """Findings confirmed so far — SUM(finding_count) over FAIL traces, the SAME rows the
+        certification report sums into its finding total (get_certification_facts: `f["findings"] +=
+        finding_count` when outcome=='FAIL'). A single aggregate query, so the running screen's
+        "findings so far" (Live Assessment PRD §4.3) is cheap to poll AND reconciles with the final
+        cert. Never raises: an unknown scan is 0."""
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT COALESCE(SUM(finding_count),0) AS n FROM scan_rule_traces "
+                    "WHERE scan_id=%s AND outcome='FAIL'", (scan_id,))
+                row = self._db.fetchone(cur)
+                return int((row or {}).get("n") or 0)
+        except Exception:
+            return 0
+
     def record_applied_fix(self, scan_id: str, file: str, rule_id: str, value: str,
                            *, source: str | None = None, thumb: str | None = None,
                            seq: int = 0) -> None:
