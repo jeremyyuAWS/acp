@@ -70,21 +70,20 @@ def provenance() -> dict:
       - 'cloud'  → a third-party host (e.g. a hosted GPU proxy). Bytes leave your network.
     This build has no API key and no third-party AI SDK; the only backend is the configured
     Ollama endpoint. `zone='local'` is the honest default for the self-hosted Ollama deployment.
+
+    The zone is derived by `providers.zone_for_url` — the SINGLE source of truth for the
+    governance zone, so `/config` (this) and the per-call trace (which also reports a zone) can
+    never disagree about whether a document left the network. Previously this reimplemented the
+    same local/cloud test inline; that duplication was a real divergence risk on a PHI signal.
     """
     from urllib.parse import urlparse
+    import providers as _providers  # lazy, like _vision_generate — no import-time cycle
     host = (urlparse(OLLAMA_BASE_URL).hostname or "").lower()
-    local = (
-        host in ("localhost", "127.0.0.1", "::1", "")
-        or host.endswith(".internal") or ".internal." in host
-        or host.endswith(".local")
-        or host.startswith("10.") or host.startswith("192.168.")
-        or any(host.startswith(f"172.{n}.") for n in range(16, 32))
-    )
     return {
         "provider": "ollama",
         "model": OLLAMA_MODEL,
         "vision_model": OLLAMA_VISION_MODEL,
-        "zone": "local" if local else "cloud",
+        "zone": _providers.zone_for_url(OLLAMA_BASE_URL),
         "host": host,
     }
 
