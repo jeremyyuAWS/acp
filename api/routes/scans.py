@@ -33,7 +33,7 @@ def _inv_capability(row: dict) -> dict:
 
 
 @router.post("/scans")
-def start_scan(request: Request, source: str = Query("local", pattern="^(local|drive|sharepoint)$"),
+def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive|sharepoint)$"),
                sync: bool = False, folder: str | None = Query(None),
                # Repeatable: ?folders=<id>&folders=<id>. `folder` stays the single-root form, so
                # every existing caller, saved link and already-queued job is unaffected. A
