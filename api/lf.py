@@ -104,8 +104,15 @@ def _trace_id(scan_id: str | None, file: str | None) -> str | None:
 
 def _file_tags(file: str, user: str | None) -> list[str]:
     """Base tag set for a file's trace — shared so a later tag-only update (e.g.
-    appending rule-fail tags after Assess) doesn't clobber the tags file_trace set."""
-    return ["accessibility-file", f"user:{user or 'demo'}", f"file:{_doc_label(file)}"]
+    appending rule-fail tags after Assess) doesn't clobber the tags file_trace set.
+
+    `format:` is added so the native Langfuse UI can filter a document type (all PDFs, all
+    docx) without parsing trace names — a type, not an identifier, same safety as `_fmt`."""
+    tags = ["accessibility-file", f"user:{user or 'demo'}", f"file:{_doc_label(file)}"]
+    fmt = _fmt(file)
+    if fmt:
+        tags.append(f"format:{fmt}")
+    return tags
 
 
 def _det_id(*parts) -> str:
@@ -162,9 +169,9 @@ def scan_trace(scan_id: str, source: str, n_files: int, ai_enabled: bool = True,
     mode = "AI-assisted" if ai_enabled else "Deterministic (no AI)"
     who = user or "demo"
     label = "Scan (Deep)" if deep_scan else "Scan"
-    # Lead the name with who ran it so the trace LIST segregates by user at a glance,
-    # in addition to user_id (which powers Langfuse's Users view) and a user: tag.
-    name = f"{who} · {label} · {n_files} document{'s' if n_files != 1 else ''} · {src}"
+    # The name must not lead with the operator email (identity leak in the trace list); segregation
+    # by user stays available through user_id (Langfuse's Users view) and the user: tag.
+    name = f"{label} · {n_files} document{'s' if n_files != 1 else ''} · {src}"
     return lf.trace(
         id=scan_id,
         name=name,
@@ -357,7 +364,8 @@ def open_assess_trace(scan_id: str, level: str, n_files: int, user: str | None =
         return _Noop()
     return lf.trace(
         id=f"{scan_id}-assess",
-        name=f"{user or 'demo'} · Assess · WCAG 2.1 {level} · {n_files} document{'s' if n_files != 1 else ''}",
+        # No operator email in the name (identity leak in the trace list); user_id carries it.
+        name=f"Assess · WCAG 2.1 {level} · {n_files} document{'s' if n_files != 1 else ''}",
         user_id=user or "demo",
         tags=["accessibility-assessment", f"level:{level}", f"user:{user or 'demo'}"],
         metadata={"scan_id": scan_id, "level": level, "documents": n_files},
@@ -647,10 +655,16 @@ def file_trace(scan_id: str, file: str, user: str | None = None):
         return _Noop()
     try:
         who = user or "demo"
+        # The NAME is the label shown in Langfuse's trace/session LIST, so it must not lead with
+        # the operator's email — that put "jeremy_acp@…onmicrosoft.com · doc-…" in every row, a
+        # real identity leak on a wider-access surface than the app. Segregation BY user stays
+        # available through `user_id` and the `user:` tag (both filterable in the UI); the visible
+        # name is just the redacted document label (file_assessment_result upgrades it with the
+        # verdict once the file is assessed, so the list still reads at a glance).
         return lf.trace(
             id=_trace_id(scan_id, file),
             session_id=scan_id,
-            name=f"{who} · {_doc_label(file)}",
+            name=_doc_label(file),
             user_id=who,
             tags=_file_tags(file, who),
             # Trace-level input so the session view shows WHAT was assessed, not an empty shell.
@@ -783,7 +797,8 @@ def discover_run_trace(scan_id: str, source: str, *, listed: int, inventoried: i
         trace = lf.trace(
             id=_det_id(scan_id, "discover-run"),
             session_id=scan_id,
-            name=f"{who} · Discover · {label}",
+            # No operator email in the name (identity leak in the trace list); user_id carries it.
+            name=f"Discover · {label}",
             user_id=who,
             tags=["accessibility-discover", f"user:{who}", f"source:{source}"],
             metadata={"scan_id": scan_id, "source": source, "phase": "discover",
@@ -890,8 +905,14 @@ def file_assessment_result(scan_id: str, file: str, *, score: float | None,
         out["pii"] = pii                        # {flagged, types(categories), findings, critical}
     if remediation is not None:
         out["remediation"] = {k: bool(v) for k, v in remediation.items()}
+    # Upgrade the trace NAME with the verdict now that the file is assessed, so Langfuse's trace
+    # list reads at a glance — "doc-3f9a2c.docx · ✗ AA" / "· ✓ AA" — instead of a bare label (or,
+    # before, the operator's email). Still no identity and no content: a redacted label, a check
+    # mark, and the conformance level. file_trace set the plain label at creation; this is the
+    # progressive enhancement once the outcome exists.
+    name = f"{_doc_label(file)} · {'✓' if conformant else '✗'} {level}"
     try:
-        lf.trace(id=_trace_id(scan_id, file)).update(output=out)
+        lf.trace(id=_trace_id(scan_id, file)).update(output=out, name=name)
     except Exception:
         pass
 
