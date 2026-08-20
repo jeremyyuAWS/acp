@@ -870,6 +870,26 @@ reach production, safely.
   legitimately has no SMB config, so an unconfigured SMB source must not flip `ready`. Touches
   `api/routes/system.py` + a readiness test — not RULE_PATHS.
 
+- **Stopped a collapsed scan from hijacking every view — selector half** (#520). The production
+  monitor's `newest scan is full-size` probe fired on prod ("newest has 5 documents but a recent scan
+  had 22"): every dashboard, report and selector defaults to the latest scan, so a degenerate small
+  scan on top makes the whole app show a shrunken estate. `App.jsx` picked `list_scans()[0]` blindly;
+  it now picks the newest scan that is NOT collapsed (new pure `pickDefaultScan`), falling back to the
+  most recent full-size one. Mirrors the probe's own definition exactly — `files < 0.5 × the biggest
+  of the last 10 siblings` — so the app's default and the probe agree on "collapsed." Conservative:
+  it only skips a scan under half its biggest recent sibling, so a legitimately small estate (no
+  larger sibling) is never hidden. Frontend-only; 7 tests. Hardens the SELECTOR, not the source.
+- **Stopped a collapsed scan from being created — source half** (#522). The upstream cause: `local`
+  scans the bundled test corpus, not the estate, yet was the SILENT default for a source-less scan
+  (`POST /scans` `Query("local")` and the worker's `payload.get("source", "local")`) — so a stray
+  request produced a small corpus scan that landed as "latest", the exact fingerprint. The scheduled
+  sweep's fallback-to-local was already fixed; this closed the on-demand door: `source` is now
+  required (a source-less request is a 422, never a corpus scan) and the worker fails closed
+  (`FatalJobError`, mirroring the missing-`scan_id` guard). `?source=local` stays valid for dev/tests
+  — only the silent default is gone. A caller audit first confirmed nothing relied on it (frontend,
+  e2e and the one test-caller all pass a source explicitly); the full suite passed unchanged. Touches
+  `api/routes/scans.py` + `api/handlers.py` — not RULE_PATHS.
+
 ## Feature: Release Center · #4599
 
 The Publish tab presented itself as a conformance report — an estate score, a "certifiable" queue,
@@ -2336,3 +2356,9 @@ real extracted content, degrading to the generic note, never a fabricated tree.
   hung). Test hygiene #505 (the wizard date time-bomb) was already recorded by the entry above and is not
   re-logged as a Task. **Sync marker still NOT advanced** (`fad0dfbe`, same convention as the prior entries):
   the large delta since it remains other sessions' undocumented feature work, left for them to characterise.
+- **2026-08-20 (collapsed-scan probe fixes)** — To **Continuous deployment to Azure (#4614)**: the two halves
+  of the `newest scan is full-size` probe failure caught on prod — the selector hardening (#520, default to
+  the newest non-collapsed scan) and the source fail-closed (#522, require an explicit scan source so `local`
+  is no longer a silent default). The scheduled-sweep fallback was already fixed; these close the selector and
+  on-demand doors. Investigation-led: verified the sweep bug was already closed and ran a caller audit before
+  changing the API contract. **Sync marker still NOT advanced** (same convention).
