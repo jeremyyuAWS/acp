@@ -71,7 +71,8 @@ const nameOf = (f) => (typeof f === 'string' ? f : f?.file || f?.name || null)
 const SKEY = (id) => `acp-assess-${id || 'none'}`
 const loadSaved = (id) => { try { return JSON.parse(sessionStorage.getItem(SKEY(id)) || 'null') } catch { return null } }
 
-export default function AssessRunner({ files = [], runId, scanBusy = false, onAssessed, onPhase }) {
+export default function AssessRunner({ files = [], runId, scanBusy = false, onAssessed, onPhase,
+                                       controlled = false, onReady }) {
   const saved = loadSaved(runId)
   // Derived from the selected scope, not a picker — see deriveLevel above.
   const level = DERIVED_LEVEL
@@ -79,6 +80,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   // default — the run already skips them (PRD §4.5), and this surfaces that as a controllable choice
   // rather than a silent one. Unchecking sends the authorized include-flagged override to the run.
   const [ignoreLifecycle, setIgnoreLifecycle] = useState(true)
+  const assessRef = useRef(null)                  // latest `assess`, for the optional external start
   const [phase, setPhase] = useState(saved?.phase || 'idle') // idle | running | done
   const [progress, setProgress] = useState(0)
   const [currentFile, setCurrentFile] = useState(null)
@@ -271,7 +273,10 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     timer.current = setInterval(tick, 2000)
   }
 
-  const assess = () => {
+  // `opts` is AssessSetup's onRun descriptor when the pre-run screen drives the run, and null
+  // when this component's own button does. Null means "use my local state", which is what every
+  // existing caller gets.
+  const assess = (opts) => {
     if (phase === 'running') return               // never launch a second pass while one runs
     if (scanBusy) return                          // a scan must finish before assessing its results
     if (!runId) return
@@ -283,7 +288,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     // container restart) has a stale/absent token and every file would 401. Push a fresh Drive
     // token from the live session first (best-effort; the endpoint 422s harmlessly for a local /
     // SharePoint scan with no token). Then kick off the assessment.
-    Promise.resolve(refreshScanDriveToken(runId)).catch(() => {}).then(() => assessScan(runId, level, !ignoreLifecycle)).then((resp) => {
+    Promise.resolve(refreshScanDriveToken(runId)).catch(() => {}).then(() => assessScan(runId, opts?.level || level, opts ? !!opts.includeLifecycleFlagged : !ignoreLifecycle)).then((resp) => {
       if (resp && resp.deferred) {
         // The analysis is running now — track it for real.
         save({ phase: 'running', startedAt, level, deferred: true })
@@ -353,8 +358,24 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   // has to move with the level selector or it is just decoration.
   const ruleCount = [...SCOPE_SCS].filter((sc) => RANK[CATALOG_LEVEL[sc]] <= RANK[level]).length
 
+  // Through a ref, not by handing `assess` to the effect directly: `assess` closes over `phase`,
+  // `ignoreLifecycle` and `level`, so a function captured once would keep starting runs from the
+  // state of the render that registered it. The ref is reassigned every render, so the parent
+  // always invokes the current one.
+  assessRef.current = assess
+  useEffect(() => {
+    if (!onReady) return undefined
+    onReady((opts) => assessRef.current?.(opts))
+    return () => onReady(null)
+  }, [onReady])
+
   return (
     <section className="panel assesspanel">
+      {/* The pre-run band — heading, document count, exclusions, target-level sentence, lifecycle
+          toggle and the Run button. `controlled` hides ALL of it, because AssessSetup renders its
+          own version of every one of those and two of them on one screen is the defect this
+          redesign removes. Progress and results below are unaffected either way. */}
+      {!controlled && (<>
       <div className="assesshd">
         <div>
           <h2 style={{ margin: 0 }}>Assess the estate against WCAG 2.1</h2>
@@ -370,7 +391,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
           )}
           {scanBusy && <p style={{ margin: '6px 0 0', fontSize: 13, color: '#854F0B' }}>⏳ A scan is still running — assessment will be available once it finishes.</p>}
         </div>
-        <button className="assessbtn" onClick={assess} disabled={phase === 'running' || !assessN || scanBusy}
+        <button className="assessbtn" onClick={() => assess()} disabled={phase === 'running' || !assessN || scanBusy}
                 style={phase === 'done' ? { background: 'transparent', color: '#1F5FA8', border: '1.5px solid #9DBCE4', fontWeight: 600 } : undefined}
                 title={scanBusy ? 'A scan is still running — assessment will be available when it completes'
                        : phase === 'done' ? 'Already assessed — re-run only if you changed the target level or re-scanned' : undefined}>
@@ -397,6 +418,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
           </span>
         </label>
       )}
+      </>)}
 
       <div role="status" aria-live="polite">
         {phase === 'running' && (
@@ -459,7 +481,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
             Assess. (If they aren’t on Drive, the files may be password-protected or an unsupported
             format.)
             <div style={{ marginTop: 8 }}>
-              <button className="ghost small" onClick={assess} disabled={phase === 'running' || scanBusy}>↻ Re-run Assess</button>
+              <button className="ghost small" onClick={() => assess()} disabled={phase === 'running' || scanBusy}>↻ Re-run Assess</button>
             </div>
           </div>
         )}

@@ -9,7 +9,7 @@ const read = (f) => readFileSync(join(here, f), 'utf8')
 describe('AssessRunner drives the real analysis when it is deferred (ADR 0020)', () => {
   it('branches on the deferred response and polls the real scan', () => {
     const s = read('AssessRunner.jsx')
-    expect(s).toMatch(/\.then\(\(\) => assessScan\(runId, level, !ignoreLifecycle\)\)\.then\(\(resp\)/)   // reads the response, not fire-and-forget
+    expect(s).toMatch(/\.then\(\(\) => assessScan\(runId, [^)]+\)\)\.then\(\(resp\)/)   // reads the response, not fire-and-forget
     expect(s).toMatch(/if \(resp && resp\.deferred\)/)          // deferred branch
     expect(s).toMatch(/const pollDeferred/)
     expect(s).toMatch(/getScan\(runId\)/)                        // polls the true per-file progress
@@ -22,7 +22,19 @@ describe('AssessRunner drives the real analysis when it is deferred (ADR 0020)',
     const s = read('AssessRunner.jsx')
     expect(s).toMatch(/refreshScanDriveToken/)
     // the refresh runs BEFORE assessScan so the fan-out has a live token; best-effort for local
-    expect(s).toMatch(/refreshScanDriveToken\(runId\)\)\.catch\(\(\) => \{\}\)\.then\(\(\) => assessScan\(runId, level, !ignoreLifecycle\)\)/)
+    expect(s).toMatch(/refreshScanDriveToken\(runId\)\)\.catch\(\(\) => \{\}\)\.then\(\(\) => assessScan\(runId, [^)]+\)\)/)
+  })
+
+  it('sends the pre-run screen\'s decision, not only its own local toggle', () => {
+    const s = read('AssessRunner.jsx')
+    // `opts` is AssessSetup's onRun descriptor. Falling back to local state when it is absent is
+    // what keeps every pre-existing caller behaving exactly as before.
+    expect(s).toMatch(/assessScan\(runId, opts\?\.level \|\| level, opts \? !!opts\.includeLifecycleFlagged : !ignoreLifecycle\)/)
+    // The button must not hand React's MouseEvent in as the descriptor: an event is truthy, so
+    // `opts.includeLifecycleFlagged` would read undefined and every click would silently send
+    // include_lifecycle_flagged=false, ignoring the checkbox next to it.
+    expect(s).not.toMatch(/onClick=\{assess\}/)
+    expect(s).toMatch(/onClick=\{\(\) => assess\(\)\}/)
   })
 
   it('shows a "sign in again" path when a deferred assess opens nothing (session-expired)', () => {
