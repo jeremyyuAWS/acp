@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import Thumbnail from './Thumbnail.jsx'
 import { locationLabel } from './remediationInboxModel.js'
-import { natureOf, contrastEvidence } from './remediationEvidence.js'
+import { natureOf, contrastEvidence, metadataEvidence } from './remediationEvidence.js'
 import GroundedBeforeAfter from './GroundedBeforeAfter.jsx'
 
 // The third pane of the remediation workspace: a CONTEXTUAL PREVIEW of the actual document.
@@ -202,6 +202,19 @@ function Properties({ f, fmt }) {
 // preview, so an invented one would be fiction (ADR 0016). We name the criterion and say so plainly.
 function StructureNote({ f }) {
   const wcag = wcagCode(f)
+  // A metadata finding (document title / language) DOES have a meaningful representation — the
+  // property's real before→after value — so show that instead of the generic "not extracted" note.
+  const meta = metadataEvidence(f)
+  if (meta) {
+    return (
+      <div>
+        <p className="muted" style={{ fontSize: 12.5, margin: '0 0 10px' }}>
+          {wcag ? `${wcag} — ` : ''}A document property, not something on the rendered page. The change is to its value:
+        </p>
+        <GroundedBeforeAfter finding={f} />
+      </div>
+    )
+  }
   return (
     <div className="muted" style={{ display: 'grid', placeItems: 'center', textAlign: 'center', padding: '28px 18px',
                                     border: '1px dashed var(--line,#e2dce4)', borderRadius: 10, minHeight: 160 }}>
@@ -295,7 +308,7 @@ export default function RemediationPreview({ finding, scanId = null, embedded = 
           {activeMode === 'visual' && (
             <>
               <Zoomable zoom={zoom}><PageView f={finding} scanId={scanId} /></Zoomable>
-              {contrast && <div style={{ marginTop: 12 }}><GroundedBeforeAfter finding={finding} /></div>}
+              {contrast && <div style={{ marginTop: 12 }}><GroundedBeforeAfter finding={finding} scanId={scanId} /></div>}
               <FixCallouts f={finding} />
             </>
           )}
@@ -380,7 +393,7 @@ export default function RemediationPreview({ finding, scanId = null, embedded = 
             background, with the ratio computed from those colours. Shown in every Visual view because
             it IS the before→after, and it is the honest stand-in where docx/pdf have no page crop. */}
         {activeMode === 'visual' && contrast && (
-          <div style={{ marginTop: 14 }}><GroundedBeforeAfter finding={finding} /></div>
+          <div style={{ marginTop: 14 }}><GroundedBeforeAfter finding={finding} scanId={scanId} /></div>
         )}
       </div>
 

@@ -212,7 +212,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
                 with the ratio computed from the real colours, or the literal value change). */}
             <div style={{ marginTop: 18 }}>
               <p className="muted" style={{ ...sectionLabel, margin: '0 0 8px' }}>Before / after</p>
-              <GroundedBeforeAfter finding={f} />
+              <GroundedBeforeAfter finding={f} scanId={scanId} />
             </div>
 
             {/* 3 · What ACP changed — the plain sentence + the real values. */}
