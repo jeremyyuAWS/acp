@@ -32,6 +32,17 @@ def test_floating_textbox_gets_a_reading_order_recommendation(tmp_path):
     assert out[0]["locator"] == "floating-text:1"
 
 
+def test_proposal_carries_plain_text_and_sequence_for_the_reading_order_card(tmp_path):
+    # The review card renders the reading order as a numbered list, so each proposal carries the box's
+    # raw text (`text`) and its position in anchor order (`seq`), not only the "Move this…" sentence.
+    body = ('<w:txbxContent><w:p><w:r><w:t>First box</w:t></w:r></w:p></w:txbxContent>'
+            '<w:txbxContent><w:p><w:r><w:t>Second box</w:t></w:r></w:p></w:txbxContent>')
+    out = proposals.propose_reading_order(_docx(tmp_path, body), ".docx")
+    assert len(out) == 2
+    assert [p["seq"] for p in out] == [1, 2]                          # anchor order
+    assert [p["text"] for p in out] == ["First box", "Second box"]    # raw text for the numbered sequence
+
+
 def test_positioned_frame_is_surfaced(tmp_path):
     body = '<w:p><w:pPr><w:framePr w:w="2000"/></w:pPr><w:r><w:t>Pull quote</w:t></w:r></w:p>'
     out = proposals.propose_reading_order(_docx(tmp_path, body), ".docx")

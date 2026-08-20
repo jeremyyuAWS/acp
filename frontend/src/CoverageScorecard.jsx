@@ -221,10 +221,14 @@ export default function CoverageScorecard({ files = [] }) {
 
       {/* Layer 2 — Remediation: if it fails, how is it fixed? */}
       <div className="muted" style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.03em', textTransform: 'uppercase', margin: '16px 0 4px' }}>Remediation — if it fails, how is it fixed?</div>
+      {/* Denominator, not a bare count. These enumerate CRITERIA over the same core as the
+          assessment tiles above (remAuto + remAi + remHuman + the unshown "no ACP fix" = s.total),
+          so "6" alone read as findings/files/methods — unit unknown. `/{s.total}` makes it
+          "6 of 20 criteria", matching the assessment row and the section's stated denominator. */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' }}>
-        <Tile emoji="⚡" n={s.remAuto} total={null} kind="auto" palette={R} sub="deterministic fix" />
-        <Tile emoji="🤖" n={s.remAi} total={null} kind="ai" palette={R} sub="AI drafts · 1-click approve" />
-        <Tile emoji="👤" n={s.remHuman} total={null} kind="human" palette={R} sub="re-authored by a person" />
+        <Tile emoji="⚡" n={s.remAuto} total={s.total} kind="auto" palette={R} sub="deterministic fix" />
+        <Tile emoji="🤖" n={s.remAi} total={s.total} kind="ai" palette={R} sub="AI drafts · 1-click approve" />
+        <Tile emoji="👤" n={s.remHuman} total={s.total} kind="human" palette={R} sub="re-authored by a person" />
       </div>
 
       <p className="muted" style={{ fontSize: 11.5, margin: '12px 0 0', lineHeight: 1.5 }}>

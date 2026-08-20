@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import Thumbnail from './Thumbnail.jsx'
 import { locationLabel } from './remediationInboxModel.js'
-import { natureOf, contrastEvidence } from './remediationEvidence.js'
+import { natureOf, contrastEvidence, metadataEvidence, readingOrderEvidence, findingSc } from './remediationEvidence.js'
+import HeadingOutline from './HeadingOutline.jsx'
+import TableStructure from './TableStructure.jsx'
 import GroundedBeforeAfter from './GroundedBeforeAfter.jsx'
 
 // The third pane of the remediation workspace: a CONTEXTUAL PREVIEW of the actual document.
@@ -200,9 +202,34 @@ function Properties({ f, fmt }) {
 // Structure mode — offered only for a structure/metadata finding. Deliberately does NOT draw a tag
 // tree or reading-order diagram: that data is computed during assessment and not re-extracted for
 // preview, so an invented one would be fiction (ADR 0016). We name the criterion and say so plainly.
-function StructureNote({ f }) {
+function StructureNote({ f, scanId = null }) {
   const wcag = wcagCode(f)
-  return (
+  // A metadata finding (document title / language) DOES have a meaningful representation — the
+  // property's real before→after value — so show that instead of the generic "not extracted" note.
+  const meta = metadataEvidence(f)
+  if (meta) {
+    return (
+      <div>
+        <p className="muted" style={{ fontSize: 12.5, margin: '0 0 10px' }}>
+          {wcag ? `${wcag} — ` : ''}A document property, not something on the rendered page. The change is to its value:
+        </p>
+        <GroundedBeforeAfter finding={f} />
+      </div>
+    )
+  }
+  // Reading order (1.3.2): the anchored items in the order a screen reader follows — a real,
+  // meaningful structural representation, not the generic "not extracted" note.
+  if (readingOrderEvidence(f)) {
+    return (
+      <div>
+        <p className="muted" style={{ fontSize: 12.5, margin: '0 0 10px' }}>
+          {wcag ? `${wcag} — ` : ''}Reading order — how a screen reader traverses the flagged anchored items:
+        </p>
+        <GroundedBeforeAfter finding={f} />
+      </div>
+    )
+  }
+  const genericNote = (
     <div className="muted" style={{ display: 'grid', placeItems: 'center', textAlign: 'center', padding: '28px 18px',
                                     border: '1px dashed var(--line,#e2dce4)', borderRadius: 10, minHeight: 160 }}>
       <div style={{ maxWidth: 380 }}>
@@ -218,6 +245,22 @@ function StructureNote({ f }) {
       </div>
     </div>
   )
+  // Heading findings (1.3.1 / 2.4.6): fetch the real docx heading outline and show before → corrected.
+  // While it loads, or when no outline is available (non-docx, <2 headings, already clean), HeadingOutline
+  // renders the generic note above as its fallback — never a fabricated outline.
+  const sc = findingSc(f)
+  if (sc === '2.4.6') {
+    return <HeadingOutline scanId={scanId} file={f?.file} wcag={wcag} fallback={genericNote} />
+  }
+  // 1.3.1 covers heading hierarchy AND table-header association: try the heading outline first, then the
+  // table structure, then the honest generic note. Each renderer degrades to the next when it has nothing.
+  if (sc === '1.3.1') {
+    return (
+      <HeadingOutline scanId={scanId} file={f?.file} wcag={wcag}
+        fallback={<TableStructure scanId={scanId} file={f?.file} wcag={wcag} fallback={genericNote} />} />
+    )
+  }
+  return genericNote
 }
 
 export default function RemediationPreview({ finding, scanId = null, embedded = false }) {
@@ -291,11 +334,11 @@ export default function RemediationPreview({ finding, scanId = null, embedded = 
         </div>
         <div style={{ marginTop: 12 }}>
           {activeMode === 'properties' && <Properties f={finding} fmt={fmt} />}
-          {activeMode === 'structure' && <StructureNote f={finding} />}
+          {activeMode === 'structure' && <StructureNote f={finding} scanId={scanId} />}
           {activeMode === 'visual' && (
             <>
               <Zoomable zoom={zoom}><PageView f={finding} scanId={scanId} /></Zoomable>
-              {contrast && <div style={{ marginTop: 12 }}><GroundedBeforeAfter finding={finding} /></div>}
+              {contrast && <div style={{ marginTop: 12 }}><GroundedBeforeAfter finding={finding} scanId={scanId} /></div>}
               <FixCallouts f={finding} />
             </>
           )}
@@ -380,7 +423,7 @@ export default function RemediationPreview({ finding, scanId = null, embedded = 
             background, with the ratio computed from those colours. Shown in every Visual view because
             it IS the before→after, and it is the honest stand-in where docx/pdf have no page crop. */}
         {activeMode === 'visual' && contrast && (
-          <div style={{ marginTop: 14 }}><GroundedBeforeAfter finding={finding} /></div>
+          <div style={{ marginTop: 14 }}><GroundedBeforeAfter finding={finding} scanId={scanId} /></div>
         )}
       </div>
 

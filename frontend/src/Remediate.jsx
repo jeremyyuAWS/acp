@@ -19,6 +19,8 @@ import ProposalThumb from './ProposalThumb.jsx'
 import { remediableFiles, emptyScopeReason, scopeSummary, ineligibleReason,
          hasDocumentSelection, documentSelection, documentScopeSentence } from './remediableScope.js'
 import { measuredReviewTime, REVIEW_TIME_BASIS } from './reviewerTime.js'
+import { reviewEmptyLine, reviewLeadLine } from './reviewQueueCopy.js'
+import { canClaimLowRisk, unassessedRiskText } from './riskOverUnassessed.js'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
 // (what to fix, prioritized, accept/reject/modify), the HITL queue, and self-remediation.
@@ -281,7 +283,7 @@ function VerifyState({ state, pct, remaining, ready, latest }) {
 // readOnly: time-travel replay — historical scans are for looking, not enqueuing
 // real remediation jobs against (decisions stay editable: per-scan decision saves
 // are the time-travel feature itself).
-export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, aiEnabled = true, readOnly = false, onRefresh, onHitlCount, onNavigate }) {
+export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, assignees = {}, setAssignees, myEmail = null, aiEnabled = true, readOnly = false, onRefresh, onHitlCount, onNavigate }) {
   const [queue, setQueue] = useState([])
   // The master/detail RemediationInbox owns its own view state (search, tabs, sort, selection),
   // so the old accordion/prefs plumbing (single-open openId, the search/severity/criterion/group
@@ -710,6 +712,16 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     ? { level: 'med', text: `${publicDocs.length ? 'Public-facing' : 'High-traffic'} content · ${criticalOpen} critical finding${criticalOpen === 1 ? '' : 's'} open · MEDIUM RISK` }
     : criticalOpen > 0
     ? { level: 'med', text: `Internal content · ${criticalOpen} critical finding${criticalOpen === 1 ? '' : 's'} open · MEDIUM RISK` }
+    // BOTH low-risk branches are reached by `criticalOpen === 0`, and zero findings is exactly
+    // what an estate nobody could analyse produces. On 2026-08-19 that rendered "overall risk LOW"
+    // over 22 documents that were never fetched (#481) — absence of evidence as evidence of
+    // absence, in the sentence most likely to end up in a status report.
+    //
+    // Only the REASSURING verdicts are gated. The branches above state findings that were
+    // genuinely found; those stay true with unassessed documents present, and suppressing them
+    // would hide a real problem to avoid an imaginary one.
+    : !canClaimLowRisk(files)
+    ? { level: 'med', text: unassessedRiskText(files) }
     : publicDocs.length
     ? { level: 'low', text: 'Public-facing content · no critical findings · overall risk LOW' }
     : { level: 'low', text: 'Internal content only · overall risk LOW' }
@@ -798,7 +810,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   <b>{reviewCount}</b> finding{reviewCount === 1 ? '' : 's'} need review across{' '}
                   <b>{reviewDocCount}</b> document{reviewDocCount === 1 ? '' : 's'}
                 </p>
-              : <p className="muted" style={{ margin: '2px 0 0', fontSize: 13 }}>All clear — nothing needs your review.</p>}
+              // NOT unconditionally "All clear": an unreadable document is not a clear one, and
+              // the reader who sees "All clear" stops reading (reviewQueueCopy.js).
+              : <p className="muted" style={{ margin: '2px 0 0', fontSize: 13 }}>{reviewLeadLine(files, reviewCount)}</p>}
           </div>
           {totalHitl > 0 && (
             <div className="rem-sec-prog">
@@ -853,10 +867,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             {actError}
           </p>
         )}
+        {/* Both branches of reviewEmptyLine are true about the QUEUE and incomplete about the
+            ESTATE, so the "N could not be analysed" caveat is appended to whichever one renders
+            rather than living inside one of them — which is how the original defect happened. */}
         {inboxQueue.length === 0 ? (
-          <p className="muted">{totalHitl === 0
-            ? 'Nothing needs your review — every fix was applied automatically. Items needing an AI-assisted fix or human sign-off will appear here.'
-            : `All reviewed — ${acted.approved} approved, ${acted.rejected} rejected${acted.deferred ? `, ${acted.deferred} deferred` : ''}. Verification runs on the approved fixes.`}</p>
+          <p className="muted">{reviewEmptyLine(files, { totalHitl, acted })}</p>
         ) : (
           <RemediationInbox
             queue={inboxQueue}
@@ -879,6 +894,13 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               // resolution, so it never blocks certification and leaves the coverage denominator.
               else if (d.state === 'not_applicable') act(f.id, 'approved', null, undefined, 'out_of_scope')
             }}
+            assignees={assignees}
+            myEmail={myEmail}
+            onAssign={(file, email) => setAssignees?.((a) => {
+              const next = { ...a }
+              if (email) next[file] = email; else delete next[file]
+              return next
+            })}
           />
         )}
       </section>

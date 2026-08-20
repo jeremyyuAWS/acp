@@ -125,7 +125,7 @@ describe('the Customize reveal', () => {
   it('wraps the criterion × format grid, one row per offered criterion', async () => {
     const c = await render()
     const details = [...c.querySelectorAll('details')]
-      .find((d) => /Customize criteria and combinations/.test(d.querySelector('summary')?.textContent || ''))
+      .find((d) => /View or customize criteria/.test(d.querySelector('summary')?.textContent || ''))
     expect(details, 'no "Customize" reveal').toBeTruthy()
     const table = details.querySelector('table')
     expect(table).toBeTruthy()
@@ -153,13 +153,63 @@ describe('scope state', () => {
   })
 
   it('renders the footer only with showStartButton, and starts a scan on confirm', async () => {
+    // The launch surface is now three steps, so Start lives on the last one. The intent of this
+    // test — the footer exists with showStartButton, and confirming dispatches onStartScan — is
+    // unchanged; it just has to walk there, which is what a user does too.
     const started = vi.fn()
     const c = await render({ showStartButton: true, onStartScan: started })
+    const cont = () => [...c.querySelectorAll('button')].find((b) => /Continue/.test(b.textContent))
+    expect(cont(), 'no Continue control on step 1').toBeTruthy()
+    await click(cont())
+    await click(cont())
     const startBtn = [...c.querySelectorAll('button')].find((b) => /Start scan/.test(b.textContent))
     expect(startBtn).toBeTruthy()
-    expect(c.textContent).toMatch(/Remember these selections for my next scan/)
+    // The criteria write-back is NOT here: this run matches the stored scope, so there is nothing
+    // to write and a checkbox offering to write it would be a control that does nothing. It
+    // appears only on divergence — see "the criteria write-back is opt-in and only on divergence".
+    expect(c.textContent).not.toMatch(/save these criteria as the platform default/)
     await click(startBtn)
     expect(started).toHaveBeenCalled()
+  })
+
+  it('shows one step at a time, so the matrix is not in front of a first-time user', async () => {
+    // The point of the restructure. Everything at once is what made a basic scan require
+    // scrolling past expert configuration.
+    const c = await render({ showStartButton: true })
+    expect(c.textContent).toMatch(/DRIVE LOCATIONS|Entire connected source/)
+    expect(c.textContent).not.toMatch(/FILE FORMATS/)
+  })
+
+  it('keeps the criterion matrix CLOSED on a recommended profile', async () => {
+    // The other half of progressive disclosure, and the half a mutation caught as unguarded: the
+    // step can be right while the expert grid is still hanging open inside it. A preset already
+    // answers this question, so opening the matrix anyway puts 17 x 4 cells in front of somebody
+    // who chose "Recommended" precisely to avoid them.
+    const c = await render()
+    const details = [...c.querySelectorAll('details')]
+      .find((d) => /View or customize criteria/.test(d.querySelector('summary')?.textContent || ''))
+    expect(details, 'no criteria disclosure found').toBeTruthy()
+    expect(details.hasAttribute('open')).toBe(false)
+  })
+
+  it('opens the matrix when the profile IS Custom', async () => {
+    // Choosing Custom is the explicit request, so it should not also cost a second click.
+    const c = await render()
+    const custom = [...c.querySelectorAll('[role="radio"]')]
+      .find((b) => /Custom/.test(b.textContent))
+    expect(custom, 'no Custom profile control').toBeTruthy()
+    await click(custom)
+    const details = [...c.querySelectorAll('details')]
+      .find((d) => /View or customize criteria/.test(d.querySelector('summary')?.textContent || ''))
+    expect(details.hasAttribute('open')).toBe(true)
+  })
+
+  it('still shows everything at once as the standalone scope editor', async () => {
+    // Same component, two surfaces. Stepping the Settings editor would hide half its controls
+    // behind a flow with nowhere to go.
+    const c = await render()
+    expect(c.textContent).toMatch(/FILE FORMATS/)
+    expect([...c.querySelectorAll('button')].some((b) => /Continue/.test(b.textContent))).toBe(false)
   })
 
   it('has no footer when standalone, but offers "Save as reusable scope"', async () => {
@@ -199,7 +249,7 @@ describe('read-only for a non-owner', () => {
 // ── Phase 2: the redesigned matrix (sticky, principle groups, column/row/group controls, cells,
 //    search + filters) ─────────────────────────────────────────────────────────────────────────
 const detailsOf = (c) => [...c.querySelectorAll('details')]
-  .find((d) => /Customize criteria and combinations/.test(d.querySelector('summary')?.textContent || ''))
+  .find((d) => /View or customize criteria/.test(d.querySelector('summary')?.textContent || ''))
 const gridOf = (c) => detailsOf(c).querySelector('table')
 // A control the redesign renders as a role=checkbox button (group / column / row toggles, filters),
 // found by its aria-label — distinct from the cell inputs, which are input[type=checkbox].
@@ -306,17 +356,17 @@ describe('Phase 2 matrix — cell states', () => {
 
 // ── readiness: cells ACP can't assess yet are greyed, disabled, and out of the count ────────────
 describe('readiness — not-ready pairs are greyed and cannot be selected', () => {
-  it('renders offered-but-not-assessable pairs as "Not ready yet", never as a checkbox', async () => {
+  it('renders offered-but-not-assessable pairs as "Not currently supported", never as a checkbox', async () => {
     const c = await render()
     const grid = gridOf(c)
-    const notReady = [...grid.querySelectorAll('td[title^="Not ready yet"]')]
+    const notReady = [...grid.querySelectorAll('td[title^="Not currently supported"]')]
     // The exact set: every offered (row.formats) pair whose assessment lane is absent/human.
     const want = OFFERED.reduce((n, r) => n + r.formats.filter((f) => !isReady(r.sc, f)).length, 0)
     expect(want).toBeGreaterThan(0)                 // there really are such cells (guards the premise)
     expect(notReady.length).toBe(want)
     for (const td of notReady) {
       expect(td.querySelector('input[type=checkbox]'), 'not-ready cell has a checkbox').toBeNull()
-      expect(td.textContent).toMatch(/Not ready yet/)
+      expect(td.textContent).toMatch(/not currently supported/i)
     }
   })
 

@@ -386,6 +386,143 @@ def _scope_section(files, facts, h2, body, cell, muted) -> list:
     return el
 
 
+def _pour_section(facts, h2, body, cell, muted) -> list:
+    """Pass rate by WCAG principle — POUR (backlog R8).
+
+    WCAG groups its success criteria under four principles (Perceivable / Operable /
+    Understandable / Robust), split here by the leading digit of each SC number. Per principle,
+    this shows how many of the criteria ACP actually EVALUATED (a validator ran and returned PASS
+    or FAIL) passed. Deterministic and honest by construction: not-evaluated and review-only
+    criteria are excluded, so this is a pass rate among evaluated checks — NOT a conformance
+    percentage. Rendered only when something was evaluated; a principle with nothing evaluated
+    shows "—" rather than a misleading 0%.
+    """
+    principles = (facts or {}).get("principles") or []
+    if sum(p.get("evaluated", 0) for p in principles) == 0:
+        return []
+    el = [Paragraph("Pass rate by WCAG principle", h2)]
+    el.append(Paragraph(
+        "WCAG groups its criteria under four principles — Perceivable, Operable, Understandable, "
+        "Robust. Of the criteria ACP <i>evaluated</i> for these documents (a validator ran and "
+        "returned pass or fail), the share that passed, per principle. Not-evaluated and "
+        "review-only criteria are excluded, so this is a pass rate among evaluated checks — "
+        "<b>not</b> a statement of WCAG 2.1 AA conformance.", muted))
+    el.append(Spacer(1, 8))
+    rows = [["Principle", "Evaluated", "Passed", "Pass rate"]]
+    for p in principles:
+        ev, ps = p.get("evaluated", 0), p.get("passed", 0)
+        rate = f"{ps}/{ev} ({round(100 * ps / ev)}%)" if ev else "—"
+        rows.append([Paragraph(_esc(p.get("principle", "")), cell), ev, ps, rate])
+    t = Table(rows, colWidths=[2.4 * inch, 1.1 * inch, 1.0 * inch, 1.5 * inch], repeatRows=1)
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 8.5), ("TEXTCOLOR", (0, 0), (-1, 0), MUTED),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, LINE), ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ZEBRA]),
+        ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+    el.append(t)
+    el.append(Spacer(1, 8))
+    return el
+
+
+def _provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, muted) -> list:
+    """How this result was produced — method, pipeline & reproducibility (backlog R11 / R12 / R-D /
+    R-E). Every figure is COUNTED from the same facts the rest of the report uses; a stage whose
+    count is not derivable is named without a number, never with a fabricated one. The reproduce
+    line renders only with a stamped rubric hash, the supersedes line only when a previous scan of
+    this estate exists — otherwise each is silently omitted (ADR 0016)."""
+    f = facts or {}
+    docs = f.get("documents") or []
+    evaluated = sum(d.get("evaluated", 0) for d in docs)
+    findings = sum(d.get("findings", 0) for d in docs)
+    by_mode = (f.get("scope") or {}).get("by_mode") or {}
+    auto, ai = by_mode.get("auto", 0), by_mode.get("ai-assisted", 0)
+    approvals, remediated = f.get("approvals_total", 0), f.get("remediated_total", 0)
+    if not evaluated and not findings:
+        return []                       # nothing was measured — there is no method to narrate
+    el = [Paragraph("How this result was produced", h2)]
+    # R11 — the method, carried by THIS scan's real counts.
+    el.append(Paragraph(
+        "Each document was checked by ACP's deterministic engine, with AI-assisted review for the "
+        "semantic criteria a rule cannot decide alone; every applied fix was re-checked by "
+        "re-scanning the corrected file, and AI-generated content was queued for human approval "
+        "before it counted. For this scan: "
+        f"<b>{evaluated}</b> criteria evaluated across <b>{len(docs)}</b> document(s) — "
+        f"<b>{auto}</b> by the deterministic engine, <b>{ai}</b> AI-assisted; "
+        f"<b>{approvals}</b> human approval(s); <b>{remediated}</b> fix(es) applied and "
+        "re-scan-validated.", body))
+    el.append(Spacer(1, 6))
+    # R12 — the pipeline in order, each count from the same sources as above.
+    stages = [f"scanned <b>{len(docs)}</b>", f"evaluated <b>{evaluated}</b>",
+              f"<b>{findings}</b> finding(s)", f"<b>{ai}</b> AI-assisted",
+              f"<b>{approvals}</b> approval(s)", f"<b>{remediated}</b> remediated &amp; re-validated",
+              f"<b>{cert}</b>/<b>{total}</b> certifiable"]
+    el.append(Paragraph("<b>Pipeline.</b> " + "  →  ".join(stages), cell))
+    el.append(Spacer(1, 6))
+    # R-D — reproduce from the stamped ruleset. Same inputs, same findings.
+    rubric = meta.get("hash") if meta else None
+    if rubric:
+        el.append(Paragraph(
+            f"<b>Reproduce.</b> Re-run this scan against rubric hash <b>{_esc(str(rubric)[:32])}…</b> "
+            "(the stamped ruleset); the same documents yield the same findings.", muted))
+    # R-E — supersedes, only when a previous scan of this estate exists.
+    prev_at = (diff or {}).get("prev_at")
+    if prev_at:
+        el.append(Paragraph(
+            f"<b>Supersedes.</b> This result supersedes the previous scan of this estate "
+            f"({_esc(str(prev_at)[:10])}).", muted))
+    el.append(Spacer(1, 8))
+    return el
+
+
+def _assurance_section(facts, h2, body, cell, muted) -> list:
+    """Human review & assurance (backlog R9 / R10). Every figure has a real denominator: review
+    outcomes counted from the immutable decision_log; the deterministic-assurance ratio as
+    deterministic ÷ evaluated criteria; the effort figure as fixes-cleared ÷ findings with that
+    basis named. NO "% effort saved" and NO "cleared ÷ attempted" — the attempted denominator is
+    not tracked (only re-scan-cleared fixes are recorded), so that ratio is omitted, not invented
+    (ADR 0016). Omitted entirely when nothing was reviewed, remediated or evaluated."""
+    f = facts or {}
+    review = f.get("review") or {}
+    docs = f.get("documents") or []
+    evaluated = sum(d.get("evaluated", 0) for d in docs)
+    findings = sum(d.get("findings", 0) for d in docs)
+    auto = ((f.get("scope") or {}).get("by_mode") or {}).get("auto", 0)
+    remediated = f.get("remediated_total", 0)
+    reviewed = review.get("reviewed", 0)
+    if not reviewed and not remediated and not evaluated:
+        return []
+    el = [Paragraph("Human review &amp; assurance", h2)]
+    # R9 — the review outcomes, from the immutable log (approved/rejected + what the platform cleared).
+    band = _stat_band([
+        Paragraph(f'<font size="20"><b>{reviewed}</b></font><br/>'
+                  f'<font size="8.5" color="#6c6470">findings human-reviewed</font>', body),
+        Paragraph(f'<font size="20" color="#3B6D11"><b>{review.get("approved", 0)}</b></font><br/>'
+                  f'<font size="8.5" color="#6c6470">approved</font>', body),
+        Paragraph(f'<font size="20" color="#854F0B"><b>{review.get("rejected", 0)}</b></font><br/>'
+                  f'<font size="8.5" color="#6c6470">rejected</font>', body),
+        Paragraph(f'<font size="20"><b>{remediated}</b></font><br/>'
+                  f'<font size="8.5" color="#6c6470">remediated &amp; re-validated</font>', body),
+    ], [])
+    el.append(band)
+    el.append(Spacer(1, 8))
+    # R10 — deterministic assurance ratio, on a real denominator.
+    if evaluated:
+        el.append(Paragraph(
+            f"<b>Assurance.</b> <b>{auto}</b> of <b>{evaluated}</b> evaluated criteria "
+            f"(<b>{round(100 * auto / evaluated)}%</b>) were decided by the deterministic engine; "
+            "the rest used AI-assisted review a person can confirm. Every remediation counted here "
+            "re-cleared the post-fix re-scan.", muted))
+    # R9 effort — only as the honest ratio, basis named; never a modelled time saving.
+    if findings:
+        el.append(Paragraph(
+            f"<b>Effort.</b> <b>{remediated}</b> of <b>{findings}</b> finding(s) were cleared by an "
+            f"applied, re-validated fix (<b>{round(100 * remediated / findings)}%</b>) — basis: "
+            "fixes-cleared ÷ findings, not a modelled hours-saved figure.", muted))
+    el.append(Spacer(1, 8))
+    return el
+
+
 def _work_by_category_section(evidence: list, h2, body, cell, muted) -> list:
     """What changed, grouped the way a person reads a document — Images, Tables, Reading Order —
     not by WCAG id (backlog: the human-task view). An executive or the ops person who did the
@@ -1035,6 +1172,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     # ── Scope of assertion / negative assurance (R-A) ────────────────────────
     el.extend(_scope_section(files, facts, h2, body, cell, _muted))
 
+    # ── Pass rate by WCAG principle / POUR (R8) ──────────────────────────────
+    el.extend(_pour_section(facts, h2, body, cell, _muted))
+
     # ── Remediation evidence appendix (backlog R1) ───────────────────────────
     # Applied-and-verified fixes vs proposals awaiting approval, kept strictly apart.
     # Sits before the conformance statement so the closing attestation is the last word.
@@ -1044,6 +1184,12 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     # The per-finding detail (with WCAG ids, before/after and sign-off) follows for the auditor.
     el.extend(_work_by_category_section(evidence or [], h2, body, cell, _muted))
     el.extend(_evidence_section(evidence or [], h2, body, cell, foot_style))
+
+    # ── How this result was produced — method, pipeline & reproducibility (R11/R12/R-D/R-E) ──
+    el.extend(_provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, _muted))
+
+    # ── Human review & assurance (R9/R10) ────────────────────────────────────
+    el.extend(_assurance_section(facts, h2, body, cell, _muted))
 
     # ── AI governance & provenance (ADR 0019 §4/§7) ──────────────────────────
     # The network-boundary + cost attestation enterprise procurement asks for, from the real

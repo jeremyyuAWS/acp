@@ -53,8 +53,15 @@ function QueueRow({ f, decisions, selected, onSelect, showFile = true }) {
   return (
     <button
       type="button"
+      id={`rinbox-row-${f.id}`}
       onClick={() => onSelect(f.id)}
       aria-current={selected ? 'true' : undefined}
+      // Roving tabindex: only the selected row is a Tab stop; Arrow/j-k keys move between rows (handled
+      // on the list container), so a keyboard user reaches the queue in ONE tab and steps through it.
+      tabIndex={selected ? 0 : -1}
+      // A clean spoken label — the issue, its document, and the remediation state — instead of the
+      // raw concatenation of the visible chips.
+      aria-label={`${r.issue}, ${r.file}${r.location ? `, ${r.location}` : ''}${r.laneShort ? ` — ${r.laneShort}` : ''}`}
       className="rinbox-row"
       style={{
         display: 'flex', gap: 10, width: '100%', textAlign: 'left', cursor: 'pointer',
@@ -205,7 +212,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
                 with the ratio computed from the real colours, or the literal value change). */}
             <div style={{ marginTop: 18 }}>
               <p className="muted" style={{ ...sectionLabel, margin: '0 0 8px' }}>Before / after</p>
-              <GroundedBeforeAfter finding={f} />
+              <GroundedBeforeAfter finding={f} scanId={scanId} />
             </div>
 
             {/* 3 · What ACP changed — the plain sentence + the real values. */}
@@ -379,6 +386,7 @@ function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
 export default function RemediationInbox({
   queue = [], decisions = {}, onDecide, onOpenWord, onRecheck,
   initialSort = 'priority', initialTab = 'needs-review', scanId = null, initialLayout = null,
+  assignees = {}, myEmail = null, onAssign,
 }) {
   const [selectedId, setSelectedId] = useState(null)
   const [tab, setTab] = useState(initialTab)
@@ -386,6 +394,7 @@ export default function RemediationInbox({
   const [search, setSearch] = useState('')
   const [collapsed, setCollapsed] = useState({}) // file -> true when a document group is collapsed
   const [drafts, setDrafts] = useState({}) // finding id -> reviewer-edited proposed value (null until edited)
+  const [assignedOnly, setAssignedOnly] = useState(false) // "Assigned to me" filter — files whose assignee is myEmail
 
   // Workspace layout + pane sizes, restored from the reviewer's last session (localStorage).
   const [layout, setLayout] = useState(() => {
@@ -414,12 +423,20 @@ export default function RemediationInbox({
   const counts = useMemo(() => workflowCounts(queue, decisions), [queue, decisions])
   const prog = useMemo(() => progress(queue, decisions), [queue, decisions])
 
+  // Findings whose FILE is assigned to the current reviewer — mirrors the backend's
+  // files_assigned_to(decisions, email): an empty/absent email matches nothing (never "everything").
+  const assignedToMe = (f) => !!myEmail && assignees[f.file] === myEmail
+  const myAssignedCount = useMemo(
+    () => (myEmail ? queue.filter(assignedToMe).length : 0),
+    [queue, assignees, myEmail]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase()
     const filtered = queue.filter((f) => matchesWorkflow(f, tab, decisions) &&
+      (!assignedOnly || assignedToMe(f)) &&
       (!q || rowModel(f, decisions).issue.toLowerCase().includes(q) || String(f.file).toLowerCase().includes(q)))
     return sortQueue(filtered, sort)
-  }, [queue, tab, sort, search, decisions])
+  }, [queue, tab, sort, search, decisions, assignedOnly, assignees, myEmail]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep a valid selection: default to the first unresolved visible row.
   useEffect(() => {
@@ -471,6 +488,32 @@ export default function RemediationInbox({
   const goPrev = () => { if (curIdx > 0) setSelectedId(visIds[curIdx - 1]) }
   const goNext = () => { if (curIdx >= 0 && curIdx < visIds.length - 1) setSelectedId(visIds[curIdx + 1]) }
 
+  // ── Keyboard navigation + screen-reader support for the queue ──
+  // The queue is operable end to end without a mouse: one Tab lands on the selected row (roving
+  // tabindex on QueueRow), then Up/Down (or j/k) step the selection and Home/End jump to the ends. A
+  // polite live region announces the moved-to finding and its N-of-M place — and the SAME announcement
+  // fires on the auto-advance after a decision, so a screen-reader user always knows where the
+  // workspace just went. (An accessibility tool should itself be exemplary here.)
+  const listRef = useRef(null)   // the queue's scroll container; catches key events bubbling from the rows
+  const kbNavRef = useRef(false) // set when the selection moved by keyboard, so focus follows it
+  const onQueueKey = (e) => {
+    const k = e.key
+    if (k === 'ArrowDown' || k === 'j') { e.preventDefault(); kbNavRef.current = true; goNext() }
+    else if (k === 'ArrowUp' || k === 'k') { e.preventDefault(); kbNavRef.current = true; goPrev() }
+    else if (k === 'Home') { e.preventDefault(); if (visIds.length) { kbNavRef.current = true; setSelectedId(visIds[0]) } }
+    else if (k === 'End') { e.preventDefault(); if (visIds.length) { kbNavRef.current = true; setSelectedId(visIds[visIds.length - 1]) } }
+  }
+  // Move focus to the newly-selected row ONLY when the change came from the keyboard, so a mouse click
+  // (or the auto-advance after a decision) never yanks focus out from under the reviewer.
+  useEffect(() => {
+    if (!kbNavRef.current) return
+    kbNavRef.current = false
+    listRef.current?.querySelector('[aria-current="true"]')?.focus()
+  }, [selectedId])
+  const announce = visIds.length === 0
+    ? 'No findings in this view.'
+    : (selected ? `Finding ${position} of ${visIds.length}: ${rowModel(selected, decisions).issue}, in ${selected.file}.` : '')
+
   // The two workspace panes, defined once and placed differently per layout (side by side, stacked,
   // or guided-only). The layout toggle sits on the guided header — the pane that is always shown.
   const guidedHeader = (
@@ -505,6 +548,12 @@ export default function RemediationInbox({
 
   return (
     <div className="rinbox-wrap">
+      {/* Screen-reader announcer: the selected finding and its place in the queue, updated on every
+          selection change — manual, keyboard, or the auto-advance after a decision. Visually hidden. */}
+      <div aria-live="polite" role="status"
+           style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>
+        {announce}
+      </div>
       {/* Dark app header (mockup): the section title + the workflow-status tabs as the page's top
           chrome — one lens on where every finding sits in the pipeline (Inbox → In progress →
           Ready to validate → Blocked → Done), spanning the three panes below. */}
@@ -540,15 +589,49 @@ export default function RemediationInbox({
               {SORTS.map((s) => <option key={s} value={s}>{SORT_LABEL[s]}</option>)}
             </select>
           </div>
+          {/* "Assigned to me" filter + a context assign chip for the selected document. Mirrors the
+              #417 backend (files_assigned_to); shown only for a signed-in reviewer with an assign
+              action, so it is never a dead control. Assigning is per-DOCUMENT (a file's whole set of
+              findings), which is how the backend keys the assignee. */}
+          {myEmail && onAssign && (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+              <button type="button" onClick={() => setAssignedOnly((v) => !v)} aria-pressed={assignedOnly}
+                      title="Show only findings in documents assigned to you"
+                      style={{ fontSize: 11.5, fontWeight: 600, padding: '3px 10px', borderRadius: 20, cursor: 'pointer',
+                               border: `1px solid ${assignedOnly ? 'transparent' : 'var(--line,#e2dce4)'}`,
+                               background: assignedOnly ? 'var(--accent,#3b6fd6)' : 'var(--bg,#fff)',
+                               color: assignedOnly ? '#fff' : 'inherit' }}>
+                Assigned to me{myAssignedCount > 0 ? ` (${myAssignedCount})` : ''}
+              </button>
+              {selected && (assignees[selected.file] === myEmail
+                ? <button type="button" onClick={() => onAssign(selected.file, null)}
+                          title={`Unassign ${selected.file} from you`}
+                          style={{ fontSize: 11.5, padding: '3px 10px', borderRadius: 20, cursor: 'pointer',
+                                   border: '1px solid var(--line,#e2dce4)', background: 'var(--bg,#fff)', color: 'inherit' }}>
+                    ✓ Assigned to you
+                  </button>
+                : <button type="button" onClick={() => onAssign(selected.file, myEmail)}
+                          title={`Assign ${selected.file} to you`}
+                          style={{ fontSize: 11.5, padding: '3px 10px', borderRadius: 20, cursor: 'pointer',
+                                   border: '1px solid var(--line,#e2dce4)', background: 'var(--bg,#fff)', color: 'var(--muted,#5b6774)' }}>
+                    + Assign to me
+                  </button>)}
+            </div>
+          )}
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
             {/* "reviewed" (a decision is recorded), NOT "resolved" — an approved fix awaiting the
                 re-scan is reviewed but not yet Completed, so this never contradicts the tab counts. */}
             <span className="muted" style={{ fontSize: 11.5, fontWeight: 600 }}>{prog.resolved} of {prog.total} reviewed</span>
           </div>
         </div>
-        <div style={{ flex: '1 1 auto', overflowY: 'auto' }}>
+        <div ref={listRef} onKeyDown={onQueueKey} aria-label="Findings — use Up and Down arrow keys to move between them"
+             style={{ flex: '1 1 auto', overflowY: 'auto' }}>
           {visible.length === 0 ? (
-            <p className="muted" style={{ padding: 16, fontSize: 13 }}>Nothing here. {tab !== 'needs-review' && <button className="linklike" onClick={() => setTab('needs-review')}>Back to Needs review</button>}</p>
+            <p className="muted" style={{ padding: 16, fontSize: 13 }}>
+              {assignedOnly
+                ? <>Nothing in this view is assigned to you. <button className="linklike" onClick={() => setAssignedOnly(false)}>Show all</button></>
+                : <>Nothing here. {tab !== 'needs-review' && <button className="linklike" onClick={() => setTab('needs-review')}>Back to Needs review</button>}</>}
+            </p>
           ) : groups.map((g) => (
             // A document with a SINGLE finding needs no expandable group header — the row itself
             // names the file. Only multi-finding documents get the collapsible 📄 header, so the file

@@ -39,16 +39,38 @@ import remediation_capability as cap  # noqa: E402
 
 _COVERAGE_JS = (ACP / "frontend" / "src" / "assessCoverage.js").read_text()
 _TEST_JS = (ACP / "frontend" / "src" / "assessCoverage.test.js").read_text()
+# The 20-core moved to its own module. assessCoverage.js now re-exports it rather than restating
+# it, which is the point of that change — one hand-maintained list instead of two that can drift.
+_DOCUMENTS_20_JS = (ACP / "frontend" / "src" / "documents20.js").read_text()
 
 # Buckets assessmentIn can return, in the order the frontend test lists them.
 _BUCKETS = ("auto", "review", "human", "gap", "at", "na")
 
 
 def _documents_20() -> list[str]:
-    m = re.search(r"export const DOCUMENTS_20\s*=\s*\[(.*?)\]", _COVERAGE_JS, re.S)
-    assert m, "DOCUMENTS_20 array not found in assessCoverage.js — the coverage module moved."
+    """The 20-check document core, read from its canonical module.
+
+    This used to parse an array literal out of assessCoverage.js. That literal is gone: it was a
+    second, hand-maintained copy of documents20.js's Set, one edit from disagreeing with the
+    activeScope CORE_SCS the rest of the page counts against, and it now derives from the Set
+    instead. Parsing the source of truth is what this guard always meant to do — the docstring
+    above says every constant is READ from the JS rather than restated here — so it follows the
+    constant rather than pinning the file it used to live in.
+    """
+    m = re.search(r"export const DOCUMENTS_20\s*=\s*new Set\(\s*\[(.*?)\]\s*\)",
+                  _DOCUMENTS_20_JS, re.S)
+    assert m, "DOCUMENTS_20 set not found in documents20.js — the canonical 20-core module moved."
     scs = re.findall(r"'([\d.]+)'", m.group(1))
     assert len(scs) == 20, f"DOCUMENTS_20 should hold 20 criteria, parsed {len(scs)}"
+
+    # And assessCoverage.js must still DERIVE from that Set. Without this, re-inlining a divergent
+    # literal there would leave this guard reading the canonical file, passing, and asserting
+    # nothing about the list the coverage module actually iterates — the exact drift the move was
+    # made to prevent, now invisible.
+    assert re.search(r"export const DOCUMENTS_20\s*=\s*\[\s*\.\.\.\s*DOCUMENTS_20_CORE\s*\]",
+                     _COVERAGE_JS), (
+        "assessCoverage.js no longer derives DOCUMENTS_20 from documents20.js — if it restates "
+        "the list again, the two can drift and this guard would not see it.")
     return scs
 
 

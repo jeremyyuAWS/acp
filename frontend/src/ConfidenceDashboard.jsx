@@ -43,7 +43,11 @@ export default function ConfidenceDashboard({ scanId }) {
         <div className="confdash-tile">
           <span className="confdash-pct">{pct(m.coverage.evaluable, m.coverage.total)}%</span>
           <span className="confdash-lbl">Assessment Coverage</span>
-          <span className="confdash-counts muted">{m.coverage.evaluable} of {m.coverage.total} criteria · {m.documents} document{m.documents !== 1 ? 's' : ''}</span>
+          {/* The unit here is criterion CHECKS (criteria × documents), not WCAG criteria — 1,482
+              dwarfs the 14/17/20 criteria totals elsewhere precisely because it is multiplied by
+              the document count. Say "checks" so it doesn't read as a fifth, disagreeing criteria
+              denominator. */}
+          <span className="confdash-counts muted">{m.coverage.evaluable.toLocaleString()} of {m.coverage.total.toLocaleString()} criterion checks · {m.documents} document{m.documents !== 1 ? 's' : ''}</span>
         </div>
         {TILES.map((t) => (
           <div key={t.key} className={`confdash-tile ${t.cls}`}>

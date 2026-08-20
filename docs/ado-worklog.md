@@ -88,6 +88,14 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   estate: the first scan discovered **39 of ~158** files, and the same index was measured climbing
   39 → 157 → 158 as it caught up (library `ItemCount` = 374 proved the upload was complete; 39 ≪ the
   200-file cap ruled that out). Filed as GH #333, with the recovery confirmed and commented there.
+- **Carried the drive identity to the download, so SharePoint files are fetched at all** (#481). The files
+  were never "unreadable" — they were never **fetched**. `handlers`' `norm` dropped `driveId` from the
+  scanner record, so the inventory row stored no drive identity, so nothing downstream marked the item as
+  SharePoint, so `_download` fell through to the Google Drive branch and handed a Graph item id to
+  `files().get_media()` — which raised, was caught, and recorded `status='error'` (the catch-all the UI
+  renders as "file unreadable") for **every** SharePoint/OneDrive file in a fan-out scan. A regression, not a
+  gap (`_sp_list` carries `driveId` per file for exactly this). The fix threads `driveId` through `norm` so
+  the download routes to Graph. Paired with #483, which stopped the drawer mislabelling the symptom.
 
 ## Feature: Operator scan scope · #4601
 
@@ -657,6 +665,14 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   concurrency the knob most likely LOWERED by measurement; adaptive counts driven by
   throttling/CPU/VRAM/DB-latency/error signals; plus the full safety contract. Design only — no runtime
   change yet. Docs-only, not RULE_PATHS.
+- **Reconciled the long-form `acp-architecture.md` to current** (#475). Patched for what shipped since #439:
+  §8 Observability rewritten to Langfuse **v3 live** (ClickHouse + Redis + MinIO + Postgres on the
+  `acp-langfuse-v3` Azure VM, why-a-VM-not-Container-Apps, host-only cutover); §9 corrected per-user scan
+  scope from "in progress" to **wired end to end** (widen-only union through the two listing chokepoints,
+  frozen into `scan_runs.scope`, `/settings/mine` + editor), plus the sign-in account chooser and
+  folder-level source scope; §1 diagram + deps gained the in-tenant Azure T4 and the v3 VM; §11 added the
+  flat-worker-pool concurrency weakness with **ADR 0037** named as the committed-but-unbuilt fix. §2–§7 core
+  reviewed and already current. Docs-only, not RULE_PATHS.
 
 ## Feature: docx Core-17 criterion coverage · #4610
 
@@ -845,6 +861,14 @@ reach production, safely.
   reachable endpoint's baked vision model was shadowed by the container VOLUME and produced nothing for 45
   days with no error. A new `_probe_ollama_vision` reuses the runtime's own `ai.vision_unavailable_reason()`,
   so preflight and a real scan agree. `Matrix-Note: none` — deploy/preflight tooling only.
+- **Surfaced SMB source readiness on `/readyz`** (#487). `describe_smb_readiness()` (config-only, no network)
+  already answered "can an SMB scan even be attempted?" but was reachable by no route, so the guard it was
+  written to be — a health check / Content-Sources surface that fails with a clear reason instead of starting
+  a scan that returns an empty estate — never ran. Wired into `GET /readyz` as an informational
+  `sources.smb` block, imported lazily (as the scanner does) and defended so a source probe can never 500
+  `/readyz`. Deliberately **not** folded into `degraded`: a deployment that scans only Drive/SharePoint
+  legitimately has no SMB config, so an unconfigured SMB source must not flip `ready`. Touches
+  `api/routes/system.py` + a readiness test — not RULE_PATHS.
 
 ## Feature: Release Center · #4599
 
@@ -1172,6 +1196,47 @@ existing data and the existing decision path; nothing adds a second write path.
   refreshes when a decision or auto-fix acknowledgement changes the count (the old `queue.length` keying
   missed those). A source guard blocks a regression to `queue.length`. Cross-session hand-off from the
   state-model owner's session (who owned the `onHitlCount` seam but was blocked). Frontend; suite green (2092).
+- **Stopped claiming every fix was applied over files nobody could read** (#479). From production: a drawer
+  read "Could not analyse — file unreadable" while the Review queue on the same screen read "All clear" and
+  "every fix was applied automatically." The counts were correct (the HITL queue *was* empty), but a file
+  that could not be opened had no fix applied — **skipped was reported as done**. The copy moved into
+  `reviewQueueCopy.js` and the caveat is now appended to whichever base sentence renders (rather than living
+  inside one branch of a ternary — the defect's shape): "All clear" is **withheld** rather than qualified,
+  "every fix was applied automatically" is **replaced** rather than decorated. The count is gated on files
+  that were **opened and failed**, not on every non-certifiable file — an ADR 0020 Discover-only row means
+  "nobody looked yet." Does not fix *why* those files are unreadable (an ingest failure, still open).
+  Frontend, not RULE_PATHS.
+- **Said WHY a document failed, from the record — stopped guessing "unreadable"** (#483). The `#479` follow-up
+  that closed the ingest half. `handlers` records the verbatim per-file exception (`scan.file_error`) and
+  `GET /decisions` returns it, but the drawer showed a generic sentence: on 2026-08-19 "Could not analyse —
+  file unreadable" was displayed over 22 SharePoint documents that had **never been fetched** (#481) — sending
+  the investigation at the documents while the bug sat in download routing. Since `status='error'` is a
+  catch-all over the whole download+analyse block, "could not *analyse*" claims a step that may never have run
+  and "unreadable" blames a document that may be fine. The drawer now shows the recorded reason instead of
+  guessing. Frontend, not RULE_PATHS.
+- **"Assigned to me" inbox filter + assign action (wires #417)** (#482). #417's backend added a per-file
+  assignee axis (`assessment_policy.assignments` / `files_assigned_to`, persisted as a `scan_decision`
+  `kind='assignee'`) but nothing in the UI read or set it — the mockup's "Assigned to me" filter was unbuilt.
+  Wired end to end, mirroring the triage plumbing: `App.jsx` holds a parallel `assignees` ({file: email})
+  state hydrated from `getDecisions(kind='assignee')` and persisted via `saveDecisionsBatch`, an assign
+  action on the row, and the filter over the inbox. Frontend, not RULE_PATHS.
+- **Keyboard + screen-reader accessibility for the review queue** (#484). An accessibility-remediation tool
+  should itself be operable by keyboard and screen reader; the queue was mouse-first (rows click-only, no
+  spoken feedback on auto-advance). Adds **roving tabindex** on the rows (one Tab lands on the selected
+  finding; Up/Down or j/k step selection, Home/End jump to the ends, focus following the move — the whole
+  queue worked in one tab stop, no mouse) plus live-region announcements when the workspace auto-advances
+  after a decision. Frontend, not RULE_PATHS.
+- **Adaptive evidence for alt-text and metadata findings** (#485). #433 gave *contrast* findings a grounded
+  before/after; every other finding fell back to a generic value diff. Adds two purpose-built,
+  **real-data-only** renderers — the two finding types where the backing data actually exists — leaving the
+  structural ones (heading outline, reading order, table headers) on the honest generic note until the finding
+  exposes document-structure data (ADR 0016, same tier as the page pager). **Alt text (1.1.1):** the affected
+  image beside its old vs new alt — the real `Thumbnail` render, cropped to the flagged object only where a
+  bounding box exists (the plain page otherwise; it never invents a location), with the finding's own
+  before/after alt strings. **Metadata (2.4.2 title / 3.1.1–3.1.2 language):** the real before→after value,
+  which also replaces the preview's generic "structure not extracted" note *for those findings only*. Built
+  fresh in `frontend/` (the dead `frontend-v2` branch was not revived). Cross-session coordinated with this
+  session on scope, the stale-branch read, and the honesty tier. Frontend, not RULE_PATHS.
 
 ## Feature: Estate coverage — three denominators and discovery at scale · #4597
 
@@ -1630,6 +1695,37 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
 - **"Notify me when complete"** (#463, slice 3c). The scan runs server-side and the banner is non-modal, so
   a user could always work elsewhere; this arms a browser notification that pings the outcome when the scan
   finishes ("145 of 250 assessed · 23 need review"). `scanNotify.js` asks permission once, only on opt-in.
+- **Three-step scan wizard with progressive disclosure** (#470). The scan modal was a folder selector, scan
+  configurator, WCAG matrix and engine panel all at once; #461 put folders first but *inside* that same dense
+  panel, which made it worse. Rebuilt as **three steps — Drive locations → Formats & criteria → Review** —
+  folders first because they decide which estate is judged, criteria only how each document in it is judged
+  (asking criteria first invites tuning 53 checks over the wrong half of a Drive).
+- **Two-column folder browser inline in step 1** (#472). Step 1 embeds the picker — tree on the left, CURRENT
+  SCOPE on the right, both visible at once — replacing the "Choose folders…" link into a modal. One
+  implementation, two layouts: `FolderPicker` grows `layout="inline"`; the Sources card and Discover keep the
+  modal. Adds a folder-scoped, honestly-labelled filter box.
+- **Reuse a recent scope, symmetric criteria write-back** (#473). Step 1 offers the boundaries this user has
+  **actually run**, derived from `scan_runs.scope` rather than a new saved-scopes store — a run's frozen scope
+  is a record of what WAS covered, and only that can be re-offered. Runs with no recorded scope are refused
+  (NULL is unknown, and applying unknown applies as *everything*), as are cross-family scopes and the wizard's
+  own default; carve-outs carry through by id, labelled, not dropped.
+- **Review step reports what this exact scope covered last time** (#474). Deliberately **not** a live pre-scan
+  estimate: under ADR 0020 a Discover run *is* the listing, so an estimate is nearly the operation run twice,
+  and it would put a second number for the same estate on screen under a different cap — the 2026-07-30 defect
+  again. Instead the review step reports a number that was **measured** — what this exact scope covered on its
+  last run.
+- **Per-stage timing instrumentation (ADR 0037 Step 0)** (#467). The measure-first first step of the Track B
+  pipeline design: `stage_timing.py` (pure — `ScanTimings` monotonic-clock accumulator, `merge_rollups` /
+  `bottleneck` / `summarize`) times each file's scan by stage (download vs analyse) into its own
+  `file_stage_timings` table, surfaced as a per-scan rollup (totals, per-stage average, bottleneck stage). A
+  strict **side-channel** — every function is total (malformed input dropped, never raised), so timing can
+  never disturb the scoring path it measures. No behaviour change; it exists so the staged speed-up is tuned
+  from real numbers, not guesses.
+- **`read_timings.py` — read a scan's per-stage rollup** (#478). A stdlib-only CLI over `GET
+  /scans/{id}/timings` (signed-in session token) that prints where a scan spent its time — download (I/O) vs
+  analyse (CPU + GPU) — bottleneck starred, so the next Track B step (splitting the bottleneck stage into its
+  own bounded pool) is chosen from data. Companion to #467; `--json` / `--provider` flags, most-recent scan
+  by default.
 
 ## Open items (backlog candidates)
 
@@ -2066,3 +2162,36 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   when complete"). To **Documentation**: #464 — ADR 0037, the measure-first staged/bounded assessment-pipeline
   design (Track B; design only, no runtime change). **Sync marker deliberately NOT advanced** (same convention
   as the prior entries).
+- **2026-08-19 (scan wizard + timing instrumentation + arch-doc reconcile)** — To **Scan-run experience
+  (Track A)**: the wizard build‑out on top of #461 — #470 (three‑step progressive‑disclosure wizard), #472
+  (inline two‑column folder browser), #473 (reuse a recent run's frozen scope, symmetric write‑back), #474
+  (review step reports the *measured* last‑run coverage, not a fabricated estimate) — plus #467, ADR 0037
+  **Step 0** per‑stage timing instrumentation (a total side‑channel that measures download‑vs‑analyse without
+  touching the scoring path). To **Documentation**: #475, the long‑form `acp-architecture.md` reconcile
+  (Langfuse v3 live, per‑user scope end‑to‑end, GPU T4, ADR 0037 as the concurrency fix). **Deliberately left
+  to their owning streams:** #419 (SMB walk/read logic, ADR 0036) belongs to the multi‑session SMB source
+  program (#388–#397) this log already defers to its owner; #476 is a trivial `.gitignore` chore. **Sync
+  marker deliberately NOT advanced** (same convention as the prior entries).
+- **2026-08-19 (remediation-honesty fix + timing reader)** — To **Remediate review queue (#4598)**: #479 —
+  stopped the Review queue claiming "every fix was applied automatically" over files that could not be read
+  (skipped was being reported as done); the caveat is now appended to whatever the queue renders, and the
+  count is gated on files opened-and-failed, not every non-certifiable file. To **Scan-run experience
+  (Track A)**: #478 — `read_timings.py`, the stdlib CLI that reads #467's per-stage rollup so the next Track B
+  step is chosen from data. **Sync marker deliberately NOT advanced** (same convention as the prior entries).
+- **2026-08-19 (SharePoint-fetch root cause + Remediate: honesty, assignee, a11y, adaptive evidence)** — One
+  root-cause chain plus three Remediate features. To **SharePoint as a document source (#4600)**: #481 — the
+  driveId was dropped in `norm`, so SharePoint files routed to the Drive download branch and every one recorded
+  `status='error'`; they were never fetched, not unreadable. To **Remediate review queue (#4598)**: #483 (the
+  #479 follow-up — the drawer now shows the *recorded* per-file reason instead of guessing "unreadable", the
+  copy that had been shown over #481's 22 never-fetched SP docs), #482 ("Assigned to me" filter + assign,
+  wiring #417's backend), #484 (keyboard + screen-reader operability for the queue — roving tabindex + auto-
+  advance announcements), and #485 (adaptive per-finding evidence — real-data-only alt-text + metadata
+  renderers, structural findings deferred to a backend data effort; cross-session coordinated with this
+  session on scope and the honesty tier). **Sync marker deliberately NOT advanced** (same convention as the
+  prior entries).
+- **2026-08-19 (SMB readiness on /readyz)** — To **Continuous deployment (#4614)**: #487 — wired the existing
+  `describe_smb_readiness()` into `GET /readyz` as an informational `sources.smb` block (defended so a source
+  probe can't 500 it; not folded into `degraded`, since a Drive/SharePoint-only deployment legitimately has no
+  SMB config). A self-contained health/readiness surface — distinct from the SMB source discovery/transport
+  program (#388–#397/#419) still left to its owning session. **Sync marker deliberately NOT advanced** (same
+  convention as the prior entries).

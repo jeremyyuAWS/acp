@@ -283,6 +283,17 @@ def scan(sid: str, request: Request):
     return res
 
 
+@router.get("/scans/{sid}/timings")
+def scan_timings(sid: str, request: Request):
+    """Per-stage timing rollup for one scan (ADR 0037 Step 0 — measure first): where the scan spent its
+    time (download vs analyse), the per-stage average seconds, and the bottleneck stage. Owner-scoped via
+    the same get_scan gate, so it never reveals another user's scan; a scan with nothing recorded reports
+    zeros and bottleneck=null rather than a fabricated number."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    return core.store.scan_timings(sid)
+
+
 @router.get("/scans/{sid}/files/{filename:path}/status")
 def get_file_accessibility_status(sid: str, filename: str, request: Request):
     """ADR 0026 — the authoritative Accessibility Status for one file. Derived-at-read over the
@@ -1228,6 +1239,50 @@ def get_file_geometry(scan_id: str, filename: str, request: Request,
 
     import geometry as _geom
     return {"bbox": _geom.shape_bbox(data, ext, locator)}
+
+
+@router.get("/scans/{scan_id}/files/{filename:path}/heading-outline")
+def get_heading_outline(scan_id: str, filename: str, request: Request):
+    """The docx heading outline `{before,after}` for a heading finding's Structure evidence — the
+    document's real styled headings in order, and a never-skip correction of them. docx-only (a PDF
+    exposes heading PRESENCE, not an extractable outline, exactly as geometry is pptx/xlsx-only).
+    Owner-scoped and non-blocking: any other format, a doc with fewer than two headings, or an
+    outline that already nests correctly returns `{"outline": null}` — a 200 with nothing, so the
+    card degrades to the honest generic note rather than erroring. Honesty (ADR 0016): real extracted
+    headings + a deterministic renumber, never a fabricated tree."""
+    owner = _owner(request)
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    ext = os.path.splitext(filename)[1].lower()
+    if ext != ".docx":
+        return {"outline": None}
+    data = _source_bytes_for_render(request, scan_id, filename, owner)
+    if not data:
+        return {"outline": None}
+    import doc_structure as _ds
+    return {"outline": _ds.heading_outline(data, ext)}
+
+
+@router.get("/scans/{scan_id}/files/{filename:path}/table-structure")
+def get_table_structure(scan_id: str, filename: str, request: Request):
+    """The docx table(s) as `{tables:[{rows, headerRow, headerMarked, truncated}]}` for a
+    header-association finding's (1.3.1) Structure evidence — real cell text, which row is the header,
+    and whether that row is actually marked so a screen reader announces it. docx-only, owner-scoped,
+    non-blocking: any other format, or a doc with no qualifying (multi-row, multi-column) table,
+    returns `{"tables": null}` (a 200) so the card degrades to the honest generic note. Honesty
+    (ADR 0016): extracted table content only — no fabricated grid, no invented header."""
+    owner = _owner(request)
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    ext = os.path.splitext(filename)[1].lower()
+    if ext != ".docx":
+        return {"tables": None}
+    data = _source_bytes_for_render(request, scan_id, filename, owner)
+    if not data:
+        return {"tables": None}
+    import doc_structure as _ds
+    result = _ds.table_structure(data, ext)
+    return {"tables": (result or {}).get("tables") if result else None}
 
 
 # A reviewer opening one 1.4.3-hybrid card shouldn't trigger dozens of slide renders; bound the

@@ -222,4 +222,108 @@ describe('RemediationInbox — workflow-status queue', () => {
     // …and the widened inbox width is persisted.
     expect(Number(localStorage.getItem('acp.remediate.leftW'))).toBeGreaterThan(before)
   })
+
+  // ── "Assigned to me" filter (#417 backend: per-file assignee) ──
+  const hasBtn = (t) => [...container.querySelectorAll('button')].some((b) => b.textContent.includes(t))
+
+  it('shows the "Assigned to me" control only when a signed-in reviewer + assign action are wired', async () => {
+    await render({ queue: QUEUE, decisions: {} })                    // no myEmail / onAssign → dead control avoided
+    expect(hasBtn('Assigned to me')).toBe(false)
+    await render({ queue: QUEUE, decisions: {}, myEmail: 'me@x.com', onAssign: () => {} })
+    expect(hasBtn('Assigned to me')).toBe(true)
+  })
+
+  it('assigns the selected document to the reviewer via onAssign(file, myEmail)', async () => {
+    const calls = []
+    await render({ queue: QUEUE, decisions: {}, myEmail: 'me@x.com', onAssign: (f, e) => calls.push([f, e]) })
+    // Default selection is id1 (a-brief.docx), unassigned → the chip offers "+ Assign to me".
+    await click(btnByText('Assign to me'))
+    expect(calls).toEqual([['a-brief.docx', 'me@x.com']])
+  })
+
+  it('"Assigned to me" narrows the queue to documents assigned to the reviewer', async () => {
+    const Q = [
+      { id: 1, file: 'a.docx', title: 'DOCX · Alpha', hasProposal: true, after: 'x' },   // needs-review, assigned
+      { id: 2, file: 'b.docx', title: 'DOCX · Beta', hasProposal: true, after: 'y' },     // needs-review, NOT assigned
+    ]
+    await render({ queue: Q, decisions: {}, myEmail: 'me@x.com', assignees: { 'a.docx': 'me@x.com' }, onAssign: () => {} })
+    let rows = [...container.querySelectorAll('.rinbox-row')].map((r) => r.textContent)
+    expect(rows.some((t) => t.includes('Alpha'))).toBe(true)
+    expect(rows.some((t) => t.includes('Beta'))).toBe(true)
+    await click(btnByText('Assigned to me'))                          // "Assigned to me (1)"
+    rows = [...container.querySelectorAll('.rinbox-row')].map((r) => r.textContent)
+    expect(rows.some((t) => t.includes('Alpha'))).toBe(true)          // assigned → stays
+    expect(rows.some((t) => t.includes('Beta'))).toBe(false)          // unassigned → filtered out
+  })
+
+  it('shows an honest empty state when nothing in view is assigned to the reviewer', async () => {
+    await render({ queue: QUEUE, decisions: {}, myEmail: 'me@x.com', assignees: {}, onAssign: () => {} })
+    await click(btnByText('Assigned to me'))
+    expect(container.textContent).toContain('Nothing in this view is assigned to you')
+    expect(btnByText('Show all')).toBeTruthy()
+  })
+
+  // ── Keyboard + screen-reader accessibility of the review queue ──
+  const liveRegion = () => container.querySelector('[aria-live="polite"]')
+  const queueList = () => container.querySelector('[aria-label^="Findings"]')
+  const key = async (el, k) => { await act(async () => { el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true })) }) }
+
+  it('announces the selected finding and its N-of-M place in a polite live region', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    // Needs review holds id1 (auto-fix) + id2 (AI draft); document sort → id1 first.
+    expect(liveRegion().getAttribute('role')).toBe('status')
+    expect(liveRegion().textContent).toContain('Finding 1 of 2')
+    expect(liveRegion().textContent).toContain('Heading contrast is too low')
+    expect(liveRegion().textContent).toContain('a-brief.docx')
+  })
+
+  it('uses a roving tabindex — only the selected row is a Tab stop', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    const rows = [...container.querySelectorAll('.rinbox-row')]
+    expect(rows.find((r) => r.getAttribute('aria-current') === 'true').tabIndex).toBe(0)
+    expect(rows.find((r) => r.getAttribute('aria-current') !== 'true').tabIndex).toBe(-1)
+  })
+
+  it('ArrowDown moves the selection to the next finding and re-announces it', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    expect(detailHeading()).toBe('Heading contrast is too low')       // id1
+    await key(queueList(), 'ArrowDown')
+    expect(detailHeading()).toBe('Image needs alt text')              // id2
+    expect(liveRegion().textContent).toContain('Finding 2 of 2')
+  })
+
+  it('keyboard navigation (j/k) moves focus to the newly-selected row', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    await key(queueList(), 'j')                                        // vim-style down
+    const focused = container.querySelector('[aria-current="true"]')
+    expect(document.activeElement).toBe(focused)
+    expect(focused.textContent).toContain('Image needs alt text')     // advanced to id2
+  })
+
+  // ── Adaptive evidence per finding type (alt text, metadata) in the decision pane ──
+  it('shows alt-text evidence (old → new alt) for a 1.1.1 finding', async () => {
+    await render({ queue: [{ id: 1, file: 'a.docx', title: 'DOCX · Image needs alt text', rule_id: '1.1.1', hasProposal: true, before: '', after: 'A bar chart of Q3 revenue' }], decisions: {} })
+    expect(container.textContent).toContain('Alt text — before')
+    expect(container.textContent).toContain('(no alt text)')          // the missing alt IS the defect
+    expect(container.textContent).toContain('Alt text — after')
+    expect(container.textContent).toContain('A bar chart of Q3 revenue')
+  })
+
+  it('shows a metadata before/after for a document-title (2.4.2) finding', async () => {
+    await render({ queue: [{ id: 1, file: 'a.docx', title: 'DOCX · Document has no title', rule_id: '2.4.2', hasProposal: true, before: null, after: 'Q3 Report' }], decisions: {} })
+    expect(container.textContent).toContain('Document title — before')
+    expect(container.textContent).toContain('(not set)')
+    expect(container.textContent).toContain('Document title — after')
+    expect(container.textContent).toContain('Q3 Report')
+  })
+
+  it('shows a numbered reading-order sequence for a 1.3.2 finding', async () => {
+    await render({ queue: [{ id: 1, file: 'a.docx', title: 'DOCX · Meaningful sequence', rule_id: '1.3.2', hasProposal: true, after: 'x',
+      proposals: [{ seq: 1, text: 'Pull quote at the top' }, { seq: 2, text: 'Sidebar callout' }] }], decisions: {} })
+    const ol = container.querySelector('ol')
+    expect(ol).toBeTruthy()                                     // a real ordered list, not the generic note
+    expect(ol.querySelectorAll('li').length).toBe(2)
+    expect(ol.textContent).toContain('Pull quote at the top')
+    expect(ol.textContent).toContain('Sidebar callout')
+  })
 })

@@ -384,6 +384,13 @@ export const setAllowlist = (emails) => (SIM
 export const inviteTester = (email) => (SIM
   ? sim({ email, emails: ['demo@sim', email], status: 'PendingAcceptance' })
   : fetch(`${BASE}/admin/invite`, { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ email }) }).then(j))
+// The immutable decision log for one scan (system.py GET /decisions). The drawer reads the
+// `scan.file_error` rows out of it to say WHY a document failed, instead of guessing "unreadable"
+// — handlers records the verbatim exception per file and nothing was showing it.
+export const listScanDecisions = (scanId, limit = 500) => (SIM
+  ? sim([])
+  : fetch(`${BASE}/decisions?scan_id=${encodeURIComponent(scanId)}&limit=${limit}`,
+          { headers: headers() }).then(j).catch(() => []))
 // Per-scan decision snapshots (PRD: time-travel) — restore/persist triage + action decisions.
 export const getDecisions = (scanId) => (SIM
   ? sim({})
@@ -715,6 +722,26 @@ export const getFileGeometry = (scanId, file, locator) => (SIM || !scanId || !fi
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/geometry?locator=${encodeURIComponent(locator)}`, { headers: headers() })
       .then(r => (r.ok ? r.json() : null))
       .then(d => (d && d.bbox) || null)
+      .catch(() => null))
+
+// The docx heading outline {before,after} for a heading finding's Structure evidence — computed on
+// demand from the document (mirrors getFileGeometry). null when unavailable (non-docx, <2 headings,
+// already-clean outline, or any failure), so the card degrades to the honest generic note.
+export const getHeadingOutline = (scanId, file) => (SIM || !scanId || !file
+  ? sim(null)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/heading-outline`, { headers: headers() })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => (d && d.outline) || null)
+      .catch(() => null))
+
+// The docx table(s) with header-row associations for a 1.3.1 finding's Structure evidence — computed
+// on demand (mirrors getHeadingOutline). null when unavailable (non-docx, no qualifying table, or any
+// failure), so the card degrades to the honest generic note.
+export const getTableStructure = (scanId, file) => (SIM || !scanId || !file
+  ? sim(null)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/table-structure`, { headers: headers() })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => (d && d.tables) || null)
       .catch(() => null))
 
 // ADR 0024 Tier B.1 — render-verified 1.4.3-hybrid contrast, ON DEMAND. With no locator the

@@ -141,6 +141,41 @@ def test_degraded_reasons_are_machine_readable_tokens(monkeypatch):
         assert token.replace("_", "").isalnum() and token.islower()
 
 
+# ── /readyz source readiness (SMB) ───────────────────────────────────────────────────────
+_SMB_ENV = ("ACP_SMB_SHARES", "ACP_SMB_DOMAIN", "ACP_SMB_USERNAME",
+            "ACP_SMB_PASSWORD", "ACP_SMB_CREDENTIAL_KV")
+
+
+def test_readyz_reports_smb_source_readiness_and_unconfigured_smb_is_not_a_fault(monkeypatch):
+    """The dead-code guard (smb_source.describe_smb_readiness) is now reachable: /readyz carries a
+    `sources.smb` block so the Sources UI / a health check can say WHY an SMB scan would be empty
+    before one starts. But a Drive/SharePoint-only deployment has no SMB config, and that is NOT a
+    readiness fault — it must never flip `ready` or land in `degraded`."""
+    for k in _SMB_ENV:
+        monkeypatch.delenv(k, raising=False)
+    r = _readyz(monkeypatch, beat=_iso(seconds=5), local_pool=0, pdf_ok=True)
+
+    smb = r["sources"]["smb"]
+    assert smb["ready"] is False
+    assert "shares (ACP_SMB_SHARES)" in smb["missing"]      # names the fix, not just the fault
+    # Unconfigured SMB is informational only — the deployment is still fully ready for its sources.
+    assert r["ready"] is True and r["degraded"] == []
+
+
+def test_readyz_smb_becomes_ready_once_shares_and_a_credential_are_configured(monkeypatch):
+    """With the shares and a credential source present, the block reports ready — and prefers the
+    Key Vault path (the Managed-Identity credential a real VNet deployment uses)."""
+    for k in _SMB_ENV:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("ACP_SMB_SHARES", r"\\fileserver\dept, \\fileserver\phi")
+    monkeypatch.setenv("ACP_SMB_CREDENTIAL_KV", "smb-svc-acp")
+    r = _readyz(monkeypatch, beat=_iso(seconds=5), local_pool=0, pdf_ok=True)
+
+    smb = r["sources"]["smb"]
+    assert smb["ready"] is True and smb["missing"] == []
+    assert smb["share_count"] == 2 and smb["credential_source"] == "key_vault"
+
+
 def test_a_missing_pdf_engine_errors_the_file_instead_of_crashing_the_scan(tmp_path, monkeypatch):
     """The other half: _analyse_pdf imported the engine outside any try/except, so an absent
     engine killed the file with an opaque ModuleNotFoundError. It must degrade to a reported
