@@ -43,6 +43,7 @@ import { applyScopeConfig } from './activeScope.js'
 import A11ySelfCheck from './A11ySelfCheck.jsx'
 import { scanPhaseLine, NARRATION_STEPS, activityLine } from './phaseNarration.js'
 import { useScanRefetch } from './scanRefetch.js'
+import { pickDefaultScan } from './defaultScan.js'
 
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
 const SHOW_A11Y = import.meta.env.DEV || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('a11y'))
@@ -342,7 +343,9 @@ export default function App() {
     getSources().then(setSources).catch(() => {})
     listScans()
       .then(async (l) => {
-        setScanList(l); if (l.length) setScan(await getScan(l[0].id))
+        // Default to the newest NON-collapsed scan, not blindly the newest: a degenerate small
+        // scan on top would otherwise make every view show a shrunken estate (see defaultScan.js).
+        setScanList(l); const d = pickDefaultScan(l); if (d) setScan(await getScan(d.id))
         // If a scan is still running (e.g. user reloaded mid-scan), resume tracking it.
         try { const a = await getActiveScan(); if (a && a.id) reconnectScan(a.id) } catch { /* ignore */ }
       })
