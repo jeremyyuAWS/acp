@@ -156,6 +156,25 @@ describe('the reconciliation partitions the estate', () => {
     expect(keys).not.toContain('exempt')
   })
 
+  it('sorts a file with NO lifecycle record into its own bucket, not "no recommendation"', () => {
+    // The partial-join case: the inventory read covered some files and not others. Calling the
+    // uncovered ones "no recommendation" would report an unread file as a checked one — and it
+    // would still add up, which is what makes it dangerous.
+    const mixed = [arch('tagged.docx'), { file: 'unlisted.pdf', type: 'PDF' }]
+    expect(recommendationBucketOf(mixed[1])).toBe('unknown')
+    const rec = recommendationReconciliation(mixed)
+    const by = Object.fromEntries(rec.buckets.map((b) => [b.key, b.count]))
+    expect(by.unknown).toBe(1)
+    expect(by.none).toBe(0)
+    expect(rec.balanced).toBe(true)
+    expect(rec.sum).toBe(2)
+  })
+
+  it('only claims "no recommendation" for a status the record actually holds', () => {
+    expect(recommendationBucketOf(active('a.docx'))).toBe('none')
+    expect(recommendationBucketOf(F('a.docx', { lifecycle_status: 'Failed' }))).toBe('none')
+  })
+
   it('flags an unbalanced reconciliation instead of hiding it', () => {
     const bad = reconcile([{ key: 'a', count: 2 }], 3, 'files discovered')
     expect(bad.balanced).toBe(false)

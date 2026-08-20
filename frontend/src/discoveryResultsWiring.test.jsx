@@ -24,6 +24,8 @@ const read = (f) => readFileSync(join(here, f), 'utf8')
 const discover = read('Discover.jsx')
 const results = read('DiscoveryResults.jsx')
 const model = read('discoveryRecommendations.js')
+const loader = read('discoveryInventory.js')
+const api = read('api.js')
 
 describe('source — Discover is the caller, and it passes the real discovery data', () => {
   it('imports the screen and the acknowledgement model', () => {
@@ -31,8 +33,10 @@ describe('source — Discover is the caller, and it passes the real discovery da
     expect(discover).toMatch(/import \{ acknowledgementSummary \} from '\.\/discoveryRecommendations\.js'/)
   })
 
-  it('renders it with the discovered files, the stored inventory summary and the scope line', () => {
-    expect(discover).toMatch(/<DiscoveryResults files=\{files\}/)
+  it('renders it with the merged file rows, the stored inventory summary and the scope line', () => {
+    // `estateFiles`, not `files`: the lifecycle columns are merged in from the inventory read, and
+    // passing the raw rows would leave the recommendation surface permanently absent.
+    expect(discover).toMatch(/<DiscoveryResults files=\{estateFiles\}/)
     // The inventory summary is what carries the whole-estate total and `truncated`; without it the
     // screen cannot tell a floor from a total.
     expect(discover).toMatch(/inventory=\{scope\?\.inventory \|\| null\}/)
@@ -42,9 +46,36 @@ describe('source — Discover is the caller, and it passes the real discovery da
   })
 
   it('gates the Assess button on the acknowledgement', () => {
-    expect(discover).toMatch(/const recsToAck = acknowledgementSummary\(files, assessAnyway\)/)
+    expect(discover).toMatch(/const recsToAck = acknowledgementSummary\(estateFiles, assessAnyway\)/)
     expect(discover).toMatch(/const needsAck = !!recsToAck && !ackRecs/)
     expect(discover).toMatch(/disabled=\{pendingActions > 0 \|\| needsAck\}/)
+  })
+})
+
+describe('source — the lifecycle columns are read from the route that actually has them', () => {
+  it('api.js exports a helper for GET /scans/{id}/inventory, paginated', () => {
+    expect(api).toMatch(/export const getScanInventory = \(scanId, \{ offset = 0, limit = 1000 \} = \{\}\) =>/)
+    expect(api).toMatch(/\/inventory\?offset=\$\{offset\}&limit=\$\{limit\}/)
+    // Same auth the rest of the module uses — a helper that dropped headers() would 401 silently.
+    expect(api).toMatch(/inventory\?offset[\s\S]{0,120}headers\(\)/)
+    // And a SIM branch, like every neighbouring scan read.
+    expect(api).toMatch(/SIM\s*\n?\s*\? sim\(simScanInventory\(scanId, offset, limit\)/)
+  })
+
+  it('Discover reads it through the complete-or-nothing loader', () => {
+    expect(discover).toMatch(/import \{ loadDiscoveryInventory, mergeLifecycle \} from '\.\/discoveryInventory\.js'/)
+    expect(discover).toMatch(/import \{ getScanInventory \} from '\.\/api\.js'/)
+    expect(discover).toMatch(/loadDiscoveryInventory\(scanId, getScanInventory\)/)
+    // Keyed on the scan, and reset the instant the id changes — a stale read attributed to a new
+    // scan would be a wrong answer rather than a missing one.
+    expect(discover).toMatch(/setInv\(null\)/)
+    expect(discover).toMatch(/\}, \[scanId\]\)/)
+    expect(discover).toMatch(/mergeLifecycle\(files, inv\)/)
+  })
+
+  it('the loader is fetch-injected and React-free, so the failure path is testable', () => {
+    expect(loader).not.toMatch(/from 'react'/)
+    expect(loader).not.toMatch(/from '\.\/api\.js'/)
   })
 })
 

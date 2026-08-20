@@ -149,6 +149,10 @@ export const RECOMMENDATION_BUCKETS = [
   ['archive', 'Tagged for archive review', 'arch'],
   ['actioned', 'Already actioned by an approved rule', 'muted'],
   ['exempt', 'Exempt from lifecycle rules', 'muted'],
+  // Not "no recommendation": no lifecycle row came back for this file, so nobody looked. Its own
+  // bucket rather than a silent promotion into `none`, which would report an unread file as a
+  // checked one and still add up.
+  ['unknown', 'No lifecycle record was read for these', 'muted'],
   ['none', 'No recommendation — stays in the estate', 'ok'],
 ]
 const RECOMMENDATION_LABEL = new Map(RECOMMENDATION_BUCKETS.map(([k, label]) => [k, label]))
@@ -167,11 +171,17 @@ export const REVIEW_TAG = { archive: 'archive review', delete: 'deletion review'
  */
 export function recommendationBucketOf(row) {
   if (isUnreadable(row)) return 'unreadable'
-  const status = (lifecycleStatusOf(row) || '').toLowerCase()
+  const recorded = lifecycleStatusOf(row)
+  // No status on the row at all — the inventory read did not cover this file. 'none' would claim
+  // a rule pass looked at it and found nothing, which is a different fact and the reassuring one.
+  if (recorded == null) return 'unknown'
+  const status = recorded.toLowerCase()
   if (status === 'exempted') return 'exempt'
   if (status === 'archived' || status === 'deleted') return 'actioned'
   if (status.includes('delete')) return 'delete'
   if (status.includes('archive')) return 'archive'
+  // Every other recorded status ('Active', and 'Failed' — a rule action that did not complete)
+  // leaves no recommendation standing against the file.
   return 'none'
 }
 

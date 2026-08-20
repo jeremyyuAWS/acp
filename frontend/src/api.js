@@ -238,6 +238,38 @@ export const getInventoryDiff = (scanId, vs = null) => (SIM
     }, 180)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/inventory-diff${vs ? `?vs=${encodeURIComponent(vs)}` : ''}`,
           { headers: headers() }).then(j))
+// SIM has no rule engine, so the demo inventory derives its lifecycle from the crawl metadata SIM
+// already computes for every file — the same `superseded` / `ageDays` facts the Discover list shows
+// beside each row. Two rules, named, so the demo exercises the real shape: a tag that carries the
+// rule that produced it and the reason it matched. Precedence matches the backend's — one status
+// per file, the reversible one where both could apply.
+const simLifecycle = (f) => {
+  if (f.superseded) return ['Delete Candidate', 'sim-superseded', "matched delete rule 'Superseded drafts'"]
+  if (f.ageDays >= 1825) return ['Archive Candidate', 'sim-legacy',
+    `matched archive rule 'Legacy documents (5+ years)' — last modified ${f.modifiedAge}`]
+  return ['Active', null, null]
+}
+const simScanInventory = (scanId, offset, limit) => {
+  const files = simGetScan(scanId).files || []
+  const rows = files.slice(offset, offset + limit).map((f) => {
+    const [lifecycle_status, lifecycle_rule_id, lifecycle_reason] = simLifecycle(f)
+    return { scan_id: scanId, file: f.file, path: f.file, size_kb: f.sizeKB ?? null,
+             owner: f.owner ?? null, lifecycle_status, lifecycle_rule_id, lifecycle_reason }
+  })
+  return { scan_id: scanId, total: files.length, offset, limit, rows }
+}
+// One page of the per-file discover inventory — EVERY discovered file with its source metadata
+// and, the reason this exists, its LIFECYCLE columns (lifecycle_status / lifecycle_rule_id /
+// lifecycle_reason). `GET /scans/{id}` cannot answer for those: it selects from file_records,
+// which has no lifecycle columns at all — they live on scan_inventory, which is this route.
+//
+// Paginated at the route (limit <= 1000) and passed through as such, `total` being the real count.
+// Reading one page and counting over it would be a count without its population, so the caller
+// pages to completion or treats the read as incomplete — see discoveryInventory.js.
+export const getScanInventory = (scanId, { offset = 0, limit = 1000 } = {}) => (SIM
+  ? sim(simScanInventory(scanId, offset, limit), 180)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/inventory?offset=${offset}&limit=${limit}`,
+          { headers: headers() }).then(j))
 // Regression diff vs a prior scan (ADR 0009) — which docs got worse/better + criteria that broke.
 export const getScanDiff = (scanId, vs = null) => {
   if (SIM) return sim({
