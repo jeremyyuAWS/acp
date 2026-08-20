@@ -152,3 +152,20 @@ export function metadataEvidence(finding) {
   if (after == null || after === '') return null
   return { label, before: finding?.before ?? null, after }
 }
+
+// ── Reading order (1.3.2) ─────────────────────────────────────────────────────────────────────
+// The out-of-order floating items in DOCUMENT (anchor) order — the sequence a screen reader actually
+// follows. Real data: propose_reading_order enqueues one proposal per floating box, in order, each
+// carrying its own `text`; those land on the 1.3.2 finding's proposals. Returns the ordered texts, or
+// null (→ the honest "not extracted" fallback) when none carry text.
+export const isReadingOrderFinding = (f) => findingSc(f) === '1.3.2'
+export function readingOrderEvidence(finding) {
+  if (!isReadingOrderFinding(finding)) return null
+  const props = Array.isArray(finding?.proposals) ? finding.proposals : []
+  const items = props
+    .slice()
+    .sort((a, b) => (a?.seq ?? 0) - (b?.seq ?? 0))          // anchor order; falls back to array order
+    .map((p) => (p && p.text != null ? String(p.text) : null))
+    .filter((t) => t != null && t.trim() !== '')
+  return items.length ? { items } : null
+}

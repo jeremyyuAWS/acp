@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import Thumbnail from './Thumbnail.jsx'
 import { locationLabel } from './remediationInboxModel.js'
-import { natureOf, contrastEvidence, metadataEvidence } from './remediationEvidence.js'
+import { natureOf, contrastEvidence, metadataEvidence, readingOrderEvidence } from './remediationEvidence.js'
 import GroundedBeforeAfter from './GroundedBeforeAfter.jsx'
 
 // The third pane of the remediation workspace: a CONTEXTUAL PREVIEW of the actual document.
@@ -210,6 +210,18 @@ function StructureNote({ f }) {
       <div>
         <p className="muted" style={{ fontSize: 12.5, margin: '0 0 10px' }}>
           {wcag ? `${wcag} — ` : ''}A document property, not something on the rendered page. The change is to its value:
+        </p>
+        <GroundedBeforeAfter finding={f} />
+      </div>
+    )
+  }
+  // Reading order (1.3.2): the anchored items in the order a screen reader follows — a real,
+  // meaningful structural representation, not the generic "not extracted" note.
+  if (readingOrderEvidence(f)) {
+    return (
+      <div>
+        <p className="muted" style={{ fontSize: 12.5, margin: '0 0 10px' }}>
+          {wcag ? `${wcag} — ` : ''}Reading order — how a screen reader traverses the flagged anchored items:
         </p>
         <GroundedBeforeAfter finding={f} />
       </div>
