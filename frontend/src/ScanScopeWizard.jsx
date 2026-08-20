@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, Fragment } from 'react'
 import { getSettings, updateSettings, getScanLocations, setScanLocations,
          listFolders, listSpFolders } from './api.js'
+import { scopeFooterPart, blockedReason } from './wizardScopeReady.js'
 import FolderPicker from './FolderPicker.jsx'
 import { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } from './scopePresets.js'
 import { TRACKED_17, RULE_DETAILS } from './ruleDetails.js'
@@ -552,10 +553,15 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
 
   // One line answering "what am I about to run?", visible at every step. Locations first because
   // that is the decision the count will later be a count OF.
+  // The locations half used to read "Entire source" for ANY empty list, so with "Specific
+  // folders" selected and nothing picked the footer contradicted the mode selector directly above
+  // it — and agreed with the run that would actually have happened. Three states, told apart.
+  // Why the primary action is unavailable, or null. A reason rather than a boolean: a dead button
+  // with no explanation is its own defect, and the reason is the thing the user has to act on.
+  const blocked = locKey ? blockedReason(scopeMode, folders) : null
+
   const footerSummary = [
-    locKey ? (folders.length
-      ? `${folders.length} folder${folders.length === 1 ? '' : 's'}${excluded.length ? ` · ${excluded.length} excluded` : ''}`
-      : 'Entire source') : null,
+    locKey ? scopeFooterPart(scopeMode, folders, excluded) : null,
     `${nFormats} format${nFormats === 1 ? '' : 's'}`,
     profileLabel,
   ].filter(Boolean).join(' · ')
@@ -726,6 +732,9 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                 lister={locKey === 'drive' ? listFolders : (parent) => listSpFolders(parent)}
                 initial={folders}
                 initialExclude={excluded}
+                // "Specific folders" IS the claim to narrow, so an empty list here is unfinished,
+                // not "everything". Without this the picker reports the source-card meaning.
+                requireSelection
                 // It has no Save of its own: the wizard footer is the only footer on this screen,
                 // and a second commit button next to it would make "saved" ambiguous. So the
                 // picker reports as you tick.
@@ -1136,9 +1145,15 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                 {step === 1 ? 'Cancel' : '← Back'}
               </button>
               {step < 3 ? (
-                <button type="button" disabled={busy} onClick={() => setStep(step + 1)}>Continue →</button>
+                // Blocked rather than silently reinterpreted. An enabled Continue over an empty
+                // "Specific folders" selection authorises the whole estate — the run the footer
+                // and the scope panel both used to describe as "Entire source" while the user was
+                // looking at a screen that said they were narrowing.
+                <button type="button" disabled={busy || !!blocked} title={blocked || undefined}
+                        onClick={() => setStep(step + 1)}>Continue →</button>
               ) : (
-                <button type="button" disabled={busy} onClick={startScan}>
+                <button type="button" disabled={busy || !!blocked} title={blocked || undefined}
+                        onClick={startScan}>
                   {busy ? 'Saving…' : 'Start scan →'}
                 </button>
               )}
