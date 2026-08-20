@@ -118,7 +118,7 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
         <p className="muted" style={{ fontSize: 12.5, margin: '10px 0 0', lineHeight: 1.6 }}>
           No findings is not the same as conformant — {m.unableToAssess} of {m.selectedChecks} selected
           checks could not run{m.documentsUnopened.length > 0
-            ? `, and ${m.documentsUnopened.length} document${m.documentsUnopened.length === 1 ? '' : 's'} could not be opened`
+            ? `, and ${m.documentsUnopened.length} document${m.documentsUnopened.length === 1 ? '' : 's'} failed to open`
             : ''}.
         </p>
       )}
@@ -127,7 +127,16 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
                     gap: 12, marginTop: 16 }}>
 
-        <Metric label="Documents assessed" value={m.documentsAssessed} unit={`of ${m.documentsSelected}`}>
+        {/* Deva, 20 Aug: "we should NOT have any exclusions at this stage" — everything knowable
+            from metadata (file type, lifecycle tag, folder) is excluded BEFORE the run, so the
+            results screen should not present a second exclusion list.
+            Half of that is already true and half of it cannot be: discovery is metadata-only
+            (`handlers.py:148` — list, classify, STOP), so it never opens a file. Password
+            protection, corruption and unsupported internal variants are only discoverable by
+            trying to read the document, which happens here. So those files are not an exclusion,
+            they are an OUTCOME of this run — and the "of 22" framing was what made them read as
+            one. The count stands alone; the failures are reported below as failures. */}
+        <Metric label="Documents assessed" value={m.documentsAssessed}>
           Files where at least one selected check completed.
         </Metric>
 
@@ -186,7 +195,8 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
       {m.documentsUnopened.length > 0 && (
         <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
           <div style={{ fontSize: 13, fontWeight: 650 }}>
-            {m.documentsUnopened.length} document{m.documentsUnopened.length === 1 ? '' : 's'} could not be opened
+            {m.documentsUnopened.length} document{m.documentsUnopened.length === 1 ? '' : 's'} failed to open
+            during this run
           </div>
           <ul className="muted" style={{ fontSize: 12.5, margin: '6px 0 0', paddingLeft: 18, lineHeight: 1.6 }}>
             {m.documentsUnopened.map((d) => (
@@ -197,8 +207,11 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
             ))}
           </ul>
           <div className="muted" style={{ fontSize: 12, marginTop: 7 }}>
-            Counted in the {m.documentsSelected} selected and excluded from every other number here.
-            They are not passes, not failures and not findings.
+            {/* Not "excluded". Nothing excluded these — the scope selected them and the run could
+                not read them, which is a result rather than a filter. Saying so is what keeps the
+                assessed count honest without smuggling an exclusion list back onto the screen. */}
+            These were selected for assessment and produced no verdict. They are not passes, not
+            failures and not findings, and they hold no work until they can be opened.
           </div>
         </div>
       )}

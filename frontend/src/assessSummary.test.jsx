@@ -104,9 +104,9 @@ describe('“no findings” never travels alone', () => {
     expect(c.textContent).toMatch(/1 of 2 selected checks could not run/)
   })
 
-  it('names an unopened document in the caveat', async () => {
+  it('names a document that failed to open, in the caveat', async () => {
     const c = await mount({ files: [doc('a.pdf'), doc('locked.pdf', [], { status: 'error' })] })
-    expect(c.textContent).toMatch(/1 document could not be opened/)
+    expect(c.textContent).toMatch(/1 document failed to open/)
   })
 
   it('carries it in the no-findings state too', async () => {
@@ -145,21 +145,41 @@ describe('the arithmetic is on the page, not just in a test', () => {
   })
 })
 
-describe('documents that could not be opened are named', () => {
-  it('lists the file and the reason', async () => {
+describe('a document that failed to open is a run outcome, not an exclusion', () => {
+  // Deva, 20 Aug: everything knowable up front should already be out of scope before the run, so
+  // the results screen must not present a second exclusion list. Discovery is metadata-only and
+  // never opens a file, so password protection and corruption are only discoverable HERE — which
+  // makes these failures of this run rather than filters applied to it. The distinction is not
+  // pedantry: an exclusion reads as "we chose not to", and a failure reads as "we could not",
+  // and only the second one tells a reader there is something left to chase.
+  it('lists the file and the reason as a failure of this run', async () => {
     const c = await mount({ files: ESTATE })
-    expect(c.textContent).toMatch(/1 document could not be opened/)
+    expect(c.textContent).toMatch(/1 document failed to open during this run/)
     expect(c.textContent).toMatch(/locked\.pdf — password-protected/)
   })
 
-  it('says they are excluded from the other numbers', async () => {
+  it('does not describe them as excluded', async () => {
+    // Scoped to THIS panel, not the whole screen. The first draft banned /exclu/i everywhere and
+    // caught "Excludes AI-drafted suggestions" on the auto-fix card — which is a metric
+    // definition doing exactly its job. What is forbidden is calling a failed READ an exclusion,
+    // and that claim lives in one place.
     const c = await mount({ files: ESTATE })
-    expect(c.textContent).toMatch(/not passes, not failures and not findings/i)
+    const panel = [...c.querySelectorAll('div')]
+      .map((d) => d.textContent)
+      .find((t) => /failed to open during this run/.test(t) && t.length < 400) || ''
+    expect(panel, 'the failed-to-open panel calls them excluded').not.toMatch(/exclu/i)
+    expect(panel).toMatch(/selected for assessment and produced no verdict/i)
+  })
+
+  it('does not qualify the assessed count with a second denominator', async () => {
+    // "20 of 22" was what made a failed read look like an exclusion applied before the run.
+    const c = await mount({ files: ESTATE })
+    expect(c.textContent, 'the assessed count still carries an "of N"').not.toMatch(/3 of 4/)
   })
 
   it('says nothing when every document opened', async () => {
     const c = await mount({ files: [doc('a.docx')] })
-    expect(c.textContent).not.toMatch(/could not be opened/)
+    expect(c.textContent).not.toMatch(/failed to open/)
   })
 })
 

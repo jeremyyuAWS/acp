@@ -69,19 +69,139 @@ const laneRan = (lane) => lane === 'auto' || lane === 'review'
  *                    what separates a partial run from a complete one. Omit when unknown; passing
  *                    0 asserts that every selected document was started.
  */
+/**
+ * One document's numbers — the single per-file pass the whole screen reads.
+ *
+ * Extracted rather than duplicated because THREE views need it: the estate summary sums these, the
+ * worklist renders one per row, and the per-file view groups this document's findings by criterion.
+ * Three modules answering "how many findings does this file have" independently is exactly the
+ * drift that produced four different answers on the screen this replaces.
+ *
+ * An unopened file gets a row too, with `opened: false` and NO counts — the caller decides whether
+ * to show it and cannot accidentally read a zero off it, because there is no number there to read.
+ * Findings, checks and criteria are scoped and level-filtered here, once.
+ */
+export function documentRow(f, { cap, assessment, criteria = SCOPE_SCS, level = 'AA' } = {}) {
+  if (!f) return null
+  const name = f.name || f.file || ''
+  if (isUnopened(f)) {
+    return { file: f.file || name, name, fmt: fmtOf(f), opened: false,
+             reason: f.error || f.reason || '', state: 'unopened' }
+  }
+
+  const target = RANK[level] || RANK.AA
+  const fmt = fmtOf(f)
+
+  let checksEvaluated = 0, checksUnable = 0, anyReviewLane = false
+  const criteriaEvaluated = new Set(), criteriaUnable = []
+  for (const sc of criteria) {
+    const lane = assessmentFor(assessment, fmt, sc)
+    if (laneRan(lane)) {
+      checksEvaluated++
+      criteriaEvaluated.add(sc)
+      if (lane === 'review') anyReviewLane = true
+    } else {
+      checksUnable++
+      criteriaUnable.push(sc)
+    }
+  }
+
+  const bySeverity = { CRITICAL: 0, SERIOUS: 0, MODERATE: 0, MINOR: 0, UNKNOWN: 0 }
+  const findings = []
+  let autoFix = 0
+  for (const x of f.issues || []) {
+    if (!isUnresolved(x)) continue
+    const sc = scOfWcag(x.wcag)
+    if (!sc || !criteria.has(sc)) continue
+    if (RANK[findingLevel(x)] > target) continue
+    const sev = SEVERITIES.includes(x.severity) ? x.severity : 'UNKNOWN'
+    // Deterministic ONLY. 'assisted' is an AI draft awaiting a person's approval — counting it as
+    // automation is what produced "51% auto-remediable" for work nobody could apply unattended.
+    const auto = modeFor(cap, fmt, sc) === 'auto'
+    if (auto) autoFix++
+    bySeverity[sev]++
+    findings.push({ ...x, sc, severity: sev, level: findingLevel(x), auto,
+                    fixMode: modeFor(cap, fmt, sc) })
+  }
+
+  return {
+    file: f.file || name, name, fmt, opened: true,
+    findings, totalFindings: findings.length, bySeverity,
+    autoFixAvailable: autoFix, humanReviewRequired: findings.length - autoFix,
+    criteriaFailing: [...new Set(findings.map((x) => x.sc))].sort(),
+    criteriaEvaluated: [...criteriaEvaluated].sort(),
+    unassessableCriteria: criteriaUnable.sort(),
+    checksEvaluated, unableToAssess: checksUnable, selectedChecks: checksEvaluated + checksUnable,
+    anyReviewLane,
+    // Per document, the same precedence the estate status uses. "Clear" here means nothing failed,
+    // never that the document conforms — the unassessable count travels with it for that reason.
+    state: findings.length ? 'attention' : anyReviewLane ? 'awaiting_review' : 'clear',
+  }
+}
+
+// Triage ordering only. A per-rule severity scale summed into one per-document figure is the score
+// defect in miniature, so this weight orders rows and is never rendered as a number.
+const SORT_WEIGHT = { CRITICAL: 1000, SERIOUS: 100, MODERATE: 10, MINOR: 1, UNKNOWN: 1 }
+
+/**
+ * The worklist: one row per document, worst first.
+ *
+ * Ordered by severity weight rather than raw count, so one critical finding outranks six minors.
+ * Unopened files sort last — they hold no work, and putting them at the top of a worklist would
+ * make the first thing a person sees the one thing they cannot act on.
+ */
+export function documentRows(files, opts = {}) {
+  if (!Array.isArray(files)) return null
+  const rows = files.map((f) => documentRow(f, opts)).filter(Boolean)
+  const rank = (r) => (r.opened
+    ? SEVERITIES.reduce((a, s) => a + r.bySeverity[s] * SORT_WEIGHT[s], 0)
+    : -1)
+  return rows.sort((a, b) => rank(b) - rank(a) || a.name.localeCompare(b.name))
+}
+
+/**
+ * One document's findings, grouped by WCAG success criterion.
+ *
+ * Grouping happens INSIDE a file, never as the top-level worklist: remediation happens to
+ * documents, so a rule-first worklist would ask one person to open the same document five times.
+ * Within a file, the grouping is what tells the fixer what kind of work the next twenty minutes is.
+ *
+ * Ordered by worst severity, then by criterion number so two equally bad groups order stably.
+ */
+export function findingsByCriterion(row) {
+  if (!row || !row.opened) return null
+  const by = new Map()
+  for (const x of row.findings) {
+    if (!by.has(x.sc)) {
+      by.set(x.sc, { sc: x.sc, findings: [], autoFixAvailable: 0, humanReviewRequired: 0 })
+    }
+    const g = by.get(x.sc)
+    g.findings.push(x)
+    if (x.auto) g.autoFixAvailable++
+    else g.humanReviewRequired++
+  }
+  const worst = (g) => Math.min(...g.findings.map((x) => {
+    const i = SEVERITIES.indexOf(x.severity)
+    return i < 0 ? SEVERITIES.length : i
+  }))
+  return [...by.values()]
+    .map((g) => ({ ...g, severity: SEVERITIES[worst(g)] || 'UNKNOWN', level: g.findings[0].level }))
+    .sort((a, b) => worst(a) - worst(b) || a.sc.localeCompare(b.sc, undefined, { numeric: true }))
+}
+
 export function assessMetrics(files, { cap, assessment, criteria = SCOPE_SCS, level = 'AA', notStarted } = {}) {
   if (!Array.isArray(files)) return null
 
-  const target = RANK[level] || RANK.AA
-  const assessed = files.filter((f) => f && !isUnopened(f))
-  const unopened = files.filter(isUnopened)
+  const rows = documentRows(files, { cap, assessment, criteria, level })
+  const assessed = rows.filter((r) => r.opened)
+  const unopened = rows.filter((r) => !r.opened)
 
   let totalFindings = 0
   let autoFix = 0
   const bySeverity = { CRITICAL: 0, SERIOUS: 0, MODERATE: 0, MINOR: 0, UNKNOWN: 0 }
   const attention = new Set()
 
-  // Checks: one criterion against one document. Counted over ASSESSED documents only — a file that
+  // Checks: one criterion against one document. Summed over ASSESSED documents only — a file that
   // was never opened has no checks, and including it would inflate the denominator of every
   // coverage number on the screen.
   let checksEvaluated = 0
@@ -90,34 +210,18 @@ export function assessMetrics(files, { cap, assessment, criteria = SCOPE_SCS, le
   const criteriaUnable = new Set()
   let anyReviewLane = false
 
-  for (const f of assessed) {
-    const fmt = fmtOf(f)
+  for (const r of assessed) {
+    checksEvaluated += r.checksEvaluated
+    checksUnable += r.unableToAssess
+    r.criteriaEvaluated.forEach((sc) => criteriaEvaluated.add(sc))
+    r.unassessableCriteria.forEach((sc) => criteriaUnable.add(sc))
+    if (r.anyReviewLane) anyReviewLane = true
 
-    for (const sc of criteria) {
-      const lane = assessmentFor(assessment, fmt, sc)
-      if (laneRan(lane)) {
-        checksEvaluated++
-        criteriaEvaluated.add(sc)
-        if (lane === 'review') anyReviewLane = true
-      } else {
-        checksUnable++
-        criteriaUnable.add(sc)
-      }
-    }
-
-    for (const x of f.issues || []) {
-      if (!isUnresolved(x)) continue
-      const sc = scOfWcag(x.wcag)
-      if (!sc || !criteria.has(sc)) continue
-      if (RANK[findingLevel(x)] > target) continue
-      totalFindings++
-      attention.add(f.file || f.name || f)
-      const sev = SEVERITIES.includes(x.severity) ? x.severity : 'UNKNOWN'
-      bySeverity[sev]++
-      // Deterministic ONLY. 'assisted' is an AI draft awaiting a person's approval — counting it
-      // here is what produced "51% auto-remediable" for work that nobody could apply unattended.
-      if (modeFor(cap, fmt, sc) === 'auto') autoFix++
-    }
+    totalFindings += r.totalFindings
+    autoFix += r.autoFixAvailable
+    for (const s of SEVERITIES) bySeverity[s] += r.bySeverity[s]
+    bySeverity.UNKNOWN += r.bySeverity.UNKNOWN
+    if (r.totalFindings) attention.add(r.file)
   }
 
   // A criterion evaluated in ANY assessed document counts as covered; one that ran nowhere does
@@ -131,9 +235,10 @@ export function assessMetrics(files, { cap, assessment, criteria = SCOPE_SCS, le
     documentsNeedingAttention: attention.size,
     // Named, not just counted: a file ACP could not open is excluded from every other number on
     // the screen, so the screen has to say which and why.
-    documentsUnopened: unopened.map((f) => ({
-      file: f.file || f.name || '', name: f.name || f.file || '', reason: f.error || f.reason || '',
-    })),
+    documentsUnopened: unopened.map((r) => ({ file: r.file, name: r.name, reason: r.reason })),
+    // The worklist, already ordered. Handed out rather than recomputed by the caller, so the
+    // summary's totals and the rows beneath it can never come from two different passes.
+    rows,
 
     // ── findings ───────────────────────────────────────────────────────────────────────────
     totalFindings,
