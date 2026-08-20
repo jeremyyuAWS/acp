@@ -251,11 +251,25 @@ def readyz():
     if not pdf["available"]:
         degraded.append("pdf_engine_missing")
 
+    # Source-adapter readiness, reported INFORMATIONALLY — deliberately NOT folded into `degraded`.
+    # A deployment that scans only Drive/SharePoint legitimately has no SMB config, so an
+    # unconfigured SMB source is not a deployment fault and must not flip `ready`. Surfacing it here
+    # gives the monitor and the Content Sources UI one place to read WHY an SMB scan would return an
+    # empty estate — before one is started — which is the whole point of describe_smb_readiness
+    # (config-only: it reads env and touches no network). Imported lazily, exactly as the scanner
+    # does, and defended so a source probe can never 500 the readiness endpoint itself.
+    try:
+        import smb_source
+        smb_ready = smb_source.describe_smb_readiness()
+    except Exception as exc:  # pragma: no cover - defensive: a source probe must not break /readyz
+        smb_ready = {"ready": False, "error": f"{exc.__class__.__name__}: {exc}"}
+
     return {
         "ready": not degraded,
         "degraded": degraded,
         "workers": {**workers, "local_pool": local_pool, "can_run_scans": can_run_scans},
         "engines": {"pdf": pdf},
+        "sources": {"smb": smb_ready},
         "service": "acp",
     }
 
