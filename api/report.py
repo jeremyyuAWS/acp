@@ -475,6 +475,54 @@ def _provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, mut
     return el
 
 
+def _assurance_section(facts, h2, body, cell, muted) -> list:
+    """Human review & assurance (backlog R9 / R10). Every figure has a real denominator: review
+    outcomes counted from the immutable decision_log; the deterministic-assurance ratio as
+    deterministic ÷ evaluated criteria; the effort figure as fixes-cleared ÷ findings with that
+    basis named. NO "% effort saved" and NO "cleared ÷ attempted" — the attempted denominator is
+    not tracked (only re-scan-cleared fixes are recorded), so that ratio is omitted, not invented
+    (ADR 0016). Omitted entirely when nothing was reviewed, remediated or evaluated."""
+    f = facts or {}
+    review = f.get("review") or {}
+    docs = f.get("documents") or []
+    evaluated = sum(d.get("evaluated", 0) for d in docs)
+    findings = sum(d.get("findings", 0) for d in docs)
+    auto = ((f.get("scope") or {}).get("by_mode") or {}).get("auto", 0)
+    remediated = f.get("remediated_total", 0)
+    reviewed = review.get("reviewed", 0)
+    if not reviewed and not remediated and not evaluated:
+        return []
+    el = [Paragraph("Human review &amp; assurance", h2)]
+    # R9 — the review outcomes, from the immutable log (approved/rejected + what the platform cleared).
+    band = _stat_band([
+        Paragraph(f'<font size="20"><b>{reviewed}</b></font><br/>'
+                  f'<font size="8.5" color="#6c6470">findings human-reviewed</font>', body),
+        Paragraph(f'<font size="20" color="#3B6D11"><b>{review.get("approved", 0)}</b></font><br/>'
+                  f'<font size="8.5" color="#6c6470">approved</font>', body),
+        Paragraph(f'<font size="20" color="#854F0B"><b>{review.get("rejected", 0)}</b></font><br/>'
+                  f'<font size="8.5" color="#6c6470">rejected</font>', body),
+        Paragraph(f'<font size="20"><b>{remediated}</b></font><br/>'
+                  f'<font size="8.5" color="#6c6470">remediated &amp; re-validated</font>', body),
+    ], [])
+    el.append(band)
+    el.append(Spacer(1, 8))
+    # R10 — deterministic assurance ratio, on a real denominator.
+    if evaluated:
+        el.append(Paragraph(
+            f"<b>Assurance.</b> <b>{auto}</b> of <b>{evaluated}</b> evaluated criteria "
+            f"(<b>{round(100 * auto / evaluated)}%</b>) were decided by the deterministic engine; "
+            "the rest used AI-assisted review a person can confirm. Every remediation counted here "
+            "re-cleared the post-fix re-scan.", muted))
+    # R9 effort — only as the honest ratio, basis named; never a modelled time saving.
+    if findings:
+        el.append(Paragraph(
+            f"<b>Effort.</b> <b>{remediated}</b> of <b>{findings}</b> finding(s) were cleared by an "
+            f"applied, re-validated fix (<b>{round(100 * remediated / findings)}%</b>) — basis: "
+            "fixes-cleared ÷ findings, not a modelled hours-saved figure.", muted))
+    el.append(Spacer(1, 8))
+    return el
+
+
 def _work_by_category_section(evidence: list, h2, body, cell, muted) -> list:
     """What changed, grouped the way a person reads a document — Images, Tables, Reading Order —
     not by WCAG id (backlog: the human-task view). An executive or the ops person who did the
@@ -1139,6 +1187,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
 
     # ── How this result was produced — method, pipeline & reproducibility (R11/R12/R-D/R-E) ──
     el.extend(_provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, _muted))
+
+    # ── Human review & assurance (R9/R10) ────────────────────────────────────
+    el.extend(_assurance_section(facts, h2, body, cell, _muted))
 
     # ── AI governance & provenance (ADR 0019 §4/§7) ──────────────────────────
     # The network-boundary + cost attestation enterprise procurement asks for, from the real
