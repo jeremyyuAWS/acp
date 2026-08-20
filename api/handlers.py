@@ -1181,6 +1181,72 @@ def _scan_assess(payload: dict, job: dict) -> None:
 
 def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, user=None,
                              rubric_hash=None, incremental=True) -> None:
+    """Per-file WALL-CLOCK safety net around the real work (_impl below).
+
+    The sub-steps are already individually bounded — download (httpx timeout 120s), the .NET
+    office CLI (ACP_OFFICE_CLI_TIMEOUT 180s), OCR (ACP_OCR_MAX_IMAGES 30 + downscale). But "each
+    sub-call is bounded" is not "the file is bounded": a step that ever slips its own timeout, a
+    retry loop, or a future analyser added without one would let ONE document hold its worker
+    forever — and with a small worker pool that stalls the whole scan at "0 of N", exactly the
+    shape seen on a cold, image-heavy SharePoint run. This converts that into a bounded per-file
+    error: if a file exceeds ACP_SCAN_FILE_TIMEOUT_S (default 600s), it is recorded as an error
+    and the worker is freed, so the scan always drains and finalizes.
+
+    Safe against the finalize trigger: the caller (scan_file / scan_batch) runs its
+    count_files_done → scan_finalize check AFTER this returns, and the error row here counts
+    toward that total — so a timed-out LAST file still finalizes the scan. save_file_result
+    upserts, so if the orphaned worker thread finishes late with a real result it simply replaces
+    the error row (no double count). ACP_SCAN_FILE_TIMEOUT_S=0 disables the watchdog.
+    """
+    import threading
+    try:
+        cap = int(_os.environ.get("ACP_SCAN_FILE_TIMEOUT_S", "600") or "600")
+    except ValueError:
+        cap = 600
+    if cap <= 0:
+        return _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _lf,
+                                             user=user, rubric_hash=rubric_hash,
+                                             incremental=incremental)
+    outcome: dict = {}
+
+    def _work():
+        try:
+            _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _lf,
+                                          user=user, rubric_hash=rubric_hash,
+                                          incremental=incremental)
+            outcome["done"] = True
+        except BaseException as e:   # noqa: BLE001 — re-raised on the caller thread below
+            outcome["error"] = e
+
+    th = threading.Thread(target=_work, name=f"scanfile:{item.get('file')}", daemon=True)
+    th.start()
+    th.join(cap)
+    if th.is_alive():
+        name = item.get("file")
+        print(f"[scan] {name}: exceeded the {cap}s per-file limit — recording it as an error and "
+              f"moving on so the scan can finish (the file's own bounded sub-calls will let the "
+              f"stuck worker thread exit on its own)", flush=True)
+        try:
+            core.store.log_decision("system", "scan.file_timeout", scan_id=scan_id, file=name,
+                                    detail=f"exceeded per-file limit {cap}s")
+        except Exception:
+            pass
+        # Record an error row so count_files_done reaches total and the scan finalizes. Upsert, so a
+        # late-finishing orphan thread just overwrites this with its real result.
+        try:
+            core.store.save_file_result(scan_id, {
+                "file": name, "engine": "n/a", "status": "error", "score": None,
+                "compliant": 0, "skipped_rules": 0, "issues": [],
+                "drive_file_id": item.get("drive_file_id")}, now)
+        except Exception:
+            pass
+        return
+    if "error" in outcome:
+        raise outcome["error"]   # preserve the impl's original error propagation
+
+
+def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _lf, user=None,
+                                  rubric_hash=None, incremental=True) -> None:
     """Download + analyse + assess + persist ONE file and emit its Discover span on that
     file's own Langfuse trace. Shared by scan_file (per-file fan-out) and scan_batch
     (ADR 0008). A
