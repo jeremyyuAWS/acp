@@ -1058,9 +1058,15 @@ export default function App() {
                     {notifyArmed ? '🔔 Will notify you' : '🔔 Notify me when done'}
                   </button>
                 )}
-                <button className="ghost small"
-                        title="Stop this scan — files already analysed are kept"
-                        onClick={() => cancelScan(liveScanId).catch(() => {})}>■ Stop scan</button>
+                {/* Board 3: while the Assess running card is the one on screen, IT owns Stop
+                    (board-exact placement, inline with the explanation of what stopping does).
+                    Every other case — Discover scanning, or viewing a different tab while a scan
+                    runs in the background — keeps this banner's Stop as the only one available. */}
+                {!(view === 'assess' && assessPhase === 'running') && (
+                  <button className="ghost small"
+                          title="Stop this scan — files already analysed are kept"
+                          onClick={() => cancelScan(liveScanId).catch(() => {})}>■ Stop scan</button>
+                )}
               </span>
             )}
           </div>
@@ -1088,7 +1094,8 @@ export default function App() {
           {/* Live Assessment command center — KPIs + funnel + worker/lane, polled from /scans/{sid}/live.
               Inert until the endpoint returns an available snapshot, so it is a no-op on backends without
               it and adds nothing to the panel when there is nothing live to show. */}
-          <LiveAssessmentLive scanId={liveScanId} active={busy} />
+          <LiveAssessmentLive scanId={liveScanId} active={busy}
+                              onStop={() => cancelScan(liveScanId).catch(() => {})} />
           {/* Narrate the phase the scanner reports, or say nothing. The old line came from a
               timer, so it could never be absent — and it was wrong whenever the timer and the
               phase disagreed. Silence beats a plausible sentence.
