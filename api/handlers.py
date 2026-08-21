@@ -880,6 +880,13 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
             # matches() maps source_modified -> modified_at so "modified before <date>" works.
             "source_modified": r.get("source_modified"),
             "owner": r.get("owner"),
+            # doc_class/size_kb (Lifecycle Rules build-plan item #3, "file type"/"larger than")
+            # were added to disposition.FIELDS and the condition builder in #610, but never wired
+            # in here — a file-type or larger-than rule validated and saved fine, then silently
+            # matched nothing at Discover time forever, because `values.get("doc_class")` (and
+            # `size_kb`) read a key this dict never set. Both are already on the inventory row.
+            "doc_class": r.get("doc_class"),
+            "size_kb": r.get("size_kb"),
         }
         matched = []
         for p in policies:

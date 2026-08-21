@@ -125,6 +125,48 @@ describe('a change applies to this run only', () => {
   })
 })
 
+describe('an explicit tile click survives the saved-scope fetch resolving later', () => {
+  // Found live 2026-08-21: scopeMode starts 'all' ("Entire connected source" renders first,
+  // purple-highlighted), then getScanLocations resolves ~1s later and — whenever the source has
+  // a saved folder set — silently flips scopeMode to 'some', with no check for whether the user
+  // already picked a tile in the meantime. Reproduced twice live: clicking "Entire connected
+  // source" during that window, then Continue, actually proceeded with the OLD saved folder
+  // scope. These hold the fetch open with an uncontrolled promise to land a click inside the
+  // exact race window, then resolve it and confirm the explicit choice won.
+  const radio = (c, name) => [...c.querySelectorAll('[role="radio"]')]
+    .find((b) => b.textContent.includes(name))
+
+  it('clicking "Entire connected source" before the fetch resolves is not clobbered once it does', async () => {
+    const { getScanLocations } = await import('./api.js')
+    let resolveFetch
+    getScanLocations.mockReturnValueOnce(new Promise((r) => { resolveFetch = r }))
+    const c = await mount()
+
+    // The fetch is still pending — scopeMode is at its 'all' default. Click it explicitly.
+    await act(async () => { radio(c, 'Entire connected source').click() })
+    expect(radio(c, 'Entire connected source').getAttribute('aria-checked')).toBe('true')
+
+    // Now the saved-scope fetch resolves, with a non-empty folder set that would otherwise flip
+    // scopeMode to 'some' — the explicit click above must win.
+    await act(async () => { resolveFetch({ locations: { drive: SAVED, _exclude: { drive: [] } } }) })
+
+    expect(radio(c, 'Entire connected source').getAttribute('aria-checked')).toBe('true')
+    expect(radio(c, 'Specific folders').getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('an untouched wizard still adopts the saved scope once the fetch resolves — the fix only guards an explicit choice', async () => {
+    const { getScanLocations } = await import('./api.js')
+    let resolveFetch
+    getScanLocations.mockReturnValueOnce(new Promise((r) => { resolveFetch = r }))
+    const c = await mount()
+
+    // No click this time — the fetch resolving should still apply the saved default.
+    await act(async () => { resolveFetch({ locations: { drive: SAVED, _exclude: { drive: [] } } }) })
+
+    expect(radio(c, 'Specific folders').getAttribute('aria-checked')).toBe('true')
+  })
+})
+
 describe('locationsKeyFor mirrors how a scan resolves its source', () => {
   // App.doScan maps 'all' to a real backend source from the tokens present. A second, different
   // answer here would seed the wizard from one source while the scan read another — the card and

@@ -5118,6 +5118,42 @@ class Store:
                 self._db.execute(cur, "SELECT * FROM documents")
             return self._db.fetchall(cur)
 
+    def list_pending_disposition_candidates(self, owner: str | None = None) -> list[dict]:
+        """`scan_inventory` rows for scans still awaiting Assess (`status='discovered'`),
+        reshaped like a `documents` row so `disposition.matches()` can evaluate them exactly as
+        `handlers._evaluate_discover_lifecycle_rules` already does at Discover time.
+
+        Exists because `list_all_documents` alone — the `documents` table, written only by
+        Assess's `upsert_document` — is what the preview/conflicts evaluators
+        (api/routes/disposition.py) read. A Discover-only estate that has never been assessed has
+        ZERO `documents` rows no matter how large the real estate is, so a rule preview always
+        reported "would_match: 0" regardless of what it would actually tag at the next Discover —
+        found live 2026-08-21 on a fresh 385-file account: an unconditioned-equivalent rule that
+        should have matched virtually everything still previewed as matching nothing.
+
+        Scoped to `status='discovered'` scans only: once Assess runs, its files become real
+        `documents` rows and the scan's status moves off 'discovered' (`set_scan_status`) — so a
+        file is covered by exactly one of `list_all_documents` and this method at any time, never
+        both, and the two lists never need deduplicating against each other.
+        """
+        with self._db.cursor() as cur:
+            q = ("SELECT si.scan_id, si.file, si.path, si.parent_folder, si.created_at, "
+                 "si.source_modified, si.owner, si.doc_class, si.size_kb, sr.source "
+                 "FROM scan_inventory si JOIN scan_runs sr ON sr.id = si.scan_id "
+                 "WHERE sr.status='discovered'")
+            params: tuple = ()
+            if owner:
+                q += " AND sr.owner_email=%s"
+                params = (owner,)
+            self._db.execute(cur, q, params)
+            rows = self._db.fetchall(cur)
+        return [{"doc_id": f"scan:{r['scan_id']}:{r['file']}", "source": r.get("source"),
+                 "path": r.get("path"), "parent_folder": r.get("parent_folder"),
+                 "created_at": r.get("created_at"), "source_modified": r.get("source_modified"),
+                 "owner": r.get("owner"), "doc_class": r.get("doc_class"),
+                 "size_kb": r.get("size_kb")}
+                for r in rows]
+
     # ── Per-file WCAG scope rules (PRD §4.4 / AC-09 — C4) ───────────────────────
     def create_scope_rule(self, rule_id: str, *, name: str, selector: str, value: str,
                           codes: list[str], priority: int = 0, is_override: bool = False,

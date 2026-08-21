@@ -234,8 +234,9 @@ export default function DiscoveryResults({
       {summary.estateListed != null && summary.estateListed !== summary.discovered && (
         <p className="muted" style={{ fontSize: 11.5, margin: '8px 0 0', lineHeight: 1.5 }}>
           This discovery listed {summary.estateListed.toLocaleString()} files in the estate.
-          The {summary.discovered.toLocaleString()} counted here are the rows on this screen, and
-          every breakdown below counts over those.
+          The {summary.discovered.toLocaleString()} counted here are the rows on this screen —
+          most breakdowns below count over those; By file type counts over the whole estate
+          listing when it can (its own total says which population it used).
         </p>
       )}
 
