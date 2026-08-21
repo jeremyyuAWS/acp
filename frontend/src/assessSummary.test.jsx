@@ -71,9 +71,12 @@ describe('the three facts that replace the score', () => {
     expect(c.textContent).toMatch(/3 across 2 documents/)
   })
 
-  it('shows no score anywhere', async () => {
+  it('shows no score anywhere — only the deliberate statement that one is absent', async () => {
     const c = await mount({ files: ESTATE })
-    expect(c.textContent, 'a score is back on the summary').not.toMatch(/score/i)
+    // The board-4 explainer cell says "No accessibility score" by name; that is a declaration of
+    // absence, not a leak. What must never appear is an actual score VALUE.
+    expect(c.textContent).toMatch(/No accessibility score/)
+    expect(c.textContent, 'a score is back on the summary').not.toMatch(/\bscore[d:]?\s*[:=]?\s*\d/i)
     expect(c.textContent).not.toMatch(/\/\s*100\b/)
   })
 
@@ -334,6 +337,32 @@ describe('the seven screen states — a run that did not complete never reads as
     expect(c.querySelector('.assesssummary-failed')).toBe(null)
     expect(gridShown(c)).toBe(true)
     expect(c.textContent).toMatch(/Needs attention/)
+  })
+})
+
+describe('board 7 state 5 — a gap named at the top, not only in the list at the bottom', () => {
+  it('names a gap at the top when the run also has findings (overlays state 2)', async () => {
+    // ESTATE has findings (a.docx, b.pdf) AND a document that failed to open (locked.pdf) — the
+    // no-findings caveat above does not fire here, so without this banner the gap sits only in the
+    // per-file list at the very bottom, under every total it qualifies.
+    const c = await mount({ files: ESTATE })
+    const banner = c.querySelector('.assesssummary-gaps')
+    expect(banner, 'no top-of-page gap banner for a run with findings AND a gap').toBeTruthy()
+    expect(banner.textContent).toMatch(/could not be assessed/)
+    expect(banner.textContent).toMatch(/1 document could not be opened/)
+  })
+
+  it('does not render the gap banner for a clean run with no gaps', async () => {
+    const c = await mount({ files: [doc('clean.docx', [], {})] })
+    expect(c.querySelector('.assesssummary-gaps')).toBe(null)
+  })
+})
+
+describe('board 4 · the 8th cell names what the score would have been', () => {
+  it('states the absence by name, in the metrics grid', async () => {
+    const c = await mount({ files: ESTATE })
+    expect(c.textContent).toMatch(/Deliberately absent/)
+    expect(c.textContent).toMatch(/No accessibility score · no percentages · no time-per-person estimate/)
   })
 })
 

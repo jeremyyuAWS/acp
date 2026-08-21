@@ -227,6 +227,35 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
         </p>
       )}
 
+      {/* Board 7, state 5 — gaps named at the TOP, with the reason, not tucked below the numbers they
+          invalidate. The no-findings case is already caveated just above; this covers the state-5-
+          overlays-state-2 case the board calls out by name — a run that DID find things and ALSO
+          could not assess part of the estate, where the gap otherwise sits only in the list at the
+          very bottom, under every total it qualifies. */}
+      {gaps && m.totalFindings > 0 && (
+        <div className="assesssummary-gaps" role="status"
+             style={{ marginTop: 12, padding: '10px 13px', borderRadius: 10,
+                      border: '1px solid #B07A00', background: 'var(--surface)' }}>
+          <div style={{ fontSize: 13.5, fontWeight: 650, color: '#8a5a00' }}>
+            Part of this run could not be assessed
+          </div>
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 3, lineHeight: 1.6 }}>
+            {m.documentsUnopened.length > 0 && (
+              <><b>{m.documentsUnopened.length}</b> document{m.documentsUnopened.length === 1 ? '' : 's'} could
+                not be opened{m.unableToAssess > 0 ? '; ' : ' (named below). '}</>
+            )}
+            {m.unableToAssess > 0 && (
+              <><b>{m.unableToAssess}</b> of {m.selectedChecks} selected checks could not run
+                {m.unassessableCriteria.length > 0
+                  ? ` — ${m.unassessableCriteria.length} criteria have no method for these formats`
+                  : ''}. </>
+            )}
+            Coverage is {m.coverageEvaluated} of {m.coverageSelected} criteria, never a clean bill of
+            health across the whole estate. These are not passes, not failures and not findings.
+          </div>
+        </div>
+      )}
+
       {/* ── The seven, and only these seven ──────────────────────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
                     gap: 12, marginTop: 16 }}>
@@ -295,6 +324,21 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
           {m.unassessableCriteria.length > 0 && <> — {m.unassessableCriteria.length} criteria
             with no method for these formats</>}. Not passes and not failures.
         </Metric>
+
+        {/* Board 4's 8th cell — the shape of the grid states what is NOT here as loudly as what is.
+            A reader who has seen a compliance dashboard expects a score; its absence is a decision,
+            and naming the decision on the screen is what stops "where's the percentage?" becoming a
+            request to reinstate one. No value — this cell is an explanation, not a metric. */}
+        <div style={{ ...card, background: 'transparent', borderStyle: 'dashed' }}>
+          <div style={lab}>Deliberately absent</div>
+          <div style={{ fontSize: 13, marginTop: 8, lineHeight: 1.5 }}>
+            No accessibility score · no percentages · no time-per-person estimate.
+          </div>
+          <div style={sub}>
+            A single score lets a critical failure average away behind passes, and cannot tell
+            “checked and passed” from “not checked” — the one distinction this screen exists to make.
+          </div>
+        </div>
       </div>
 
       {/* ── The arithmetic, printed. Either it holds on screen or it is a visible bug. ───── */}
