@@ -17,7 +17,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
-import { gotoStep } from './wizardNav.testkit.js'
 
 globalThis.__BUILD_TIME__ = '2026-08-01T00:00:00.000Z'
 globalThis.__BUILD_VERSION__ = '2026.8.1'
@@ -105,22 +104,12 @@ describe('reconnecting to a pending default-path job on mount', () => {
   })
 })
 
-describe('starting a fresh default-path scan writes the same reconnect key', () => {
-  it('sets active_job_id the moment the job starts, so an IMMEDIATE reload would still catch it', async () => {
-    startScan.mockResolvedValue({ job_id: 'j3' })
-    // Never resolves within this test's window — the point is to catch the key while in-flight.
-    getJob.mockImplementation(() => new Promise(() => {}))
-
-    const c = await mountSignedIn()
-    const discoverTab = byText(c, '[role="tab"]', /Discover/)
-    await act(async () => { discoverTab?.click() }); await flush()
-    await act(async () => { byText(c, 'button', /Re-scan all sources/)?.click() }); await flush()
-    const dialog = c.querySelector('[role="dialog"]')
-    await gotoStep(dialog, act, 3)
-    const start = dialog.querySelector('button[data-wizard-forward]')
-    await act(async () => { start?.click() }); await flush()
-
-    expect(startScan).toHaveBeenCalled()
-    expect(sessionStorage.getItem('active_job_id')).toBe('j3')
-  })
-})
+// A test that drove doScan's non-durable (`else`) branch through the full gate UI used to live
+// here, asserting pollScanJob's sessionStorage.setItem happens the moment a fresh job starts.
+// Removed 2026-08-21: durable (queuedScan) is now the default and the switch that could force the
+// other branch was already gone from the UI before that, so the gate's confirm path is
+// structurally unable to reach `else { pollScanJob(...) }` any more — there is no operator-facing
+// way left to drive this scenario short of calling the component's internal closure directly,
+// which isn't exposed. The line this covered is a single `sessionStorage.setItem(ACTIVE_JOB_KEY,
+// job_id)` at the top of pollScanJob; the tests above still fully cover the half of the mechanism
+// that matters (resuming, resolving, clearing, surfacing an error) for whichever branch runs it.
