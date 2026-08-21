@@ -802,6 +802,15 @@ export default function App() {
   // Presentation decouple: results views stay blank until the user runs Assess. The flag
   // is persisted on the scan (assessed_at); justAssessed gives an immediate optimistic flip.
   const assessed = !!run?.assessed_at || justAssessed === run?.id
+  // When the Assess results (summary / worklist / file / run-details) may render. Two ways to be
+  // ready, and the distinction is the bug this guards: (1) the runner finished a run THIS session
+  // (assessPhase 'done'); (2) the scan was assessed in a PRIOR session — persisted `assessed_at`,
+  // and NOT this session's optimistic `justAssessed` flip. Case 2 is the reload: assessPhase is
+  // 'idle' because AssessRunner's per-session cache is gone, so gating purely on 'done' left an
+  // already-assessed scan showing an EMPTY panel (AssessSetup hidden by `assessed`, results hidden
+  // by the 'done' gate). Excluding `justAssessed === run.id` keeps results hidden during the
+  // click→running gap the 'done' gate was added to cover, so a fresh run still waits for the bar.
+  const resultsReady = assessPhase === 'done' || (!!run?.assessed_at && justAssessed !== run?.id)
   const assessGate = <AssessGate onGo={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
   // Time-travel = viewing any scan other than the latest. Drives the replay banner + the
   // app-wide "replaymode" tint so it's unmistakable you're looking at a past point in time.
@@ -1144,16 +1153,16 @@ export default function App() {
 
                  FileDrawer is not deleted — Overview still uses it. This is only about which view
                  the Assess tab opens for a document. */}
-            {assessed && assessPhase === 'done' && assessFile && (
+            {assessed && resultsReady && assessFile && (
               <AssessFileFindings row={assessFile} cap={cap} assessment={assessment}
                                   onBack={() => { setAssessFile(null); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
                                   onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
             )}
-            {assessed && assessPhase === 'done' && runDetails && (
+            {assessed && resultsReady && runDetails && (
               <RunDetails scanId={run.id} files={files} cap={cap} assessment={assessment}
                           onBack={() => { setRunDetails(false); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
             )}
-            {assessed && assessPhase === 'done' && !runDetails && !assessFile && <><AssessSummary files={files} cap={cap} assessment={assessment} onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onRunDetails={() => { setRunDetails(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><AssessWorklist files={files} cap={cap} assessment={assessment} onOpenFile={(row) => setAssessFile(row)} /><RuleBreakdown scanId={run.id} files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
+            {assessed && resultsReady && !runDetails && !assessFile && <><AssessSummary files={files} cap={cap} assessment={assessment} onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onRunDetails={() => { setRunDetails(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><AssessWorklist files={files} cap={cap} assessment={assessment} onOpenFile={(row) => setAssessFile(row)} /><RuleBreakdown scanId={run.id} files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
           </>
         ) : placeholder)}
 
