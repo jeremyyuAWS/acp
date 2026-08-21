@@ -19,18 +19,48 @@
 //                            signal. Issue #333 measured it: 178 files uploaded, 39 discovered,
 //                            presented as complete; the same index returned 157 five minutes
 //                            later and 158 after fifteen.
+//   api/scanner.py:779,940   BUT NOT WHEN FOLDERS WERE CHOSEN. A SharePoint/OneDrive scan narrowed
+//                            to picked folders goes through `_sp_walk_folder`, a BFS over
+//                            `/drives/{id}/items/{id}/children` — a directory traversal, and
+//                            immediately consistent like Drive's. Only the whole-OneDrive and
+//                            whole-site paths hit the index.
 //   api/scanner.py:509       Google Drive walks folders directly (`_search_folder`), which is
 //                            immediately consistent for whatever the token can see.
+//
+// That distinction is worth more than the warning it corrects: on an estate the index is
+// under-reporting, PICKING THE FOLDERS IS THE FIX, not merely a narrower scan. Saying "listed
+// through a search index" over a run that walked its folders directly would be a false alarm, and
+// a panel that cries wolf on a correct run is one nobody reads on the run that matters.
 //
 // So the guarantee is a property of the SOURCE, and stating it is free — no extra call, no
 // estimate. What this module will not do is invent the missing half of #333: comparing against the
 // library's own `ItemCount` needs a backend call that does not exist yet, so nothing here says
 // "39 of ~374". A caveat that is honest about being a caveat beats a number that is made up.
 
+/** Did this run narrow to chosen folders? `scope.folders` is written by `_list` only when
+ *  SharePoint locations were actually picked, and it is what routes the scan through the
+ *  children walk instead of the search index. */
+const folderScoped = (scope) =>
+  !!(scope && Array.isArray(scope.folders) && scope.folders.length > 0)
+
 /** How a source enumerates, and what that does and does not guarantee. Null for a source we have
- *  not established — silence rather than a guess about someone's connector. */
-export function enumerationMethod(source) {
+ *  not established — silence rather than a guess about someone's connector.
+ *
+ *  `scope` is the run's recorded scope. Absent, a SharePoint source is reported as index-listed,
+ *  which is what an un-narrowed scan does and the safe answer when the record does not say. */
+export function enumerationMethod(source, scope = null) {
   if (source === 'sharepoint' || source === 'onedrive') {
+    if (folderScoped(scope)) {
+      return {
+        source,
+        method: 'folder traversal',
+        consistent: true,
+        caveat: 'The chosen folders were listed by walking them directly, so this reflects the '
+              + 'source as it was at the moment of the run — not a search index that may lag '
+              + 'behind it. Subfolders are included: the walk descends the whole subtree.',
+        resolve: null,
+      }
+    }
     return {
       source,
       method: 'search index',
@@ -40,7 +70,10 @@ export function enumerationMethod(source) {
       caveat: 'SharePoint and OneDrive are listed through Microsoft’s search index, which lags '
             + 'recent changes. Files uploaded or moved shortly before this run may not appear yet, '
             + 'and a partial listing is indistinguishable from a genuinely small estate.',
-      resolve: 'If this estate was changed in the last few minutes, list it again before assessing.',
+      resolve: 'If this estate was changed in the last few minutes, list it again before assessing. '
+             + 'If files are missing that are not recent, choose the folders instead of the whole '
+             + 'source — a folder-scoped scan walks the folders directly (subfolders included) and '
+             + 'does not consult the index at all.',
     }
   }
   if (source === 'drive') {
