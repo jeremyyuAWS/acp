@@ -9,7 +9,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  NOT_RECORDED, RECOMMENDATION_BUCKETS, acknowledgementSummary, estateSummary, formatBucketOf,
+  NOT_RECORDED, RECOMMENDATION_BUCKETS, acknowledgementSummary, estateSummary,
+  estateTypeReconciliation, formatBucketOf,
   hasLifecycleData, isConflicted, isUnreadable, lifecycleStatusOf, recommendationBucketOf,
   recommendationReconciliation, recommendationRows, reconcile, ruleNameOf, typeReconciliation,
   unreadableReasons,
@@ -60,6 +61,45 @@ describe('format buckets mirror the backend estate taxonomy', () => {
     expect(keys).toContain('av')
     expect(rec.buckets.find((b) => b.key === 'image').assessable).toBe(false)
     expect(rec.buckets.find((b) => b.key === 'docx').assessable).toBe(true)
+  })
+})
+
+describe('estateTypeReconciliation — the whole-estate version, image/video included', () => {
+  it('counts over the estate inventory, not the scanned rows — the gap typeReconciliation cannot close', () => {
+    // A realistic estate where almost nothing is a scannable format: typeReconciliation(files)
+    // would only ever see the 3 docx rows that got opened and scored, reporting the 9,000 images
+    // as if they did not exist. estateTypeReconciliation reads the SAME denominator the "N files
+    // discovered" headline already uses (inventory.discovered), so the two numbers agree.
+    const inventory = { discovered: 9003, by_format: { docx: 3, image: 9000 } }
+    const rec = estateTypeReconciliation(inventory)
+    expect(rec.total).toBe(9003)
+    expect(rec.sum).toBe(9003)
+    expect(rec.balanced).toBe(true)
+    expect(rec.population).toBe('the whole estate listing')
+    const image = rec.buckets.find((b) => b.key === 'image')
+    expect(image.count).toBe(9000)
+    expect(image.assessable).toBe(false)
+  })
+
+  it('is null without a usable inventory — the caller falls back to typeReconciliation(files)', () => {
+    expect(estateTypeReconciliation(null)).toBeNull()
+    expect(estateTypeReconciliation(undefined)).toBeNull()
+    expect(estateTypeReconciliation({})).toBeNull()                          // no by_format at all
+    expect(estateTypeReconciliation({ discovered: 12 })).toBeNull()          // discovered, no by_format
+    expect(estateTypeReconciliation({ by_format: { docx: 1 } })).toBeNull()  // by_format, no discovered
+  })
+
+  it('drops a format bucket with zero files — not a bucket of this estate', () => {
+    const rec = estateTypeReconciliation({ discovered: 2, by_format: { docx: 2, image: 0, av: 0 } })
+    expect(rec.buckets.map((b) => b.key)).toEqual(['docx'])
+  })
+
+  it('flags an unbalanced inventory rather than silently absorbing the gap', () => {
+    // by_format undercounting discovered — e.g. a format bucket this taxonomy does not (yet) name.
+    const rec = estateTypeReconciliation({ discovered: 10, by_format: { docx: 4 } })
+    expect(rec.balanced).toBe(false)
+    expect(rec.sum).toBe(4)
+    expect(rec.total).toBe(10)
   })
 })
 

@@ -257,6 +257,12 @@ export function reconcile(buckets, total, population) {
 /**
  * Every discovered file, grouped by format, summing to the number of files discovered.
  * Null when `files` is not an array.
+ *
+ * SCOPED TO THE ROWS ON SCREEN — `files` is the scanned population (only assessable formats are
+ * ever opened and scored), so an image, a video, or a legacy type discovery merely LISTED never
+ * appears here with a real count. `estateTypeReconciliation` below is the whole-estate version;
+ * prefer it when an inventory is available and fall back to this only when it is not (a local
+ * scan, or one predating the inventory field).
  */
 export function typeReconciliation(files, population = 'files discovered') {
   if (!Array.isArray(files)) return null
@@ -267,6 +273,35 @@ export function typeReconciliation(files, population = 'files discovered') {
     // A format with no files in this estate is dropped: it is not a bucket of this population.
     .filter((b) => b.count > 0)
   return reconcile(buckets, files.length, population)
+}
+
+/**
+ * The same by-type partition as `typeReconciliation`, but over the WHOLE estate listing
+ * (`estate_inventory.summarize()`'s `by_format`/`discovered`, computed server-side from every
+ * file Drive/SharePoint returned — image, video and unsupported types included, none of them
+ * ever opened or scored). This is what the "grey types are inventoried but carry no WCAG test"
+ * caption below the bars actually promises; `typeReconciliation(files)` cannot deliver on that
+ * promise because the scanned-rows population it counts over structurally excludes almost every
+ * non-assessable file (found 2026-08-21: an estate of mostly images/video rendered this panel as
+ * if the estate were document-only, with no error and no wrong number — the grey buckets were
+ * just always empty, because the files that belonged in them were never in `files` to begin with).
+ *
+ * Null when there is no inventory to read (a local scan, or one predating this field) — the
+ * caller falls back to `typeReconciliation(files)`, which is honest about a narrower population
+ * rather than wrong about the whole one.
+ *
+ * The bucket vocabulary (docx/pdf/pptx/xlsx/html/image/av/other) is shared verbatim with
+ * `api/estate_inventory.py`'s `_format_of` — same taxonomy, so no re-derivation can drift from it.
+ */
+export function estateTypeReconciliation(inventory, population = 'the whole estate listing') {
+  if (!inventory || typeof inventory !== 'object') return null
+  const total = Number(inventory.discovered)
+  const by = inventory.by_format
+  if (!Number.isFinite(total) || !by || typeof by !== 'object') return null
+  const buckets = FORMAT_BUCKETS
+    .map(([key, label, assessable]) => ({ key, label, assessable, count: Number(by[key]) || 0 }))
+    .filter((b) => b.count > 0)
+  return reconcile(buckets, total, population)
 }
 
 /**
