@@ -1089,7 +1089,12 @@ export default function App() {
         {/* onScan/busy/tokens are threaded so Overview can offer the scan-scope editor after a
             scan exists. Before one, `placeholder` (EmptyState → ScanSetup) is the whole screen;
             without these the editor would still be reachable exactly once per workspace. */}
-        {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} me={me} onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onFileTypeChange={setFileTypeConfig} cap={cap} assessment={assessment} /> : assessGate) : placeholder)}
+        {/* The Overview grows organically across the funnel: it renders once an estate is DISCOVERED,
+            not only once it is assessed, and its own sections reveal as each stage completes (the
+            discovery numbers first, the assessment KPIs once Assess has run). This reverses the older
+            OV-01/OV-04 gate — "Overview stays blank until assessed" — which the reveal-as-completed
+            structure makes unnecessary: there is no empty-findings page to guard against any more. */}
+        {view === 'overview' && (run ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} me={me} onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onFileTypeChange={setFileTypeConfig} cap={cap} assessment={assessment} /> : placeholder)}
 
         {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
           scanId={run?.id}

@@ -20,7 +20,7 @@ import EstateCoverage from './EstateCoverage.jsx'
 import AssessmentReconciliation from './AssessmentReconciliation.jsx'
 import { reconcileBuckets } from './estateFunnel.js'
 import { reconciliationInputs } from './reconciliationInputs.js'
-import { assessMetrics } from './assessMetrics.js'
+import { assessMetrics, coverageSentence, SEVERITIES, SEVERITY_LABEL } from './assessMetrics.js'
 import AssertionScope from './AssertionScope.jsx'
 import NextStep from './NextStep.jsx'
 import { CORE_SCS } from './activeScope.js'
@@ -114,6 +114,13 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   // inventory without analysing it, and a cancelled/interrupted one stops partway, so `n` is
   // the documents we KNOW ABOUT while `analysed` is the documents we know ANYTHING about.
   const analysed = analysedCount(files)
+  // The Overview grows organically across the funnel: the discovery section fills in once an estate
+  // has been inventoried, and the assessment section reveals only once documents have actually been
+  // assessed (analysed > 0). A discovered-but-not-yet-assessed estate shows the discovery numbers
+  // and a prompt to run Assess — never a page of empty findings charts, which is the failure the
+  // old "Overview stays blank until assessed" gate (OV-01/OV-04) was avoiding. Reveal-as-completed
+  // solves that concern without hiding the discovery work the estate has already done.
+  const stageAssessed = analysed > 0
   // Estate-coverage funnel progress (stages 4-9). Discovery denominators (1-3) come from
   // run.scope.inventory; these come from the file rows — each a REAL count, never a projection.
   //   human_review = documents carrying at least one REVIEW-lane finding (ADR 0023: assessed-for-
@@ -142,6 +149,12 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const rec = reconcileBuckets(run?.scope?.inventory, reconciliationInputs(run, files))
   const assessedBucket = rec ? rec.rows.find((r) => r.key === 'assessed') : null
   const metrics = assessMetrics(files, { cap, assessment })
+  // The by-severity addends for the assessment section's equation — printed so the partition is
+  // checkable on screen, the same rule the Assess tab's summary obeys.
+  const sevAddends = metrics
+    ? [...SEVERITIES.map((s) => metrics.bySeverity[s]),
+       ...(metrics.bySeverity.UNKNOWN > 0 ? [metrics.bySeverity.UNKNOWN] : [])]
+    : []
   // An em dash, never a zero. "0 findings" over an estate nobody assessed is the same false
   // verdict as a completed run that found nothing - the distinction this product exists to make.
   const tile = (v) => (v == null ? '\u2014' : v.toLocaleString())
@@ -367,21 +380,61 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           plausible. Self-guarding: it renders nothing at all without an inventory to partition. */}
       <AssessmentReconciliation run={run} files={files} />
 
-      {/* WHAT THE NUMBERS ABOVE ARE A CLAIM ABOUT (board 7). This screen exports as the compliance
-          report, and a report that states findings without stating its own boundary is exactly the
-          document an auditor should not be handed. Fed the SAME `rec` the tiles and the
-          reconciliation use, so the exclusion count here cannot disagree with the bucket that
-          produced it. */}
-      <AssertionScope run={run} fileCount={n} coreScs={CORE_SCS} rec={rec} />
+      {/* ── ASSESSMENT — the section that grows in once documents have actually been assessed.
+             Below discovery, above the detailed findings charts. Before a run it is a prompt, not an
+             empty grid; after one it is the seven metrics (board 4), read from the SAME assessMetrics
+             the Assess tab reports so one run never shows two different totals across two tabs. ── */}
+      {stageAssessed && metrics ? (
+        <>
+          <section className="panel overview-assessment" aria-label="Assessment summary">
+            <h2>Assessment <span className="muted" style={{ fontWeight: 400 }}>· {coverageSentence(metrics)}</span></h2>
+            <div className="metrics">
+              <div className="metric" title="Documents where at least one selected check completed.">
+                <span>documents assessed</span><b>{metrics.documentsAssessed}</b></div>
+              <div className="metric" title="Assessed documents carrying at least one unresolved finding.">
+                <span>needing attention</span><b style={{ color: '#854F0B' }}>{metrics.documentsNeedingAttention}</b></div>
+              <div className="metric" title="Unresolved finding instances across all assessed documents. One criterion can produce many.">
+                <span>total findings</span><b>{metrics.totalFindings}</b></div>
+              <div className="metric" title="Findings with a deterministic remediation — same input, same fix, no person needed.">
+                <span>auto-fix available</span><b style={{ color: '#2F7D32' }}>{metrics.autoFixAvailable}</b></div>
+              <div className="metric" title="Findings needing a person's judgement, including every AI-drafted fix awaiting approval.">
+                <span>human review required</span><b>{metrics.humanReviewRequired}</b></div>
+              <div className="metric" title="Selected checks that could not run — no method for these formats. Not passes and not failures.">
+                <span>unable to assess</span><b>{metrics.unableToAssess} <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>checks</span></b></div>
+            </div>
+            {/* The severity partition, added up on screen — the 7th metric, printed as an equation so
+                a reader can check it against Total findings rather than take it on trust. */}
+            {metrics.totalFindings > 0 && (
+              <div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
+                By severity: {SEVERITIES.map((s, i) => (
+                  <span key={s}>{i > 0 ? ' · ' : ''}<b>{metrics.bySeverity[s]}</b> {SEVERITY_LABEL[s]}</span>
+                ))} — {sevAddends.join(' + ')} = {metrics.totalFindings}
+              </div>
+            )}
+          </section>
 
-      {/* SO WHAT NOW (board 7). The only panel on this screen with a primary action; everything
-          else reports. Fed the same `metrics` as the tiles, so the count it acts on is the count
-          shown above it, and the same `rec` for the lifecycle backlog. */}
-      <NextStep metrics={metrics}
-                awaiting={lifecycleAwaiting}
-                onRemediate={() => onGo && onGo('remediate')}
-                onExport={() => openReport(run.id)}
-                onReviewLifecycle={() => onGo && onGo('discover')} />
+          {/* WHAT THE NUMBERS ABOVE ARE A CLAIM ABOUT (board 7). This screen exports as the compliance
+              report, and a report that states findings without stating its own boundary is exactly the
+              document an auditor should not be handed. Fed the SAME `rec` the tiles use. */}
+          <AssertionScope run={run} fileCount={n} coreScs={CORE_SCS} rec={rec} />
+
+          {/* SO WHAT NOW (board 7). The only panel on this screen with a primary action. */}
+          <NextStep metrics={metrics}
+                    awaiting={lifecycleAwaiting}
+                    onRemediate={() => onGo && onGo('remediate')}
+                    onExport={() => openReport(run.id)}
+                    onReviewLifecycle={() => onGo && onGo('discover')} />
+        </>
+      ) : (
+        <section className="panel overview-runassess" aria-label="Assessment not yet run">
+          <h2>Assessment <span className="muted" style={{ fontWeight: 400 }}>· not yet run</span></h2>
+          <p className="muted" style={{ margin: '4px 0 12px' }}>
+            {n.toLocaleString()} document{n === 1 ? '' : 's'} discovered. Run an assessment to score them
+            against WCAG 2.1 — findings, coverage and the severity breakdown appear here once it finishes.
+          </p>
+          <button onClick={() => onGo && onGo('assess')}>Run assessment →</button>
+        </section>
+      )}
 
       {/* Whole-estate coverage: the three denominators (discovered / assessment-eligible /
           remediation-eligible) as a funnel + format composition + capability-status split, from the
@@ -443,6 +496,10 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
 
       <PiiPanel scanId={run.id} />
 
+      {/* The detailed findings & score charts belong to the assessment stage — hidden until a run
+          has produced findings to chart, so a discovered-not-assessed estate never shows a wall of
+          "No open findings" panels. They reappear, populated, the moment Assess completes. */}
+      {stageAssessed && (<>
       <div className="chartrow">
         <section className="panel"><h2>Compliance status <span className="muted" style={{ fontWeight: 400 }}>· click to drill in</span></h2><Donut segments={statusSegments(run, files)} caption="documents" onPick={pickStatus} /><Insight text={INS.status} /></section>
         <section className="panel"><h2>Findings by severity <span className="muted" style={{ fontWeight: 400 }}>· blocking findings</span></h2>
@@ -478,6 +535,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         <section className="panel"><h2>Findings by WCAG level <span className="muted" style={{ fontWeight: 400 }}>· all findings, blocking &amp; advisory</span></h2>{byLevel.length ? <Bars items={byLevel} cols="150px 1fr 30px" onPick={(it) => { const fs = files.filter((f) => (f.issues || []).some((i) => (levelOfFinding(i) || 'unknown') === it.lvl)); setSeg({ title: it.lvl === 'unknown' ? 'Findings whose criterion is not in the catalog' : `Level ${it.lvl} findings`, subtitle: `${fs.length} document(s)`, files: fs }) }} /> : <p className="muted">No open findings.</p>}<Insight text={INS.wcagLevel} /></section>
         <section className="panel"><h2>Documents by score band</h2><Bars items={scoreBands} cols="150px 1fr 30px" onPick={(it) => { const lo = it.label.startsWith('90') ? 90 : it.label.startsWith('50') ? 50 : it.label.startsWith('below') ? 0 : null; const fs = lo != null ? files.filter((f) => f.score != null && f.score >= lo && f.score <= (lo === 90 ? 100 : lo === 50 ? 89 : 49)) : files.filter((f) => f.score == null); setSeg({ title: it.label, subtitle: `${fs.length} document(s)`, files: fs }) }} /><Insight text={INS.scoreBand} /></section>
       </div>
+      </>)}
 
       <div className="muted" style={{ margin: '20px 0 2px' }}>Inventory distribution</div>
       <div className="chartrow">
@@ -498,7 +556,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         </div>
       </section>
 
-      {trend.length > 1 && new Set(trend).size > 1 && (() => {
+      {stageAssessed && trend.length > 1 && new Set(trend).size > 1 && (() => {
         // Compliance velocity: points/week from the FIRST to the LATEST scored scan,
         // using scanList's real completed_at (trend/trendDates above only carry a
         // display label, not a parseable date). A single outlier scan can't compute a

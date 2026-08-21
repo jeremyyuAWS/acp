@@ -106,9 +106,17 @@ describe('the app routes it', () => {
     expect(app).toMatch(/<EmptyState onGoToSource=\{\(\) => \{ setView\('integrations'\)/)
   })
 
-  it('still gates the report on a completed assessment', () => {
-    // OV-01/OV-04 predate this change and must survive it: Overview renders only when a run has
-    // been assessed; discovery alone never populates it.
-    expect(read('App.jsx')).toMatch(/view === 'overview' && \(run \? \(assessed \?/)
+  it('renders the Overview once an estate is discovered, and lets it grow into assessment', () => {
+    // REVERSES OV-01/OV-04 (2026-08-20, at the owner's direction). The old rule — "Overview stays
+    // blank until assessed; discovery alone never populates it" — existed to avoid a home screen
+    // full of empty findings charts before a run. The organic-growth redesign makes that gate
+    // unnecessary: the Overview now renders after discovery and REVEALS each section as its stage
+    // completes (discovery numbers first, the assessment KPIs once Assess has run, via Overview's
+    // own `stageAssessed = analysed > 0`), so there is no empty-findings page left to guard against.
+    // The gate is therefore gone from the overview tab — it no longer wraps Overview in `assessed ?`.
+    const app = read('App.jsx')
+    expect(app).toMatch(/view === 'overview' && \(run \? <Overview\b/)
+    expect(app, 'the old assessed-only gate still wraps the Overview tab')
+      .not.toMatch(/view === 'overview' && \(run \? \(assessed \?/)
   })
 })
