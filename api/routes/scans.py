@@ -140,6 +140,19 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                           "done": False, "scan_id": None, "error": None, "source": source,
                           "ai": effective_ai})
 
+    # Liveness heartbeat, separate from progress. The deferred-discovery path below makes exactly
+    # one core.update_job call (at the very end) — during the crawl itself, a large estate can go
+    # a long time with no progress write, which is indistinguishable from a dead replica unless
+    # something else proves the replica is still up. This companion thread does only that: touch
+    # updated_at every core._JOB_HEARTBEAT_SECONDS regardless of what work() has found so far, so
+    # core.get_job_state's staleness check tracks "is the replica alive" rather than "how big is
+    # this estate" — and stops the moment work() ends, one way or another, via the Event below.
+    _stop_heartbeat = threading.Event()
+
+    def _heartbeat():
+        while not _stop_heartbeat.wait(core._JOB_HEARTBEAT_SECONDS):
+            core.update_job(job_id, {})
+
     def work():
         try:
             from handlers import _defer_analysis_to_assess
@@ -179,7 +192,10 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                                      "files_done": done.get("files_found", 0)})
         except Exception as e:
             core.update_job(job_id, {"phase": "error", "done": True, "error": str(e)})
+        finally:
+            _stop_heartbeat.set()
 
+    threading.Thread(target=_heartbeat, daemon=True).start()
     threading.Thread(target=work, daemon=True).start()
     return {"job_id": job_id}
 
@@ -247,10 +263,18 @@ def cancel_scan(sid: str, request: Request):
     """Stop an in-flight fan-out scan (found live 2026-07-11: there was NO way to stop a
     scan — a wedged one blocked all new scans until the lease sweeper caught up). Kills the
     scan's outstanding jobs and closes the run as 'cancelled'; files already analysed keep
-    their records. Owner-scoped: you can only cancel your own scan."""
-    if not core.store.cancel_scan(sid, owner=_owner(request)):
-        raise HTTPException(409, "scan not found, not yours, or not running")
-    return {"scan_id": sid, "status": "cancelled"}
+    their records. Owner-scoped: you can only cancel your own scan.
+
+    Falls back to cancel_queued_job when cancel_scan says no: a scan_id issued by the durable
+    (queued) start path is real and known to the caller from the moment it's enqueued, but has
+    no scan_runs row — and so nothing for cancel_scan to find — until a worker actually claims
+    it (found live 2026-08-21: a scan stuck waiting for a worker had no way to be cancelled
+    either, the other half of the 2026-07-11 gap this route was built to close)."""
+    if core.store.cancel_scan(sid, owner=_owner(request)):
+        return {"scan_id": sid, "status": "cancelled"}
+    if core.store.cancel_queued_job(sid):
+        return {"scan_id": sid, "status": "cancelled", "was_queued": True}
+    raise HTTPException(409, "scan not found, not yours, or not running")
 
 
 @router.get("/scans/jobs/{job_id}")

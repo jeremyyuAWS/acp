@@ -1744,6 +1744,26 @@ class Store:
             self._stamp_assessed_if_ran(cur, sid)
         return True
 
+    def cancel_queued_job(self, sid: str) -> bool:
+        """Cancel a scan that is still `queued` and has never been claimed by a worker — the gap
+        `cancel_scan` cannot cover, because a queued-unclaimed job has NO `scan_runs` row yet
+        (that row is only created once a worker claims it and starts the discovery handler), and
+        `cancel_scan` requires one. Marks the `jobs` row `status='dead'` directly.
+
+        No owner check: a never-claimed job has no owner_email recorded anywhere yet either (it
+        lives only in `jobs`, which carries no owner column), so there is nothing to check it
+        against. `sid` is an unguessable token already trusted as the sole credential for polling
+        this scan (`GET /scans/jobs/{job_id}` has no owner check today) — this follows the same
+        model, not a new, weaker one.
+
+        Returns False once a worker HAS claimed it (status moved to 'running' or beyond) — at
+        that point `cancel_scan` is the right call, and the route tries both in order."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE jobs SET status='dead', updated_at=%s WHERE scan_id=%s AND status='queued'",
+                (self._now(), sid))
+            return cur.rowcount > 0
+
     def _stamp_assessed_if_ran(self, cur, sid: str) -> None:
         """Stamp assessed_at on a non-finalized run that nonetheless assessed ≥1 document, so its
         partial results reach the results views. No-op when nothing ran or a stamp already exists."""

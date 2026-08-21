@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  MAX_PAGES, PAGE_LIMIT, lifecycleIndex, loadDiscoveryInventory, mergeLifecycle,
+  MAX_PAGES, PAGE_LIMIT, inventoryOnlyRows, lifecycleIndex, loadDiscoveryInventory, mergeLifecycle,
 } from './discoveryInventory.js'
 
 const row = (file, extra = {}) => ({ file, path: file, lifecycle_status: 'Active', ...extra })
@@ -155,5 +155,41 @@ describe('merging the lifecycle columns onto the scan file rows', () => {
     const merged = mergeLifecycle([{ file: 'a.docx' }], inv)[0]
     expect(merged.lifecycle_override_reason).toBeUndefined()
     expect('lifecycle_overridden_by' in merged).toBe(false)
+  })
+})
+
+describe('the estate-only rows the scanned files never included', () => {
+  const files = [{ file: 'a.docx' }, { file: 'b.pdf' }]
+
+  it('synthesizes a minimal row for an inventory file that was never scanned', () => {
+    const inv = { rows: [
+      { file: 'a.docx', status: 'assessable', format: 'docx' },        // already scanned — skip
+      { file: 'photo.png', status: 'metadata_only', format: 'image', size_kb: 400, owner: 'Dana' },
+    ] }
+    const rows = inventoryOnlyRows(files, inv)
+    expect(rows).toEqual([{ file: 'photo.png', type: 'PNG', pages: null, score: null,
+                            _estateOnly: true, _sizeKb: 400, _owner: 'Dana' }])
+  })
+
+  it('drops ACP\'s own excluded output — not the user\'s content', () => {
+    const inv = { rows: [{ file: 'Remediated/a.docx', status: 'excluded', format: 'docx' }] }
+    expect(inventoryOnlyRows(files, inv)).toEqual([])
+  })
+
+  it('is empty when every inventory row is already a scanned file — the common case', () => {
+    const inv = { rows: [{ file: 'a.docx', status: 'assessable' }, { file: 'b.pdf', status: 'assessable' }] }
+    expect(inventoryOnlyRows(files, inv)).toEqual([])
+  })
+
+  it('is empty without a usable inventory — never invents a row', () => {
+    expect(inventoryOnlyRows(files, null)).toEqual([])
+    expect(inventoryOnlyRows(files, undefined)).toEqual([])
+    expect(inventoryOnlyRows(files, {})).toEqual([])
+    expect(inventoryOnlyRows(files, { rows: null })).toEqual([])
+  })
+
+  it('labels an extensionless file OTHER rather than guessing', () => {
+    const rows = inventoryOnlyRows(files, { rows: [{ file: 'README', status: 'unsupported' }] })
+    expect(rows[0].type).toBe('OTHER')
   })
 })

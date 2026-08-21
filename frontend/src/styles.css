@@ -82,6 +82,22 @@ button.ghost { background: #fff; color: var(--plum); border: 1px solid var(--lin
 .aibadge.off { background: #8c8694; }
 .chatmsg .aibadge { display: block; width: fit-content; margin-top: 7px; letter-spacing: .02em; }
 .chatlive { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; font-size: 10px; font-weight: 700; color: var(--plum); background: #f3eef6; border: 1px solid #e6dcec; padding: 2px 7px; border-radius: 999px; vertical-align: middle; }
+
+/* Term — inline glossary tooltip (see Term.jsx) */
+.term { position: relative; display: inline-flex; align-items: center; gap: 3px; }
+.terminfo { background: none; border: none; color: #b7afbd; cursor: pointer; padding: 1px; line-height: 0; border-radius: 999px; }
+.terminfo:hover, .terminfo:focus-visible { color: var(--plum); }
+.terminfo:focus-visible { outline: 2px solid var(--plum); outline-offset: 1px; }
+.termbox {
+  position: absolute; z-index: 20; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  width: 240px; background: var(--ink); color: #fff; border-radius: 8px; padding: 9px 11px;
+  font-size: 12px; line-height: 1.5; box-shadow: 0 6px 20px rgba(0,0,0,.18);
+}
+.termbox b { display: block; font-size: 11.5px; margin-bottom: 3px; color: #fff; }
+.termbox::after {
+  content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+  border: 5px solid transparent; border-top-color: var(--ink);
+}
 .expchev { display: inline-block; width: 14px; color: var(--muted); font-size: 11px; }
 .panel h2 { margin: 0 0 14px; font-size: 14px; font-weight: 600; color: var(--muted); }
 
@@ -1610,17 +1626,23 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 /* chart panels */
 .chartrow { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
 
-/* visual funnel (decreasing animated bars) */
-.vfunnel { margin: 8px 0 18px; }
-.vfrow { display: grid; grid-template-columns: 120px 1fr 34px; align-items: center; gap: 12px; padding: 5px 0; cursor: pointer; }
-button.vfrow { background: none; border: none; font: inherit; color: inherit; width: 100%; text-align: left; }
-.vfrow:hover .vflabel { color: var(--plum); }
-.vflabel { font-size: 13px; color: var(--ink); }
-.vflabel em { font-style: normal; color: var(--muted); font-size: 11px; }
-.vfbar { height: 24px; background: #f0edf2; border-radius: 7px; overflow: hidden; }
-.vfbar > i { display: block; height: 100%; border-radius: 7px; transition: width 0.9s ease; }
-.vfn { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; font-size: 15px; }
-.vfn { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; font-size: 15px; }
+/* K8 · trapezoid re-skin of the compliance funnel (replaced the decreasing-animated-bars form —
+   same stages data, no other consumer of the old .vfunnel/.vfrow/.vfbar/.vfn classes remained). A
+   different shape: each stage narrows toward the one below it, with the real conversion rate
+   from the previous stage printed in the gap, not implied by the taper alone. */
+.trapfunnel { margin: 8px 0 6px; display: flex; flex-direction: column; align-items: center; }
+.trapstage { background: none; border: none; padding: 0; cursor: pointer; width: 100%; display: flex; justify-content: center; }
+.trapshape {
+  clip-path: polygon(6% 0, 94% 0, 100% 100%, 0% 100%);
+  min-width: 140px; margin: 0 auto; padding: 12px 28px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  transition: width 0.9s ease;
+}
+.trapstage:hover .trapshape { filter: brightness(1.08); }
+.trapstage-label { color: #fff; font-size: 13.5px; font-weight: 600; }
+.trapstage-label em { font-style: normal; opacity: .85; font-size: 11px; }
+.trapstage-n { color: #fff; font-weight: 700; font-variant-numeric: tabular-nums; font-size: 16px; }
+.trapdrop { text-align: center; font-size: 11.5px; color: var(--muted); margin: 2px 0; }
 
 /* AI mode toggle (Monitor) */
 .aimodetoggle { display: flex; flex-direction: column; gap: 10px; padding: 10px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }

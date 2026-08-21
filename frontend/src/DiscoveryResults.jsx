@@ -1,6 +1,7 @@
 import { useState } from 'react'
+import Term from './Term.jsx'
 import {
-  NOT_RECORDED, acknowledgementSummary, estateSummary, plural,
+  NOT_RECORDED, acknowledgementSummary, estateSummary, estateTypeReconciliation, plural,
   recommendationReconciliation, recommendationRows, typeReconciliation, unreadableReasons,
 } from './discoveryRecommendations.js'
 import { contentTypeBreakdown } from './contentTypeBreakdown.js'
@@ -134,7 +135,11 @@ export default function DiscoveryResults({
   // Nothing was read, so nothing is claimed — not "0 files discovered".
   if (!summary) return null
 
-  const types = typeReconciliation(files)
+  // Prefer the whole-estate breakdown (every image/video/unsupported file Drive or SharePoint
+  // returned, not just what got opened and scored) — see estateTypeReconciliation's own header
+  // for why typeReconciliation(files) cannot show them. Falls back only when there is no
+  // inventory to read (a local scan, or one predating the field).
+  const types = estateTypeReconciliation(inventory) || typeReconciliation(files)
   // null on every source but SharePoint today, and null there too unless the tenant actually
   // returned a content type — see contentTypeBreakdown.js for why that is the honest default.
   const contentTypes = contentTypeBreakdown(files)
@@ -213,7 +218,7 @@ export default function DiscoveryResults({
         {summary.delete != null && (
           <Stat n={summary.delete} label="tagged for deletion review" color={STAT_COLOR.delete} />
         )}
-        <Stat n={summary.unreadable} label="could not be read" color={STAT_COLOR.unreadable} />
+        <Stat n={summary.unreadable} label={<Term k="unreadable">could not be read</Term>} color={STAT_COLOR.unreadable} />
       </div>
 
       {summary.truncated && (
