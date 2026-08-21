@@ -62,7 +62,11 @@ export async function loadDiscoveryInventory(scanId, fetchPage, { limit = PAGE_L
   return rows.length === total ? { rows, total } : null
 }
 
-/** The lifecycle fields, keyed by the filename they belong to. */
+/** The lifecycle + classification fields, keyed by the filename they belong to.
+ *
+ *  `content_type` rides along because it comes from the SAME paginated read — building a second
+ *  fetch cycle just to carry one more column would duplicate everything this module exists to get
+ *  right (the all-or-nothing read, the page cap, the failure-is-not-evidence rule) for no reason. */
 export function lifecycleIndex(rows) {
   const byFile = new Map()
   ;(rows || []).forEach((r) => {
@@ -72,6 +76,7 @@ export function lifecycleIndex(rows) {
       lifecycle_rule_id: r.lifecycle_rule_id ?? null,
       lifecycle_reason: r.lifecycle_reason ?? null,
       path: r.path ?? null,
+      content_type: r.content_type ?? null,
     })
   })
   return byFile
@@ -94,13 +99,20 @@ export function mergeLifecycle(files, inventory) {
   if (byFile.size === 0) return files
   return files.map((f) => {
     const hit = byFile.get(String(f.file))
-    if (!hit || hit.lifecycle_status == null) return f
-    return {
-      ...f,
-      lifecycle_status: hit.lifecycle_status,
-      lifecycle_rule_id: hit.lifecycle_rule_id,
-      lifecycle_reason: hit.lifecycle_reason,
-      path: f.path ?? hit.path ?? undefined,
+    if (!hit) return f
+    // TWO INDEPENDENT FIELDS, merged independently. This used to bail out of the WHOLE merge —
+    // including content_type — whenever lifecycle_status was null, which is exactly the bug this
+    // module's own doc comment warns against one field over: a row with a real content type and no
+    // lifecycle rule match would have LOST its content type here, for a reason that has nothing to
+    // do with content type. lifecycle_status and content_type come from different sources
+    // (a rule pass vs. a Graph read) and must be free to arrive apart.
+    const out = { ...f, path: f.path ?? hit.path ?? undefined }
+    if (hit.lifecycle_status != null) {
+      out.lifecycle_status = hit.lifecycle_status
+      out.lifecycle_rule_id = hit.lifecycle_rule_id
+      out.lifecycle_reason = hit.lifecycle_reason
     }
+    if (hit.content_type != null) out.content_type = hit.content_type
+    return out
   })
 }

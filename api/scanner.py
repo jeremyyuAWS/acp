@@ -776,6 +776,66 @@ def _sp_default_drive(token: str, site: str | None = None) -> str | None:
         return None
 
 
+def _sp_content_type(token: str, base: str, item_id: str) -> str | None:
+    """The SharePoint Content Type name assigned to one item, or None.
+
+    BEST-EFFORT, AND UNVERIFIED AGAINST A LIVE TENANT — flagged loudly rather than shipped quiet.
+    `fields.ContentType` is the standard SharePoint column every list item carries (it is how
+    CSOM/REST have always exposed the content type name), so this is the most likely-correct
+    shape, but it has not been confirmed against a real Graph response, and Graph's exact
+    behaviour for `$expand=fields($select=ContentType)` on a `listItem` under a driveItem can
+    still surprise. Treat this function's return value as a hint until a real tenant confirms it,
+    and see docs/sharepoint-gaps.md's read/write line — this is the "read native SharePoint
+    metadata as a rule input" build it names, done for the one field that is safe to guess at.
+
+    NEVER RAISES. This is deliberately a SEPARATE call from the listing walk, not folded into
+    `_SP_ITEM_SELECT`/the paginated `/children` request: a malformed `$expand` on THAT call would
+    fail the entire listing (`_sp_get` raises on any non-2xx), which would mean a classification
+    feature I cannot test against production could break scanning itself. One extra Graph call
+    per SCANNABLE item is the more expensive shape and the strictly safer one.
+    """
+    try:
+        data = _sp_get(token, f"{base}/items/{item_id}/listItem?$expand=fields($select=ContentType)")
+        ct = (data.get("fields") or {}).get("ContentType")
+        return str(ct) if ct else None
+    except Exception:      # noqa: BLE001 — a classification hint must never fail the scan
+        return None
+
+
+def _sp_enrich_content_types(token: str, files: list[dict]) -> None:
+    """Best-effort content-type enrichment over the SCANNABLE set, in place.
+
+    Bounded to `files` (the analysis set — docx/pptx/xlsx/pdf/html), not the whole raw estate: an
+    estate is often mostly media the engine never opens, and a per-item Graph call for each of
+    those would be real cost spent on files nobody classifies. The scannable set is already the
+    set Assess is about to download, so the added cost is proportional to work already committed.
+
+    THREE-STRIKE CIRCUIT BREAKER, scoped to this one call. If a tenant does not support this shape
+    at all — wrong Graph API version, a permission gap, a personal OneDrive with no backing list —
+    every attempt fails the same way, and burning one call per remaining file for a guaranteed
+    failure is pure waste. Disabled only for the REST of this listing; the next scan tries again,
+    so a transient outage does not turn this off permanently. Gated by ACP_SP_CONTENT_TYPE=0 for
+    an operator who wants it off without a code change, matching ACP_SP_ENUMERATE's precedent.
+    """
+    if os.environ.get("ACP_SP_CONTENT_TYPE", "1").strip() == "0":
+        return
+    failures = 0
+    for rec in files:
+        if failures >= 3:
+            break
+        item_id = rec.get("id")
+        if not item_id:
+            continue
+        drive_id = rec.get("driveId")
+        base = f"{GRAPH}/drives/{drive_id}" if drive_id else f"{GRAPH}/me/drive"
+        ct = _sp_content_type(token, base, item_id)
+        if ct:
+            rec["content_type"] = ct
+            failures = 0
+        else:
+            failures += 1
+
+
 def _sp_walk_folder(token: str, drive_id: str, item_id: str, max_files: int,
                     exts: set[str], inventory_out: list | None = None,
                     exclude_ids: set | None = None, base: str | None = None,
@@ -1111,7 +1171,11 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
         # Parity with _search_drive: the whole-estate three-denominator summary, so SharePoint's
         # coverage dashboard is populated and its truncation is honest (a floor when hit_cap).
         scope_out["inventory"] = estate_inventory.summarize(est_files, truncated=hit_cap)
-    return files[:max_files]
+    result = files[:max_files]
+    # Content-type enrichment LAST, over the FINAL scannable set only — after truncation, so a
+    # capped listing never pays for classification on files it is about to drop.
+    _sp_enrich_content_types(token, result)
+    return result
 
 
 # Graph's simple upload tops out at 4 MiB; past that it needs a resumable session. Remediated
