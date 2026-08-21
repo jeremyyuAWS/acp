@@ -221,4 +221,15 @@ describe('App composes the Assess tab the way the board specifies', () => {
     // AssessSetup's "omitted renders no line at all rather than an invented one" contract.
     expect(app()).toMatch(/function fmtStamp\(iso\) \{\n\s*if \(!iso\) return null/)
   })
+
+  it('board 3 · Stop moves into the running card, but only while THAT card is the one showing', () => {
+    // The shared scan-progress banner's own Stop button is suppressed specifically when
+    // view === 'assess' && assessPhase === 'running' — every other case (Discover scanning, or
+    // viewing a different tab while a scan runs in the background) must keep it, since nothing
+    // else offers a Stop control there. Getting this guard backwards would silently remove Stop
+    // from Discover, which is the one regression this whole relocation was held back over earlier.
+    const s = app()
+    expect(s).toMatch(/!\(view === 'assess' && assessPhase === 'running'\) && \([\s\S]{0,320}?Stop scan/)
+    expect(s).toMatch(/<LiveAssessmentLive[\s\S]{0,150}?onStop=\{\(\) => cancelScan\(liveScanId\)/)
+  })
 })

@@ -18,8 +18,8 @@ const SNAP = {
     in_flight: 1, queued: 13, workers: { busy: 1, max: 4 },
   },
 }
-const render = (snapshot, throughput) =>
-  renderToStaticMarkup(createElement(AssessRunProgress, { snapshot, throughput }))
+const render = (snapshot, throughput, onStop) =>
+  renderToStaticMarkup(createElement(AssessRunProgress, { snapshot, throughput, onStop }))
 
 describe('the assessment running screen focuses on the document in flight', () => {
   it('renders nothing until the live snapshot is available', () => {
@@ -59,5 +59,25 @@ describe('the assessment running screen focuses on the document in flight', () =
     const html = render(idle)
     expect(html).toContain('Assessing 22 documents')
     expect(html).toContain('Idle')
+  })
+})
+
+describe('Stop — board-exact placement, inline with what stopping does', () => {
+  it('offers Stop only when both an active run and a handler are given', () => {
+    expect(render(SNAP, undefined, () => {})).toContain('>Stop<')
+    expect(render(SNAP, undefined, undefined), 'Stop rendered with no handler to call').not.toContain('>Stop<')
+    const notActive = { ...SNAP, active: false }
+    expect(render(notActive, undefined, () => {}), 'Stop offered on a run with nothing left to stop')
+      .not.toContain('>Stop<')
+  })
+
+  it('sits beside the explanation of what stopping does, not alone', () => {
+    const html = render(SNAP, undefined, () => {})
+    const stopAt = html.indexOf('>Stop<')
+    const explainAt = html.indexOf('Results appear when the run finishes')
+    expect(stopAt).toBeGreaterThan(-1)
+    expect(explainAt).toBeGreaterThan(-1)
+    // Same flex row — within a couple hundred characters of markup, not on a separate row far away.
+    expect(explainAt - stopAt).toBeLessThan(400)
   })
 })

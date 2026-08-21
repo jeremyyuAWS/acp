@@ -13,8 +13,13 @@ import { normalizeLive } from './liveAssessment.js'
 // completed-vs-eligible; the current file and step from the live_queue "current" block; the ETA from
 // rolling throughput. The board's finer per-document checklist (pages/elements read, checks-done)
 // needs per-document progress the snapshot does not carry yet, so it is not invented — the current
-// STEP is shown instead of a fabricated checklist. Stop is the scan-progress control above this card
-// (it cancels the run and keeps every document already assessed); this card does not duplicate it.
+// STEP is shown instead of a fabricated checklist.
+//
+// STOP LIVES HERE NOW, board-exact. It used to stay in App.jsx's shared scan-progress banner (also
+// used by Discover), duplicating nothing but sitting in the wrong place relative to the board. App
+// now suppresses ITS OWN Stop specifically while this card is the one showing (view === 'assess' &&
+// assessPhase === 'running') and passes the same cancel handler down as `onStop` — so there is still
+// exactly one Stop control on screen at any moment, just the board's chosen one.
 
 function stepLabel(cur) {
   if (!cur) return null
@@ -25,7 +30,7 @@ function stepLabel(cur) {
   return 'Assessing this document'
 }
 
-export default function AssessRunProgress({ snapshot, throughput }) {
+export default function AssessRunProgress({ snapshot, throughput, onStop }) {
   const m = normalizeLive(snapshot)
   if (!m.available) return null
 
@@ -84,12 +89,23 @@ export default function AssessRunProgress({ snapshot, throughput }) {
         )}
       </div>
 
-      {/* The board's central promise. Not a caption on a number — there is no number to caption. */}
-      <p className="muted" style={{ fontSize: 12.5, margin: 0, lineHeight: 1.6 }}>
-        Results appear when the run finishes, not before — a half-populated count of failures reads as a
-        verdict, and there is no honest way to caption one mid-run. Stopping keeps the documents already
-        assessed; nothing is written back to your drive at any point.
-      </p>
+      {/* Stop, board-exact placement: the button beside the sentence explaining what it does, not a
+          bare icon in a corner. Only while the run is actually active — a finished/cancelled run has
+          nothing left to stop, and offering the control anyway would invite a confusing no-op click. */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
+        {onStop && m.active && (
+          <button type="button" className="ghost small" onClick={onStop}
+                  title="Stop this run — documents already assessed are kept">
+            Stop
+          </button>
+        )}
+        {/* The board's central promise. Not a caption on a number — there is no number to caption. */}
+        <p className="muted" style={{ fontSize: 12.5, margin: 0, lineHeight: 1.6, flex: '1 1 260px' }}>
+          Results appear when the run finishes, not before — a half-populated count of failures reads as a
+          verdict, and there is no honest way to caption one mid-run. Stopping keeps the documents already
+          assessed; nothing is written back to your drive at any point.
+        </p>
+      </div>
     </section>
   )
 }
