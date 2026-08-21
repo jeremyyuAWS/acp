@@ -278,6 +278,16 @@ _SCHEMA = [
       id TEXT PRIMARY KEY, ts TEXT, actor TEXT, action TEXT,
       scan_id TEXT, file TEXT, rule_id TEXT, detail TEXT
     )""",
+    # R18 · Comments on a finding — a human discussion thread anchored to ONE finding
+    # (scan × file × criterion × instance), so a judgement call and any disagreement about it
+    # live next to the finding rather than in a chat elsewhere. Append-only, like decision_log:
+    # comments are a record, never edited. `finding_key` is the frontend-computed stable identity
+    # of the finding within the scan (file||rule||location); `file`/`rule_id` are stored alongside
+    # so a comment is legible without re-deriving them. `author` is the acting user's email.
+    """CREATE TABLE IF NOT EXISTS finding_comments (
+      id TEXT PRIMARY KEY, ts TEXT, scan_id TEXT, finding_key TEXT,
+      file TEXT, rule_id TEXT, author TEXT, body TEXT
+    )""",
     # Durable job queue (ADR 0004). Survives restarts; retried with backoff;
     # exhausted jobs become 'dead' (dead-letter). Timestamps are ISO-8601 TEXT so
     # they sort chronologically and compare portably across Postgres + SQLite.
@@ -1436,7 +1446,7 @@ class Store:
                          "scan_decisions", "pii_findings", "hitl_queue", "hitl_events",
                          "disposition_audit", "decision_log", "inventory", "jobs", "documents",
                          "org_memory", "remediation_state", "remediation_diff", "applied_fixes",
-                         "ai_calls"]
+                         "ai_calls", "finding_comments"]
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
@@ -2258,6 +2268,50 @@ class Store:
             else:
                 self._db.execute(cur, "SELECT * FROM ai_calls ORDER BY ts DESC LIMIT %s", (limit,))
             return self._db.fetchall(cur)
+
+    # -- R18 · Comments on a finding -----------------------------------------------------------
+    def add_finding_comment(self, scan_id: str, finding_key: str, author: str, body: str,
+                            file: str = "", rule_id: str = "") -> dict:
+        """Append one comment to a finding's thread and return the stored row. Append-only:
+        a comment is a record of what someone said, so there is no update or delete path here.
+        `finding_key` is the finding's stable identity within the scan (computed client-side as
+        file||rule||location); `file`/`rule_id` are denormalised for display. Empty `body`
+        is rejected by the route, not silently stored."""
+        import uuid
+        from datetime import datetime, timezone
+        row = {
+            "id": uuid.uuid4().hex, "ts": datetime.now(timezone.utc).isoformat(),
+            "scan_id": scan_id, "finding_key": finding_key,
+            "file": file or "", "rule_id": rule_id or "", "author": author, "body": body,
+        }
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO finding_comments(id,ts,scan_id,finding_key,file,rule_id,author,body) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                (row["id"], row["ts"], row["scan_id"], row["finding_key"],
+                 row["file"], row["rule_id"], row["author"], row["body"]))
+        return row
+
+    def list_finding_comments(self, scan_id: str, finding_key: str, limit: int = 500) -> list[dict]:
+        """One finding's thread, OLDEST first — a conversation reads top-to-bottom. Scoped to
+        (scan_id, finding_key); an empty list means no comments, never an error."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM finding_comments WHERE scan_id=%s AND finding_key=%s "
+                "ORDER BY ts ASC LIMIT %s", (scan_id, finding_key, limit))
+            return self._db.fetchall(cur)
+
+    def count_finding_comments(self, scan_id: str) -> dict[str, int]:
+        """How many comments each finding in a scan has, keyed by finding_key — lets the inbox
+        show a '💬 n' marker without fetching every thread. Empty dict if none."""
+        out: dict[str, int] = {}
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT finding_key, COUNT(*) AS n FROM finding_comments WHERE scan_id=%s "
+                "GROUP BY finding_key", (scan_id,))
+            for r in self._db.fetchall(cur):
+                out[r.get("finding_key")] = int(r.get("n") or 0)
+        return out
 
     def ai_cost_rollup(self, since_days: int | None = None, scan_id: str | None = None) -> dict:
         """AI usage + cost governance rollup (ADR 0019 Phase 1). Every number is a real

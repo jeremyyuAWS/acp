@@ -16,6 +16,7 @@ import CloseoutPanel from './CloseoutPanel.jsx'
 // subject. R8 is page-level because a failure list is a property of the run.
 import RemediationDocProgress from './RemediationDocProgress.jsx'
 import DocumentAudit from './DocumentAudit.jsx'
+import FindingComments from './FindingComments.jsx'
 import FixOutcomes from './FixOutcomes.jsx'
 import { autoFixRows, matchesWorkflow } from './remediationInboxModel.js'
 import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
@@ -967,6 +968,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               <>
                 <RemediationDocProgress queue={inboxQueue} file={sel.file} decisions={decisions} />
                 <DocumentAudit scanId={sel.scanId || run?.id} file={sel.file} />
+                <FindingComments scanId={sel.scanId || run?.id} finding={sel} />
               </>
             ) : null)}
             queue={inboxQueue}

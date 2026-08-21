@@ -347,6 +347,30 @@ export const getDocumentTimeline = (scanId, file) => {
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/timeline?file=${encodeURIComponent(file)}`,
                { headers: headers() }).then(j).catch(() => [])
 }
+// R18 · Comments on a finding — the human discussion thread anchored to one finding
+// (scan × file × criterion × instance). SIM has no backend, so it keeps the thread in memory for
+// the length of the demo session; real mode reads/writes the owner-scoped store. Oldest first.
+const _simComments = {}   // `${scanId}::${findingKey}` -> [{id, ts, author, body, file, rule_id}]
+export const findingKeyOf = (f) =>
+  [f?.file || '', f?.rule_id || f?.ruleId || f?.wcag || '', f?.location || f?.locator || ''].join('||')
+export const getFindingComments = (scanId, findingKey) => {
+  if (SIM) return sim((_simComments[`${scanId}::${findingKey}`] || []).slice())
+  if (!scanId || !findingKey) return Promise.resolve([])
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/comments?finding_key=${encodeURIComponent(findingKey)}`,
+               { headers: headers() }).then(j).catch(() => [])
+}
+export const addFindingComment = (scanId, { findingKey, body, file = '', ruleId = '' }) => {
+  if (SIM) {
+    const key = `${scanId}::${findingKey}`
+    const row = { id: `c${(_simComments[key] || []).length + 1}`, ts: new Date().toISOString(),
+                  author: simIdentity().email, body, file, rule_id: ruleId }
+    ;(_simComments[key] = _simComments[key] || []).push(row)
+    return sim(row)
+  }
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/comments`,
+               { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+                 body: JSON.stringify({ finding_key: findingKey, body, file, rule_id: ruleId }) }).then(j)
+}
 export const getMe = () => (SIM ? sim(simIdentity()) : fetch(`${BASE}/me`, { headers: headers() }).then(j))
 export const getSources = () => (SIM ? sim(simGetSources()) : fetch(`${BASE}/sources`, { headers: headers() }).then(j))
 export const getRubric = () => (SIM
