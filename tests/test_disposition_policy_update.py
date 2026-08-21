@@ -48,20 +48,22 @@ NEW = [{"field": "modified_age_days", "op": "gt", "value": 90}]
 
 
 def _rule(st, policy_id="p1", *, match=None, action="archive", enabled=False,
-          action_config="{}", requires_approval=True):
+          action_config="{}", requires_approval=True, owner_email="demo"):
     st.create_disposition_policy(policy_id, name="stale finance",
                                  match=json.dumps(OLD if match is None else match),
                                  action=action, action_config=action_config,
-                                 requires_approval=requires_approval, enabled=enabled)
+                                 requires_approval=requires_approval, enabled=enabled,
+                                 owner_email=owner_email)
     return policy_id
 
 
-def _ran(st, policy_id="p1"):
+def _ran(st, policy_id="p1", owner_email="demo"):
     """Give the rule a history: one flagged file and the audit row that names it — exactly the
     pair handlers._evaluate_discover_lifecycle_rules writes at discovery."""
     st.create_disposition_audit("a1", doc_id="scan:s1:Finance/ledger.docx", policy_id=policy_id,
                                 action="archive", result="pending_approval",
-                                detail="matched archive rule 'stale finance'")
+                                detail="matched archive rule 'stale finance'",
+                                owner_email=owner_email)
 
 
 # ── A rule that has produced nothing is fully editable ───────────────────────────────────────
@@ -207,7 +209,7 @@ def test_any_recorded_outcome_counts_as_history(client, result):
     c, st = client
     _rule(st)
     st.create_disposition_audit("a9", doc_id="drive:9", policy_id="p1", action="archive",
-                                result=result, detail="whatever happened")
+                                result=result, detail="whatever happened", owner_email="demo")
     assert c.put("/disposition/policies/p1", json={"match": NEW}).status_code == 409
 
 
@@ -218,7 +220,7 @@ def test_another_rules_history_does_not_freeze_this_one(client):
     _rule(st, "p1")
     _rule(st, "p2")
     st.create_disposition_audit("a1", doc_id="drive:1", policy_id="p2", action="archive",
-                                result="applied", detail="p2 ran")
+                                result="applied", detail="p2 ran", owner_email="demo")
     assert c.put("/disposition/policies/p1", json={"match": NEW}).status_code == 200
 
 

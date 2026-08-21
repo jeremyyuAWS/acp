@@ -400,6 +400,12 @@ _SCHEMA = [
       id TEXT PRIMARY KEY, ts TEXT, doc_id TEXT, policy_id TEXT,
       action TEXT, result TEXT, detail TEXT
     )""",
+    # Lifecycle-rule tenant isolation: disposition_policy/disposition_audit shipped with NO
+    # ownership column at all, so every signed-in user saw and could toggle every OTHER
+    # tenant's rules (including the demo account's) — same owner_email pattern and
+    # NULL-excluded semantics as documents.owner_email above.
+    "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS owner_email TEXT",
+    "ALTER TABLE disposition_audit ADD COLUMN IF NOT EXISTS owner_email TEXT",
     # Per-file WCAG scope rules (Discover/Assess Lifecycle PRD §4.4 / AC-09, "C4"). A rule
     # targets files by folder / owner / department and assigns a Core-17 subset; the effective
     # code-set for a file is resolved from matching rules (union, or a higher-priority override
@@ -4870,21 +4876,41 @@ class Store:
 
     # ── Configurable disposition (ADR 0003, Phase 3 — preview only) ────────────
     def create_disposition_policy(self, policy_id: str, *, name: str, match: str, action: str,
-                                  action_config: str, requires_approval: bool, enabled: bool) -> None:
+                                  action_config: str, requires_approval: bool, enabled: bool,
+                                  owner_email: str | None = None) -> None:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO disposition_policy(policy_id,name,match,action,action_config,"
-                "requires_approval,enabled) VALUES(%s,%s,%s,%s,%s,%s,%s)",
-                (policy_id, name, match, action, action_config, int(requires_approval), int(enabled)))
+                "requires_approval,enabled,owner_email) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                (policy_id, name, match, action, action_config, int(requires_approval),
+                 int(enabled), owner_email))
 
-    def list_disposition_policies(self) -> list[dict]:
+    def list_disposition_policies(self, owner: str | None = None) -> list[dict]:
+        """Every rule this tenant authored — filtered to `owner_email`, same NULL-excluded
+        semantics as list_all_documents. `disposition_policy` had NO ownership column at all
+        until this migration: `list_policies()` returned every rule to every signed-in user,
+        demo account included, which is the isolation gap this scoping closes."""
         with self._db.cursor() as cur:
-            self._db.execute(cur, "SELECT * FROM disposition_policy ORDER BY name")
+            if owner:
+                self._db.execute(cur,
+                    "SELECT * FROM disposition_policy WHERE owner_email=%s ORDER BY name", (owner,))
+            else:
+                self._db.execute(cur, "SELECT * FROM disposition_policy ORDER BY name")
             return self._db.fetchall(cur)
 
-    def get_disposition_policy(self, policy_id: str) -> dict | None:
+    def get_disposition_policy(self, policy_id: str, owner: str | None = None) -> dict | None:
+        """A single rule, or None if it doesn't exist OR belongs to a different tenant — the
+        same shape as get_scan(sid, owner=...): a foreign policy_id 404s rather than leaking
+        whether it exists. Pass owner=None only for an internal, already-scoped lookup (e.g.
+        _readable's enrichment join, which starts from an owner-filtered policy list)."""
         with self._db.cursor() as cur:
-            self._db.execute(cur, "SELECT * FROM disposition_policy WHERE policy_id=%s", (policy_id,))
+            if owner:
+                self._db.execute(cur,
+                    "SELECT * FROM disposition_policy WHERE policy_id=%s AND owner_email=%s",
+                    (policy_id, owner))
+            else:
+                self._db.execute(cur, "SELECT * FROM disposition_policy WHERE policy_id=%s",
+                                 (policy_id,))
             return self._db.fetchone(cur)
 
     def set_disposition_policy_enabled(self, policy_id: str, enabled: bool) -> None:
@@ -4955,11 +4981,27 @@ class Store:
             self._db.execute(cur, "UPDATE scan_runs SET scope=%s WHERE id=%s",
                              (_json.dumps(scope), scan_id))
 
-    def list_all_documents(self) -> list[dict]:
-        """Every document row -- used only by the disposition preview evaluator, which
-        needs the full set to run a predicate in Python (see api/disposition.py)."""
+    def list_all_documents(self, owner: str | None = None) -> list[dict]:
+        """Document rows -- used by the disposition preview evaluator, which needs the full
+        (tenant-scoped) set to run a predicate in Python (see api/disposition.py).
+
+        `owner` scopes to `documents.owner_email` — the column added specifically to separate
+        WHICH TENANT a document belongs to from `owner` (a business-owner fact that collides
+        with a tenant id the moment anyone populates it as designed; see the column's own
+        migration comment above). Omit `owner` only for genuinely cross-tenant internal callers
+        (there are none today); every route-level caller must pass the requesting user's email.
+
+        NULL is EXCLUDED when `owner` is given, never matched as a wildcard — a row predating
+        this column, or written by a path that never stamped it, is tenant-unknown. The cost of
+        excluding it is a document nobody's disposition policy can see; the cost of including it
+        is a document the wrong customer's policy can act on. Those are not the same size of
+        mistake, so the query never uses `owner_email IS NULL OR owner_email=%s`.
+        """
         with self._db.cursor() as cur:
-            self._db.execute(cur, "SELECT * FROM documents")
+            if owner:
+                self._db.execute(cur, "SELECT * FROM documents WHERE owner_email=%s", (owner,))
+            else:
+                self._db.execute(cur, "SELECT * FROM documents")
             return self._db.fetchall(cur)
 
     # ── Per-file WCAG scope rules (PRD §4.4 / AC-09 — C4) ───────────────────────
@@ -5015,24 +5057,37 @@ class Store:
 
     # ── Disposition audit (ADR 0003 Phase 3 — execute path) ─────────────────────
     def create_disposition_audit(self, audit_id: str, *, doc_id: str, policy_id: str,
-                                 action: str, result: str, detail: str) -> None:
+                                 action: str, result: str, detail: str,
+                                 owner_email: str | None = None) -> None:
         """Append-only, like decision_log: rows are inserted and their result may move
-        forward (pending_approval → applied/failed/rejected) but never deleted."""
+        forward (pending_approval → applied/failed/rejected) but never deleted.
+
+        owner_email is stamped at creation from the caller's identity, not re-derived from
+        doc_id/policy_id — the route has already confirmed both belong to this tenant before
+        calling, so this is a record of who ran the disposition, same pattern as decision_log."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "INSERT INTO disposition_audit(id,ts,doc_id,policy_id,action,result,detail) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s)",
-                (audit_id, self._now(), doc_id, policy_id, action, result, detail))
+                "INSERT INTO disposition_audit(id,ts,doc_id,policy_id,action,result,detail,"
+                "owner_email) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                (audit_id, self._now(), doc_id, policy_id, action, result, detail, owner_email))
 
-    def get_disposition_audit(self, audit_id: str) -> dict | None:
+    def get_disposition_audit(self, audit_id: str, owner: str | None = None) -> dict | None:
         with self._db.cursor() as cur:
-            self._db.execute(cur, "SELECT * FROM disposition_audit WHERE id=%s", (audit_id,))
+            if owner:
+                self._db.execute(cur,
+                    "SELECT * FROM disposition_audit WHERE id=%s AND owner_email=%s",
+                    (audit_id, owner))
+            else:
+                self._db.execute(cur, "SELECT * FROM disposition_audit WHERE id=%s", (audit_id,))
             return self._db.fetchone(cur)
 
     def list_disposition_audit(self, result: str | None = None,
-                               policy_id: str | None = None, limit: int = 500) -> list[dict]:
+                               policy_id: str | None = None, limit: int = 500,
+                               owner: str | None = None) -> list[dict]:
         q, params = "SELECT * FROM disposition_audit", []
         conds = []
+        if owner:
+            conds.append("owner_email=%s"); params.append(owner)
         if result:
             conds.append("result=%s"); params.append(result)
         if policy_id:

@@ -23,11 +23,12 @@ def _inv():
     ]
 
 
-def _archive_rule(st):
+def _archive_rule(st, owner="admin@x.com"):
     st.create_disposition_policy(
         "p-arch", name="Archive the /Archive folder",
         match=json.dumps([{"field": "parent_folder", "op": "prefix", "value": "/Archive"}]),
-        action="archive", action_config="{}", requires_approval=False, enabled=True)
+        action="archive", action_config="{}", requires_approval=False, enabled=True,
+        owner_email=owner)
 
 
 def _status(st, scan_id, file):

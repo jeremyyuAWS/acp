@@ -29,6 +29,13 @@ from .system import _require_admin, _require_owner
 router = APIRouter()
 
 
+def _owner(request: Request) -> str:
+    """The current user for per-user data isolation — matches assess.py/scans.py's helper.
+    disposition_policy/disposition_audit had no ownership column until this fix, so every
+    signed-in user (demo account included) saw and could act on every other tenant's rules."""
+    return getattr(request.state, "user_email", None) or "demo"
+
+
 def _drive_svc(request: Request):
     """Drive client from the caller's token header, or None (leave-only mode)."""
     token = request.headers.get("x-drive-token")
@@ -89,15 +96,16 @@ def create_policy(body: PolicyCreate, request: Request):
     except ValueError as e:
         raise HTTPException(422, str(e))
     policy_id = uuid.uuid4().hex[:12]
+    owner = _owner(request)
     core.store.create_disposition_policy(
         policy_id, name=body.name, match=json.dumps(body.match), action=body.action,
         action_config=json.dumps(body.action_config), requires_approval=body.requires_approval,
-        enabled=body.enabled)
+        enabled=body.enabled, owner_email=owner)
     core.store.log_decision("admin", "disposition.policy_created", detail=body.name)
-    return core.store.get_disposition_policy(policy_id)
+    return core.store.get_disposition_policy(policy_id, owner=owner)
 
 
-def _readable(rows: list[dict]) -> list[dict]:
+def _readable(rows: list[dict], owner: str) -> list[dict]:
     """Join the human-readable facts onto audit rows: the document's source/path/department and
     the policy's NAME.
 
@@ -118,8 +126,8 @@ def _readable(rows: list[dict]) -> list[dict]:
     """
     if not rows:
         return []
-    docs = {d["doc_id"]: d for d in core.store.list_all_documents()}
-    policies = {p["policy_id"]: p for p in core.store.list_disposition_policies()}
+    docs = {d["doc_id"]: d for d in core.store.list_all_documents(owner=owner)}
+    policies = {p["policy_id"]: p for p in core.store.list_disposition_policies(owner=owner)}
     out = []
     for r in rows:
         d = docs.get(r.get("doc_id")) or {}
@@ -134,22 +142,23 @@ def _readable(rows: list[dict]) -> list[dict]:
 
 
 @router.get("/disposition/policies")
-def list_policies():
-    return core.store.list_disposition_policies()
+def list_policies(request: Request):
+    return core.store.list_disposition_policies(owner=_owner(request))
 
 
 @router.put("/disposition/policies/{policy_id}/enabled")
 def set_policy_enabled(policy_id: str, enabled: bool, request: Request):
     _require_admin(request)
-    if core.store.get_disposition_policy(policy_id) is None:
+    owner = _owner(request)
+    if core.store.get_disposition_policy(policy_id, owner=owner) is None:
         raise HTTPException(404, "policy not found")
     core.store.set_disposition_policy_enabled(policy_id, enabled)
     core.store.log_decision("admin", f"disposition.policy_{'enabled' if enabled else 'disabled'}",
                             detail=policy_id)
-    return core.store.get_disposition_policy(policy_id)
+    return core.store.get_disposition_policy(policy_id, owner=owner)
 
 
-def _preview(match: list[dict], action: str, policy_id: str | None) -> dict:
+def _preview(match: list[dict], action: str, policy_id: str | None, owner: str) -> dict:
     """The dry run itself, shared by the saved-policy preview and the draft preview.
 
     ONE evaluator, deliberately. The rule editor previews a draft as it is typed and the rule list
@@ -160,20 +169,27 @@ def _preview(match: list[dict], action: str, policy_id: str | None) -> dict:
     Read-only by construction: reads `documents`, runs `disposition.matches` in Python, writes
     nothing. No file is touched, no disposition_audit row appended, no policy row created.
     """
-    docs = core.store.list_all_documents()
+    docs = core.store.list_all_documents(owner=owner)
     selected = [d for d in docs if disposition.matches(d, match)]
     return {"policy_id": policy_id, "action": action,
             "would_match": len(selected), "documents": selected}
 
 
 @router.post("/disposition/policies/{policy_id}/preview")
-def preview_policy(policy_id: str):
+def preview_policy(policy_id: str, request: Request):
     """Dry run: which documents would this policy select, right now? Never writes
-    disposition_audit and never touches a file -- read-only by construction."""
-    policy = core.store.get_disposition_policy(policy_id)
+    disposition_audit and never touches a file -- read-only by construction.
+
+    Previously took no Request param at all, so it had zero auth gate and could not have been
+    owner-scoped even if it wanted to be — any caller who knew a policy_id could preview any
+    tenant's rule against the whole documents table. Now admin-gated and owner-scoped like its
+    siblings: a policy_id belonging to a different tenant 404s rather than previewing."""
+    _require_admin(request)
+    owner = _owner(request)
+    policy = core.store.get_disposition_policy(policy_id, owner=owner)
     if policy is None:
         raise HTTPException(404, "policy not found")
-    return _preview(json.loads(policy["match"]), policy["action"], policy_id)
+    return _preview(json.loads(policy["match"]), policy["action"], policy_id, owner)
 
 
 class PolicyDraft(BaseModel):
@@ -215,7 +231,7 @@ def preview_draft(body: PolicyDraft, request: Request):
         disposition.validate_action_config(body.action, body.action_config)
     except ValueError as e:
         raise HTTPException(422, str(e))
-    return _preview(body.match, body.action, None)
+    return _preview(body.match, body.action, None, _owner(request))
 
 
 class PolicyUpdate(BaseModel):
@@ -232,7 +248,7 @@ class PolicyUpdate(BaseModel):
     requires_approval: bool | None = None
 
 
-def _policy_has_history(policy_id: str) -> bool:
+def _policy_has_history(policy_id: str, owner: str) -> bool:
     """Has this rule already produced a recorded outcome?
 
     disposition_audit is the complete record of what a rule has done. Every path that acts on a
@@ -248,7 +264,7 @@ def _policy_has_history(policy_id: str) -> bool:
     loudly — an auditor reading "rejected: matched delete rule 'stale-finance'" is owed the rule
     that sentence was written about.
     """
-    return bool(core.store.list_disposition_audit(policy_id=policy_id, limit=1))
+    return bool(core.store.list_disposition_audit(policy_id=policy_id, limit=1, owner=owner))
 
 
 @router.put("/disposition/policies/{policy_id}")
@@ -292,7 +308,8 @@ def update_policy(policy_id: str, body: PolicyUpdate, request: Request):
     disabled and are edited before they are ever armed.
     """
     _require_admin(request)
-    policy = core.store.get_disposition_policy(policy_id)
+    owner = _owner(request)
+    policy = core.store.get_disposition_policy(policy_id, owner=owner)
     if policy is None:
         raise HTTPException(404, "policy not found")
 
@@ -319,7 +336,7 @@ def update_policy(policy_id: str, body: PolicyUpdate, request: Request):
                 ("action", policy["action"], new_action),
                 ("action_config", current_cfg, new_cfg))
                if before != after]
-    if changed and _policy_has_history(policy_id):
+    if changed and _policy_has_history(policy_id, owner):
         raise HTTPException(409,
             f"this rule has already run — its {', '.join(changed)} can no longer be changed. "
             "Files it flagged carry its decision, and no record says which version of the rule "
@@ -335,7 +352,7 @@ def update_policy(policy_id: str, body: PolicyUpdate, request: Request):
         action_config=json.dumps(new_cfg), requires_approval=new_req)
     core.store.log_decision("admin", "disposition.policy_updated",
                             detail=f"{new_name}: {', '.join(changed) or 'name/approval only'}")
-    return core.store.get_disposition_policy(policy_id)
+    return core.store.get_disposition_policy(policy_id, owner=owner)
 
 
 @router.post("/disposition/policies/{policy_id}/execute")
@@ -344,7 +361,8 @@ def execute_policy(policy_id: str, request: Request):
     pending_approval; the rest are actioned immediately. Idempotent per
     (doc, policy): a pending or applied outcome is never re-queued."""
     _require_owner(request)   # actually moves/trashes files — owner-only
-    policy = core.store.get_disposition_policy(policy_id)
+    owner = _owner(request)
+    policy = core.store.get_disposition_policy(policy_id, owner=owner)
     if policy is None:
         raise HTTPException(404, "policy not found")
     if not policy.get("enabled"):
@@ -357,7 +375,7 @@ def execute_policy(policy_id: str, request: Request):
         raise HTTPException(400, "this policy acts on Drive files immediately — "
                                  "connect Google Drive first")
     summary = {"matched": 0, "pending_approval": 0, "applied": 0, "failed": 0, "skipped": 0}
-    for doc in core.store.list_all_documents():
+    for doc in core.store.list_all_documents(owner=owner):
         if not disposition.matches(doc, match):
             continue
         summary["matched"] += 1
@@ -369,7 +387,8 @@ def execute_policy(policy_id: str, request: Request):
             detail = f"queued by policy '{policy['name']}' — awaiting approval"
             core.store.create_disposition_audit(
                 audit_id, doc_id=doc["doc_id"], policy_id=policy_id,
-                action=policy["action"], result="pending_approval", detail=detail)
+                action=policy["action"], result="pending_approval", detail=detail,
+                owner_email=owner)
             summary["pending_approval"] += 1
             _trace_decision(doc["doc_id"], doc.get("path"), action=policy["action"],
                             status="pending_approval", policy_id=policy_id, reason=detail)
@@ -379,7 +398,7 @@ def execute_policy(policy_id: str, request: Request):
                 _persist_tags(doc, cfg, policy_id)
             core.store.create_disposition_audit(
                 audit_id, doc_id=doc["doc_id"], policy_id=policy_id,
-                action=policy["action"], result=result, detail=detail)
+                action=policy["action"], result=result, detail=detail, owner_email=owner)
             summary[result] += 1
             _trace_decision(doc["doc_id"], doc.get("path"), action=policy["action"],
                             status=result, policy_id=policy_id, reason=detail)
@@ -393,7 +412,8 @@ def disposition_audit(request: Request, limit: int = Query(200, ge=1, le=1000)):
     """Full disposition history, newest first — the visible face of the append-only
     audit table (pending, applied, rejected, failed alike)."""
     _require_admin(request)
-    return _readable(core.store.list_disposition_audit(limit=limit))
+    owner = _owner(request)
+    return _readable(core.store.list_disposition_audit(limit=limit, owner=owner), owner)
 
 
 @router.get("/disposition/approvals")
@@ -412,7 +432,8 @@ def list_approvals(request: Request):
     exactly what a reviewer should see before deciding, and approve() already fails it with 410.
     """
     _require_admin(request)
-    return _readable(core.store.list_disposition_audit(result="pending_approval"))
+    owner = _owner(request)
+    return _readable(core.store.list_disposition_audit(result="pending_approval", owner=owner), owner)
 
 
 @router.post("/disposition/approvals/{audit_id}/approve")
@@ -439,7 +460,8 @@ def approve_disposition(audit_id: str, request: Request,
     twice is how an approval queue stops being trusted.
     """
     _require_owner(request)   # authorises a move/trash of the file — owner-only
-    row = core.store.get_disposition_audit(audit_id)
+    owner = _owner(request)
+    row = core.store.get_disposition_audit(audit_id, owner=owner)
     if row is None or row["result"] != "pending_approval":
         raise HTTPException(404, "no pending approval with that id")
     if not execute:
@@ -450,10 +472,10 @@ def approve_disposition(audit_id: str, request: Request,
         _trace_decision(row["doc_id"], (core.store.get_document(row["doc_id"]) or {}).get("path"),
                         action=row["action"], status="approved", policy_id=row["policy_id"],
                         reason=detail)
-        return core.store.get_disposition_audit(audit_id)
-    policy = core.store.get_disposition_policy(row["policy_id"]) or {}
+        return core.store.get_disposition_audit(audit_id, owner=owner)
+    policy = core.store.get_disposition_policy(row["policy_id"], owner=owner) or {}
     cfg = json.loads(policy.get("action_config") or "{}")
-    docs = {d["doc_id"]: d for d in core.store.list_all_documents()}
+    docs = {d["doc_id"]: d for d in core.store.list_all_documents(owner=owner)}
     doc = docs.get(row["doc_id"])
     if doc is None:
         core.store.set_disposition_audit_result(audit_id, "failed", "document no longer exists")
@@ -468,7 +490,7 @@ def approve_disposition(audit_id: str, request: Request,
                             detail=f"{row['action']} {row['doc_id']}: {detail}"[:200])
     _trace_decision(row["doc_id"], doc.get("path"), action=row["action"], status=result,
                     policy_id=row["policy_id"], reason=detail)
-    return core.store.get_disposition_audit(audit_id)
+    return core.store.get_disposition_audit(audit_id, owner=owner)
 
 
 @router.post("/disposition/approvals/{audit_id}/reject")
@@ -477,7 +499,8 @@ def reject_disposition(audit_id: str, request: Request):
     automatically — a later execute run may propose it again only if the doc
     still matches, since rejected rows don't block re-evaluation."""
     _require_admin(request)
-    row = core.store.get_disposition_audit(audit_id)
+    owner = _owner(request)
+    row = core.store.get_disposition_audit(audit_id, owner=owner)
     if row is None or row["result"] != "pending_approval":
         raise HTTPException(404, "no pending approval with that id")
     core.store.set_disposition_audit_result(audit_id, "rejected", "declined by admin")
@@ -486,4 +509,4 @@ def reject_disposition(audit_id: str, request: Request):
     _trace_decision(row["doc_id"], (core.store.get_document(row["doc_id"]) or {}).get("path"),
                     action=row["action"], status="rejected", policy_id=row["policy_id"],
                     reason="declined by admin")
-    return core.store.get_disposition_audit(audit_id)
+    return core.store.get_disposition_audit(audit_id, owner=owner)

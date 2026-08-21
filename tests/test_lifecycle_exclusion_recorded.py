@@ -64,10 +64,13 @@ def _items():
     ]
 
 
-def _policy(st, name, action, match, *, enabled=True):
+def _policy(st, name, action, match, *, enabled=True, owner="admin@x.com"):
+    """owner defaults to _discover()'s own default actor — see test_discover_lifecycle_rules.py's
+    _policy for why."""
     pid = "p-" + name
     st.create_disposition_policy(pid, name=name, match=json.dumps(match), action=action,
-                                 action_config="{}", requires_approval=False, enabled=enabled)
+                                 action_config="{}", requires_approval=False, enabled=enabled,
+                                 owner_email=owner)
     return pid
 
 
