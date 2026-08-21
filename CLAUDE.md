@@ -288,6 +288,47 @@ Two more things that day's merges cost:
   committed and pushed; only `node --check` running over the page caught it. Grep for markers
   before you stage, not after.
 
+## Don't exhaust the shared GitHub API budget — stop polling
+
+The authenticated GitHub API limit is **5,000 requests/hour PER ACCOUNT, not per session** — every
+concurrent Claude session on this machine draws from the SAME 5,000. The fastest way to burn it is a
+CI-watch loop, and a loop that is harmless solo is not harmless ×5.
+
+**Why.** On 2026-08-21 this account's GraphQL budget hit zero inside the hour and stayed there,
+blocking `gh pr create` for 15+ minutes at a stretch — several times in one session. Nothing was
+wrong with the PRs; the cause was **polling**. Each "watch CI until green" loop calls `gh pr checks`
+/ `gh run view` every 20–30s — dozens of calls per PR over a few minutes — and there were several PRs
+in flight across ~5 concurrent sessions sharing one budget. The work itself (a handful of PRs) would
+never have come close; the *watching* did.
+
+**What actually counts, and what is free.** `git push` is the git protocol, not the REST/GraphQL
+API — it does **not** count, so push freely. The `/rate_limit` endpoint is **exempt** — checking the
+budget is free (`gh api rate_limit --jq '.resources.graphql.remaining'`). Conditional requests that
+come back `304 Not Modified` don't count either. What DOES count is every `gh pr` / `gh run` / `gh
+api` read — those are the polling calls that drained it.
+
+**What to do.**
+
+- **Don't poll CI in a tight loop.** If you must poll, use **≥60s** intervals, run **one** watcher at
+  a time, and stop the instant the run completes. Prefer a single check after a sensible wait over a
+  fast loop.
+- **Let GitHub do the waiting instead of you.** `gh pr merge --auto --squash` merges the PR the
+  moment its required checks pass — no polling from you at all — and `deploy.yml`'s `workflow_run`
+  trigger then deploys on merge. This is the frugal default for "merge on green"; it needs branch
+  protection on `main` with the CI checks marked required (a repo-settings decision — ask the user
+  before changing merge policy for everyone).
+- **Assume the budget is already half-spent by other sessions.** Check `…graphql.remaining` before a
+  burst of PR work; if it's low, do the essential calls and let the rest wait for the top-of-hour
+  reset rather than hammering (hammering also trips the separate *secondary* limit).
+- **Move waiting into Actions where you can.** Anything polled *inside* a workflow spends the repo's
+  `GITHUB_TOKEN` budget (1,000/hr **per repo**), which is separate from the user's 5,000/hr.
+
+**Raising the ceiling is an org action, not a code change** — note it to the user, don't try to code
+around it: a **GitHub App** installation token has a separate, larger budget that scales with the
+install (≈12,500/hr for orgs); **GitHub Enterprise Cloud** raises the user limit to 15,000/hr. Until
+one of those exists, the answer to a hit limit is *stop polling and wait for reset*, never *retry
+harder*.
+
 ## Retire your worktree after the merge
 
 ```
