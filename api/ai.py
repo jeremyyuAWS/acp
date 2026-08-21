@@ -22,6 +22,15 @@ import re
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL    = os.environ.get("OLLAMA_MODEL", "llama3.2")
+# Shared-secret auth for the Azure GPU deployment (interim fix, 2026-08-21): the GPU Ollama's
+# ingress used to rely on an IP allowlist that assumed a static outbound IP for acp-app's
+# Consumption-plan environment -- which doesn't have one (a large shared NAT pool instead), so
+# every real request was silently 403ing at the network layer for days with zero visible error
+# here (a bare `httpx` connection failure looks identical to "endpoint down"). ACP_OLLAMA_SHARED_
+# SECRET is empty for local/CPU Ollama (no auth needed on localhost) and set only where the GPU
+# deployment's own auth-checking proxy (deploy/ollama/Dockerfile.gpu) is in front of Ollama.
+_OLLAMA_SECRET = os.environ.get("ACP_OLLAMA_SHARED_SECRET", "")
+_OLLAMA_HEADERS = {"X-ACP-Ollama-Secret": _OLLAMA_SECRET} if _OLLAMA_SECRET else {}
 # A separate vision model — the text model cannot see images, so genuine alt text needs this.
 # Same local-Ollama backend, so the "no third-party AI" claim holds. Default is moondream (a
 # compact ~1.7GB captioner) rather than llava:7b (~4.5GB): with llama3.1:8b it fits the 8Gi
@@ -253,6 +262,7 @@ def explain_finding(
             f"{OLLAMA_BASE_URL}/api/generate",
             json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
                   "options": {"temperature": 0.3, "num_predict": 120}},
+            headers=_OLLAMA_HEADERS,
             # CPU inference of a 3B model: first call loads the model (~15s) then
             # generates. 90s bounds the worst cold-start; the old 150s left the UI's
             # "thinking…" spinner hanging for 2.5 minutes when Ollama was wedged.
@@ -290,7 +300,7 @@ def _fetch_tags() -> list[dict] | None:
     """
     import httpx
     try:
-        r = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=OLLAMA_PROBE_TIMEOUT)
+        r = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", headers=_OLLAMA_HEADERS, timeout=OLLAMA_PROBE_TIMEOUT)
         r.raise_for_status()
         return r.json().get("models", []) or []
     except httpx.ConnectError:
@@ -300,7 +310,7 @@ def _fetch_tags() -> list[dict] | None:
     except Exception:
         return None
     try:
-        r = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=OLLAMA_COLD_START_TIMEOUT)
+        r = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", headers=_OLLAMA_HEADERS, timeout=OLLAMA_COLD_START_TIMEOUT)
         r.raise_for_status()
         return r.json().get("models", []) or []
     except Exception:
@@ -1019,6 +1029,7 @@ def describe_reading_order(page_bytes: bytes, *, filename: str = "",
             f"{OLLAMA_BASE_URL}/api/generate",
             json={"model": OLLAMA_VISION_MODEL, "prompt": prompt, "images": [b64],
                   "stream": False, "options": {"temperature": 0.2, "num_predict": 140}},
+            headers=_OLLAMA_HEADERS,
             timeout=OLLAMA_VISION_TIMEOUT,
         )
         r.raise_for_status()
@@ -1126,6 +1137,7 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
                   # cannot do the task. Every comparison of a reasoning model against this lane was
                   # measuring the cap.
                   "options": {"temperature": 0.4, "num_predict": 400}},
+            headers=_OLLAMA_HEADERS,
             timeout=90,
         )
         r.raise_for_status()
@@ -1182,6 +1194,7 @@ def simplify_text(text: str, *, scan_id: str | None = None, file: str | None = N
             f"{OLLAMA_BASE_URL}/api/generate",
             json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
                   "options": {"temperature": 0.3, "num_predict": 220}},
+            headers=_OLLAMA_HEADERS,
             timeout=OLLAMA_VISION_TIMEOUT,
         )
         r.raise_for_status()
@@ -1263,7 +1276,8 @@ def _ollama_narrative(facts: dict) -> tuple[str, str] | None:
         r = httpx.post(
             f"{OLLAMA_BASE_URL}/api/generate",
             json={"model": OLLAMA_MODEL, "prompt": _p, "stream": False,
-                  "options": {"temperature": 0.4, "num_predict": 200}}, timeout=150)
+                  "options": {"temperature": 0.4, "num_predict": 200}},
+            headers=_OLLAMA_HEADERS, timeout=150)
         r.raise_for_status()
         _data = r.json()
         raw = (_data.get("response", "") or "").strip()

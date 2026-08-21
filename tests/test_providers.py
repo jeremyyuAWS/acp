@@ -44,8 +44,8 @@ def test_ollama_adapter_posts_images_and_normalizes(monkeypatch):
         def raise_for_status(self): pass
         def json(self): return {"response": "  A bar chart of Q4 revenue  "}
 
-    def fake_post(url, json=None, timeout=None):
-        seen["url"] = url; seen["json"] = json; seen["timeout"] = timeout
+    def fake_post(url, json=None, headers=None, timeout=None):
+        seen["url"] = url; seen["json"] = json; seen["headers"] = headers; seen["timeout"] = timeout
         return _R()
 
     import httpx
@@ -70,7 +70,8 @@ def test_ollama_adapter_model_override(monkeypatch):
         def json(self): return {"response": "x y z"}
 
     import httpx
-    monkeypatch.setattr(httpx, "post", lambda url, json=None, timeout=None: captured.update(json=json) or _R())
+    monkeypatch.setattr(httpx, "post",
+                        lambda url, json=None, headers=None, timeout=None: captured.update(json=json) or _R())
     p = providers.OllamaVisionProvider("http://localhost:11434", "moondream")
     p.generate("d", b"B", model="llava:13b")
     assert captured["json"]["model"] == "llava:13b"        # per-call override wins
@@ -253,7 +254,7 @@ def test_ollama_result_surfaces_token_usage(monkeypatch):
                     "prompt_eval_count": 266, "eval_count": 31}
 
     import httpx
-    monkeypatch.setattr(httpx, "post", lambda url, json=None, timeout=None: _R())
+    monkeypatch.setattr(httpx, "post", lambda url, json=None, headers=None, timeout=None: _R())
     res = providers.OllamaVisionProvider("http://localhost:11434", "llava:13b").generate("d", b"B")
     assert res["prompt_tokens"] == 266 and res["completion_tokens"] == 31   # prompt_eval_count/eval_count
 
