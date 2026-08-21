@@ -419,9 +419,15 @@ third is the correctness fix with the widest blast radius.
   SC. Until this lands, **nothing measures whether any detector is correct** — every lane in the
   capability report is a claim the engine makes about itself. Highest-value item for a customer
   who will ask "how do you know?"
-- [ ] **P2.2 — Reconcile the three scope editors.** `ScanSetup`, `FileTypeConfig` and `ScanScope`
-  each write all of `scan_scope`; last touched wins. `ScanSetup.jsx`'s own header calls this the
-  *"two filters"* backlog item and says it needs a decision about which surface is authoritative.
+- [x] **P2.2 — Reconcile the three scope editors.** Resolved by REMOVAL rather than by the
+  reconciliation this item asked for, which is why it is worth writing down rather than just
+  ticking. The item read: *"`ScanSetup`, `FileTypeConfig` and `ScanScope` each write all of
+  `scan_scope`; last touched wins."* Two of those three are now mounted nowhere — `ScanScope` came
+  off Discover with the criterion picker and `FileTypeConfig` off Settings — so there is no longer a
+  race to arbitrate. Verified 2026-08-21 against `origin/main`: the only surfaces that write
+  `scan_scope` are `ScanSetup` (on Overview) and `AssessSetup` (in App), and they own different
+  axes. Both retired components are kept in the tree per CLAUDE.md; if either is mounted again this
+  item comes back with it.
 - [ ] **P2.3 — Document-type scoping.** Discover *groups* by classification (HR, Legal,
   public-facing, legal-hold) but a scan cannot be *scoped* by it. For a hospital, "assess only
   legal-hold" is a more natural ask than file type, and the ontology data already exists.

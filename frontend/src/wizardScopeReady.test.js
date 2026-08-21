@@ -86,8 +86,14 @@ describe('the surfaces actually consult this', () => {
   // these pin the wiring that a DOM test would not distinguish from a coincidence.
   it('the wizard blocks its footer button on the reason', () => {
     const w = read('ScanScopeWizard.jsx')
-    expect(w, 'the block was removed from the wizard').toMatch(/blockedReason\(scopeMode, folders\)/)
-    expect(w, 'Continue no longer honours the block').toMatch(/disabled=\{busy \|\| !!blocked\}/)
+    // Through `stepBlockedReason`, which is a thin wrapper over `blockedReason` scoped to step 1.
+    // The scoping matters and is the reason this assertion moved: left unscoped, the reason would
+    // also disable "Run discovery" on the review step for a scope the user already fixed and
+    // walked past, which reads as the wizard refusing a valid run.
+    expect(w, 'the block was removed from the wizard').toMatch(/stepBlockedReason\(/)
+    expect(read('discoveryWizardSteps.js'), 'the step gate stopped consulting the real reason')
+      .toMatch(/blockedReason\(scopeMode, folders\)/)
+    expect(w, 'the forward control no longer honours the block').toMatch(/disabled=\{busy \|\| !!blocked\}/)
   })
 
   it('the wizard footer reads through the mode-aware summary', () => {

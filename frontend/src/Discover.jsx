@@ -10,14 +10,13 @@ import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
 import { dupeCountOf, duplicateFiles } from './dedupe.js'
 import { scopeSentence, isNarrowScope } from './scanScope.js'
-import EstateCoverage from './EstateCoverage.jsx'
-import { estateProgressFromFiles } from './estateProgress.js'
 import DiscoveryResults from './DiscoveryResults.jsx'
 import DiscoverInventoryExport from './DiscoverInventoryExport.jsx'
 import DiscoveryCompleteness from './DiscoveryCompleteness.jsx'
 import { acknowledgementSummary } from './discoveryRecommendations.js'
 import { loadDiscoveryInventory, mergeLifecycle } from './discoveryInventory.js'
-import { getScanInventory } from './api.js'
+import { getScanInventory, listScanDecisions } from './api.js'
+import { buildUnreadableWhy } from './unreadableWhy.js'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
@@ -137,6 +136,27 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   }, [scanId])
   // Un-merged when the read has not completed — mergeLifecycle passes `files` straight through.
   const estateFiles = useMemo(() => mergeLifecycle(files, inv), [files, inv])
+
+  // WHY the unreadable files could not be read. The reason is recorded per file in the scan's
+  // decision log (`scan.file_error`) and was reachable only one drawer at a time; the aggregate
+  // breakdown on this screen read its reason off the file ROW, where the backend puts nothing, so
+  // it said "no reason was recorded" over a scan that had recorded every one.
+  //
+  // Same three-states-render-the-same rule as `inv` above: not asked, loading and failed all leave
+  // this null, and a null `reasonOf` restores exactly the previous behaviour — the buckets fall
+  // back to "not recorded", which is the honest answer while nothing has been read.
+  const [errLog, setErrLog] = useState(null)
+  useEffect(() => {
+    let live = true
+    setErrLog(null)
+    if (!scanId) return undefined
+    listScanDecisions(scanId).then((rows) => { if (live) setErrLog(Array.isArray(rows) ? rows : null) })
+    return () => { live = false }
+  }, [scanId])
+  const why = useMemo(
+    () => (errLog ? buildUnreadableWhy(errLog, estateFiles) : null),
+    [errLog, estateFiles],
+  )
 
   // The folder portion of a file's path, when it carries one — real scans name files by path
   // (`HR/policies/leave.docx`), SIM by bare filename. Empty string when there is no folder.
@@ -346,15 +366,16 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           The component is kept and mounted nowhere, per the standing rule in CLAUDE.md; the orphan
           is recorded in discoverScopePanelsRemoved.test.jsx so it cannot be read as unfinished. */}
 
-      {/* Estate coverage funnel — discovered → assessment-eligible → remediation-eligible, on the tab
-          where discovery happens. Shown once a scan has produced an inventory; assessment/remediation
-          stages fill in as Assess and Remediate run. */}
-      {scope?.inventory && scope.inventory.discovered > 0 && (
-        <section className="panel">
-          <h2>Estate coverage <span className="muted" style={{ fontWeight: 400 }}>· discovered → assessable → remediable</span></h2>
-          <EstateCoverage inventory={scope.inventory} progress={estateProgressFromFiles(files)} />
-        </section>
-      )}
+      {/* The estate-coverage funnel is NOT on this tab any more. It partitioned the estate a second
+          time, directly above a panel that partitions it — and its stages ran discovered →
+          assessable → REMEDIABLE, which is the reading this file already rejected a few hundred
+          lines down: "Rubric scores and remediation state used to appear here, which read as 'the
+          scan already assessed and remediated your documents' — it does neither."
+
+          It is not retired. EstateCoverage still mounts on Overview, which is where a cross-stage
+          funnel belongs, so nothing was lost from the product — only from the tab that answers one
+          question. The one figure it contributed that DiscoveryResults lacked, the eligible
+          PERCENTAGE, moved onto the headline tile beside the count. */}
 
       <div className="estatebar">
         <div>
@@ -451,6 +472,9 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                              onRelist={() => onScan && onScan(run?.source === 'sharepoint' ? 'sharepoint' : 'drive')} />
 
       <DiscoveryResults files={estateFiles} inventory={scope?.inventory || null} scopeLine={scopeLine} runAt={runAt}
+                        reasonOf={why ? why.reasonOf : undefined}
+                        reasonSampleOf={why ? why.sampleOf : null}
+                        reasonFetchLikely={why ? why.fetchLikely : null}
                         acknowledged={ackRecs} onAcknowledge={setAckRecs}
                         overrides={assessAnyway} onOverridesChange={setAssessAnyway}
                         actor={me?.email || me?.name || null} scanId={scanId} />
@@ -587,13 +611,16 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               Approve the {recsToAck.total.toLocaleString()} discovery recommendation{recsToAck.total === 1 ? '' : 's'} above to continue
             </span>
           )}
-          <button onClick={() => onAdvance?.()} disabled={pendingActions > 0 || needsAck}
+          {/* `data-advance` is a STABLE hook. Two tests found this control by its label, so a copy
+              change broke them for no reason connected to what they assert — they care that the
+              advance control is gated, not what it is called this week. */}
+          <button data-advance="assess" onClick={() => onAdvance?.()} disabled={pendingActions > 0 || needsAck}
                   title={pendingActions > 0
                     ? `${pendingActions} action${pendingActions === 1 ? '' : 's'} still pending — accept or override each row, or use "Accept all recommendations"`
                     : needsAck
                       ? `${recsToAck.total} discovery recommendation${recsToAck.total === 1 ? '' : 's'} need your approval — tick "I approve these recommendations" in Discovery results`
                       : undefined}>
-            Assess — score vs WCAG →
+            Continue to Assess →
           </button>
         </div>
       )}

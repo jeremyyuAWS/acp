@@ -14,6 +14,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
+import { gotoStep } from './wizardNav.testkit.js'
 
 afterEach(unmountAll)
 
@@ -49,7 +50,12 @@ async function mount(props = {}) {
 }
 const click = async (el) => { await act(async () => { el.click() }); await act(async () => { await Promise.resolve() }) }
 const dialog = (c) => c.querySelector('[role="dialog"]')
-const startBtn = (c) => [...dialog(c).querySelectorAll('button')].find((b) => /Start discovery/.test(b.textContent))
+// The run control is on the wizard's third step. Walked to, then read by its stable hook —
+// its label is per-step data now, and none of these cases is about what it says.
+const startBtn = async (c) => {
+  await gotoStep(dialog(c), act, 3)
+  return dialog(c).querySelector('button[data-wizard-forward]')
+}
 const cancelBtn = (c) => [...dialog(c).querySelectorAll('button')].find((b) => b.textContent.trim() === 'Cancel')
 
 describe('scanSourceLabel — accurate per source, not "everything is Google Drive"', () => {
@@ -86,12 +92,12 @@ describe('ScanReviewModal — honest estimate line', () => {
 })
 
 describe('ScanReviewModal — chrome and labels', () => {
-  it('renders a real dialog labeled "New scan", ~1.5× wider than the old modal', async () => {
+  it('renders a real dialog labeled "New discovery", ~1.5× wider than the old modal', async () => {
     const c = await mount({ source: 'drive', ...BEHAVIOR })
     const d = dialog(c)
     expect(d).toBeTruthy()
     expect(d.getAttribute('aria-modal')).toBe('true')
-    expect(d.getAttribute('aria-label')).toBe('New scan')
+    expect(d.getAttribute('aria-label')).toBe('New discovery')
     // The wider inner panel (min(940px, 100%), up from 620px) is asserted at the source level in
     // scanScopeWizard.test.jsx — jsdom's CSS parser drops the unsupported min() from the DOM style,
     // so it cannot be read back off the rendered node here.
@@ -157,18 +163,19 @@ describe('ScanReviewModal — the engine switches are not on this surface', () =
     // then the Continue control, both of which were only ever standing in for "the modal rendered
     // with these props". Assert the thing itself: the wizard's own primary action is on screen.
     expect(dialog(c).textContent).toMatch(/documents in/)
-    expect(startBtn(c), 'the wizard did not mount, so the props were not accepted after all')
+    expect(await startBtn(c), 'the wizard did not mount, so the props were not accepted after all')
       .toBeTruthy()
   })
 })
 
 describe('ScanReviewModal — confirm / cancel', () => {
-  it('mounts the wizard and runs onConfirm on Start discovery', async () => {
-    // One screen (PRD DISC-01) — Start is right there. The guarantee is unchanged: confirming in
+  it('mounts the wizard and runs onConfirm on Run discovery', async () => {
+    // Three steps again, so the run control is walked to rather than sitting on the opening
+    // screen. The guarantee is unchanged and is the only thing this case is about: confirming in
     // the wizard reaches the modal's onConfirm.
     const onConfirm = vi.fn()
     const c = await mount({ source: 'drive', estCount: 5, onConfirm })
-    const start = startBtn(c)
+    const start = await startBtn(c)
     expect(start).toBeTruthy()
     await click(start)
     expect(onConfirm).toHaveBeenCalled()

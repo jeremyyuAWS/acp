@@ -36,15 +36,47 @@ const tagStyle = (tone) => ({
   whiteSpace: 'nowrap', display: 'inline-block', ...TAG_TONE[tone],
 })
 
-const Stat = ({ n, label, color }) => (
+const Stat = ({ n, label, color, sub = null }) => (
   <div style={{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 12,
                 padding: '14px 16px', flex: 1, minWidth: 0 }}>
     <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.01em', lineHeight: 1.15, color }}>
       {n.toLocaleString()}
     </div>
     <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 3 }}>{label}</div>
+    {sub && <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>{sub}</div>}
   </div>
 )
+
+/** The eligible share, as a string, or null when it cannot be stated.
+ *
+ *  THE DENOMINATOR IS THE ESTATE LISTING, NOT THE ROWS ON SCREEN, and that is the whole difficulty.
+ *  `summary.assessable` is an ESTATE-level figure (it comes from `scope.inventory`), while
+ *  `summary.discovered` counts the rows this screen is rendering, which a filter can narrow. Divide
+ *  one by the other on a filtered view and you get "183% of the estate" — a true numerator over a
+ *  denominator from a different population. Caught by a fixture, not by reading it.
+ *
+ *  So this takes `listed` and REFUSES to compute without it. No estate denominator, no share: a
+ *  percentage whose boundary is unstated is the count-without-its-boundary defect wearing a
+ *  percent sign.
+ *
+ *  Rounded AWAY FROM ZERO for a non-zero count: 22 of 12,408 is 0.18%, and "0%" beside a tile
+ *  reading "22" says the estate contains none of what it just counted. `<1%` is the true statement
+ *  and the more useful one — it is the whole point of putting a percentage here.
+ *
+ *  Exported for the test, and because a share of a total is exactly the kind of arithmetic that
+ *  gets re-derived slightly differently in a second place. */
+export function eligibleShare(eligible, listed) {
+  if (typeof eligible !== 'number' || typeof listed !== 'number') return null
+  if (!(listed > 0) || eligible < 0) return null
+  // A numerator larger than its denominator means they came from different populations. Saying
+  // nothing is right: the alternative is printing a figure over 100%, which is what this guard
+  // exists to have caught.
+  if (eligible > listed) return null
+  const pct = (eligible / listed) * 100
+  if (eligible === 0) return '0% of the estate'
+  if (pct < 1) return '<1% of the estate'
+  return `${Math.round(pct)}% of the estate`
+}
 
 /** A reconciliation table: one row per bucket, then the sum and the total it must equal. The sum
  *  line is not decoration — it is the claim "these partition the estate", rendered. */
@@ -77,6 +109,7 @@ const Reconciliation = ({ id, heading, note, rec, renderLabel }) => (
 
 export default function DiscoveryResults({
   files = null, inventory = null, scopeLine = null, runAt = null, policies = null, reasonOf = undefined,
+  reasonSampleOf = null, reasonFetchLikely = null,
   acknowledged = false, onAcknowledge = null,
   overrides: overridesProp, onOverridesChange,
   onExport = null, actor = null, scanId = null,
@@ -95,6 +128,12 @@ export default function DiscoveryResults({
 
   const types = typeReconciliation(files)
   const unread = unreadableReasons(files, reasonOf)
+  // Buckets whose RECORDED message names a transport/HTTP failure. Derived from the log, not
+  // from the fact that a file failed — a scan with no such messages gets no clause at all.
+  const fetchBuckets = (unread && reasonFetchLikely)
+    ? unread.buckets.filter((b) => b.recorded && reasonFetchLikely(b.reason))
+    : []
+  const fetchFiles = fetchBuckets.reduce((n, b) => n + b.count, 0)
   const recRows = recommendationRows(files, policies)
   const recRec = recommendationReconciliation(files)
   const ack = acknowledgementSummary(files, overrides)
@@ -152,7 +191,8 @@ export default function DiscoveryResults({
             Absent when nothing measured it. A "0" here would assert the estate contains nothing
             testable, which is a discovery result nobody obtained. */}
         {summary.assessable != null && (
-          <Stat n={summary.assessable} label="can be assessed" color={STAT_COLOR.assessable} />
+          <Stat n={summary.assessable} label="can be assessed" color={STAT_COLOR.assessable}
+                sub={eligibleShare(summary.assessable, summary.estateListed)} />
         )}
         {/* Absent until the lifecycle columns reach this screen — a "0" here would be a claim
             about the estate made from a field nobody read. */}
@@ -236,12 +276,33 @@ export default function DiscoveryResults({
                 <Reconciliation
                   id="discres-unread" heading="Reason · files" rec={unread}
                   renderLabel={(b) => (b.recorded
-                    ? b.reason
+                    ? (
+                      <span title={(reasonSampleOf && reasonSampleOf(b.reason)) || undefined}>
+                        {b.reason}
+                      </span>
+                    )
                     : <span className="muted">No reason was recorded for these</span>)} />
+                {/* ONE orienting clause, and only when the recorded message names a transport or
+                    HTTP failure. "Could not be read" reads as "the document is broken", and that
+                    reading is what sent a whole investigation to inspect 22 SharePoint documents
+                    that had never been fetched at all — the download was routed to the wrong API.
+                    This does not re-diagnose the failure; it says which end of it the recorded
+                    message is about. */}
+                {fetchBuckets.length > 0 && (
+                  <p className="scopewarn" role="status"
+                     style={{ fontSize: 12, margin: '10px 0 0', lineHeight: 1.5 }}>
+                    {fetchFiles.toLocaleString()} of {unread.total.toLocaleString()} failed with a
+                    transport or HTTP error ({fetchBuckets.map((b) => b.reason).join(', ')}), so
+                    {fetchFiles === 1 ? ' that file' : ' those files'} may never have been fetched.
+                    That points at the source or the connection, not at the
+                    {fetchFiles === 1 ? ' document' : ' documents'}.
+                  </p>
+                )}
                 <p className="muted" style={{ fontSize: 11.5, margin: '12px 0 0', lineHeight: 1.5 }}>
                   Shown apart from the recommendations so a partial read is never mistaken for a
                   complete one. A file with no recorded reason is counted as exactly that — the
-                  reason is never guessed from the failure.
+                  reason is never guessed from the failure. Hover a reason for the message the scan
+                  actually recorded.
                 </p>
               </>
             )}

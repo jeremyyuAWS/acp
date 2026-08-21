@@ -30,7 +30,10 @@ const Row = ({ tone = 'muted', children }) => (
 export default function DiscoveryCompleteness({ run, scanList = null, onRelist = null }) {
   if (!run) return null
 
-  const method = enumerationMethod(run.source)
+  // The SCOPE decides this, not the source alone: a SharePoint run narrowed to chosen folders
+  // walks them directly and never touches the search index, so warning about index lag over
+  // it would be a false alarm on a correct run.
+  const method = enumerationMethod(run.source, run.scope || null)
   const prev = previousListing(run, scanList)
 
   // An immediately-consistent source with no prior run to compare has nothing to report. Saying

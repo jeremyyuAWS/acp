@@ -19,10 +19,26 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
+import { gotoStep } from './wizardNav.testkit.js'
 
-afterEach(unmountAll)
+afterEach(() => {
+  unmountAll()
+  listDispositionPolicies.mockReset()
+  listDispositionPolicies.mockImplementation(RULES_DEFAULT)
+})
 
 const listDispositionPolicies = vi.fn(async () => [])
+
+// PERSISTENT, not `…Once`. Walking to the review now passes THROUGH step 2, which mounts the rules
+// editor and reads the same endpoint for itself — so a one-shot mock is consumed before the review
+// ever asks, and the review then sees the default. That produced "None enabled" over a fixture
+// configuring two rules, and — worse — over a fixture whose whole point was a FAILED read, which is
+// the one sentence this file exists to prevent.
+//
+// Each of these fixtures describes a persistent state of the workspace ("two rules exist", "this
+// user gets a 403 from an admin-only endpoint"), so a persistent mock is also the truer model. Reset
+// between cases so one does not leak into the next.
+const RULES_DEFAULT = async () => []
 
 vi.mock('./api.js', () => ({
   getSettings: vi.fn(async () => ({ scan_scope: '' })),
@@ -44,6 +60,9 @@ async function mount() {
       onStartScan: () => {}, scans: [],
     }))
   })
+  // EVERY case in this file asserts step-3 content — the wizard is three steps now, and the review
+  // is the last of them. Walked by clicking Continue, so the gate on step 1 still applies.
+  await gotoStep(container, act, 3)
   return container
 }
 
@@ -66,21 +85,23 @@ describe('the promise, before the run', () => {
     // while the heading above it still said "Ready to scan" — and "scan" is the word this product
     // uses for the expensive, content-reading thing that happens later.
     const c = await mount()
-    expect(c.textContent).toMatch(/Ready to discover/)
-    expect(c.textContent, 'the review heading still calls this a scan').not.toMatch(/Ready to scan/)
+    // Case-insensitive: the label is uppercase now, matching the two panels it sits beside. The
+    // claim is the WORD — discover, not scan — not its letter case.
+    expect(c.textContent).toMatch(/Ready to discover/i)
+    expect(c.textContent, 'the review heading still calls this a scan').not.toMatch(/Ready to scan/i)
   })
 })
 
 describe('the rules that will run', () => {
   it('reports none when the workspace has no lifecycle rule', async () => {
-    listDispositionPolicies.mockResolvedValueOnce([])
+    listDispositionPolicies.mockResolvedValue([])
     const c = await mount()
     expect(row(c, 'Lifecycle rules')).toMatch(/none enabled/i)
     expect(row(c, 'Lifecycle rules')).toMatch(/No file will be tagged/i)
   })
 
   it('counts the enabled ones and says what they do', async () => {
-    listDispositionPolicies.mockResolvedValueOnce([
+    listDispositionPolicies.mockResolvedValue([
       { policy_id: 'p1', name: 'Stale HR', action: 'archive', enabled: 1 },
       { policy_id: 'p2', name: 'Old exports', action: 'delete', enabled: 1 },
       { policy_id: 'p3', name: 'Draft', action: 'archive', enabled: 0 },
@@ -98,19 +119,26 @@ describe('the rules that will run', () => {
   it('shows NO row when the rules could not be read', async () => {
     // The failure that must not become a sentence. "None enabled" here would be a claim that no
     // file gets tagged, made on the strength of a request that never returned.
-    listDispositionPolicies.mockRejectedValueOnce(new Error('403'))
+    listDispositionPolicies.mockRejectedValue(new Error('403'))
     const c = await mount()
-    expect(c.textContent, 'a failed rule read rendered as "no rules"').not.toMatch(/Lifecycle rules/)
+    // Scoped to the CONTRACT ROW, not the whole screen. "Lifecycle rules" is now also the title of
+    // wizard step 2, so a whole-container ban matches the progress rail and fails on correct
+    // output — testing the vocabulary instead of the claim. The claim is that the review states no
+    // rule count when the read failed, and an absent <dt> makes row() return ''.
+    expect(row(c, 'Lifecycle rules'), 'a failed rule read rendered as a row').toBe('')
     expect(c.textContent, 'a failed rule read rendered as "none enabled"').not.toMatch(/none enabled/i)
   })
 
   it('still lets the run start when the rules are unknown', async () => {
     // The row is evidence, not a gate. A rules endpoint that is down (it is admin-only, and a
     // non-admin gets a 403 every time) must not block discovery.
-    listDispositionPolicies.mockRejectedValueOnce(new Error('403'))
+    listDispositionPolicies.mockRejectedValue(new Error('403'))
     const c = await mount()
-    const start = [...c.querySelectorAll('button')].find((b) => /Start discovery/.test(b.textContent))
+    // By the stable hook: the forward control's label is per-step data now ("Run discovery →" on
+    // the last one), and this case is about whether the run is BLOCKED, not what it is called.
+    const start = c.querySelector('button[data-wizard-forward]')
     expect(start).toBeTruthy()
+    expect(start.textContent).toMatch(/Run discovery/)
     expect(start.disabled, 'discovery is blocked when the lifecycle rules cannot be read').toBe(false)
   })
 })

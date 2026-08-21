@@ -2,8 +2,12 @@ import { useState, useEffect, useMemo, Fragment } from 'react'
 import { getSettings, updateSettings, getScanLocations, setScanLocations,
          listFolders, listSpFolders, listDispositionPolicies } from './api.js'
 import { scopeFooterPart, blockedReason } from './wizardScopeReady.js'
-import { METADATA_ONLY_TITLE, METADATA_ONLY_BODY, lifecycleRuleSummary } from './discoveryPromise.js'
+import { METADATA_ONLY_TITLE, METADATA_ONLY_BODY, lifecycleRuleSummary,
+         WHAT_HAPPENS_NEXT, RULE_SET_PROVENANCE } from './discoveryPromise.js'
 import FolderPicker from './FolderPicker.jsx'
+import DispositionRules from './DispositionRules.jsx'
+import { WIZARD_STEPS, FIRST_STEP, LAST_STEP, stepInfo, stepBlockedReason,
+         nextStep, prevStep, forwardLabel, railState } from './discoveryWizardSteps.js'
 import { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } from './scopePresets.js'
 import { TRACKED_17, RULE_DETAILS } from './ruleDetails.js'
 import { ASSESSMENT_FALLBACK, assessmentFor } from './capability.js'
@@ -253,10 +257,18 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   const [pickerSeed, setPickerSeed] = useState(0)
   const chooseAll = () => { setScopeMode('all'); setFolders([]); setExcluded([]); setPickerSeed((n) => n + 1) }
 
-  // Kept as an identity so the remaining call sites read unchanged. There is one step now: the
-  // scope. Left in place rather than inlined because the regions it wraps are long, and silently
-  // dropping a gate is the kind of edit that disappears in review.
-  const atStep = () => true
+  // ── THE THREE STEPS ─────────────────────────────────────────────────────────────────────────
+  //
+  // This was an identity stub — `const atStep = () => true` — while the wizard had one decision in
+  // it. It has three again: where to inventory, which lifecycle rules run during the run, and the
+  // review that carries the metadata-only promise. See discoveryWizardSteps.js for why the rail
+  // came back, which is the reason the note at the top of this file gave for removing it.
+  //
+  // ONLY IN THE FULL WIZARD. `showStartButton` is the modal that actually launches a run
+  // (ScanReviewModal is its one caller); mounted as a settings panel there is no footer to
+  // navigate with, so every region stays visible exactly as before and no existing embed changes.
+  const [step, setStep] = useState(FIRST_STEP)
+  const atStep = (n) => !showStartButton || step === n
 
 
   const foldersDiffer = savedFolders !== null
@@ -331,13 +343,24 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   useEffect(() => {
     // Only where the review step renders. The endpoint is admin-only, so mounting the wizard as a
     // settings panel would spend a guaranteed 403 on an answer nothing on that screen shows.
-    if (!showStartButton) return undefined
+    // ON THE REVIEW STEP ONLY, and this is narrower than it looks. The endpoint is admin-only, so
+    // for a non-admin every call is a guaranteed 403; keying this on `step` alone spent three of
+    // them per pass through the wizard, two for an answer that screen was not showing. The
+    // original guard said exactly this about mounting the wizard as a settings panel — the same
+    // reasoning, applied to steps.
+    //
+    // It must still be a REFETCH rather than a mount-time read: step 2 is now an editor, and
+    // DispositionRules creates and enables policies through its own calls. A list loaded once
+    // would let the review summarise the rule set as it was BEFORE the user edited it — and that
+    // summary is what the run is authorised against (DS-07). Stale by exactly one screen is worse
+    // than absent: specific, plausible and wrong.
+    if (!showStartButton || step !== LAST_STEP) return undefined
     let alive = true
     Promise.resolve(listDispositionPolicies())
       .then((rows) => { if (alive && Array.isArray(rows)) setPolicies(rows) })
       .catch(() => { /* the row is omitted; nothing here blocks a scan */ })
     return () => { alive = false }
-  }, [showStartButton])
+  }, [showStartButton, step])
 
   // What this EXACT scope covered last time, matched on the whole frozen boundary — locations,
   // carve-outs and criteria together, in the shape scanner records them. Recomputed on every
@@ -553,7 +576,11 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   // it — and agreed with the run that would actually have happened. Three states, told apart.
   // Why the primary action is unavailable, or null. A reason rather than a boolean: a dead button
   // with no explanation is its own defect, and the reason is the thing the user has to act on.
-  const blocked = locKey ? blockedReason(scopeMode, folders) : null
+  // Scoped to the step it belongs to. `blockedReason` answers one question — has the user chosen
+  // to narrow without saying to what — and that question is step 1's. Left unscoped, it would also
+  // disable "Run discovery" on the review step for a scope the user already corrected and walked
+  // past, which reads as the wizard refusing a valid run.
+  const blocked = locKey ? stepBlockedReason(showStartButton ? step : FIRST_STEP, scopeMode, folders) : null
 
   // Locations, and nothing else. It read "Entire source · 4 formats assessed · Custom scope" —
   // two thirds of which described a decision this screen no longer makes. A summary naming the
@@ -566,16 +593,29 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
 
   return (
     <div>
-      <p style={{ fontSize: 13, margin: '0 0 4px' }}>
-        Choose what this scan should evaluate. The same scope will be used for assessment,
-        remediation, reporting, and export.
-        {' '}
-        <span aria-hidden="true" title="Unsupported combinations are reported as 'Not evaluated' and are never counted as passes."
-              style={{ cursor: 'help', color: 'var(--muted)' }}>ⓘ</span>
-        <span className="sronly">
-          Unsupported combinations are reported as 'Not evaluated' and are never counted as passes.
-        </span>
-      </p>
+      {/* The step's own subtitle, replacing a fixed line that had gone stale twice over: it said
+          "choose what this scan should EVALUATE" on a screen that stopped choosing criteria in
+          #532, and promised the scope would be reused "for assessment, remediation, reporting and
+          export" — which is Assess's scope, not this one. A sentence that survives the removal of
+          the thing it described is worse than no sentence: it is a wrong answer in the position a
+          reader trusts most. */}
+      {showStartButton ? (
+        (stepInfo(step) || {}).subtitle && (
+          <p className="muted" style={{ fontSize: 13, margin: '0 0 10px', lineHeight: 1.5 }}>
+            {stepInfo(step).subtitle}
+          </p>
+        )
+      ) : (
+        <p style={{ fontSize: 13, margin: '0 0 4px' }}>
+          Choose where ACP should inventory. Every readable file in scope is listed.
+          {' '}
+          <span aria-hidden="true" title="Document formats and WCAG criteria are chosen later, in Assess."
+                style={{ cursor: 'help', color: 'var(--muted)' }}>ⓘ</span>
+          <span className="sronly">
+            Document formats and WCAG criteria are chosen later, in Assess.
+          </span>
+        </p>
+      )}
 
 
       {/* ── Stepper ─────────────────────────────────────────────────────────── */}
@@ -583,8 +623,34 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
           an end to this" to somebody looking at a dense configuration screen for the first time. */}
       {showStartButton && (
         <ol style={{ display: 'flex', gap: 0, listStyle: 'none', margin: '0 0 14px', padding: 0,
-                     fontSize: 12.5, alignItems: 'center' }}>
-          </ol>
+                     fontSize: 12.5, alignItems: 'center', flexWrap: 'wrap' }}>
+          {railState(step).map((rs, i) => (
+            <li key={rs.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {i > 0 && (
+                <span aria-hidden="true"
+                      style={{ width: 34, height: 1, background: 'var(--line)', margin: '0 12px' }} />
+              )}
+              <span aria-hidden="true"
+                    style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                             width: 22, height: 22, borderRadius: '50%', fontSize: 11.5, fontWeight: 700,
+                             background: rs.done ? '#DCEFC8' : rs.current ? 'var(--ink)' : 'var(--surface-2, #f0f0f3)',
+                             color: rs.done ? '#2F5D12' : rs.current ? '#fff' : 'var(--muted)',
+                             border: rs.done || rs.current ? 'none' : '1px solid var(--line)' }}>
+                {rs.done ? '✓' : rs.id}
+              </span>
+              {/* aria-current marks the step, and the visited/upcoming state is spelled out for a
+                  screen reader — the rail's whole meaning is carried in colour otherwise. */}
+              <span aria-current={rs.current ? 'step' : undefined}
+                    style={{ fontWeight: rs.current ? 700 : 400,
+                             color: rs.upcoming ? 'var(--muted)' : 'var(--ink)' }}>
+                {rs.title}
+                <span className="sronly">
+                  {rs.done ? ' — completed' : rs.current ? ' — current step' : ' — not started'}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ol>
       )}
 
       {/* ── 0. Drive locations (PRD §6 step 1) ──────────────────────────────── */}
@@ -749,6 +815,23 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
         </div>
       )}
 
+      {/* ── 2. Lifecycle rules ──────────────────────────────────────────────── */}
+      {/* THE SAME COMPONENT the Discover tab mounts, not a wizard-only copy. DispositionRules
+          already is this board — the rule list, the action pills, Preview matches, the Name/Action
+          builder and the archive-beats-delete conflict warning — and it says so in its own header
+          ("Discover, step 2 — Lifecycle rules"). It was simply reachable only AFTER a run, which
+          is one run too late: these rules tag files DURING discovery, so a user who first meets
+          them on the results screen has already produced an inventory the rules did not touch.
+
+          A second implementation here would drift, and the halves that drift first are the safety
+          copy — that a "delete" rule writes a recommendation and trashes nothing — which is the
+          one thing on this screen that must never be approximated. */}
+      {/* `embedded`: the rail already says "Lifecycle rules" and the wizard prints the same
+          one-liner as the step subtitle, so the component drops its own title and disclosure and
+          renders open. A step the user navigated to that arrives collapsed reads as an empty
+          step. */}
+      {showStartButton && step === 2 && <DispositionRules embedded />}
+
       {/* The scan profiles, format cards and criterion × format matrix USED TO BE HERE.
           They are Assess's question now (PRD DISC-01). Discover answers one — where should ACP
           inventory? — and every readable file inside that boundary is listed whatever its type
@@ -776,29 +859,43 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
           last time it ran, matched on the whole frozen boundary and captioned with its date. When
           no such run exists the line says so and stops — inventing a figure for precisely the case
           with no evidence behind it would be the least checkable number on the screen. */}
-      {/* The scope restated as a contract, on the same screen that chose it — there is
-          no later step to defer it to. */}
-      {showStartButton && (
-        <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '12px 14px' }}>
+      {/* The scope restated as a contract. It used to say "on the same screen that chose it — there
+          is no later step to defer it to", which was true of a one-page wizard and is the sentence
+          that had to change: there IS a later step now, and this is it. A review that shares a
+          screen with the controls it reviews is a caption, not a checkpoint. */}
+      {/* THE PROMISE, full width and above everything else on this step. It used to sit inside the
+          contract card, one item among several. Under ADR 0020 discovery opens no file — the
+          single strongest claim ACP makes about a customer's drive — and the moment it matters is
+          the moment somebody is deciding whether to point this at their estate, before they read
+          the details. A promise that has to be found is a promise made quietly. */}
+      {atStep(3) && (
+        <div className="discover-promise"
+             style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 12,
+                      padding: '11px 14px', borderRadius: 10, background: '#F1F7EA',
+                      border: '1px solid #C6DCA9' }}>
+          <span aria-hidden="true" style={{ fontSize: 15, lineHeight: 1.2 }}>🛡</span>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#2F5D12' }}>{METADATA_ONLY_TITLE}</div>
+            <div style={{ fontSize: 12.5, marginTop: 3, lineHeight: 1.55, color: 'var(--ink)' }}>
+              {METADATA_ONLY_BODY}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {atStep(3) && (
+        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '12px 14px',
+                      flex: '1 1 340px', minWidth: 0 }}>
           {/* "discover", not "scan". The button below has said "Start discovery" since #532; the
               heading above it still said scan, which is the word this product uses for the
               expensive, content-reading thing. Two names for one action on one screen. */}
-          <div style={{ fontSize: 13, fontWeight: 650, marginBottom: 8 }}>Ready to discover</div>
-
-          {/* THE PROMISE, stated where it is being made. Under ADR 0020 discovery opens no file —
-              the single strongest claim ACP makes about a customer's drive, and until now visible
-              nowhere at the moment somebody authorises a run against it. */}
-          <div className="discover-promise"
-               style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 10,
-                        padding: '8px 10px', borderRadius: 8, background: 'var(--bg)',
-                        border: '1px solid var(--line)' }}>
-            <span aria-hidden="true" style={{ fontSize: 13, lineHeight: 1.3 }}>🔒</span>
-            <div>
-              <div style={{ fontSize: 12.5, fontWeight: 650 }}>{METADATA_ONLY_TITLE}</div>
-              <div className="muted" style={{ fontSize: 11.5, marginTop: 2, lineHeight: 1.5 }}>
-                {METADATA_ONLY_BODY}
-              </div>
-            </div>
+          {/* Uppercase section label, matching the two panels it now sits beside. The promise that
+              used to be inside this card has moved to a full-width banner above both — one
+              statement of it, at the top of the step, rather than one buried mid-card. */}
+          <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.04em',
+                        color: 'var(--muted)', marginBottom: 8 }}>
+            READY TO DISCOVER
           </div>
 
           <dl style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 14px',
@@ -858,6 +955,25 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
             {coverageSentence(lastRun, lastRun ? whenLabel(lastRun.at) : '')}
           </div>
         </div>
+
+        {/* WHAT HAPPENS NEXT — the SEQUENCE, beside the contract rather than under it. What a
+            reader checks at this moment is ordering: that tagging happens during the listing, that
+            they review before anything is assessed, and that Assess runs afterwards on files they
+            choose. The wizard said what the scope WAS and never what the run would DO. */}
+        <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '12px 14px',
+                      flex: '1 1 300px', minWidth: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.04em',
+                        color: 'var(--muted)', marginBottom: 8 }}>
+            WHAT HAPPENS NEXT
+          </div>
+          <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, lineHeight: 1.6 }}>
+            {WHAT_HAPPENS_NEXT.map((line) => <li key={line} style={{ marginBottom: 4 }}>{line}</li>)}
+          </ol>
+          <p className="muted" style={{ fontSize: 11.5, margin: '10px 0 0', lineHeight: 1.5 }}>
+            {RULE_SET_PROVENANCE}
+          </p>
+        </div>
+        </div>
       )}
 
       {/* ── 5/7. Footer ─────────────────────────────────────────────────────── */}
@@ -872,17 +988,35 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                         display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <span className="muted" style={{ fontSize: 12.5 }}>{footerSummary}</span>
             <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-              <button className="ghost small" type="button" disabled={busy}
-                      onClick={() => onStartScan?.({ cancel: true })}>
-                Cancel
-              </button>
-              {/* One action, and it says what actually happens: this LISTS the estate and opens
-                  no file (`_defer_analysis_to_assess()` defaults on, ADR 0020) — the WCAG work
-                  runs later, in Assess. Blocked while the scope is unfinished, carrying the reason
-                  (#502). */}
-              <button type="button" disabled={busy || !!blocked} title={blocked || undefined}
-                      onClick={startScan}>
-                {busy ? 'Saving…' : 'Start discovery →'}
+              {/* BACK, or Cancel on the first step. Back is never disabled, even from a step whose
+                  own input is incomplete: a user who cannot retreat from a state they cannot
+                  complete is stuck inside a modal, which is a worse failure than any scope mistake
+                  this wizard is guarding against. */}
+              {step === FIRST_STEP ? (
+                <button className="ghost small" type="button" disabled={busy}
+                        onClick={() => onStartScan?.({ cancel: true })}>
+                  Cancel
+                </button>
+              ) : (
+                <button className="ghost small" type="button" data-wizard-back
+                        onClick={() => setStep(prevStep(step) ?? FIRST_STEP)}>
+                  ← Back
+                </button>
+              )}
+              {/* One forward control. On the last step it RUNS — and says so rather than
+                  "Continue", because this lists somebody's estate and opens no file
+                  (`_defer_analysis_to_assess()` defaults on, ADR 0020); the WCAG work runs later,
+                  in Assess. Blocked only while step 1's scope is unfinished, carrying the reason
+                  (#502) — an empty folder list under "Specific folders" falls through to the WHOLE
+                  source, so advancing from it authorises the opposite of what the mode says. */}
+              <button type="button" data-wizard-forward
+                      disabled={busy || !!blocked} title={blocked || undefined}
+                      onClick={() => {
+                        if (step === LAST_STEP) { startScan(); return }
+                        const n = nextStep(step, scopeMode, folders)
+                        if (n) setStep(n)
+                      }}>
+                {busy ? 'Saving…' : forwardLabel(step)}
               </button>
             </span>
           </div>

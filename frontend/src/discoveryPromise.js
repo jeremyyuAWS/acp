@@ -51,3 +51,29 @@ export function lifecycleRuleSummary(policies) {
     names: on.map((p) => p.name).filter(Boolean),
   }
 }
+
+
+/**
+ * What the run will actually do, in order (approved board, step 3).
+ *
+ * Four steps rather than a paragraph, because the thing a reader is checking at this moment is
+ * SEQUENCE: that tagging happens during the listing, that they review before anything is assessed,
+ * and that Assess runs afterwards on a subset they choose. A prose block hides ordering; a
+ * numbered list is the claim.
+ *
+ * `tagged`, `candidates`, `recommendations` — never archived or deleted. The rule engine writes a
+ * lifecycle_status and one audit row; nothing is moved, trashed or renamed
+ * (api/handlers._evaluate_discover_lifecycle_rules). This is the screen where somebody authorises
+ * a rule that SOUNDS destructive, and the copy is the only thing standing between the two
+ * readings.
+ */
+export const WHAT_HAPPENS_NEXT = [
+  'Every file in scope is listed from its metadata.',
+  'Enabled rules tag matching files as archive or deletion candidates.',
+  'You review the results and acknowledge the recommendations.',
+  'Assess then runs on the files you select, excluding tagged ones.',
+]
+
+/** Why the rule set is worth showing here at all — DS-07, said in the operator's terms. */
+export const RULE_SET_PROVENANCE =
+  'The rule set is stored with this run, so results can be traced to the exact rules used.'

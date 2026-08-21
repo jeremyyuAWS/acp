@@ -111,11 +111,17 @@ produced. **Gate once at the authoritative point; everything downstream inherits
 Everything the first version of this list held has since merged — scope visibility (#164), the
 control plane surface (#165) and the two file-type controls (#166). What remains:
 
-1. **Per-document filtering as a first-class carry-through.** Discover's `restrictedBySelection`
-   narrows a run by marked document through a mechanism entirely separate from `scan_scope`.
-   Every other filter — criteria, formats — funnels through the one gate in `_rule_outcome` and
-   inherits assess, remediate and publish for free (§5). This one does not, so it is the single
-   remaining gap in "the filter carries through everywhere".
+1. **Per-document filtering as a first-class carry-through.** `restrictedBySelection` narrows a run
+   by marked document through a mechanism entirely separate from `scan_scope`. Every other filter —
+   criteria, formats — funnels through the one gate in `_rule_outcome` and inherits assess,
+   remediate and publish for free (§5). This one does not, so it is the single remaining gap in
+   "the filter carries through everywhere".
+
+   **Corrected 2026-08-21: this is not a Discover item.** The row said "Discover's
+   `restrictedBySelection`" from the day it was written. It lives in `remediableScope.js` and is
+   read by `Remediate.jsx`; `git grep restrictedBySelection` finds nothing in `Discover.jsx`. The
+   gap is real, the tab named was not — which is the failure §"A note on reading this document"
+   below was added to warn about, landing on the very list that warning sits under.
 2. **Make the Users tab real, or stop shipping it.** A hardcoded roster that reads as live data
    is a worse answer than an empty state. Needs a backend; none exists.
 3. **Decide what the SIM build should claim.** Disposition, Rubric and Test users all return

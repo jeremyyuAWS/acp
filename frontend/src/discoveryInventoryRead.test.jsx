@@ -146,8 +146,9 @@ describe('a read that did not complete renders NOTHING — never a zero', () => 
     const acceptAll = [...container.querySelectorAll('button')]
       .find((b) => b.textContent.includes('Accept all recommendations'))
     await act(async () => { acceptAll.click() })
-    const assess = [...container.querySelectorAll('button')]
-      .find((b) => b.textContent.includes('Assess — score vs WCAG'))
+    // By the stable hook, not the label: this case asserts the control is ENABLED once the
+    // recommendations are accepted, which has nothing to do with what the button says.
+    const assess = container.querySelector('button[data-advance="assess"]')
     expect(assess.disabled).toBe(false)
   })
 })

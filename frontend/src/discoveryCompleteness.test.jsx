@@ -59,6 +59,51 @@ describe('what each source actually guarantees', () => {
     expect(enumerationMethod('smb')).toBeNull()
     expect(enumerationMethod(undefined)).toBeNull()
   })
+
+  it('does NOT cry index-lag over a SharePoint run that walked its folders', () => {
+    // api/scanner.py:779,940 — picked folders go through `_sp_walk_folder`, a BFS over
+    // /children. That is a directory traversal, immediately consistent, and it never asks the
+    // index anything. Warning about index lag over it is a false alarm, and a panel that cries
+    // wolf on a correct run is one nobody reads on the run that matters.
+    const m = enumerationMethod('sharepoint', { folders: [{ id: 'd/i', name: 'Home Drives' }] })
+    expect(m.consistent).toBe(true)
+    expect(m.resolve).toBeNull()
+    expect(m.method).toBe('folder traversal')
+    // Asserted as the CLAIM, not as a banned phrase: the correct caveat legitimately contains the
+    // words "search index" while saying this run did not use one ("not a search index that may lag
+    // behind it"). A whole-string ban matches its own contrast clause — testing the vocabulary
+    // instead of the claim, which has failed on correct code repeatedly in this repo.
+    expect(m.caveat).toMatch(/walking them directly/i)
+    // And it answers the question a folder scan actually raises.
+    expect(m.caveat).toMatch(/subfolders are included/i)
+  })
+
+  it('still warns when the scan was NOT narrowed — including when no scope was recorded', () => {
+    // Guards the case above from passing on a function that stopped warning altogether. An absent
+    // or empty `scope.folders` is the un-narrowed whole-source scan, which is index-listed; an
+    // absent scope is a record that does not say, and the safe reading of that is the warning.
+    for (const scope of [null, {}, { folders: [] }, { kind: 'sharepoint', site: 'x' }]) {
+      const m = enumerationMethod('sharepoint', scope)
+      expect(m.consistent, JSON.stringify(scope)).toBe(false)
+      expect(m.caveat).toMatch(/search index/i)
+    }
+  })
+
+  it('offers folder-scoping as the fix for files that are missing but not recent', () => {
+    // The re-list resolves index LAG. It does nothing for an estate the index is simply not
+    // returning, and pointing only at "list it again" sends someone round that loop forever.
+    const m = enumerationMethod('onedrive')
+    expect(m.resolve).toMatch(/choose the folders/i)
+    expect(m.resolve).toMatch(/subfolders included/i)
+  })
+
+  it('the panel reads the run’s scope, not its source alone', () => {
+    const run = { source: 'sharepoint', scope: { folders: [{ id: 'd/i', name: 'Home Drives' }],
+                                                 inventory: { discovered: 2520 } } }
+    // Consistent source + no prior listing to compare = nothing worth saying, so the panel
+    // self-guards to silence rather than reassuring.
+    expect(text(createElement(DiscoveryCompleteness, { run }))).toBe('')
+  })
 })
 
 describe('this listing against the last one', () => {

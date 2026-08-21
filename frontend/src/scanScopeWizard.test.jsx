@@ -24,6 +24,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { createTestRoot, unmountAll } from './testRoots.js'
+import { gotoStep } from './wizardNav.testkit.js'
 
 afterEach(unmountAll)
 
@@ -72,7 +73,13 @@ const click = async (el) => { await act(async () => { el.click() }) }
 describe('the wizard chrome', () => {
   it('uses the new wording, not the old "pairs" phrasing', async () => {
     const c = await render()
-    expect(c.textContent).toMatch(/same scope will be used for assessment, remediation, reporting, and export/)
+    // THE OLD LINE IS GONE, and it deserved to be. It read "the same scope will be used for
+    // assessment, remediation, reporting, and export" — describing a criteria scope this screen
+    // stopped choosing in #532. A sentence that outlives the thing it described is worse than no
+    // sentence: it is a wrong answer in the position a reader trusts most.
+    expect(c.textContent).toMatch(/Choose where ACP should inventory/)
+    expect(c.textContent, 'the wizard still promises to reuse this scope for assessment')
+      .not.toMatch(/same scope will be used for assessment/)
     expect(c.textContent).not.toMatch(/of \d+ pairs selected/)
   })
 })
@@ -82,15 +89,24 @@ describe('the wizard chrome', () => {
 // ── owning its own state: picking a profile loads it ────────────────────────────────────────────
 describe('scope state', () => {
   it('renders the footer with showStartButton, and starts discovery on confirm', async () => {
-    // Same guarantee as before — the footer exists and confirming dispatches onStartScan — but
-    // there is nothing to walk through now. One question, one screen, one action.
+    // Same guarantee as always — the footer exists and confirming dispatches onStartScan — but
+    // it is reached by walking three steps again.
+    //
+    // THIS CASE USED TO ASSERT THE OPPOSITE, in these words: "there is nothing to walk through
+    // now. One question, one screen, one action", with a check that no Continue control had
+    // survived the collapse. That was right while Discover had one decision in it. It has three
+    // (where to inventory, which lifecycle rules run, and the review that carries the
+    // metadata-only promise), so a Continue control is now required rather than forbidden — and
+    // the inversion is written down rather than quietly dropped.
     const started = vi.fn()
     const c = await render({ showStartButton: true, onStartScan: started })
-    expect([...c.querySelectorAll('button')].some((b) => /Continue/.test(b.textContent)),
-      'a Continue control survived the collapse to one step').toBe(false)
-    const startBtn = [...c.querySelectorAll('button')].find((b) => /Start discovery/.test(b.textContent))
-    expect(startBtn, 'no Start discovery control').toBeTruthy()
+    expect([...c.querySelectorAll('button')].some((b) => /Continue to rules/.test(b.textContent)),
+      'step 1 has no forward control').toBe(true)
+    await gotoStep(c, act, 3)
+    const startBtn = c.querySelector('button[data-wizard-forward]')
+    expect(startBtn, 'no run control on the review step').toBeTruthy()
     // "discovery", not "scan": this lists the estate and opens no file — the WCAG work is Assess's.
+    expect(startBtn.textContent).toMatch(/Run discovery/)
     expect(c.textContent).not.toMatch(/Start scan/)
     await click(startBtn)
     expect(started).toHaveBeenCalled()
@@ -108,7 +124,15 @@ describe('scope state', () => {
       expect(c.textContent, `a format/criteria control is back on Discover: ${gone}`)
         .not.toMatch(gone)
     }
-    // And it says what the run WILL cover, so "no format control" cannot be read as "no formats".
+    // The absence must hold on EVERY step, not just the one the wizard opens on — a criteria grid
+    // reintroduced behind step 2 or 3 would sail past a check that only ever looked at step 1.
+    await gotoStep(c, act, 3)
+    for (const gone of [/FILE FORMATS/, /SCAN PROFILE/, /supported checks selected/]) {
+      expect(c.textContent, `a format/criteria control is back on a later step: ${gone}`)
+        .not.toMatch(gone)
+    }
+    // And the review says what the run WILL cover, so "no format control" cannot be read as
+    // "no formats". That line lives on step 3 now, which is why this walks there.
     expect(c.textContent).toMatch(/All file types will be inventoried/)
   })
 
