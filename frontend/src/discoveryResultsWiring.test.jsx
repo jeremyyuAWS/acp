@@ -120,8 +120,8 @@ const render = async (files) => {
   })
   return container
 }
-const assessBtn = () => [...container.querySelectorAll('button')]
-  .find((b) => b.textContent.includes('Assess — score vs WCAG'))
+// By the stable hook rather than the label — these cases are about the acknowledgement GATE.
+const assessBtn = () => container.querySelector('button[data-advance="assess"]')
 const byText = (t) => [...container.querySelectorAll('button, label')]
   .find((el) => el.textContent.includes(t))
 const click = async (el) => { await act(async () => { el.click() }) }

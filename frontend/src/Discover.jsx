@@ -611,13 +611,16 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               Approve the {recsToAck.total.toLocaleString()} discovery recommendation{recsToAck.total === 1 ? '' : 's'} above to continue
             </span>
           )}
-          <button onClick={() => onAdvance?.()} disabled={pendingActions > 0 || needsAck}
+          {/* `data-advance` is a STABLE hook. Two tests found this control by its label, so a copy
+              change broke them for no reason connected to what they assert — they care that the
+              advance control is gated, not what it is called this week. */}
+          <button data-advance="assess" onClick={() => onAdvance?.()} disabled={pendingActions > 0 || needsAck}
                   title={pendingActions > 0
                     ? `${pendingActions} action${pendingActions === 1 ? '' : 's'} still pending — accept or override each row, or use "Accept all recommendations"`
                     : needsAck
                       ? `${recsToAck.total} discovery recommendation${recsToAck.total === 1 ? '' : 's'} need your approval — tick "I approve these recommendations" in Discovery results`
                       : undefined}>
-            Assess — score vs WCAG →
+            Continue to Assess →
           </button>
         </div>
       )}

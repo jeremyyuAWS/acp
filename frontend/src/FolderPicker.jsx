@@ -296,6 +296,21 @@ export default function FolderPicker({
           </button>
         </div>
       ))}
+      {/* WHAT THE COUNTS MEAN, standing under the list rather than hidden in a title attribute.
+          Same sentence, one constant — a second wording here would be a second claim about the
+          same number.
+
+          It was reachable only on hover, which is no answer on a touch device and no answer to
+          most people on a desktop either. The number it explains decides what gets scanned, and
+          the wrong reading of it ("430 items" as "430 documents") is the one a reader arrives at
+          unaided. Rendered only when a row actually shows a count — on Google Drive the provider
+          returns none, and a caption explaining figures nobody can see is furniture. */}
+      {!loading && !err && shown.some((f) => sizeHint(f)) && (
+        <div className="muted" style={{ padding: '9px 18px', fontSize: 11.5, lineHeight: 1.5,
+                                        borderTop: '1px solid var(--line)' }}>
+          {SIZE_HINT_BASIS}
+        </div>
+      )}
     </div>
   )
 
