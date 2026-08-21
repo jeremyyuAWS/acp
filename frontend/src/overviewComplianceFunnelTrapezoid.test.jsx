@@ -34,7 +34,10 @@ describe('the compliance funnel, re-skinned as a trapezoid', () => {
   it('still shows every stage label and its count', () => {
     const html = render()
     for (const label of ['Discover', 'Assess', 'Remediate', 'Verify', 'Publish']) {
-      expect(html).toContain(`>${label}<`)
+      // Not `>${label}<`: the JSX is `{s.label} {s.proj && <em>...}</em>}`, so a non-projected
+      // stage renders "Discover " (a real trailing space before the closing tag) — the label is
+      // followed by whatever comes next, not always immediately by `<`.
+      expect(html).toMatch(new RegExp(`>${label}\\b`))
     }
   })
 
