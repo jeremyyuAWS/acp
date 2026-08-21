@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import Term from './Term.jsx'
 import {
   NOT_RECORDED, acknowledgementSummary, estateSummary, plural,
   recommendationReconciliation, recommendationRows, typeReconciliation, unreadableReasons,
@@ -206,7 +207,7 @@ export default function DiscoveryResults({
         {summary.delete != null && (
           <Stat n={summary.delete} label="tagged for deletion review" color={STAT_COLOR.delete} />
         )}
-        <Stat n={summary.unreadable} label="could not be read" color={STAT_COLOR.unreadable} />
+        <Stat n={summary.unreadable} label={<Term k="unreadable">could not be read</Term>} color={STAT_COLOR.unreadable} />
       </div>
 
       {summary.truncated && (
