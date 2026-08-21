@@ -1,11 +1,12 @@
 /**
- * Settings is scoped to access management: Owners + Users, nothing else.
+ * Settings is scoped to access management (Owners + Users) plus the one self-service action every
+ * signed-in user needs (My Data — reset only your own scans; see resetMyData.test.jsx).
  *
- * The six other admin panels (Scoring rules, Estate, File types, Remediated storage, Disposition,
- * Data reset, AI-provider governance) were removed from the tab bar on request. They were NOT
- * deleted — their components are still exported from Settings.jsx and still covered by their own
- * tests (see simAdminWriteHonesty / aiProviders / aiEndpointSettings). This test pins both halves:
- * the tabs are gone, and the code that could bring them back is still here.
+ * The six OTHER admin panels (Scoring rules, Estate, File types, Remediated storage, Disposition,
+ * the global admin Data reset, AI-provider governance) were removed from the tab bar on request.
+ * They were NOT deleted — their components are still exported from Settings.jsx and still covered
+ * by their own tests (see simAdminWriteHonesty / aiProviders / aiEndpointSettings). This test pins
+ * both halves: those six are gone, and the code that could bring one back is still here.
  *
  * It also covers the Users-tab onboarding: two equal paths, Microsoft (SharePoint/OneDrive) and
  * Google (Drive), each ending at the same allowlist.
@@ -35,12 +36,12 @@ const setValue = (el, v) => {
   set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-describe('the settings panel is access-only', () => {
-  it('shows exactly the Owners and Users tabs, in that order', async () => {
-    expect(tabTexts(await render())).toEqual(['Owners', 'Users'])
+describe('the settings panel is access-only, plus self-service My Data', () => {
+  it('shows exactly the Owners, Users and My Data tabs, in that order', async () => {
+    expect(tabTexts(await render())).toEqual(['Owners', 'Users', 'My Data'])
   })
 
-  it('no longer offers any of the removed admin tabs', async () => {
+  it('no longer offers any of the removed ADMIN-ONLY tabs', async () => {
     const texts = tabTexts(await render())
     for (const gone of ['Scoring rules', 'Estate', 'File types', 'Remediated storage', 'Disposition', 'Data']) {
       expect(texts).not.toContain(gone)

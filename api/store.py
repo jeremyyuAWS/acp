@@ -1470,6 +1470,68 @@ class Store:
                 self._db.execute(cur, f"DELETE FROM {t}")
         return list(self._ANALYTICS_TABLES)
 
+    # Tables in _ANALYTICS_TABLES that key on scan_id, scoped via a scan_runs.owner_email join.
+    _RESET_USER_SCAN_TABLES = ["file_records", "issue_records", "scan_rule_traces",
+                               "file_stage_timings", "scan_file_manifests", "scan_inventory",
+                               "file_tags", "pii_findings", "hitl_queue", "hitl_events",
+                               "remediation_diff", "applied_fixes", "ai_calls", "finding_comments",
+                               "jobs"]
+    # Tables that key on doc_id (not scan_id), scoped via a documents.owner_email join.
+    _RESET_USER_DOC_TABLES = ["disposition_audit", "remediation_state"]
+
+    def reset_user_data(self, owner_email: str) -> dict:
+        """Delete ONE user's scans and everything tied to them — the self-service sibling of
+        reset_analytics(), scoped so two people testing concurrently never clear each other's work.
+
+        Three shapes of table:
+          - scan_id-keyed (_RESET_USER_SCAN_TABLES): scan_id IN (SELECT id FROM scan_runs WHERE
+            owner_email=%s).
+          - doc_id-keyed (_RESET_USER_DOC_TABLES): doc_id IN (SELECT doc_id FROM documents WHERE
+            owner_email=%s) — disposition_audit/remediation_state key on doc_id, not scan_id.
+          - owns owner_email directly: scan_decisions, documents, scan_runs (WHERE owner_email=%s);
+            org_memory (WHERE org=%s — every call site sets `org` to the signed-in user's own
+            email, so it is already per-user despite the name).
+
+        Deliberately excluded, unlike reset_analytics():
+          - `inventory` — a global path-dedup index with no owner concept; nothing to scope it by.
+          - `decision_log` — documented as an immutable append-only audit record (reset_analytics
+            wiping it is an existing inconsistency, not repeated here). One row IS appended by the
+            caller after this returns, recording that the reset happened.
+
+        Cross-attribution: finding_comments/hitl_events/ai_calls etc. are scoped by the SCAN's
+        owner, not by who authored/reviewed each row — resetting your scan removes a teammate's
+        comment on it too, because the scan it was about no longer exists. That is "delete my scan
+        and everything about it," not "delete only what I personally wrote."
+
+        DB rows only — does not purge Blob-stored remediated copies or Drive mirrors (unlike the
+        admin reset's blob purge, which is a GLOBAL purge unsafe to run per-user without first
+        tracking which blob URLs belong to this owner's files — not built here). A reset user may
+        see stale bytes take extra storage until a real per-owner blob accounting exists; nothing
+        product-visible references them once the DB rows are gone.
+        """
+        cleared: list[str] = []
+        with self._db.cursor() as cur:
+            for t in self._RESET_USER_SCAN_TABLES:
+                self._db.execute(cur,
+                    f"DELETE FROM {t} WHERE scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)",
+                    (owner_email,))
+                cleared.append(t)
+            for t in self._RESET_USER_DOC_TABLES:
+                self._db.execute(cur,
+                    f"DELETE FROM {t} WHERE doc_id IN (SELECT doc_id FROM documents WHERE owner_email=%s)",
+                    (owner_email,))
+                cleared.append(t)
+            self._db.execute(cur, "DELETE FROM scan_decisions WHERE owner_email=%s", (owner_email,))
+            cleared.append("scan_decisions")
+            self._db.execute(cur, "DELETE FROM documents WHERE owner_email=%s", (owner_email,))
+            cleared.append("documents")
+            self._db.execute(cur, "DELETE FROM org_memory WHERE org=%s", (owner_email,))
+            cleared.append("org_memory")
+            # scan_runs last — every scan_id-scoped subquery above depends on these rows existing.
+            self._db.execute(cur, "DELETE FROM scan_runs WHERE owner_email=%s", (owner_email,))
+            cleared.append("scan_runs")
+        return {"owner": owner_email, "cleared_tables": cleared}
+
     def list_scans(self, owner: str | None = None) -> list[dict]:
         # Completed scans only — in-flight (status='running', no completed_at) scans
         # are excluded so they don't appear as bogus entries in the scan picker.

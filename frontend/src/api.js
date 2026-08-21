@@ -762,6 +762,12 @@ export const setWorkers = (count) => (SIM
 export const resetDemoData = (scope = 'all') => (SIM
   ? sim({ scope, cleared_tables: [], langfuse_traces_deleted: 0 })
   : fetch(`${BASE}/admin/reset?scope=${scope}&confirm=true`, { method: 'POST', headers: headers() }).then(j))
+// Self-service reset — clears only the SIGNED-IN USER'S OWN scans, so two people testing
+// concurrently never clear each other's work. No scope choice (unlike resetDemoData): it is
+// always "everything of mine". DB rows only — does not purge Blob/Drive copies.
+export const resetMyData = () => (SIM
+  ? sim({ owner: 'demo', cleared_tables: [] })
+  : fetch(`${BASE}/me/reset-data?confirm=true`, { method: 'POST', headers: headers() }).then(j))
 // Graph folder picker (OneDrive / SharePoint). Returns ids ALREADY in `<driveId>/<itemId>` form,
 // which is what ?folders= expects — re-attaching the drive at the call site is how the download
 // path once fetched the signed-in user's file of that id instead.
