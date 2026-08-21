@@ -1610,17 +1610,23 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 /* chart panels */
 .chartrow { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
 
-/* visual funnel (decreasing animated bars) */
-.vfunnel { margin: 8px 0 18px; }
-.vfrow { display: grid; grid-template-columns: 120px 1fr 34px; align-items: center; gap: 12px; padding: 5px 0; cursor: pointer; }
-button.vfrow { background: none; border: none; font: inherit; color: inherit; width: 100%; text-align: left; }
-.vfrow:hover .vflabel { color: var(--plum); }
-.vflabel { font-size: 13px; color: var(--ink); }
-.vflabel em { font-style: normal; color: var(--muted); font-size: 11px; }
-.vfbar { height: 24px; background: #f0edf2; border-radius: 7px; overflow: hidden; }
-.vfbar > i { display: block; height: 100%; border-radius: 7px; transition: width 0.9s ease; }
-.vfn { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; font-size: 15px; }
-.vfn { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; font-size: 15px; }
+/* K8 · trapezoid re-skin of the compliance funnel (replaced the decreasing-animated-bars form —
+   same stages data, no other consumer of the old .vfunnel/.vfrow/.vfbar/.vfn classes remained). A
+   different shape: each stage narrows toward the one below it, with the real conversion rate
+   from the previous stage printed in the gap, not implied by the taper alone. */
+.trapfunnel { margin: 8px 0 6px; display: flex; flex-direction: column; align-items: center; }
+.trapstage { background: none; border: none; padding: 0; cursor: pointer; width: 100%; display: flex; justify-content: center; }
+.trapshape {
+  clip-path: polygon(6% 0, 94% 0, 100% 100%, 0% 100%);
+  min-width: 140px; margin: 0 auto; padding: 12px 28px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  transition: width 0.9s ease;
+}
+.trapstage:hover .trapshape { filter: brightness(1.08); }
+.trapstage-label { color: #fff; font-size: 13.5px; font-weight: 600; }
+.trapstage-label em { font-style: normal; opacity: .85; font-size: 11px; }
+.trapstage-n { color: #fff; font-weight: 700; font-variant-numeric: tabular-nums; font-size: 16px; }
+.trapdrop { text-align: center; font-size: 11.5px; color: var(--muted); margin: 2px 0; }
 
 /* AI mode toggle (Monitor) */
 .aimodetoggle { display: flex; flex-direction: column; gap: 10px; padding: 10px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }

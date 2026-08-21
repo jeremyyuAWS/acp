@@ -23,6 +23,7 @@ import { reconciliationInputs } from './reconciliationInputs.js'
 import { assessMetrics, coverageSentence, SEVERITIES, SEVERITY_LABEL } from './assessMetrics.js'
 import AssertionScope from './AssertionScope.jsx'
 import NextStep from './NextStep.jsx'
+import EstateTreemap from './EstateTreemap.jsx'
 import { CORE_SCS } from './activeScope.js'
 
 // The estate dashboard — doubles as the exportable compliance report.
@@ -190,6 +191,20 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const NA_GREY = '#9a948f'   // "not measured" — never a score band, so it reads as absent, not bad
   const bySource = countBy((f) => f.sourceName).map(([label, value]) => ({ label, value, color: PLUM }))
   const byType = countBy((f) => (f.type || '').toUpperCase()).map(([label, value]) => ({ label, value, color: PLUM }))
+  // Total pages per type, for the treemap's "by total pages" toggle — sums only files that
+  // actually carry a page count (a discover-only file's `pages` is null, not zero). `byPages` is
+  // null, not a zero-filled array, when NOTHING in the estate has been paginated yet: the toggle
+  // that switches to it is not even offered in that case (see EstateTreemap), rather than
+  // switching to a chart of all-zero bars.
+  const pageSums = {}
+  let anyPages = false
+  for (const f of files) {
+    if (f.pages == null) continue
+    anyPages = true
+    const k = (f.type || '').toUpperCase()
+    pageSums[k] = (pageSums[k] || 0) + f.pages
+  }
+  const byPages = anyPages ? Object.entries(pageSums).map(([label, value]) => ({ label, value })) : null
   const byDept = countBy((f) => f.department).map(([label, value]) => ({ label, value, color: PLUM }))
   // Collapsed across the three spellings a finding's `wcag` arrives in — see wcagFinding.js.
   // Keying the raw string listed 1.3.1 twice, as "info & relationships" and "Info and
@@ -543,16 +558,39 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         <section className="panel"><h2>By document type</h2><Bars items={byType} cols="62px 1fr 28px" onPick={(it) => { const fs = files.filter((f) => (f.type || '').toUpperCase() === it.label); setSeg({ title: `${it.label} documents · ${it.value} total`, subtitle: 'filtered by type', files: fs }) }} /><Insight text={INS.type} /></section>
       </div>
 
+      <EstateTreemap byCount={byType} byPages={byPages} onPick={(label) => {
+        const fs = files.filter((f) => (f.type || '').toUpperCase() === label)
+        setSeg({ title: `${label} documents · ${fs.length} total`, subtitle: 'filtered by type', files: fs })
+      }} />
+
       <section className="panel">
         <h2>Compliance funnel · click a stage</h2>
-        <div className="vfunnel">
-          {stages.map((s) => (
-            <button className="vfrow" key={s.label} onClick={() => onGo(s.go)} aria-label={`${s.label}${s.proj ? ' projected' : ''}: ${s.v.toLocaleString()} documents — open`}>
-              <span className="vflabel">{s.label} {s.proj && <em>· proj</em>}</span>
-              <span className="vfbar"><i style={{ width: on ? `${(s.v / maxN) * 100}%` : '0%', background: s.proj ? '#c4aecb' : '#7a5c8e' }} /></span>
-              <span className="vfn">{s.v.toLocaleString()}</span>
-            </button>
-          ))}
+        <div className="trapfunnel">
+          {stages.map((s, i) => {
+            // Conversion from the PREVIOUS stage, not from the funnel's first stage — each drop
+            // answers "of what reached here, how much reached the next step", which is what a
+            // funnel is for. Absent (not 0%) when the previous stage has nothing to convert from,
+            // so a 0-document funnel doesn't print a division-by-zero "0%" and call it measured.
+            const prev = i > 0 ? stages[i - 1] : null
+            const pct = prev && prev.v > 0 ? Math.round((s.v / prev.v) * 100) : null
+            const widthPct = on ? Math.max(8, (s.v / maxN) * 100) : 0
+            return (
+              <div key={s.label}>
+                {prev && (
+                  <div className="trapdrop" aria-hidden="true">
+                    {pct == null ? '— no prior stage to convert from' : `↓ ${pct}%`}
+                  </div>
+                )}
+                <button className="trapstage" onClick={() => onGo(s.go)}
+                        aria-label={`${s.label}${s.proj ? ' projected' : ''}: ${s.v.toLocaleString()} documents — open`}>
+                  <div className="trapshape" style={{ width: `${widthPct}%`, background: s.proj ? '#c4aecb' : '#7a5c8e' }}>
+                    <span className="trapstage-label">{s.label} {s.proj && <em>· proj</em>}</span>
+                    <span className="trapstage-n">{s.v.toLocaleString()}</span>
+                  </div>
+                </button>
+              </div>
+            )
+          })}
         </div>
       </section>
 
