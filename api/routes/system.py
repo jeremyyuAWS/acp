@@ -49,7 +49,7 @@ def _require_owner(request: Request) -> None:
 def admin_reset(request: Request,
                 scope: str = Query("all", pattern="^(all|grafana|langfuse)$"),
                 confirm: bool = Query(False)):
-    _require_admin(request)
+    _require_owner(request)   # destructive + irreversible (wipes data + blobs) — owner-only
     """Reset demo data so the charts start fresh (admin, audited).
     scope=grafana → clear the ACP Postgres analytics tables (Grafana + in-app
     charts); scope=langfuse → delete the project's Langfuse traces; all → both.
@@ -130,7 +130,7 @@ def invite_tester(body: dict, request: Request):
     (ADR 0033). Owner-only. 409 when the invite credential isn't configured — the feature ships
     dark, so this path simply doesn't exist until an operator opts in. Least-privilege: this sends
     a guest invite (Graph User.Invite.All), it does NOT create a tenant user."""
-    _require_admin(request)
+    _require_owner(request)   # manages the login perimeter — owner-only
     import invites
     email = (body.get("email") or "").strip().lower()
     if not email or "@" not in email:
@@ -155,7 +155,7 @@ def invite_tester(body: dict, request: Request):
 @router.put("/admin/allowlist")
 def set_allowlist(body: dict, request: Request):
     """Replace the editable test-user list. The owner is always kept (anti-lockout)."""
-    _require_admin(request)
+    _require_owner(request)   # manages the login perimeter — owner-only
     emails = body.get("emails", [])
     if not isinstance(emails, list):
         raise HTTPException(400, "emails must be a list of strings")

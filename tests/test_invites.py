@@ -125,7 +125,7 @@ def test_invite_endpoint_is_owner_gated_dark_and_writes_the_allowlist():
     src = (ROOT / "api" / "routes" / "system.py").read_text()
     assert '@router.post("/admin/invite")' in src
     body = re.search(r"def invite_tester\(.*?(?=\n@router|\Z)", src, re.S).group(0)
-    assert "_require_admin(request)" in body                       # owner-only
+    assert "_require_owner(request)" in body                       # owner-only (manages the login perimeter)
     assert "invites.invite_configured()" in body and "409" in body  # ships dark → 409
     assert "send_guest_invite" in body                             # sends the invite
     assert "set_allowlist" in body                                 # auto-adds to the allowlist

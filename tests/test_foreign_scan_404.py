@@ -158,12 +158,18 @@ def test_a_non_owner_scan_is_absent_from_the_list_not_merely_unreadable(
 def test_owner_only_admin_endpoints_403_for_an_allowed_non_owner(gated_client, isolated_store):
     """The corroborating signal from the same session: 403, not 404.
 
-    /ai/providers and /disposition/approvals are owner-gated by _require_admin, so an allowed
-    non-owner gets 403. Pinned alongside the 404s because the pair is what identifies the
-    situation in a log: 403 means "you are known and not the owner", 404 means "this scan is
-    not yours". Two different gates, both working.
+    Under the open-access model an allowed non-owner is a full admin for VIEWS — so the provider
+    and approval-queue reads below now return 200, not 403 (everyone sees the same screens). The
+    403 gate still exists, on the DESTRUCTIVE owner-only actions: wiping data, managing logins,
+    approving a move/trash. Pinned alongside the 404s because the pair is what identifies the
+    situation in a log: 403 means "you are known and not the owner (of this destructive action)",
+    404 means "this scan is not yours". Two different gates, both working.
     """
     client = gated_client(ALLOWED_NON_OWNER)
 
-    assert client.get("/ai/providers").status_code == 403
-    assert client.get("/disposition/approvals").status_code == 403
+    # Views are open to any signed-in user now.
+    assert client.get("/ai/providers").status_code == 200
+    assert client.get("/disposition/approvals").status_code == 200
+    # The destructive/perimeter actions stay owner-only → 403 for an allowed non-owner.
+    assert client.put("/admin/admins", json={"emails": []}).status_code == 403
+    assert client.post("/admin/reset?confirm=true").status_code == 403

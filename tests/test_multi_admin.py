@@ -25,6 +25,11 @@ def owned(monkeypatch):
     import core
     monkeypatch.setattr(core, "OWNER_EMAIL", "owner@hosp.org", raising=False)
     monkeypatch.setattr(core, "ADMIN_EMAILS", {"deva@hosp.org", "sam@hosp.org"}, raising=False)
+    # These tests exercise the ROLE-BASED admin union + gate (owner / additional admins vs a
+    # non-admin). That distinction only exists with the open-access flag off; with it on (the
+    # default) every authenticated user is an admin. Pin it off here; open access is covered in
+    # test_open_access_model.py.
+    monkeypatch.setattr(core, "OPEN_ACCESS", False, raising=False)
     return core
 
 
