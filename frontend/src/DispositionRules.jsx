@@ -212,8 +212,19 @@ function PrecedenceNote() {
   )
 }
 
-export default function DispositionRules() {
-  const [open, setOpen] = useState(false)
+/**
+ * @param embedded  true when this IS a screen rather than a section on one — wizard step 2.
+ *
+ * On the Discover tab this is one panel among many, so it collapses and carries its own title and
+ * one-line description. As a wizard step it is the entire screen: the rail already says "Lifecycle
+ * rules" and the wizard already prints the same description as the step subtitle, so rendering
+ * them again is the duplicate-header defect, and a disclosure the user must open to see the step
+ * they navigated to is a step that looks empty.
+ */
+export default function DispositionRules({ embedded = false }) {
+  // Embedded, it starts open and stays open — there is nothing else on the screen to collapse in
+  // favour of.
+  const [open, setOpen] = useState(embedded)
   const [rules, setRules] = useState(null)   // null = not asked yet. NEVER rendered as "no rules".
   const [counts, setCounts] = useState({})   // policy_id -> would_match, only once actually asked
   const [err, setErr] = useState('')
@@ -242,14 +253,20 @@ export default function DispositionRules() {
   const enabledCount = rules == null ? null : rules.filter((p) => p.enabled).length
 
   return (
-    <section className="disprules" style={{ marginTop: 12, border: line, borderRadius: 10, padding: '10px 14px' }}>
-      <button className="linklike" onClick={() => setOpen((o) => !o)} aria-expanded={open}
-              style={{ fontWeight: 700, fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span aria-hidden="true">{open ? '▾' : '▸'}</span> Lifecycle rules
-      </button>
-      <div className="muted" style={{ fontSize: 12, marginTop: 3, lineHeight: 1.5 }}>
-        Rules run during discovery and <b>tag</b> matching files. Nothing is moved, trashed or changed.
-      </div>
+    <section className="disprules"
+             style={{ marginTop: embedded ? 0 : 12, border: embedded ? 'none' : line,
+                      borderRadius: 10, padding: embedded ? 0 : '10px 14px' }}>
+      {!embedded && (
+        <>
+          <button className="linklike" onClick={() => setOpen((o) => !o)} aria-expanded={open}
+                  style={{ fontWeight: 700, fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span aria-hidden="true">{open ? '▾' : '▸'}</span> Lifecycle rules
+          </button>
+          <div className="muted" style={{ fontSize: 12, marginTop: 3, lineHeight: 1.5 }}>
+            Rules run during discovery and <b>tag</b> matching files. Nothing is moved, trashed or changed.
+          </div>
+        </>
+      )}
 
       {open && (
         <div style={{ marginTop: 14 }}>

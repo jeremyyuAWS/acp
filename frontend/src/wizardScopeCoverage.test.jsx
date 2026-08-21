@@ -24,6 +24,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
+import { gotoStep, backToStart } from './wizardNav.testkit.js'
 
 afterEach(unmountAll)
 
@@ -68,11 +69,13 @@ async function mount(scans = []) {
 
 const btn = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent))
 const chip = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent) && b.hasAttribute('aria-pressed'))
-// The review summary is on the same screen as the scope now (PRD DISC-01 collapsed the three
-// steps to one), so there is nowhere to walk to. Kept as a no-op rather than deleted at every call
-// site: the tests still read as "choose a scope, then look at what it says about it", which is the
-// sequence they are about.
-const toReview = async () => {}
+// Walk to the review step. This was a no-op for a while — the wizard had collapsed to one screen,
+// so there was nowhere to go — and it was kept at every call site rather than deleted precisely so
+// that restoring the steps would be one edit here instead of twelve. It is real again.
+//
+// Which is also why the cases below did not have to change: they read as "choose a scope, then
+// look at what it says about it", and that sequence is what they were always about.
+const toReview = async (c) => gotoStep(c, act, 3)
 
 describe('there is still no invented pre-scan estimate', () => {
   it('says the count is determined at scan time when this scope has no history', async () => {
@@ -130,9 +133,12 @@ describe('a measured number, matched on the whole boundary', () => {
     await act(async () => { chip(c, /HR/).click() })
     await toReview(c)
     expect(c.textContent).toMatch(/240 documents/)
-    // No Back — one screen. Switching the scope must move the number underneath it just the same,
-    // which is the whole point: a count that outlives the scope it measured is the stale-number
-    // defect this line exists to prevent.
+    // BACK TO THE SCOPE, change it, forward again. The wizard has steps once more, and this is the
+    // stronger version of the same claim: the count must follow the scope across a round trip, not
+    // merely while both are on one screen. A count that outlives the scope it measured is the
+    // stale-number defect this line exists to prevent, and a round trip is exactly how a real user
+    // reaches it.
+    await backToStart(c, act)
     await act(async () => { chip(c, /Finance/).click() })
     await toReview(c)
     expect(c.textContent).toMatch(/12 documents/)

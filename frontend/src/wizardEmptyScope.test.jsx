@@ -46,10 +46,14 @@ async function mount() {
 }
 
 const btn = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent))
-// The primary action. Was Continue when Discover had three steps; it is Start discovery now
-// (PRD DISC-01 collapsed it to one). What is guarded is unchanged: the action is blocked
-// while 'Specific folders' is chosen with none selected, and it says why.
-const continueBtn = (c) => btn(c, /Start discovery/)
+// The primary action — by its stable hook, and deliberately WITHOUT navigating anywhere.
+//
+// This file is about step 1's gate: "Specific folders" chosen with none selected falls through to
+// the WHOLE source, so the forward control must refuse (#502). Walking past it is the one thing
+// these cases must not do, and a finder that matched the button by label would have to be updated
+// every time the label changes — which it just did, from "Start discovery" to the per-step
+// "Continue to rules →".
+const continueBtn = (c) => c.querySelector('button[data-wizard-forward]')
 const modeBtn = (c, label) => [...c.querySelectorAll('[role="radio"]')]
   .find((b) => b.textContent.includes(label))
 

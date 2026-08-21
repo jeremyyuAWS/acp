@@ -19,6 +19,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
+import { gotoStep } from './wizardNav.testkit.js'
 
 // vite replaces these `define` literals at build time; vitest does not, and App.jsx reads them
 // unguarded in its header, so define them as globals before it renders.
@@ -84,7 +85,7 @@ describe('the universal scan gate (App)', () => {
     // The gate is open…
     const d = dialog(c)
     expect(d).toBeTruthy()
-    expect(d.getAttribute('aria-label')).toBe('New scan')
+    expect(d.getAttribute('aria-label')).toBe('New discovery')
     // The "Formats & WCAG criteria" heading is gone (it named step 2's subject while the
     // user was on step 1). This assertion was a proxy for "the review modal opened" — so
     // assert the estimate line, which is the modal's own content and is step-independent.
@@ -109,11 +110,16 @@ describe('the universal scan gate (App)', () => {
     await click(byText(c, 'button', /Re-scan all sources/))
     expect(startScan).not.toHaveBeenCalled()
     // Durable is off by default and no longer togglable here, so a confirm takes the non-queued
-    // path. Three steps now, so walk to Start the way a user does.
-    // One screen now (PRD DISC-01) — no Continue to walk. The guarantee is unchanged: nothing
-    // scans until the gate is confirmed.
-    const start = [...dialog(c).querySelectorAll('button')].find((b) => /Start discovery/.test(b.textContent))
+    // path. Three steps, so walk to the run control the way a user does.
+    //
+    // Both eras of this comment were sitting here at once — "Three steps now, so walk to Start"
+    // immediately above "One screen now (PRD DISC-01) — no Continue to walk". Neither was deleted
+    // when the other was added, so the file asserted one thing and explained two. The guarantee
+    // itself never changed: nothing scans until the gate is confirmed.
+    await gotoStep(dialog(c), act, 3)
+    const start = dialog(c).querySelector('button[data-wizard-forward]')
     expect(start).toBeTruthy()
+    expect(start.textContent).toMatch(/Run discovery/)
     await click(start)
     // Confirm dispatched the scan (source 'all' for "Re-scan all sources") and closed the gate.
     expect(startScan).toHaveBeenCalled()

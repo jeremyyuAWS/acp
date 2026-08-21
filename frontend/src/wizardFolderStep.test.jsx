@@ -25,6 +25,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
+import { gotoStep } from './wizardNav.testkit.js'
 
 afterEach(unmountAll)
 
@@ -57,6 +58,14 @@ async function mount(onStartScan = () => {}, props = {}) {
 }
 
 const btn = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent))
+// The run control lives on step 3 now (Source and folders → Lifecycle rules → Review and run), so
+// a case that clicks it walks there first. By the stable hook rather than the label: the forward
+// control's text is per-step data ("Run discovery →" at the end), and none of these cases is about
+// what it says.
+const runDiscovery = async (c) => {
+  await gotoStep(c, act, 3)
+  return c.querySelector('button[data-wizard-forward]')
+}
 
 // Start lives on step 3 of the wizard now. Walking there is what a user does, so the tests do it
 // too rather than reaching past the flow.
@@ -67,7 +76,7 @@ async function toStart(c) {
     // eslint-disable-next-line no-await-in-loop
     await act(async () => { cont.click() })
   }
-  return btn(c, /Start discovery/)
+  return runDiscovery(c)
 }
 
 describe('the card seeds the wizard', () => {

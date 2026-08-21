@@ -29,6 +29,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
+import { gotoStep } from './wizardNav.testkit.js'
 
 afterEach(unmountAll)
 
@@ -71,6 +72,14 @@ async function mount(props = {}) {
 }
 
 const btn = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent))
+// The run control lives on step 3 now (Source and folders → Lifecycle rules → Review and run), so
+// a case that clicks it walks there first. By the stable hook rather than the label: the forward
+// control's text is per-step data ("Run discovery →" at the end), and none of these cases is about
+// what it says.
+const runDiscovery = async (c) => {
+  await gotoStep(c, act, 3)
+  return c.querySelector('button[data-wizard-forward]')
+}
 const chip = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent) && b.hasAttribute('aria-pressed'))
 const scopePanel = (c) => c.querySelector('[role="region"][aria-label="Current scope"]')
 
@@ -134,7 +143,10 @@ describe('applying one', () => {
       // eslint-disable-next-line no-await-in-loop
       await act(async () => { cont.click() })
     }
-    await act(async () => { btn(c, /Start discovery/).click() })
+    // Navigation happens OUTSIDE the act that clicks Run: `runDiscovery` awaits its own
+    // act() per step, and nesting act() inside act() is a real source of lost updates.
+    const run = await runDiscovery(c)
+    await act(async () => { run.click() })
     expect(seen[0].folders.map((f) => f.id)).toEqual(['hr'])
     // Carried, not dropped. Dropping it would widen the run behind a control labelled as a
     // narrowing — and the review step would still have said "1 excluded".

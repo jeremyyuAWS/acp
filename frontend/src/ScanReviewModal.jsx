@@ -66,7 +66,7 @@ export default function ScanReviewModal({
   const hasEstimate = typeof estCount === 'number' && estCount > 0
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="New scan"
+    <div role="dialog" aria-modal="true" aria-label="New discovery"
          onClick={() => onCancel?.()}
          style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,.45)',
                   display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '5vh 16px' }}>
@@ -80,7 +80,7 @@ export default function ScanReviewModal({
           {/* Still "scan", not "assessment". This action LISTS the estate and opens no file —
               `_defer_analysis_to_assess()` defaults to on (ADR 0020), so the WCAG analysis runs
               later, at Assess. Naming it an assessment would assert one that has not happened. */}
-          <h3 style={{ margin: 0, fontSize: 16 }}>New scan</h3>
+          <h3 style={{ margin: 0, fontSize: 16 }}>New discovery</h3>
           <button className="ghost small" aria-label="Close" onClick={() => onCancel?.()}
                   style={{ marginLeft: 'auto' }}>×</button>
         </div>
