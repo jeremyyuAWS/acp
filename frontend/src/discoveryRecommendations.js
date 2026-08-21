@@ -219,6 +219,20 @@ export function lifecycleReasonOf(row) {
  *  by KEEPING the safer recommendation and leaving the decision to a human. */
 export const isConflicted = (row) => /also matched/i.test(lifecycleReasonOf(row) || '')
 
+/** A human's recorded override of THIS row's recommendation (lifecycle rules #8), or null when
+ *  none was recorded. Requires a reason — an override record with no reason is not a recorded
+ *  override, the same rule W4's disposition.js normalizeDisposition applies. */
+export function overrideOf(row) {
+  if (!row) return null
+  const reason = (row.lifecycle_override_reason || '').toString().trim()
+  if (!reason) return null
+  return {
+    reason,
+    actor: row.lifecycle_overridden_by || null,
+    at: row.lifecycle_overridden_at || null,
+  }
+}
+
 /**
  * The recommendation table rows, newest concern first: deletion before archive (the less
  * reversible recommendation is the one to read first), then by filename.
@@ -239,6 +253,7 @@ export function recommendationRows(files, policies = null) {
       rule: ruleNameOf(row, policies),
       reason: lifecycleReasonOf(row),
       conflicted: isConflicted(row),
+      override: overrideOf(row),
     }))
     .sort((a, b) => (a.bucket === b.bucket
       ? String(a.file).localeCompare(String(b.file))

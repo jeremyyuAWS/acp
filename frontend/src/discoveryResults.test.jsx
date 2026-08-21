@@ -10,7 +10,7 @@
  * is pinned separately in discoveryResultsWiring.test.js, because a source sweep cannot catch a
  * syntax error and a DOM test cannot see a component that was never mounted.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
@@ -200,6 +200,55 @@ describe('the recommendation table', () => {
     expect(text()).toContain('tagged for archive review')
     await click(btn('All'))
     expect(text()).toContain('sepsis-pathway-v3.docx')
+  })
+})
+
+describe('the per-file override (lifecycle rules #8)', () => {
+  const setValue = async (input, value) => {
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      setter.call(input, value)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  }
+  const btnByText = (text2) => [...container.querySelectorAll('button')].find((b) => b.textContent.trim() === text2)
+
+  it('offers "Keep this file" per recommendation row when a handler is wired', async () => {
+    await render({ files: ESTATE, onOverrideRecommendation: async () => true })
+    expect(btnByText('Keep this file')).toBeTruthy()
+  })
+
+  it('is disabled with no handler wired, rather than silently doing nothing', async () => {
+    await render({ files: ESTATE })
+    expect(btnByText('Keep this file').disabled).toBe(true)
+  })
+
+  it('calls the handler with (file, reason) and explains the override in the footnote', async () => {
+    const onOverrideRecommendation = vi.fn(() => Promise.resolve(true))
+    await render({
+      files: [arch('Clinical Guidelines/2019/sepsis-pathway-v3.docx')],
+      onOverrideRecommendation,
+    })
+    await click(btnByText('Keep this file'))
+    await setValue(container.querySelector('.lc-override-form input'), 'still needed for the audit')
+    await click(btnByText('Save'))
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+    expect(onOverrideRecommendation).toHaveBeenCalledWith(
+      'Clinical Guidelines/2019/sepsis-pathway-v3.docx', 'still needed for the audit')
+    expect(text()).toContain('Keep this file')
+    expect(text()).toContain('records that you reviewed the recommendation')
+  })
+
+  it('renders a recorded override permanently, distinct from Assess anyway', async () => {
+    const overridden = F('kept.pdf', {
+      lifecycle_status: 'Archive Candidate', lifecycle_rule_id: 'p1',
+      lifecycle_reason: "matched archive rule 'Legacy clinical policies'",
+      lifecycle_override_reason: 'under active legal hold', lifecycle_overridden_by: 'reviewer@x.com',
+    })
+    await render({ files: [overridden] })
+    expect(text()).toContain('Kept')
+    expect(text()).toContain('under active legal hold')
+    expect(btnByText('Keep this file')).toBeFalsy()
   })
 })
 

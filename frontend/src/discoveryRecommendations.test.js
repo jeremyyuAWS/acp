@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest'
 import {
   NOT_RECORDED, RECOMMENDATION_BUCKETS, acknowledgementSummary, estateSummary,
   estateTypeReconciliation, formatBucketOf,
-  hasLifecycleData, isConflicted, isUnreadable, lifecycleStatusOf, recommendationBucketOf,
+  hasLifecycleData, isConflicted, isUnreadable, lifecycleStatusOf, overrideOf, recommendationBucketOf,
   recommendationReconciliation, recommendationRows, reconcile, ruleNameOf, typeReconciliation,
   unreadableReasons,
 } from './discoveryRecommendations.js'
@@ -256,6 +256,38 @@ describe('the recommendation table names the rule that produced each tag', () =>
     expect(recommendationRows([row])[0].conflicted).toBe(true)
     // The SAFER recommendation is what is shown — never the delete rule that lost.
     expect(recommendationRows([row])[0].bucket).toBe('archive')
+  })
+})
+
+describe('a recorded override (lifecycle rules #8) rides alongside the recommendation', () => {
+  it('is null when no override reason was recorded', () => {
+    expect(overrideOf(arch('a.docx'))).toBeNull()
+    expect(overrideOf(F('a.docx', { lifecycle_override_reason: '   ' }))).toBeNull()   // blank, not real
+    expect(overrideOf(null)).toBeNull()
+  })
+
+  it('carries the reason, actor and timestamp when one was recorded', () => {
+    const row = F('a.docx', {
+      lifecycle_override_reason: 'under active legal hold',
+      lifecycle_overridden_by: 'reviewer@x.com',
+      lifecycle_overridden_at: '2026-08-21T10:00:00+00:00',
+    })
+    expect(overrideOf(row)).toEqual({
+      reason: 'under active legal hold', actor: 'reviewer@x.com', at: '2026-08-21T10:00:00+00:00',
+    })
+  })
+
+  it('reaches recommendationRows() so the table can render it per-file', () => {
+    const overridden = F('a.docx', {
+      lifecycle_status: 'Archive Candidate', lifecycle_rule_id: 'p1',
+      lifecycle_reason: "matched archive rule 'Legacy'",
+      lifecycle_override_reason: 'still in active use', lifecycle_overridden_by: 'reviewer@x.com',
+    })
+    const rows = recommendationRows([overridden, arch('b.docx')])
+    expect(rows.find((r) => r.file === 'a.docx').override).toEqual({
+      reason: 'still in active use', actor: 'reviewer@x.com', at: null,
+    })
+    expect(rows.find((r) => r.file === 'b.docx').override).toBeNull()
   })
 })
 
