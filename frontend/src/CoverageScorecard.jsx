@@ -5,7 +5,7 @@ import { CORE_SCS, DENOMINATOR, SCOPE_SIZE, SCOPE_LABEL } from './activeScope.js
 // Capability coverage scorecard for the Assess tab (ADR 0023, two axes). Answers the up-front
 // question in CUSTOMER-OUTCOME language — not implementation (deterministic/OCR/vision):
 //
-//   ASSESSMENT — can ACP determine compliance?   🟢 A4 Fully Assessed · 🟡 A3 Potential Issue · 🔴 A2 Human Assessment Required · ⚪ N/A
+//   ASSESSMENT — can ACP determine compliance?   ✓ A4 Fully Assessed · ! A3 Potential Issue · ✕ A2 Human Assessment Required · – N/A
 //   REMEDIATION — if it fails, how is it fixed?   ⚡ R4 Automatically Fixed · 🤖 R3 AI Generated Fix · 👤 R2 Guided
 //   Wording matches the WCAG matrix (docs/acp-architecture-deck.md, "A4/A3/A2/NA · R4/R3/R2")
 //   so the two surfaces cannot disagree — coverageScorecard.test.jsx asserts these strings so
@@ -16,12 +16,19 @@ import { CORE_SCS, DENOMINATOR, SCOPE_SIZE, SCOPE_LABEL } from './activeScope.js
 // Computed from the capability tables, never from scan data. Companion to RuleBreakdown (what
 // THIS scan found). See assessCoverage.js.
 
-// Assessment lanes.
+// Assessment lanes. The glyph is a MONOCHROME character (✓ / ! / ✕ / –), board assess-11's icon
+// language — not a colour emoji. That is the point of the change, not a stylistic preference: a
+// colour emoji renders in its own fixed colour regardless of CSS, so it cannot follow the tile's own
+// `ink` (a dark-mode theme swap left every status dot the same green/amber/red on a dark panel,
+// which is a contrast and a brand-consistency problem a plain character does not have — the glyph
+// inherits `color` like any other text). LABEL WORDING is unchanged and stays "Fully Assessed" etc.,
+// not board 11's "Certifiable" phrasing — that vocabulary is a documented cross-surface contract with
+// docs/acp-architecture-deck.md (A4/A3/A2/NA), which this PR does not touch.
 const A = {
-  auto: { emoji: '🟢', bg: '#e6f2e0', ink: '#2b6a1e', bd: '#c3ddb2', label: 'Fully Assessed' },
-  review: { emoji: '🟡', bg: '#fbf3d6', ink: '#8a6a0e', bd: '#eeda9a', label: 'Potential Issue' },
-  human: { emoji: '🔴', bg: '#f8e3e0', ink: '#98392b', bd: '#eec2bb', label: 'Human Assessment Required' },
-  na: { emoji: '⚪', bg: '#f1eff4', ink: '#7a7386', bd: '#e0dae6', label: 'Not applicable' },
+  auto: { emoji: '✓', bg: '#e6f2e0', ink: '#2b6a1e', bd: '#c3ddb2', label: 'Fully Assessed' },
+  review: { emoji: '!', bg: '#fbf3d6', ink: '#8a6a0e', bd: '#eeda9a', label: 'Potential Issue' },
+  human: { emoji: '✕', bg: '#f8e3e0', ink: '#98392b', bd: '#eec2bb', label: 'Human Assessment Required' },
+  na: { emoji: '–', bg: '#f1eff4', ink: '#7a7386', bd: '#e0dae6', label: 'Not applicable' },
 }
 // Remediation paths.
 const R = {
@@ -35,12 +42,12 @@ const fmtLabel = (f) => '.' + f
 // html) reads as human-only; a buildable gap reads as not-yet-assessed (N/A) with a footnote.
 const foldLane = (lane) => (lane === 'at' ? 'human' : lane === 'gap' ? 'na' : lane)
 const assessLane = (p) => foldLane(p.assessment)
-const LANE_EMOJI = { auto: '🟢', review: '🟡', human: '🔴', na: '⚪' }
+const LANE_EMOJI = { auto: '✓', review: '!', human: '✕', na: '–' }
 const REM_EMOJI = { auto: '⚡', ai: '🤖', human: '👤', na: '—' }
 const GRID_FMTS = ['docx', 'xlsx', 'pptx', 'pdf']
 
 // The Rule × Document-type grid — one glance at what ACP does for every criterion × format.
-// Each cell is the assessment lane emoji (🟢/🟡/🔴/⚪); hover shows assessment + remediation.
+// Each cell is the assessment lane emoji (✓/!/✕/–); hover shows assessment + remediation.
 function RuleFormatMatrix({ rows }) {
   return (
     <div style={{ overflowX: 'auto', marginTop: 12 }}>
@@ -65,7 +72,7 @@ function RuleFormatMatrix({ rows }) {
                 const label = a === 'auto' ? 'Fully Assessed' : a === 'review' ? 'Potential Issue' : a === 'human' ? 'Human Assessment Required' : 'N/A for this format'
                 return (
                   <td key={f} style={{ textAlign: 'center', fontSize: 16 }} title={`${p.sc} · .${f} — ${label} · ${remTxt}`}>
-                    {LANE_EMOJI[a] || '⚪'}
+                    {LANE_EMOJI[a] || '–'}
                   </td>
                 )
               })}
@@ -113,7 +120,7 @@ function Bar({ counts, total }) {
 
 // Coverage-gap warning — the (criterion × format) cells where the barrier applies but ACP has NO
 // assessment method (buildable 'gap' or AT-only 'at'), derived by assessmentGaps from the same
-// capability tables. This is the piece the folded lanes hid: gap→⚪ and at→🔴 fold a "not-yet-
+// capability tables. This is the piece the folded lanes hid: gap→– and at→✕ fold a "not-yet-
 // assessed" hole into N/A / human, so the operator could not tell a genuine hole from an
 // inapplicable cell. Here it is stated per format, in plain "N criteria have no assessment method
 // for .fmt" language, using GAP_REASON/AT_REASON for the why. When there is no hole (a document-
@@ -127,7 +134,7 @@ function GapSummary({ files, documents }) {
     return (
       <p className="muted" style={{ fontSize: 11.5, margin: '10px 0 0', lineHeight: 1.5 }}>
         <b style={{ color: '#2b6a1e' }}>✓ No coverage gaps</b> — ACP has an assessment method for every
-        applicable criterion in {fmts}. Cells shown as ⚪ are barriers that can’t exist in these file
+        applicable criterion in {fmts}. Cells shown as – are barriers that can’t exist in these file
         types, not methods ACP is missing.
       </p>
     )
@@ -163,7 +170,7 @@ function GapSummary({ files, documents }) {
       <div className="muted" style={{ fontSize: 11, marginTop: 7, lineHeight: 1.45 }}>
         {g.cells.some((c) => c.lane === 'at') && <>{AT_REASON}. </>}
         {g.cells.some((c) => c.lane === 'gap') && <>Buildable gaps are statically detectable criteria ACP does not check yet. </>}
-        These fold into ⚪/🔴 above; listed here so a missing method is not mistaken for an inapplicable cell.
+        These fold into –/✕ above; listed here so a missing method is not mistaken for an inapplicable cell.
       </div>
     </div>
   )
@@ -208,15 +215,15 @@ export default function CoverageScorecard({ files = [] }) {
       {/* Layer 1 — Assessment: can ACP determine compliance? */}
       <div className="muted" style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.03em', textTransform: 'uppercase', marginBottom: 4 }}>Assessment — can we determine compliance?</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' }}>
-        <Tile emoji="🟢" n={assess.auto} total={s.total} kind="auto" palette={A} sub="assessed &amp; certifiable" />
-        <Tile emoji="🟡" n={assess.review} total={s.total} kind="review" palette={A} sub="evidence flagged · human confirms" />
-        {assess.human > 0 && <Tile emoji="🔴" n={assess.human} total={s.total} kind="human" palette={A} sub="a person must assess" />}
-        <Tile emoji="⚪" n={assess.na} total={s.total} kind="na" palette={A} sub="barrier can't exist here" />
+        <Tile emoji="✓" n={assess.auto} total={s.total} kind="auto" palette={A} sub="assessed &amp; certifiable" />
+        <Tile emoji="!" n={assess.review} total={s.total} kind="review" palette={A} sub="evidence flagged · human confirms" />
+        {assess.human > 0 && <Tile emoji="✕" n={assess.human} total={s.total} kind="human" palette={A} sub="a person must assess" />}
+        <Tile emoji="–" n={assess.na} total={s.total} kind="na" palette={A} sub="barrier can't exist here" />
       </div>
       <div style={{ marginTop: 10 }}><Bar counts={assess} total={s.total} /></div>
 
       {/* Coverage-gap warning — where ACP has no assessment method (buildable / needs-AT), stated
-          per format so the folded ⚪/🔴 lanes don't hide a genuine hole. */}
+          per format so the folded –/✕ lanes don't hide a genuine hole. */}
       <GapSummary files={files} documents={documents} />
 
       {/* Layer 2 — Remediation: if it fails, how is it fixed? */}
@@ -232,11 +239,11 @@ export default function CoverageScorecard({ files = [] }) {
       </div>
 
       <p className="muted" style={{ fontSize: 11.5, margin: '12px 0 0', lineHeight: 1.5 }}>
-        <b style={{ color: 'inherit' }}>🟢 Fully Assessed</b> = ACP certifies pass &amp; fail.
-        <b style={{ color: 'inherit' }}> 🟡 Potential Issue</b> = ACP flags evidence of a likely issue; a reviewer confirms.
-        <b style={{ color: 'inherit' }}> 🔴 Human Assessment Required</b> = ACP can't assess it.
-        <b style={{ color: 'inherit' }}> ⚪ N/A</b> = the barrier can't exist in these file types.
-        Assessment and remediation are independent — e.g. a 🟡 finding can still carry a 🤖 one-click fix. Capability view — independent of any single scan.
+        <b style={{ color: 'inherit' }}>✓ Fully Assessed</b> = ACP certifies pass &amp; fail.
+        <b style={{ color: 'inherit' }}> ! Potential Issue</b> = ACP flags evidence of a likely issue; a reviewer confirms.
+        <b style={{ color: 'inherit' }}> ✕ Human Assessment Required</b> = ACP can't assess it.
+        <b style={{ color: 'inherit' }}> – N/A</b> = the barrier can't exist in these file types.
+        Assessment and remediation are independent — e.g. a ! finding can still carry a 🤖 one-click fix. Capability view — independent of any single scan.
       </p>
       {/* Say out loud why this total and the panel below differ. An unexplained 20 here beside a
           14 there reads as one of them being wrong. */}
@@ -260,7 +267,7 @@ export default function CoverageScorecard({ files = [] }) {
       {grid && (
         <>
           <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>
-            🟢 Fully Assessed · 🟡 Potential Issue · 🔴 Human Assessment Required · ⚪ N/A — hover a cell for the remediation lane.
+            ✓ Fully Assessed · ! Potential Issue · ✕ Human Assessment Required · – N/A — hover a cell for the remediation lane.
           </div>
           <RuleFormatMatrix rows={s.per} />
         </>
