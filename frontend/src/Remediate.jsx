@@ -17,6 +17,7 @@ import CloseoutPanel from './CloseoutPanel.jsx'
 import RemediationDocProgress from './RemediationDocProgress.jsx'
 import DocumentAudit from './DocumentAudit.jsx'
 import FindingComments from './FindingComments.jsx'
+import DueDate from './DueDate.jsx'
 import FixOutcomes from './FixOutcomes.jsx'
 import { autoFixRows, matchesWorkflow } from './remediationInboxModel.js'
 import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
@@ -968,6 +969,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               <>
                 <RemediationDocProgress queue={inboxQueue} file={sel.file} decisions={decisions} />
                 <DocumentAudit scanId={sel.scanId || run?.id} file={sel.file} />
+                <DueDate scanId={sel.scanId || run?.id} file={sel.file}
+                         value={decisions[sel.file]?.due_date || ''}
+                         assignee={decisions[sel.file]?.assignee || ''} />
                 <FindingComments scanId={sel.scanId || run?.id} finding={sel} />
               </>
             ) : null)}

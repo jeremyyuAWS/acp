@@ -836,6 +836,42 @@ def files_assigned_to(decisions: dict | None, email: str | None) -> frozenset:
     return frozenset(f for f, who in assignments(decisions).items() if who == email)
 
 
+def due_dates(decisions: dict | None) -> dict:
+    """The per-file due-date axis (R19), `{file: iso_date}`. The exact sibling of `assignments`:
+    it reads ONE decision kind (`kind='due_date'`, `value=<ISO date string>`) off the same
+    `store.get_decisions(scan_id, owner)` map. No new persistence — a due date rides `scan_decisions`
+    on its `(scan_id, file, kind)` PK, so it is owner-scoped for free and one file carries at most
+    one due date (setting a new one upserts). A due date is meaningful only paired with an owner
+    (R17), so this is the deadline half of "who does this, by when".
+
+    Only files with a non-empty due date appear; a file never dated, or whose date was cleared (the
+    row deleted), is simply absent.
+    """
+    if not decisions:
+        return {}
+    out: dict = {}
+    for f, kinds in decisions.items():
+        if isinstance(kinds, dict):
+            when = kinds.get("due_date")
+            if when:
+                out[f] = when
+    return out
+
+
+def overdue_files(decisions: dict | None, today: str) -> frozenset:
+    """The files whose due date is strictly before `today` (an ISO date, e.g. '2026-08-20').
+
+    Comparison is lexicographic on the ISO date prefix, which is correct for `YYYY-MM-DD` and for
+    full ISO timestamps alike (they sort chronologically as text). A file due *today* is NOT overdue
+    — the deadline is the end of that day, not its start. An empty/None `today` matches nothing
+    rather than treating every dated file as overdue.
+    """
+    if not today:
+        return frozenset()
+    day = today[:10]
+    return frozenset(f for f, when in due_dates(decisions).items() if str(when)[:10] < day)
+
+
 def filter_issues_to_scope(issues: list[dict], fmt: str | None,
                            scope: dict | None = None) -> list[dict]:
     """Drop findings whose (criterion, format) pair the operator left out of scope.
