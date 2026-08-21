@@ -138,8 +138,8 @@ def adc_scopes(request: Request):
     re-consent (`gcloud auth application-default login --scopes=...`), or the deployment must move
     to a service account, which does honour `scopes=`.
     """
-    from .system import _require_admin
-    _require_admin(request)
+    from .system import _require_owner
+    _require_owner(request)   # reports on the deployment's server-side credential — owner-only, not a tenant's business
 
     import google.auth
     import google.auth.transport.requests as _gart

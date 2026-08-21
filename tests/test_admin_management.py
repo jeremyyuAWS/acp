@@ -51,6 +51,11 @@ def env(monkeypatch):
     store = _Store()
     monkeypatch.setattr(core, "OWNER_EMAIL", "owner@hosp.org", raising=False)
     monkeypatch.setattr(core, "ADMIN_EMAILS", {"env-admin@hosp.org"}, raising=False)
+    # This file exercises the ROLE-BASED admin union (owner / env / owner-promoted store set) and its
+    # promote/demote flow — which is precisely the OPEN_ACCESS=off behaviour. With open access on
+    # (the default) every authenticated user is an admin, so the union/demote distinctions collapse;
+    # that behaviour is covered separately in test_open_access_model.py. Pin the flag off here.
+    monkeypatch.setattr(core, "OPEN_ACCESS", False, raising=False)
     monkeypatch.setattr(core, "store", store, raising=False)
     monkeypatch.setattr(core, "get_store", lambda: store, raising=False)
     return s, core, store

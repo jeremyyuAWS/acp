@@ -7,9 +7,12 @@ disposition_audit (requires_approval policies — the default) or are actioned
 immediately. /approvals lists the pending queue; approve performs the action,
 reject records the refusal. Every outcome lands in disposition_audit.
 
-Safety posture: all mutating routes are owner-gated via _require_admin (the
-per-route admin check this module's preview-era docstring asked for), delete
-is always Drive trash (never permanent — see disposition.execute_action), and
+Safety posture: authoring routes (create / update / enable / preview a policy) are open to any
+authenticated user under the open-access model (_require_admin, which every signed-in user now
+passes) — a policy is created disabled and never moves a file on its own. The two routes that
+actually AUTHORISE or PERFORM a move-or-trash — execute and approve — are OWNER-gated
+(_require_owner), so no single non-owner can act on the estate. delete is always Drive trash
+(never permanent — see disposition.execute_action), and
 a doc/policy pair with a live outcome (pending or applied) is never re-queued.
 """
 from __future__ import annotations
@@ -21,7 +24,7 @@ from pydantic import BaseModel
 
 import core
 import disposition
-from .system import _require_admin
+from .system import _require_admin, _require_owner
 
 router = APIRouter()
 
@@ -340,7 +343,7 @@ def execute_policy(policy_id: str, request: Request):
     """Run an ENABLED policy for real. requires_approval matches queue as
     pending_approval; the rest are actioned immediately. Idempotent per
     (doc, policy): a pending or applied outcome is never re-queued."""
-    _require_admin(request)
+    _require_owner(request)   # actually moves/trashes files — owner-only
     policy = core.store.get_disposition_policy(policy_id)
     if policy is None:
         raise HTTPException(404, "policy not found")
@@ -435,7 +438,7 @@ def approve_disposition(audit_id: str, request: Request,
     decision is not re-proposed on the next execute run — asking a reviewer the same question
     twice is how an approval queue stops being trusted.
     """
-    _require_admin(request)
+    _require_owner(request)   # authorises a move/trash of the file — owner-only
     row = core.store.get_disposition_audit(audit_id)
     if row is None or row["result"] != "pending_approval":
         raise HTTPException(404, "no pending approval with that id")

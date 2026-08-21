@@ -88,6 +88,17 @@ ADMIN_EMAILS = {
     e.strip().lower() for e in os.environ.get("ACP_ADMIN_EMAILS", "").split(",") if e.strip()
 }
 
+# OPEN-ACCESS MODEL. When on (the default), there is NO separate admin view: every user who is
+# admitted at all (email_allowed — owner, allow-listed tester, or an allowed domain) sees the same
+# screens and can use the same non-destructive features, including creating lifecycle rules. It is
+# deliberately NOT a bypass of the login perimeter — an unauthenticated caller (empty email) is
+# still nobody — and it does NOT open the genuinely destructive, irreversible actions, which stay
+# owner-only via _require_owner: wiping all data (POST /admin/reset), managing who can log in
+# (PUT /admin/allowlist, POST /admin/invite, PUT /admin/admins), and authorising/performing a file
+# move-or-trash (disposition approve/execute). Set ACP_OPEN_ACCESS=0 to restore role-based admin
+# (owner + ACP_ADMIN_EMAILS + owner-promoted store admins).
+OPEN_ACCESS = os.environ.get("ACP_OPEN_ACCESS", "1").strip().lower() not in ("0", "false", "no", "off")
+
 
 def is_owner(email: str | None) -> bool:
     """The single protected owner (ACP_OWNER_EMAIL) — the root of trust that manages who else is an
@@ -99,12 +110,18 @@ def is_owner(email: str | None) -> bool:
 
 
 def is_admin(email: str | None) -> bool:
-    """May this identity use the platform-admin surfaces (scope editor, platform Settings, access
-    management)? True for the protected OWNER_EMAIL, any ACP_ADMIN_EMAILS entry (env, permanent), any
-    email the owner promoted from Settings (store `admin_emails`), or — when no owner is configured at
-    all (local dev / demo / no-auth) — everyone. This is the single source of truth both the SPA flag
-    (is_scope_owner) and the API gate (_require_admin) consult, so they can never disagree about who
-    is an admin."""
+    """May this identity use the platform-admin surfaces (scope editor, platform Settings, the
+    lifecycle rule builder, access-management views)? True for the protected OWNER_EMAIL, any
+    ACP_ADMIN_EMAILS entry (env, permanent), any email the owner promoted from Settings (store
+    `admin_emails`), or — when no owner is configured (local dev / demo / no-auth) — everyone.
+
+    Under the OPEN_ACCESS model (the default, see the constant above) it is additionally True for ANY
+    authenticated, admitted user: there is no separate admin view, so everyone who can sign in gets
+    the same screens and features. An empty email (unauthenticated) is still never an admin — the
+    login perimeter is unchanged — and the destructive actions are separately owner-gated.
+
+    This is the single source of truth both the SPA flag (is_scope_owner) and the API gate
+    (_require_admin) consult, so they can never disagree about who sees the admin surface."""
     if not OWNER_EMAIL:
         return True
     e = (email or "").strip().lower()
@@ -112,6 +129,8 @@ def is_admin(email: str | None) -> bool:
         return False
     if e == OWNER_EMAIL or e in ADMIN_EMAILS:
         return True
+    if OPEN_ACCESS:
+        return True   # any authenticated, admitted user — same views/features for everyone
     try:
         return e in get_store().get_admins()
     except Exception:
