@@ -140,6 +140,21 @@ describe('App composes the Assess tab the way the board specifies', () => {
     expect(app()).toMatch(/assessPhase === 'idle' && !assessed && \([\s\S]{0,600}?<AssessSetup/)
   })
 
+  it('shows the results for a scan assessed in an EARLIER session, not only after a run this session', () => {
+    // The regression from the empty-panel report: results gated PURELY on assessPhase === 'done'
+    // left a scan assessed in a prior session showing a blank Assess tab on reload — AssessSetup is
+    // hidden by `assessed`, and the results were hidden by 'done' (assessPhase is 'idle' because
+    // AssessRunner's per-session cache is gone). The gate must also admit a persisted (assessed_at)
+    // scan that was NOT assessed this session, while still hiding results during a live run.
+    const s = app()
+    // resultsReady is the two-way gate: finished this session (done) OR a prior-session assessed scan.
+    expect(s).toMatch(/const resultsReady =[\s\S]{0,80}assessPhase === 'done'[\s\S]{0,120}?assessed_at[\s\S]{0,60}?justAssessed !== run\?\.id/)
+    // the results are gated on it…
+    expect(s).toMatch(/assessed && resultsReady && !runDetails && !assessFile && <><AssessSummary/)
+    // …and NOT purely on 'done' any more (the exact shape that produced the empty panel).
+    expect(s).not.toMatch(/assessed && assessPhase === 'done' && !runDetails/)
+  })
+
   it('passes the discovery timestamp FORMATTED, never the raw column', () => {
     // This assertion previously pinned `discoveredAt={run.completed_at || null}` and passed while
     // the screen was wrong. AssessSetup interpolates the value straight into "From discovery run
