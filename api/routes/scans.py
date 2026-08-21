@@ -839,6 +839,47 @@ def scan_timeline(sid: str, request: Request, file: str = Query(...)):
     return core.store.document_timeline(sid, file)
 
 
+@router.get("/scans/{sid}/comments")
+def list_finding_comments(sid: str, request: Request, finding_key: str = Query(...)):
+    """R18 · Comments on a finding — the human discussion thread for ONE finding, oldest first.
+    Owner-scoped like every per-scan surface: a user reads only their own scans' threads."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    return core.store.list_finding_comments(sid, finding_key)
+
+
+@router.get("/scans/{sid}/comment-counts")
+def finding_comment_counts(sid: str, request: Request):
+    """How many comments each finding in the scan carries, keyed by finding_key — so the inbox
+    can show a '💬 n' marker without fetching every thread. Owner-scoped."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    return core.store.count_finding_comments(sid)
+
+
+@router.post("/scans/{sid}/comments")
+async def add_finding_comment(sid: str, request: Request):
+    """R18 · Post one comment to a finding's thread. Body: {"finding_key": "...", "body": "...",
+    "file": "...", "rule_id": "..."}. The author is the signed-in user, never the client — so a
+    comment cannot be attributed to someone else. Append-only; empty bodies are rejected."""
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    finding_key = (body.get("finding_key") or "").strip()
+    text = (body.get("body") or "").strip()
+    if not finding_key:
+        raise HTTPException(422, "finding_key is required")
+    if not text:
+        raise HTTPException(422, "comment body is required")
+    return core.store.add_finding_comment(
+        sid, finding_key, owner, text,
+        file=(body.get("file") or "").strip(), rule_id=(body.get("rule_id") or "").strip())
+
+
 @router.get("/scans/{sid}/applied-fixes")
 def scan_applied_fixes(sid: str, request: Request):
     """The concrete values AI fixes wrote this scan (vision-generated alt text + a small
