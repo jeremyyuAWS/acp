@@ -77,6 +77,7 @@ const Reconciliation = ({ id, heading, note, rec, renderLabel }) => (
 
 export default function DiscoveryResults({
   files = null, inventory = null, scopeLine = null, runAt = null, policies = null, reasonOf = undefined,
+  reasonSampleOf = null, reasonFetchLikely = null,
   acknowledged = false, onAcknowledge = null,
   overrides: overridesProp, onOverridesChange,
   onExport = null, actor = null, scanId = null,
@@ -95,6 +96,12 @@ export default function DiscoveryResults({
 
   const types = typeReconciliation(files)
   const unread = unreadableReasons(files, reasonOf)
+  // Buckets whose RECORDED message names a transport/HTTP failure. Derived from the log, not
+  // from the fact that a file failed — a scan with no such messages gets no clause at all.
+  const fetchBuckets = (unread && reasonFetchLikely)
+    ? unread.buckets.filter((b) => b.recorded && reasonFetchLikely(b.reason))
+    : []
+  const fetchFiles = fetchBuckets.reduce((n, b) => n + b.count, 0)
   const recRows = recommendationRows(files, policies)
   const recRec = recommendationReconciliation(files)
   const ack = acknowledgementSummary(files, overrides)
@@ -236,12 +243,33 @@ export default function DiscoveryResults({
                 <Reconciliation
                   id="discres-unread" heading="Reason · files" rec={unread}
                   renderLabel={(b) => (b.recorded
-                    ? b.reason
+                    ? (
+                      <span title={(reasonSampleOf && reasonSampleOf(b.reason)) || undefined}>
+                        {b.reason}
+                      </span>
+                    )
                     : <span className="muted">No reason was recorded for these</span>)} />
+                {/* ONE orienting clause, and only when the recorded message names a transport or
+                    HTTP failure. "Could not be read" reads as "the document is broken", and that
+                    reading is what sent a whole investigation to inspect 22 SharePoint documents
+                    that had never been fetched at all — the download was routed to the wrong API.
+                    This does not re-diagnose the failure; it says which end of it the recorded
+                    message is about. */}
+                {fetchBuckets.length > 0 && (
+                  <p className="scopewarn" role="status"
+                     style={{ fontSize: 12, margin: '10px 0 0', lineHeight: 1.5 }}>
+                    {fetchFiles.toLocaleString()} of {unread.total.toLocaleString()} failed with a
+                    transport or HTTP error ({fetchBuckets.map((b) => b.reason).join(', ')}), so
+                    {fetchFiles === 1 ? ' that file' : ' those files'} may never have been fetched.
+                    That points at the source or the connection, not at the
+                    {fetchFiles === 1 ? ' document' : ' documents'}.
+                  </p>
+                )}
                 <p className="muted" style={{ fontSize: 11.5, margin: '12px 0 0', lineHeight: 1.5 }}>
                   Shown apart from the recommendations so a partial read is never mistaken for a
                   complete one. A file with no recorded reason is counted as exactly that — the
-                  reason is never guessed from the failure.
+                  reason is never guessed from the failure. Hover a reason for the message the scan
+                  actually recorded.
                 </p>
               </>
             )}

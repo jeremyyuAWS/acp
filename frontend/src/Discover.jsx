@@ -17,7 +17,8 @@ import DiscoverInventoryExport from './DiscoverInventoryExport.jsx'
 import DiscoveryCompleteness from './DiscoveryCompleteness.jsx'
 import { acknowledgementSummary } from './discoveryRecommendations.js'
 import { loadDiscoveryInventory, mergeLifecycle } from './discoveryInventory.js'
-import { getScanInventory } from './api.js'
+import { getScanInventory, listScanDecisions } from './api.js'
+import { buildUnreadableWhy } from './unreadableWhy.js'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
@@ -137,6 +138,27 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   }, [scanId])
   // Un-merged when the read has not completed — mergeLifecycle passes `files` straight through.
   const estateFiles = useMemo(() => mergeLifecycle(files, inv), [files, inv])
+
+  // WHY the unreadable files could not be read. The reason is recorded per file in the scan's
+  // decision log (`scan.file_error`) and was reachable only one drawer at a time; the aggregate
+  // breakdown on this screen read its reason off the file ROW, where the backend puts nothing, so
+  // it said "no reason was recorded" over a scan that had recorded every one.
+  //
+  // Same three-states-render-the-same rule as `inv` above: not asked, loading and failed all leave
+  // this null, and a null `reasonOf` restores exactly the previous behaviour — the buckets fall
+  // back to "not recorded", which is the honest answer while nothing has been read.
+  const [errLog, setErrLog] = useState(null)
+  useEffect(() => {
+    let live = true
+    setErrLog(null)
+    if (!scanId) return undefined
+    listScanDecisions(scanId).then((rows) => { if (live) setErrLog(Array.isArray(rows) ? rows : null) })
+    return () => { live = false }
+  }, [scanId])
+  const why = useMemo(
+    () => (errLog ? buildUnreadableWhy(errLog, estateFiles) : null),
+    [errLog, estateFiles],
+  )
 
   // The folder portion of a file's path, when it carries one — real scans name files by path
   // (`HR/policies/leave.docx`), SIM by bare filename. Empty string when there is no folder.
@@ -451,6 +473,9 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                              onRelist={() => onScan && onScan(run?.source === 'sharepoint' ? 'sharepoint' : 'drive')} />
 
       <DiscoveryResults files={estateFiles} inventory={scope?.inventory || null} scopeLine={scopeLine} runAt={runAt}
+                        reasonOf={why ? why.reasonOf : undefined}
+                        reasonSampleOf={why ? why.sampleOf : null}
+                        reasonFetchLikely={why ? why.fetchLikely : null}
                         acknowledged={ackRecs} onAcknowledge={setAckRecs}
                         overrides={assessAnyway} onOverridesChange={setAssessAnyway}
                         actor={me?.email || me?.name || null} scanId={scanId} />
