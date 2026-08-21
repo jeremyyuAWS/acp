@@ -93,14 +93,20 @@ def test_a_missing_scope_names_the_consent_that_would_fix_it(monkeypatch):
 
 def test_site_listing_covers_every_document_library(monkeypatch):
     """A team site routinely has several libraries. Scanning only the default would under-report
-    the estate in a way that looks exactly like a smaller estate."""
+    the estate in a way that looks exactly like a smaller estate.
+
+    The route is `/root/children`, not `/root/search`: a whole-site listing WALKS each library
+    now. Search reads the eventually-consistent index and under-reports a recently-changed
+    library with no error (#333 measured 39 of 178 on prod). Only the URL moved here — the claim
+    is unchanged and is still that every library is covered.
+    """
     import httpx
     monkeypatch.setattr(httpx, "get", _fake_graph({
         "https://graph.microsoft.com/v1.0/sites/S/drives": {"value": [
             {"id": "d1", "name": "Documents"}, {"id": "d2", "name": "Policies"}]},
-        "https://graph.microsoft.com/v1.0/drives/d1/root/search": {"value": [
+        "https://graph.microsoft.com/v1.0/drives/d1/root/children": {"value": [
             {"id": "i1", "name": "a.docx", "file": {}}]},
-        "https://graph.microsoft.com/v1.0/drives/d2/root/search": {"value": [
+        "https://graph.microsoft.com/v1.0/drives/d2/root/children": {"value": [
             {"id": "i2", "name": "b.pdf", "file": {}}]},
     }))
     files = scanner._sp_list("tok", 50, site="S")
@@ -115,9 +121,9 @@ def test_same_item_id_in_two_libraries_is_two_documents(monkeypatch):
     monkeypatch.setattr(httpx, "get", _fake_graph({
         "https://graph.microsoft.com/v1.0/sites/S/drives": {"value": [
             {"id": "d1", "name": "A"}, {"id": "d2", "name": "B"}]},
-        "https://graph.microsoft.com/v1.0/drives/d1/root/search": {"value": [
+        "https://graph.microsoft.com/v1.0/drives/d1/root/children": {"value": [
             {"id": "SHARED", "name": "one.docx", "file": {}}]},
-        "https://graph.microsoft.com/v1.0/drives/d2/root/search": {"value": [
+        "https://graph.microsoft.com/v1.0/drives/d2/root/children": {"value": [
             {"id": "SHARED", "name": "two.docx", "file": {}}]},
     }))
     files = scanner._sp_list("tok", 50, site="S")
@@ -125,12 +131,18 @@ def test_same_item_id_in_two_libraries_is_two_documents(monkeypatch):
 
 
 def test_onedrive_mode_is_unchanged_and_records_no_drive(monkeypatch):
-    """No site → exactly the previous behaviour, and NO driveId, because that absence is what
-    every item stored before this change looks like. The download path reads it as /me/drive."""
+    """No site → NO driveId, because that absence is what every item stored before site support
+    looks like, and the download path reads it as /me/drive.
+
+    That contract is the reason the whole-OneDrive walk passes `/me/drive` as the BASE rather than
+    resolving the real drive id: resolving it would cost a round trip AND change what is stored on
+    every item, for no gain. The listing route is `/root/children` now — the walk — but the shape
+    of what it records is exactly as it was, which is what this case pins.
+    """
     seen: list[str] = []
     import httpx
     monkeypatch.setattr(httpx, "get", _fake_graph({
-        "https://graph.microsoft.com/v1.0/me/drive/root/search": {"value": [
+        "https://graph.microsoft.com/v1.0/me/drive/root/children": {"value": [
             {"id": "i1", "name": "mine.docx", "file": {}}]},
     }, seen))
     files = scanner._sp_list("tok", 50)
