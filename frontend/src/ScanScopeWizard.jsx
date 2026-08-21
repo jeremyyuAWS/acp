@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, Fragment } from 'react'
+import { useState, useEffect, useMemo, useRef, Fragment } from 'react'
 import { getSettings, updateSettings, getScanLocations, setScanLocations,
          listFolders, listSpFolders, listDispositionPolicies } from './api.js'
 import { scopeFooterPart, blockedReason } from './wizardScopeReady.js'
@@ -233,6 +233,14 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   // blank list is the wrong one — the same rule the picker and the source card already follow.
   const [scopeMode, setScopeMode] = useState('all')   // 'all' | 'some'
   const [saveFolders, setSaveFolders] = useState(false)    // write back to the card, off by default
+  // Set the instant a person picks a tile — guards the fetch below from overwriting an explicit
+  // choice with the saved default. Found live 2026-08-21: `scopeMode` starts 'all' (painting
+  // "Entire connected source" immediately), then this effect's fetch resolves ~1s later and,
+  // when the source has a saved folder set, silently flips it to 'some' — so a tile clicked
+  // during that window can render as selected and then revert under the user, and clicking
+  // Continue during the flash proceeds with whichever won the race rather than what's on screen.
+  // A ref, not state — read inside the fetch's `.then`, which must never rerun the effect.
+  const scopeModeTouched = useRef(false)
 
   useEffect(() => {
     if (!locKey) { setSavedFolders([]); return undefined }
@@ -242,7 +250,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
       const inc = (r.locations || {})[locKey] || []
       const exc = ((r.locations || {})._exclude || {})[locKey] || []
       setFolders(inc); setExcluded(exc); setSavedFolders(inc)
-      if (inc.length) setScopeMode('some')
+      if (inc.length && !scopeModeTouched.current) setScopeMode('some')
     }).catch(() => { if (alive) setSavedFolders([]) })
     return () => { alive = false }
   }, [locKey])
@@ -255,7 +263,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   // says something else — two answers to "what am I about to scan?" on one screen, which is the
   // failure the two-column layout exists to remove.
   const [pickerSeed, setPickerSeed] = useState(0)
-  const chooseAll = () => { setScopeMode('all'); setFolders([]); setExcluded([]); setPickerSeed((n) => n + 1) }
+  const chooseAll = () => { scopeModeTouched.current = true; setScopeMode('all'); setFolders([]); setExcluded([]); setPickerSeed((n) => n + 1) }
 
   // ── THE THREE STEPS ─────────────────────────────────────────────────────────────────────────
   //
@@ -685,7 +693,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                 const on = scopeMode === id
                 return (
                   <button key={id} type="button" role="radio" aria-checked={on} disabled={busy}
-                          onClick={() => (id === 'all' ? chooseAll() : setScopeMode('some'))}
+                          onClick={() => { scopeModeTouched.current = true; if (id === 'all') chooseAll(); else setScopeMode('some') }}
                           style={{ flex: '1 1 200px', textAlign: 'left', cursor: 'pointer',
                                    border: `1px solid ${on ? '#6D28D9' : 'var(--line)'}`,
                                    background: on ? '#F3EEFC' : 'var(--surface)', color: 'inherit',

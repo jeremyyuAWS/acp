@@ -175,6 +175,14 @@ def reorder_policies(body: PolicyReorder, request: Request):
     return core.store.list_disposition_policies(owner=owner)
 
 
+def _all_candidates(owner: str) -> list[dict]:
+    """Every document a disposition rule could match, right now: assessed documents plus the
+    inventory of scans still awaiting Assess. A file is covered by exactly one of the two sources
+    (see store.list_pending_disposition_candidates's own docstring for why), so this is a plain
+    concatenation, not a merge — no dedup needed."""
+    return core.store.list_all_documents(owner=owner) + core.store.list_pending_disposition_candidates(owner=owner)
+
+
 @router.get("/disposition/policies/conflicts")
 def list_conflicts(request: Request):
     """Files matched by 2+ ENABLED archive/delete rules right now, and which one would win —
@@ -194,7 +202,7 @@ def list_conflicts(request: Request):
     if not policies:
         return {"conflicts": []}
     out = []
-    for doc in core.store.list_all_documents(owner=owner):
+    for doc in _all_candidates(owner):
         matched = []
         for p in policies:
             try:
@@ -238,10 +246,11 @@ def _preview(match: list[dict], action: str, policy_id: str | None, owner: str) 
     and the count that rule actually produces could differ — and the entire reason the preview
     exists is that somebody is deciding on the strength of that number.
 
-    Read-only by construction: reads `documents`, runs `disposition.matches` in Python, writes
-    nothing. No file is touched, no disposition_audit row appended, no policy row created.
+    Read-only by construction: reads `documents` plus any not-yet-assessed scan inventory (see
+    `_all_candidates`), runs `disposition.matches` in Python, writes nothing. No file is touched,
+    no disposition_audit row appended, no policy row created.
     """
-    docs = core.store.list_all_documents(owner=owner)
+    docs = _all_candidates(owner)
     selected = [d for d in docs if disposition.matches(d, match)]
     # `total` is `docs` already fetched to run the predicate over — free to report, and it's
     # what turns "would_match: 812" into a percentage a person can judge a rule's breadth by
