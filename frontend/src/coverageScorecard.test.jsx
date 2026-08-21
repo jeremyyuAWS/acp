@@ -90,13 +90,16 @@ describe('CoverageScorecard renders the two-axis capability view (ADR 0023)', ()
     const txt = container.textContent
     // column headers for the four document formats
     for (const f of ['.docx', '.xlsx', '.pptx', '.pdf']) expect(txt).toContain(f)
-    // a representative criterion row + a lane emoji legend
+    // a representative criterion row + a lane glyph legend. The glyph is a MONOCHROME character
+    // (✓ / ! / ✕ / –, board assess-11), not a colour emoji — it inherits the tile's ink colour via
+    // CSS rather than carrying its own fixed colour.
     expect(txt).toContain('1.4.3')
-    expect(txt).toContain('🟢')
-    expect(txt).toContain('🟡')
-    // grid cells render the assessment-lane emoji (🟢 for 1.4.3 contrast in every format)
-    const cells = [...container.querySelectorAll('td')].filter((td) => td.textContent.trim() === '🟢')
-    expect(cells.length).toBeGreaterThan(0)
+    // grid cells render the assessment-lane glyph as the cell's ENTIRE trimmed content — a specific
+    // check, not a page-wide search for '!' or '–', both of which appear elsewhere on the page for
+    // unrelated reasons (em dashes, punctuation).
+    const cellsWith = (glyph) => [...container.querySelectorAll('td')].filter((td) => td.textContent.trim() === glyph)
+    expect(cellsWith('✓').length, 'no ✓ (Fully Assessed) cell in the grid').toBeGreaterThan(0)
+    expect(cellsWith('!').length, 'no ! (Potential Issue) cell in the grid').toBeGreaterThan(0)
   })
 
   it('toggling to all-document criteria grows the total beyond 20', async () => {
