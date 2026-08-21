@@ -177,6 +177,13 @@ describe('App composes the Assess tab the way the board specifies', () => {
     expect(app()).toMatch(/<AssessSummary[\s\S]{0,400}?\brun=\{run\}/)
   })
 
+  it('state 4 · feeds the not-started count from the backend so the partial banner can name it', () => {
+    // get_scan exposes run.not_assessed for a stopped run (the documents the scope selected but the
+    // run never assessed — they are not in the file list). Passing its count lets the partial banner
+    // say "N documents were never started" rather than only "of the M assessed".
+    expect(app()).toMatch(/<AssessSummary[\s\S]{0,500}?notStarted=\{run\?\.not_assessed\?\.count\}/)
+  })
+
   it('passes the discovery timestamp FORMATTED, never the raw column', () => {
     // This assertion previously pinned `discoveredAt={run.completed_at || null}` and passed while
     // the screen was wrong. AssessSetup interpolates the value straight into "From discovery run
