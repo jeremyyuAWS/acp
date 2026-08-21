@@ -1552,6 +1552,10 @@ class Store:
                     self._db.execute(cur,
                         "UPDATE scan_runs SET status='interrupted', completed_at=%s "
                         "WHERE id=%s AND status='running'", (self._now(), row["id"]))
+                    # Same as cancel_scan: an interrupted assess fan-out that got some documents
+                    # done keeps those results reachable. A discover-only interruption has no
+                    # file_records and stays unassessed.
+                    self._stamp_assessed_if_ran(cur, row["id"])
                 print(f"[scan] {row['id']}: marked interrupted — 'running' with no outstanding "
                       f"jobs for {int(age)}s (worker lost it, e.g. a deploy mid-scan)", flush=True)
                 return None
@@ -1597,7 +1601,23 @@ class Store:
             self._db.execute(cur,
                 "UPDATE scan_runs SET status='cancelled', completed_at=%s "
                 "WHERE id=%s AND status='running'", (self._now(), sid))
+            # A cancelled ASSESS fan-out has already assessed some documents (their file_records
+            # exist); stamp assessed_at so the run's PARTIAL results are reachable — the results
+            # views gate on assessed_at, and without this a stopped run showed nothing at all. Only
+            # when something ran: a discover-only cancel has no file_records and stays unassessed,
+            # which is correct — it is not a partial assessment. COALESCE so a run that had already
+            # finalized keeps its original stamp rather than being back-dated to the cancel.
+            self._stamp_assessed_if_ran(cur, sid)
         return True
+
+    def _stamp_assessed_if_ran(self, cur, sid: str) -> None:
+        """Stamp assessed_at on a non-finalized run that nonetheless assessed ≥1 document, so its
+        partial results reach the results views. No-op when nothing ran or a stamp already exists."""
+        self._db.execute(cur,
+            "UPDATE scan_runs SET assessed_at=COALESCE(assessed_at, %s) "
+            "WHERE id=%s AND assessed_at IS NULL "
+            "AND EXISTS (SELECT 1 FROM file_records WHERE scan_id=%s)",
+            (self._now(), sid, sid))
 
     # The counters finalize_scan_run writes, as a single SELECT so a derived-at-read value and
     # a stored one are computed from one definition and cannot drift apart.
@@ -1778,6 +1798,39 @@ class Store:
             # to a dict (or None) by _fill_run_aggregate above.
             _scope = run.get("scope")
             run["scan_scope"] = _scope.get("scan_scope") if isinstance(_scope, dict) else None
+            # State 4 (partial run): the documents the scope SELECTED but the run never assessed.
+            # They are not in the files array above — get_scan returns only what ran — so the results
+            # screen cannot name "the 13 not started" without this. The per-file jobs are the
+            # authoritative selected set (one 'scan_file' per document, 'scan_batch' bundles several);
+            # a not-started job was marked 'dead' by cancel_scan and its payload survives (only 'done'
+            # jobs are ever purged), so subtracting the analysed files from the enqueued files gives
+            # exactly what was left. Additive field, so no other reader of the files array is touched,
+            # and computed ONLY for a non-finalized run — a completed run has nothing outstanding.
+            if run.get("status") in ("cancelled", "interrupted"):
+                import json as _json
+                analysed = {f["file"] for f in files}
+                enqueued = []
+                self._db.execute(cur,
+                    "SELECT payload FROM jobs WHERE scan_id=%s AND type IN ('scan_file','scan_batch')", (sid,))
+                for jr in self._db.fetchall(cur):
+                    try:
+                        p = _json.loads(jr.get("payload") or "{}")
+                    except Exception:
+                        continue
+                    if p.get("file"):
+                        enqueued.append(p["file"])
+                    for it in (p.get("items") or []):
+                        if isinstance(it, dict) and it.get("file"):
+                            enqueued.append(it["file"])
+                # de-dup preserving order; drop what actually ran. dict.fromkeys is the ordered set.
+                not_started = [f for f in dict.fromkeys(enqueued) if f not in analysed]
+                run["not_assessed"] = {
+                    "count": len(not_started),
+                    # Capped so a huge stopped run cannot bloat the payload; the count is exact.
+                    "documents": [{"file": f, "name": f} for f in not_started[:500]],
+                    # assessed + not_started, robust even if some 'done' jobs were already purged.
+                    "selected": len(analysed) + len(not_started),
+                }
             # WHEN this run's inventory was taken. The column is stamped at discovery for every
             # run from here on; for a run discovered BEFORE it existed it is NULL, and the newest
             # per-file `scan_inventory.discovered_at` is the honest derivation — real persisted
