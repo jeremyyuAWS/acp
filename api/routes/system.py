@@ -80,6 +80,23 @@ def admin_reset(request: Request,
             "blobs_purged": blobs_purged}
 
 
+@router.post("/me/reset-data")
+def reset_my_data(request: Request, confirm: bool = Query(False)):
+    """Self-service reset (destructive + irreversible, DB rows only): clears the SIGNED-IN USER'S
+    OWN scans and everything tied to them, so two people testing concurrently never clear each
+    other's work — unlike /admin/reset, which wipes every user's data and is owner-only. No admin
+    gate here on purpose: this only ever touches the caller's own rows (see
+    store.reset_user_data's docstring for exactly what is and isn't cleared — notably, it does not
+    purge Blob/Drive copies, and it does not delete the immutable decision_log; it appends to it)."""
+    if not confirm:
+        raise HTTPException(400, "confirmation required — pass confirm=true")
+    owner = (getattr(request.state, "user_email", None) or "demo")
+    result = core.store.reset_user_data(owner)
+    core.store.log_decision(owner, "reset_user_data",
+                            detail=f"tables={len(result['cleared_tables'])}")
+    return result
+
+
 @router.post("/alerts/webhook")
 async def alert_webhook(request: Request, key: str = Query("")):
     """Receiver for Grafana alert notifications (public path, shared-secret).

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { resetDemoData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, getAiStatus, getAdmins, setAdmins, getMe } from './api.js'
+import { resetDemoData, resetMyData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, getAiStatus, getAdmins, setAdmins, getMe } from './api.js'
 import { SIM } from './sim.js'
 
 // What a write is allowed to claim when the API layer marked its own answer `simulated`.
@@ -74,6 +74,52 @@ export function ResetData() {
           {result.scope !== 'grafana' && `, deleted ${result.langfuse_traces_deleted} Langfuse trace(s)`}.
           {result.scope !== 'grafana' && result.langfuse_traces_deleted === 0 &&
             ' (No traces deleted — if Langfuse still shows data, clear it from its UI / retention settings.)'}
+        </p>
+      )}
+      {err && <p style={{ marginTop: 12, fontSize: 13, color: '#A32D2D' }}>⚠ {err}</p>}
+    </div>
+  )
+}
+
+// Self-service sibling of ResetData above: clears only the SIGNED-IN USER'S OWN scans, so two
+// people testing concurrently never clear each other's work — no admin role needed, no scope
+// choice (it's always "everything of mine"). Typed-confirm, same convention as ResetData.
+export function ResetMyData() {
+  const [typed, setTyped] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState(null)
+  const [err, setErr] = useState('')
+  const run = () => {
+    setBusy(true); setErr(''); setResult(null)
+    resetMyData()
+      .then((d) => { setResult(d); setTyped('') })
+      .catch((e) => setErr(e.message || 'reset failed'))
+      .finally(() => setBusy(false))
+  }
+  return (
+    <div style={{ maxWidth: 560 }}>
+      <h3 style={{ marginTop: 0 }}>Reset my test data</h3>
+      <p className="muted" style={{ fontSize: 13 }}>
+        Wipes <strong>your own</strong> scans and everything tied to them — findings, decisions,
+        review comments, applied fixes — so you can test with a clean slate. Other signed-in
+        users' scans are untouched. Does <strong>not</strong> delete files from SharePoint /
+        OneDrive / Drive, and does not remove already-written remediated copies from storage.
+        This cannot be undone.
+      </p>
+      <label style={{ fontSize: 13 }}>Type <code>RESET</code> to confirm:
+        <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="RESET"
+               style={{ marginLeft: 8, padding: '4px 8px', border: '1px solid var(--line)', borderRadius: 6 }} />
+      </label>
+      <div style={{ marginTop: 14 }}>
+        <button onClick={run} disabled={busy || typed !== 'RESET'}
+                style={{ background: typed === 'RESET' ? '#A32D2D' : '#ccc', color: '#fff', border: 'none',
+                         borderRadius: 8, padding: '8px 16px', cursor: typed === 'RESET' ? 'pointer' : 'not-allowed', fontWeight: 600 }}>
+          {busy ? 'Resetting…' : 'Reset my data'}
+        </button>
+      </div>
+      {result && (
+        <p style={{ marginTop: 12, fontSize: 13, color: '#3B6D11' }}>
+          ✓ Reset done — cleared {result.cleared_tables?.length || 0} table(s) for {result.owner}.
         </p>
       )}
       {err && <p style={{ marginTop: 12, fontSize: 13, color: '#A32D2D' }}>⚠ {err}</p>}
@@ -737,17 +783,20 @@ export default function Settings({ onClose, files = [], onDelegationChange }) {
         {/* Above the subtabs on purpose — the SIM badge is true of every write path in this panel
             (the Users allowlist included), not only the panels reachable from a tab. */}
         {SIM && <SimNotice />}
-        {/* Scoped to access management: Owners + Users only. The other admin panels (Scoring rules,
-            Estate, File types, Remediated storage, Disposition, Data reset, AI-provider governance)
-            are still exported from this module and covered by tests — add a button + body to
-            resurface one. */}
+        {/* Scoped to access management (Owners + Users) plus the one self-service action every
+            signed-in user needs (My Data). The remaining admin-only panels (Scoring rules, Estate,
+            File types, Remediated storage, Disposition, the global admin Data reset,
+            AI-provider governance) are still exported from this module and covered by tests —
+            add a button + body to resurface one. */}
         <div className="subtabs" role="tablist" aria-label="Settings sections">
           <button role="tab" aria-selected={tab === 'owners'} className={tab === 'owners' ? 'fchip on' : 'fchip'} onClick={() => setTab('owners')}>Owners</button>
           <button role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'fchip on' : 'fchip'} onClick={() => setTab('users')}>Users</button>
+          <button role="tab" aria-selected={tab === 'mydata'} className={tab === 'mydata' ? 'fchip on' : 'fchip'} onClick={() => setTab('mydata')}>My Data</button>
         </div>
         <div className="setbody">
           {tab === 'owners' && <OwnerDelegate files={files} onChanged={onDelegationChange} />}
           {tab === 'users' && <AllowList />}
+          {tab === 'mydata' && <ResetMyData />}
         </div>
       </div>
     </div>
