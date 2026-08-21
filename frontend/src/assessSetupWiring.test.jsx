@@ -171,6 +171,12 @@ describe('App composes the Assess tab the way the board specifies', () => {
     expect(app()).toMatch(/<AssessSummary[\s\S]{0,300}?assessedAt=\{fmtStamp\(run\?\.assessed_at\)\}/)
   })
 
+  it('seven states · passes the run to the summary, so a stopped or failed run is classified as one', () => {
+    // The file list alone cannot distinguish a partial or failed run from a complete one — the run's
+    // own status can. Without this prop AssessSummary can only ever render the completed states.
+    expect(app()).toMatch(/<AssessSummary[\s\S]{0,400}?\brun=\{run\}/)
+  })
+
   it('passes the discovery timestamp FORMATTED, never the raw column', () => {
     // This assertion previously pinned `discoveredAt={run.completed_at || null}` and passed while
     // the screen was wrong. AssessSetup interpolates the value straight into "From discovery run
