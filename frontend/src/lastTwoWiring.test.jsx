@@ -108,7 +108,7 @@ describe('no redesign component ships unreachable', () => {
   // and a check that quietly matches nothing is worse than no check.
   const BOARD_COMPONENTS = [
     'AssessSetup', 'AssessSummary', 'AssessWorklist', 'AssessFileFindings',
-    'DiscoveryResults', 'DiscoverInventoryExport', 'AssessmentReconciliation',
+    'DiscoveryResults', 'DiscoverInventoryExport', 'DiscoveryCompleteness', 'AssessmentReconciliation',
     'AssertionScope', 'NextStep', 'RunDetails',
     'RemediationWork', 'RemediationApprovals', 'ManualWork', 'RemediationVerify',
     'DeliveryPanel', 'CloseoutPanel', 'FixOutcomes', 'RemediationDocProgress', 'DocumentAudit',

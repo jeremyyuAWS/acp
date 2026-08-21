@@ -16,6 +16,7 @@ import EstateCoverage from './EstateCoverage.jsx'
 import { estateProgressFromFiles } from './estateProgress.js'
 import DiscoveryResults from './DiscoveryResults.jsx'
 import DiscoverInventoryExport from './DiscoverInventoryExport.jsx'
+import DiscoveryCompleteness from './DiscoveryCompleteness.jsx'
 import { acknowledgementSummary } from './discoveryRecommendations.js'
 import { loadDiscoveryInventory, mergeLifecycle } from './discoveryInventory.js'
 import { getScanInventory } from './api.js'
@@ -87,7 +88,7 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 // tab. Both OPTIONAL: every existing caller and test constructs Discover without them, and the
 // ad-hoc panel simply does not render when `me` is absent rather than throwing.
 export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null, onCertified,
-  hasSPToken = false, runAt = null }) {
+  hasSPToken = false, runAt = null, run = null, scanList = null }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
   // component is given neither — Discover takes scanId and scope, not the run. The pieces it needs
   // are assembled here rather than threading the whole run object through a new prop; the resolver
@@ -440,6 +441,17 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
 
           It self-guards: no inventory to export renders nothing, and it says "not recorded"
           rather than inventing a date for a run the backend never stamped. */}
+      {/* IS THIS THE WHOLE ESTATE? Directly above the export, because an inventory taken out of
+          ACP outlives the screen that qualified it — a reader should meet the completeness caveat
+          before the download button, not after.
+
+          Self-guarding: it renders nothing when it has nothing to say. A panel that appeared on
+          every run saying "this might be incomplete" would be decoration — true of all software,
+          useful to nobody, and it would train the reader to skip the box that one day carries a
+          real signal. */}
+      <DiscoveryCompleteness run={run} scanList={scanList}
+                             onRelist={() => onScan && onScan(run?.source === 'sharepoint' ? 'sharepoint' : 'drive')} />
+
       <DiscoverInventoryExport scanId={scanId} run={runForExport}
                                inventory={scope?.inventory || null} />
 
