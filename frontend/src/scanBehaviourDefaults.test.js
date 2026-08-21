@@ -19,6 +19,13 @@
  * Asserted against App.jsx's TEXT rather than by mounting App, for the same reason the CI wiring
  * tests read ci.yml: mounting the whole application to read four initial useState values pulls in
  * the entire provider tree, and a failure there would report as anything but "a default moved".
+ *
+ * `queuedScan` is a DIFFERENT kind of default from the other three, though it lives in the same
+ * useState block: deepScan/incremental/excludeRemediated decide WHAT a scan does (data-scope
+ * behaviour a user could reasonably want to change per run); queuedScan decides HOW it runs
+ * (session-scoped thread vs. durable queue — reliability, not scope). It flipped to true
+ * (2026-08-21) because the session-scoped path is lost outright when its replica restarts, and
+ * this app redeploys on every merge — not a rare edge case. See App.jsx's own comment on it.
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -31,7 +38,8 @@ const APP = readFileSync(join(HERE, 'App.jsx'), 'utf8')
 // [state name, expected initial value, why it is that way]
 const DEFAULTS = [
   ['deepScan', 'false', 'PII extraction doubles scan time; it is opt-in'],
-  ['queuedScan', 'false', 'session-scoped is the pilot default'],
+  ['queuedScan', 'true',
+   'the session-scoped path is lost outright when its replica restarts, and this app redeploys on every merge'],
   ['incremental', 'false',
    'a skipped file still reports a score, so the skip is invisible in the result'],
   ['excludeRemediated', 'true',
@@ -47,20 +55,33 @@ describe('the Scan behaviour group starts from a known baseline', () => {
     })
   }
 
-  it('leaves exactly one of the four on, and it is the safety one', () => {
+  it('the two DATA-SCOPE switches (deepScan, incremental) stay off by default', () => {
     // Stated as a whole-group property so "turn them all off" cannot quietly take
     // exclude_remediated with it. That request was made on 2026-08-19 and this is the one
     // deliberately held back — a decision worth more than a comment.
+    //
+    // Scoped to deepScan/incremental (data-scope behaviour) rather than all four: queuedScan
+    // joined excludeRemediated as "on" on 2026-08-21, but for a different reason (reliability,
+    // not data scope — see the module docstring), so a single "exactly N on" count would conflate
+    // two unrelated defaults changing for two unrelated reasons.
     //
     // READ OUT OF App.jsx, not out of DEFAULTS above. Filtering the table would compare a
     // constant to itself: green forever, including while the source said the opposite. The first
     // draft of this test did exactly that and was caught by mutating the source and watching this
     // case keep passing — "a check that cannot fail is indistinguishable from a check that
     // passed" (CLAUDE.md).
+    const on = ['deepScan', 'incremental']
+      .map((name) => [name, APP.match(new RegExp(`const \\[${name}, set\\w+\\] = useState\\((\\w+)\\)`))])
+      .filter(([, m]) => m && m[1] === 'true')
+      .map(([name]) => name)
+    expect(on).toEqual([])
+  })
+
+  it('excludeRemediated and queuedScan are the only two on, for their own separate reasons', () => {
     const on = DEFAULTS
       .map(([name]) => [name, APP.match(new RegExp(`const \\[${name}, set\\w+\\] = useState\\((\\w+)\\)`))])
       .filter(([, m]) => m && m[1] === 'true')
       .map(([name]) => name)
-    expect(on).toEqual(['excludeRemediated'])
+    expect(on.sort()).toEqual(['excludeRemediated', 'queuedScan'])
   })
 })

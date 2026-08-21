@@ -313,7 +313,18 @@ export default function App() {
   const [ontology, setOntology] = useState(loadPublished)
   const [aiEnabled, setAiEnabled] = useState(true)
   const [hitlCount, setHitlCount] = useState(0)  // pending HITL items, reported up from Remediate for the nav badge
-  const [queuedScan, setQueuedScan] = useState(false)  // session-scoped is the pilot default; opt into Durable (background queue) via the switch
+  // Durable (background queue) is the default (2026-08-21). The session-scoped path runs as a
+  // bare in-process thread with no queue behind it — the code's own comment on it has always said
+  // "lost if that replica restarts", and this app auto-deploys on every merge to main, so that was
+  // not a rare edge case: a scan interrupted mid-crawl by a routine redeploy left phase="queued"
+  // forever with no error (fixed to fail loud in #607, but failing loud is still failing — the
+  // scan itself is gone either way). The durable path survives the exact same redeploy because the
+  // job lives in scan_runs / the worker queue, not in a thread that dies with its replica.
+  // Confirmed live via GET /readyz before flipping this: workers.alive=true, can_run_scans=true —
+  // this is not pointing the default at unconfirmed infrastructure. The switch that used to expose
+  // this choice was intentionally removed from the UI (ScanReviewModal.jsx) — this default IS
+  // that "operator through configuration" lever now, not a placeholder for a future removed one.
+  const [queuedScan, setQueuedScan] = useState(true)
   const [deepScan, setDeepScan] = useState(false)      // off by default → Fast scan; opt in to PII scan via the switch
   const [excludeRemediated, setExcludeRemediated] = useState(true)  // on by default — skip re-discovering ACP's own Remediated/ output
   // ADR 0011 skips re-analysing byte-identical files already scored under the same rubric. OFF by
