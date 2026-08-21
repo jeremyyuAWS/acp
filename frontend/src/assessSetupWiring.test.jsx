@@ -187,6 +187,17 @@ describe('App composes the Assess tab the way the board specifies', () => {
     expect(s).toMatch(/<AssessFileFindings[\s\S]{0,200}?assessedAt=\{fmtStamp\(run\?\.assessed_at\)\}/)
   })
 
+  it('A28 · wires the worklist bulk-fix to the scoped remediateScan call, with run.id supplied at the call site', () => {
+    // handleBulkFix is declared BEFORE `run` exists (run is derived after this component's only
+    // early return) so it cannot close over run.id directly — the same hook-order constraint that
+    // shaped assessFileNext. run.id is supplied by the JSX call site instead, which is past that
+    // return and has it in scope.
+    const s = app()
+    expect(s).toMatch(/import \{[^}]*remediateScan[^}]*\} from '\.\/api'/)
+    expect(s).toMatch(/const handleBulkFix = useCallback\(async \(scanId, rows\) => \{/)
+    expect(s).toMatch(/<AssessWorklist[\s\S]{0,200}?onBulkFix=\{\(rows\) => handleBulkFix\(run\.id, rows\)\}/)
+  })
+
   it('state 4 · feeds the not-started count from the backend so the partial banner can name it', () => {
     // get_scan exposes run.not_assessed for a stopped run (the documents the scope selected but the
     // run never assessed — they are not in the file list). Passing its count lets the partial banner
