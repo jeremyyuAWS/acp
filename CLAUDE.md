@@ -349,3 +349,37 @@ a habit that works, not a lost cause. Two things make it safe to do:
   `git worktree list` for the branch, then `git checkout --detach origin/main` there before
   deleting. This bites hardest when the two steps are done by different sessions, which is the
   order this section describes.
+
+## Keep retired features in the tree — but write down that they are retired
+
+When a feature is removed from the UI, **delete the mount, not the code**. The owner's standing
+instruction (2026-08-21): leave features we no longer use in the codebase so they can be brought
+back if needed. Restoring a panel should be one commit.
+
+So: take out the `<Component />` and its import, leave `Component.jsx` and its tests where they are.
+
+**But an orphan you do not write down becomes a lie.** On 2026-08-20 ten components sat on `main`
+that nothing rendered — `AssessSetup`, `AssessFileFindings`, `DeliveryPanel` and the rest, each
+merged with passing tests and a green suite. Every one read as shipped on every status list. Two
+were reported to the owner as "wired" before anybody checked. The failure is invisible by
+construction: these components return `null` when they cannot derive anything, so *never mounted*
+and *mounted with the wrong props* both render blank and the suite stays green either way.
+
+Both halves are needed, and they are not in tension:
+
+- **Keep the file** so the decision is reversible.
+- **Assert the orphan in a test** so it cannot be mistaken for live code — see
+  `discoverUploadRemoved.test.jsx` (Upload) and `scopeStep.test.js` (ScanScope). Each names the
+  component, asserts nothing mounts it, and says the removal was deliberate. When it is mounted
+  again, that test fails, which is the reminder to delete the test rather than a regression.
+
+The other direction has its own guard: `lastTwoWiring.test.jsx` sweeps every component written for
+the approved design boards and fails if any is not rendered by some screen. Retired features are
+not on that list; components that are supposed to be live are.
+
+**Currently retired and mounted nowhere** (frontend/src): `AssessScope`, `ConfidenceDashboard`,
+`ControlPlane`, `Disposition`, `FileTypeConfig`, `RiskScore`, `RolePrivilege`, `Rubric`,
+`ScanScope`, `ScopeRules`, `ScreenReaderDemo`, `Upload`. Do not delete these, and do not "wire them
+back in" because they look unfinished — several were removed on purpose, and one
+(`RemediationFixPreview`, since deleted) shipped live in exactly that way after a session read
+*unmounted* as *unfinished*. Check the git history and the issues before assuming a gap.
