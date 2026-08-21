@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import WindowedRows from './WindowedRows.jsx'
 import FileDrawer from './FileDrawer.jsx'
@@ -18,7 +18,7 @@ import { acknowledgementSummary } from './discoveryRecommendations.js'
 import { hasClassificationData, NO_CLASSIFICATION_TITLE, NO_CLASSIFICATION_BODY,
          NO_CLASSIFICATION_WHY } from './classificationData.js'
 import { loadDiscoveryInventory, mergeLifecycle } from './discoveryInventory.js'
-import { getScanInventory, listScanDecisions } from './api.js'
+import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation } from './api.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
@@ -144,6 +144,27 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
     loadDiscoveryInventory(scanId, getScanInventory).then((r) => { if (live) setInv(r) })
     return () => { live = false }
   }, [scanId])
+  // Re-reads the same paginated inventory this effect loads. Exposed so a mutation that lands on
+  // scan_inventory server-side (a lifecycle override, currently the only one) can bring its own
+  // result back onto screen without a full page reload.
+  const reloadInventory = useCallback(() => {
+    if (!scanId) return
+    loadDiscoveryInventory(scanId, getScanInventory).then((r) => setInv(r))
+  }, [scanId])
+  // Lifecycle rules #8: POST the override, then reload the inventory so the recorded reason
+  // reaches this screen the same way every other lifecycle fact does — through the same
+  // all-or-nothing paginated read, never patched into local state (a locally-patched row would
+  // outrun the server on a failed write and there would be no way to tell the two apart).
+  const overrideRecommendation = useCallback(async (file, reason) => {
+    if (!scanId) return false
+    try {
+      await overrideLifecycleRecommendation(scanId, file, reason)
+      reloadInventory()
+      return true
+    } catch {
+      return false
+    }
+  }, [scanId, reloadInventory])
   // Un-merged when the read has not completed — mergeLifecycle passes `files` straight through.
   const estateFiles = useMemo(() => mergeLifecycle(files, inv), [files, inv])
 
@@ -525,6 +546,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                         reasonFetchLikely={why ? why.fetchLikely : null}
                         acknowledged={ackRecs} onAcknowledge={setAckRecs}
                         overrides={assessAnyway} onOverridesChange={setAssessAnyway}
+                        onOverrideRecommendation={overrideRecommendation}
                         actor={me?.email || me?.name || null} scanId={scanId} />
 
       {/* TAKE THE INVENTORY OUT OF ACP, DATED. Metadata-only CSV/JSON for the compliance reader,

@@ -4,6 +4,7 @@ import {
   recommendationReconciliation, recommendationRows, typeReconciliation, unreadableReasons,
 } from './discoveryRecommendations.js'
 import { contentTypeBreakdown } from './contentTypeBreakdown.js'
+import LifecycleOverrideControl from './LifecycleOverrideControl.jsx'
 
 // The Discovery results screen (approved design board `DiscoverResults.dc.html`).
 //
@@ -114,6 +115,12 @@ export default function DiscoveryResults({
   acknowledged = false, onAcknowledge = null,
   overrides: overridesProp, onOverridesChange,
   onExport = null, actor = null, scanId = null,
+  // Lifecycle rules #8 — a human's per-file override of the recommendation itself, distinct from
+  // `overrides`/`onOverridesChange` above (which is "Assess anyway", a separate, unreasoned,
+  // client-state-only flag). `onOverrideRecommendation(file, reason)` should POST the override and
+  // resolve truthy on success; the caller (Discover.jsx) owns refetching the inventory afterward
+  // so the recorded override reaches this table on the next render.
+  onOverrideRecommendation = null,
 }) {
   const [filter, setFilter] = useState('all')
   // Uncontrolled by default, exactly like Discover's own `decisions` prop: a caller that wants the
@@ -373,6 +380,7 @@ export default function DiscoveryResults({
                   <th style={{ width: '15%' }}>Recommendation</th>
                   <th style={{ width: '19%' }}>Matched rule</th>
                   <th>Reason</th>
+                  <th style={{ width: '15%' }}>Override</th>
                   <th style={{ width: '11%', textAlign: 'right' }}>Assess anyway</th>
                 </tr>
               </thead>
@@ -392,6 +400,11 @@ export default function DiscoveryResults({
                     <td className="muted" style={{ fontSize: 12.5 }}>
                       {r.reason || <span>No reason was recorded for this match.</span>}
                     </td>
+                    <td style={{ fontSize: 12.5 }}>
+                      <LifecycleOverrideControl file={r.file} override={r.override}
+                                                disabled={!onOverrideRecommendation}
+                                                onSave={onOverrideRecommendation} />
+                    </td>
                     <td style={{ textAlign: 'right' }}>
                       <input type="checkbox" style={{ width: 15, height: 15 }}
                              aria-label={`Assess ${r.file} anyway`}
@@ -406,9 +419,10 @@ export default function DiscoveryResults({
 
           <p className="muted" style={{ fontSize: 11.5, margin: '14px 0 0', lineHeight: 1.55 }}>
             These are recommendations only. <b>Nothing is archived, moved or trashed</b> — ACP
-            attaches a flag and records which rule produced it. Ticking <i>Assess anyway</i> keeps
-            that flag and records that you want this file assessed; it changes no tag and moves no
-            file.
+            attaches a flag and records which rule produced it. <i>Keep this file</i> records that
+            you reviewed the recommendation and are keeping the file anyway, with why — it changes
+            no tag and moves no file. Ticking <i>Assess anyway</i> keeps that flag and records that
+            you want this file assessed; it changes no tag and moves no file.
           </p>
         </div>
       )}

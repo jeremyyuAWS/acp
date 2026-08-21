@@ -134,4 +134,26 @@ describe('merging the lifecycle columns onto the scan file rows', () => {
     const idx = lifecycleIndex([arch('a.docx'), null, { lifecycle_status: 'Active' }])
     expect([...idx.keys()]).toEqual(['a.docx'])
   })
+
+  it('merges a recorded override (lifecycle rules #8) INDEPENDENTLY of lifecycle_status, same as content_type', async () => {
+    const overridden = row('a.docx', {
+      lifecycle_status: 'Archive Candidate', lifecycle_rule_id: 'p1',
+      lifecycle_reason: "matched archive rule 'Legacy clinical policies'",
+      lifecycle_override_reason: 'still needed for the audit',
+      lifecycle_overridden_by: 'reviewer@x.com',
+      lifecycle_overridden_at: '2026-08-21T10:00:00+00:00',
+    })
+    const inv = await loadDiscoveryInventory('s1', pager([overridden]))
+    const merged = mergeLifecycle([{ file: 'a.docx' }], inv)[0]
+    expect(merged.lifecycle_override_reason).toBe('still needed for the audit')
+    expect(merged.lifecycle_overridden_by).toBe('reviewer@x.com')
+    expect(merged.lifecycle_status).toBe('Archive Candidate')   // both facts arrived, independently
+  })
+
+  it('leaves override fields absent on a row nobody overrode, rather than null-flooding every row', async () => {
+    const inv = await loadDiscoveryInventory('s1', pager([arch('a.docx')]))
+    const merged = mergeLifecycle([{ file: 'a.docx' }], inv)[0]
+    expect(merged.lifecycle_override_reason).toBeUndefined()
+    expect('lifecycle_overridden_by' in merged).toBe(false)
+  })
 })

@@ -493,6 +493,16 @@ _SCHEMA = [
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS lifecycle_rule_id TEXT",
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS lifecycle_reason TEXT",
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS exclusion_reason TEXT",
+    # Lifecycle rules #8: a human's reasoned disagreement with a rule's Archive/Delete Candidate
+    # recommendation for THIS file. Deliberately separate from lifecycle_status/lifecycle_rule_id/
+    # lifecycle_reason above, which stay untouched — those record what the RULE said; these record
+    # what the HUMAN said in response. An override does not change lifecycle_status: it is itself
+    # only a recommendation ("keep this despite the rule"), matching every other lifecycle surface's
+    # "nothing is moved" discipline, and it keeps DiscoveryResults' bucket reconciliation a true
+    # partition of what the rule pass produced.
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS lifecycle_override_reason TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS lifecycle_overridden_by TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS lifecycle_overridden_at TEXT",
     # The file's own source-modified time on the governed document (mirrors scan_inventory.
     # source_modified). The disposition rules engine reads this for "modified before <date>"
     # conditions — documents.created_at already exists; this adds the modified axis.
@@ -1083,6 +1093,7 @@ class Store:
     _INV_COLS = ("scan_id,file,drive_file_id,mime,size_kb,doc_class,checksum,path,"
                  "created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
                  "lifecycle_status,lifecycle_rule_id,lifecycle_reason,exclusion_reason,"
+                 "lifecycle_override_reason,lifecycle_overridden_by,lifecycle_overridden_at,"
                  "content_type")
 
     def list_inventory(self, scan_id: str) -> list[dict]:
@@ -1133,9 +1144,36 @@ class Store:
     def get_lifecycle_status(self, scan_id: str, file: str) -> dict | None:
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT lifecycle_status,lifecycle_rule_id,lifecycle_reason,exclusion_reason "
+                "SELECT lifecycle_status,lifecycle_rule_id,lifecycle_reason,exclusion_reason,"
+                "lifecycle_override_reason,lifecycle_overridden_by,lifecycle_overridden_at "
                 "FROM scan_inventory WHERE scan_id=%s AND file=%s", (scan_id, file))
             return self._db.fetchone(cur)
+
+    def override_lifecycle(self, scan_id: str, file: str, *, reason: str, actor: str) -> dict | None:
+        """Record a human's reasoned disagreement with a rule's Archive/Delete Candidate
+        recommendation for one file (lifecycle rules #8). Deliberately does NOT touch
+        lifecycle_status/lifecycle_rule_id/lifecycle_reason — those stay the rule's own record;
+        an override is itself only a recommendation ("keep this despite the rule"), so the
+        reconciliation in DiscoveryResults stays a true partition of what the rule pass produced.
+
+        Returns the row's {lifecycle_status, lifecycle_rule_id} as they stood BEFORE this call
+        (the caller needs lifecycle_rule_id to attribute the audit entry to the rule being
+        overridden), or None when the row does not exist or does not currently carry a candidate
+        status — there is nothing to override on a file no rule flagged."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT lifecycle_status,lifecycle_rule_id FROM scan_inventory "
+                "WHERE scan_id=%s AND file=%s", (scan_id, file))
+            prior = self._db.fetchone(cur)
+            if not prior or (prior.get("lifecycle_status") or "") not in (
+                    "Archive Candidate", "Delete Candidate"):
+                return None
+            self._db.execute(cur,
+                "UPDATE scan_inventory SET lifecycle_override_reason=%s, "
+                "lifecycle_overridden_by=%s, lifecycle_overridden_at=%s "
+                "WHERE scan_id=%s AND file=%s",
+                (reason, actor, self._now(), scan_id, file))
+        return prior
 
     def count_lifecycle_by_status(self, scan_id: str) -> dict:
         """{status: count} across the scan's inventory — the reconciliation Reports need

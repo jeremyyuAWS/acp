@@ -75,6 +75,13 @@ export function lifecycleIndex(rows) {
       lifecycle_status: r.lifecycle_status ?? null,
       lifecycle_rule_id: r.lifecycle_rule_id ?? null,
       lifecycle_reason: r.lifecycle_reason ?? null,
+      // A human's reasoned disagreement with the rule above (lifecycle rules #8) — a SEPARATE
+      // fact from lifecycle_status/lifecycle_rule_id/lifecycle_reason, merged independently
+      // below for the same reason content_type is: it can be present or absent regardless of
+      // whether the rule pass matched anything.
+      lifecycle_override_reason: r.lifecycle_override_reason ?? null,
+      lifecycle_overridden_by: r.lifecycle_overridden_by ?? null,
+      lifecycle_overridden_at: r.lifecycle_overridden_at ?? null,
       path: r.path ?? null,
       content_type: r.content_type ?? null,
     })
@@ -111,6 +118,11 @@ export function mergeLifecycle(files, inventory) {
       out.lifecycle_status = hit.lifecycle_status
       out.lifecycle_rule_id = hit.lifecycle_rule_id
       out.lifecycle_reason = hit.lifecycle_reason
+    }
+    if (hit.lifecycle_overridden_at != null) {
+      out.lifecycle_override_reason = hit.lifecycle_override_reason
+      out.lifecycle_overridden_by = hit.lifecycle_overridden_by
+      out.lifecycle_overridden_at = hit.lifecycle_overridden_at
     }
     if (hit.content_type != null) out.content_type = hit.content_type
     return out

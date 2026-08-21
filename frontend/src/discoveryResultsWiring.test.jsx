@@ -43,6 +43,15 @@ describe('source — Discover is the caller, and it passes the real discovery da
     expect(discover).toMatch(/scopeLine=\{scopeLine\}/)
     expect(discover).toMatch(/acknowledged=\{ackRecs\} onAcknowledge=\{setAckRecs\}/)
     expect(discover).toMatch(/overrides=\{assessAnyway\} onOverridesChange=\{setAssessAnyway\}/)
+    // Lifecycle rules #8 — a real handler, not a stub: wired to the same reload path every other
+    // scan_inventory mutation would need, so the recorded override actually reaches this screen.
+    expect(discover).toMatch(/onOverrideRecommendation=\{overrideRecommendation\}/)
+  })
+
+  it('overrideRecommendation POSTs the override then reloads the inventory, never patches state locally', () => {
+    expect(discover).toMatch(/const overrideRecommendation = useCallback\(async \(file, reason\) => \{/)
+    expect(discover).toMatch(/await overrideLifecycleRecommendation\(scanId, file, reason\)/)
+    expect(discover).toMatch(/reloadInventory\(\)/)
   })
 
   it('gates the Assess button on the acknowledgement', () => {

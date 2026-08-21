@@ -249,12 +249,20 @@ const simLifecycle = (f) => {
     `matched archive rule 'Legacy documents (5+ years)' — last modified ${f.modifiedAge}`]
   return ['Active', null, null]
 }
+// Lifecycle rules #8 overrides recorded so far in SIM mode, keyed by file — simScanInventory is
+// recomputed fresh on every call (it derives from f.superseded/f.ageDays, not persisted state),
+// so an override needs its own small store to survive across calls the way the real backend's
+// scan_inventory row does.
+const _simOverrides = new Map()
 const simScanInventory = (scanId, offset, limit) => {
   const files = simGetScan(scanId).files || []
   const rows = files.slice(offset, offset + limit).map((f) => {
     const [lifecycle_status, lifecycle_rule_id, lifecycle_reason] = simLifecycle(f)
+    const ov = _simOverrides.get(f.file)
     return { scan_id: scanId, file: f.file, path: f.file, size_kb: f.sizeKB ?? null,
-             owner: f.owner ?? null, lifecycle_status, lifecycle_rule_id, lifecycle_reason }
+             owner: f.owner ?? null, lifecycle_status, lifecycle_rule_id, lifecycle_reason,
+             lifecycle_override_reason: ov?.reason ?? null,
+             lifecycle_overridden_by: ov?.actor ?? null, lifecycle_overridden_at: ov?.at ?? null }
   })
   return { scan_id: scanId, total: files.length, offset, limit, rows }
 }
@@ -270,6 +278,28 @@ export const getScanInventory = (scanId, { offset = 0, limit = 1000 } = {}) => (
   ? sim(simScanInventory(scanId, offset, limit), 180)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/inventory?offset=${offset}&limit=${limit}`,
           { headers: headers() }).then(j))
+// Lifecycle rules #8 — record a human's reasoned disagreement with a rule's Archive/Delete
+// Candidate recommendation for ONE file. Rejects (throws) on a blank reason or a file with no
+// candidate status to override, matching the real route's 422/409 — the caller (Discover.jsx)
+// treats any rejection as "could not record this" and leaves the file unoverridden.
+export const overrideLifecycleRecommendation = (scanId, file, reason) => {
+  const r = (reason || '').trim()
+  if (!r) return Promise.reject(new Error('a reason is required'))
+  if (SIM) {
+    const row = simScanInventory(scanId, 0, 1e9).rows.find((x) => x.file === file)
+    if (!row || !['Archive Candidate', 'Delete Candidate'].includes(row.lifecycle_status)) {
+      return Promise.reject(new Error('no recommendation to override'))
+    }
+    const at = new Date().toISOString()
+    _simOverrides.set(file, { reason: r, actor: simIdentity().email, at })
+    return sim({ ...row, lifecycle_override_reason: r, lifecycle_overridden_by: simIdentity().email,
+                lifecycle_overridden_at: at })
+  }
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/lifecycle-override`, {
+    method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ reason: r }),
+  }).then(j)
+}
 // Regression diff vs a prior scan (ADR 0009) — which docs got worse/better + criteria that broke.
 export const getScanDiff = (scanId, vs = null) => {
   if (SIM) return sim({

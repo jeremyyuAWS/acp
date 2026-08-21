@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, Response, StreamingResponse
+from pydantic import BaseModel
 
 import core
 from scanner import run_scan
@@ -837,6 +838,42 @@ def scan_timeline(sid: str, request: Request, file: str = Query(...)):
     if core.store.get_scan(sid, owner=_owner(request)) is None:
         raise HTTPException(404, "scan not found")
     return core.store.document_timeline(sid, file)
+
+
+class LifecycleOverrideIn(BaseModel):
+    reason: str
+
+
+@router.post("/scans/{sid}/files/{filename:path}/lifecycle-override")
+def override_file_lifecycle(sid: str, filename: str, body: LifecycleOverrideIn, request: Request):
+    """Lifecycle rules #8: record a human's reasoned disagreement with a rule's Archive/Delete
+    Candidate recommendation for ONE file. A reason is required — an undocumented override is
+    exactly the unaccountable state this exists to prevent (same discipline as W4's
+    DispositionControl). It does not change the file's lifecycle_status: like every other
+    lifecycle surface, this is itself only a recommendation, not an action.
+
+    Writes BOTH audit tables, the same dual-write convention every other disposition route
+    follows: `disposition_audit` (the audit_id-precise, action-typed record) and `log_decision`
+    (the file-scoped record `document_timeline`/the Assessment Timeline drawer already reads —
+    this is what makes the override show up in a file's existing audit history without a new
+    viewer)."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    reason = (body.reason or "").strip()
+    if not reason:
+        raise HTTPException(422, "a reason is required — it becomes part of the audit record")
+    owner = _owner(request)
+    prior = core.store.override_lifecycle(sid, filename, reason=reason, actor=owner)
+    if prior is None:
+        raise HTTPException(409, "this file has no archive/delete recommendation to override")
+    rule_id = prior.get("lifecycle_rule_id")
+    doc_id = f"scan:{sid}:{filename}"
+    if rule_id:
+        core.store.create_disposition_audit(uuid.uuid4().hex, doc_id=doc_id, policy_id=rule_id,
+            action="tag", result="overridden", detail=reason, owner_email=owner)
+    core.store.log_decision(owner, "disposition.file_overridden", scan_id=sid, file=filename,
+        rule_id=rule_id, detail=reason)
+    return core.store.get_lifecycle_status(sid, filename)
 
 
 @router.get("/scans/{sid}/comments")
