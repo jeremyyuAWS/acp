@@ -18,6 +18,7 @@ import RemediationDocProgress from './RemediationDocProgress.jsx'
 import DocumentAudit from './DocumentAudit.jsx'
 import FindingComments from './FindingComments.jsx'
 import DueDate from './DueDate.jsx'
+import UndoFix from './UndoFix.jsx'
 import FixOutcomes from './FixOutcomes.jsx'
 import { autoFixRows, matchesWorkflow } from './remediationInboxModel.js'
 import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
@@ -977,6 +978,13 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           <RemediationInbox
             renderDetailExtra={(sel) => (sel ? (
               <>
+                {/* R15 · only for a row ACP applied itself — a drafted-AI or manually-authored
+                    finding was never something ACP claimed to fix on its own, so there is
+                    nothing here to un-claim for those rows. */}
+                {sel.autoApplied && (
+                  <UndoFix scanId={sel.scanId || run?.id} file={sel.file} ruleId={sel.ruleId}
+                           onUndone={onRefresh} />
+                )}
                 <RemediationDocProgress queue={inboxQueue} file={sel.file} decisions={decisions} />
                 <DocumentAudit scanId={sel.scanId || run?.id} file={sel.file} />
                 <DueDate scanId={sel.scanId || run?.id} file={sel.file}
