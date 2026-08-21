@@ -1020,6 +1020,22 @@ export const deleteDispositionPolicy = (policyId) => (SIM
       return { deleted: policyId }
     })())
   : fetch(`${BASE}/disposition/policies/${encodeURIComponent(policyId)}`, { method: 'DELETE', headers: headers() }).then(j))
+// Reorder = the whole new order, not a single move — SIM just re-sorts its array to match, since
+// _simDisp.policies' own array order already IS the "priority" order the real backend tracks
+// with an explicit column.
+export const reorderDispositionPolicies = (policyIds) => (SIM
+  ? sim((() => {
+      const byId = new Map(_simDisp.policies.map((p) => [p.policy_id, p]))
+      _simDisp.policies = policyIds.map((id) => byId.get(id)).filter(Boolean)
+      return [..._simDisp.policies]
+    })())
+  : fetch(`${BASE}/disposition/policies/reorder`, {
+      method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ policy_ids: policyIds }),
+    }).then(j))
+export const listDispositionConflicts = () => (SIM
+  ? sim({ conflicts: [] })
+  : fetch(`${BASE}/disposition/policies/conflicts`, { headers: headers() }).then(j))
 export const previewDispositionPolicy = (policyId) => (SIM
   ? sim({ policy_id: policyId, would_match: 3, documents: [
       { doc_id: 'drive:sim1', path: 'HR Handbook 2019.pdf', department: 'HR', age_days: 1460 },

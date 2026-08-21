@@ -411,6 +411,15 @@ _SCHEMA = [
     # NULL-excluded semantics as documents.owner_email above.
     "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS owner_email TEXT",
     "ALTER TABLE disposition_audit ADD COLUMN IF NOT EXISTS owner_email TEXT",
+    # Explicit rule priority (Lifecycle Rules build-plan item #6). Evaluation order used to be
+    # implicit — name, alphabetically, an accident of list_disposition_policies' own ORDER BY —
+    # so reordering rules meant renaming them. NULL (every pre-existing row) sorts LAST, after
+    # every rule that has a real priority, and is broken by name among itself — the exact order
+    # those rows already evaluated in, so this migration changes nothing for a tenant until they
+    # actually reorder something. A brand new rule is assigned the next integer past the current
+    # max on create (see create_disposition_policy), so it starts last too — the safe default —
+    # rather than silently jumping ahead of rules that were already there.
+    "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS priority INTEGER",
     # Per-file WCAG scope rules (Discover/Assess Lifecycle PRD §4.4 / AC-09, "C4"). A rule
     # targets files by folder / owner / department and assigns a Core-17 subset; the effective
     # code-set for a file is resolved from matching rules (union, or a higher-priority override
@@ -4890,25 +4899,50 @@ class Store:
     def create_disposition_policy(self, policy_id: str, *, name: str, match: str, action: str,
                                   action_config: str, requires_approval: bool, enabled: bool,
                                   owner_email: str | None = None) -> None:
+        """`priority` is assigned here, not passed in: the next integer past this tenant's
+        current max (0 when they have no rules yet), computed in the same INSERT rather than a
+        separate SELECT so two rules created back-to-back can't race onto the same priority.
+        A brand new rule always starts LAST — the safe default; reordering is a separate,
+        deliberate act (reorder_disposition_policies)."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO disposition_policy(policy_id,name,match,action,action_config,"
-                "requires_approval,enabled,owner_email) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                "requires_approval,enabled,owner_email,priority) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,"
+                "(SELECT COALESCE(MAX(priority),0)+1 FROM disposition_policy WHERE owner_email=%s))",
                 (policy_id, name, match, action, action_config, int(requires_approval),
-                 int(enabled), owner_email))
+                 int(enabled), owner_email, owner_email))
 
     def list_disposition_policies(self, owner: str | None = None) -> list[dict]:
         """Every rule this tenant authored — filtered to `owner_email`, same NULL-excluded
         semantics as list_all_documents. `disposition_policy` had NO ownership column at all
         until this migration: `list_policies()` returned every rule to every signed-in user,
-        demo account included, which is the isolation gap this scoping closes."""
+        demo account included, which is the isolation gap this scoping closes.
+
+        ORDER BY priority (NULLs last — a pre-priority row, not a claim to run first), then name
+        as the tiebreaker rows without a priority already used. This is THE precedence order:
+        handlers._evaluate_discover_lifecycle_rules and the conflicts report both just consume
+        whatever order this returns, so reordering here is reordering evaluation, not a
+        display-only sort."""
+        order = "ORDER BY CASE WHEN priority IS NULL THEN 1 ELSE 0 END, priority, name"
         with self._db.cursor() as cur:
             if owner:
                 self._db.execute(cur,
-                    "SELECT * FROM disposition_policy WHERE owner_email=%s ORDER BY name", (owner,))
+                    f"SELECT * FROM disposition_policy WHERE owner_email=%s {order}", (owner,))
             else:
-                self._db.execute(cur, "SELECT * FROM disposition_policy ORDER BY name")
+                self._db.execute(cur, f"SELECT * FROM disposition_policy {order}")
             return self._db.fetchall(cur)
+
+    def reorder_disposition_policies(self, owner: str, policy_ids: list[str]) -> None:
+        """Assign priority 1..N to `policy_ids` in the order given — the whole ordering in one
+        call, not a per-rule "move up/down" that could interleave with another tab's edit.
+        The caller (routes/disposition.reorder_policies) is responsible for checking `policy_ids`
+        is exactly this owner's current rule set before calling; this method trusts it and just
+        writes the numbers."""
+        with self._db.cursor() as cur:
+            for i, policy_id in enumerate(policy_ids, start=1):
+                self._db.execute(cur,
+                    "UPDATE disposition_policy SET priority=%s WHERE policy_id=%s AND owner_email=%s",
+                    (i, policy_id, owner))
 
     def get_disposition_policy(self, policy_id: str, owner: str | None = None) -> dict | None:
         """A single rule, or None if it doesn't exist OR belongs to a different tenant — the

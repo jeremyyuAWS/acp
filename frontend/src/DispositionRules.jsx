@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   listDispositionPolicies, createDispositionPolicy, setDispositionPolicyEnabled, previewDispositionPolicy,
-  deleteDispositionPolicy,
+  deleteDispositionPolicy, reorderDispositionPolicies, listDispositionConflicts,
 } from './api.js'
 import {
   ACTIONS, CONDITIONS, LIFECYCLE_ACTIONS, actionSpec, draftProblem, draftToMatch, emptyDraft,
@@ -80,7 +80,7 @@ function ActionTag({ action }) {
   )
 }
 
-function RuleRow({ p, count, onCount, onChanged, onDuplicate }) {
+function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, isLast, rank }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const enabled = !!p.enabled
@@ -149,10 +149,26 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate }) {
       .catch((e) => setErr(refusalText(e)))
       .finally(() => setBusy(false))
   }
+  const move = (dir) => {
+    setBusy(true); setErr('')
+    Promise.resolve(onMove(p.policy_id, dir))
+      .catch((e) => setErr(refusalText(e)))
+      .finally(() => setBusy(false))
+  }
 
   return (
     <div className="lifecycle-rule" style={{ border: line, borderRadius: 11, padding: '13px 15px', marginBottom: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        {/* Priority order, not decoration: two files matched by both an archive and a delete
+            rule settle on whichever rule is FIRST here (disposition.resolve_candidate) — moving
+            a rule up the list is moving it up the precedence a real conflict resolves by. */}
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <button className="ghost small" onClick={() => move('up')} disabled={busy || isFirst}
+                  aria-label={`Move rule ${p.name} up`} style={{ padding: '0 6px', lineHeight: 1.2 }}>▲</button>
+          <button className="ghost small" onClick={() => move('down')} disabled={busy || isLast}
+                  aria-label={`Move rule ${p.name} down`} style={{ padding: '0 6px', lineHeight: 1.2 }}>▼</button>
+        </span>
+        <span className="muted" style={{ fontSize: 11, width: 16, textAlign: 'center' }}>{rank}</span>
         <input type="checkbox" checked={enabled} onChange={toggle} disabled={busy}
                aria-label={`Enable rule ${p.name}`} style={{ width: 15, height: 15 }} />
         <span style={{ fontSize: 13.5, fontWeight: 600 }}>{p.name}</span>
@@ -318,6 +334,28 @@ export default function DispositionRules({ embedded = false }) {
     ).then((created) => onCreated(created && created.policy_id ? created.policy_id : null))
   }, [onCreated])
 
+  // Swap with the adjacent rule and send the WHOLE new order — reorderDispositionPolicies takes
+  // every id, not a single move, so this always sends a complete, unambiguous list.
+  const onMove = useCallback((policyId, dir) => {
+    const i = rules.findIndex((p) => p.policy_id === policyId)
+    const j = dir === 'up' ? i - 1 : i + 1
+    if (i < 0 || j < 0 || j >= rules.length) return Promise.resolve()
+    const next = rules.slice()
+    ;[next[i], next[j]] = [next[j], next[i]]
+    return Promise.resolve(reorderDispositionPolicies(next.map((p) => p.policy_id))).then(() => load())
+  }, [rules, load])
+
+  const [conflicts, setConflicts] = useState(null)   // null = not checked yet
+  const [conflictsErr, setConflictsErr] = useState('')
+  const [conflictsBusy, setConflictsBusy] = useState(false)
+  const checkConflicts = () => {
+    setConflictsBusy(true); setConflictsErr('')
+    Promise.resolve(listDispositionConflicts())
+      .then((r) => setConflicts(Array.isArray(r?.conflicts) ? r.conflicts : []))
+      .catch((e) => setConflictsErr(refusalText(e)))
+      .finally(() => setConflictsBusy(false))
+  }
+
   const enabledCount = rules == null ? null : rules.filter((p) => p.enabled).length
 
   return (
@@ -354,13 +392,41 @@ export default function DispositionRules({ embedded = false }) {
             ? <p className="muted" style={{ fontSize: 12.5, margin: '0 0 10px' }}>
                 No lifecycle rules yet. Add one below — it starts disabled.
               </p>
-            : rules.map((p) => (
-                <RuleRow key={p.policy_id} p={p} count={counts[p.policy_id] ?? null}
-                         onCount={setCount} onChanged={load} onDuplicate={onDuplicate} />
+            : rules.map((p, i) => (
+                <RuleRow key={p.policy_id} p={p} count={counts[p.policy_id] ?? null} rank={i + 1}
+                         isFirst={i === 0} isLast={i === rules.length - 1}
+                         onCount={setCount} onChanged={load} onDuplicate={onDuplicate} onMove={onMove} />
               )))}
 
           <NewRule onCreated={onCreated} />
           <PrecedenceNote />
+
+          {rules != null && rules.length > 1 && (
+            <div style={{ marginTop: 14, borderTop: line, paddingTop: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <button className="ghost small" onClick={checkConflicts} disabled={conflictsBusy}>
+                  {conflictsBusy ? 'Checking…' : 'Check for rule conflicts'}
+                </button>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  Files matched by more than one enabled rule, and which one wins right now.
+                </span>
+              </div>
+              {conflictsErr && <p style={alertStyle} role="alert">⚠ {conflictsErr}</p>}
+              {conflicts != null && (conflicts.length === 0
+                ? <p className="muted" style={{ fontSize: 12.5, margin: '8px 0 0' }}>
+                    No file matches more than one enabled rule.
+                  </p>
+                : conflicts.map((c) => (
+                    <div key={c.doc_id} style={{ border: line, borderRadius: 8, padding: '8px 11px', marginTop: 8, fontSize: 12.5 }}>
+                      <div style={{ fontWeight: 600 }}>{c.path || c.doc_id}</div>
+                      <div className="muted" style={{ margin: '3px 0' }}>
+                        Matches {c.matched_rules.map((r) => `"${r.name}"`).join(', ')}
+                      </div>
+                      <div>Wins: <b>{c.winner ? c.winner.name : '—'}</b> — {c.reason}</div>
+                    </div>
+                  )))}
+            </div>
+          )}
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderTop: line,
                         paddingTop: 12, marginTop: 14 }}>

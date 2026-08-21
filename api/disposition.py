@@ -16,6 +16,7 @@ complex, at the cost of fetching the full documents table per preview. Fine
 at today's scale; revisit if/when that table gets large enough to matter.
 """
 from __future__ import annotations
+import json
 import posixpath
 from datetime import datetime, timezone
 
@@ -143,6 +144,69 @@ def matches(doc: dict, match: list[dict]) -> bool:
         if not _OPS[cond["op"]](values.get(cond["field"]), cond.get("value")):
             return False
     return True
+
+
+# ── Candidate precedence (PRD §6) ───────────────────────────────────────────────
+# Moved here from api/handlers._evaluate_discover_lifecycle_rules (Lifecycle Rules build-plan
+# item #6, "identify which rule wins") so the discover-time evaluator and the conflicts report
+# (routes/disposition.list_conflicts) make the SAME decision from the same code, rather than the
+# report re-deriving a second copy of this logic that could quietly drift from what discovery
+# actually does. Pure — no store access, same contract as matches().
+
+DELETE_OVERRIDE_KEYS = ("override_archive", "supersedes_archive", "supersede_archive")
+
+
+def delete_supersedes_archive(action_config: dict | None) -> bool:
+    """True iff a delete policy's action_config explicitly permits it to win over an archive
+    rule that also matched the same file. The default is the safe one — a delete rule does NOT
+    silently outrank an archive rule."""
+    cfg = action_config or {}
+    return any(bool(cfg.get(k)) for k in DELETE_OVERRIDE_KEYS)
+
+
+def actor_authorized_for_delete(actor: str | None) -> bool:
+    """A discover-time actor may let a delete rule supersede an archive rule only when they are a
+    real authenticated owner — the keyless 'demo'/anonymous path never produces the
+    irreversible-leaning Delete Candidate when an archive rule also matched."""
+    return bool(actor) and actor != "demo"
+
+
+def resolve_candidate(matched: list[dict], actor: str | None) -> tuple[dict | None, str | None, str | None]:
+    """Given every policy that matched one document (in PRIORITY order — the order `matched` is
+    already in, since list_disposition_policies sorts by priority/name and this function only
+    ever sees what the caller already ordered), decide which one WINS and why.
+
+    Returns (chosen_policy, new_status, reason) — chosen_policy is None (and the other two as
+    well) when nothing in `matched` produces a candidate status (e.g. only 'tag' policies
+    matched; tag is applied separately by the caller, not decided here).
+
+    Archive-vs-delete precedence: a delete rule wins over a co-matching archive rule only when
+    its action_config explicitly permits the override AND the actor is a real authenticated
+    owner — otherwise the reversible outcome (archive) is kept and the file is flagged for
+    review rather than letting a delete rule silently win. Ties within one action type are
+    broken by priority order — the FIRST archive (or delete) rule in `matched` — which is why
+    the caller's ordering is load-bearing, not incidental.
+    """
+    archive_p = next((p for p in matched if p.get("action") == "archive"), None)
+    delete_p = next((p for p in matched if p.get("action") == "delete"), None)
+    if delete_p and archive_p:
+        try:
+            dcfg = json.loads(delete_p.get("action_config") or "{}")
+        except Exception:
+            dcfg = {}
+        if delete_supersedes_archive(dcfg) and actor_authorized_for_delete(actor):
+            reason = (f"delete rule '{delete_p.get('name')}' supersedes archive rule "
+                      f"'{archive_p.get('name')}' (override permitted, actor authorized)")
+            return delete_p, "Delete Candidate", reason
+        reason = (f"matched archive rule '{archive_p.get('name')}' — flagged for review: "
+                  f"delete rule '{delete_p.get('name')}' also matched but its override is "
+                  f"not permitted or the actor is not authorized")
+        return archive_p, "Archive Candidate", reason
+    if delete_p:
+        return delete_p, "Delete Candidate", f"matched delete rule '{delete_p.get('name')}'"
+    if archive_p:
+        return archive_p, "Archive Candidate", f"matched archive rule '{archive_p.get('name')}'"
+    return None, None, None
 
 
 # ── Execute path (ADR 0003 Phase 3 — approved 2026-07-02) ─────────────────────

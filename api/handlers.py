@@ -836,27 +836,11 @@ from pathlib import Path as _Path
 
 
 # ── Lifecycle rule evaluation during Discover (PRD §4.3 / §6, Phase B4) ─────────
-# disposition_policy has no priority column, so NAME is the deterministic precedence order
-# (list_disposition_policies() returns rows ORDER BY name). Documented here rather than added as
-# a schema change — the accessor already yields a stable order and the PRD's precedence is a
-# per-file archive-vs-delete decision, not a global rank.
-_DELETE_OVERRIDE_KEYS = ("override_archive", "supersedes_archive", "supersede_archive")
-
-
-def _delete_supersedes_archive(action_config: dict | None) -> bool:
-    """True iff a delete policy's action_config explicitly permits it to win over an archive
-    rule that also matched the same file (PRD §6). The default is the safe one — a delete rule
-    does NOT silently outrank an archive rule."""
-    cfg = action_config or {}
-    return any(bool(cfg.get(k)) for k in _DELETE_OVERRIDE_KEYS)
-
-
-def _actor_authorized_for_delete(actor: str | None) -> bool:
-    """A discover-time actor may let a delete rule supersede an archive rule only when they are a
-    real authenticated owner (PRD §6) — the keyless 'demo'/anonymous path never produces the
-    irreversible-leaning Delete Candidate when an archive rule also matched. Mirrors the
-    scan-owner gate the routes already apply."""
-    return bool(actor) and actor != "demo"
+# disposition_policy now has a priority column (Lifecycle Rules build-plan item #6) —
+# list_disposition_policies() sorts by it (NULLs last, then name), so `policies` below is already
+# in precedence order; nothing here needs to re-sort. The archive-vs-delete precedence decision
+# itself lives in disposition.resolve_candidate — shared with the conflicts report
+# (routes/disposition.list_conflicts) so both make the same call from one place.
 
 
 def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | None) -> None:
@@ -926,33 +910,9 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
             core.store.create_disposition_audit(
                 uuid.uuid4().hex, doc_id=doc_id, policy_id=p["policy_id"], action="tag",
                 result="applied", detail="tagged: " + ", ".join(tags), owner_email=actor)
-        # ── Candidate status: archive-vs-delete precedence (PRD §6). Take the first (name-order)
-        # matching rule of each kind.
-        archive_p = next((p for p in matched if p.get("action") == "archive"), None)
-        delete_p = next((p for p in matched if p.get("action") == "delete"), None)
-        chosen = new_status = reason = None
-        if delete_p and archive_p:
-            try:
-                dcfg = _json.loads(delete_p.get("action_config") or "{}")
-            except Exception:
-                dcfg = {}
-            if _delete_supersedes_archive(dcfg) and _actor_authorized_for_delete(actor):
-                chosen, new_status = delete_p, "Delete Candidate"
-                reason = (f"delete rule '{delete_p.get('name')}' supersedes archive rule "
-                          f"'{archive_p.get('name')}' (override permitted, actor authorized)")
-            else:
-                # Safe default: keep the reversible outcome and flag for review rather than let a
-                # delete rule silently win.
-                chosen, new_status = archive_p, "Archive Candidate"
-                reason = (f"matched archive rule '{archive_p.get('name')}' — flagged for review: "
-                          f"delete rule '{delete_p.get('name')}' also matched but its override is "
-                          f"not permitted or the actor is not authorized")
-        elif delete_p:
-            chosen, new_status = delete_p, "Delete Candidate"
-            reason = f"matched delete rule '{delete_p.get('name')}'"
-        elif archive_p:
-            chosen, new_status = archive_p, "Archive Candidate"
-            reason = f"matched archive rule '{archive_p.get('name')}'"
+        # ── Candidate status: archive-vs-delete precedence (PRD §6), shared with the conflicts
+        # report — see disposition.resolve_candidate's own docstring for the precedence rule.
+        chosen, new_status, reason = disposition.resolve_candidate(matched, actor)
         if chosen is None:
             continue
         if core.store.doc_has_disposition(doc_id, chosen["policy_id"]):

@@ -146,6 +146,78 @@ def list_policies(request: Request):
     return core.store.list_disposition_policies(owner=_owner(request))
 
 
+class PolicyReorder(BaseModel):
+    """The tenant's full rule order, listed. Not a single rule's new position — the whole
+    ordering, so two people (or two tabs) reordering at once produce one clear last-write-wins
+    outcome instead of two partial moves interleaving into an order nobody chose."""
+    policy_ids: list[str]
+
+
+@router.put("/disposition/policies/reorder")
+def reorder_policies(body: PolicyReorder, request: Request):
+    """Set evaluation priority for every one of this tenant's rules at once, 1..N in the order
+    given. Registered before PUT /disposition/policies/{policy_id} so "reorder" is never read as
+    a policy_id — see the routes above it for why that ordering matters here specifically.
+
+    Requires the FULL current set, each rule exactly once — not a subset, and not an id that
+    doesn't belong to this tenant — so there's never an ambiguous "what happened to the rule I
+    left out" question. 422, not a silent partial reorder, when it doesn't match."""
+    _require_admin(request)
+    owner = _owner(request)
+    current_ids = {p["policy_id"] for p in core.store.list_disposition_policies(owner=owner)}
+    given_ids = list(body.policy_ids)
+    if len(given_ids) != len(set(given_ids)) or set(given_ids) != current_ids:
+        raise HTTPException(422,
+            "policy_ids must list every one of this tenant's rules exactly once — "
+            f"expected {len(current_ids)} rule(s), got {len(set(given_ids))} distinct id(s)")
+    core.store.reorder_disposition_policies(owner, given_ids)
+    core.store.log_decision(owner, "disposition.policies_reordered", detail=",".join(given_ids))
+    return core.store.list_disposition_policies(owner=owner)
+
+
+@router.get("/disposition/policies/conflicts")
+def list_conflicts(request: Request):
+    """Files matched by 2+ ENABLED archive/delete rules right now, and which one would win —
+    the same decision disposition.resolve_candidate makes at discovery time, run here on demand
+    against the CURRENT estate and CURRENT rules so a person can see a conflict before running
+    Discover again, not only after it already happened.
+
+    A tag-only overlap is not a conflict: every matching tag policy applies independently (see
+    _evaluate_discover_lifecycle_rules), so only archive/delete matches are counted toward the
+    2+ threshold. `actor` for the precedence call is the REQUESTING user, not necessarily who a
+    future Discover run will be attributed to — an honest best-guess for "if this ran now, under
+    you", not a guarantee of what a later run under a different actor would decide.
+    """
+    _require_admin(request)
+    owner = _owner(request)
+    policies = [p for p in core.store.list_disposition_policies(owner=owner) if p.get("enabled")]
+    if not policies:
+        return {"conflicts": []}
+    out = []
+    for doc in core.store.list_all_documents(owner=owner):
+        matched = []
+        for p in policies:
+            try:
+                match = json.loads(p.get("match") or "[]")
+            except Exception:
+                continue
+            if disposition.matches(doc, match):
+                matched.append(p)
+        candidates = [p for p in matched if p.get("action") in ("archive", "delete")]
+        if len(candidates) < 2:
+            continue
+        chosen, outcome, reason = disposition.resolve_candidate(matched, owner)
+        out.append({
+            "doc_id": doc.get("doc_id"), "path": doc.get("path"),
+            "matched_rules": [{"policy_id": p["policy_id"], "name": p.get("name"),
+                               "action": p.get("action")} for p in candidates],
+            "winner": ({"policy_id": chosen["policy_id"], "name": chosen.get("name")}
+                      if chosen else None),
+            "outcome": outcome, "reason": reason,
+        })
+    return {"conflicts": out}
+
+
 @router.put("/disposition/policies/{policy_id}/enabled")
 def set_policy_enabled(policy_id: str, enabled: bool, request: Request):
     _require_admin(request)
