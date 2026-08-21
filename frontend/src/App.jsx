@@ -28,6 +28,7 @@ import Publish from './Publish.jsx'
 import Overview from './Overview.jsx'
 import AssessRunner from './AssessRunner.jsx'
 import AssessSetup from './AssessSetup.jsx'
+import AssessFileFindings from './AssessFileFindings.jsx'
 import { inventorySnapshot } from './discoverRunTime.js'
 import AssessSummary from './AssessSummary.jsx'
 import AssessWorklist from './AssessWorklist.jsx'
@@ -35,7 +36,6 @@ import RunDetails from './RunDetails.jsx'
 import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
 import Dashboard from './Dashboard.jsx'
-import FileDrawer from './FileDrawer.jsx'
 import { CAPABILITY_FALLBACK, ASSESSMENT_FALLBACK } from './capability.js'
 import Remediate from './Remediate.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
@@ -206,9 +206,11 @@ export default function App() {
   // deliberately absent from the primary navigation, which is where engineering diagnostics were
   // not supposed to be.
   const [runDetails, setRunDetails] = useState(false)
-  // The document a worklist row opens. `FileDrawer` is the existing per-file surface and takes the
-  // whole row, so the drill-down is real today rather than a button that goes nowhere; the
-  // dedicated findings-by-criterion view replaces this when it lands.
+  // The worklist ROW a reader opened, for the findings-by-criterion view. It holds the row rather
+  // than the file so the view renders the same derivation the list was ordered by.
+  //
+  // This used to open FileDrawer, with a note saying the dedicated view "replaces this when it
+  // lands". It landed in #546 and sat unmounted; that note is now history rather than a plan.
   const [assessFile, setAssessFile] = useState(null)
   // AssessRunner still owns the run; AssessSetup owns the button that starts it. The runner hands
   // its start function here on mount. Stable identity via useCallback, so registering does not
@@ -1119,14 +1121,26 @@ export default function App() {
                 different question, and stacking it below would put a capability reference back on
                 the screen whose whole problem was too many panels answering different questions
                 at once. */}
-            {assessFile && (
-              <FileDrawer file={assessFile} scanId={run.id} onClose={() => setAssessFile(null)} />
+            {/* ONE FILE, BY CRITERION (approved board assess-05 / A13-A18). Replaces the results
+                 while it is open, exactly as RunDetails does — it carries its own Back and
+                 next-document controls, which only make sense for a view that owns the screen.
+
+                 It takes the worklist's ROW rather than the raw file, so it renders the same
+                 derivation the list was ordered by; recomputing one here could disagree with the
+                 list about which document needs a person first.
+
+                 FileDrawer is not deleted — Overview still uses it. This is only about which view
+                 the Assess tab opens for a document. */}
+            {assessed && assessPhase === 'done' && assessFile && (
+              <AssessFileFindings row={assessFile} cap={cap} assessment={assessment}
+                                  onBack={() => { setAssessFile(null); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+                                  onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
             )}
             {assessed && assessPhase === 'done' && runDetails && (
               <RunDetails scanId={run.id} files={files} cap={cap} assessment={assessment}
                           onBack={() => { setRunDetails(false); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
             )}
-            {assessed && assessPhase === 'done' && !runDetails && <><AssessSummary files={files} cap={cap} assessment={assessment} onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onRunDetails={() => { setRunDetails(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><AssessWorklist files={files} cap={cap} assessment={assessment} onOpenFile={(row) => setAssessFile(files.find((f) => (f.file || f.name) === row.file) || null)} /><RuleBreakdown scanId={run.id} files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
+            {assessed && assessPhase === 'done' && !runDetails && !assessFile && <><AssessSummary files={files} cap={cap} assessment={assessment} onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onRunDetails={() => { setRunDetails(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><AssessWorklist files={files} cap={cap} assessment={assessment} onOpenFile={(row) => setAssessFile(row)} /><RuleBreakdown scanId={run.id} files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
           </>
         ) : placeholder)}
 

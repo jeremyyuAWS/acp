@@ -15,6 +15,7 @@ import { scopeSentence, isNarrowScope } from './scanScope.js'
 import EstateCoverage from './EstateCoverage.jsx'
 import { estateProgressFromFiles } from './estateProgress.js'
 import DiscoveryResults from './DiscoveryResults.jsx'
+import DiscoverInventoryExport from './DiscoverInventoryExport.jsx'
 import { acknowledgementSummary } from './discoveryRecommendations.js'
 import { loadDiscoveryInventory, mergeLifecycle } from './discoveryInventory.js'
 import { getScanInventory } from './api.js'
@@ -87,6 +88,12 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 // ad-hoc panel simply does not render when `me` is absent rather than throwing.
 export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null, onCertified,
   hasSPToken = false, runAt = null }) {
+  // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
+  // component is given neither — Discover takes scanId and scope, not the run. The pieces it needs
+  // are assembled here rather than threading the whole run object through a new prop; the resolver
+  // falls back to the newest per-file inventory stamp when both are absent, which is the case for
+  // every run listed before scan_runs.discovered_at existed.
+  const runForExport = { id: scanId, discovered_at: null, completed_at: null }
   const [sel, setSel] = useState(null)
   const [showPicker, setShowPicker] = useState(false)   // Drive folder picker modal (Choose folder to scan)
   const [showSites, setShowSites] = useState(false)     // SharePoint site picker modal
@@ -426,6 +433,15 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                         acknowledged={ackRecs} onAcknowledge={setAckRecs}
                         overrides={assessAnyway} onOverridesChange={setAssessAnyway}
                         actor={me?.email || me?.name || null} scanId={scanId} />
+
+      {/* TAKE THE INVENTORY OUT OF ACP, DATED. Metadata-only CSV/JSON for the compliance reader,
+          with the snapshot instant on every row — a count is a fact about a boundary at an
+          instant, and a CSV outlives the screen that explained it.
+
+          It self-guards: no inventory to export renders nothing, and it says "not recorded"
+          rather than inventing a date for a run the backend never stamped. */}
+      <DiscoverInventoryExport scanId={scanId} run={runForExport}
+                               inventory={scope?.inventory || null} />
 
       {files.length === 0 ? (
         <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Sources.</p>
