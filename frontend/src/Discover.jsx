@@ -95,7 +95,7 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 // tab. Both OPTIONAL: every existing caller and test constructs Discover without them, and the
 // ad-hoc panel simply does not render when `me` is absent rather than throwing.
 export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
-  hasSPToken = false, runAt = null, run = null, scanList = null }) {
+  hasSPToken = false, runAt = null, run = null, scanList = null, rawFiles = null }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
   // component is given neither — Discover takes scanId and scope, not the run. The pieces it needs
   // are assembled here rather than threading the whole run object through a new prop; the resolver
@@ -216,7 +216,16 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // DID CLASSIFICATION REACH THIS SCREEN AT ALL? False on every real scan today: file_records
   // carries no department and no tags, and get_scan projects that table alone. False means the
   // triage surface is OMITTED, not zeroed — see classificationData.js.
-  const classified = hasClassificationData(files)
+  //
+  // Checked against `rawFiles` (the PRE-annotation records App.jsx passes straight from
+  // get_scan), never against `files` (POST-annotation). ontology.annotate() back-fills
+  // department/tags from a filename guess on every file that lacks them — real files always
+  // lack them, so annotate() ALWAYS gives every real file a non-empty department, and checking
+  // the annotated array made this read "classified" on every real scan (found live 2026-08-21:
+  // the "How this works" copy and the exposure chart claimed a Deep-scan classification that
+  // never ran). `rawFiles` defaults to `files` so a caller that never learned about this
+  // distinction — every existing test — keeps today's behavior exactly.
+  const classified = hasClassificationData(rawFiles ?? files)
   const isConfirmed = (f) => !!classState[f.file]?.confirmed
   const toggleTag = (f, t) => setClassState((s) => { const cur = s[f.file]?.tags ?? tagsOf(f); const next = cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]; return { ...s, [f.file]: { tags: next, confirmed: false } } })
   const confirmClass = (f) => setClassState((s) => ({ ...s, [f.file]: { tags: tagsOf(f), confirmed: true } }))
