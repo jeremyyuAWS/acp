@@ -406,6 +406,83 @@ describe('A11 progressive disclosure — a page can narrow what renders, never w
   })
 })
 
+describe('A28 bulk select — only ever the deterministic fixes, never an AI draft', () => {
+  // Default "Needs attention" view: handbook.docx (2 auto, 1 needs a person), board.pdf (0 auto —
+  // both its findings are AI-drafted 'assisted', never selectable), deck.pptx (1 auto).
+  const checkboxIn = (row) => row.querySelector('input[type="checkbox"]')
+
+  it('offers a checkbox only on a row with a deterministic fix — never on 0-auto or unopened', async () => {
+    const c = await mount({ files: ESTATE, onBulkFix: vi.fn() })
+    expect(checkboxIn(named(c, 'handbook.docx')), 'no checkbox on a document with an auto-fix').toBeTruthy()
+    expect(checkboxIn(named(c, 'deck.pptx'))).toBeTruthy()
+    expect(checkboxIn(named(c, 'board.pdf')), 'board.pdf has 0 deterministic findings — assisted only')
+      .toBe(null)
+  })
+
+  it('renders no selection checkboxes in the table when the caller offers no bulk action', async () => {
+    // A24's own "only auto-fixable" toggle is ALSO a checkbox and is unrelated to A28 — it lives in
+    // the refine bar, not the table. Scoped to the table body/head specifically.
+    const c = await mount({ files: ESTATE })
+    expect(c.querySelectorAll('table input[type="checkbox"]')).toHaveLength(0)
+  })
+
+  it('shows the selection bar naming the documents and the deterministic findings, once picked', async () => {
+    const c = await mount({ files: ESTATE, onBulkFix: vi.fn() })
+    expect(c.querySelector('.worklist-bulkbar'), 'the bar must not show with nothing picked').toBe(null)
+    await act(async () => { checkboxIn(named(c, 'handbook.docx')).click() })
+    const bar = c.querySelector('.worklist-bulkbar')
+    expect(bar).toBeTruthy()
+    expect(bar.textContent).toMatch(/1 document selected/)
+    // handbook.docx: 2 deterministic (1.3.1 x2), never the 1 assisted 1.1.1 finding.
+    expect(bar.textContent).toMatch(/Fix 2 findings/)
+  })
+
+  it('sums across the selection, and pluralises the document count correctly', async () => {
+    const c = await mount({ files: ESTATE, onBulkFix: vi.fn() })
+    await act(async () => { checkboxIn(named(c, 'handbook.docx')).click() })
+    await act(async () => { checkboxIn(named(c, 'deck.pptx')).click() })
+    const bar = c.querySelector('.worklist-bulkbar')
+    expect(bar.textContent).toMatch(/2 documents selected/)
+    expect(bar.textContent).toMatch(/Fix 3 findings/)   // 2 (handbook) + 1 (deck)
+  })
+
+  it('hands back the whole picked rows, not just names, when Fix is clicked', async () => {
+    const onBulkFix = vi.fn()
+    const c = await mount({ files: ESTATE, onBulkFix })
+    await act(async () => { checkboxIn(named(c, 'handbook.docx')).click() })
+    await act(async () => { [...c.querySelectorAll('.worklist-bulkbar button')].find((b) => /^Fix/.test(b.textContent)).click() })
+    expect(onBulkFix).toHaveBeenCalledTimes(1)
+    const rows = onBulkFix.mock.calls[0][0]
+    expect(rows).toHaveLength(1)
+    expect(rows[0].file).toBe('handbook.docx')
+    expect(rows[0].autoFixAvailable).toBe(2)
+  })
+
+  it('clears the selection and hides the bar again', async () => {
+    const c = await mount({ files: ESTATE, onBulkFix: vi.fn() })
+    await act(async () => { checkboxIn(named(c, 'handbook.docx')).click() })
+    await act(async () => { [...c.querySelectorAll('.worklist-bulkbar button')].find((b) => /Clear/.test(b.textContent)).click() })
+    expect(c.querySelector('.worklist-bulkbar')).toBe(null)
+  })
+
+  it('select-all picks every selectable row on the page and only those', async () => {
+    const c = await mount({ files: ESTATE, onBulkFix: vi.fn() })
+    const headerBox = c.querySelector('thead input[type="checkbox"]')
+    expect(headerBox, 'no select-all control').toBeTruthy()
+    await act(async () => { headerBox.click() })
+    expect(checkboxIn(named(c, 'handbook.docx')).checked).toBe(true)
+    expect(checkboxIn(named(c, 'deck.pptx')).checked).toBe(true)
+    expect(c.querySelector('.worklist-bulkbar').textContent).toMatch(/2 documents selected/)
+  })
+
+  it('offers no select-all when nothing on the page is selectable', async () => {
+    // "Awaiting review" holds documents with zero findings — nothing to bulk-fix.
+    const c = await mount({ files: ESTATE, onBulkFix: vi.fn() })
+    await act(async () => { btn(c, /Awaiting review/).click() })
+    expect(c.querySelector('thead input[type="checkbox"]')).toBe(null)
+  })
+})
+
 describe('selecting a document', () => {
   it('hands the whole module row back, not a name', async () => {
     const onOpenFile = vi.fn()

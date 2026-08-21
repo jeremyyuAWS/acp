@@ -111,8 +111,12 @@ function Severity({ row }) {
  * @param criteria   the agreed criteria (defaults to the agreed scope inside assessMetrics)
  * @param level      conformance target
  * @param onOpenFile called with the whole row when a document is selected
+ * @param onBulkFix   A28 · called with the array of selected rows when "Fix N findings" is
+ *                    clicked. Only ever handed rows carrying autoFixAvailable > 0 — this
+ *                    component offers selection ONLY over the deterministic fixes; it never
+ *                    lets a bulk action silently sweep up an AI draft awaiting approval.
  */
-export default function AssessWorklist({ files, cap, assessment, criteria, level = 'AA', onOpenFile }) {
+export default function AssessWorklist({ files, cap, assessment, criteria, level = 'AA', onOpenFile, onBulkFix }) {
   const rows = documentRows(files, { cap, assessment, criteria, level })
   // null means "no filter chosen yet", not "all". Resolved below against the rows that actually
   // exist, so the default follows the data as it loads rather than freezing whatever was true on
@@ -127,6 +131,9 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
   // FILTERED set is currently rendered, not which rows match. Re-derived from `visible` on every
   // render, so tightening a filter to under PAGE_SIZE rows shows everything with no stale toggle.
   const [expanded, setExpanded] = useState(false)
+  // A28 bulk select. A Set of file keys, not rows — rows are recomputed every render (from
+  // documentRows), so holding rows themselves would go stale the instant the estate refetches.
+  const [picked, setPicked] = useState(() => new Set())
 
   // Nothing, rather than zeros. A run that has not happened is not a run that found nothing, and a
   // worklist of no documents is not a worklist. The summary above carries the run's own state.
@@ -161,6 +168,27 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
   const truncated = !expanded && visible.length > PAGE_SIZE
   const shown = truncated ? visible.slice(0, PAGE_SIZE) : visible
   const hiddenRows = truncated ? visible.slice(PAGE_SIZE) : []
+
+  // A28 · which of the CURRENTLY SHOWN rows are selectable at all. Only a row with a deterministic
+  // fix available can be picked — a bulk action offers ONLY what ACP can apply unattended, never a
+  // document whose only work is an AI draft awaiting approval or a person's judgement. Rows that
+  // scroll out of `picked` when a filter narrows are simply not iterated below; nothing prunes the
+  // Set itself, so re-widening the filter restores a selection rather than silently losing it.
+  const selectable = shown.filter((r) => r.opened && (r.autoFixAvailable || 0) > 0)
+  const pickedRows = shown.filter((r) => picked.has(r.file))
+  const pickedFindings = total(pickedRows, 'autoFixAvailable')
+  const allSelectableShown = selectable.length > 0 && selectable.every((r) => picked.has(r.file))
+  const togglePicked = (file) => setPicked((prev) => {
+    const next = new Set(prev)
+    if (next.has(file)) next.delete(file); else next.add(file)
+    return next
+  })
+  const toggleAllShown = () => setPicked((prev) => {
+    const next = new Set(prev)
+    if (allSelectableShown) selectable.forEach((r) => next.delete(r.file))
+    else selectable.forEach((r) => next.add(r.file))
+    return next
+  })
 
   const populations = [
     ['attention', counts.attention], ['awaiting_review', counts.awaiting_review],
@@ -240,10 +268,37 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
         and still on the same row.
       </p>
 
+      {/* A28 bulk select + bulk action. Only offers the deterministic fixes in the selection — see
+          the checkbox guards above — so this button can never silently sweep up an AI draft still
+          awaiting a person's approval. Shown only once something is actually picked. */}
+      {onBulkFix && pickedRows.length > 0 && (
+        <div className="worklist-bulkbar" role="status"
+             style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 10, padding: '8px 12px',
+                      borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)' }}>
+          <span style={{ fontSize: 13 }}>
+            <b>{pickedRows.length}</b> document{pickedRows.length === 1 ? '' : 's'} selected
+          </span>
+          <button type="button" onClick={() => onBulkFix(pickedRows)}>
+            Fix {pickedFindings} finding{pickedFindings === 1 ? '' : 's'}
+          </button>
+          <button type="button" className="ghost small" onClick={() => setPicked(new Set())}>
+            Clear selection
+          </button>
+        </div>
+      )}
+
       <table style={{ marginTop: 10 }}>
         <thead>
           <tr>
-            <th scope="col" style={{ width: '38%' }}>Document</th>
+            {/* A28 · a select-all only when there is something selectable on the page — a header
+                checkbox over zero deterministic-fix rows would toggle nothing and imply otherwise. */}
+            <th scope="col" style={{ width: 28 }}>
+              {onBulkFix && selectable.length > 0 && (
+                <input type="checkbox" checked={allSelectableShown} onChange={toggleAllShown}
+                       aria-label={allSelectableShown ? 'Deselect all shown' : 'Select all shown with an automatic fix'} />
+              )}
+            </th>
+            <th scope="col" style={{ width: '36%' }}>Document</th>
             <th scope="col">Findings</th>
             <th scope="col" style={{ width: 190 }}>Severity</th>
             <th scope="col">Auto-fix</th>
@@ -257,6 +312,16 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
               second ordering rule for the same list, and the two would drift. */}
           {shown.map((row) => (
             <tr key={row.file} className={`worklist-row worklist-${row.state}`}>
+              {/* A28 · a checkbox only on a row this bulk action can actually touch. An unopened
+                  file, or one with zero deterministic findings, gets an empty cell — offering a
+                  checkbox that selects nothing would be a control that lies about what it does. */}
+              <td>
+                {onBulkFix && row.opened && (row.autoFixAvailable || 0) > 0 && (
+                  <input type="checkbox" checked={picked.has(row.file)}
+                         onChange={() => togglePicked(row.file)}
+                         aria-label={`Select ${row.name} for the automatic fixes`} />
+                )}
+              </td>
               <td>
                 <div style={fname}>{row.name}</div>
                 <div className="muted" style={subline}>

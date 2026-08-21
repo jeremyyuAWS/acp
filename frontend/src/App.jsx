@@ -7,7 +7,7 @@ import ScopeFunnel from './ScopeFunnel.jsx'
 import { armNotifyOnComplete, notifyScanComplete, notificationsSupported, notifyPermission } from './scanNotify.js'
 import { refreshDriveToken } from './driveAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, getScanLocations, SESSION_EXPIRED } from './api'
+import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, getScanLocations, remediateScan, SESSION_EXPIRED } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -218,6 +218,36 @@ export default function App() {
   // re-fire on every render of this very large component.
   const assessStart = useRef(null)
   const registerAssessStart = useCallback((fn) => { assessStart.current = fn }, [])
+  // A28 · bulk-fix the deterministic findings in a worklist selection. Calls the SAME endpoint
+  // (remediateScan with an explicit scope) R3's "Apply N automatic fixes" already uses on the
+  // Remediate tab — this is a second entry point into proven, tested infrastructure, not a new
+  // code path. Enqueues, then hands off to Remediate to watch progress there rather than
+  // duplicating its polling machinery here.
+  //
+  // Takes scanId as a CALL-TIME argument rather than closing over `run` — `run` is derived at
+  // line ~822, after this component's only early return (`if (!me) return <SignIn/>`), so a hook
+  // declared here cannot reference it without the same "rendered more hooks than previous render"
+  // crash the assessFileNext memo hit (see App.jsx history). The JSX call site, which IS past that
+  // return, supplies run.id explicitly instead.
+  const [bulkFixBusy, setBulkFixBusy] = useState(false)
+  const handleBulkFix = useCallback(async (scanId, rows) => {
+    if (!scanId || bulkFixBusy || !rows?.length) return
+    setBulkFixBusy(true); setErr(null)
+    try {
+      const r = await remediateScan(scanId, rows.map((row) => row.file))
+      if (!r.enqueued) {
+        setErr(`Nothing to remediate — the server found no eligible work in the ${rows.length} `
+          + `document${rows.length === 1 ? '' : 's'} sent. They may already have been remediated `
+          + `elsewhere; re-open Assess to refresh.`)
+      } else {
+        setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' })
+      }
+    } catch (e) {
+      setErr(`Bulk fix failed: ${e?.message ?? e}`)
+    } finally {
+      setBulkFixBusy(false)
+    }
+  }, [bulkFixBusy])
   const [cap, setCap] = useState(CAPABILITY_FALLBACK)
   const [assessment, setAssessment] = useState(ASSESSMENT_FALLBACK)
   useEffect(() => {
@@ -1191,7 +1221,7 @@ export default function App() {
               <RunDetails scanId={run.id} files={files} cap={cap} assessment={assessment}
                           onBack={() => { setRunDetails(false); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
             )}
-            {assessed && resultsReady && !runDetails && !assessFile && <><AssessSummary files={files} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} run={run} notStarted={run?.not_assessed?.count} onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onRunDetails={() => { setRunDetails(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onChangeScope={() => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><AssessWorklist files={files} cap={cap} assessment={assessment} onOpenFile={(row) => setAssessFile(row)} /><RuleBreakdown scanId={run.id} files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
+            {assessed && resultsReady && !runDetails && !assessFile && <><AssessSummary files={files} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} run={run} notStarted={run?.not_assessed?.count} onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onRunDetails={() => { setRunDetails(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onChangeScope={() => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><AssessWorklist files={files} cap={cap} assessment={assessment} onOpenFile={(row) => setAssessFile(row)} onBulkFix={(rows) => handleBulkFix(run.id, rows)} /><RuleBreakdown scanId={run.id} files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
           </>
         ) : placeholder)}
 
