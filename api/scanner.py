@@ -778,14 +778,28 @@ def _sp_default_drive(token: str, site: str | None = None) -> str | None:
 
 def _sp_walk_folder(token: str, drive_id: str, item_id: str, max_files: int,
                     exts: set[str], inventory_out: list | None = None,
-                    exclude_ids: set | None = None) -> tuple[list[dict], bool]:
+                    exclude_ids: set | None = None, base: str | None = None,
+                    skip_names: set | None = None) -> tuple[list[dict], bool]:
     """BFS one Graph folder subtree. Returns (raw driveItems, truncated).
 
     Recursion is server-side here for the same reason _search_folder does it for Drive: the
     picker hands back a folder and the user means "and everything under it". Making that an
     "include subfolders" toggle would offer a choice whose wrong answer silently under-reports.
+
+    `base` is the Graph drive base to walk — `/drives/{id}` by default, but `/me/drive` for a
+    whole-OneDrive walk, where there is no resolved drive id and the download path reads an absent
+    `driveId` as /me/drive. Passing the base rather than resolving an id keeps that contract
+    unchanged and costs no extra round trip.
+
+    `skip_names` prunes folders BY NAME at enqueue — ACP's own archive and remediated-mirror
+    folders. The caller filters those out afterwards by path anyway, so this changes no result;
+    what it changes is the COST, and on a library saved back a few times the archive is the
+    biggest subtree there is. Walking it spends the cap on items that are then discarded, which
+    can push real documents past the cap and out of the estate.
     """
     excluded = set(exclude_ids or ())
+    skip = set(skip_names or ())
+    root = base or f"{GRAPH}/drives/{drive_id}"
     queue = [item_id]
     seen: set[str] = set()
     raw: list[dict] = []
@@ -796,7 +810,7 @@ def _sp_walk_folder(token: str, drive_id: str, item_id: str, max_files: int,
             continue                          # a shortcut/cycle must not walk forever
         seen.add(cur)
         seg = "root" if cur in (None, "", "root") else f"items/{cur}"
-        url = f"{GRAPH}/drives/{drive_id}/{seg}/children?$select={_SP_ITEM_SELECT},folder&$top=200"
+        url = f"{root}/{seg}/children?$select={_SP_ITEM_SELECT},folder&$top=200"
         while url:
             if len(raw) >= max_files:
                 truncated = True
@@ -809,6 +823,8 @@ def _sp_walk_folder(token: str, drive_id: str, item_id: str, max_files: int,
                     # need not know which form reached it.
                     if (it.get("id") in excluded
                             or f"{drive_id}/{it.get('id')}" in excluded):
+                        continue
+                    if it.get("name") in skip:
                         continue
                     queue.append(it.get("id"))
                     continue
@@ -934,13 +950,44 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
             yield data.get("value", [])
             url = data.get("@odata.nextLink")
 
+    # ── HOW THE ESTATE IS ENUMERATED, and why this is not `search` any more ─────────────────────
+    #
+    # Every branch below now WALKS `/children` from a root. It used to walk only for chosen
+    # folders and use `root/search(q='')` for a whole drive or a whole site, and that difference
+    # was the single largest correctness bug in discovery.
+    #
+    # `search(q='')` reads Microsoft's SEARCH INDEX, which is eventually consistent. It returns
+    # what has been indexed, with no error and no signal when that is less than what exists.
+    # Issue #333 measured it on prod: 178 files uploaded, 39 discovered, presented as a complete
+    # inventory; the same query returned 157 five minutes later and 158 after fifteen. A partial
+    # listing is indistinguishable from a genuinely small estate, and EVERYTHING downstream —
+    # assessment coverage, the reconciliation, the compliance assertion — is a fraction of that
+    # number. Discovery's entire value is completeness, so a fast wrong answer is the one outcome
+    # it cannot ship.
+    #
+    # `/children` is a directory traversal against live metadata: immediately consistent, and it
+    # returns what is actually there. That is what the folder-scoped path has always used, which
+    # is why "pick the folders" was the workaround for an estate the index was under-reporting.
+    # The workaround is now the behaviour.
+    #
+    # THE COST IS REAL AND IS ACCEPTED. Search is one paged call per drive; a walk is one call per
+    # FOLDER, so a deep estate costs many more round trips and takes longer. Correctness wins:
+    # the cap and `truncated` already bound the work and say when a listing stopped short, and a
+    # slow complete answer can be waited for while a fast partial one cannot be detected.
+    #
+    # ACP_SP_ENUMERATE=search restores the old path without a code change, for an operator who
+    # hits a wall on a very large estate and knowingly accepts an index-backed listing. It is not
+    # the default and it is not silent — the scan logs which mode produced the inventory, so a
+    # count can always be attributed to the method that produced it.
+    use_search = os.environ.get("ACP_SP_ENUMERATE", "walk").strip().lower() == "search"
     if locations:
         # Chosen folders. Each location is (drive_id, item_id) — never a bare item id, because a
         # Graph item id is unique only within its drive (see _sp_folders).
         targets = []
         for drive_id, item_id in locations:
             walked, cut = _sp_walk_folder(token, drive_id, item_id, max_files, exts,
-                                          inventory_out=None, exclude_ids=exclude_ids)
+                                          inventory_out=None, exclude_ids=exclude_ids,
+                                          skip_names=skip_folders)
             hit_cap = hit_cap or cut
             targets.append((drive_id, iter([walked])))
     elif site:
@@ -948,13 +995,50 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
         if not drives:
             print(f"[scan] SharePoint site {site} has no document libraries visible to this "
                   f"token — nothing to scan", flush=True)
-        targets = [(d["id"], _pages(f"{GRAPH}/drives/{d['id']}/root/search(q='')"
-                                    f"?$select={_SP_ITEM_SELECT}&$top=200")) for d in drives]
-    else:
-        # None, not a resolved id: the download path reads a missing driveId as /me/drive, which
-        # is what every item stored before this change looks like.
+        if use_search:
+            print(f"[scan] SharePoint site {site} listed via the SEARCH INDEX "
+                  f"(ACP_SP_ENUMERATE=search) — recent changes may be missing", flush=True)
+            targets = [(d["id"], _pages(f"{GRAPH}/drives/{d['id']}/root/search(q='')"
+                                        f"?$select={_SP_ITEM_SELECT}&$top=200")) for d in drives]
+        else:
+            # Each library walked from its own root, sharing ONE budget across the site.
+            #
+            # The budget is what the lazy `search` generator gave for free and an eager walk does
+            # not: the old loop stopped requesting pages the moment the cap filled, so a site whose
+            # first library exhausts it never touched the second. Walking every library up front
+            # would spend real Graph calls on an estate that is already a floor — slower, and
+            # against a customer's tenant.
+            #
+            # A library left unwalked is TRUNCATION, and it is recorded as such. Silently returning
+            # library A as though it were the site is the exact failure this whole change is about,
+            # reached from the other direction.
+            targets = []
+            budget = max_files
+            for d in drives:
+                if budget <= 0:
+                    hit_cap = True          # libraries left unlisted → the estate is a floor
+                    break
+                walked, cut = _sp_walk_folder(token, d["id"], "root", budget, exts,
+                                              inventory_out=None, exclude_ids=exclude_ids,
+                                              skip_names=skip_folders)
+                hit_cap = hit_cap or cut
+                budget -= len(walked)
+                targets.append((d["id"], iter([walked])))
+    elif use_search:
+        print("[scan] OneDrive listed via the SEARCH INDEX (ACP_SP_ENUMERATE=search) — "
+              "recent changes may be missing", flush=True)
         targets = [(None, _pages(f"{GRAPH}/me/drive/root/search(q='')"
                                  f"?$select={_SP_ITEM_SELECT}&$top=200"))]
+    else:
+        # `/me/drive` as the BASE, and `drive_id` stays None on purpose. Resolving the real id
+        # would be an extra round trip and would change what is stored on every item; the download
+        # path reads an absent `driveId` as /me/drive, which is correct there and only there, and
+        # is the shape every item listed before site support already has.
+        walked, cut = _sp_walk_folder(token, None, "root", max_files, exts,
+                                      inventory_out=None, exclude_ids=exclude_ids,
+                                      base=f"{GRAPH}/me/drive", skip_names=skip_folders)
+        hit_cap = hit_cap or cut
+        targets = [(None, iter([walked]))]
 
     for i, (drive_id, pages) in enumerate(targets):
         for batch in pages:
