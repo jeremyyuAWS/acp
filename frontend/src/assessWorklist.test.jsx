@@ -78,7 +78,14 @@ const order = (c) => rowsOf(c).map(nameOf)
 const named = (c, name) => rowsOf(c).find((r) => nameOf(r) === name)
 const cell = (r, col) => r.querySelector(`.col-${col} .n`).textContent
 const btn = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent))
-const showAll = async (c) => { await act(async () => { btn(c, /^All /).click() }) }
+// "Show every row" — the state filter AND, now, the A11 pagination reveal if the filtered set still
+// exceeds one page. Existing callers asked for every row to be visible; A11 truncation is additive
+// and this keeps that promise rather than making every pre-existing test learn about page size.
+const showAll = async (c) => {
+  await act(async () => { btn(c, /^All /).click() })
+  const more = btn(c, /^Show the other/)
+  if (more) await act(async () => { more.click() })
+}
 
 describe('nothing to report renders nothing', () => {
   it('renders no markup at all before a run', async () => {
@@ -354,6 +361,48 @@ describe('A19 severity filter and A24 auto-fixable toggle — narrow, never hide
   it('does not render the controls for an estate with nothing to fix', async () => {
     const c = await mount({ files: [doc('notes.docx'), doc('clean.pptx')] })
     expect(c.querySelector('.worklist-refine')).toBe(null)
+  })
+})
+
+describe('A11 progressive disclosure — a page can narrow what renders, never what it hid', () => {
+  // Seven documents needing attention, each with a distinct number of findings, so "the other 2"
+  // sums to a checkable, non-trivial total (2 + 3 = 5, from the last two of the seven).
+  const SEVEN = Array.from({ length: 7 }, (_, i) =>
+    doc(`doc${i}.docx`, Array.from({ length: i + 1 }, () => finding('1.1.1', 'CRITICAL'))))
+
+  it('shows the first page and names what the page — not the filter — is hiding', async () => {
+    // documentRows ranks by severity weight DESCENDING, so doc6 (7 findings) leads and doc0
+    // (1 finding) trails. The page shows the five heaviest; "the other 2" are the two lightest —
+    // doc1 (2 findings) and doc0 (1 finding) — summing to 3.
+    const c = await mount({ files: SEVEN })
+    await act(async () => { btn(c, /^All /).click() })
+    expect(rowsOf(c)).toHaveLength(5)
+    expect(order(c)).toEqual(['doc6.docx', 'doc5.docx', 'doc4.docx', 'doc3.docx', 'doc2.docx'])
+    expect(c.textContent).toMatch(/5 of 7 documents shown/)
+    expect(c.textContent).toMatch(/Show the other 2, which hold 3 findings between them/)
+  })
+
+  it('reveals every row on demand, and the page-hidden line disappears', async () => {
+    const c = await mount({ files: SEVEN })
+    await act(async () => { btn(c, /^All /).click() })
+    await act(async () => { btn(c, /^Show the other/).click() })
+    expect(rowsOf(c)).toHaveLength(7)
+    expect(c.textContent).not.toMatch(/Show the other/)
+  })
+
+  it('does not truncate a set that already fits on one page', async () => {
+    const c = await mount({ files: SEVEN.slice(0, 5) })
+    await act(async () => { btn(c, /^All /).click() })
+    expect(rowsOf(c)).toHaveLength(5)
+    expect(c.textContent).not.toMatch(/Show the other/)
+  })
+
+  it('leaves the FILTER summary line (what the filter hid) untouched by pagination', async () => {
+    // The existing "Showing X of Y" line answers a different question — what the filter is not
+    // showing — and must keep counting the full filtered set, not just the current page.
+    const c = await mount({ files: SEVEN })
+    await act(async () => { btn(c, /^All /).click() })
+    expect(c.textContent).toMatch(/Showing 7 of 7 documents/)
   })
 })
 
