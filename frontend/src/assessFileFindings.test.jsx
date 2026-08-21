@@ -96,6 +96,31 @@ describe('AssessFileFindings — nothing, rather than zeros', () => {
   })
 })
 
+describe('AssessFileFindings — document-to-document navigation (A13)', () => {
+  const ROW = rowFor(doc([finding('1.1.1', 'CRITICAL')]))
+
+  it('offers the next document, named, when one is given', async () => {
+    const c = await mount({ row: ROW, nextName: 'HR/Onboarding Handbook.docx', onNext: () => {} })
+    const next = [...c.querySelectorAll('button')].find((b) => /next/i.test(b.textContent))
+    expect(next, 'no next-document control rendered').toBeTruthy()
+    expect(next.textContent).toMatch(/next: HR\/Onboarding Handbook\.docx/)
+  })
+
+  it('moves to the next document when clicked', async () => {
+    let moved = false
+    const c = await mount({ row: ROW, nextName: 'b.pdf', onNext: () => { moved = true } })
+    const next = [...c.querySelectorAll('button')].find((b) => /next/i.test(b.textContent))
+    await act(async () => { next.click() })
+    expect(moved).toBe(true)
+  })
+
+  it('offers no next control at the end of the list', async () => {
+    // The last document in the worklist order gets onBack but no onNext — there is nowhere to go.
+    const c = await mount({ row: ROW, onBack: () => {} })
+    expect([...c.querySelectorAll('button')].some((b) => /next/i.test(b.textContent))).toBe(false)
+  })
+})
+
 describe('AssessFileFindings — every number comes from assessMetrics', () => {
   it('prints the row’s own findings, severity, auto-fix and review counts', async () => {
     const row = rowFor(FILE)
