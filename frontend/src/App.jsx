@@ -739,6 +739,7 @@ export default function App() {
         setLiveScanId(scan_id)
         const t0 = Date.now()
         let misses = 0
+        let foundOnce = false
         for (let i = 0; i < 600 && !fresh; i++) {        // up to ~10 min for large estates
           await new Promise((r) => setTimeout(r, 1000))
           // Fan-out scans create the row early with status 'running' and bump files_done as each
@@ -746,16 +747,27 @@ export default function App() {
           // the scan row itself — no fabricated phase, no timer-driven bar.
           const elapsed = Math.round((Date.now() - t0) / 1000)
           let g = null
-          try { g = await getScan(scan_id); misses = 0 } catch { g = null; misses++ }
+          try { g = await getScan(scan_id); misses = 0; foundOnce = true } catch { g = null; misses++ }
           // A deploy mid-scan drops this tab's identity; the owner-scoped lookup then 404s
           // FOREVER (found live 2026-07-11: silent console spam, banner wedged on
           // "Connecting…"). Persistent misses → say what happened instead of spinning.
-          if (misses >= 8) {
+          //
+          // Gated on foundOnce (found live 2026-08-21): a scan that has NEVER been claimed by a
+          // worker has no scan_runs row yet at all, so getScan 404s from the very first poll —
+          // that is expected, not a session loss, and firing "your session ended" over it is a
+          // wrong diagnosis of a real, different problem (a stuck queue). Only "found, then
+          // repeatedly vanished" is a real session-loss signal.
+          if (foundOnce && misses >= 8) {
             window.dispatchEvent(new CustomEvent('acp:session-expired', { detail: { reason:
               'The app was updated and this tab’s session ended. Sign in again — your scan kept running server-side and will be here when you return.' } }))
             return
           }
-          setProgress(g ? queuedProgress(g, elapsed) : { phase: 'connecting', elapsed })
+          // Never once claimed after ~45s of trying: say that plainly instead of either the wrong
+          // session-expiry message above or spinning silently for the full 10-minute cap.
+          if (!foundOnce && misses >= 45) {
+            throw new Error('this scan never started — the queue may be stuck. Try again, or check Monitor.')
+          }
+          setProgress(g ? queuedProgress(g, elapsed) : { phase: foundOnce ? 'connecting' : 'queued', elapsed })
           if (g && g.run && g.run.status !== 'running') fresh = g
         }
         if (!fresh) throw new Error('scan still processing — watch it finish in the Monitor queue')

@@ -1,14 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ScanSetup from './ScanSetup.jsx'
 import { Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer, { statusOf } from './FileDrawer.jsx'
+import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
+import { loadDiscoveryInventory, inventoryOnlyRows } from './discoveryInventory.js'
 import { findingsByCriterion, findingsByLevel, levelOfFinding } from './wcagFinding.js'
 import { analysedCount, avgScore } from './docStatus.js'
 import { estateProgressFromFiles } from './estateProgress.js'
 import { IDENTITY, SIM, remediableCount, recommendationSummary } from './sim.js'
-import { openReport } from './api.js'
+import { openReport, getScanInventory } from './api.js'
 import { loadPublished } from './ontology.js'
 import WordCloud from './WordCloud.jsx'
 import Insight from './Insight.jsx'
@@ -23,6 +25,7 @@ import { reconciliationInputs } from './reconciliationInputs.js'
 import { assessMetrics, coverageSentence, SEVERITIES, SEVERITY_LABEL } from './assessMetrics.js'
 import AssertionScope from './AssertionScope.jsx'
 import NextStep from './NextStep.jsx'
+import EstateTreemap from './EstateTreemap.jsx'
 import { CORE_SCS } from './activeScope.js'
 
 // The estate dashboard — doubles as the exportable compliance report.
@@ -34,6 +37,24 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const [on, setOn] = useState(false)
   const [seg, setSeg] = useState(null)
   const [selFile, setSelFile] = useState(null)
+  const [estOnlyFile, setEstOnlyFile] = useState(null)
+  // The per-file estate inventory — every image/video/unsupported file discovery listed but never
+  // opened, behind the same paginated `GET /scans/{id}/inventory` route Discover.jsx already reads
+  // for lifecycle columns (discoveryInventory.js). Only fetched here to widen "by type"/"by pages"
+  // and their drill-downs from the scanned subset to the true estate; every other panel on this
+  // screen is unaffected and keeps reading `files` directly.
+  const [inv, setInv] = useState(null)
+  useEffect(() => {
+    let live = true
+    setInv(null)      // a new scan invalidates the previous read the instant the id changes
+    if (!run?.id) return undefined
+    loadDiscoveryInventory(run.id, getScanInventory).then((r) => { if (live) setInv(r) })
+    return () => { live = false }
+  }, [run?.id])
+  // `files` plus the estate-only rows the inventory adds — read by `byType`/`byPages` and their
+  // onPick filters ONLY. Every other computation on this screen (scores, findings, departments)
+  // stays on `files`, which is correct for them: a never-opened file has no score or finding.
+  const estateFiles = useMemo(() => [...files, ...inventoryOnlyRows(files, inv)], [files, inv])
   const reportRef = useRef(null)
   const [exporting, setExporting] = useState(false)
   const [scanExporting, setScanExporting] = useState(false)
@@ -185,11 +206,28 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const allFindings = files.reduce((a, f) => a + (f.issues || []).length, 0)
 
   // inventory distributions
-  const countBy = (fn) => Object.entries(files.reduce((m, f) => { const k = fn(f); if (k != null) m[k] = (m[k] || 0) + 1; return m }, {})).sort((a, b) => b[1] - a[1])
+  const countBy = (fn, pop = files) => Object.entries(pop.reduce((m, f) => { const k = fn(f); if (k != null) m[k] = (m[k] || 0) + 1; return m }, {})).sort((a, b) => b[1] - a[1])
   const PLUM = '#7a5c8e'
   const NA_GREY = '#9a948f'   // "not measured" — never a score band, so it reads as absent, not bad
   const bySource = countBy((f) => f.sourceName).map(([label, value]) => ({ label, value, color: PLUM }))
-  const byType = countBy((f) => (f.type || '').toUpperCase()).map(([label, value]) => ({ label, value, color: PLUM }))
+  // Over estateFiles, not files: an estate that is mostly images/video must not render this panel
+  // as if it were document-only (see discoveryInventory.js's inventoryOnlyRows for the gap this
+  // closes — the identical failure DiscoveryResults.jsx's own "By file type" panel had).
+  const byType = countBy((f) => (f.type || '').toUpperCase(), estateFiles).map(([label, value]) => ({ label, value, color: PLUM }))
+  // Total pages per type, for the treemap's "by total pages" toggle — sums only files that
+  // actually carry a page count (a discover-only file's `pages` is null, not zero). `byPages` is
+  // null, not a zero-filled array, when NOTHING in the estate has been paginated yet: the toggle
+  // that switches to it is not even offered in that case (see EstateTreemap), rather than
+  // switching to a chart of all-zero bars.
+  const pageSums = {}
+  let anyPages = false
+  for (const f of estateFiles) {
+    if (f.pages == null) continue
+    anyPages = true
+    const k = (f.type || '').toUpperCase()
+    pageSums[k] = (pageSums[k] || 0) + f.pages
+  }
+  const byPages = anyPages ? Object.entries(pageSums).map(([label, value]) => ({ label, value })) : null
   const byDept = countBy((f) => f.department).map(([label, value]) => ({ label, value, color: PLUM }))
   // Collapsed across the three spellings a finding's `wcag` arrives in — see wcagFinding.js.
   // Keying the raw string listed 1.3.1 twice, as "info & relationships" and "Info and
@@ -540,19 +578,42 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       <div className="muted" style={{ margin: '20px 0 2px' }}>Inventory distribution</div>
       <div className="chartrow">
         <section className="panel"><h2>By source system</h2><Bars items={bySource} cols="118px 1fr 28px" onPick={(it) => { const fs = files.filter((f) => f.sourceName === it.label); setSeg({ title: `${it.label} · ${it.value} document${it.value !== 1 ? 's' : ''}`, subtitle: 'filtered by source', files: fs }) }} /><Insight text={INS.source} /></section>
-        <section className="panel"><h2>By document type</h2><Bars items={byType} cols="62px 1fr 28px" onPick={(it) => { const fs = files.filter((f) => (f.type || '').toUpperCase() === it.label); setSeg({ title: `${it.label} documents · ${it.value} total`, subtitle: 'filtered by type', files: fs }) }} /><Insight text={INS.type} /></section>
+        <section className="panel"><h2>By document type</h2><Bars items={byType} cols="62px 1fr 28px" onPick={(it) => { const fs = estateFiles.filter((f) => (f.type || '').toUpperCase() === it.label); setSeg({ title: `${it.label} · ${it.value} total`, subtitle: 'filtered by type', files: fs }) }} /><Insight text={INS.type} /></section>
       </div>
+
+      <EstateTreemap byCount={byType} byPages={byPages} onPick={(label) => {
+        const fs = estateFiles.filter((f) => (f.type || '').toUpperCase() === label)
+        setSeg({ title: `${label} · ${fs.length} total`, subtitle: 'filtered by type', files: fs })
+      }} />
 
       <section className="panel">
         <h2>Compliance funnel · click a stage</h2>
-        <div className="vfunnel">
-          {stages.map((s) => (
-            <button className="vfrow" key={s.label} onClick={() => onGo(s.go)} aria-label={`${s.label}${s.proj ? ' projected' : ''}: ${s.v.toLocaleString()} documents — open`}>
-              <span className="vflabel">{s.label} {s.proj && <em>· proj</em>}</span>
-              <span className="vfbar"><i style={{ width: on ? `${(s.v / maxN) * 100}%` : '0%', background: s.proj ? '#c4aecb' : '#7a5c8e' }} /></span>
-              <span className="vfn">{s.v.toLocaleString()}</span>
-            </button>
-          ))}
+        <div className="trapfunnel">
+          {stages.map((s, i) => {
+            // Conversion from the PREVIOUS stage, not from the funnel's first stage — each drop
+            // answers "of what reached here, how much reached the next step", which is what a
+            // funnel is for. Absent (not 0%) when the previous stage has nothing to convert from,
+            // so a 0-document funnel doesn't print a division-by-zero "0%" and call it measured.
+            const prev = i > 0 ? stages[i - 1] : null
+            const pct = prev && prev.v > 0 ? Math.round((s.v / prev.v) * 100) : null
+            const widthPct = on ? Math.max(8, (s.v / maxN) * 100) : 0
+            return (
+              <div key={s.label}>
+                {prev && (
+                  <div className="trapdrop" aria-hidden="true">
+                    {pct == null ? '— no prior stage to convert from' : `↓ ${pct}%`}
+                  </div>
+                )}
+                <button className="trapstage" onClick={() => onGo(s.go)}
+                        aria-label={`${s.label}${s.proj ? ' projected' : ''}: ${s.v.toLocaleString()} documents — open`}>
+                  <div className="trapshape" style={{ width: `${widthPct}%`, background: s.proj ? '#c4aecb' : '#7a5c8e' }}>
+                    <span className="trapstage-label">{s.label} {s.proj && <em>· proj</em>}</span>
+                    <span className="trapstage-n">{s.v.toLocaleString()}</span>
+                  </div>
+                </button>
+              </div>
+            )
+          })}
         </div>
       </section>
 
@@ -608,7 +669,11 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       )}
       </div>
 
-      {seg &&<SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={setSelFile} />}
+      {/* An estate-only row (image/video/unsupported — never opened, see inventoryOnlyRows) has no
+          assessment record for FileDrawer to show; route it to the lighter EstateOnlyDrawer
+          instead of opening FileDrawer on a file it was never built to describe. */}
+      {seg &&<SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => (f._estateOnly ? setEstOnlyFile(f) : setSelFile(f))} />}
+      {estOnlyFile && <EstateOnlyDrawer file={estOnlyFile} onClose={() => setEstOnlyFile(null)} />}
       {selFile && <FileDrawer file={selFile} scanId={run.id} onClose={() => setSelFile(null)} />}
     </>
   )

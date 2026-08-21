@@ -22,10 +22,13 @@ let _instancePromise = null
 let _key = null
 
 // One instance per (clientId, tenant): created once, initialize() awaited once, and any interrupted
-// redirect resolved. Re-resolves only if the runtime config points at a different app/tenant.
-async function getInstance() {
+// redirect resolved. Re-resolves whenever the resolved (clientId, tenant) pair changes — which now
+// includes switching `tenantKey` to connect a DIFFERENT configured SharePoint tenant, not just a
+// runtime config change. Each tenant gets its own cache/interaction state, same as MSAL intends for
+// genuinely separate app registrations.
+async function getInstance(tenantKey) {
   if (!window.msal) throw new MsalNotReady('MSAL not loaded')
-  const { clientId, tenant } = await getSpAuth()
+  const { clientId, tenant } = await getSpAuth(tenantKey)
   if (!clientId) throw new MsalNotConfigured('No Entra client id')
   const key = `${clientId}@${tenant}`
   if (_instancePromise && _key === key) return _instancePromise
@@ -57,10 +60,11 @@ function clearStuckInteraction() {
 // Sign in and return { account, accessToken } for the given scopes. Retries exactly once, after
 // clearing a stale interaction lock, so one testerʼs fumbled popup doesn't wedge every later attempt.
 // Any other MSAL error (user_cancelled, popup_window_error, …) propagates unchanged for the caller
-// to phrase.
-export async function signInForScopes(scopes) {
+// to phrase. `tenantKey` selects which configured Microsoft tenant to sign into — omitted (every
+// caller before multi-tenant SharePoint) uses the first/only configured one, unchanged.
+export async function signInForScopes(scopes, tenantKey) {
   const attempt = async () => {
-    const inst = await getInstance()
+    const inst = await getInstance(tenantKey)
     // Same reasoning as the Google side (SignIn.jsx): MSAL will otherwise reuse the single
     // signed-in Entra account without asking, so a user whose Microsoft work account differs
     // from their Google one had no way to say so.

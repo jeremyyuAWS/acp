@@ -426,6 +426,13 @@ def config(request: Request = None):
             # when these are absent). Null when SharePoint isn't configured; the SPA hides the button.
             "azure_client_id": core.AZURE_CLIENT_ID,
             "azure_tenant_id": core.AZURE_TENANT_ID,
+            # Every SharePoint/OneDrive DATA-SOURCE connection this deployment can reach — one entry
+            # per Entra app registration (ACP_AZURE_CLIENT_ID[_N]/ACP_AZURE_TENANT_ID[_N]). Distinct
+            # from azure_client_id/azure_tenant_id above, which stays the single identity provider
+            # that gates SIGN-IN to ACP itself; connecting a second tenant's SharePoint as a scan
+            # source does not change who is allowed to use the app. [] when unconfigured — same
+            # "hide the button" contract as the singular fields.
+            "microsoft_tenants": core.MICROSOFT_TENANTS,
             "auth": "gis" if core.GOOGLE_CLIENT_ID else "demo",
             **_build_info(),
             "ai": _ai.provenance(),

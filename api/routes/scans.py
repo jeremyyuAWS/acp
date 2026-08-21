@@ -246,10 +246,18 @@ def cancel_scan(sid: str, request: Request):
     """Stop an in-flight fan-out scan (found live 2026-07-11: there was NO way to stop a
     scan — a wedged one blocked all new scans until the lease sweeper caught up). Kills the
     scan's outstanding jobs and closes the run as 'cancelled'; files already analysed keep
-    their records. Owner-scoped: you can only cancel your own scan."""
-    if not core.store.cancel_scan(sid, owner=_owner(request)):
-        raise HTTPException(409, "scan not found, not yours, or not running")
-    return {"scan_id": sid, "status": "cancelled"}
+    their records. Owner-scoped: you can only cancel your own scan.
+
+    Falls back to cancel_queued_job when cancel_scan says no: a scan_id issued by the durable
+    (queued) start path is real and known to the caller from the moment it's enqueued, but has
+    no scan_runs row — and so nothing for cancel_scan to find — until a worker actually claims
+    it (found live 2026-08-21: a scan stuck waiting for a worker had no way to be cancelled
+    either, the other half of the 2026-07-11 gap this route was built to close)."""
+    if core.store.cancel_scan(sid, owner=_owner(request)):
+        return {"scan_id": sid, "status": "cancelled"}
+    if core.store.cancel_queued_job(sid):
+        return {"scan_id": sid, "status": "cancelled", "was_queued": True}
+    raise HTTPException(409, "scan not found, not yours, or not running")
 
 
 @router.get("/scans/jobs/{job_id}")
