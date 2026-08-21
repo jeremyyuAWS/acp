@@ -1,14 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ScanSetup from './ScanSetup.jsx'
 import { Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer, { statusOf } from './FileDrawer.jsx'
+import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
+import { loadDiscoveryInventory, inventoryOnlyRows } from './discoveryInventory.js'
 import { findingsByCriterion, findingsByLevel, levelOfFinding } from './wcagFinding.js'
 import { analysedCount, avgScore } from './docStatus.js'
 import { estateProgressFromFiles } from './estateProgress.js'
 import { IDENTITY, SIM, remediableCount, recommendationSummary } from './sim.js'
-import { openReport } from './api.js'
+import { openReport, getScanInventory } from './api.js'
 import { loadPublished } from './ontology.js'
 import WordCloud from './WordCloud.jsx'
 import Insight from './Insight.jsx'
@@ -35,6 +37,24 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const [on, setOn] = useState(false)
   const [seg, setSeg] = useState(null)
   const [selFile, setSelFile] = useState(null)
+  const [estOnlyFile, setEstOnlyFile] = useState(null)
+  // The per-file estate inventory — every image/video/unsupported file discovery listed but never
+  // opened, behind the same paginated `GET /scans/{id}/inventory` route Discover.jsx already reads
+  // for lifecycle columns (discoveryInventory.js). Only fetched here to widen "by type"/"by pages"
+  // and their drill-downs from the scanned subset to the true estate; every other panel on this
+  // screen is unaffected and keeps reading `files` directly.
+  const [inv, setInv] = useState(null)
+  useEffect(() => {
+    let live = true
+    setInv(null)      // a new scan invalidates the previous read the instant the id changes
+    if (!run?.id) return undefined
+    loadDiscoveryInventory(run.id, getScanInventory).then((r) => { if (live) setInv(r) })
+    return () => { live = false }
+  }, [run?.id])
+  // `files` plus the estate-only rows the inventory adds — read by `byType`/`byPages` and their
+  // onPick filters ONLY. Every other computation on this screen (scores, findings, departments)
+  // stays on `files`, which is correct for them: a never-opened file has no score or finding.
+  const estateFiles = useMemo(() => [...files, ...inventoryOnlyRows(files, inv)], [files, inv])
   const reportRef = useRef(null)
   const [exporting, setExporting] = useState(false)
   const [scanExporting, setScanExporting] = useState(false)
@@ -186,11 +206,14 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const allFindings = files.reduce((a, f) => a + (f.issues || []).length, 0)
 
   // inventory distributions
-  const countBy = (fn) => Object.entries(files.reduce((m, f) => { const k = fn(f); if (k != null) m[k] = (m[k] || 0) + 1; return m }, {})).sort((a, b) => b[1] - a[1])
+  const countBy = (fn, pop = files) => Object.entries(pop.reduce((m, f) => { const k = fn(f); if (k != null) m[k] = (m[k] || 0) + 1; return m }, {})).sort((a, b) => b[1] - a[1])
   const PLUM = '#7a5c8e'
   const NA_GREY = '#9a948f'   // "not measured" — never a score band, so it reads as absent, not bad
   const bySource = countBy((f) => f.sourceName).map(([label, value]) => ({ label, value, color: PLUM }))
-  const byType = countBy((f) => (f.type || '').toUpperCase()).map(([label, value]) => ({ label, value, color: PLUM }))
+  // Over estateFiles, not files: an estate that is mostly images/video must not render this panel
+  // as if it were document-only (see discoveryInventory.js's inventoryOnlyRows for the gap this
+  // closes — the identical failure DiscoveryResults.jsx's own "By file type" panel had).
+  const byType = countBy((f) => (f.type || '').toUpperCase(), estateFiles).map(([label, value]) => ({ label, value, color: PLUM }))
   // Total pages per type, for the treemap's "by total pages" toggle — sums only files that
   // actually carry a page count (a discover-only file's `pages` is null, not zero). `byPages` is
   // null, not a zero-filled array, when NOTHING in the estate has been paginated yet: the toggle
@@ -198,7 +221,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   // switching to a chart of all-zero bars.
   const pageSums = {}
   let anyPages = false
-  for (const f of files) {
+  for (const f of estateFiles) {
     if (f.pages == null) continue
     anyPages = true
     const k = (f.type || '').toUpperCase()
@@ -555,12 +578,12 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       <div className="muted" style={{ margin: '20px 0 2px' }}>Inventory distribution</div>
       <div className="chartrow">
         <section className="panel"><h2>By source system</h2><Bars items={bySource} cols="118px 1fr 28px" onPick={(it) => { const fs = files.filter((f) => f.sourceName === it.label); setSeg({ title: `${it.label} · ${it.value} document${it.value !== 1 ? 's' : ''}`, subtitle: 'filtered by source', files: fs }) }} /><Insight text={INS.source} /></section>
-        <section className="panel"><h2>By document type</h2><Bars items={byType} cols="62px 1fr 28px" onPick={(it) => { const fs = files.filter((f) => (f.type || '').toUpperCase() === it.label); setSeg({ title: `${it.label} documents · ${it.value} total`, subtitle: 'filtered by type', files: fs }) }} /><Insight text={INS.type} /></section>
+        <section className="panel"><h2>By document type</h2><Bars items={byType} cols="62px 1fr 28px" onPick={(it) => { const fs = estateFiles.filter((f) => (f.type || '').toUpperCase() === it.label); setSeg({ title: `${it.label} · ${it.value} total`, subtitle: 'filtered by type', files: fs }) }} /><Insight text={INS.type} /></section>
       </div>
 
       <EstateTreemap byCount={byType} byPages={byPages} onPick={(label) => {
-        const fs = files.filter((f) => (f.type || '').toUpperCase() === label)
-        setSeg({ title: `${label} documents · ${fs.length} total`, subtitle: 'filtered by type', files: fs })
+        const fs = estateFiles.filter((f) => (f.type || '').toUpperCase() === label)
+        setSeg({ title: `${label} · ${fs.length} total`, subtitle: 'filtered by type', files: fs })
       }} />
 
       <section className="panel">
@@ -646,7 +669,11 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       )}
       </div>
 
-      {seg &&<SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={setSelFile} />}
+      {/* An estate-only row (image/video/unsupported — never opened, see inventoryOnlyRows) has no
+          assessment record for FileDrawer to show; route it to the lighter EstateOnlyDrawer
+          instead of opening FileDrawer on a file it was never built to describe. */}
+      {seg &&<SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => (f._estateOnly ? setEstOnlyFile(f) : setSelFile(f))} />}
+      {estOnlyFile && <EstateOnlyDrawer file={estOnlyFile} onClose={() => setEstOnlyFile(null)} />}
       {selFile && <FileDrawer file={selFile} scanId={run.id} onClose={() => setSelFile(null)} />}
     </>
   )
