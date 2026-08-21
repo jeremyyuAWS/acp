@@ -94,7 +94,10 @@ describe('every tile is read from an authority the screen already trusts', () =>
 
   it('takes findings from assessMetrics, the module the Assess tab uses', () => {
     // One run must not report two different findings totals depending on which tab you stand on.
-    expect(src).toMatch(/import \{ assessMetrics \} from '\.\/assessMetrics\.js'/)
+    // assessMetrics is imported from the shared module (alongside the coverage/severity helpers the
+    // organic Overview's assessment section reuses) — the point is that the findings total comes from
+    // there, not that it is the only named import.
+    expect(src).toMatch(/import \{ assessMetrics[^}]*\} from '\.\/assessMetrics\.js'/)
     expect(src).toMatch(/assessMetrics\(files, \{ cap, assessment \}\)/)
   })
 
