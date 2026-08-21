@@ -36,15 +36,47 @@ const tagStyle = (tone) => ({
   whiteSpace: 'nowrap', display: 'inline-block', ...TAG_TONE[tone],
 })
 
-const Stat = ({ n, label, color }) => (
+const Stat = ({ n, label, color, sub = null }) => (
   <div style={{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 12,
                 padding: '14px 16px', flex: 1, minWidth: 0 }}>
     <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.01em', lineHeight: 1.15, color }}>
       {n.toLocaleString()}
     </div>
     <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 3 }}>{label}</div>
+    {sub && <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>{sub}</div>}
   </div>
 )
+
+/** The eligible share, as a string, or null when it cannot be stated.
+ *
+ *  THE DENOMINATOR IS THE ESTATE LISTING, NOT THE ROWS ON SCREEN, and that is the whole difficulty.
+ *  `summary.assessable` is an ESTATE-level figure (it comes from `scope.inventory`), while
+ *  `summary.discovered` counts the rows this screen is rendering, which a filter can narrow. Divide
+ *  one by the other on a filtered view and you get "183% of the estate" — a true numerator over a
+ *  denominator from a different population. Caught by a fixture, not by reading it.
+ *
+ *  So this takes `listed` and REFUSES to compute without it. No estate denominator, no share: a
+ *  percentage whose boundary is unstated is the count-without-its-boundary defect wearing a
+ *  percent sign.
+ *
+ *  Rounded AWAY FROM ZERO for a non-zero count: 22 of 12,408 is 0.18%, and "0%" beside a tile
+ *  reading "22" says the estate contains none of what it just counted. `<1%` is the true statement
+ *  and the more useful one — it is the whole point of putting a percentage here.
+ *
+ *  Exported for the test, and because a share of a total is exactly the kind of arithmetic that
+ *  gets re-derived slightly differently in a second place. */
+export function eligibleShare(eligible, listed) {
+  if (typeof eligible !== 'number' || typeof listed !== 'number') return null
+  if (!(listed > 0) || eligible < 0) return null
+  // A numerator larger than its denominator means they came from different populations. Saying
+  // nothing is right: the alternative is printing a figure over 100%, which is what this guard
+  // exists to have caught.
+  if (eligible > listed) return null
+  const pct = (eligible / listed) * 100
+  if (eligible === 0) return '0% of the estate'
+  if (pct < 1) return '<1% of the estate'
+  return `${Math.round(pct)}% of the estate`
+}
 
 /** A reconciliation table: one row per bucket, then the sum and the total it must equal. The sum
  *  line is not decoration — it is the claim "these partition the estate", rendered. */
@@ -159,7 +191,8 @@ export default function DiscoveryResults({
             Absent when nothing measured it. A "0" here would assert the estate contains nothing
             testable, which is a discovery result nobody obtained. */}
         {summary.assessable != null && (
-          <Stat n={summary.assessable} label="can be assessed" color={STAT_COLOR.assessable} />
+          <Stat n={summary.assessable} label="can be assessed" color={STAT_COLOR.assessable}
+                sub={eligibleShare(summary.assessable, summary.estateListed)} />
         )}
         {/* Absent until the lifecycle columns reach this screen — a "0" here would be a claim
             about the estate made from a field nobody read. */}

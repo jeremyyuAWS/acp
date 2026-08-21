@@ -10,8 +10,6 @@ import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
 import { dupeCountOf, duplicateFiles } from './dedupe.js'
 import { scopeSentence, isNarrowScope } from './scanScope.js'
-import EstateCoverage from './EstateCoverage.jsx'
-import { estateProgressFromFiles } from './estateProgress.js'
 import DiscoveryResults from './DiscoveryResults.jsx'
 import DiscoverInventoryExport from './DiscoverInventoryExport.jsx'
 import DiscoveryCompleteness from './DiscoveryCompleteness.jsx'
@@ -368,15 +366,16 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           The component is kept and mounted nowhere, per the standing rule in CLAUDE.md; the orphan
           is recorded in discoverScopePanelsRemoved.test.jsx so it cannot be read as unfinished. */}
 
-      {/* Estate coverage funnel — discovered → assessment-eligible → remediation-eligible, on the tab
-          where discovery happens. Shown once a scan has produced an inventory; assessment/remediation
-          stages fill in as Assess and Remediate run. */}
-      {scope?.inventory && scope.inventory.discovered > 0 && (
-        <section className="panel">
-          <h2>Estate coverage <span className="muted" style={{ fontWeight: 400 }}>· discovered → assessable → remediable</span></h2>
-          <EstateCoverage inventory={scope.inventory} progress={estateProgressFromFiles(files)} />
-        </section>
-      )}
+      {/* The estate-coverage funnel is NOT on this tab any more. It partitioned the estate a second
+          time, directly above a panel that partitions it — and its stages ran discovered →
+          assessable → REMEDIABLE, which is the reading this file already rejected a few hundred
+          lines down: "Rubric scores and remediation state used to appear here, which read as 'the
+          scan already assessed and remediated your documents' — it does neither."
+
+          It is not retired. EstateCoverage still mounts on Overview, which is where a cross-stage
+          funnel belongs, so nothing was lost from the product — only from the tab that answers one
+          question. The one figure it contributed that DiscoveryResults lacked, the eligible
+          PERCENTAGE, moved onto the headline tile beside the count. */}
 
       <div className="estatebar">
         <div>
