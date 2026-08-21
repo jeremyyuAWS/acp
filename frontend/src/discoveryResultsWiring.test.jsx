@@ -138,7 +138,9 @@ describe('DOM — the acknowledgement gates Assess on the Discover tab', () => {
     await render([arch('Clinical/old-pathway.docx'), F('Clinical/live.docx', { lifecycle_status: 'Active' })])
     // Accept the per-row lifecycle decisions first, so the ONLY thing left holding the button is
     // the acknowledgement — otherwise this would pass for the pre-existing pending-actions reason.
-    await click(byText('Accept all recommendations'))
+    // Both rows here carry a REAL lifecycle_status (one archive, one a rule pass that measured
+    // Keep), so both are acceptable and the bulk button names them: "Accept all 2 recommendations".
+    await click(byText('Accept all 2 recommendations'))
     expect(assessBtn().disabled).toBe(true)
     expect(container.textContent).toContain('Approve the 1 discovery recommendation above to continue')
 
@@ -148,8 +150,13 @@ describe('DOM — the acknowledgement gates Assess on the Discover tab', () => {
 
   it('leaves the button alone when there is nothing to acknowledge', async () => {
     // No lifecycle column on any row — the recommendation surface is absent, so it cannot gate.
+    //
+    // Nothing to ACCEPT either, for the same underlying reason: with no lifecycle_status and no
+    // age/usage signal, retentionSignal calls this row 'unassessed', which is not a recommendation
+    // a bulk action can accept — so the "Accept all" button does not render at all rather than
+    // rubber-stamping a fabricated Keep. Discover must not depend on that button existing.
     await render([F('Clinical/live.docx')])
-    await click(byText('Accept all recommendations'))
+    expect(byText('Accept all')).toBeUndefined()
     expect(container.textContent).not.toContain('to continue')
     expect(assessBtn().disabled).toBe(false)
   })
