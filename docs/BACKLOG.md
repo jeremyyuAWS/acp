@@ -402,9 +402,15 @@ third is the correctness fix with the widest blast radius.
   you, and four are ones a clean scan can certify* — the other eleven are reported as reviewed,
   not passed. Source: `docs/capability-report.md`, and `remediation_capability.CAPABILITY["docx"]`
   is the authority if the two disagree.
-- [ ] **P1.3 — Say the Ontology gap out loud.** Custom labels and hierarchical taxonomy have no
-  v2 equivalent (`Ontology.jsx` is v1-only; `ontology.js` data layer survives). Decide whether to
-  port, defer, or drop before someone reaches for it in the room.
+- [x] **P1.3 — Say the Ontology gap out loud.** Said, and said in the PRODUCT rather than only
+  here, which is where it mattered: on an unclassified estate Discover now states that department
+  and sensitivity are not collected, and OMITS the exposure-and-risk chart instead of rendering it
+  at zero. That chart read "100% internal" with every risk flag at 0 — each number true and the
+  reading false, since *"0 legal-hold"* asserts an estate holds no documents under legal hold,
+  which is a finding nobody obtained, on the screen a compliance reader opens to find them.
+  The port/defer/drop decision on `Ontology.jsx` (v1-only; the `ontology.js` data layer survives)
+  is still open and now belongs with P2.3, which is blocked on the same missing thing: a
+  scan-derived source for classification.
 - [?] **P1.4 — Vision default.** `moondream` scores **0/6 facts and asserts a false year** on a
   real notice (`docs/local-model-evaluation.md`). `qwen2.5vl:7b` scores 3/6 at 4.4s. Blocked on
   the 8 GiB Consumption ceiling that forced moondream — ADR 0022 requires the CPU floor stay
@@ -428,9 +434,20 @@ third is the correctness fix with the widest blast radius.
   `scan_scope` are `ScanSetup` (on Overview) and `AssessSetup` (in App), and they own different
   axes. Both retired components are kept in the tree per CLAUDE.md; if either is mounted again this
   item comes back with it.
-- [ ] **P2.3 — Document-type scoping.** Discover *groups* by classification (HR, Legal,
-  public-facing, legal-hold) but a scan cannot be *scoped* by it. For a hospital, "assess only
-  legal-hold" is a more natural ask than file type, and the ontology data already exists.
+- [ ] **P2.3 — Document-type scoping. BLOCKED, and this row's premise was wrong.** It read: *"the
+  ontology data already exists."* It does not. Verified against `origin/main` on 2026-08-21:
+  `file_records` (`store.py:70`) has no `department` and no `tags`; `get_scan` (`store.py:1752`)
+  projects that table alone and joins nothing; `documents` is the only table carrying `department`
+  and `store.py:4647` says outright that *"department has no scan-derived source yet, so on most
+  estates that bucket IS the estate"*; `store.py:1902` adds that department-selector scope rules
+  therefore do not resolve. So on every real estate `f.department` is undefined and `f.tags` is
+  empty — Discover's whole triage surface was SIM-only, which is now said on the screen rather
+  than rendered as zeros (`classificationData.js`).
+  **The blocker is a scan-derived source for classification, not a scoping control.** Building
+  "assess only legal-hold" on top of this would scope a customer's estate by an empty column. The
+  nearest real source is SharePoint's own managed metadata / content types / sensitivity labels —
+  listed in `docs/sharepoint-gaps.md` as a build within the read-only scopes (`listItem/fields`).
+  Do that first; the scoping control is small once the data is real.
 - [x] **P2.4 — The three unassessed DOCX criteria.** Done — all three built rather than disclaimed.
   1.4.1 and 1.4.11 landed as declarations with guided lanes (#202) and then prefilled proposers
   (#203), which moved both from `human` to `assisted`: the criterion is editorial, but the SIGNAL

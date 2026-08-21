@@ -14,6 +14,8 @@ import DiscoveryResults from './DiscoveryResults.jsx'
 import DiscoverInventoryExport from './DiscoverInventoryExport.jsx'
 import DiscoveryCompleteness from './DiscoveryCompleteness.jsx'
 import { acknowledgementSummary } from './discoveryRecommendations.js'
+import { hasClassificationData, NO_CLASSIFICATION_TITLE, NO_CLASSIFICATION_BODY,
+         NO_CLASSIFICATION_WHY } from './classificationData.js'
 import { loadDiscoveryInventory, mergeLifecycle } from './discoveryInventory.js'
 import { getScanInventory, listScanDecisions } from './api.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
@@ -203,6 +205,10 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   const exposureInternal = { label: 'internal', value: internalDocs.length, color: '#9a948f' }
   const internalRisk = ['PII', 'legal-hold', 'high-traffic'].map((t) => ({ label: t, value: internalDocs.filter((f) => tagsOf(f).includes(t)).length, color: RISK_COLOR[t] })).filter((d) => d.value)
 
+  // DID CLASSIFICATION REACH THIS SCREEN AT ALL? False on every real scan today: file_records
+  // carries no department and no tags, and get_scan projects that table alone. False means the
+  // triage surface is OMITTED, not zeroed — see classificationData.js.
+  const classified = hasClassificationData(files)
   const isConfirmed = (f) => !!classState[f.file]?.confirmed
   const toggleTag = (f, t) => setClassState((s) => { const cur = s[f.file]?.tags ?? tagsOf(f); const next = cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]; return { ...s, [f.file]: { tags: next, confirmed: false } } })
   const confirmClass = (f) => setClassState((s) => ({ ...s, [f.file]: { tags: tagsOf(f), confirmed: true } }))
@@ -494,7 +500,10 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         const totalWidth = files.length || 1
         return (
         <>
-          <SH id="disc-documents" label="Documents" desc="grouped by department · click to expand · tag &amp; decide right in the row" />
+          <SH id="disc-documents" label="Documents"
+              desc={classified
+                ? 'grouped by department · click to expand · tag &amp; decide right in the row'
+                : 'click to expand · every discovered file, listed'} />
 
           {/* Document Location — a view filter over source drive / folder / path (PRD §4.1). It
               narrows only what is shown here; discovery still found every file above, and no
@@ -557,15 +566,52 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
 
           <div style={{ fontSize: 12.5, color: 'var(--ink)', background: '#F1EFF3', border: '1px solid var(--line)',
                         borderRadius: 8, padding: '9px 12px', margin: '0 0 12px', lineHeight: 1.5 }}>
-            <b>How this works:</b> <strong>document type</strong> comes from the file format ·
-            <strong> department</strong> &amp; <strong>exposure</strong> are inferred from the file name
-            (e.g. <code>HR-</code>, <code>Legal-</code>, <code>Finance-</code>, <code>public-</code>, <code>-hold</code>) ·
-            <strong> sensitive-data</strong> flags come from the scan (Deep scan) — confirm or correct any tag below,
-            your edits win over the agent's guess. Each row also carries the agent's recommended{' '}
-            <strong>lifecycle action</strong> (keep / archive / retain / delete) — accept it, override it, or use
-            <strong> ✓ accept both</strong> to sign off on the tags &amp; the action in one click.
+            {/* The claims here have to match what actually reached the screen. This box used to
+                state that department and exposure "are inferred from the file name" — nothing does
+                that for a real file, and the box sat above a grouping that had put the whole estate
+                in one Unassigned bucket. A help text explaining a mechanism that does not run is
+                worse than none: it sends a reader looking for the naming convention that would
+                make it work. */}
+            {classified ? (
+              <>
+                <b>How this works:</b> <strong>document type</strong> comes from the file format ·
+                <strong> department</strong> &amp; <strong>exposure</strong> come from the classification
+                on each document · <strong>sensitive-data</strong> flags come from the scan (Deep scan) —
+                confirm or correct any tag below, your edits win over the agent's guess. Each row also
+                carries the agent's recommended{' '}
+                <strong>lifecycle action</strong> (keep / archive / retain / delete) — accept it, override it, or use
+                <strong> ✓ accept both</strong> to sign off on the tags &amp; the action in one click.
+              </>
+            ) : (
+              <>
+                <b>How this works:</b> <strong>document type</strong> comes from the file format ·
+                every discovered file is listed below with the metadata discovery recorded. Each row
+                carries the agent's recommended <strong>lifecycle action</strong> (keep / archive /
+                retain / delete) — accept it or override it. Department and sensitivity are not
+                collected yet, so there is nothing to confirm on this estate.
+              </>
+            )}
           </div>
           <div className="chartrow">
+            {/* THE EXPOSURE CHART IS ABSENT, NOT ZEROED, when nothing classified this estate.
+                Rendered unclassified it read "100% internal" with every risk flag at zero — each
+                number true, and the reading false. "0 legal-hold" states that this estate holds no
+                documents under legal hold, which is a finding nobody obtained, on the screen a
+                compliance reader opens precisely to find them. Same rule as hasLifecycleData. */}
+            {!classified ? (
+              <section className="panel">
+                <h2>By exposure &amp; risk</h2>
+                <p style={{ fontSize: 13, fontWeight: 650, margin: '10px 0 4px' }}>
+                  {NO_CLASSIFICATION_TITLE}
+                </p>
+                <p className="muted" style={{ fontSize: 12.5, margin: 0, lineHeight: 1.55 }}>
+                  {NO_CLASSIFICATION_BODY}
+                </p>
+                <p className="muted" style={{ fontSize: 11.5, margin: '10px 0 0', lineHeight: 1.5 }}>
+                  {NO_CLASSIFICATION_WHY}
+                </p>
+              </section>
+            ) : (
             <section className="panel"><h2>By exposure &amp; risk <span className="muted" style={{ fontWeight: 400 }}>· expand internal to see its risk flags</span></h2>
               <ExposureRisk pub={exposurePub} internal={exposureInternal} internalRisk={internalRisk} onPick={(tag) => {
                 const filtered = tag === 'public-facing'
@@ -577,6 +623,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               }} />
               <p className="muted ppfoot">Public-facing pages (also your high-traffic content) are the top legal-exposure surface under ADA / EAA. The {exposureInternal.value} internal documents carry the PII &amp; legal-hold content that matters most if mishandled.</p>
             </section>
+            )}
             <section className="panel"><h2>By document type</h2><Bars items={byType} cols="70px 1fr 30px" /></section>
           </div>
           <div className="hitlbar">
