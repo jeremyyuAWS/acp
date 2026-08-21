@@ -21,14 +21,19 @@ import { CORE_SCS, DENOMINATOR, SCOPE_SIZE, SCOPE_LABEL } from './activeScope.js
 // colour emoji renders in its own fixed colour regardless of CSS, so it cannot follow the tile's own
 // `ink` (a dark-mode theme swap left every status dot the same green/amber/red on a dark panel,
 // which is a contrast and a brand-consistency problem a plain character does not have — the glyph
-// inherits `color` like any other text). LABEL WORDING is unchanged and stays "Fully Assessed" etc.,
-// not board 11's "Certifiable" phrasing — that vocabulary is a documented cross-surface contract with
-// docs/acp-architecture-deck.md (A4/A3/A2/NA), which this PR does not touch.
+// inherits `color` like any other text).
+//
+// `label` is UNCHANGED and stays the primary text ("Fully Assessed" etc.) — that vocabulary is a
+// documented cross-surface contract with docs/acp-architecture-deck.md (A4/A3/A2/NA), asserted by
+// this file's own tests, and a straight rename would create two spellings of one thing wherever the
+// deck isn't updated too. `boardLabel` PAIRS board 11's plain-language phrasing ("Certifiable" etc.)
+// alongside it as a secondary aside — additive, not a replacement, so nothing here disagrees with
+// the deck; a reader sees both names for the same concept rather than one silently dropped.
 const A = {
-  auto: { emoji: '✓', bg: '#e6f2e0', ink: '#2b6a1e', bd: '#c3ddb2', label: 'Fully Assessed' },
-  review: { emoji: '!', bg: '#fbf3d6', ink: '#8a6a0e', bd: '#eeda9a', label: 'Potential Issue' },
-  human: { emoji: '✕', bg: '#f8e3e0', ink: '#98392b', bd: '#eec2bb', label: 'Human Assessment Required' },
-  na: { emoji: '–', bg: '#f1eff4', ink: '#7a7386', bd: '#e0dae6', label: 'Not applicable' },
+  auto: { emoji: '✓', bg: '#e6f2e0', ink: '#2b6a1e', bd: '#c3ddb2', label: 'Fully Assessed', boardLabel: 'Certifiable' },
+  review: { emoji: '!', bg: '#fbf3d6', ink: '#8a6a0e', bd: '#eeda9a', label: 'Potential Issue', boardLabel: 'Evidence + review' },
+  human: { emoji: '✕', bg: '#f8e3e0', ink: '#98392b', bd: '#eec2bb', label: 'Human Assessment Required', boardLabel: 'Person only' },
+  na: { emoji: '–', bg: '#f1eff4', ink: '#7a7386', bd: '#e0dae6', label: 'Not applicable', boardLabel: 'Cannot occur' },
 }
 // Remediation paths.
 const R = {
@@ -92,7 +97,13 @@ function Tile({ emoji, n, total, kind, palette, sub }) {
         <span style={{ fontSize: 16 }}>{emoji}</span> {n}
         {total != null && <span style={{ fontSize: 13, color: '#9a94a3', fontWeight: 600 }}>/{total}</span>}
       </div>
-      <div style={{ fontSize: 12.5, fontWeight: 600, color: c.ink, marginTop: 2 }}>{c.label}</div>
+      <div style={{ fontSize: 12.5, fontWeight: 600, color: c.ink, marginTop: 2 }}>
+        {c.label}
+        {/* Board 11's plain-language phrasing, paired alongside the matrix vocabulary rather than
+            replacing it — see the note on the A map above for why. Only the assessment axis has
+            one; the remediation palette (R) carries no boardLabel, so this renders nothing there. */}
+        {c.boardLabel && <span className="muted" style={{ fontWeight: 400 }}> · {c.boardLabel}</span>}
+      </div>
       {sub && <div className="muted" style={{ fontSize: 11, marginTop: 1 }}>{sub}</div>}
     </div>
   )

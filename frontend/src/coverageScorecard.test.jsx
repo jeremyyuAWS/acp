@@ -15,6 +15,26 @@ const render = async (files) => { await act(async () => { root.render(createElem
 const click = async (el) => { await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }
 const btnByText = (t) => [...container.querySelectorAll('button')].find((b) => b.textContent.includes(t))
 
+describe('board 11 — plain-language labels are PAIRED with the matrix vocabulary, not swapped in', () => {
+  it('shows board 11\'s phrasing alongside each assessment-lane label, on the tile itself', async () => {
+    await render([{ file: 'a.docx', type: 'docx' }])
+    const txt = container.textContent
+    // The matrix vocabulary (docs/acp-architecture-deck.md contract) stays the primary text —
+    for (const label of ['Fully Assessed', 'Potential Issue']) expect(txt).toContain(label)
+    // — with board 11's own words paired beside it, not replacing it.
+    for (const board11 of ['Certifiable', 'Evidence + review']) expect(txt).toContain(board11)
+  })
+
+  it('does not pair a board 11 phrase onto the remediation axis — board 11 names no icon there', async () => {
+    await render([{ file: 'a.docx', type: 'docx' }])
+    const txt = container.textContent
+    expect(txt).toContain('Automatically Fixed')
+    // "Fixed automatically" (board 11's remediation phrasing) is deliberately out of scope —
+    // only the assessment axis was the flagged decision.
+    expect(txt).not.toContain('Fixed automatically')
+  })
+})
+
 describe('CoverageScorecard renders the two-axis capability view (ADR 0023)', () => {
   it('an all-.xlsx estate shows both layers + customer-outcome lanes, scoped to .xlsx', async () => {
     await render([{ file: 'book.xlsx', type: 'xlsx' }])
