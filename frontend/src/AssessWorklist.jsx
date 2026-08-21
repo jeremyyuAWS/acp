@@ -62,6 +62,11 @@ const FILTERS = [
 /** Addition over the module's own row fields. An unopened row has no such field and adds nothing. */
 const total = (rows, key) => rows.reduce((a, r) => a + (r[key] || 0), 0)
 
+/** Findings of one severity, summed over rows. An unopened row carries no bySeverity and adds nothing. */
+const sevTotal = (rows, s) => rows.reduce((a, r) => a + (r.bySeverity?.[s] || 0), 0)
+
+const cap1 = (s) => s.charAt(0).toUpperCase() + s.slice(1)
+
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
 
 const fname = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12.5 }
@@ -108,6 +113,11 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
   // exist, so the default follows the data as it loads rather than freezing whatever was true on
   // the first render.
   const [chosen, setChosen] = useState(null)
+  // A19 severity filter and A24 auto-fixable toggle. Both compose ON TOP of the state filter
+  // (ANDed together), and both keep their counts visible whether or not they are selected —
+  // narrowing this list must never hide how much it narrowed, the same rule the state filter obeys.
+  const [sevChosen, setSevChosen] = useState(null)
+  const [autoOnly, setAutoOnly] = useState(false)
 
   // Nothing, rather than zeros. A run that has not happened is not a run that found nothing, and a
   // worklist of no documents is not a worklist. The summary above carries the run's own state.
@@ -118,7 +128,24 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
   const clear = rows.filter((r) => r.state === 'clear').length
 
   const active = counts[chosen] ? chosen : (counts.attention ? 'attention' : 'all')
-  const visible = rows.filter(FILTERS.find((f) => f.key === active).match)
+  const stateScoped = rows.filter(FILTERS.find((f) => f.key === active).match)
+
+  // The severity chips and the auto-fixable toggle count over the STATE-SCOPED rows — the exact
+  // population the two controls can narrow — so a chip never advertises findings the state filter
+  // has already put out of view. Counts are findings, not documents: "Critical 6" is six findings.
+  const sevCounts = {}
+  let sevAll = 0
+  for (const s of SEVERITIES) { sevCounts[s] = sevTotal(stateScoped, s); sevAll += sevCounts[s] }
+  const autoFindings = total(stateScoped, 'autoFixAvailable')
+  const scopedFindings = total(stateScoped, 'totalFindings')
+  const docsWithAuto = stateScoped.filter((r) => (r.autoFixAvailable || 0) > 0).length
+
+  // A severity with no findings in scope cannot be chosen; if the state filter changes out from
+  // under a selected severity, fall back to all rather than showing an empty list with no cause.
+  const sevActive = sevChosen && sevCounts[sevChosen] > 0 ? sevChosen : null
+  let visible = stateScoped
+  if (sevActive) visible = visible.filter((r) => (r.bySeverity?.[sevActive] || 0) > 0)
+  if (autoOnly) visible = visible.filter((r) => (r.autoFixAvailable || 0) > 0)
   const filtered = visible.length < rows.length
 
   const populations = [
@@ -148,6 +175,48 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
           ))}
         </div>
       </div>
+
+      {/* A19 severity filter + A24 auto-fixable toggle. Shown only when there is finding work in
+          scope to narrow — a run with nothing to fix has nothing for either control to do. Every
+          chip keeps its count whether selected or not, so a narrowed view still says what it hid. */}
+      {scopedFindings > 0 && (
+        <div className="worklist-refine" style={{ display: 'flex', alignItems: 'center', gap: 16,
+                                                  flexWrap: 'wrap', marginTop: 10 }}>
+          {sevAll > 0 && (
+            <div role="group" aria-label="Filter documents by finding severity"
+                 style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <span className="muted" style={{ fontSize: 11.5 }}>Severity</span>
+              <button type="button" className={!sevActive ? 'small' : 'ghost small'}
+                      aria-pressed={!sevActive} onClick={() => setSevChosen(null)}>
+                All {sevAll}
+              </button>
+              {SEVERITIES.map((s) => (
+                <button key={s} type="button"
+                        className={sevActive === s ? 'small' : 'ghost small'}
+                        aria-pressed={sevActive === s}
+                        disabled={sevCounts[s] === 0}
+                        onClick={() => setSevChosen(sevActive === s ? null : s)}>
+                  <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: 2, marginRight: 5,
+                                                    background: SEV_COLOR[s], display: 'inline-block' }} />
+                  {cap1(SEVERITY_LABEL[s])} {sevCounts[s]}
+                </button>
+              ))}
+            </div>
+          )}
+          <label className="worklist-autoonly" style={{ display: 'inline-flex', alignItems: 'center',
+                                                        gap: 7, fontSize: 12.5, cursor: 'pointer' }}>
+            <input type="checkbox" checked={autoOnly}
+                   onChange={(e) => setAutoOnly(e.target.checked)} />
+            <span>Only what ACP can fix without a person</span>
+            {/* The toggle carries its own denominator for the same reason the chips do: hiding the
+                documents a person must still touch is exactly the mistake this screen guards against. */}
+            <span className="muted">
+              {autoFindings} of {scopedFindings} findings ·{' '}
+              {docsWithAuto} of {plural(stateScoped.length, 'document', 'documents')}
+            </span>
+          </label>
+        </div>
+      )}
 
       {/* The ordering, said out loud. A list whose order carries a judgement and does not name it
           is one people re-sort by hand because they assume it is arbitrary. */}

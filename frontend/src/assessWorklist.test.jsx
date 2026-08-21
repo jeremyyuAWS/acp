@@ -281,6 +281,82 @@ describe('a filter can narrow this list, never hide what it dropped', () => {
   })
 })
 
+describe('A19 severity filter and A24 auto-fixable toggle — narrow, never hide what they drop', () => {
+  // Both compose on top of the state filter and obey the same rule the state filter does: every
+  // count stays on screen whether or not it is the one selected, and a narrowed view still prints
+  // the estate totals underneath it. Severity counts are FINDINGS ("Serious 2"), the toggle's
+  // denominator is findings AND documents, and neither control invents a number of its own.
+  const refineBtn = (c, re) => [...c.querySelectorAll('.worklist-refine button')].find((b) => re.test(b.textContent))
+  const autoInput = (c) => c.querySelector('.worklist-autoonly input')
+
+  it('counts findings by severity and keeps every count visible, selected or not', async () => {
+    const c = await mount({ files: ESTATE })
+    // 1 critical + 2 serious + 2 moderate + 1 minor = 6, the findings held by the 3 attention docs.
+    expect(refineBtn(c, /^All /).textContent).toMatch(/All 6/)
+    expect(refineBtn(c, /Critical/).textContent).toMatch(/Critical 1/)
+    expect(refineBtn(c, /Serious/).textContent).toMatch(/Serious 2/)
+    expect(refineBtn(c, /Moderate/).textContent).toMatch(/Moderate 2/)
+    expect(refineBtn(c, /Minor/).textContent).toMatch(/Minor 1/)
+  })
+
+  it('narrows to the documents holding a finding of the chosen severity', async () => {
+    const c = await mount({ files: ESTATE })
+    await act(async () => { refineBtn(c, /Serious/).click() })
+    // handbook (serious 1.3.1) and board (serious 1.1.1) hold one; deck.pptx (a lone moderate) does not.
+    expect(order(c)).toEqual(['handbook.docx', 'board.pdf'])
+  })
+
+  it('still prints the estate totals when a severity is chosen', async () => {
+    const c = await mount({ files: ESTATE })
+    await act(async () => { refineBtn(c, /Serious/).click() })
+    expect(c.textContent).toMatch(/Showing 2 of 6 documents/)
+    expect(c.textContent, 'a severity-filtered view lost the estate totals')
+      .toMatch(/Across all 6: 6 findings · 3 auto-fix · 3 needing a person/)
+  })
+
+  it('shows only auto-fixable documents when toggled, carrying its own denominator', async () => {
+    const c = await mount({ files: ESTATE })
+    // 3 of the 6 findings are deterministic, across 2 of the 3 attention documents.
+    expect(c.querySelector('.worklist-autoonly').textContent)
+      .toMatch(/3 of 6 findings · 2 of 3 documents/)
+    await act(async () => { autoInput(c).click() })
+    // handbook (2 auto) and deck (1 auto) can be cleared without a person; board.pdf (0 auto) cannot.
+    expect(order(c)).toEqual(['handbook.docx', 'deck.pptx'])
+    expect(c.textContent).toMatch(/Across all 6:/)
+  })
+
+  it('ANDs severity and auto-fixable when both are set', async () => {
+    const c = await mount({ files: ESTATE })
+    await act(async () => { refineBtn(c, /Serious/).click() })
+    await act(async () => { autoInput(c).click() })
+    // serious AND auto-fixable: handbook keeps its place; board is serious-but-manual, deck is
+    // auto-but-not-serious. Only the intersection survives.
+    expect(order(c)).toEqual(['handbook.docx'])
+  })
+
+  it('offers an empty severity but does not let it be chosen', async () => {
+    const c = await mount({ files: [doc('a.pptx', [finding('1.3.1', 'CRITICAL')])] })
+    // One critical finding and nothing else — the other three severities are shown at zero, so the
+    // reader sees they were considered, and disabled, so the list cannot be filtered to nothing.
+    expect(refineBtn(c, /Critical/).disabled).toBe(false)
+    expect(refineBtn(c, /Minor/).disabled).toBe(true)
+    expect(refineBtn(c, /Minor/).textContent).toMatch(/Minor 0/)
+  })
+
+  it('hides both controls when the state in view has no finding work to narrow', async () => {
+    const c = await mount({ files: ESTATE })
+    // "Awaiting review" holds one document with no findings; there is nothing for a severity chip
+    // or an auto-fix toggle to act on, so the refine bar is not drawn at all.
+    await act(async () => { btn(c, /Awaiting review/).click() })
+    expect(c.querySelector('.worklist-refine')).toBe(null)
+  })
+
+  it('does not render the controls for an estate with nothing to fix', async () => {
+    const c = await mount({ files: [doc('notes.docx'), doc('clean.pptx')] })
+    expect(c.querySelector('.worklist-refine')).toBe(null)
+  })
+})
+
 describe('selecting a document', () => {
   it('hands the whole module row back, not a name', async () => {
     const onOpenFile = vi.fn()
