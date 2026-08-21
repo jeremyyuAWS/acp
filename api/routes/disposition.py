@@ -101,7 +101,7 @@ def create_policy(body: PolicyCreate, request: Request):
         policy_id, name=body.name, match=json.dumps(body.match), action=body.action,
         action_config=json.dumps(body.action_config), requires_approval=body.requires_approval,
         enabled=body.enabled, owner_email=owner)
-    core.store.log_decision("admin", "disposition.policy_created", detail=body.name)
+    core.store.log_decision(owner, "disposition.policy_created", detail=body.name)
     return core.store.get_disposition_policy(policy_id, owner=owner)
 
 
@@ -153,7 +153,7 @@ def set_policy_enabled(policy_id: str, enabled: bool, request: Request):
     if core.store.get_disposition_policy(policy_id, owner=owner) is None:
         raise HTTPException(404, "policy not found")
     core.store.set_disposition_policy_enabled(policy_id, enabled)
-    core.store.log_decision("admin", f"disposition.policy_{'enabled' if enabled else 'disabled'}",
+    core.store.log_decision(owner, f"disposition.policy_{'enabled' if enabled else 'disabled'}",
                             detail=policy_id)
     return core.store.get_disposition_policy(policy_id, owner=owner)
 
@@ -350,7 +350,7 @@ def update_policy(policy_id: str, body: PolicyUpdate, request: Request):
     core.store.update_disposition_policy(
         policy_id, name=new_name, match=json.dumps(new_match), action=new_action,
         action_config=json.dumps(new_cfg), requires_approval=new_req)
-    core.store.log_decision("admin", "disposition.policy_updated",
+    core.store.log_decision(owner, "disposition.policy_updated",
                             detail=f"{new_name}: {', '.join(changed) or 'name/approval only'}")
     return core.store.get_disposition_policy(policy_id, owner=owner)
 
@@ -402,7 +402,7 @@ def execute_policy(policy_id: str, request: Request):
             summary[result] += 1
             _trace_decision(doc["doc_id"], doc.get("path"), action=policy["action"],
                             status=result, policy_id=policy_id, reason=detail)
-    core.store.log_decision("admin", "disposition.policy_executed",
+    core.store.log_decision(owner, "disposition.policy_executed",
                             detail=f"{policy['name']}: {summary}")
     return {"policy_id": policy_id, **summary}
 
@@ -467,7 +467,7 @@ def approve_disposition(audit_id: str, request: Request,
     if not execute:
         detail = "approved by admin — decision recorded, file not touched"
         core.store.set_disposition_audit_result(audit_id, "approved", detail)
-        core.store.log_decision("admin", "disposition.approved",
+        core.store.log_decision(owner, "disposition.approved",
                                 detail=f"{row['action']} {row['doc_id']}: recorded, not executed")
         _trace_decision(row["doc_id"], (core.store.get_document(row["doc_id"]) or {}).get("path"),
                         action=row["action"], status="approved", policy_id=row["policy_id"],
@@ -486,7 +486,7 @@ def approve_disposition(audit_id: str, request: Request,
     if result == "applied" and row["action"] == "tag":
         _persist_tags(doc, cfg, row["policy_id"])
     core.store.set_disposition_audit_result(audit_id, result, detail)
-    core.store.log_decision("admin", f"disposition.{result}",
+    core.store.log_decision(owner, f"disposition.{result}",
                             detail=f"{row['action']} {row['doc_id']}: {detail}"[:200])
     _trace_decision(row["doc_id"], doc.get("path"), action=row["action"], status=result,
                     policy_id=row["policy_id"], reason=detail)
@@ -504,7 +504,7 @@ def reject_disposition(audit_id: str, request: Request):
     if row is None or row["result"] != "pending_approval":
         raise HTTPException(404, "no pending approval with that id")
     core.store.set_disposition_audit_result(audit_id, "rejected", "declined by admin")
-    core.store.log_decision("admin", "disposition.rejected",
+    core.store.log_decision(owner, "disposition.rejected",
                             detail=f"{row['action']} {row['doc_id']}")
     _trace_decision(row["doc_id"], (core.store.get_document(row["doc_id"]) or {}).get("path"),
                     action=row["action"], status="rejected", policy_id=row["policy_id"],
