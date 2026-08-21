@@ -725,14 +725,65 @@ def clear_scan_tokens(scan_id: str) -> None:
 #
 # WHAT THIS DOES AND DOES NOT FIX. It makes the PROGRESS READABLE from any replica, which is the
 # only thing affinity was buying. The work still runs as a thread on one replica, so it is still
-# lost if that replica restarts — exactly as the code comment beside it has always said, and
-# exactly why the durable queue exists and is the default (`queuedScan` is true; this path is the
-# "This session" opt-out). Removing affinity does not make this path durable and must not be
-# described as if it did.
+# lost if that replica restarts — exactly as the code comment beside it has always said. NOTE
+# (2026-08-21): the comment used to claim the durable queue is the default via `queuedScan`; the
+# frontend's actual default is `queuedScan = false` ("session-scoped is the pilot default",
+# App.jsx) and the switch to opt into the durable queue was deliberately removed from the UI
+# (ScanReviewModal.jsx). So THIS thread-based path is, in practice, the only path a user can
+# reach today — which is exactly why a job stuck here needs to fail loudly instead of hanging
+# forever (see _JOB_STALE_SECONDS below), not why it's a rare edge case.
 _JOB_TTL = 3600                            # a scan poll outlives the scan; nothing needs longer
+
+# A job stuck on a replica that died (redeploy, crash, OOM) leaves NO trace: the thread that
+# would have called update_job() on error or completion is simply gone, so the job sits at
+# whatever phase it was last written to, forever, with no error and no timeout. Live incident
+# 2026-08-21: a scan queued shortly before a routine merge-triggered redeploy never advanced
+# past phase="queued", scan_id=null — Assess correctly reported 0 eligible documents because
+# there was, and would always be, no scan to be eligible under. Nothing surfaced that; the
+# Discover screen just kept showing "scanning...".
+#
+# Detected here at READ time, not by a separate sweeper thread/cron: a sweeper is itself just
+# another thread that can die with the replica, which is the exact failure mode this exists to
+# catch — a mechanism to detect "the replica died" that itself lives on a replica is not a fix.
+# A read-time check has no such single point of failure: whichever replica answers the poll
+# computes staleness fresh from the shared timestamp, so it works even if every worker replica
+# has been recycled since the job was written.
+#
+# The threshold has to be longer than the gap between liveness signals or a slow-but-alive job
+# false-positives as dead. set_job/update_job stamp `updated_at` on EVERY write, and the scan
+# thread below (routes/scans.py's `work()`) runs a heartbeat companion thread that touches it
+# every _JOB_HEARTBEAT_SECONDS regardless of scan progress — so `updated_at` going stale means
+# the REPLICA is gone, not merely that this particular scan is slow. That decouples the staleness
+# signal from how long a legitimately large estate takes to crawl.
+_JOB_HEARTBEAT_SECONDS = 20
+_JOB_STALE_SECONDS = int(os.environ.get("ACP_JOB_STALE_SECONDS", "90") or "90")
+
+
+def _job_now_iso() -> str:
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).isoformat()
+
+
+def _job_is_stale(state: dict) -> bool:
+    """True if `state` describes unfinished work with no liveness signal recent enough to trust.
+    A MISSING updated_at (a job written before this instrumentation existed, or one whose replica
+    died before its first heartbeat) counts as stale, not exempt — that is precisely the case the
+    live incident above was."""
+    if state.get("done"):
+        return False
+    ts = state.get("updated_at")
+    if not ts:
+        return True
+    import datetime as _dt
+    try:
+        age = (_dt.datetime.now(_dt.timezone.utc) - _dt.datetime.fromisoformat(ts)).total_seconds()
+    except Exception:
+        return True                        # unparseable timestamp is as untrustworthy as none
+    return age > _JOB_STALE_SECONDS
 
 
 def set_job(job_id: str, state: dict) -> None:
+    state = {**state, "updated_at": _job_now_iso()}
     r = _get_redis()
     if r is not None:
         try:
@@ -747,7 +798,10 @@ def set_job(job_id: str, state: dict) -> None:
 def update_job(job_id: str, patch: dict) -> None:
     """Merge into the stored state. Read-modify-write rather than a field-wise update because the
     progress callback sends partial dicts, and a lost key would show the poller a scan that went
-    backwards."""
+    backwards. Always re-stamps updated_at, even for an empty patch — the heartbeat companion
+    thread in routes/scans.py's work() calls update_job(job_id, {}) for exactly that: proving the
+    replica is still alive without claiming any new progress happened."""
+    patch = {**patch, "updated_at": _job_now_iso()}
     r = _get_redis()
     if r is not None:
         try:
@@ -763,16 +817,29 @@ def update_job(job_id: str, patch: dict) -> None:
 
 
 def get_job_state(job_id: str) -> dict | None:
+    """The poll's answer, with staleness resolved into an honest terminal state rather than left
+    for the caller to notice. Never mutates the stored record — every replica computes this fresh,
+    so an already-dead job reads the same way from whichever replica answers the next poll."""
     r = _get_redis()
+    state = None
     if r is not None:
         try:
             import json as _j
             v = r.get(f"job:{job_id}")
             if v:
-                return _j.loads(v)
+                state = _j.loads(v)
         except Exception:
             pass
-    return JOBS.get(job_id)
+    if state is None:
+        state = JOBS.get(job_id)
+    if state is None:
+        return None
+    if _job_is_stale(state):
+        return {**state, "phase": "error", "done": True,
+                "error": (state.get("error") or
+                          "scan interrupted — the server likely restarted mid-run; "
+                          "please start a new scan")}
+    return state
 
 
 def finalize_scan(scan_id: str, effective_ai: bool, source: str) -> None:

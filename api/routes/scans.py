@@ -139,6 +139,19 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                           "done": False, "scan_id": None, "error": None, "source": source,
                           "ai": effective_ai})
 
+    # Liveness heartbeat, separate from progress. The deferred-discovery path below makes exactly
+    # one core.update_job call (at the very end) — during the crawl itself, a large estate can go
+    # a long time with no progress write, which is indistinguishable from a dead replica unless
+    # something else proves the replica is still up. This companion thread does only that: touch
+    # updated_at every core._JOB_HEARTBEAT_SECONDS regardless of what work() has found so far, so
+    # core.get_job_state's staleness check tracks "is the replica alive" rather than "how big is
+    # this estate" — and stops the moment work() ends, one way or another, via the Event below.
+    _stop_heartbeat = threading.Event()
+
+    def _heartbeat():
+        while not _stop_heartbeat.wait(core._JOB_HEARTBEAT_SECONDS):
+            core.update_job(job_id, {})
+
     def work():
         try:
             from handlers import _defer_analysis_to_assess
@@ -178,7 +191,10 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                                      "files_done": done.get("files_found", 0)})
         except Exception as e:
             core.update_job(job_id, {"phase": "error", "done": True, "error": str(e)})
+        finally:
+            _stop_heartbeat.set()
 
+    threading.Thread(target=_heartbeat, daemon=True).start()
     threading.Thread(target=work, daemon=True).start()
     return {"job_id": job_id}
 
