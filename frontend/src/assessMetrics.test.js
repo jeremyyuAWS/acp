@@ -283,6 +283,37 @@ describe('screen state, in precedence order', () => {
     expect(st({ findings: 0, anyReviewLane: false })).toBe('clear')
   })
 
+  it('reads a stopped run as partial from runStatus alone, before any not-started count', () => {
+    // A cancelled or interrupted run did not reach the end of its scope. That is partial even when
+    // the caller cannot yet say how many documents were skipped — the file list is what get_scan
+    // returns, which is only what ran. Findings present must not let it read as a complete result.
+    expect(st({ runStatus: 'cancelled', findings: 9 })).toBe('partial')
+    expect(st({ runStatus: 'interrupted', findings: 0 })).toBe('partial')
+  })
+
+  it('reads an errored run as failed even where a record survived', () => {
+    expect(st({ runStatus: 'error', assessed: 1, findings: 5 })).toBe('failed')
+  })
+
+  it('leaves a completed run classified exactly as before the argument existed', () => {
+    // 'done' and undefined are the no-op: a completed run is still classified by its findings only,
+    // so nothing on the happy path moves.
+    expect(st({ runStatus: 'done', findings: 3 })).toBe('attention')
+    expect(st({ runStatus: 'done', findings: 0, anyReviewLane: false })).toBe('clear')
+    expect(st({ runStatus: undefined, findings: 0, anyReviewLane: false })).toBe('clear')
+  })
+
+  it('never lets no-scope be masked by the run status', () => {
+    // Empty is decided first: a scope that selected nothing is "nothing to assess", not a failure of
+    // a run that never had anything to do.
+    expect(st({ selected: 0, assessed: 0, runStatus: 'error' })).toBe('empty')
+  })
+
+  it('threads runStatus through assessMetrics onto a real estate', () => {
+    expect(run([doc('a.docx', [finding('1.1.1')])], { runStatus: 'cancelled' }).status).toBe('partial')
+    expect(run([doc('a.docx', [finding('1.1.1')])], { runStatus: 'done' }).status).toBe('attention')
+  })
+
   it('derives the state from a real estate', () => {
     expect(run([doc('a.docx', [finding('1.1.1')])]).status).toBe('attention')
     expect(run([doc('a.docx')]).status).toBe('awaiting_review')   // 1.1.1 is a review lane on docx

@@ -254,6 +254,89 @@ describe('one primary action', () => {
   })
 })
 
+describe('the seven screen states — a run that did not complete never reads as one that did', () => {
+  const gridShown = (c) => /Findings by severity/.test(c.textContent)
+
+  describe('state 6 · assessment failed', () => {
+    it('renders no metric grid — not even zeros — for an errored run', async () => {
+      // A grid of zeros is the same false verdict as a completed run that found nothing. This state
+      // reached no terminal check, so it states that and shows no numbers.
+      const c = await mount({ files: ESTATE, run: { status: 'error' } })
+      expect(c.textContent).toMatch(/Assessment could not run/)
+      expect(gridShown(c), 'a failed run rendered the metric grid').toBe(false)
+      expect(c.textContent).not.toMatch(/\b0\b/)
+      expect(c.textContent).toMatch(/nothing was changed/)
+    })
+
+    it('is failed when no document opened, even without a run status', async () => {
+      const c = await mount({ files: [doc('locked.pdf', [], { status: 'error', error: 'password-protected' })] })
+      expect(c.textContent).toMatch(/Assessment could not run/)
+      expect(gridShown(c)).toBe(false)
+    })
+
+    it('offers reconnect and keeps the previous results reachable via run details', async () => {
+      const onReconnect = vi.fn(); const onRunDetails = vi.fn()
+      const c = await mount({ files: ESTATE, run: { status: 'error' }, onReconnect, onRunDetails })
+      await act(async () => { [...c.querySelectorAll('button')].find((b) => /Reconnect/.test(b.textContent)).click() })
+      expect(onReconnect).toHaveBeenCalled()
+      expect([...c.querySelectorAll('button')].some((b) => /Run details/.test(b.textContent))).toBe(true)
+    })
+  })
+
+  describe('state 7 · nothing matched the scope', () => {
+    it('states the cause and never renders a grid of zeros', async () => {
+      const c = await mount({ files: [], discovered: 12408 })
+      expect(c.textContent).toMatch(/Nothing to assess/)
+      expect(c.textContent, 'the discovered total is not stated').toMatch(/12,408 files/)
+      expect(c.textContent).toMatch(/\.docx, \.pdf, \.pptx or \.xlsx/)
+      expect(gridShown(c)).toBe(false)
+    })
+
+    it('offers the controls that change the scope', async () => {
+      let changed = null
+      const c = await mount({ files: [], onChangeScope: (which) => { changed = which } })
+      await act(async () => { [...c.querySelectorAll('button')].find((b) => /Change document types/.test(b.textContent)).click() })
+      expect(changed).toBe('types')
+    })
+  })
+
+  describe('state 4 · partially completed', () => {
+    it('names the assessed denominator ONCE at the top, before any metric', async () => {
+      // Every number below is of the documents that ran, not of the scope selected. ESTATE opens 3
+      // of its 4 (locked.pdf could not be read), so a cancelled run assessed 3.
+      const c = await mount({ files: ESTATE, run: { status: 'cancelled' } })
+      const banner = c.querySelector('.assesssummary-partial')
+      expect(banner, 'no partial banner').toBeTruthy()
+      expect(banner.textContent).toMatch(/Partially completed — 3 documents assessed/)
+      expect(banner.textContent).toMatch(/of the 3 assessed/)
+    })
+
+    it('still shows the metrics — a partial run reports what it has, it just captions it', async () => {
+      const c = await mount({ files: ESTATE, run: { status: 'interrupted' } })
+      expect(gridShown(c), 'partial dropped the metrics entirely').toBe(true)
+    })
+
+    it('names the not-started count when the caller knows it', async () => {
+      const c = await mount({ files: ESTATE, run: { status: 'cancelled' }, notStarted: 13 })
+      expect(c.querySelector('.assesssummary-partial').textContent)
+        .toMatch(/13 selected documents were never started/)
+    })
+
+    it('does not invent a not-started count when it is unknown', async () => {
+      const c = await mount({ files: ESTATE, run: { status: 'cancelled' } })
+      expect(c.querySelector('.assesssummary-partial').textContent).not.toMatch(/never started/)
+    })
+  })
+
+  it('a completed run renders exactly as before — no banner, full grid', async () => {
+    const c = await mount({ files: ESTATE, run: { status: 'done' } })
+    expect(c.querySelector('.assesssummary-partial')).toBe(null)
+    expect(c.querySelector('.assesssummary-failed')).toBe(null)
+    expect(gridShown(c)).toBe(true)
+    expect(c.textContent).toMatch(/Needs attention/)
+  })
+})
+
 describe('what the component is not allowed to derive itself', () => {
   it('takes every number from the metric module', () => {
     // Asserted at the source: a component that recomputes a count is a fifth denominator waiting

@@ -52,6 +52,55 @@ function Metric({ label, value, unit, children, tone }) {
   )
 }
 
+// Board 7, state 6 — the run reached no terminal check. No metric renders, not even zero: a grid of
+// zeros reads as "assessed, found nothing", and the whole point of this state is that nothing was
+// assessed. The previous run's results stay reachable under their own timestamp (Run details).
+function FailedState({ assessedAt, onReconnect, onRunDetails }) {
+  return (
+    <section className="panel assesssummary assesssummary-failed" role="status"
+             style={{ borderLeft: `4px solid ${TONE.failed.bar}` }}>
+      <div style={{ fontSize: 19, fontWeight: 650, color: TONE.failed.c }}>
+        {STATUS_LABEL.failed}
+      </div>
+      <p className="muted" style={{ fontSize: 13.5, margin: '8px 0 0', lineHeight: 1.6, maxWidth: 640 }}>
+        No document reached a verdict in this run{assessedAt ? ` (${assessedAt})` : ''}. Nothing was
+        assessed and nothing was changed — this is not a run that found no problems, it is a run that
+        did not happen.
+      </p>
+      <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+        {onReconnect && <button type="button" onClick={() => onReconnect()}>Reconnect and retry</button>}
+        {onRunDetails && (
+          <button className="ghost small" type="button" onClick={() => onRunDetails()}>Run details</button>
+        )}
+      </div>
+    </section>
+  )
+}
+
+// Board 7, state 7 — the scope selected no assessable document. It states the CAUSE and offers the
+// control that fixes it, and it never renders the summary grid with zeros: nothing was checked here,
+// so nothing is clear. Distinct from state 6, where documents were selected but none could be read.
+function EmptyState({ discovered, onChangeScope }) {
+  return (
+    <section className="panel assesssummary assesssummary-empty" role="status"
+             style={{ borderLeft: `4px solid ${TONE.empty.bar}` }}>
+      <div style={{ fontSize: 19, fontWeight: 650, color: TONE.empty.c }}>{STATUS_LABEL.empty}</div>
+      <p className="muted" style={{ fontSize: 13.5, margin: '8px 0 0', lineHeight: 1.6, maxWidth: 640 }}>
+        {discovered
+          ? `Discovery listed ${discovered.toLocaleString()} files, and none is a .docx, .pdf, .pptx or .xlsx in the selected folders. `
+          : 'No document in the selected scope is a format ACP can assess. '}
+        Widening the document types or the folders will change that.
+      </p>
+      {onChangeScope && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+          <button type="button" onClick={() => onChangeScope('types')}>Change document types</button>
+          <button className="ghost small" type="button" onClick={() => onChangeScope('folders')}>Change folders</button>
+        </div>
+      )}
+    </section>
+  )
+}
+
 /**
  * @param files       the scan's file rows
  * @param cap         remediation-capability map
@@ -63,10 +112,26 @@ function Metric({ label, value, unit, children, tone }) {
  * @param onRunDetails secondary — traces and capability live behind this, not on this screen
  */
 export default function AssessSummary({ files, cap, assessment, criteria, level = 'AA',
-                                        assessedAt, notStarted, onRemediate, onRunDetails }) {
-  const m = assessMetrics(files, { cap, assessment, criteria, level, notStarted })
+                                        assessedAt, notStarted, run, discovered,
+                                        onRemediate, onRunDetails, onReconnect, onChangeScope }) {
+  // The run's own status decides two of the seven screen states the file list cannot: a run of
+  // 'error' is `failed` even with a stray record, and one 'cancelled'/'interrupted' is `partial`
+  // even before the not-started count is known. 'done'/absent leaves classification to the findings.
+  const runStatus = run?.status
+  const m = assessMetrics(files, { cap, assessment, criteria, level, notStarted, runStatus })
   // Nothing, rather than zeros. A run that has not happened is not a run that found nothing.
   if (!m) return null
+
+  // ── Board 7, states 6 and 7: the two the previous screen rendered as an ordinary completed
+  //    result. Neither may show the metrics grid — a grid of zeros is the same false verdict as a
+  //    completed run that found nothing, and an empty scope never checked anything to be "clear"
+  //    about. Each states its CAUSE and offers the control that changes it, and nothing else. ──
+  if (m.status === 'failed') {
+    return <FailedState assessedAt={assessedAt} onReconnect={onReconnect} onRunDetails={onRunDetails} />
+  }
+  if (m.status === 'empty') {
+    return <EmptyState discovered={discovered} onChangeScope={onChangeScope} />
+  }
 
   const tone = TONE[m.status] || TONE.attention
   const r = reconcile(m)
@@ -79,6 +144,28 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
 
   return (
     <section className="panel assesssummary" style={{ borderLeft: `4px solid ${tone.bar}` }}>
+
+      {/* ── Board 7, state 4: a partial run must be impossible to mistake for a full one. Every
+             number below is of the documents that were assessed, not of the scope that was selected,
+             so the banner names that denominator ONCE, at the top, before any metric is read. The
+             not-started documents are named when the caller knows them (they are not in the file
+             list — get_scan returns only what ran — so `notStarted` arrives separately or not at
+             all; absent, the banner still fixes the "reads as complete" failure with the count it
+             has). ── */}
+      {m.status === 'partial' && (
+        <div className="assesssummary-partial" role="status"
+             style={{ marginBottom: 14, padding: '11px 13px', borderRadius: 10,
+                      border: `1px solid ${TONE.partial.bar}`, background: 'var(--surface)' }}>
+          <div style={{ fontSize: 15, fontWeight: 650, color: TONE.partial.c }}>
+            {STATUS_LABEL.partial} — {m.documentsAssessed} document{m.documentsAssessed === 1 ? '' : 's'} assessed
+          </div>
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 4, lineHeight: 1.6 }}>
+            The run stopped before its scope was complete. Every number below is <b>of the{' '}
+            {m.documentsAssessed} assessed</b>
+            {notStarted > 0 ? <>, and {notStarted} selected document{notStarted === 1 ? '' : 's'} {notStarted === 1 ? 'was' : 'were'} never started.</> : '.'}
+          </div>
+        </div>
+      )}
 
       {/* ── A1 · what this run was, before its numbers. The level is stated, never chosen here, and
              the criteria count is the selected scope — the same denominator the coverage sentence

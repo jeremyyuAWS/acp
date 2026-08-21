@@ -220,7 +220,7 @@ export function findingsByCriterion(row) {
                  || a.sc.localeCompare(b.sc, undefined, { numeric: true }))
 }
 
-export function assessMetrics(files, { cap, assessment, criteria = SCOPE_SCS, level = 'AA', notStarted } = {}) {
+export function assessMetrics(files, { cap, assessment, criteria = SCOPE_SCS, level = 'AA', notStarted, runStatus } = {}) {
   if (!Array.isArray(files)) return null
 
   const rows = documentRows(files, { cap, assessment, criteria, level })
@@ -292,7 +292,7 @@ export function assessMetrics(files, { cap, assessment, criteria = SCOPE_SCS, le
     scopeLabel: criteria === SCOPE_SCS ? SCOPE_LABEL : 'document core',
 
     status: statusOf({
-      selected: files.length, assessed: assessed.length, notStarted,
+      selected: files.length, assessed: assessed.length, notStarted, runStatus,
       findings: totalFindings, anyReviewLane,
     }),
   }
@@ -307,13 +307,20 @@ export function assessMetrics(files, { cap, assessment, criteria = SCOPE_SCS, le
  * as an ordinary completed result.
  *
  * `partial` requires knowing how many selected documents were never started, which the file list
- * alone cannot say — so it is reported only when the caller supplies `notStarted`. Absent that,
- * this returns the completed state it can defend rather than guessing at one it cannot.
+ * alone cannot say. Two independent signals establish it: `notStarted > 0` (a count the caller
+ * supplies from the estate) and a `runStatus` of 'cancelled' or 'interrupted' (the run itself did
+ * not reach its end). Either one means partial — the run stopped short of its selected scope, and a
+ * screen that presented that as complete would be the exact failure this ordering exists to prevent.
+ * Absent both, this returns the completed state it can defend rather than guessing at one it cannot.
+ *
+ * `runStatus` also carries the failure case: a run of 'error' reached no terminal check, which is
+ * `failed` even where a stray file record exists. 'done' and undefined leave every branch exactly as
+ * it was before the argument existed — a completed run is classified purely by its findings.
  */
-export function statusOf({ selected, assessed, notStarted, findings, anyReviewLane }) {
+export function statusOf({ selected, assessed, notStarted, findings, anyReviewLane, runStatus }) {
   if (!selected) return 'empty'                        // nothing matched the scope
-  if (!assessed) return 'failed'                       // no check reached a terminal state
-  if (notStarted > 0) return 'partial'                 // some selected document never began
+  if (runStatus === 'error' || !assessed) return 'failed'   // no check reached a terminal state
+  if (runStatus === 'cancelled' || runStatus === 'interrupted' || notStarted > 0) return 'partial'
   if (findings > 0) return 'attention'
   if (anyReviewLane) return 'awaiting_review'          // nothing failed, but a person still decides
   return 'clear'
