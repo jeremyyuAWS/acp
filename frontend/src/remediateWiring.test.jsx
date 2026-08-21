@@ -149,3 +149,21 @@ describe('the per-item four reach the detail pane, beside their subject', () => 
     }
   })
 })
+
+describe('R1 (board 9) — the hero names which assessment this backlog is from', () => {
+  const rem = () => code('Remediate.jsx')
+
+  it('accepts assessedAt and prints it next to the hero title, omitting rather than inventing', () => {
+    // Pre-formatted by the caller — the same "format once, pass a string" contract every other
+    // stamp on these tabs follows — so this component formats no dates of its own, and the
+    // guard means a missing value prints nothing rather than a raw ISO timestamp or a blank line.
+    const s = rem()
+    expect(s).toMatch(/assessedAt = null/)
+    expect(s).toMatch(/assessedAt && \([\s\S]{0,200}?from the assessment of \{assessedAt\}/)
+  })
+
+  it('App passes the run\'s own assessed_at, formatted via fmtStamp — never the raw column', () => {
+    const app = code('App.jsx')
+    expect(app).toMatch(/<Remediate[\s\S]{0,700}?assessedAt=\{fmtStamp\(run\?\.assessed_at\)\}/)
+  })
+})

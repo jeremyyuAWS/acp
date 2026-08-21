@@ -299,7 +299,7 @@ function VerifyState({ state, pct, remaining, ready, latest }) {
 // readOnly: time-travel replay — historical scans are for looking, not enqueuing
 // real remediation jobs against (decisions stay editable: per-scan decision saves
 // are the time-travel feature itself).
-export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, assignees = {}, setAssignees, myEmail = null, aiEnabled = true, readOnly = false, onRefresh, onHitlCount, onNavigate, cap = null, assessment = null }) {
+export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, assignees = {}, setAssignees, myEmail = null, aiEnabled = true, readOnly = false, onRefresh, onHitlCount, onNavigate, cap = null, assessment = null, assessedAt = null }) {
   const [queue, setQueue] = useState([])
   // The master/detail RemediationInbox owns its own view state (search, tabs, sort, selection),
   // so the old accordion/prefs plumbing (single-open openId, the search/severity/criterion/group
@@ -814,6 +814,16 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       <section className="rem-hero">
         <div className="rem-hero-main">
           <h2 className="rem-hero-title">Accessibility remediation</h2>
+          {/* R1 (board 9) — "from the assessment of [date/time]": which run this backlog belongs
+              to. Pre-formatted by the caller (App.jsx, fmtStamp) — the same "format once, pass a
+              string, omit rather than invent" contract every other stamp on these tabs follows —
+              so this component formats no dates of its own and prints nothing for a missing value
+              rather than a raw ISO timestamp. */}
+          {assessedAt && (
+            <div className="muted rem-hero-assessed" style={{ fontSize: 12.5, marginTop: 2 }}>
+              from the assessment of {assessedAt}
+            </div>
+          )}
           <div className="rem-hero-line">
             <b>{files.length}</b> document{files.length === 1 ? '' : 's'} processed
             {fixedCount > 0 && <> · <b className="rh-fixed">{fixedCount}</b> issue{fixedCount === 1 ? '' : 's'} fixed automatically</>}
