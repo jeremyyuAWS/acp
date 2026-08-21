@@ -7,7 +7,7 @@ import FileDrawer from './FileDrawer.jsx'
 import { filesForSource, inventoryFacts, fmtSize } from './sourceOps.js'
 // Single source of truth for the SharePoint/Graph scopes, so this sign-in path and SharePoint.jsx
 // can never request different permissions than IT consented to (read-only; see that module).
-import { SP_SCOPES } from './sharepointScopes.js'
+import { SP_SCOPES, getMicrosoftTenants } from './sharepointScopes.js'
 import { signInForScopes, MsalNotReady, MsalNotConfigured } from './msalClient.js'
 import { friendlyAuthError } from './authErrors.js'
 
@@ -165,11 +165,24 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
   const [spConnecting, setSpConnecting] = useState(false)
   const [spError,      setSpError]      = useState('')
   const [googleClientId, setGoogleClientId] = useState('')
+  // Every SharePoint/OneDrive tenant this deployment can connect to (multi-tenant SharePoint) —
+  // one entry for a single-tenant deployment (today's default), more once a second Entra app
+  // registration is configured (ACP_AZURE_CLIENT_ID_2/ACP_AZURE_TENANT_ID_2). spTenantKey is which
+  // one the connect button targets; the picker below only renders when there is a real choice.
+  const [microsoftTenants, setMicrosoftTenants] = useState([])
+  const [spTenantKey, setSpTenantKey] = useState('')
   const availRef = useRef(null)
   const gdTokenClientRef = useRef(null)
 
   useEffect(() => {
     getConfig().then((c) => { if (c?.google_client_id) setGoogleClientId(c.google_client_id) }).catch(() => {})
+    getMicrosoftTenants().then((t) => {
+      setMicrosoftTenants(t)
+      // Default to whichever tenant is already connected (sp_tenant_key), so re-opening this tab
+      // doesn't silently reset the picker to "primary" out from under an existing connection.
+      const stored = sessionStorage.getItem('sp_tenant_key')
+      setSpTenantKey((stored && t.some((x) => x.key === stored)) ? stored : (t[0]?.key || ''))
+    }).catch(() => {})
   }, [])
 
   const driveBackend   = sources.find((s) => s.type === 'google_drive')
@@ -213,9 +226,15 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
     try {
       // Shared, resilient MSAL client (msalClient.js) — same one the login screen uses, so the two
       // never race over interaction state, and a stuck `interaction_in_progress` lock self-clears.
-      const { account, accessToken } = await signInForScopes(SP_SCOPES)
+      // spTenantKey selects WHICH configured tenant to sign into — 'primary' (or the only entry)
+      // when this deployment has just one, same as before multi-tenant SharePoint existed.
+      const { account, accessToken } = await signInForScopes(SP_SCOPES, spTenantKey)
       sessionStorage.setItem('sp_token', accessToken)
       sessionStorage.setItem('sp_account', JSON.stringify(account))
+      // Recorded so a reload knows which tenant is connected (picker default above) and so the
+      // connected-source card below can label it — otherwise "OneDrive" alone is ambiguous the
+      // moment a second tenant exists to confuse it with.
+      sessionStorage.setItem('sp_tenant_key', spTenantKey || '')
       onConnect('microsoft', account.username || '', accessToken)
     } catch (e) {
       if (e instanceof MsalNotReady) setSpError('MSAL not loaded yet — try again.')
@@ -321,7 +340,15 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
             {connectedSources.map((src) => {
               const isGdrive  = src.type === 'google_drive'
               const typeLabel = isGdrive ? 'Google Drive' : 'OneDrive'
-              const title     = src.name && src.name !== typeLabel ? `${typeLabel} — ${src.name}` : typeLabel
+              // The connected tenant's own label, appended only when more than one is configured
+              // — a single-tenant deployment (still every deployment today) sees no change here,
+              // since "OneDrive" alone was never ambiguous until a second tenant existed to
+              // confuse it with.
+              const connectedTenant = !isGdrive && microsoftTenants.length > 1
+                ? microsoftTenants.find((t) => t.key === sessionStorage.getItem('sp_tenant_key'))
+                : null
+              const title     = src.name && src.name !== typeLabel ? `${typeLabel} — ${src.name}`
+                : connectedTenant ? `${typeLabel} — ${connectedTenant.label}` : typeLabel
               const store     = isGdrive ? 'Drive' : 'OneDrive'
               const lastRun   = lastCompletedRun(scans, src.type)
               const lastScan  = lastScanLabel(scans, src.type)
@@ -449,6 +476,21 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                 <div className="srccard-body">
                   <div className="srccard-name">{s.name}</div>
                   <div className="srccard-desc">{desc}</div>
+                  {/* Only rendered once a second tenant is actually configured
+                      (ACP_AZURE_CLIENT_ID_2/ACP_AZURE_TENANT_ID_2) — a single-tenant deployment
+                      (every deployment today) sees no picker and no behaviour change. */}
+                  {!isGdrive && microsoftTenants.length > 1 && (
+                    <label className="srccard-tenantpick muted" style={{ display: 'flex',
+                      alignItems: 'center', gap: 6, fontSize: 12, marginTop: 6 }}>
+                      Tenant:
+                      <select value={spTenantKey} disabled={isConnecting}
+                              onChange={(e) => setSpTenantKey(e.target.value)}>
+                        {microsoftTenants.map((t) => (
+                          <option key={t.key} value={t.key}>{t.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
                   {error && <div className="srccard-err">{error}</div>}
                 </div>
                 <div className="srccard-actions">

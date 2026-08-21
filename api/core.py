@@ -34,6 +34,43 @@ GOOGLE_CLIENT_ID = os.environ.get("ACP_GOOGLE_CLIENT_ID") or None
 # these over its build-time VITE_AZURE_* fallback. Tenant defaults to 'common' only if unset.
 AZURE_CLIENT_ID = os.environ.get("ACP_AZURE_CLIENT_ID") or None
 AZURE_TENANT_ID = os.environ.get("ACP_AZURE_TENANT_ID") or None
+
+
+def _load_microsoft_tenants() -> list[dict]:
+    """Every Microsoft/Entra app registration this deployment can connect SharePoint/OneDrive
+    through, as a data-source connection — NOT the identity provider that gates sign-in to ACP
+    itself (that stays AZURE_CLIENT_ID/AZURE_TENANT_ID alone; SignIn.jsx's "Sign in with
+    Microsoft" is unchanged by this).
+
+    Single-tenant Entra app registrations (docs/sharepoint-app-registration.md) reach exactly one
+    organization's SharePoint/OneDrive each — this deployment was structurally unable to reach a
+    second, separate production tenant's estate no matter how a user signed in. `ACP_AZURE_CLIENT_ID`/
+    `ACP_AZURE_TENANT_ID` become slot "primary"; `ACP_AZURE_CLIENT_ID_2`/`ACP_AZURE_TENANT_ID_2` (and
+    `_3`, `_4`, ...) add more, each requiring its own app registration and admin consent in ITS OWN
+    tenant (docs/sharepoint-app-registration.md's steps, repeated per tenant — nothing here
+    substitutes for that). `_N_LABEL` names the slot for the connect-source picker; unset falls back
+    to "Tenant N". Contiguous numbering only — a gap (2 set, 3 unset, 4 set) stops the scan, since a
+    silently-skipped slot is worse than an obviously-missing one.
+    """
+    tenants = []
+    if AZURE_CLIENT_ID and AZURE_TENANT_ID:
+        tenants.append({"key": "primary",
+                        "label": os.environ.get("ACP_AZURE_TENANT_LABEL") or "Primary",
+                        "client_id": AZURE_CLIENT_ID, "tenant_id": AZURE_TENANT_ID})
+    n = 2
+    while True:
+        cid = os.environ.get(f"ACP_AZURE_CLIENT_ID_{n}")
+        tid = os.environ.get(f"ACP_AZURE_TENANT_ID_{n}")
+        if not (cid and tid):
+            break
+        tenants.append({"key": f"tenant{n}",
+                        "label": os.environ.get(f"ACP_AZURE_TENANT_{n}_LABEL") or f"Tenant {n}",
+                        "client_id": cid, "tenant_id": tid})
+        n += 1
+    return tenants
+
+
+MICROSOFT_TENANTS = _load_microsoft_tenants()
 # Deployment environment. ACP_DEPLOY_ENV is canonical; ACP_ENV is a legacy alias, still read.
 #
 # ACP_ENV used to mean two different things: this, and the Container Apps *environment name* in

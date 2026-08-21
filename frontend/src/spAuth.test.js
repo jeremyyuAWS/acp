@@ -14,16 +14,18 @@ describe('getSpAuth prefers runtime /config over the build-time fallback', () =>
   beforeEach(() => vi.resetModules())  // getSpAuth caches its result; reset per case
 
   it('returns the runtime azure_client_id / azure_tenant_id from /config', async () => {
+    // A backend that predates multi-tenant SharePoint (or a rollout-order accident) sends only
+    // the singular pair, no microsoft_tenants — getMicrosoftTenants' legacy fallback covers it.
     vi.doMock('./api.js', () => ({ getConfig: () => Promise.resolve({ azure_client_id: 'runtime-cid', azure_tenant_id: 'runtime-tid' }) }))
     const { getSpAuth } = await import('./sharepointScopes.js')
-    expect(await getSpAuth()).toEqual({ clientId: 'runtime-cid', tenant: 'runtime-tid' })
+    expect(await getSpAuth()).toEqual({ clientId: 'runtime-cid', tenant: 'runtime-tid', key: 'primary' })
   })
 
   it('falls back to the build-time value (and tenant "common") when /config carries neither', async () => {
     vi.doMock('./api.js', () => ({ getConfig: () => Promise.resolve({}) }))
     const { getSpAuth } = await import('./sharepointScopes.js')
     // No VITE_AZURE_* in the test env → empty client id, tenant defaults to 'common'.
-    expect(await getSpAuth()).toEqual({ clientId: '', tenant: 'common' })
+    expect(await getSpAuth()).toEqual({ clientId: '', tenant: 'common', key: null })
   })
 
   it('does not throw when /config is unreachable — degrades to the fallback', async () => {
