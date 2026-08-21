@@ -343,6 +343,48 @@ describe('AssessFileFindings — no score, no percentage, no effort estimate', (
   })
 })
 
+describe('AssessFileFindings — board 5: size, assessed timestamp, Open in Drive', () => {
+  it('shows the size, formatted, only when the raw file record carries one', async () => {
+    const withSize = { ...FILE, size_kb: 4300 }
+    const t = text(await mount({ row: rowFor(withSize), file: withSize }))
+    expect(t).toMatch(/4\.2 MB/)
+  })
+
+  it('shows KB below the 1024 threshold', async () => {
+    const small = { ...FILE, size_kb: 480 }
+    const t = text(await mount({ row: rowFor(small), file: small }))
+    expect(t).toMatch(/480 KB/)
+  })
+
+  it('omits the size segment rather than printing "0 KB" when the file carries none', async () => {
+    const t = text(await mount({ row: rowFor(FILE), file: FILE }))
+    expect(t).not.toMatch(/\bKB\b/)
+    expect(t).not.toMatch(/\bMB\b/)
+  })
+
+  it('prints the assessed timestamp only when the caller supplies one, pre-formatted', async () => {
+    // Scoped to the h2's metadata line specifically — "assessed" the bare word is not unique to
+    // this stamp ("1 criterion could not be assessed" is unrelated copy lower on the same screen).
+    const metaLine = (c) => c.querySelector('h2').nextElementSibling.textContent
+    const withStamp = await mount({ row: rowFor(FILE), file: FILE, assessedAt: '20 Aug, 16:45' })
+    expect(metaLine(withStamp)).toMatch(/assessed 20 Aug, 16:45/)
+    const noStamp = await mount({ row: rowFor(FILE), file: FILE })
+    expect(metaLine(noStamp)).not.toMatch(/assessed/)
+  })
+
+  it('offers Open in Drive only when the file carries a drive_file_id, linking straight to it', async () => {
+    const withDrive = { ...FILE, drive_file_id: 'abc123' }
+    const c = await mount({ row: rowFor(withDrive), file: withDrive })
+    const link = [...c.querySelectorAll('a')].find((a) => /Open in Drive/.test(a.textContent))
+    expect(link, 'no Open in Drive link rendered').toBeTruthy()
+    expect(link.getAttribute('href')).toBe('https://drive.google.com/file/d/abc123/view')
+    expect(link.getAttribute('target')).toBe('_blank')
+
+    const noDrive = await mount({ row: rowFor(FILE), file: FILE })
+    expect([...noDrive.querySelectorAll('a')].some((a) => /Open in Drive/.test(a.textContent))).toBe(false)
+  })
+})
+
 // ── SOURCE LANE ──────────────────────────────────────────────────────────────────────────────
 // Claims the DOM cannot carry: the absence of an operation, of an import, of an arithmetic.
 

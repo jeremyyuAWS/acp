@@ -444,6 +444,13 @@ export default function App() {
     const i = assessNavRows.findIndex((r) => r.file === assessFile.file)
     return i >= 0 && i + 1 < assessNavRows.length ? assessNavRows[i + 1] : null
   }, [assessNavRows, assessFile])
+  // A5/A13 · the RAW file record behind the worklist row. `assessFile` is a documentRow — the
+  // derived shape the worklist and this navigation use — which carries no size, no Drive id and no
+  // timestamp. Those live only on the file record `files` itself hands out, so this looks it up by
+  // the one key both shapes share.
+  const assessFileRaw = useMemo(
+    () => (assessFile ? files.find((f) => f.file === assessFile.file) : null),
+    [assessFile, files])
 
   // Real accounts that get elevated privileges on source connect (never shown in demo list)
   const PRIV_PROFILE = {
@@ -1173,7 +1180,8 @@ export default function App() {
                  FileDrawer is not deleted — Overview still uses it. This is only about which view
                  the Assess tab opens for a document. */}
             {assessed && resultsReady && assessFile && (
-              <AssessFileFindings row={assessFile} cap={cap} assessment={assessment}
+              <AssessFileFindings row={assessFile} file={assessFileRaw} cap={cap} assessment={assessment}
+                                  assessedAt={fmtStamp(run?.assessed_at)}
                                   onBack={() => { setAssessFile(null); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
                                   onNext={assessFileNext ? () => { setAssessFile(assessFileNext); window.scrollTo({ top: 0, behavior: 'smooth' }) } : undefined}
                                   nextName={assessFileNext?.name}
