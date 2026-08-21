@@ -24,7 +24,12 @@ ACTIONS = {"leave", "archive", "rename", "move", "delete", "tag"}
 FIELDS = {"department", "business_criticality", "regulatory_tags", "triage_score",
          "source", "owner", "age_days",
          # Folder/path + lifecycle conditions (Discover/Assess Lifecycle PRD, Phase B1).
-         "path", "parent_folder", "modified_age_days", "modified_at", "created_at"}
+         "path", "parent_folder", "modified_age_days", "modified_at", "created_at",
+         # File type/size (Lifecycle Rules build-plan item #3). doc_class is the same
+         # ADR-0020-stage-2 classification Discover already shows ("pdf-document",
+         # "spreadsheet", "image", ...); size_kb is the scanner's own inventory size,
+         # newly threaded through to `documents` by upsert_document alongside it.
+         "doc_class", "size_kb"}
 
 
 def _iso_before(a, b) -> bool:
