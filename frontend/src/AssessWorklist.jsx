@@ -62,6 +62,11 @@ const FILTERS = [
 /** Addition over the module's own row fields. An unopened row has no such field and adds nothing. */
 const total = (rows, key) => rows.reduce((a, r) => a + (r[key] || 0), 0)
 
+// A11 progressive disclosure (board 4). Five rows is enough to read the shape of a list without
+// scrolling past it on a laptop; a page carries its own count of what it left out, in the same
+// units the columns are in, so a screenshot of the first five never reads as the whole worklist.
+const PAGE_SIZE = 5
+
 /** Findings of one severity, summed over rows. An unopened row carries no bySeverity and adds nothing. */
 const sevTotal = (rows, s) => rows.reduce((a, r) => a + (r.bySeverity?.[s] || 0), 0)
 
@@ -118,6 +123,10 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
   // narrowing this list must never hide how much it narrowed, the same rule the state filter obeys.
   const [sevChosen, setSevChosen] = useState(null)
   const [autoOnly, setAutoOnly] = useState(false)
+  // A11 progressive disclosure. Independent of the filters above — it narrows how much of the
+  // FILTERED set is currently rendered, not which rows match. Re-derived from `visible` on every
+  // render, so tightening a filter to under PAGE_SIZE rows shows everything with no stale toggle.
+  const [expanded, setExpanded] = useState(false)
 
   // Nothing, rather than zeros. A run that has not happened is not a run that found nothing, and a
   // worklist of no documents is not a worklist. The summary above carries the run's own state.
@@ -147,6 +156,11 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
   if (sevActive) visible = visible.filter((r) => (r.bySeverity?.[sevActive] || 0) > 0)
   if (autoOnly) visible = visible.filter((r) => (r.autoFixAvailable || 0) > 0)
   const filtered = visible.length < rows.length
+  // The page actually on screen. `hidden` rows are still counted in the totals below — this only
+  // ever cuts how many ROWS render, never a number.
+  const truncated = !expanded && visible.length > PAGE_SIZE
+  const shown = truncated ? visible.slice(0, PAGE_SIZE) : visible
+  const hiddenRows = truncated ? visible.slice(PAGE_SIZE) : []
 
   const populations = [
     ['attention', counts.attention], ['awaiting_review', counts.awaiting_review],
@@ -241,7 +255,7 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
           {/* documentRows has already ordered these — by what needs a person, then by the overall
               severity mix, then by name, with unopened files last. Re-sorting here would be a
               second ordering rule for the same list, and the two would drift. */}
-          {visible.map((row) => (
+          {shown.map((row) => (
             <tr key={row.file} className={`worklist-row worklist-${row.state}`}>
               <td>
                 <div style={fname}>{row.name}</div>
@@ -314,6 +328,19 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
           ))}
         </tbody>
       </table>
+
+      {/* A11 · what the PAGE is not showing, distinct from what the FILTER is not showing below.
+          Named with the same units the columns are in, exactly as the filter's own "not showing"
+          line does — a truncated screenshot must carry its denominator no less than a filtered one. */}
+      {truncated && (
+        <div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
+          {shown.length} of {plural(visible.length, 'document', 'documents')} shown —{' '}
+          <button type="button" className="linklike" onClick={() => setExpanded(true)}>
+            Show the other {hiddenRows.length}
+          </button>, which hold {total(hiddenRows, 'totalFindings')} finding
+          {total(hiddenRows, 'totalFindings') === 1 ? '' : 's'} between them.
+        </div>
+      )}
 
       {/* What the filter is not showing, in the units the columns are in. Printed always, so a
           screenshot of a filtered worklist carries its own denominator. */}
