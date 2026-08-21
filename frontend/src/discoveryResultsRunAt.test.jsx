@@ -126,3 +126,40 @@ describe('the stamp is formatted by the caller, in the app-wide format', () => {
     expect(s).toMatch(/<DiscoveryResults[\s\S]{0,200}?runAt=\{runAt\}/)
   })
 })
+
+
+describe('how much of this estate can be assessed at all', () => {
+  // The KPI that reframes an engagement. Discovery lists everything; only some of it carries an
+  // accessibility test. On 12,408 files where 22 are Office or PDF, that one number is the story —
+  // and it was previously visible only inside a funnel and a bar chart, never as a headline.
+  const INV = (extra) => ({ discovered: 12408, ...extra })
+
+  it('renders the count when discovery measured it', async () => {
+    const t = await mount({ inventory: INV({ assessment_eligible: 22 }) })
+    // Asserted against the rendered PAIR, not the number alone. textContent runs the tile's value
+    // straight into its label ("22can be assessed"), and \b matches only a word/non-word
+    // transition — 2 to c is word-to-word, so a \b22\b here fails on correct output. Matching the
+    // pair is also the stronger claim: it pins that this count belongs to THIS label.
+    expect(t).toMatch(/22\s*can be assessed/i)
+  })
+
+  it('accepts the older by_status shape', async () => {
+    const t = await mount({ inventory: INV({ by_status: { assessable: 3400 } }) })
+    expect(t).toMatch(/3,400\s*can be assessed/i)
+  })
+
+  it('renders NOTHING when nothing measured it — never a zero', async () => {
+    // "0 can be assessed" asserts the estate contains nothing testable, which is a discovery
+    // result nobody obtained. Absent is the honest answer.
+    const t = await mount({ inventory: INV({}) })
+    expect(t).not.toMatch(/can be assessed/i)
+  })
+
+  it('reads the same definition the bucket reconciliation uses', async () => {
+    // Two derivations of "assessable" on one screen would let the header contradict the partition
+    // directly beneath it — the four-denominator defect in a new place.
+    const src = read('discoveryRecommendations.js')
+    expect(src).toMatch(/import \{ assessmentEligible \} from '\.\/estateFunnel\.js'/)
+    expect(src).toMatch(/assessable: assessmentEligible\(inventory\)/)
+  })
+})

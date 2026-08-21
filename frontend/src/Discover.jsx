@@ -6,7 +6,6 @@ import SegmentDrawer from './SegmentDrawer.jsx'
 import FolderPicker from './FolderPicker.jsx'
 import SitePicker from './SitePicker.jsx'
 import DispositionRules from './DispositionRules.jsx'
-import MyScanScope from './MyScanScope.jsx'
 import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
 import { dupeCountOf, duplicateFiles } from './dedupe.js'
@@ -335,13 +334,17 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           (owner-only); here any signed-in reviewer widens it for their OWN scans. Collapsed by default
           so it does not compete with the primary scope step; kept beside it so scope is reasoned about
           in one place. Widen-only, enforced server-side. */}
-      <details className="panel scopestep">
-        <summary>
-          <b>My scan scope</b>
-          <span className="muted"> · assess more than the org default, for your own scans</span>
-        </summary>
-        <MyScanScope />
-      </details>
+      {/* REMOVED: the per-user scope panel that widened which WCAG criteria a reviewer's own scans
+          would be assessed against.
+
+          Same conflation as the org-level picker taken off this tab earlier today, and it was the
+          first thing on the page. Discover asks ONE question — WHERE to inventory. Which criteria
+          apply is Assess's question, and AssessSetup owns it there. Discovery is metadata-only
+          (ADR 0020) and lists every file whatever the criteria say, so a criterion choice here
+          never changed what got listed.
+
+          The component is kept and mounted nowhere, per the standing rule in CLAUDE.md; the orphan
+          is recorded in discoverScopePanelsRemoved.test.jsx so it cannot be read as unfinished. */}
 
       {/* Estate coverage funnel — discovered → assessment-eligible → remediation-eligible, on the tab
           where discovery happens. Shown once a scan has produced an inventory; assessment/remediation
@@ -434,6 +437,19 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           so, the acknowledgement that gates Assess, and the reconciliation that shows every
           discovered file landing in exactly one bucket. Sections whose data has not reached this
           screen render NOTHING — never a zero. */}
+      {/* IS THIS THE WHOLE ESTATE? ABOVE the results, not below them.
+          
+          It sat under the export first, reasoning that a reader should meet the caveat before the
+          download button. That was the wrong reader: the one who matters reads the COUNTS, and by
+          the time a caveat appears beneath them they have already believed the numbers. A caveat
+          under the figure it qualifies is decoration.
+
+          Self-guarding: it renders nothing when it has nothing to say. A panel appearing on every
+          run to announce "this might be incomplete" would be true of all software, useful to
+          nobody, and would train the reader to skip the box that one day carries a real signal. */}
+      <DiscoveryCompleteness run={run} scanList={scanList}
+                             onRelist={() => onScan && onScan(run?.source === 'sharepoint' ? 'sharepoint' : 'drive')} />
+
       <DiscoveryResults files={estateFiles} inventory={scope?.inventory || null} scopeLine={scopeLine} runAt={runAt}
                         acknowledged={ackRecs} onAcknowledge={setAckRecs}
                         overrides={assessAnyway} onOverridesChange={setAssessAnyway}
@@ -445,17 +461,6 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
 
           It self-guards: no inventory to export renders nothing, and it says "not recorded"
           rather than inventing a date for a run the backend never stamped. */}
-      {/* IS THIS THE WHOLE ESTATE? Directly above the export, because an inventory taken out of
-          ACP outlives the screen that qualified it — a reader should meet the completeness caveat
-          before the download button, not after.
-
-          Self-guarding: it renders nothing when it has nothing to say. A panel that appeared on
-          every run saying "this might be incomplete" would be decoration — true of all software,
-          useful to nobody, and it would train the reader to skip the box that one day carries a
-          real signal. */}
-      <DiscoveryCompleteness run={run} scanList={scanList}
-                             onRelist={() => onScan && onScan(run?.source === 'sharepoint' ? 'sharepoint' : 'drive')} />
-
       <DiscoverInventoryExport scanId={scanId} run={runForExport}
                                inventory={scope?.inventory || null} />
 

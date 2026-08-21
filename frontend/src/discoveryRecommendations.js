@@ -25,6 +25,11 @@
 // never guessed from the action.
 
 // ── Absence ───────────────────────────────────────────────────────────────────
+// One definition of "assessment eligible", shared with the bucket reconciliation on the same
+// screen. Two derivations that drifted apart would put a header number contradicting the partition
+// directly beneath it.
+import { assessmentEligible } from './estateFunnel.js'
+
 export const NOT_RECORDED = 'not recorded'
 
 // ── File-format buckets ───────────────────────────────────────────────────────
@@ -302,6 +307,16 @@ export function estateSummary(files, inventory = null) {
     archive: lifecycle ? count('archive') : null,
     delete: lifecycle ? count('delete') : null,
     unreadable: files.filter(isUnreadable).length,
+    // HOW MUCH OF THIS ESTATE CAN BE ASSESSED AT ALL. Discovery lists everything; only some of it
+    // carries an accessibility test. On an estate of 12,408 files where 22 are Office or PDF, that
+    // one number reframes the engagement — and it was previously visible only inside a funnel and
+    // a bar chart, never as a headline.
+    //
+    // Metadata-derived, so discovery is entitled to it (ADR 0020: no file is opened). Read from
+    // the SAME helper the bucket reconciliation uses, so the header cannot contradict the
+    // partition below it. Null when nothing measured it — never 0, which would claim the estate
+    // contains nothing testable.
+    assessable: assessmentEligible(inventory),
     estateListed: listed,
     // The listing hit its cap, so the counts are a FLOOR. Silent truncation is the one failure
     // an inventory exists to prevent.

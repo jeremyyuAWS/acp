@@ -153,3 +153,27 @@ describe('and speaks up when it does', () => {
     expect(t).not.toMatch(/374/)
   })
 })
+
+
+describe('the caveat sits ABOVE the numbers it qualifies', () => {
+  // The flaw this fixes was mine. The panel first sat under the export, reasoning that a reader
+  // should meet the caveat before the download button. Wrong reader: the one who matters reads the
+  // COUNTS, and a caveat appearing beneath them arrives after they have been believed.
+  //
+  // Source-level because it asserts ORDER in a tree, which a render of one component cannot see.
+  it('Discover renders it before the results, not after', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { fileURLToPath } = await import('node:url')
+    const { dirname, join } = await import('node:path')
+    const here = dirname(fileURLToPath(import.meta.url))
+    const src = readFileSync(join(here, 'Discover.jsx'), 'utf8')
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+      .replace(/^\s*\/\/.*$/gm, '')
+
+    const caveat = src.indexOf('<DiscoveryCompleteness')
+    const results = src.indexOf('<DiscoveryResults')
+    expect(caveat, 'completeness panel mounted').toBeGreaterThan(-1)
+    expect(results, 'results panel mounted').toBeGreaterThan(-1)
+    expect(caveat, 'the caveat must precede the counts it qualifies').toBeLessThan(results)
+  })
+})

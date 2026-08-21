@@ -29,7 +29,7 @@ const TAG_TONE = {
   del: { background: '#FBE9E9', border: '1px solid #E5C4C4', color: '#A32D2D' },
 }
 const BAR_COLOR = { assessable: '#6B8FC7', other: '#B9B1BD' }
-const STAT_COLOR = { archive: '#2B4A7E', delete: '#A32D2D', unreadable: '#8a6d1f' }
+const STAT_COLOR = { archive: '#2B4A7E', delete: '#A32D2D', unreadable: '#8a6d1f', assessable: '#3B6D11' }
 
 const tagStyle = (tone) => ({
   fontSize: 11, fontWeight: 600, padding: '2px 9px', borderRadius: 20,
@@ -144,6 +144,16 @@ export default function DiscoveryResults({
 
       <div style={{ display: 'flex', gap: 12, marginTop: 16, flexWrap: 'wrap' }}>
         <Stat n={summary.discovered} label={`${plural(summary.discovered, 'file', 'files')} discovered`} />
+        {/* SECOND, because it qualifies the number beside it. Discovery lists everything; only some
+            of it carries an accessibility test at all, and on an estate of 12,408 files where 22
+            are Office or PDF that single number reframes the engagement. It was previously visible
+            only inside a funnel and a bar chart — never as a headline.
+
+            Absent when nothing measured it. A "0" here would assert the estate contains nothing
+            testable, which is a discovery result nobody obtained. */}
+        {summary.assessable != null && (
+          <Stat n={summary.assessable} label="can be assessed" color={STAT_COLOR.assessable} />
+        )}
         {/* Absent until the lifecycle columns reach this screen — a "0" here would be a claim
             about the estate made from a field nobody read. */}
         {summary.archive != null && (

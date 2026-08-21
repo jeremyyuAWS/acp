@@ -284,6 +284,25 @@ function count(v) {
  * measured AND they sum to exactly the discovered total — the one claim the panel may make with a
  * tick.
  */
+/**
+ * How many discovered files carry ANY applicable accessibility test.
+ *
+ * Exported so the headline KPI and the bucket reconciliation read one definition rather than two.
+ * They sit on the same screen; two derivations of "assessable" that drifted apart would put a
+ * number in the header contradicting the partition directly beneath it — the four-denominator
+ * defect in a new place.
+ *
+ * A DIRECT COUNT WINS: discovery records `assessment_eligible` itself. `by_status.assessable` is
+ * the older shape and is accepted as a fallback. Null when neither was measured — never 0, which
+ * would assert that nothing in the estate can be tested.
+ */
+export function assessmentEligible(inv) {
+  const direct = count(inv && inv.assessment_eligible)
+  if (direct != null) return direct
+  const byStatus = (inv && inv.by_status) || null
+  return byStatus ? count(byStatus.assessable) : null
+}
+
 export function reconcileBuckets(inv, opts = {}) {
   const discovered = (inv && inv.discovered) || 0
   if (!discovered) return null
@@ -293,8 +312,7 @@ export function reconcileBuckets(inv, opts = {}) {
   // eligible` — the same subtraction api/estate_inventory.funnel_facts makes for the conformance
   // report — and clamped so it can never read negative on a stale or partial summary.
   const byStatus = (inv && inv.by_status) || null
-  let eligible = count(inv && inv.assessment_eligible)
-  if (eligible == null && byStatus) eligible = count(byStatus.assessable)
+  const eligible = assessmentEligible(inv)
   const noTest = eligible == null ? null : Math.max(0, discovered - eligible)
 
   // Assessment-eligible files in a document type this run did not select.
