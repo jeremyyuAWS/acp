@@ -143,6 +143,45 @@ describe('the arithmetic is on the page, not just in a test', () => {
     expect(c.textContent).toMatch(/1 moderate/)
     expect(c.textContent).toMatch(/0 minor/)
   })
+
+  it('A6 · prints the severity partition as an equation, all four addends, summing to the total', async () => {
+    const c = await mount({ files: ESTATE })
+    // The words are already there per-severity; the equation makes the partition checkable at a
+    // glance against Total findings, and includes the zero so the four addends are always four.
+    expect(c.querySelector('.assesssummary-sevsum').textContent).toMatch(/1 \+ 1 \+ 1 \+ 0 = 3/)
+  })
+
+  it('A6 · prints no equation when there is nothing to add', async () => {
+    // A run that found nothing has no partition; an equation "0 + 0 + 0 + 0 = 0" would be noise on a
+    // clean result and read like a scoreboard of zeros.
+    const c = await mount({ files: [doc('c.docx')] })
+    expect(c.querySelector('.assesssummary-sevsum')).toBe(null)
+  })
+})
+
+describe('A1 · what the run was, before its numbers', () => {
+  it('names the screen and states the level and criteria scope', async () => {
+    const c = await mount({ files: ESTATE })
+    expect(c.querySelector('.assesssummary-head').textContent).toMatch(/Assessment results/)
+    // The level is STATED, never a control; the criteria count is the selected scope, the same
+    // denominator the coverage sentence reads against — so the two can never disagree.
+    expect(c.querySelector('.assesssummary-head').textContent)
+      .toMatch(/WCAG 2\.1 Level AA · 2 selected criteria/)
+  })
+
+  it('renders the assessed timestamp when given, and no orphan separator when not', async () => {
+    const withStamp = await mount({ files: ESTATE, assessedAt: '20 Aug, 16:44' })
+    expect(withStamp.querySelector('.assesssummary-head').textContent)
+      .toMatch(/20 Aug, 16:44 · WCAG 2\.1 Level AA/)
+    // Absent stamp: the line starts at the level, with no leading " · " where the date would be.
+    const noStamp = await mount({ files: ESTATE })
+    expect(noStamp.querySelector('.assesssummary-head').textContent).toMatch(/^Assessment resultsWCAG 2\.1/)
+  })
+
+  it('states the level it was given rather than a constant', async () => {
+    const c = await mount({ files: ESTATE, level: 'AAA' })
+    expect(c.querySelector('.assesssummary-head').textContent).toMatch(/WCAG 2\.1 Level AAA/)
+  })
 })
 
 describe('a document that failed to open is a run outcome, not an exclusion', () => {

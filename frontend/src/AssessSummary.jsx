@@ -63,7 +63,7 @@ function Metric({ label, value, unit, children, tone }) {
  * @param onRunDetails secondary — traces and capability live behind this, not on this screen
  */
 export default function AssessSummary({ files, cap, assessment, criteria, level = 'AA',
-                                        notStarted, onRemediate, onRunDetails }) {
+                                        assessedAt, notStarted, onRemediate, onRunDetails }) {
   const m = assessMetrics(files, { cap, assessment, criteria, level, notStarted })
   // Nothing, rather than zeros. A run that has not happened is not a run that found nothing.
   if (!m) return null
@@ -71,9 +71,26 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
   const tone = TONE[m.status] || TONE.attention
   const r = reconcile(m)
   const gaps = m.unableToAssess > 0 || m.documentsUnopened.length > 0
+  // The by-severity addends, printed as an equation so the partition is checkable on screen — the
+  // same reason the worklist prints its per-row sum. UNKNOWN joins only when it is non-zero, and the
+  // whole thing reconciles to Total findings (assessMetrics guarantees sevSum === totalFindings).
+  const sevAddends = [...SEVERITIES.map((s) => m.bySeverity[s]),
+                      ...(m.bySeverity.UNKNOWN > 0 ? [m.bySeverity.UNKNOWN] : [])]
 
   return (
     <section className="panel assesssummary" style={{ borderLeft: `4px solid ${tone.bar}` }}>
+
+      {/* ── A1 · what this run was, before its numbers. The level is stated, never chosen here, and
+             the criteria count is the selected scope — the same denominator the coverage sentence
+             reads against, so "17 selected criteria" and "14 of 17 evaluated" can never disagree.
+             The timestamp arrives pre-formatted (or absent → no segment), exactly as AssessSetup's
+             discovery stamp does, so this component formats no dates of its own. ── */}
+      <div className="assesssummary-head" style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 17, fontWeight: 650 }}>Assessment results</div>
+        <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>
+          {assessedAt ? `${assessedAt} · ` : ''}WCAG 2.1 Level {level} · {m.coverageSelected} selected criteria
+        </div>
+      </div>
 
       {/* ── Status: three checkable facts, no score ─────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -166,6 +183,15 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
               <span style={{ fontSize: 11.5 }}><b>{m.bySeverity.UNKNOWN}</b> unclassified</span>
             )}
           </div>
+          {/* A6 · the partition, added up on screen. A severity breakdown with no visible sum is a
+              set of numbers a reader has to trust; printed as an equation it is one they can check
+              against Total findings in the tile beside it. Only when there is something to add. */}
+          {m.totalFindings > 0 && (
+            <div className="muted assesssummary-sevsum" style={{ fontSize: 11, marginTop: 8,
+                                                                 fontVariantNumeric: 'tabular-nums' }}>
+              {sevAddends.join(' + ')} = {m.totalFindings}
+            </div>
+          )}
         </div>
 
         <Metric label="Auto-fix available" value={m.autoFixAvailable} tone="#2F7D32">

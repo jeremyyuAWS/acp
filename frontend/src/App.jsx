@@ -32,6 +32,7 @@ import AssessFileFindings from './AssessFileFindings.jsx'
 import { inventorySnapshot } from './discoverRunTime.js'
 import AssessSummary from './AssessSummary.jsx'
 import AssessWorklist from './AssessWorklist.jsx'
+import { documentRows } from './assessMetrics.js'
 import RunDetails from './RunDetails.jsx'
 import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
@@ -430,6 +431,19 @@ export default function App() {
   // An empty config means no restriction, matching Discover's original `!== false` test — a
   // type absent from the map has never been excluded, only ones explicitly set false.
   const files = useMemo(() => visibleForFileTypes(allFiles, fileTypeConfig), [allFiles, fileTypeConfig])
+
+  // A13 · document-to-document navigation from inside a file's findings. It walks the SAME order the
+  // worklist prints — documentRows, unopened last — so "next" never disagrees with the list it came
+  // from. Only opened documents are reachable: an unopened file has no findings view to move to.
+  // Declared here, with the other hooks and above every early return, so its hook order is stable.
+  const assessNavRows = useMemo(
+    () => documentRows(files, { cap, assessment }).filter((r) => r.opened),
+    [files, cap, assessment])
+  const assessFileNext = useMemo(() => {
+    if (!assessFile) return null
+    const i = assessNavRows.findIndex((r) => r.file === assessFile.file)
+    return i >= 0 && i + 1 < assessNavRows.length ? assessNavRows[i + 1] : null
+  }, [assessNavRows, assessFile])
 
   // Real accounts that get elevated privileges on source connect (never shown in demo list)
   const PRIV_PROFILE = {
@@ -1156,13 +1170,15 @@ export default function App() {
             {assessed && resultsReady && assessFile && (
               <AssessFileFindings row={assessFile} cap={cap} assessment={assessment}
                                   onBack={() => { setAssessFile(null); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+                                  onNext={assessFileNext ? () => { setAssessFile(assessFileNext); window.scrollTo({ top: 0, behavior: 'smooth' }) } : undefined}
+                                  nextName={assessFileNext?.name}
                                   onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
             )}
             {assessed && resultsReady && runDetails && (
               <RunDetails scanId={run.id} files={files} cap={cap} assessment={assessment}
                           onBack={() => { setRunDetails(false); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
             )}
-            {assessed && resultsReady && !runDetails && !assessFile && <><AssessSummary files={files} cap={cap} assessment={assessment} onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onRunDetails={() => { setRunDetails(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><AssessWorklist files={files} cap={cap} assessment={assessment} onOpenFile={(row) => setAssessFile(row)} /><RuleBreakdown scanId={run.id} files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
+            {assessed && resultsReady && !runDetails && !assessFile && <><AssessSummary files={files} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onRunDetails={() => { setRunDetails(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><AssessWorklist files={files} cap={cap} assessment={assessment} onOpenFile={(row) => setAssessFile(row)} /><RuleBreakdown scanId={run.id} files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
           </>
         ) : placeholder)}
 

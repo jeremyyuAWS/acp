@@ -155,6 +155,22 @@ describe('App composes the Assess tab the way the board specifies', () => {
     expect(s).not.toMatch(/assessed && assessPhase === 'done' && !runDetails/)
   })
 
+  it('A13 · wires document-to-document navigation from the worklist order', () => {
+    // AssessFileFindings has always supported onNext/nextName; the Assess tab never passed them, so
+    // no cross-document nav shipped. The order must be the worklist's own — documentRows — or "next"
+    // would disagree with the list the reader came from.
+    const s = app()
+    expect(s).toMatch(/import \{ documentRows \} from '\.\/assessMetrics\.js'/)
+    expect(s, 'the nav order is not taken from documentRows').toMatch(/documentRows\(files,[\s\S]{0,60}?\.filter\(\(r\) => r\.opened\)/)
+    expect(s, 'onNext is not wired to the computed next row').toMatch(/<AssessFileFindings[\s\S]{0,400}?onNext=\{assessFileNext/)
+    expect(s).toMatch(/nextName=\{assessFileNext\?\.name\}/)
+  })
+
+  it('A1 · passes the assessed timestamp to the summary, FORMATTED', () => {
+    // Same rule as the discovery stamp below: the raw assessed_at column must never reach a screen.
+    expect(app()).toMatch(/<AssessSummary[\s\S]{0,300}?assessedAt=\{fmtStamp\(run\?\.assessed_at\)\}/)
+  })
+
   it('passes the discovery timestamp FORMATTED, never the raw column', () => {
     // This assertion previously pinned `discoveredAt={run.completed_at || null}` and passed while
     // the screen was wrong. AssessSetup interpolates the value straight into "From discovery run
