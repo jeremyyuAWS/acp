@@ -184,7 +184,8 @@ def routed(monkeypatch):
 def _seed_doc(st, doc_id="drive:t1", path="Reports/old.docx", source="drive"):
     st.upsert_document(doc_id, source=source, path=path, content_hash=None, owner=None,
                        created_at="2019-01-01T00:00:00+00:00",
-                       last_seen="2019-01-01T00:00:00+00:00", triage_score=0, triage_rationale="")
+                       last_seen="2019-01-01T00:00:00+00:00", triage_score=0, triage_rationale="",
+                       owner_email="demo")
 
 
 def _make_tag_policy(rd, name, *, requires_approval, tags=("legacy", "review")):

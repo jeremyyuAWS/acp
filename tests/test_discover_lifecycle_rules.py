@@ -38,11 +38,16 @@ def _items():
     ]
 
 
-def _policy(st, name, action, match, *, action_config=None, enabled=True):
+def _policy(st, name, action, match, *, action_config=None, enabled=True, owner="admin@x.com"):
+    """owner defaults to _discover()'s own default actor — the lifecycle evaluator now scopes
+    policies to the discovering scan's owner (the fix for "rules created by the demo account
+    can appear in your workflow"), so a policy must be OWNED BY the actor running Discover in
+    each test, not merely present in the store."""
     pid = "p-" + name
     st.create_disposition_policy(
         pid, name=name, match=json.dumps(match), action=action,
-        action_config=json.dumps(action_config or {}), requires_approval=False, enabled=enabled)
+        action_config=json.dumps(action_config or {}), requires_approval=False, enabled=enabled,
+        owner_email=owner)
     return pid
 
 
@@ -149,10 +154,10 @@ def test_delete_does_not_supersede_for_unauthorized_actor(isolated_store, monkey
     st = isolated_store
     _wire(monkeypatch, st)
     _policy(st, "a-archive", "archive",
-            [{"field": "path", "op": "prefix", "value": "/Archive/"}])
+            [{"field": "path", "op": "prefix", "value": "/Archive/"}], owner="demo")
     _policy(st, "b-delete", "delete",
             [{"field": "path", "op": "prefix", "value": "/Archive/"}],
-            action_config={"override_archive": True})
+            action_config={"override_archive": True}, owner="demo")
     _discover(user="demo")  # keyless/demo actor is not authorized for the irreversible-leaning move
     assert st.get_lifecycle_status("s1", "old.docx")["lifecycle_status"] == "Archive Candidate"
 

@@ -51,7 +51,7 @@ def _docs(st):
     ):
         st.upsert_document(doc_id, source="drive", path=path, content_hash=None, owner="demo",
                            created_at=created, last_seen="2026-08-20T00:00:00+00:00",
-                           triage_score=10, triage_rationale="seeded")
+                           triage_score=10, triage_rationale="seeded", owner_email="demo")
 
 
 FINANCE = [{"field": "parent_folder", "op": "prefix", "value": "Finance/2019"}]
@@ -104,7 +104,7 @@ def test_the_draft_count_is_the_count_the_saved_rule_produces(client):
 
     st.create_disposition_policy("p1", name="stale-finance", match=json.dumps(FINANCE),
                                  action="archive", action_config="{}", requires_approval=True,
-                                 enabled=False)
+                                 enabled=False, owner_email="demo")
     saved = c.post("/disposition/policies/p1/preview").json()
 
     assert draft["would_match"] == saved["would_match"] == 2

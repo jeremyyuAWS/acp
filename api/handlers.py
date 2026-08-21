@@ -874,7 +874,10 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
     """
     import disposition
     import uuid
-    policies = [p for p in core.store.list_disposition_policies() if p.get("enabled")]
+    # owner=actor is the fix for the reported "rules created by the demo account can appear in
+    # your workflow" defect: this was the one caller of list_disposition_policies() that already
+    # had the scan owner in scope (as `actor`) and still fetched every tenant's enabled policies.
+    policies = [p for p in core.store.list_disposition_policies(owner=actor) if p.get("enabled")]
     if not policies:
         return
     for r in core.store.list_inventory(scan_id):
@@ -922,7 +925,7 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
             core.store.add_file_tags(scan_id, file, tags, kind="system", rule_id=p["policy_id"])
             core.store.create_disposition_audit(
                 uuid.uuid4().hex, doc_id=doc_id, policy_id=p["policy_id"], action="tag",
-                result="applied", detail="tagged: " + ", ".join(tags))
+                result="applied", detail="tagged: " + ", ".join(tags), owner_email=actor)
         # ── Candidate status: archive-vs-delete precedence (PRD §6). Take the first (name-order)
         # matching rule of each kind.
         archive_p = next((p for p in matched if p.get("action") == "archive"), None)
@@ -958,7 +961,8 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
                                         rule_id=chosen["policy_id"], reason=reason)
         core.store.create_disposition_audit(
             uuid.uuid4().hex, doc_id=doc_id, policy_id=chosen["policy_id"],
-            action=chosen.get("action"), result="pending_approval", detail=reason)
+            action=chosen.get("action"), result="pending_approval", detail=reason,
+            owner_email=actor)
 
 
 def _mark_discovered(scan_id: str) -> None:

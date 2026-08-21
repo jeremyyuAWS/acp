@@ -53,12 +53,13 @@ def _seed(st, *, doc_id="sp:1", source="sharepoint", path="/Finance/old.docx"):
     st.upsert_document(doc_id, source=source, path=path, content_hash=None, owner="demo",
                        created_at="2020-01-01T00:00:00+00:00",
                        last_seen="2026-08-18T00:00:00+00:00",
-                       triage_score=10, triage_rationale="seeded")
+                       triage_score=10, triage_rationale="seeded", owner_email="demo")
     st.create_disposition_policy("p1", name="archive-stale", match=json.dumps(
         [{"field": "source", "op": "eq", "value": source}]),
-        action="archive", action_config="{}", requires_approval=True, enabled=True)
+        action="archive", action_config="{}", requires_approval=True, enabled=True,
+        owner_email="demo")
     st.create_disposition_audit("a1", doc_id=doc_id, policy_id="p1", action="archive",
-                                result="pending_approval", detail="queued")
+                                result="pending_approval", detail="queued", owner_email="demo")
     return "a1"
 
 
@@ -78,9 +79,10 @@ def test_a_queued_action_on_a_vanished_document_stays_visible(client):
     """Filtering it out would hide the one row a reviewer most needs to see before deciding."""
     c, st = client
     st.create_disposition_policy("p1", name="x", match="[]", action="archive",
-                                 action_config="{}", requires_approval=True, enabled=True)
+                                 action_config="{}", requires_approval=True, enabled=True,
+                                 owner_email="demo")
     st.create_disposition_audit("a1", doc_id="gone:1", policy_id="p1", action="archive",
-                                result="pending_approval", detail="queued")
+                                result="pending_approval", detail="queued", owner_email="demo")
     row = c.get("/disposition/approvals").json()[0]
     assert row["document_exists"] is False
     assert row["source"] is None and row["path"] is None
@@ -183,7 +185,8 @@ def test_a_deleted_rule_leaves_the_name_absent_not_faked(client):
     the fact."""
     c, st = client
     st.create_disposition_audit("a9", doc_id="sp:1", policy_id="deleted-policy",
-                                action="archive", result="applied", detail="done")
+                                action="archive", result="applied", detail="done",
+                                owner_email="demo")
     row = [r for r in c.get("/disposition/audit").json() if r["id"] == "a9"][0]
     assert row["policy_name"] is None
 
@@ -214,10 +217,11 @@ def test_the_recorded_decision_says_the_file_was_not_touched(client):
 def test_the_trail_is_newest_first_and_bounded(client):
     c, st = client
     st.create_disposition_policy("p1", name="x", match="[]", action="archive",
-                                 action_config="{}", requires_approval=True, enabled=True)
+                                 action_config="{}", requires_approval=True, enabled=True,
+                                 owner_email="demo")
     for i in range(5):
         st.create_disposition_audit(f"z{i}", doc_id="sp:1", policy_id="p1", action="archive",
-                                    result="applied", detail=f"row {i}")
+                                    result="applied", detail=f"row {i}", owner_email="demo")
     rows = c.get("/disposition/audit?limit=3").json()
     assert len(rows) == 3
 
