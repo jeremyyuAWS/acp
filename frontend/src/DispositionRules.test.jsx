@@ -128,16 +128,72 @@ describe('the existing rules list', () => {
     expect(text()).not.toContain('Matches none of the files')  // never a manufactured zero
   })
 
-  it('enables a rule through the API, and surfaces a refusal on the rule it happened to', async () => {
-    listDispositionPolicies.mockResolvedValue([RULES[1]])
+  it('disables a rule with no confirmation and no preview', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0]])   // RULES[0] is enabled
     await render(); await expand(); await flush()
+    const confirmSpy = vi.spyOn(window, 'confirm')
+    await click(byLabel('Enable rule Legacy clinical policies')); await flush()
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(previewDispositionPolicy).not.toHaveBeenCalled()
+    expect(setDispositionPolicyEnabled).toHaveBeenCalledWith('p1', false)
+    confirmSpy.mockRestore()
+  })
+
+  it('previews before enabling, names the count and percentage in the confirm, and only enables on accept', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[1]])   // RULES[1] is disabled, action=delete
+    previewDispositionPolicy.mockResolvedValue({ would_match: 41, total: 205 })
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    await render(); await expand(); await flush()
+
+    await click(byLabel('Enable rule Superseded drafts')); await flush()
+    expect(previewDispositionPolicy).toHaveBeenCalledWith('p2')
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('41 files (20% of your estate)'))
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('tagged for deletion review'))
+    expect(setDispositionPolicyEnabled).not.toHaveBeenCalled()   // declined
+
+    confirmSpy.mockReturnValue(true)
     await click(byLabel('Enable rule Superseded drafts')); await flush()
     expect(setDispositionPolicyEnabled).toHaveBeenCalledWith('p2', true)
+    confirmSpy.mockRestore()
+  })
 
+  it('adds a broad-rule warning past the stated threshold, and omits it below it', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[1]])
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    previewDispositionPolicy.mockResolvedValue({ would_match: 60, total: 100 })   // 60% — broad
+    await render(); await expand(); await flush()
+    await click(byLabel('Enable rule Superseded drafts')); await flush()
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('check the conditions are as narrow'))
+
+    confirmSpy.mockClear()
+    previewDispositionPolicy.mockResolvedValue({ would_match: 10, total: 100 })   // 10% — not broad
+    await click(byLabel('Enable rule Superseded drafts')); await flush()
+    expect(confirmSpy).toHaveBeenCalledWith(expect.not.stringContaining('check the conditions are as narrow'))
+    confirmSpy.mockRestore()
+  })
+
+  it('still offers to enable when the preview itself fails, naming the failure instead of the count', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[1]])
+    previewDispositionPolicy.mockRejectedValue(new Error('network error'))
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    await render(); await expand(); await flush()
+    await click(byLabel('Enable rule Superseded drafts')); await flush()
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Could not check how many files'))
+    expect(setDispositionPolicyEnabled).toHaveBeenCalledWith('p2', true)
+    confirmSpy.mockRestore()
+  })
+
+  it('surfaces a refusal on the rule it happened to, after confirming', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[1]])
+    previewDispositionPolicy.mockResolvedValue({ would_match: 3, total: 10 })
     setDispositionPolicyEnabled.mockRejectedValue(new Error('403: admin required'))
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    await render(); await expand(); await flush()
     await click(byLabel('Enable rule Superseded drafts')); await flush()
     const alert = container.querySelector('.lifecycle-rule [role="alert"]')
     expect(alert.textContent).toContain('Only a platform admin')
+    window.confirm.mockRestore()
   })
 
   it('duplicates a rule with the same match/action, a distinguishing name, and no id of its own', async () => {

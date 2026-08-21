@@ -39,6 +39,11 @@ import {
 // needs no server) and the real count is fetched the moment the rule exists — still disabled, so
 // "before it is enabled" is preserved.
 
+// Enabling a rule that would match at least this share of the tenant's estate gets an extra
+// warning line in the confirm dialog on top of the count. A stated line, not a backend limit —
+// it never blocks enabling, only makes an unusually broad rule harder to enable by accident.
+const BROAD_RULE_PCT = 50
+
 const line = '1px solid var(--line)'
 const inp = {
   padding: '7px 10px', border: line, borderRadius: 8, background: 'var(--surface)',
@@ -80,12 +85,43 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate }) {
   const [err, setErr] = useState('')
   const enabled = !!p.enabled
 
-  const toggle = () => {
+  const doSetEnabled = (next) => {
     setBusy(true); setErr('')
-    Promise.resolve(setDispositionPolicyEnabled(p.policy_id, !enabled))
+    Promise.resolve(setDispositionPolicyEnabled(p.policy_id, next))
       .then(() => onChanged())
       .catch((e) => setErr(refusalText(e)))
       .finally(() => setBusy(false))
+  }
+  // Disabling never needs confirmation — it only stops future tagging, nothing to undo. Enabling
+  // does: it's the moment a rule starts acting, so it previews first and asks, naming the count
+  // and the share of the estate a person is committing to — not just "are you sure?".
+  const toggle = () => {
+    if (enabled) { doSetEnabled(false); return }
+    setBusy(true); setErr('')
+    Promise.resolve(previewDispositionPolicy(p.policy_id))
+      .then((r) => {
+        const n = r?.would_match ?? null
+        const total = r?.total ?? null
+        onCount(p.policy_id, n)
+        setBusy(false)
+        if (n == null) {
+          if (window.confirm(`Enable "${p.name}"? It will start tagging matching files immediately. (Could not check how many files it would match.)`)) doSetEnabled(true)
+          return
+        }
+        const pct = total ? Math.round((n / total) * 100) : null
+        const outcome = actionSpec(p.action).outcome
+        let msg = `Enable "${p.name}"? This will ${n === 0 ? 'currently tag no files' : `tag ${n} file${n === 1 ? '' : 's'}${pct != null ? ` (${pct}% of your estate)` : ''} as ${outcome}`}, and any future match, until you disable it.`
+        // BROAD_RULE_PCT: an arbitrary but stated line, not a backend limit — half the estate is
+        // the point past which "this folder" usually stops being what a rule author meant.
+        if (pct != null && pct >= BROAD_RULE_PCT) {
+          msg += `\n\n⚠ That's ${pct}% of your estate — check the conditions are as narrow as you intended before enabling.`
+        }
+        if (window.confirm(msg)) doSetEnabled(true)
+      })
+      .catch((e) => {
+        setBusy(false)
+        if (window.confirm(`Enable "${p.name}"? (Could not check how many files it would match: ${refusalText(e)})`)) doSetEnabled(true)
+      })
   }
   const runPreview = () => {
     setBusy(true); setErr('')
