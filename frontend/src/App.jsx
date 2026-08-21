@@ -243,6 +243,19 @@ export default function App() {
   const [deltaKey, setDeltaKey] = useState(0)
   const [progress, setProgress] = useState(null)
   const [loaded, setLoaded] = useState(false)
+  // Externally-certified documents, read by Publish. NOTHING WRITES THIS ANY MORE: its only writer
+  // was the ad-hoc single-file upload panel on Discover, removed on request — and that was the
+  // app's only mount of Upload, so there is no other route to it.
+  //
+  // Kept rather than deleted. Publish consumes it and handles an empty list (`certified = []` is
+  // its default), so the effect is that externally-certified documents simply never appear there —
+  // a consequence of removing upload, not a fault. Keeping the state means restoring the panel is
+  // one commit; deleting it would widen a removal into a refactor.
+  //
+  // The SETTER is still bound because the workspace reset at `resetWorkspace` clears it along with
+  // everything else. Dropping it from this destructure made that call a ReferenceError — caught
+  // here rather than at runtime, which is the whole reason to look at who else touches a symbol
+  // before narrowing it.
   const [certifiedDocs, setCertifiedDocs] = useState([])
   const [publishedFiles, setPublishedFiles] = useState([])
   const [hasDriveToken, setHasDriveToken] = useState(() => !!sessionStorage.getItem('gd_token'))
@@ -1064,7 +1077,7 @@ export default function App() {
              it is a secondary action inside Discover now, which is where "get files in front
              of ACP" already lives. Dropping it outright would have removed the only way to try
              a single ad-hoc file without wiring a whole source. */
-          me={me} onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
+          me={me} />}
 
         {view === 'assess' && (run ? (
           <>

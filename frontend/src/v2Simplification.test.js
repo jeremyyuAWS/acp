@@ -28,12 +28,27 @@ describe('v2 simplification: removed surfaces stay removed', () => {
     expect(allow[1]).not.toContain("'upload'")
   })
 
-  it('keeps the ad-hoc file path, folded into Discover', () => {
-    // Removing the TAB must not remove the CAPABILITY — that would be a feature deletion
-    // wearing a simplification's clothes. Upload still ships, one level down.
-    expect(existsSync(join(HERE, 'Upload.jsx'))).toBe(true)
-    expect(read('Discover.jsx')).toContain("import Upload from './Upload.jsx'")
-    expect(read('Discover.jsx')).toMatch(/<Upload\b/)
+  // SUPERSEDED 2026-08-21. This case read "keeps the ad-hoc file path, folded into Discover" and
+  // asserted that Upload was still mounted there. Its reasoning was sound and is worth preserving
+  // verbatim, because it is the thing that changed rather than the thing that was wrong:
+  //
+  //     Removing the TAB must not remove the CAPABILITY — that would be a feature deletion
+  //     wearing a simplification's clothes. Upload still ships, one level down.
+  //
+  // v2 removed the Upload TAB (#151) and deliberately kept the capability one level down, as the
+  // "Assess a single file · without connecting a source" panel on Discover. On 2026-08-21 the owner
+  // asked for that panel to be removed, having been told it was the app's only mount of Upload and
+  // that removing it takes ad-hoc single-file assessment out of the product.
+  //
+  // So this is now a feature deletion, openly, rather than one wearing a simplification's clothes —
+  // which is exactly the distinction the original case existed to force. The assertion is inverted
+  // rather than deleted, so the decision stays visible and reversible.
+  //
+  // Upload.jsx is NOT deleted. discoverUploadRemoved.test.jsx records that it is mounted nowhere.
+  it('no longer offers the ad-hoc file path — removed on request, not simplified away', () => {
+    expect(existsSync(join(HERE, 'Upload.jsx')), 'the component is kept, so this is one commit to reverse').toBe(true)
+    expect(read('Discover.jsx')).not.toContain("import Upload from './Upload.jsx'")
+    expect(read('Discover.jsx')).not.toMatch(/<Upload\b/)
   })
 
   it('has no Validation coverage, Business ontology or Permissions tab in Settings', () => {

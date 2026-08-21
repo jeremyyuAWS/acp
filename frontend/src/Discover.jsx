@@ -5,7 +5,6 @@ import FileDrawer, { retentionOf } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FolderPicker from './FolderPicker.jsx'
 import SitePicker from './SitePicker.jsx'
-import Upload from './Upload.jsx'
 import DispositionRules from './DispositionRules.jsx'
 import MyScanScope from './MyScanScope.jsx'
 import { Bars } from './charts.jsx'
@@ -84,10 +83,10 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 // makes decide()/undoDec() below actually survive a reload instead of resetting on every
 // visit to this tab, and is also what feeds the campaign "resolved" counts (ADR 0003
 // Phase 4) real data instead of always reading 0.
-// `me` / `onCertified` arrive with Upload, which folded in here when v2 dropped its top-level
+// `me` arrived with Upload, which folded in here when v2 dropped its top-level
 // tab. Both OPTIONAL: every existing caller and test constructs Discover without them, and the
 // ad-hoc panel simply does not render when `me` is absent rather than throwing.
-export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null, onCertified,
+export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
   hasSPToken = false, runAt = null, run = null, scanList = null }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
   // component is given neither — Discover takes scanId and scope, not the run. The pieces it needs
@@ -410,16 +409,21 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           onClose={() => setShowSites(false)} />
       )}
 
-      {/* Upload, folded in from its own tab. Collapsed by default so it stays a secondary
-          action: the primary path is a connected source, and a permanently-open drop zone
-          would compete with it for the eye at the top of the estate view. <details> is
-          natively keyboard-operable, so this adds no focus handling of its own. */}
-      {me && (
-        <details className="panel adhocupload">
-          <summary>Assess a single file <span className="muted">· without connecting a source</span></summary>
-          <Upload me={me} onCertified={onCertified} />
-        </details>
-      )}
+      {/* REMOVED on request: the ad-hoc single-file panel that wrapped the Upload component.
+
+          Its summary text and the JSX tag are deliberately not quoted here. v2Simplification's
+          case reads this file RAW, and a comment quoting what it removed matches its own
+          protected explanation — the fifth time that shape has failed on correct code tonight.
+
+          Be clear about what that costs, because it was the ONLY mount of Upload in the app:
+          ad-hoc single-file assessment is gone from the product, not merely tidied off this
+          screen. Upload folded in here when v2 dropped its top-level tab (#151), so there is no
+          other route to it.
+
+          Upload.jsx and its tests are deliberately NOT deleted — restoring this is one commit, and
+          deleting a working capability is a bigger decision than removing a panel. It is now
+          mounted nowhere; discoverUploadRemoved.test.jsx records that so it cannot be mistaken for
+          live code. */}
 
       {/* Deva #3 — define archival/deletion rules right here in Discover. The rules run at discovery
           time and mark matched files as candidates; Assess excludes them by default. */}
