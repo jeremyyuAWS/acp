@@ -9,8 +9,10 @@
  *   - confirming in the gate is what starts the scan (the scan API is called then, not before);
  *   - cancelling the gate starts nothing.
  *
- * The scan API (startScanQueued) is stubbed to throw, so `doScan` bails immediately after calling
- * it — we assert only that it WAS or WAS NOT called, never running the real poll loop.
+ * Durable (queuedScan) is the default (2026-08-21) — see App.jsx's own comment on that useState —
+ * so a confirm from this gate takes the QUEUED path. startScanQueued is stubbed to throw, so
+ * `doScan` bails immediately after calling it — we assert only that it WAS or WAS NOT called,
+ * never running the real poll loop.
  *
  * DOM-level, not browser-level: this repo's preview server runs vite rooted at the SHARED checkout
  * whatever worktree you are in (CLAUDE.md), so a browser check would exercise code without this.
@@ -108,9 +110,10 @@ describe('the universal scan gate (App)', () => {
   it('starts the scan only when the gate is confirmed', async () => {
     const c = await mountSignedInOnDiscover()
     await click(byText(c, 'button', /Re-scan all sources/))
-    expect(startScan).not.toHaveBeenCalled()
-    // Durable is off by default and no longer togglable here, so a confirm takes the non-queued
-    // path. Three steps, so walk to the run control the way a user does.
+    expect(startScanQueued).not.toHaveBeenCalled()
+    // Durable is ON by default and no longer togglable here, so a confirm takes the queued path
+    // (App.jsx's `if (queuedScan) { startScanQueued(...) }`). Three steps, so walk to the run
+    // control the way a user does.
     //
     // Both eras of this comment were sitting here at once — "Three steps now, so walk to Start"
     // immediately above "One screen now (PRD DISC-01) — no Continue to walk". Neither was deleted
@@ -122,8 +125,9 @@ describe('the universal scan gate (App)', () => {
     expect(start.textContent).toMatch(/Run discovery/)
     await click(start)
     // Confirm dispatched the scan (source 'all' for "Re-scan all sources") and closed the gate.
-    expect(startScan).toHaveBeenCalled()
-    expect(startScan.mock.calls[0][0]).toBe('all')
+    expect(startScanQueued).toHaveBeenCalled()
+    expect(startScanQueued.mock.calls[0][0]).toBe('all')
+    expect(startScan).not.toHaveBeenCalled()
     expect(dialog(c)).toBeNull()
   })
 
