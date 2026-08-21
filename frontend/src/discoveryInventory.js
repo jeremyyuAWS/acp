@@ -116,3 +116,45 @@ export function mergeLifecycle(files, inventory) {
     return out
   })
 }
+
+/**
+ * Estate-inventory rows NOT already represented among the scanned `files` — the images, videos
+ * and unsupported-format files discovery LISTED but never opened (only the assessable formats
+ * are ever opened and scored). Synthesized into the same minimal shape a scanned row carries
+ * (`file`, `type`, `pages`, `score`) so a caller can fold them into an existing by-type/by-page
+ * breakdown and drill-down list without a second code path.
+ *
+ * `type` is the file's own extension, uppercased — the SAME derivation `ontology.js`'s
+ * `annotate()` uses for scanned rows, so an image and a docx land in the same vocabulary of bars.
+ * `pages` and `score` are always null: nothing here was ever opened, so neither exists to report.
+ *
+ * Matched against `files` by filename, the same key `mergeLifecycle` above already uses. ACP's own
+ * output (`status: 'excluded'`, stamped server-side by `_inv_capability`) is dropped — it is not
+ * the user's content and does not belong in an estate-composition count.
+ *
+ * `_estateOnly: true` flags a row so a caller can route its detail view away from `FileDrawer`
+ * (which assumes a real assessment record — rules, remediation state, evidence — that never
+ * existed for a file ACP never opened) toward a lighter view of only what discovery actually read.
+ *
+ * Returns `[]` when there is no inventory to read (a local scan, one predating the field, or a
+ * failed/partial paginated read) — never invents a row, mirroring `mergeLifecycle`'s own guard.
+ */
+export function inventoryOnlyRows(files, inventory) {
+  if (!Array.isArray(inventory?.rows)) return []
+  const known = new Set((files || []).map((f) => String(f.file)))
+  return inventory.rows
+    .filter((r) => r && r.file && !known.has(String(r.file)) && r.status !== 'excluded')
+    .map((r) => {
+      const name = String(r.file)
+      const dot = name.lastIndexOf('.')
+      return {
+        file: r.file,
+        type: dot > 0 ? name.slice(dot + 1).toUpperCase() : 'OTHER',
+        pages: null,
+        score: null,
+        _estateOnly: true,
+        _sizeKb: r.size_kb ?? null,
+        _owner: r.owner ?? null,
+      }
+    })
+}
