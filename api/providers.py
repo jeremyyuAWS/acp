@@ -184,10 +184,12 @@ class OllamaVisionProvider:
         try:
             import httpx
             b64 = base64.b64encode(image_bytes).decode("ascii")
+            import ai as _ai
             r = httpx.post(
                 f"{self.base_url}/api/generate",
                 json={"model": mdl, "prompt": prompt, "images": [b64],
                       "stream": False, "options": {"temperature": 0.2, "num_predict": 128}},
+                headers=_ai._OLLAMA_HEADERS,
                 timeout=timeout,
             )
             r.raise_for_status()

@@ -29,7 +29,7 @@ def _fake_get(script, models, seen):
     """Each call pops the next outcome: 'ok' | 'timeout' | 'connect'."""
     it = iter(script)
 
-    def get(url, timeout=None):
+    def get(url, headers=None, timeout=None):
         kind = next(it)
         seen.append((kind, timeout))
         if kind == "timeout":

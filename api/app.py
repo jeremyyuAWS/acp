@@ -176,6 +176,7 @@ def _ollama_prewarm():
                 httpx.post(f"{_ai.OLLAMA_BASE_URL}/api/generate",
                            json={"model": _ai.OLLAMA_MODEL, "prompt": " ",
                                  "keep_alive": "30m", "options": {"num_predict": 1}},
+                           headers=_ai._OLLAMA_HEADERS,
                            timeout=60)
             except Exception:
                 pass

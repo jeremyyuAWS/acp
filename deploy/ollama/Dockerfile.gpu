@@ -10,7 +10,14 @@
 # OLLAMA_MAX_LOADED_MODELS=1 (a reload per switch) or use the A100 profile (40/80GB).
 #
 # Wire the app: OLLAMA_BASE_URL=<this app's https FQDN>, OLLAMA_MODEL=llama3.1:8b,
-# OLLAMA_VISION_MODEL=llava:13b. Provisioning runbook: deploy/ollama/gpu-runbook.sh.
+# OLLAMA_VISION_MODEL=llava:13b, ACP_OLLAMA_SHARED_SECRET=<same value as this image's own>.
+# Provisioning runbook: deploy/ollama/gpu-runbook.sh.
+#
+# AUTH GATE (2026-08-21): this image no longer exposes Ollama directly. acp-ollama-gate.py sits in
+# front of it and requires X-ACP-Ollama-Secret to match ACP_OLLAMA_SHARED_SECRET on every request —
+# see that file's docstring for why (the IP-allowlist this replaces assumed a static outbound IP
+# acp-app's Consumption environment does not have). Both this app AND every caller (acp-app,
+# acp-worker) must be given the SAME secret value; the gate refuses to start at all without one.
 #
 # WHY OLLAMA_MODELS=/models AND NOT THE DEFAULT /root/.ollama:
 # The ollama/ollama base image declares `VOLUME /root/.ollama`. Under a runtime that mounts an
@@ -39,5 +46,24 @@ RUN set -e; \
     test -d /models/manifests; \
     kill $SP 2>/dev/null || true
 
-ENV OLLAMA_HOST=0.0.0.0:11434
+# ── Auth gate (interim fix, 2026-08-21) ────────────────────────────────────────────────────────
+# The ingress IP allowlist this used to rely on assumed acp-app has a static outbound IP; it does
+# not (a Consumption-plan environment draws from a large shared NAT pool), so every real request
+# was silently 403ing for days with the container itself reporting perfectly healthy the whole
+# time. Ollama now binds to 127.0.0.1 only; acp-ollama-gate.py is the only thing listening on the
+# externally-exposed port, and refuses any request without a valid X-ACP-Ollama-Secret header.
+# Placed as a NEW layer after the model bake above so ACR's build cache reuses the (large, slow)
+# model-pull layers untouched — this only rebuilds the fast layers.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
+COPY acp-ollama-gate.py /usr/local/bin/acp-ollama-gate.py
+COPY acp-start-gpu.sh /usr/local/bin/acp-start-gpu.sh
+RUN chmod +x /usr/local/bin/acp-start-gpu.sh
+
+# Ollama itself now listens only on localhost, on a non-default internal port — the gate is what
+# actually answers on 11434, which is why EXPOSE/ingress target-port needs no change on the
+# Container App side.
+ENV OLLAMA_HOST=127.0.0.1:11500
+ENV ACP_OLLAMA_UPSTREAM=http://127.0.0.1:11500
 EXPOSE 11434
+ENTRYPOINT ["/usr/local/bin/acp-start-gpu.sh"]
