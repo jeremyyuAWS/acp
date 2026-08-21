@@ -17,11 +17,13 @@ const listDispositionPolicies = vi.fn()
 const createDispositionPolicy = vi.fn()
 const setDispositionPolicyEnabled = vi.fn()
 const previewDispositionPolicy = vi.fn()
+const deleteDispositionPolicy = vi.fn()
 vi.mock('./api.js', () => ({
   listDispositionPolicies: (...a) => listDispositionPolicies(...a),
   createDispositionPolicy: (...a) => createDispositionPolicy(...a),
   setDispositionPolicyEnabled: (...a) => setDispositionPolicyEnabled(...a),
   previewDispositionPolicy: (...a) => previewDispositionPolicy(...a),
+  deleteDispositionPolicy: (...a) => deleteDispositionPolicy(...a),
 }))
 
 const { default: DispositionRules } = await import('./DispositionRules.jsx')
@@ -33,6 +35,7 @@ beforeEach(() => {
   createDispositionPolicy.mockReset().mockResolvedValue({ policy_id: 'new1' })
   setDispositionPolicyEnabled.mockReset().mockResolvedValue({})
   previewDispositionPolicy.mockReset().mockResolvedValue({ would_match: 0 })
+  deleteDispositionPolicy.mockReset().mockResolvedValue({ deleted: 'p1' })
   ;({ container, root } = createTestRoot())
 })
 
@@ -135,6 +138,40 @@ describe('the existing rules list', () => {
     await click(byLabel('Enable rule Superseded drafts')); await flush()
     const alert = container.querySelector('.lifecycle-rule [role="alert"]')
     expect(alert.textContent).toContain('Only a platform admin')
+  })
+
+  it('duplicates a rule with the same match/action, a distinguishing name, and no id of its own', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0]])
+    await render(); await expand(); await flush()
+    await click(btnByText('Duplicate')); await flush()
+    expect(createDispositionPolicy).toHaveBeenCalledWith(
+      'Legacy clinical policies (copy)', JSON.parse(RULES[0].match), 'archive', {}, false)
+    // The duplicate is previewed like any freshly created rule — not executed, not enabled.
+    expect(previewDispositionPolicy).toHaveBeenCalledWith('new1')
+  })
+
+  it('confirms before deleting, and only deletes on confirmation', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[1]])
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    await render(); await expand(); await flush()
+    await click(byLabel('Delete rule Superseded drafts')); await flush()
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(deleteDispositionPolicy).not.toHaveBeenCalled()
+
+    confirmSpy.mockReturnValue(true)
+    await click(byLabel('Delete rule Superseded drafts')); await flush()
+    expect(deleteDispositionPolicy).toHaveBeenCalledWith('p2')
+    confirmSpy.mockRestore()
+  })
+
+  it('surfaces the history guard when deleting a rule that has already run', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[1]])
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    deleteDispositionPolicy.mockRejectedValue(new Error("409: this rule has already run"))
+    await render(); await expand(); await flush()
+    await click(byLabel('Delete rule Superseded drafts')); await flush()
+    const alert = container.querySelector('.lifecycle-rule [role="alert"]')
+    expect(alert.textContent).toContain('already run')
   })
 })
 

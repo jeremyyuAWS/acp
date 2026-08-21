@@ -355,6 +355,35 @@ def update_policy(policy_id: str, body: PolicyUpdate, request: Request):
     return core.store.get_disposition_policy(policy_id, owner=owner)
 
 
+@router.delete("/disposition/policies/{policy_id}")
+def delete_policy(policy_id: str, request: Request):
+    """Remove a rule outright — the counterpart to update_policy's edit-after-history guard.
+
+    Same rule, same reason: a policy with ANY disposition_audit history is refused with 409
+    instead of deleted. Its audit rows and any scan_inventory.lifecycle_rule_id pointing at it
+    would otherwise name a policy_id nothing can look up — "matched rule p-a1b2c3" with no rule
+    left to show for it is worse for an auditor than a rule that stays around disabled. A rule
+    with no history has nothing pointing at it, so deleting it loses nothing on record.
+
+    The UI's answer to "I don't want this rule that already ran" is the same one update_policy's
+    409 message gives for editing one: disable it (PUT .../enabled) and leave it be, or create a
+    replacement. Deletion is for a rule that was never armed, never matched anything, and is
+    simply wrong.
+    """
+    _require_admin(request)
+    owner = _owner(request)
+    policy = core.store.get_disposition_policy(policy_id, owner=owner)
+    if policy is None:
+        raise HTTPException(404, "policy not found")
+    if _policy_has_history(policy_id, owner):
+        raise HTTPException(409,
+            "this rule has already run and has audit history — it can't be deleted, only "
+            "disabled. Disable it (it will stop tagging new files) and its history stays intact.")
+    core.store.delete_disposition_policy(policy_id)
+    core.store.log_decision(owner, "disposition.policy_deleted", detail=policy.get("name"))
+    return {"deleted": policy_id}
+
+
 @router.post("/disposition/policies/{policy_id}/execute")
 def execute_policy(policy_id: str, request: Request):
     """Run an ENABLED policy for real. requires_approval matches queue as

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   listDispositionPolicies, createDispositionPolicy, setDispositionPolicyEnabled, previewDispositionPolicy,
+  deleteDispositionPolicy,
 } from './api.js'
 import {
   ACTIONS, CONDITIONS, LIFECYCLE_ACTIONS, actionSpec, draftProblem, draftToMatch, emptyDraft,
@@ -74,7 +75,7 @@ function ActionTag({ action }) {
   )
 }
 
-function RuleRow({ p, count, onCount, onChanged }) {
+function RuleRow({ p, count, onCount, onChanged, onDuplicate }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const enabled = !!p.enabled
@@ -95,6 +96,23 @@ function RuleRow({ p, count, onCount, onChanged }) {
       .catch((e) => setErr(refusalText(e)))
       .finally(() => setBusy(false))
   }
+  // Only a rule with zero disposition_audit history can be deleted (mirrors the backend's
+  // edit-after-history guard) — the route 409s and refusalText surfaces its message rather than
+  // this button trying to predict history client-side and getting it wrong.
+  const remove = () => {
+    if (!window.confirm(`Delete "${p.name}"? This can't be undone.`)) return
+    setBusy(true); setErr('')
+    Promise.resolve(deleteDispositionPolicy(p.policy_id))
+      .then(() => onChanged())
+      .catch((e) => setErr(refusalText(e)))
+      .finally(() => setBusy(false))
+  }
+  const duplicate = () => {
+    setBusy(true); setErr('')
+    Promise.resolve(onDuplicate(p))
+      .catch((e) => setErr(refusalText(e)))
+      .finally(() => setBusy(false))
+  }
 
   return (
     <div className="lifecycle-rule" style={{ border: line, borderRadius: 11, padding: '13px 15px', marginBottom: 10 }}>
@@ -106,6 +124,9 @@ function RuleRow({ p, count, onCount, onChanged }) {
         <span className="muted" style={{ fontSize: 12 }}>{enabled ? 'Enabled' : 'Disabled — tags nothing yet'}</span>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           <button className="ghost small" onClick={runPreview} disabled={busy}>Preview matches</button>
+          <button className="ghost small" onClick={duplicate} disabled={busy}>Duplicate</button>
+          <button className="ghost small" onClick={remove} disabled={busy}
+                  aria-label={`Delete rule ${p.name}`}>Delete</button>
         </span>
       </div>
       <RuleSentence match={p.match} action={p.action} count={count} />
@@ -250,6 +271,17 @@ export default function DispositionRules({ embedded = false }) {
       .catch(() => { /* the count stays unasked rather than becoming a zero */ })
   }, [load, setCount])
 
+  // Duplicate = create a new rule with the same match/action/approval, a distinguishing name, and
+  // no backend route of its own — createDispositionPolicy already makes it disabled, so a
+  // duplicate starts exactly as safe as any new rule does.
+  const onDuplicate = useCallback((p) => {
+    const match = JSON.parse(p.match || '[]')
+    const actionConfig = JSON.parse(p.action_config || '{}')
+    return Promise.resolve(
+      createDispositionPolicy(`${p.name} (copy)`, match, p.action, actionConfig, !!p.requires_approval)
+    ).then((created) => onCreated(created && created.policy_id ? created.policy_id : null))
+  }, [onCreated])
+
   const enabledCount = rules == null ? null : rules.filter((p) => p.enabled).length
 
   return (
@@ -288,7 +320,7 @@ export default function DispositionRules({ embedded = false }) {
               </p>
             : rules.map((p) => (
                 <RuleRow key={p.policy_id} p={p} count={counts[p.policy_id] ?? null}
-                         onCount={setCount} onChanged={load} />
+                         onCount={setCount} onChanged={load} onDuplicate={onDuplicate} />
               )))}
 
           <NewRule onCreated={onCreated} />

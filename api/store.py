@@ -4938,6 +4938,16 @@ class Store:
             self._db.execute(cur, "UPDATE disposition_policy SET enabled=%s WHERE policy_id=%s",
                              (int(enabled), policy_id))
 
+    def delete_disposition_policy(self, policy_id: str) -> None:
+        """Remove a rule's row outright. The caller (routes/disposition.delete_policy) is the
+        policy: a rule with any disposition_audit history is refused before this is ever called,
+        the same guard update_disposition_policy's caller applies to a definition change — a
+        deleted policy_id would otherwise leave audit rows and scan_inventory.lifecycle_rule_id
+        references naming a rule that no longer exists to explain itself. A rule with no history
+        has nothing pointing at it, so removing the row loses nothing an auditor would look for."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "DELETE FROM disposition_policy WHERE policy_id=%s", (policy_id,))
+
     def update_disposition_policy(self, policy_id: str, *, name: str, match: str, action: str,
                                   action_config: str, requires_approval: bool) -> None:
         """Overwrite a saved rule's editable columns. NEVER touches `enabled`.
