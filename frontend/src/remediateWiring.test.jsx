@@ -167,3 +167,20 @@ describe('R1 (board 9) — the hero names which assessment this backlog is from'
     expect(app).toMatch(/<Remediate[\s\S]{0,700}?assessedAt=\{fmtStamp\(run\?\.assessed_at\)\}/)
   })
 })
+
+describe('R15 (board 10) — undo an applied fix, mounted only for an auto-applied row', () => {
+  const rem = () => code('Remediate.jsx')
+
+  it('imports UndoFix', () => {
+    expect(rem()).toMatch(/import UndoFix from '\.\/UndoFix\.jsx'/)
+  })
+
+  it('mounts UndoFix in the detail pane, guarded on sel.autoApplied', () => {
+    // A drafted-AI or manually-authored finding was never something ACP applied on its own — the
+    // guard is what keeps this from offering an "undo" that has nothing to undo.
+    const s = rem()
+    expect(s).toMatch(/sel\.autoApplied && \([\s\S]{0,200}?<UndoFix\b/)
+    expect(s).toMatch(/<UndoFix[\s\S]{0,200}?ruleId=\{sel\.ruleId\}/)
+    expect(s).toMatch(/<UndoFix[\s\S]{0,200}?onUndone=\{onRefresh\}/)
+  })
+})

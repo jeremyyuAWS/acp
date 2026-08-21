@@ -901,6 +901,28 @@ def scan_ai_calls(sid: str, request: Request):
     return core.store.list_ai_calls(sid)
 
 
+@router.post("/scans/{sid}/files/{filename:path}/undo-fix")
+async def undo_fix(sid: str, filename: str, request: Request):
+    """R15 — undo one deterministic fix ACP claims to have applied to this file.
+
+    Body: {"rule_id": "1.1.1"}. There is no file to restore: remediation only ever produces a
+    SEPARATE corrected copy (ensure_remediated_folder), never overwriting the source, so this
+    cannot mean 'put the bytes back' — it means ACP stops claiming the finding is fixed. See
+    store.undo_applied_fix for exactly what that clears. Owner-scoped like every other
+    remediation route; 404s the same way as an unknown/foreign scan, 400 for a missing rule_id."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    rule_id = str(body.get("rule_id") or "").strip()
+    if not rule_id:
+        raise HTTPException(400, "rule_id required")
+    undone = core.store.undo_applied_fix(sid, filename, rule_id)
+    return {"undone": undone}
+
+
 @router.get("/scans/{sid}/files/{filename:path}/remediation-diffs")
 def file_remediation_diffs(sid: str, filename: str, request: Request):
     """Per-fix before→after evidence for one file — the original text/markup and the

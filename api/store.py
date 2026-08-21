@@ -2562,6 +2562,38 @@ class Store:
             "by_format": _bucket(rows, lambda r: (r.get("file") or "").rsplit(".", 1)[-1].lower() if "." in (r.get("file") or "") else None),
         }
 
+    def undo_applied_fix(self, scan_id: str, file: str, rule_id: str) -> bool:
+        """R15 — undo ONE deterministic fix ACP claims to have applied.
+
+        There is nothing to restore on the document: remediation never modifies the source, it
+        only ever produces a separate corrected copy (ensure_remediated_folder / Blob), so
+        'undo' cannot mean 'put the file back' — the file was never touched. It means ACP stops
+        CLAIMING this finding is fixed. Both places that claim are cleared:
+
+          - applied_fixes: the older, alt-text-only evidence table (autoFixRows' fallback source)
+          - remediation_diff: the newer, all-fix-types before/after evidence table (autoFixRows'
+            primary source when populated — record_remediation_diffs REPLACES the whole (scan,
+            file) set on every remediate_file run, so this deletion is a snapshot edit, not a
+            log entry; if the file is remediated again later, a still-fixable finding is fixed
+            again like any other, which is the correct behaviour, not a resurrection bug)
+
+        Once neither table claims the fix, isResolved() (remediationInboxModel.js) has nothing
+        to key on for that (file, rule_id) and the finding falls back to whatever state its
+        underlying assessment issue is actually in — reappearing in the worklist exactly as if
+        the fix had never run. Returns True if either table actually had a row to remove, so the
+        caller can tell 'undone' from 'nothing was applied here to begin with'.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "DELETE FROM applied_fixes WHERE scan_id=%s AND file=%s AND rule_id=%s",
+                (scan_id, file, rule_id))
+            n1 = cur.rowcount
+            self._db.execute(cur,
+                "DELETE FROM remediation_diff WHERE scan_id=%s AND file=%s AND rule_id=%s",
+                (scan_id, file, rule_id))
+            n2 = cur.rowcount
+        return bool((n1 or 0) + (n2 or 0))
+
     def get_remediation_diffs(self, scan_id: str, file: str) -> list[dict]:
         """The before→after evidence for one file, ordered by SC then application order —
         what the certification PDF's 'Before → After' section renders."""

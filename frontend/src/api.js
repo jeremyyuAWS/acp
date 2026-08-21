@@ -333,6 +333,17 @@ export const getFileRemediationDiffs = (scanId, file) => {
 // SIM has no engine, so it serves fixtures — but only once the demo has actually run
 // remediation (_simRemed.total). Returning them unconditionally would open the Remediation
 // view already claiming "N issues fixed automatically" and marking the step done.
+// R15 · undo one deterministic fix ACP claims to have applied. There is nothing to restore on the
+// document — remediation only ever produces a separate corrected copy, never overwriting the
+// source — so this clears ACP's OWN evidence that the finding is fixed; the underlying assessment
+// issue reappears in the worklist as if the fix had never run. SIM: optimistic, matching every
+// other write in this module — there is no real store to mutate in demo mode.
+export const undoAppliedFix = (scanId, file, ruleId) => (SIM
+  ? sim({ undone: true })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/undo-fix`,
+          { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ rule_id: ruleId }) }).then(j))
+
 export const getScanRemediationDiffs = (scanId) => {
   if (SIM) return sim(_simRemed.total ? simRemediationDiffs() : [])
   if (!scanId) return sim([])
