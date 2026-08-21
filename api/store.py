@@ -451,6 +451,13 @@ _SCHEMA = [
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS owner TEXT",
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS parent_folder TEXT",
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS discovered_at TEXT",
+    # SharePoint's Content Type name, best-effort and SharePoint-only — None for every other
+    # source and None whenever the tenant did not return one (scanner._sp_enrich_content_types).
+    # The one field of "read SharePoint-native metadata as a rule input" (docs/sharepoint-gaps.md)
+    # this build is confident enough to ship UNVERIFIED against a live tenant: `fields.ContentType`
+    # is the standard column every SharePoint list item carries. Additive, source-metadata only —
+    # no file opened, same ADR 0020 discipline as every other inventory column.
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS content_type TEXT",
     # The Graph DRIVE the item was listed from. Graph item ids are unique only WITHIN a drive, so
     # `drive_file_id` alone does not identify a SharePoint item — asking /me/drive for a site's
     # item id 404s or, worse, returns a different document with the same id (scanner._sp_download).
@@ -982,16 +989,22 @@ class Store:
             for it in items:
                 self._db.execute(cur,
                     "INSERT INTO scan_inventory(scan_id,file,drive_file_id,mime,size_kb,doc_class,"
-                    "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at,drive_id) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
+                    "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
+                    "content_type) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
                     "drive_file_id=EXCLUDED.drive_file_id, mime=EXCLUDED.mime, size_kb=EXCLUDED.size_kb, "
                     "doc_class=EXCLUDED.doc_class, checksum=EXCLUDED.checksum, path=EXCLUDED.path, "
                     "created_at=EXCLUDED.created_at, source_modified=EXCLUDED.source_modified, "
-                    "owner=EXCLUDED.owner, parent_folder=EXCLUDED.parent_folder, drive_id=EXCLUDED.drive_id",
+                    "owner=EXCLUDED.owner, parent_folder=EXCLUDED.parent_folder, drive_id=EXCLUDED.drive_id, "
+                    # COALESCE, not overwrite: a re-list that got no content type this time (a
+                    # transient enrichment failure) must not blank out one recorded on a PRIOR
+                    # list of the same file — that would be a real answer thrown away for a gap.
+                    "content_type=COALESCE(EXCLUDED.content_type, scan_inventory.content_type)",
                     (scan_id, it.get("file"), it.get("drive_file_id"), it.get("mime"),
                      it.get("size_kb"), it.get("doc_class"), it.get("checksum"), it.get("path"),
                      it.get("created_at"), it.get("source_modified"), it.get("owner"),
-                     it.get("parent_folder"), it.get("discovered_at") or now, it.get("drive_id")))
+                     it.get("parent_folder"), it.get("discovered_at") or now, it.get("drive_id"),
+                     it.get("content_type")))
 
     def mark_discovery_complete(self, scan_id: str, at: str | None = None) -> str | None:
         """Stamp WHEN this run's discovery finished — the instant its inventory describes.
@@ -1049,7 +1062,8 @@ class Store:
 
     _INV_COLS = ("scan_id,file,drive_file_id,mime,size_kb,doc_class,checksum,path,"
                  "created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
-                 "lifecycle_status,lifecycle_rule_id,lifecycle_reason,exclusion_reason")
+                 "lifecycle_status,lifecycle_rule_id,lifecycle_reason,exclusion_reason,"
+                 "content_type")
 
     def list_inventory(self, scan_id: str) -> list[dict]:
         with self._db.cursor() as cur:

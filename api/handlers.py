@@ -1069,7 +1069,12 @@ def _scan_discover(payload: dict, job: dict) -> None:
              "source_modified": it.get("source_modified"),
              "source_mime": it.get("source_mime"), "created_at": it.get("created_at"),
              "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
-             "size_kb": it.get("size_kb")} for it in items]
+             "size_kb": it.get("size_kb"),
+             # SharePoint's Content Type name, best-effort (_sp_enrich_content_types). None for
+             # every other source, and None here whenever the tenant did not return one — never
+             # invented. See classificationData.js on the frontend for why absence must stay
+             # absence all the way through this pipeline.
+             "content_type": it.get("content_type")} for it in items]
     if defer:
         # ADR 0020 stage 3/4 — Discover LISTS only: classify from metadata (no file opened),
         # persist the inventory + the scan-level params, and STOP. The estate is browsable in
@@ -1090,7 +1095,8 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 # Carried into the row because Assess rebuilds its download work from the
                 # INVENTORY, not from `norm` — so anything the download needs has to survive
                 # the round trip through the table.
-                "drive_id": it.get("drive_id")}
+                "drive_id": it.get("drive_id"),
+                "content_type": it.get("content_type")}
                for it in norm] + inventory
         _dedupe_inventory_files(inv)
         if inv:

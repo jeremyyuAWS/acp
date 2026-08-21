@@ -3,6 +3,7 @@ import {
   NOT_RECORDED, acknowledgementSummary, estateSummary, plural,
   recommendationReconciliation, recommendationRows, typeReconciliation, unreadableReasons,
 } from './discoveryRecommendations.js'
+import { contentTypeBreakdown } from './contentTypeBreakdown.js'
 
 // The Discovery results screen (approved design board `DiscoverResults.dc.html`).
 //
@@ -127,6 +128,9 @@ export default function DiscoveryResults({
   if (!summary) return null
 
   const types = typeReconciliation(files)
+  // null on every source but SharePoint today, and null there too unless the tenant actually
+  // returned a content type — see contentTypeBreakdown.js for why that is the honest default.
+  const contentTypes = contentTypeBreakdown(files)
   const unread = unreadableReasons(files, reasonOf)
   // Buckets whose RECORDED message names a transport/HTTP failure. Derived from the log, not
   // from the fact that a file failed — a scan with no such messages gets no clause at all.
@@ -259,6 +263,33 @@ export default function DiscoveryResults({
             <p className="muted" style={{ fontSize: 11.5, margin: '12px 0 0', lineHeight: 1.5 }}>
               Grey types are inventoried but carry no WCAG test. They stay visible here rather than
               disappearing — unsupported is not the same as passed.
+            </p>
+          </div>
+        )}
+
+        {/* Absent on every source but SharePoint, and absent there too unless the tenant actually
+            returned a content type — this is a real column an operator's library may or may not
+            use, not the department/tag classification the panel above the KPI row already speaks
+            to honestly. See contentTypeBreakdown.js. */}
+        {contentTypes && (
+          <div className="panel" style={{ flex: '1 1 380px' }}>
+            <h2>BY CONTENT TYPE <span className="muted" style={{ fontWeight: 400 }}>· from SharePoint</span></h2>
+            {contentTypes.buckets.map((b) => (
+              <div className="critrow" key={b.key} style={{ gridTemplateColumns: '160px 1fr 56px' }}>
+                <span className="critlabel" style={{ fontSize: 13, color: b.known ? undefined : 'var(--muted)' }}>
+                  {b.label}
+                </span>
+                <span className="track">
+                  <i style={{ width: `${(b.count / Math.max(1, ...contentTypes.buckets.map((x) => x.count))) * 100}%`,
+                              background: b.known ? BAR_COLOR.assessable : BAR_COLOR.other }} />
+                </span>
+                <span style={{ textAlign: 'right', fontSize: 13 }}>{b.count.toLocaleString()}</span>
+              </div>
+            ))}
+            <p className="muted" style={{ fontSize: 11.5, margin: '12px 0 0', lineHeight: 1.5 }}>
+              Read from the source's own SharePoint Content Type column, where the library uses
+              one. Not every file will carry one — that is the source's answer, not a gap in the
+              scan.
             </p>
           </div>
         )}
