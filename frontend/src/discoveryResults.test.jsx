@@ -94,6 +94,27 @@ describe('the estate summary and its reconciliations add up on screen', () => {
     expect(text()).toMatch(/Total/)
   })
 
+  it('by-file-type reads the whole estate listing when an inventory is present, not just the scanned rows', async () => {
+    // The scanned rows (ESTATE) hold 5 docx/pdf and 1 png — but a real estate this size might hold
+    // thousands of images that were never opened at all. Once an inventory carries by_format, the
+    // panel must show THAT population, not the 6-row scanned one, or the estate reads as
+    // document-only when it is not (found 2026-08-21).
+    await render({ files: ESTATE, inventory: { discovered: 9006, by_format: { docx: 2, pdf: 1, image: 9000, other: 3 } } })
+    expect(text()).toContain('the whole estate listing')
+    const rows = [...container.querySelectorAll('.critrow')]
+    const counts = rows.map((r) => Number(r.lastElementChild.textContent.replace(/,/g, '')))
+    expect(counts.reduce((a, b) => a + b, 0)).toBe(9006)
+    const imageRow = rows.find((r) => r.firstElementChild.textContent === 'Images')
+    expect(imageRow.lastElementChild.textContent).toBe('9,000')
+  })
+
+  it('by-file-type falls back to the scanned rows when there is no inventory to read', async () => {
+    await render({ files: ESTATE, inventory: { discovered: 12408 } })   // no by_format
+    const rows = [...container.querySelectorAll('.critrow')]
+    const counts = rows.map((r) => Number(r.lastElementChild.textContent.replace(/,/g, '')))
+    expect(counts.reduce((a, b) => a + b, 0)).toBe(ESTATE.length)
+  })
+
   it('shows every discovered file landing in exactly one bucket, with the sum visible', async () => {
     await render({ files: ESTATE })
     expect(text()).toContain('EVERY DISCOVERED FILE, IN ONE BUCKET')
