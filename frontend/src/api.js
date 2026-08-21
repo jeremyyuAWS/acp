@@ -1013,6 +1013,13 @@ export const setDispositionPolicyEnabled = (policyId, enabled) => (SIM
       return p
     })())
   : fetch(`${BASE}/disposition/policies/${encodeURIComponent(policyId)}/enabled?enabled=${enabled}`, { method: 'PUT', headers: headers() }).then(j))
+export const deleteDispositionPolicy = (policyId) => (SIM
+  ? sim((() => {
+      const i = _simDisp.policies.findIndex((x) => x.policy_id === policyId)
+      if (i >= 0) _simDisp.policies.splice(i, 1)
+      return { deleted: policyId }
+    })())
+  : fetch(`${BASE}/disposition/policies/${encodeURIComponent(policyId)}`, { method: 'DELETE', headers: headers() }).then(j))
 export const previewDispositionPolicy = (policyId) => (SIM
   ? sim({ policy_id: policyId, would_match: 3, documents: [
       { doc_id: 'drive:sim1', path: 'HR Handbook 2019.pdf', department: 'HR', age_days: 1460 },
