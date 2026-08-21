@@ -1330,6 +1330,31 @@ existing data and the existing decision path; nothing adds a second write path.
   (#560) and the mounting step rendered it in the live tab (`Remediate.jsx:947`). Filed #568 with the
   line-level evidence; the removal drops the import + render and deletes the module/model/tests (keeping R7),
   with the two shared source-sweep tests trimmed. A dropped decision, un-shipped. Frontend; not RULE_PATHS.
+- **R18 — comments on a finding** (#573). A judgement call that two people disagree about should live
+  *next to the finding*, not in a chat nobody reading it later can see. Adds an append-only discussion
+  thread anchored to one finding (scan × file × criterion × instance) via a new `finding_comments` table
+  and owner-scoped `GET`/`POST /scans/{sid}/comments` — the author is stamped server-side, never from the
+  request body, so a comment can't be misattributed. The UI is a new `FindingComments` component mounted
+  through the existing `renderDetailExtra` render-prop (the same additive one-line pattern as
+  `DocumentAudit`), so the inbox model and apply/assignee flow are untouched. Honest states: nothing
+  renders before the fetch answers, and the empty state says the thread is empty, not that the finding is
+  uncontested. Table registered in `_ANALYTICS_TABLES` (reset-completeness). 7 backend + 5 frontend tests.
+  Backend + frontend; not RULE_PATHS.
+- **R19 — due dates on a document** (#586). The deadline half of "who does this, by when" — the sibling of
+  the R17 assignee axis. A due date rides the same generic per-file `scan_decisions` store (`kind='due_date'`),
+  so it is owner-scoped for free, one date per document, and needs **no new persistence**: the two decision
+  routes just widen their allow-list, and `assessment_policy.due_dates()` / `overdue_files(decisions, today)`
+  read it (overdue is strictly-before-today, correct for `YYYY-MM-DD` and full timestamps; due-today is not
+  overdue). New self-contained `DueDate` component mounted via the same `renderDetailExtra` prop (reuses
+  `saveDecision`, so `api.js` is untouched); shows an Overdue badge and — honoring the design's own caution
+  that "a due date with no owner is a decoration" — warns when a deadline is set on an unowned document. A
+  list-level overdue badge on inbox rows was deliberately deferred (belongs in the hot inbox the pipeline is
+  rewriting; `overdue_files()` is the backend it will use). 7 backend + 7 frontend tests. `assessment_policy.py`
+  is under RULE_PATHS (it holds the lane tables) but the change adds only workflow helpers, so the commit
+  carries `Matrix-Note: none`. Backend + frontend.
+- **R16 — fix-critical-first: found already shipped, not rebuilt.** `remediationInboxModel.sortQueue`'s default
+  `priority` sort already orders by `SEV_RANK` (critical → serious → moderate → minor), then lane, then id, and
+  the inbox defaults to it — so the backlog item was satisfied. Recorded here rather than duplicated.
 
 ## Feature: Estate coverage — three denominators and discovery at scale · #4597
 
@@ -2585,3 +2610,13 @@ real extracted content, degrading to the generic note, never a fabricated tree.
   fixes. Policy items R22/R23/R24 settled (not built) per Jeremy. **Sync marker deliberately NOT advanced**
   (same convention): most of this is the bot pipeline's + other sessions' work, logged here for intake, not
   claimed.
+- **2026-08-21 (Remediation redesign — R18, R19, R16)** — Added two shipped slices to **Remediate review
+  queue (#4598)**: **R18 comments on a finding** (#573) and **R19 due dates on a document** (#586), both built
+  as self-contained components mounted through the existing `renderDetailExtra` render-prop so the hot inbox
+  the claude[bot] pipeline is actively rewriting stayed untouched — the collision-avoidance strategy the whole
+  redesign push has used. R18 adds a new `finding_comments` table + owner-scoped routes; R19 reuses the
+  R17 assignee decision axis with a new `kind='due_date'` (no new persistence). Also recorded that **R16
+  fix-critical-first was already shipped** (the inbox's default `priority` sort is severity-first) and so was
+  not rebuilt. Remaining R-series item: **R15 undo-a-batch** (touches the apply flow; feasibility being scoped).
+  Per the new working agreement (#583) CI was not polled — merges gated on a single delayed check per PR.
+  **Sync marker deliberately NOT advanced** (same convention).
