@@ -39,15 +39,19 @@ describe('one reset, used by every path that changes the active scan', () => {
     }
   })
 
-  it('all six call sites use it', () => {
-    // sign-in, time-travel (switchScan), a new scan (doScan), reconnect, and the two branches of
-    // the acp:scan-unavailable recovery (opening a different scan, and clearing the dead one when
-    // the user has none of their own — both change the active scan, so both must reset). The
-    // definition reads `const resetScanScopedState = () => {`, so it does not match this pattern
-    // — every hit is a call. A path appearing WITHOUT one is the drift this exists to stop; a new
-    // path appearing WITH one is the rule being followed, so bump the count and name it here.
+  it('all seven call sites use it', () => {
+    // sign-in, time-travel (switchScan), a new scan (doScan), reconnect (reconnectScan), reconnect
+    // to a pending default-path JOB after a reload (reconnectJob — added alongside reconnectScan
+    // because the default path has no scan_runs row for getActiveScan to find until its crawl
+    // finishes, so it needed its OWN reconnect path via sessionStorage's active_job_id), and the
+    // two branches of the acp:scan-unavailable recovery (opening a different scan, and clearing
+    // the dead one when the user has none of their own — both change the active scan, so both
+    // must reset). The definition reads `const resetScanScopedState = () => {`, so it does not
+    // match this pattern — every hit is a call. A path appearing WITHOUT one is the drift this
+    // exists to stop; a new path appearing WITH one is the rule being followed, so bump the count
+    // and name it here.
     const calls = code.match(/resetScanScopedState\(\)/g) || []
-    expect(calls.length).toBe(6)
+    expect(calls.length).toBe(7)
   })
 
   it('the scan-unavailable recovery resets too — it changes the active scan', () => {
@@ -75,6 +79,12 @@ describe('one reset, used by every path that changes the active scan', () => {
     const rc = code.match(/const reconnectScan = async[\s\S]*?\n  \}\n/)
     expect(rc).toBeTruthy()
     expect(rc[0]).toContain('resetScanScopedState()')
+  })
+
+  it('reconnecting a pending default-path job resets too', () => {
+    const rj = code.match(/const reconnectJob = async[\s\S]*?\n  \}\n/)
+    expect(rj).toBeTruthy()
+    expect(rj[0]).toContain('resetScanScopedState()')
   })
 })
 

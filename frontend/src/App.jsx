@@ -429,8 +429,14 @@ export default function App() {
         // Default to the newest NON-collapsed scan, not blindly the newest: a degenerate small
         // scan on top would otherwise make every view show a shrunken estate (see defaultScan.js).
         setScanList(l); const d = pickDefaultScan(l); if (d) setScan(await getScan(d.id))
-        // If a scan is still running (e.g. user reloaded mid-scan), resume tracking it.
-        try { const a = await getActiveScan(); if (a && a.id) reconnectScan(a.id) } catch { /* ignore */ }
+        // If a scan is still running (e.g. user reloaded mid-scan), resume tracking it. The
+        // default-path job is checked FIRST: it can be mid-crawl with no scan_runs row at all
+        // (see ACTIVE_JOB_KEY above), a window getActiveScan() cannot see into, so a pending job
+        // and an active scan_runs row are never both real at once — no double-reconnect risk.
+        const pendingJobId = sessionStorage.getItem(ACTIVE_JOB_KEY)
+        if (pendingJobId) { reconnectJob(pendingJobId) } else {
+          try { const a = await getActiveScan(); if (a && a.id) reconnectScan(a.id) } catch { /* ignore */ }
+        }
       })
       .catch(() => {})
       .finally(() => setLoaded(true))
@@ -685,6 +691,54 @@ export default function App() {
   // only the Sources tab reached it. (`pendingScan` state is declared with the other hooks above.)
   const requestScan = (source, folder = null) => setPendingScan({ source, folder })
 
+  // The DEFAULT (session-scoped, non-durable) scan path has no scan_runs row until AFTER its
+  // crawl finishes — _scan_discover creates it partway through its own function body, well past
+  // the point _list() has already spent however long the source's estate takes to walk. So
+  // getActiveScan() (below) cannot see a scan in that window at all: reload the tab mid-crawl and
+  // the screen shows nothing running, no error, nothing — the same invisibility #607 fixed for a
+  // job whose replica died, still present for the ordinary case of a plain reload.
+  //
+  // ACTIVE_JOB_KEY is what survives the reload instead: sessionStorage (not state, which a reload
+  // wipes), holding the one thing the poll actually needs — job_id — set the moment a job starts
+  // and cleared the moment it resolves, success or failure alike, so a finished job is never
+  // "reconnected" to on a later reload.
+  const ACTIVE_JOB_KEY = 'active_job_id'
+
+  const pollScanJob = async (job_id) => {
+    sessionStorage.setItem(ACTIVE_JOB_KEY, job_id)
+    try {
+      let job
+      do {
+        await new Promise((r) => setTimeout(r, 350))
+        job = await getJob(job_id)
+        setProgress(job)
+      } while (!job.done)
+      if (job.error) throw new Error(job.error)
+      return await getScan(job.scan_id)
+    } finally {
+      sessionStorage.removeItem(ACTIVE_JOB_KEY)
+    }
+  }
+
+  // Reconnect to an in-flight DEFAULT-path scan after a page reload — the mirror of reconnectScan
+  // just below, for the path that has no durable scan_runs row to reconnect through until the end.
+  // A job that died silently before this reload (#607's staleness detection, read fresh on the
+  // very next poll) surfaces here exactly as it would have in a tab that stayed open — the reload
+  // does not cost the error, only the seconds spent waiting for it.
+  const reconnectJob = async (job_id) => {
+    setBusy(true); setErr(null); setProgress({ phase: 'connecting' })
+    try {
+      const fresh = await pollScanJob(job_id)
+      setScan(fresh)
+      resetScanScopedState()
+      setScanList(await listScans())
+    } catch (e) {
+      setErr(`scan failed: ${e?.message ?? e}`)
+    } finally {
+      setBusy(false); setProgress(null)
+    }
+  }
+
   // `runScope` is the wizard's per-run folder choice ({folders, exclude}). Given, it wins over the
   // connection default below — that is what "this run only" means. Absent (a scan started without
   // the wizard), the saved connection scope is used, so a scheduled or card-launched scan still
@@ -773,14 +827,7 @@ export default function App() {
         if (!fresh) throw new Error('scan still processing — watch it finish in the Monitor queue')
       } else {
         const { job_id } = await startScan(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded)
-        let job
-        do {
-          await new Promise((r) => setTimeout(r, 350))
-          job = await getJob(job_id)
-          setProgress(job)
-        } while (!job.done)
-        if (job.error) throw new Error(job.error)
-        fresh = await getScan(job.scan_id)
+        fresh = await pollScanJob(job_id)
       }
       setScan(fresh)
       // A re-scan is a new run, so nothing from the last one carries into it. The previous scan

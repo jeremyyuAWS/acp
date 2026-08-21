@@ -301,6 +301,40 @@ describe('the existing rules list', () => {
     await click(btnByText('Check for rule conflicts')); await flush()
     expect(text()).toContain('500: internal error')
   })
+
+  it('duplicates a rule with the same match/action, a distinguishing name, and no id of its own', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0]])
+    await render(); await expand(); await flush()
+    await click(btnByText('Duplicate')); await flush()
+    expect(createDispositionPolicy).toHaveBeenCalledWith(
+      'Legacy clinical policies (copy)', JSON.parse(RULES[0].match), 'archive', {}, false)
+    // The duplicate is previewed like any freshly created rule — not executed, not enabled.
+    expect(previewDispositionPolicy).toHaveBeenCalledWith('new1')
+  })
+
+  it('confirms before deleting, and only deletes on confirmation', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[1]])
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    await render(); await expand(); await flush()
+    await click(byLabel('Delete rule Superseded drafts')); await flush()
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(deleteDispositionPolicy).not.toHaveBeenCalled()
+
+    confirmSpy.mockReturnValue(true)
+    await click(byLabel('Delete rule Superseded drafts')); await flush()
+    expect(deleteDispositionPolicy).toHaveBeenCalledWith('p2')
+    confirmSpy.mockRestore()
+  })
+
+  it('surfaces the history guard when deleting a rule that has already run', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[1]])
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    deleteDispositionPolicy.mockRejectedValue(new Error("409: this rule has already run"))
+    await render(); await expand(); await flush()
+    await click(byLabel('Delete rule Superseded drafts')); await flush()
+    const alert = container.querySelector('.lifecycle-rule [role="alert"]')
+    expect(alert.textContent).toContain('already run')
+  })
 })
 
 describe('the new-rule builder', () => {
