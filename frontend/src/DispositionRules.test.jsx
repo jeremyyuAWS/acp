@@ -18,12 +18,16 @@ const createDispositionPolicy = vi.fn()
 const setDispositionPolicyEnabled = vi.fn()
 const previewDispositionPolicy = vi.fn()
 const deleteDispositionPolicy = vi.fn()
+const reorderDispositionPolicies = vi.fn()
+const listDispositionConflicts = vi.fn()
 vi.mock('./api.js', () => ({
   listDispositionPolicies: (...a) => listDispositionPolicies(...a),
   createDispositionPolicy: (...a) => createDispositionPolicy(...a),
   setDispositionPolicyEnabled: (...a) => setDispositionPolicyEnabled(...a),
   previewDispositionPolicy: (...a) => previewDispositionPolicy(...a),
   deleteDispositionPolicy: (...a) => deleteDispositionPolicy(...a),
+  reorderDispositionPolicies: (...a) => reorderDispositionPolicies(...a),
+  listDispositionConflicts: (...a) => listDispositionConflicts(...a),
 }))
 
 const { default: DispositionRules } = await import('./DispositionRules.jsx')
@@ -36,6 +40,8 @@ beforeEach(() => {
   setDispositionPolicyEnabled.mockReset().mockResolvedValue({})
   previewDispositionPolicy.mockReset().mockResolvedValue({ would_match: 0 })
   deleteDispositionPolicy.mockReset().mockResolvedValue({ deleted: 'p1' })
+  reorderDispositionPolicies.mockReset().mockResolvedValue([])
+  listDispositionConflicts.mockReset().mockResolvedValue({ conflicts: [] })
   ;({ container, root } = createTestRoot())
 })
 
@@ -230,38 +236,70 @@ describe('the existing rules list', () => {
     expect(alert.textContent).toContain('already run')
   })
 
-  it('duplicates a rule with the same match/action, a distinguishing name, and no id of its own', async () => {
+  it('moving a rule down sends the whole new order, not just the one that moved', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0], RULES[1]])   // p1 then p2
+    await render(); await expand(); await flush()
+    await click(byLabel('Move rule Legacy clinical policies down')); await flush()
+    expect(reorderDispositionPolicies).toHaveBeenCalledWith(['p2', 'p1'])
+  })
+
+  it('moving up is the mirror of moving down', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0], RULES[1]])
+    await render(); await expand(); await flush()
+    await click(byLabel('Move rule Superseded drafts up')); await flush()
+    expect(reorderDispositionPolicies).toHaveBeenCalledWith(['p2', 'p1'])
+  })
+
+  it('disables moving the first rule up and the last rule down', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0], RULES[1]])
+    await render(); await expand(); await flush()
+    expect(byLabel('Move rule Legacy clinical policies up').disabled).toBe(true)
+    expect(byLabel('Move rule Superseded drafts down').disabled).toBe(true)
+    expect(byLabel('Move rule Legacy clinical policies down').disabled).toBe(false)
+    expect(byLabel('Move rule Superseded drafts up').disabled).toBe(false)
+  })
+
+  it('shows no conflict-check control at all with 0 or 1 rules', async () => {
     listDispositionPolicies.mockResolvedValue([RULES[0]])
     await render(); await expand(); await flush()
-    await click(btnByText('Duplicate')); await flush()
-    expect(createDispositionPolicy).toHaveBeenCalledWith(
-      'Legacy clinical policies (copy)', JSON.parse(RULES[0].match), 'archive', {}, false)
-    // The duplicate is previewed like any freshly created rule — not executed, not enabled.
-    expect(previewDispositionPolicy).toHaveBeenCalledWith('new1')
+    expect(btnByText('Check for rule conflicts')).toBeUndefined()
   })
 
-  it('confirms before deleting, and only deletes on confirmation', async () => {
-    listDispositionPolicies.mockResolvedValue([RULES[1]])
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  it('checks for conflicts on demand and reports none found', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0], RULES[1]])
     await render(); await expand(); await flush()
-    await click(byLabel('Delete rule Superseded drafts')); await flush()
-    expect(confirmSpy).toHaveBeenCalled()
-    expect(deleteDispositionPolicy).not.toHaveBeenCalled()
-
-    confirmSpy.mockReturnValue(true)
-    await click(byLabel('Delete rule Superseded drafts')); await flush()
-    expect(deleteDispositionPolicy).toHaveBeenCalledWith('p2')
-    confirmSpy.mockRestore()
+    expect(listDispositionConflicts).not.toHaveBeenCalled()   // not fetched automatically
+    await click(btnByText('Check for rule conflicts')); await flush()
+    expect(listDispositionConflicts).toHaveBeenCalled()
+    expect(text()).toContain('No file matches more than one enabled rule.')
   })
 
-  it('surfaces the history guard when deleting a rule that has already run', async () => {
-    listDispositionPolicies.mockResolvedValue([RULES[1]])
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
-    deleteDispositionPolicy.mockRejectedValue(new Error("409: this rule has already run"))
+  it('reports a real conflict with both matched rules, the winner and why', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0], RULES[1]])
+    listDispositionConflicts.mockResolvedValue({
+      conflicts: [{
+        doc_id: 'd1', path: 'Finance/2019/ledger.docx',
+        matched_rules: [{ policy_id: 'p1', name: 'Legacy clinical policies', action: 'archive' },
+                       { policy_id: 'p2', name: 'Superseded drafts', action: 'delete' }],
+        winner: { policy_id: 'p1', name: 'Legacy clinical policies' },
+        outcome: 'Archive Candidate',
+        reason: "matched archive rule 'Legacy clinical policies' — flagged for review",
+      }],
+    })
     await render(); await expand(); await flush()
-    await click(byLabel('Delete rule Superseded drafts')); await flush()
-    const alert = container.querySelector('.lifecycle-rule [role="alert"]')
-    expect(alert.textContent).toContain('already run')
+    await click(btnByText('Check for rule conflicts')); await flush()
+    expect(text()).toContain('Finance/2019/ledger.docx')
+    expect(text()).toContain('Legacy clinical policies')
+    expect(text()).toContain('Superseded drafts')
+    expect(text()).toContain('flagged for review')
+  })
+
+  it('surfaces a refusal from the conflicts check inline', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0], RULES[1]])
+    listDispositionConflicts.mockRejectedValue(new Error('500: internal error'))
+    await render(); await expand(); await flush()
+    await click(btnByText('Check for rule conflicts')); await flush()
+    expect(text()).toContain('500: internal error')
   })
 
   it('duplicates a rule with the same match/action, a distinguishing name, and no id of its own', async () => {
