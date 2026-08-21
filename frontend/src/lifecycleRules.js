@@ -84,21 +84,87 @@ export const CONDITIONS = [
     placeholder: 'e.g. 1095',
     lead: 'not modified in the last ',
   },
+  // The five below were already backend-supported (api/disposition.py FIELDS) and already had a
+  // plain-English readback (the old EXTRA_PHRASES map, for rules made another way) — but no way
+  // to CREATE one here. Same lead/unit wording as before, so moving a field from "readback only"
+  // to "buildable" changes nothing about how an existing rule using it reads.
+  {
+    key: 'pathContains',
+    label: 'Path contains',
+    field: 'path',
+    op: 'contains',
+    kind: 'text',
+    placeholder: 'e.g. _superseded',
+    lead: 'whose path contains ',
+  },
+  {
+    key: 'createdBefore',
+    label: 'Created before',
+    field: 'created_at',
+    op: 'before',
+    kind: 'date',
+    placeholder: 'YYYY-MM-DD',
+    lead: 'created before ',
+  },
+  {
+    key: 'olderThanDays',
+    label: 'Older than',
+    field: 'age_days',
+    op: 'gt',
+    kind: 'number',
+    unit: 'days',
+    placeholder: 'e.g. 1825',
+    lead: 'older than ',
+  },
+  {
+    key: 'owner',
+    label: 'Owned by',
+    field: 'owner',
+    op: 'eq',
+    kind: 'text',
+    placeholder: 'e.g. jane@company.com',
+    lead: 'owned by ',
+  },
+  {
+    key: 'source',
+    label: 'Source',
+    field: 'source',
+    op: 'eq',
+    kind: 'text',
+    placeholder: 'e.g. drive, sharepoint',
+    lead: 'in ',
+  },
+  // department/business_criticality/regulatory_tags are deliberately NOT here, despite being
+  // valid api/disposition.py FIELDS. Nothing anywhere writes them — upsert_document's own
+  // docstring says so ("left for an admin/connector to populate later") and a repo-wide grep for
+  // a writer of any of the three found none. A condition on a column nothing ever sets would
+  // create a rule that silently matches zero files forever, which is exactly the "measured zero"
+  // dishonesty this screen's own wording rules exist to prevent. Add them here only once
+  // something populates them — file_type/size below are the real version of this same question,
+  // answered the other way because both DO have a live writer (doc_class already does; size_kb
+  // is wired through in this same change, api/store.upsert_document + both its callers).
+  {
+    key: 'fileType',
+    label: 'File type',
+    field: 'doc_class',
+    op: 'eq',
+    kind: 'text',
+    placeholder: 'e.g. pdf-document, spreadsheet, image',
+    lead: 'of type ',
+  },
+  {
+    key: 'largerThanKb',
+    label: 'Larger than',
+    field: 'size_kb',
+    op: 'gt',
+    kind: 'number',
+    unit: 'KB',
+    placeholder: 'e.g. 10000',
+    lead: 'larger than ',
+  },
 ]
 
 const BY_FIELD_OP = new Map(CONDITIONS.map((c) => [`${c.field}:${c.op}`, c]))
-
-// Conditions a rule may already carry from elsewhere (the older editor, or the API directly).
-// Rendering them as "modified age days gt 1095" would put the schema back in front of the reader,
-// so every field the backend allows gets a phrase here even when the builder cannot create it.
-const EXTRA_PHRASES = {
-  'path:contains': { lead: 'whose path contains ' },
-  'created_at:before': { lead: 'created before ', date: true },
-  'age_days:gt': { lead: 'older than ', unit: 'days' },
-  'department:eq': { lead: 'owned by the ', unit: 'department' },
-  'owner:eq': { lead: 'owned by ' },
-  'source:eq': { lead: 'in ' },
-}
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -117,7 +183,6 @@ function clauseFor(cond) {
   if (!cond || !cond.field || !cond.op) return null
   const key = `${cond.field}:${cond.op}`
   const tpl = BY_FIELD_OP.get(key)
-  const extra = EXTRA_PHRASES[key]
   const raw = cond.value
   if (tpl) {
     const value = tpl.kind === 'date' ? formatRuleDate(raw)
@@ -125,11 +190,8 @@ function clauseFor(cond) {
       : String(raw ?? '')
     return { lead: tpl.lead, value, positional: !!tpl.positional }
   }
-  if (extra) {
-    const value = extra.date ? formatRuleDate(raw) : extra.unit ? `${raw} ${extra.unit}` : String(raw ?? '')
-    return { lead: extra.lead, value, positional: false }
-  }
-  // Last resort: still no schema punctuation, but no invented phrasing either.
+  // Last resort — a field/op the builder doesn't (yet) offer, e.g. triage_score, or a legacy
+  // combination like department:ne. Still no schema punctuation, but no invented phrasing either.
   return { lead: `${String(cond.field).replaceAll('_', ' ')} ${cond.op} `, value: String(raw ?? ''), positional: false }
 }
 

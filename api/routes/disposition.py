@@ -171,8 +171,11 @@ def _preview(match: list[dict], action: str, policy_id: str | None, owner: str) 
     """
     docs = core.store.list_all_documents(owner=owner)
     selected = [d for d in docs if disposition.matches(d, match)]
+    # `total` is `docs` already fetched to run the predicate over — free to report, and it's
+    # what turns "would_match: 812" into a percentage a person can judge a rule's breadth by
+    # (Lifecycle Rules build-plan item #5, "warns about unusually broad rules").
     return {"policy_id": policy_id, "action": action,
-            "would_match": len(selected), "documents": selected}
+            "would_match": len(selected), "total": len(docs), "documents": selected}
 
 
 @router.post("/disposition/policies/{policy_id}/preview")

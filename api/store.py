@@ -355,6 +355,11 @@ _SCHEMA = [
     "ALTER TABLE documents ADD COLUMN IF NOT EXISTS is_scanned INT",
     "ALTER TABLE documents ADD COLUMN IF NOT EXISTS doc_class TEXT",
     "ALTER TABLE documents ADD COLUMN IF NOT EXISTS classified_at TEXT",
+    # File size (Lifecycle Rules build-plan item #3 — a "larger than" condition). The scanner
+    # already computes this per file (api/scanner.py's size_kb, written to scan_inventory) but
+    # never carried it to `documents`, the table the disposition matcher actually reads —
+    # doc_class had the identical gap once, closed by the two migrations just above.
+    "ALTER TABLE documents ADD COLUMN IF NOT EXISTS size_kb INT",
     # Per-violation remediation state machine (ADR 0003, Phase 2). Keyed by
     # (doc_id, rule_id) so "3 of 5 violations fixed" is first-class -- supersedes the
     # binary file_records.remediated_at as the governing truth (file_records stays the
@@ -929,7 +934,7 @@ class Store:
                                      owner_email=report.get("owner"),
                                      created_at=created_at, last_seen=now,
                                      triage_score=tscore, triage_rationale=rationale,
-                                     classify=f.get("classify"))
+                                     classify=f.get("classify"), size_kb=f.get("size_kb"))
         except Exception:
             pass
         return sid
@@ -4716,7 +4721,8 @@ class Store:
     def upsert_document(self, doc_id: str, *, source: str, path: str, content_hash: str | None,
                         owner: str | None, created_at: str, last_seen: str,
                         triage_score: int, triage_rationale: str,
-                        classify: dict | None = None, owner_email: str | None = None) -> None:
+                        classify: dict | None = None, owner_email: str | None = None,
+                        size_kb: int | None = None) -> None:
         """Upsert a document's scan-derived fields. department/regulatory_tags/
         business_criticality/usage_signal aren't set here (no real-scan source for them
         yet — ADR 0003's own noted gap) and are left for an admin/connector to populate
@@ -4724,15 +4730,21 @@ class Store:
 
         `classify` (ADR 0020 stage 2) is the Discover-side inventory peek — pages/images/
         has_text/has_images/is_scanned/doc_class. Additive: absent → those columns are left
-        as-is (so a re-run without classify never wipes a prior classification)."""
+        as-is (so a re-run without classify never wipes a prior classification).
+
+        `size_kb` is NOT part of `classify` — it's a plain scan-derived fact (like path or
+        last_seen), not an ADR-0020 classification, so it always overwrites on conflict rather
+        than being left alone when absent. The caller already computes it (scanner.py's
+        _inv_size_kb, the same value scan_inventory.size_kb stores) for every file; it simply
+        was not threaded through to this table until now."""
         c = classify or {}
         b = lambda v: (1 if v else 0) if v is not None else None  # noqa: E731
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO documents(doc_id,source,path,content_hash,owner,created_at,"
                 "last_seen,triage_score,triage_rationale,pages,images,has_text,has_images,"
-                "is_scanned,doc_class,classified_at,owner_email) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "is_scanned,doc_class,classified_at,owner_email,size_kb) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                 # owner_email IS updated on conflict, and the reason is worth stating because the
                 # alternative looks safer and is not. doc_id falls back to
                 # `{source}:{content_hash}` (documents.resolve_doc_id), so two tenants scanning
@@ -4751,7 +4763,7 @@ class Store:
                 # follow-up is a decision rather than a discovery.
                 "ON CONFLICT(doc_id) DO UPDATE SET path=EXCLUDED.path, "
                 "content_hash=EXCLUDED.content_hash, last_seen=EXCLUDED.last_seen, "
-                "owner_email=EXCLUDED.owner_email, "
+                "owner_email=EXCLUDED.owner_email, size_kb=EXCLUDED.size_kb, "
                 "triage_score=EXCLUDED.triage_score, triage_rationale=EXCLUDED.triage_rationale"
                 + (", pages=EXCLUDED.pages, images=EXCLUDED.images, has_text=EXCLUDED.has_text, "
                    "has_images=EXCLUDED.has_images, is_scanned=EXCLUDED.is_scanned, "
@@ -4761,7 +4773,7 @@ class Store:
                  triage_score, triage_rationale,
                  c.get("pages"), c.get("images"), b(c.get("has_text")), b(c.get("has_images")),
                  b(c.get("is_scanned")), c.get("doc_class"),
-                 (last_seen if classify else None), owner_email))
+                 (last_seen if classify else None), owner_email, size_kb))
 
     def estate_by_department(self, owner_email: str, *, department: str | None = None,
                              owner: str | None = None) -> list[dict]:

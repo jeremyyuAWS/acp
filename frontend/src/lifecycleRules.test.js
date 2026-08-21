@@ -27,7 +27,8 @@ const read = (f) => readFileSync(join(HERE, f), 'utf8')
 // Mirrors api/disposition.py — FIELDS and _OPS. Kept literal so a backend narrowing shows up as a
 // failing test here rather than as a 422 in a deployment.
 const BACKEND_FIELDS = new Set(['department', 'business_criticality', 'regulatory_tags', 'triage_score',
-  'source', 'owner', 'age_days', 'path', 'parent_folder', 'modified_age_days', 'modified_at', 'created_at'])
+  'source', 'owner', 'age_days', 'path', 'parent_folder', 'modified_age_days', 'modified_at', 'created_at',
+  'doc_class', 'size_kb'])
 const BACKEND_OPS = new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'prefix', 'before', 'after'])
 
 const draft = (over = {}) => ({ ...emptyDraft(), ...over, values: { ...emptyDraft().values, ...(over.values || {}) } })
@@ -85,10 +86,28 @@ describe('the sentence a rule is restated as', () => {
   })
 
   it('phrases a condition the builder cannot create, instead of printing the schema', () => {
+    // triage_score is a real backend field (api/disposition.py FIELDS) the builder deliberately
+    // does not expose — it's computed, not an attribute an admin would author a rule around — so
+    // it is the one field still routed through the last-resort fallback rather than a template.
+    expect(ruleSentenceText([{ field: 'triage_score', op: 'gt', value: 70 }], 'archive'))
+      .toBe('Files triage score gt 70 will be tagged for archive review.')
+  })
+
+  it('phrases every condition the builder CAN create with its own reader-facing wording, not the schema', () => {
     expect(ruleSentenceText([{ field: 'path', op: 'contains', value: '_OLD' }], 'archive'))
       .toBe('Files whose path contains _OLD will be tagged for archive review.')
     expect(ruleSentenceText([{ field: 'age_days', op: 'gt', value: 1825 }], 'archive'))
       .toBe('Files older than 1825 days will be tagged for archive review.')
+    expect(ruleSentenceText([{ field: 'created_at', op: 'before', value: '2021-01-01' }], 'archive'))
+      .toBe('Files created before 1 Jan 2021 will be tagged for archive review.')
+    expect(ruleSentenceText([{ field: 'owner', op: 'eq', value: 'jane@company.com' }], 'archive'))
+      .toBe('Files owned by jane@company.com will be tagged for archive review.')
+    expect(ruleSentenceText([{ field: 'source', op: 'eq', value: 'sharepoint' }], 'archive'))
+      .toBe('Files in sharepoint will be tagged for archive review.')
+    expect(ruleSentenceText([{ field: 'doc_class', op: 'eq', value: 'pdf-document' }], 'delete'))
+      .toBe('Files of type pdf-document will be tagged for deletion review.')
+    expect(ruleSentenceText([{ field: 'size_kb', op: 'gt', value: 10000 }], 'archive'))
+      .toBe('Files larger than 10000 KB will be tagged for archive review.')
   })
 
   it('survives a legacy or corrupt match column without throwing', () => {
@@ -146,6 +165,15 @@ describe('draft → the payload the backend validates', () => {
       { field: 'modified_age_days', op: 'gt', value: 1095 },
     ])
     expect(typeof m[1].value).toBe('number')     // '1095' > 999 is false as a string compare
+  })
+
+  it('builds a condition on file type and size — the two genuinely new fields this adds', () => {
+    const m = draftToMatch(draft({ values: { fileType: 'pdf-document', largerThanKb: '10000' } }))
+    expect(m).toEqual([
+      { field: 'doc_class', op: 'eq', value: 'pdf-document' },
+      { field: 'size_kb', op: 'gt', value: 10000 },
+    ])
+    expect(typeof m[1].value).toBe('number')
   })
 
   it('refuses a rule with no conditions — it would match every file in scope', () => {
