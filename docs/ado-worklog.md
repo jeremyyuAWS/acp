@@ -924,6 +924,14 @@ reach production, safely.
   — only the silent default is gone. A caller audit first confirmed nothing relied on it (frontend,
   e2e and the one test-caller all pass a source explicitly); the full suite passed unchanged. Touches
   `api/routes/scans.py` + `api/handlers.py` — not RULE_PATHS.
+- **Vision/GPU model readiness on `/readyz`** (#547). Extends the readiness surface (cf. #487 SMB) so a
+  **missing vision model is caught before a scan runs dry** — the probe checks the model is actually present
+  on the resolved GPU/vision path, not just that the host answers. Not RULE_PATHS.
+- **CI reliability: don't let an empty merge commit or a silent red block deploys.** An empty merge commit
+  was being read as a parser failure and blocking `main`'s deploy — fixed by asking `git` whether a commit is
+  empty rather than enumerating the exceptions; and `main` going red is now **announced out loud** (a skipped
+  deploy is otherwise silent). Pairs with the earlier CI cancel-in-progress fix (#525). CI config; not
+  RULE_PATHS.
 
 ## Feature: Release Center · #4599
 
@@ -1303,6 +1311,25 @@ existing data and the existing decision path; nothing adds a second write path.
   count is derived from the same `findingAuto` lanes the Findings list uses, so they can't disagree; the
   standalone reccard and its dead `REC_STYLE`/`MODE_LABEL` constants were removed. Frontend tests; not a
   RULE_PATHS change.
+- **The R1–R12 redesign core, built as standalone modules and then mounted.** A `claude[bot]` pipeline
+  landed the redesign as discrete, unit-tested modules: the work partitioned by **who does it** (R2) + the
+  deterministic **batch** (R3); the **approval queue** (R5) and **verification state** (R9); the **manual
+  lane** (R6, from the capability table); **what happened when a fix did not land** (R8); the **audit
+  trail** (R10); **delivery** per configuration (R11) and **close-the-loop** re-verification (R12); and R7
+  per-document progress. The #551 wiring then rewired `Remediate.jsx` around them and a follow-up mounted
+  the per-item panels into the detail pane, so **all ten board components now render** rather than sitting
+  orphaned. Frontend; not RULE_PATHS.
+- **R20 — CSV companion to the remediation report** (#569). The report shipped PDF-only; this adds the
+  machine-readable half (one row per document × criterion — found / changed-to / remaining), built from the
+  **same `buildRemediationModel`** the PDF uses so the two cannot diverge, RFC-4180 quoting, and the PDF's
+  honesty carried over ("time not recorded"; a `# PARTIAL` line when the fix list is capped). A "Changes
+  (CSV)" button beside the PDF one; 9 tests. Taken as a non-overlapping slice after cross-session
+  coordination. Frontend; not RULE_PATHS.
+- **Removed the R4 "Preview one fix" stepper that shipped live** (#570, closes #568). R4 was reviewed and
+  **dropped by Deva, confirmed by Jeremy** — but the bot pipeline had merged it as a standalone module
+  (#560) and the mounting step rendered it in the live tab (`Remediate.jsx:947`). Filed #568 with the
+  line-level evidence; the removal drops the import + render and deletes the module/model/tests (keeping R7),
+  with the two shared source-sweep tests trimmed. A dropped decision, un-shipped. Frontend; not RULE_PATHS.
 
 ## Feature: Estate coverage — three denominators and discovery at scale · #4597
 
@@ -1461,6 +1488,19 @@ three-denominator model (#297, under Documentation).
   (every pre-aggregation report) renders no panel rather than five measured-looking zeros, and the ordinal
   buckets are fixed youngest→oldest with "no date recorded" last, never sorted largest-first like the format
   composition. No new chart component — reuses `Bars` (ordered, null=not-measured). Not a RULE_PATHS change.
+- **The Assess results redesign — one unit (the check), seven metrics, and no score** (#545, absorbs #543/#544).
+  Nine panels leading with counts over four different unstated denominators became three levels (summary /
+  file worklist / document) on **one unit: the check** (one criterion × one document), with every metric a
+  slice that prints adding back up on screen. Definitions carry the weight: *documents assessed* names and
+  excludes an unreadable file; *auto-fix* is deterministic only (AI drafts under human review); *unable-to-
+  assess* counts checks that did not run, never files that passed; coverage is "14 of 17", never a percentage.
+  The single **compliance score is removed** — a document with 40 findings awaiting judgement scored 100 and
+  read "compliant", because a score cannot tell checked-and-passed from not-checked. Frontend; not RULE_PATHS.
+- **Overview reconciled to one estate, with an action beside the number** (board 7). Every discovered file
+  lands in exactly one bucket (reconciliation), the four headline tiles the board specifies replace the ad-hoc
+  set, each assertion states its own scope beside the findings it qualifies, and a NEXT panel gives one action
+  with its denominator next to it. The "assess?" question was dropped from Discover (it belongs to Assess).
+  Frontend; not RULE_PATHS.
 
 ---
 
@@ -1671,6 +1711,18 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   belong to Assess, where the deep evaluation actually happens. Discover is now a scope-only step (which
   source, which folders), matching the phase-1 exit contract "no format/SC controls in Discover" — a cleaner
   split between *what estate to catalogue* (Discover) and *how to judge it* (Assess).
+- **Lifecycle-rules step — a plain-language rule editor that only ever tags.** A Discover step to author
+  archival/deletion-candidate rules in plain language; it only **tags** (never moves or deletes), reads the
+  lifecycle columns from the inventory route completely-or-not-at-all, and a companion disposition change lets
+  a rule be **previewed before saving** and edited while it has not yet run.
+- **Discovery results + a dated, exportable inventory** (#562). A discovery-results view (recommendations,
+  acknowledgement, reconciliation); the results header now says **when the inventory was taken** (persisted
+  from the discovery stamp, formatted — not the raw column, and not the assessment's time); and the inventory
+  **exports as metadata-only CSV/JSON** with the snapshot instant. It also states plainly whether the
+  inventory is the **whole estate** or just what a capped run found, and the ad-hoc single-file panel was
+  removed on request. Several honesty fixes alongside: don't confirm a download that didn't happen; the scope
+  screen sets a *discovery* boundary (it had said "assess"); the run's total counts what Assess enqueued, not
+  what Discover listed.
 
 ## Feature: Observability — AI tracing and cost (Langfuse) · #4697
 
@@ -1917,6 +1969,14 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   populations (everything discovered, the supported document types, the formats chosen — the only ones judged
   against WCAG and remediated), and the bare list next to the wrong count invited the reassuring guess "all of
   them." Now stated plainly (same honesty family as #479/#483/#491/#502).
+- **The Live Assessment running screen — an authoritative, reconciled view of a scan in flight** (#553, #555,
+  #556, #557, #561, #563, #566, #567; Live Assessment Experience §8). An authoritative live-run snapshot
+  contract (#555) with a worker / queue / lane block (#553/#556) wired and mounted into the running screen
+  (#557); a **findings-so-far** KPI reconciled to the final certification, with an honest "so far" qualifier
+  on provisional counts (#561/#563); **rolling throughput + a calibrated ETA range** (#566, PRD 4.2/4.3); and
+  a **server-tailing SSE event stream** over the snapshot (#567) so the screen updates live rather than
+  polling blind. Turns "it's running" into how much is done, how fast, how long left, and what's emerging —
+  the same numbers the final report will show. Backend + frontend; not RULE_PATHS.
 
 ## Feature: Certification report as an audit artifact · #4698
 
@@ -2511,3 +2571,17 @@ real extracted content, degrading to the generic note, never a fabricated tree.
   so the native list filters by result and PII. PHI guard intact (categories/counts only). Not RULE_PATHS.
   #538 (ADO Feature-ID binding) is itself a delivery-log edit, so no entry. **Sync marker deliberately NOT
   advanced** (same convention as the prior entries).
+- **2026-08-20/21 (the big overnight batch — redesign build-out, live assessment, R20/R4)** — brought the log
+  current for ~50 merges since #542 (the docs/ADO session that binds IDs had gone; no other session was
+  logging the new work). To **Remediate review queue (#4598)**: the R1–R12 redesign core built as standalone
+  modules by the claude[bot] pipeline (R2/R3/R5/R9 #551, R6/R8/R10 #559, R11/R12 #558, R4/R7 #560) then
+  wired + all ten components mounted; **#569 R20 CSV** (mine); **#570 R4 removal** (the dropped stepper that
+  shipped live — I filed/evidenced #568, acp-bf built the revert; I stood down on my parallel attempt to
+  avoid a duplicate PR). To **Scan-run experience / Track A (#4696)**: the Live Assessment running screen
+  (#553/#555/#556/#557/#561/#563/#566/#567). To **Estate coverage (#4597)**: the Assess results redesign
+  (#545) and the Overview reconciliation/four-tiles/NEXT board. To **Discover & Assess lifecycle (#4618)**:
+  the lifecycle-rules step, discovery-results + dated exportable inventory (#562), disposition rule preview.
+  To **Continuous deployment (#4614)**: #547 vision/GPU readiness on /readyz, and CI empty-merge/red-announce
+  fixes. Policy items R22/R23/R24 settled (not built) per Jeremy. **Sync marker deliberately NOT advanced**
+  (same convention): most of this is the bot pipeline's + other sessions' work, logged here for intake, not
+  claimed.
