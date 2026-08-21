@@ -101,7 +101,10 @@ const DEPT_TAGS = {
   'Human Resources': ['PII', 'policy'], 'Legal & Compliance': ['legal-hold', 'policy'], 'Finance': ['financial'],
   'Research Administration': ['PII', 'policy'], 'Cardiology': ['PII'], 'Radiology': ['PII'], 'Oncology': ['PII'], 'Neurology': ['PII'],
 }
-const STATUS_CYCLE = ['issues', 'certifiable', 'issues', 'uncertain', 'issues', 'certifiable', 'issues', 'certifiable', 'issues', 'error']
+// No 'error' in the cycle: a document ACP cannot open is a rare event (password-protected, corrupt
+// or an unsupported variant), not one document in ten. The failed-to-open slice is seeded sparsely
+// below instead, so the demo estate reads like a real one rather than a broken drive.
+const STATUS_CYCLE = ['issues', 'certifiable', 'issues', 'uncertain', 'issues', 'certifiable', 'issues', 'certifiable', 'issues', 'certifiable']
 const DEPT_COUNTS = [19, 17, 15, 22, 18, 16, 20, 15, 17, 16]
 const slug = (d) => d.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 const iss = (rows) => rows.map(([ruleId, wcag, severity]) => ({ ruleId, rule_id: ruleId, wcag, severity }))
@@ -282,7 +285,10 @@ function genCorpus() {
       // it couldn't read, so the could-not-open count always equals the unanalysable
       // bucket (customer note: no 9-vs-25 mismatch between the estate bar and the status donut).
       const cycle = STATUS_CYCLE[i % STATUS_CYCLE.length]
-      const status = (i % 21 === 5 || cycle === 'error') ? 'error' : cycle
+      // ~1 document in 40 fails to open — a realistic estate has a handful of unreadable files, not
+      // a sixth of the drive. Over ~175 demo documents this is 4-5 could-not-open rows, enough to
+      // populate the "failed to open" panel without reading as a systemic outage.
+      const status = (i % 40 === 5) ? 'error' : cycle
       const locked = status === 'error'
       const openIssue = locked ? (i % 2 ? 'password-protected' : 'unsupported / corrupt — could not open') : null
       // Keep scores consistent with status so every chart agrees: only 'certifiable'
