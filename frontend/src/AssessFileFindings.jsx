@@ -198,7 +198,7 @@ function Band({ title, note, groups, fmt }) {
  * @param onRemediate  the one action: hand this document to remediation. No fix is applied here.
  */
 export default function AssessFileFindings({ row, file, cap, assessment, criteria, level = 'AA',
-                                             onBack, onNext, nextName, onRemediate }) {
+                                             assessedAt, onBack, onNext, nextName, onRemediate }) {
   const r = row || documentRow(file, { cap, assessment, criteria, level })
 
   // Nothing, rather than zeros. A document that was never opened produced no verdict — it is not a
@@ -222,6 +222,13 @@ export default function AssessFileFindings({ row, file, cap, assessment, criteri
   const noMethod = r.unassessableCriteria
   const identityHolds = failing.size + passed.length + noMethod.length === r.selectedChecks
   const FMT = (r.fmt || '').toUpperCase()
+  // A13 board fields — file size and a Drive link. Both come from the RAW file record (`file`),
+  // never from the derived row, which carries neither. Rendered only when the field is actually
+  // present: a "0 KB" or a dead link invented from nothing is worse than the field being absent.
+  const sizeKB = file?.sizeKB ?? file?.size_kb
+  const sizeLabel = sizeKB ? (sizeKB >= 1024 ? `${(sizeKB / 1024).toFixed(1)} MB` : `${sizeKB} KB`) : null
+  const driveUrl = file?.drive_file_id
+    ? `https://drive.google.com/file/d/${encodeURIComponent(file.drive_file_id)}/view` : null
 
   return (
     <section className="assessfilefindings">
@@ -243,16 +250,34 @@ export default function AssessFileFindings({ row, file, cap, assessment, criteri
         <div>
           <h2 style={{ ...mono, margin: 0, fontSize: 17, fontWeight: 650 }}>{r.name}</h2>
           <div className="muted" style={{ marginTop: 5, fontSize: 12.5 }}>
+            {/* Every segment renders only when the file actually carries it — never a "0 pages" or
+                "assessed —" for a value nobody sent. sizeLabel and assessedAt both arrive pre-derived
+                (KB→MB done here from the raw record; the timestamp pre-formatted by the caller, the
+                same fmtStamp contract every other stamp on this screen uses). */}
             {FMT && <>{FMT} · </>}
-            {/* Rendered only when the file carries it — never a "0 pages" for a count nobody sent. */}
+            {sizeLabel && <>{sizeLabel} · </>}
             {file?.pages ? <>{file.pages} pages · </> : null}
             {file?.sheets ? <>{file.sheets} sheets · </> : null}
+            {assessedAt && <>assessed {assessedAt} · </>}
             WCAG 2.1 Level {level}
           </div>
         </div>
-        {onRemediate && r.totalFindings > 0 && (
-          <button type="button" onClick={() => onRemediate(r)}>Send to remediation</button>
-        )}
+        <span style={{ display: 'flex', gap: 8 }}>
+          {driveUrl && (
+            // `.ghost`/`.small` are button-only selectors (styles.css:68/156) and do not style an
+            // <a>, so the equivalent chrome is inlined rather than applying classes that would
+            // silently do nothing on this element.
+            <a href={driveUrl} target="_blank" rel="noopener noreferrer"
+               style={{ display: 'inline-flex', alignItems: 'center', fontSize: 13, padding: '6px 12px',
+                        borderRadius: 9, background: '#fff', color: 'var(--plum)',
+                        border: '1px solid var(--line)', textDecoration: 'none' }}>
+              Open in Drive
+            </a>
+          )}
+          {onRemediate && r.totalFindings > 0 && (
+            <button type="button" onClick={() => onRemediate(r)}>Send to remediation</button>
+          )}
+        </span>
       </div>
 
       <div className="panel" style={{ marginTop: 14, display: 'flex', gap: 40, alignItems: 'center',

@@ -177,6 +177,16 @@ describe('App composes the Assess tab the way the board specifies', () => {
     expect(app()).toMatch(/<AssessSummary[\s\S]{0,400}?\brun=\{run\}/)
   })
 
+  it('board 5 · feeds the raw file record and the assessed stamp to the one-file view', () => {
+    // AssessFileFindings' `row` prop is a documentRow — it carries no size, no Drive id and no
+    // timestamp. Those live only on the raw file record, so App must look it up and pass it
+    // separately (`file=`), alongside the run's own assessed_at, formatted.
+    const s = app()
+    expect(s).toMatch(/const assessFileRaw = useMemo\(/)
+    expect(s).toMatch(/<AssessFileFindings[\s\S]{0,120}?\bfile=\{assessFileRaw\}/)
+    expect(s).toMatch(/<AssessFileFindings[\s\S]{0,200}?assessedAt=\{fmtStamp\(run\?\.assessed_at\)\}/)
+  })
+
   it('state 4 · feeds the not-started count from the backend so the partial banner can name it', () => {
     // get_scan exposes run.not_assessed for a stopped run (the documents the scope selected but the
     // run never assessed — they are not in the file list). Passing its count lets the partial banner
