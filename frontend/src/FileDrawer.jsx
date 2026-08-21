@@ -20,6 +20,7 @@ import EvidenceHeader, { fmtEvidence } from './EvidenceHeader.jsx'
 import { confirmCriterion, getFileStatus, getExamined, disposeCriterion, listDispositions } from './api.js'
 import { listScanDecisions } from './api.js'
 import { errorReasonFor, noFindingsLine, looksLikeFetchFailure } from './fileErrorReason.js'
+import { retentionSignal } from './retentionSignal.js'
 import { showsAssessmentHero } from './riskOverUnassessed.js'
 import DispositionControl from './DispositionControl.jsx'
 import { isDispositionable, normalizeDisposition, DISPOSITIONABLE_OUTCOMES } from './disposition.js'
@@ -362,11 +363,18 @@ export function findingsClaim(st, file, model) {
 // Retention/lifecycle recommendation (step 3 · Retain / Archive / Delete) — based
 // purely on metadata + risk flags, NOT on accessibility findings (that's Assess).
 export function retentionOf(f) {
-  if (f.locked) return { label: 'Could not open', bg: '#EEEDEA', fg: '#5F5E5A', why: `${f.openIssue || 'could not open'} — provide credentials or an accessible export so this document can be classified and assessed.` }
-  if ((f.tags || []).includes('legal-hold')) return { label: 'Retain · legal hold', bg: '#FAEEDA', fg: '#854F0B', why: 'Under legal hold — must be retained regardless of age or usage.' }
-  if (f.superseded) return { label: 'Archive', bg: '#EEEDFE', fg: '#3C3489', why: 'A newer version exists — archive to shrink the audited estate.' }
-  if (f.ageDays >= 540 && f.views90d < 60) return { label: 'Archive candidate', bg: '#EEEDFE', fg: '#3C3489', why: `Last edited ${f.modifiedAge} with ${f.views90d} views/90d — low value to keep live.` }
-  return { label: 'Keep', bg: '#E7F0DC', fg: '#3B6D11', why: 'Active and in use — keep in the live estate.' }
+  // DELEGATES NOW. The five-field heuristic that used to live here read four fields no real scan
+  // populates (ageDays, views90d, tags, locked — zero backend references between them), so every
+  // real row fell through to `Keep — Active and in use`: a constant, asserting a document is active
+  // and in use, next to a control inviting a reviewer to sign off on it.
+  //
+  // retentionSignal.js prefers the REAL signal — `lifecycle_status` from the discovery rule pass,
+  // which mergeLifecycle already puts on these rows — keeps every SIM heuristic for the demo, and
+  // returns an explicit `Not assessed` when nothing measured the row.
+  //
+  // The return shape is unchanged (label / bg / fg / why) because SourceDrawer and sourceOps read
+  // it, and it now also carries `bucket` and `source` for callers that want them.
+  return retentionSignal(f)
 }
 
 const STEPS = ['Discover', 'Classify', 'Retain', 'Assess', 'Risk score', 'Remediate', 'Human review', 'Re-validate', 'Publish', 'Monitor']

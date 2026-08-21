@@ -143,11 +143,13 @@ describe('a read that did not complete renders NOTHING — never a zero', () => 
   it('does not block Assess on an acknowledgement it cannot show', async () => {
     h.mode = 'reject'
     await render()
+    // The read failed, so no row carries a lifecycle_status — every row is 'unassessed', which has
+    // nothing for a bulk action to accept, so no "Accept all" button renders at all. That absence
+    // IS the assertion: Assess must not stay blocked waiting on a control that cannot exist.
     const acceptAll = [...container.querySelectorAll('button')]
-      .find((b) => b.textContent.includes('Accept all recommendations'))
-    await act(async () => { acceptAll.click() })
-    // By the stable hook, not the label: this case asserts the control is ENABLED once the
-    // recommendations are accepted, which has nothing to do with what the button says.
+      .find((b) => b.textContent.includes('Accept all'))
+    expect(acceptAll, 'a rejected read produced a recommendation to accept').toBeUndefined()
+    // By the stable hook, not the label.
     const assess = container.querySelector('button[data-advance="assess"]')
     expect(assess.disabled).toBe(false)
   })

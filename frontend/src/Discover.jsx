@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import WindowedRows from './WindowedRows.jsx'
-import FileDrawer, { retentionOf } from './FileDrawer.jsx'
+import FileDrawer from './FileDrawer.jsx'
+import { retentionBucket, isAcceptable } from './retentionSignal.js'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FolderPicker from './FolderPicker.jsx'
 import SitePicker from './SitePicker.jsx'
@@ -20,10 +21,17 @@ import { buildUnreadableWhy } from './unreadableWhy.js'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
-const RET_BUCKET = (f) => { if (f.locked) return 'locked'; const l = retentionOf(f).label; return l.startsWith('Retain') ? 'retain' : l.startsWith('Archive') ? 'archive' : 'keep' }
-const RET_COLOR = { keep: '#639922', archive: '#7a5c8e', retain: '#D85A30', locked: '#9a948f', delete: '#1F5FA8' }
+// The bucket comes from retentionSignal now, not from parsing a label back into one. Reading a
+// bucket off `label.startsWith('Archive')` meant the badge TEXT was load-bearing: rewording it
+// silently re-bucketed every row, and there was no `unassessed` string to match on at all.
+const RET_BUCKET = retentionBucket
+const RET_COLOR = { keep: '#639922', archive: '#7a5c8e', retain: '#D85A30', locked: '#9a948f', delete: '#1F5FA8', unassessed: '#9a948f' }
 const RET_ORDER = ['keep', 'archive', 'retain']
-const RET_BADGE = { keep: ['Keep', '#E7F0DC', '#3B6D11'], archive: ['Archive', '#EEEDFE', '#3C3489'], retain: ['Retain · legal hold', '#FAEEDA', '#854F0B'], locked: ['🔒 Could not open', '#EEEDEA', '#5F5E5A'], delete: ['Delete', '#E2EDFB', '#1F5FA8'] }
+const RET_BADGE = { keep: ['Keep', '#E7F0DC', '#3B6D11'], archive: ['Archive', '#EEEDFE', '#3C3489'], retain: ['Retain · legal hold', '#FAEEDA', '#854F0B'], locked: ['🔒 Could not open', '#EEEDEA', '#5F5E5A'], delete: ['Delete', '#E2EDFB', '#1F5FA8'],
+  // Grey, and it says the thing rather than implying it. No lifecycle rule matched and no age
+  // or usage signal reached this screen, so there is no recommendation — which is what a real
+  // estate looks like today, and what a hardcoded 'Keep' was hiding.
+  unassessed: ['Not assessed', '#F1EFF3', '#5F5E5A'] }
 const RISK_COLOR = { PII: '#1F5FA8', 'legal-hold': '#854F0B', 'high-traffic': '#A56814' }
 const TYPE_COLOR = { PDF: '#C2410C', DOCX: '#2563EB', PPTX: '#D97706', XLSX: '#15803D', HTML: '#7A5C8E', VIDEO: '#9333EA', AUDIO: '#0891B2' }
 const CLASS_TAGS = ['PII', 'legal-hold', 'public-facing', 'high-traffic']
@@ -210,7 +218,14 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
 
   const dupeCount = dupeCountOf(files)
 
-  const actionable = files.filter((f) => !f.locked)
+  // ONLY ROWS WITH A REAL RECOMMENDATION count toward "needs a decision". `!f.locked` used to be
+  // the whole filter, which is why an all-'unassessed' estate (no disposition rules configured —
+  // the common case for a real deployment) could still leave Assess reachable: RET_BUCKET was
+  // hardcoded 'keep', so every row silently HAD a recommendation to bulk-accept. Now that a row can
+  // genuinely have none, gating on isAcceptable is what keeps that path open rather than trading
+  // one defect (a fabricated Keep) for a worse one (Discover permanently blocking Assess whenever
+  // nothing was configured to make a recommendation).
+  const actionable = files.filter(isAcceptable)
   const effAction = (f) => { const d = decisions[f.file]; return d?.state === 'override' ? d.action : RET_BUCKET(f) }
   const decide = (f, dec) => { setDecisions((s) => ({ ...s, [f.file]: dec })); setEditAct(null) }
   const undoDec = (f) => setDecisions((s) => { const n = { ...s }; delete n[f.file]; return n })
@@ -226,7 +241,16 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   ]
   const sfMatch = matchesFilters(sf, SF_FACETS, (f) => f.file)
   const pendingActions = actionable.length - dcount('accepted') - dcount('override')
-  const acceptAll = () => setDecisions((s) => { const n = { ...s }; actionable.forEach((f) => { if (!n[f.file]) n[f.file] = { state: 'accepted' } }); return n })
+  // BULK ACCEPT SKIPS ROWS WITH NOTHING TO ACCEPT. This is where the hardcoded `Keep` did the most
+  // damage: one click recorded an accepted lifecycle decision for every document in the estate, on a
+  // recommendation nobody produced, and the resulting audit trail is indistinguishable from a
+  // reviewer who actually looked. Silent bulk sign-off over an unmeasured default is worse than the
+  // wrong badge that produced it.
+  // `actionable` is already isAcceptable-filtered, so this is `actionable` under a name that
+  // reads correctly at each call site — kept separate rather than aliased so a future change to
+  // one is not silently a change to the other's meaning.
+  const acceptable = () => actionable
+  const acceptAll = () => setDecisions((s) => { const n = { ...s }; acceptable().forEach((f) => { if (!n[f.file]) n[f.file] = { state: 'accepted' } }); return n })
   // What the acknowledgement covers — null when the lifecycle rule pass did not reach this screen
   // or matched nothing, in which case there is nothing to acknowledge and nothing to gate.
   const recsToAck = acknowledgementSummary(estateFiles, assessAnyway)
@@ -311,10 +335,19 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                             </span>
                           ) : !dec ? (
                             <span className="decctl">
-                              {bothPending
-                                ? <button className="decbtn ok wide" title="Confirm classification & accept action" onClick={() => { confirmClass(f); decide(f, { state: 'accepted' }) }}>✓ accept both</button>
-                                : <button className="decbtn ok" title="Accept recommendation" onClick={() => decide(f, { state: 'accepted' })}>✓</button>}
-                              <button className="decbtn ed" title="Change action" onClick={() => setEditAct(f.file)}>✎</button>
+                              {/* NO ACCEPT CONTROL WITHOUT A RECOMMENDATION. Accepting `Not assessed`
+                                  would record a human decision over nothing — and it is that record,
+                                  not the badge, which a later audit reads as "a person reviewed this
+                                  and agreed". Setting one is still offered: a reviewer who knows the
+                                  answer can supply it, which is the opposite of rubber-stamping a
+                                  default. */}
+                              {!isAcceptable(f)
+                                ? <button className="decbtn ed" title="No recommendation was produced for this document — set one"
+                                          onClick={() => setEditAct(f.file)}>set action</button>
+                                : bothPending
+                                  ? <button className="decbtn ok wide" title="Confirm classification & accept action" onClick={() => { confirmClass(f); decide(f, { state: 'accepted' }) }}>✓ accept both</button>
+                                  : <button className="decbtn ok" title="Accept recommendation" onClick={() => decide(f, { state: 'accepted' })}>✓</button>}
+                              {isAcceptable(f) && <button className="decbtn ed" title="Change action" onClick={() => setEditAct(f.file)}>✎</button>}
                               {!isConfirmed(f) && !bothPending && <button className="decbtn ok wide" title="Confirm classification" onClick={() => confirmClass(f)}>tags ✓</button>}
                             </span>
                           ) : <button className="decbtn undo" title="Undo action" onClick={() => undoDec(f)}>↺</button>}
@@ -598,7 +631,14 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           {pendingActions > 0 ? (
             <>
               <span className="muted" style={{ fontSize: 13 }}>{pendingActions} action{pendingActions === 1 ? '' : 's'} pending</span>
-              <button className="ghost" onClick={acceptAll}>✓ Accept all recommendations</button>
+              {/* Absent when there is nothing to accept, rather than a button that silently does
+                  nothing. Its count is stated so the number a reviewer signs off on is the number
+                  they can see, not the estate size. */}
+              {acceptable().length > 0 && (
+                <button className="ghost" onClick={acceptAll}>
+                  ✓ Accept all {acceptable().length.toLocaleString()} recommendation{acceptable().length === 1 ? '' : 's'}
+                </button>
+              )}
             </>
           ) : (
             <span className="muted" style={{ fontSize: 13, color: '#3B6D11' }}>✓ All recommendations decided — done here? Continue →</span>
