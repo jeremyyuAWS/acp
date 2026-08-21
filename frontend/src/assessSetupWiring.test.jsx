@@ -233,3 +233,18 @@ describe('App composes the Assess tab the way the board specifies', () => {
     expect(s).toMatch(/<LiveAssessmentLive[\s\S]{0,150}?onStop=\{\(\) => cancelScan\(liveScanId\)/)
   })
 })
+
+describe('the Discover nav tab only checks off once discovery has actually FINISHED', () => {
+  // `run` is truthy the instant a scan record exists client-side — even one still `status:
+  // 'running'`, mid-listing. `!!run` alone put a green checkmark on the Discover tab while a scan
+  // was still in flight, which is exactly the state that produced a live report: Discover showing
+  // a real, growing file count with its own tab already checked off, while Assess correctly said
+  // "no discovery run has listed an estate yet" (it reads completed_at, the same gate
+  // /assess/eligibility uses) — two truthful signals that read as a contradiction because one of
+  // them was answering the wrong question.
+  it('keys the Discover stage-done flag off completed_at, not off a scan merely existing', () => {
+    const s = read('App.jsx')
+    expect(s).toMatch(/discover: !!run\?\.completed_at/)
+    expect(s, 'the old premature form is still present').not.toMatch(/discover: !!run,/)
+  })
+})

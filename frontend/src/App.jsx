@@ -942,7 +942,13 @@ export default function App() {
         <div className="tabs" role="tablist" aria-label="Compliance workflow">
           {TABS.filter(([k]) => !me.allow || me.allow.includes(k)).map(([k, label, rg, step]) => {
             const stageDone = {
-              discover: !!run,
+              // A scan record existing is not the same as discovery having FINISHED — `run` is
+              // truthy the instant a scan starts (even mid-listing, `status='running'`), so `!!run`
+              // put a checkmark on Discover while a scan was still in flight. The backend's own
+              // definition of "a completed discovery run" (list_scans: `completed_at IS NOT NULL`,
+              // the same gate /assess/eligibility reads) is completed_at — match it here, so the
+              // nav tab and the Assess tab's "no discovery run yet" message can never disagree.
+              discover: !!run?.completed_at,
               assess: assessed,
               remediate: files.some((f) => f.remediated_at || f.drive_write_url),
               publish: (publishedFiles?.length || 0) > 0,
