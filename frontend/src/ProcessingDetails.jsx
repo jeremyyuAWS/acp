@@ -43,7 +43,7 @@ export default function ProcessingDetails({ files, processing = 0, defaultOpen =
           <tbody>
             {shown.map((r) => (
               <tr key={r.file}>
-                <td style={cell}>{r.file}</td>
+                <td style={{ ...cell, fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace', fontSize: 11.5 }}>{r.file}</td>
                 <td style={cell}>{r.format || '—'}</td>
                 <td style={{ ...cell, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', color: '#54636F' }}
                     title={r.location || undefined}>{r.location || '—'}</td>
