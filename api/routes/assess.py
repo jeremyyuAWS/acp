@@ -40,6 +40,13 @@ def _latest_inventory(owner: str) -> dict | None:
     try:
         scans = core.store.list_scans_including_discovered(owner)
     except Exception:
+        # Silent until now — a real failure here reads identically to "no discovery yet" on
+        # screen, which is exactly the bug this function exists to fix. Logged, not raised: a
+        # broken query for one owner must not 500 everyone else's eligibility preview.
+        import traceback
+        print(f"[assess.eligibility] list_scans_including_discovered failed for owner={owner!r}:",
+              flush=True)
+        traceback.print_exc()
         return None
     for s in scans:
         scope = s.get("scope")
@@ -98,6 +105,12 @@ def _latest_scan_id_with_inventory(owner: str) -> str | None:
     try:
         scans = core.store.list_scans_including_discovered(owner)
     except Exception:
+        # See _latest_inventory's identical except: logged so a real failure here doesn't read
+        # as an indistinguishable "no discovery yet".
+        import traceback
+        print(f"[assess.eligibility] list_scans_including_discovered failed for owner={owner!r}:",
+              flush=True)
+        traceback.print_exc()
         return None
     for s in scans:
         sid = s.get("id")
