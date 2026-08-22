@@ -48,6 +48,15 @@ def _latest_inventory(owner: str) -> dict | None:
               flush=True)
         traceback.print_exc()
         return None
+    # TEMPORARY — live root-cause diagnostic (2026-08-21). scope.inventory is confirmed present
+    # in the DB for this owner's newest scan (verified via GET /scans/{sid}), owner_email is
+    # confirmed to match _owner(request) exactly, and list_scans_including_discovered raises
+    # nothing — yet this loop was still returning None. Logging what the loop actually sees so
+    # the mismatch is visible instead of guessed at. Remove once root-caused.
+    print(f"[assess.eligibility] owner={owner!r} got {len(scans)} scan(s): " + ", ".join(
+        f"{s.get('id')}(scope={type(s.get('scope')).__name__}"
+        f"{',inv=' + str(isinstance((s.get('scope') or {}).get('inventory'), dict)) if isinstance(s.get('scope'), dict) else ''})"
+        for s in scans), flush=True)
     for s in scans:
         scope = s.get("scope")
         if isinstance(scope, dict) and isinstance(scope.get("inventory"), dict):
