@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { allRules } from './rules'
 import { WCAG } from './wcagCatalog.js'
-import { assessScan, getCapability, getScan, getScanTraces, refreshScanDriveToken, getQueueJob } from './api.js'
+import { assessScan, getCapability, getScan, getScanTraces, refreshScanDriveToken, getQueueJob, getJobs, setWorkers } from './api.js'
 import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
 import { TraceChip } from './Transparency.jsx'
 import { assessLine } from './phaseNarration.js'
@@ -129,6 +129,33 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     const id = setInterval(() => setNowTick(Date.now()), 1000)
     return () => clearInterval(id)
   }, [phase])
+  // Live worker strip — polled at 10s while running (lighter than QueuePanel's 2s; the
+  // user needs "is it alive?" not sub-second accuracy here).
+  const [workerSnap, setWorkerSnap] = useState(null)    // {workers, running, queued, worker_tier_alive}
+  const [workerBusy, setWorkerBusy] = useState(false)
+  useEffect(() => {
+    if (phase !== 'running') return undefined
+    let on = true
+    const load = () => getJobs().then((d) => {
+      if (!on) return
+      setWorkerSnap({ workers: d.workers ?? 0, running: d.stats?.running ?? 0,
+                      queued: d.stats?.queued ?? 0, alive: !!d.worker_tier_alive })
+    }).catch(() => {})
+    load()
+    const id = setInterval(load, 10000)
+    return () => { on = false; clearInterval(id) }
+  }, [phase])
+  const adjustWorkers = (delta) => {
+    if (!workerSnap || workerBusy) return
+    const next = Math.max(0, Math.min(16, workerSnap.workers + delta))
+    if (next === workerSnap.workers) return
+    setWorkerBusy(true)
+    setWorkerSnap((s) => ({ ...s, workers: next }))   // optimistic
+    setWorkers(next)
+      .then((d) => setWorkerSnap((s) => ({ ...s, workers: d.workers ?? next })))
+      .catch(() => setWorkerSnap((s) => ({ ...s, workers: workerSnap.workers })))
+      .finally(() => setWorkerBusy(false))
+  }
   // Remediation capability ({fmt: {sc: mode}}) — fetched once, seeded with the bundled
   // table so the auto-fixable counts are correct synchronously (and never regress to the
   // format-blind view if the fetch is slow or fails).
@@ -498,6 +525,30 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                       ? <span className="muted">🔧 A worker is on this now{jobInfo.phase && <> · {jobInfo.phase}</>}
                           {jobInfo.locked_at && <> · claimed {fmtElapsed(Date.now() - new Date(jobInfo.locked_at).getTime())} ago</>}</span>
                       : assessStartedAt && <span className="muted">Running · {fmtElapsed(nowTick - assessStartedAt)}</span>}
+              </div>
+            )}
+            {workerSnap && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0 2px',
+                            fontSize: 12.5, flexWrap: 'wrap' }}>
+                <span style={{ color: workerSnap.alive ? '#1a7f37' : '#854F0B', fontWeight: 600 }}>
+                  {workerSnap.alive ? '● worker service online' : '● worker service offline'}
+                </span>
+                <span className="muted">·</span>
+                <span className="muted">{workerSnap.running} running · {workerSnap.queued} queued</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 4 }}>
+                  <button onClick={() => adjustWorkers(-1)} disabled={workerBusy || workerSnap.workers <= 0}
+                          aria-label="Remove an in-process worker"
+                          style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
+                                   background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
+                                   cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>−</button>
+                  <span style={{ fontSize: 13, fontWeight: 600, minWidth: 14, textAlign: 'center' }}>{workerSnap.workers}</span>
+                  <button onClick={() => adjustWorkers(+1)} disabled={workerBusy || workerSnap.workers >= 16}
+                          aria-label="Add an in-process worker"
+                          style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
+                                   background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
+                                   cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>+</button>
+                  <span className="muted" style={{ fontSize: 11 }}>in-process workers</span>
+                </span>
               </div>
             )}
             {(currentFile || currentPhase) && (
