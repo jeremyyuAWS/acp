@@ -5,19 +5,37 @@
 // files that have LANDED; the still-processing COUNT is surfaced separately.
 import { fmtOf } from './capability.js'
 
-// file_records.status → how it reads in the table. certifiable = clean pass (compliant); uncertain =
-// a human needs to look; error = failed to process; discovered = an inventory placeholder (Discover
-// only, nothing opened yet).
-const RESULT = {
-  certifiable: { label: 'Passed', kind: 'ok' },
-  uncertain: { label: 'Needs review', kind: 'warn' },
-  error: { label: 'Failed', kind: 'bad' },
-  discovered: { label: 'Queued', kind: 'muted' },
+// Map a file record to a display result + semantic kind.
+// "Failed" is deliberately avoided: it is ambiguous between "ACP failed to process it" and
+// "the document failed its accessibility check". Use unambiguous operational language instead.
+function resultOf(f) {
+  if (f.status === 'error') return { label: "Couldn't assess", kind: 'bad' }
+  if (f.status === 'certifiable') return { label: 'Assessed — no issues', kind: 'ok' }
+  if (f.status === 'uncertain') return { label: 'Assessed — issues found', kind: 'warn' }
+  if (f.status === 'discovered') return { label: 'Queued', kind: 'muted' }
+  // 'analysed' = file was opened and scored; check the issues array for the right label.
+  if (f.status === 'analysed') {
+    return (f.issues && f.issues.length)
+      ? { label: 'Assessed — issues found', kind: 'warn' }
+      : { label: 'Assessed — no issues', kind: 'ok' }
+  }
+  // Any other backend state (e.g. 'processing', 'queued') falls through to the literal value.
+  return { label: f.status || 'Processing', kind: 'muted' }
+}
+
+// The action available for a row, expressed as a verb the caller can render as a button.
+// 'view'  → file was assessed; show its results.
+// 'error' → file couldn't be assessed; show the error detail.
+// null    → still in flight; no actionable outcome yet.
+function actionOf(f) {
+  if (f.status === 'error') return 'error'
+  if (f.status === 'certifiable' || f.status === 'uncertain' || f.status === 'analysed') return 'view'
+  return null
 }
 
 export function processingRows(files) {
   return (files || []).map((f) => {
-    const r = RESULT[f.status] || { label: f.status || '—', kind: 'muted' }
+    const r = resultOf(f)
     return {
       file: f.file,
       format: (fmtOf(f) || '').toUpperCase(),
@@ -25,16 +43,18 @@ export function processingRows(files) {
       result: r.label,
       kind: r.kind,
       score: typeof f.score === 'number' ? f.score : null,
+      issues: Array.isArray(f.issues) ? f.issues.length : null,
+      folder: f.parent_folder || null,
       owner: f.owner || null,
-      location: f.parent_folder || null,
+      action: actionOf(f),
     }
   })
 }
 
 export const PROCESSING_FILTERS = [
-  { key: 'all', label: 'All' },
+  { key: 'all',      label: 'All' },
   { key: 'findings', label: 'Findings' },
-  { key: 'failed', label: 'Failed' },
+  { key: 'failed',   label: "Couldn't assess" },
   { key: 'completed', label: 'Completed' },
 ]
 
@@ -42,7 +62,7 @@ export const PROCESSING_FILTERS = [
 const MATCH = {
   all: () => true,
   findings: (r) => r.status === 'uncertain',
-  failed: (r) => r.status === 'error',
+  failed:   (r) => r.status === 'error',
   completed: (r) => r.status !== 'discovered',
 }
 
