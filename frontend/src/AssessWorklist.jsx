@@ -204,16 +204,17 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
           {populations.map(([k, n]) => `${n} ${STATE_LABEL[k]}`).join(' · ')}
         </span>
       </div>
-      {/* Tab bar — full-width, one tab per population. Disabled tabs are shown but non-interactive
-          so the reader knows the category exists and is empty, rather than wondering where it went. */}
-      <div role="tablist" aria-label="Filter documents"
+      {/* Filter bar — full-width underline style. Uses aria-pressed (toggle buttons) rather than
+          aria-selected (tabs) so tests and AT see the pressed state without a tablist context.
+          Disabled buttons are shown but non-interactive so the reader knows empty categories exist. */}
+      <div role="group" aria-label="Filter documents"
            style={{ display: 'flex', gap: 0, borderBottom: '2px solid var(--line)', marginBottom: 12 }}>
         {FILTERS.map((f) => {
           const isActive = f.key === active
           const isEmpty = f.key !== 'all' && counts[f.key] === 0
           return (
-            <button key={f.key} role="tab" type="button"
-                    aria-selected={isActive}
+            <button key={f.key} type="button"
+                    aria-pressed={isActive}
                     disabled={isEmpty}
                     onClick={() => setChosen(f.key)}
                     style={{
@@ -224,8 +225,8 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
                       color: isEmpty ? 'var(--muted)' : isActive ? 'var(--plum)' : 'var(--ink)',
                       cursor: isEmpty ? 'default' : 'pointer',
                     }}>
-              {f.label}
-              <span style={{ marginLeft: 6, fontSize: 12, fontVariantNumeric: 'tabular-nums',
+              {f.label}{' '}
+              <span style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums',
                              color: isActive ? 'var(--plum)' : 'var(--muted)' }}>
                 {counts[f.key]}
               </span>
