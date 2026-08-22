@@ -1178,11 +1178,6 @@ export default function App() {
               explained, not glossed over. Same three-denominator inventory EstateCoverage uses. */}
           <ScopeFunnel inventory={progress.inventory} blocked={progress.blocked} />
           <ProcessingDetails files={progress.files} processing={progress.outcomes?.processing || 0} />
-          {/* Live Assessment command center — KPIs + funnel + worker/lane, polled from /scans/{sid}/live.
-              Inert until the endpoint returns an available snapshot, so it is a no-op on backends without
-              it and adds nothing to the panel when there is nothing live to show. */}
-          <LiveAssessmentLive scanId={liveScanId} active={busy}
-                              onStop={() => cancelScan(liveScanId).catch(() => {})} />
           {/* Narrate the phase the scanner reports, or say nothing. The old line came from a
               timer, so it could never be absent — and it was wrong whenever the timer and the
               phase disagreed. Silence beats a plausible sentence.
@@ -1214,6 +1209,26 @@ export default function App() {
           )}
         </div>
       )}
+
+      {/* Live Assessment command center — KPIs + funnel + worker/lane, polled from /scans/{sid}/live.
+          Inert until the endpoint returns an available snapshot, so it is a no-op on backends without
+          it and adds nothing to the panel when there is nothing live to show.
+
+          Deliberately OUTSIDE the {busy && progress} scan banner above (2026-08-22): `busy` is
+          scan-specific (doScan/reconnectScan/reconnectJob), so this card previously activated only
+          during a Discover run and stayed dark through an assess-only one — including after a
+          reload mid-assess, since nothing set busy/liveScanId for that case at all. assessPhase
+          IS correctly restored on reload (AssessRunner's own sessionStorage resume calls
+          setPhase('running'), which its onPhase effect reports up here), so `run?.id` is a safe,
+          already-resilient source for scanId once assessPhase says a run is live.
+
+          This also completes AssessRunProgress's own half of a Board 3 assumption: its comment
+          already says "while the Assess running card is the one on screen, IT owns Stop" — that
+          logic (and the OUTER scan-banner's Stop-suppression above, when view === 'assess' &&
+          assessPhase === 'running') was written assuming this card would be live during assess.
+          It never was, until this line. */}
+      <LiveAssessmentLive scanId={liveScanId || run?.id} active={busy || assessPhase === 'running'}
+                          onStop={() => cancelScan(liveScanId || run?.id).catch(() => {})} />
 
       <main id="main-content" tabIndex={-1}>
       <ErrorBoundary key={view}>
