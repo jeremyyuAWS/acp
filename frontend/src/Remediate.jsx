@@ -390,9 +390,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [remMsg, setRemMsg] = useState('')
   const [remProg, setRemProg] = useState(null)   // { total, done, latest, failed }
   const [serverFixed, setServerFixed] = useState(0)  // files fixed server-side this scan (persists after each batch)
+  const [staleDismissed, setStaleDismissed] = useState(false)
   const pollRef = useRef(null)
   const remStartRef = useRef(false)   // synchronous guard — remBusy is state, two clicks in one frame both read false
   useEffect(() => () => clearInterval(pollRef.current), [])
+  useEffect(() => { setStaleDismissed(false) }, [runId])
   const REMKEY = (id) => `acp-remed-${id || 'none'}`
 
   // One poll loop, shared by a fresh run and by resume-after-navigation. Ticks the live
@@ -794,8 +796,49 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const written2 = files.filter((f) => f.drive_write_url)
   const downloadOnly = files.filter((f) => f.remediated_at && !f.drive_write_url)
 
+  const _DONE_STATES = new Set(['done', 'complete', 'completed', 'finalized', 'cancelled', 'interrupted'])
+  const assessRunning = run?.status && !_DONE_STATES.has(run.status)
+  const showStaleBanner = assessRunning && files.length > 0 && !staleDismissed
+
   return (
     <>
+      {/* Snapshot separation: when a new assessment is running, the remediation results below are
+          from the prior assessment phase. Show a persistent warning so users know the numbers belong
+          to two different snapshots. Dismissible so they can keep working from the old results. */}
+      {showStaleBanner && (
+        <div role="status" style={{
+          display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between',
+          background: 'color-mix(in srgb, #d97706 12%, var(--surface))',
+          border: '1px solid color-mix(in srgb, #d97706 30%, transparent)',
+          borderRadius: 8, padding: '10px 14px', marginBottom: 12, flexWrap: 'wrap',
+        }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', minWidth: 0 }}>
+            <span aria-hidden="true" style={{ fontSize: 16, lineHeight: '20px', flexShrink: 0 }}>⚠</span>
+            <div>
+              <strong style={{ fontSize: 13.5 }}>A new assessment is running</strong>
+              <div style={{ fontSize: 12.5, color: 'var(--ink)', marginTop: 2 }}>
+                The remediation results below are from{assessedAt ? ` ${assessedAt}` : ' a previous assessment'}.
+                They will not update until the new assessment completes.
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+            <button
+              onClick={() => onNavigate?.('assess')}
+              style={{ fontSize: 12.5, padding: '4px 10px', borderRadius: 6, border: '1px solid var(--line)',
+                       background: 'var(--surface)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              View assessment progress
+            </button>
+            <button
+              onClick={() => setStaleDismissed(true)}
+              style={{ fontSize: 12.5, padding: '4px 10px', borderRadius: 6, border: 'none',
+                       background: 'transparent', cursor: 'pointer', color: 'var(--muted)', whiteSpace: 'nowrap' }}>
+              Continue from previous results
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Above the hero, which carries the headline finding counts — the numbers a reader would
           otherwise take as "the estate". No findings count is passed: there is no open-findings
           total in scope here, and inventing one to fill the sentence would be the opposite of
