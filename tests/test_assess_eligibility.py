@@ -229,6 +229,67 @@ def test_endpoint_uses_latest_discovery(client):
     assert body["discovered"] == 6
 
 
+def _seed_discover_only_scan(store, sid: str, owner: str, files: list[dict],
+                             started_at: str = "2026-08-21T16:00:00+00:00") -> None:
+    """A REAL ADR 0020 Discover-only scan — status='discovered', completed_at NEVER set — built
+    the same way handlers._scan_discover actually creates one (init_scan_run with status=
+    'discovered' and a scope dict, then add_inventory for the per-file rows), not save_scan
+    (which hardcodes status='done' and always wants a completed_at — the wrong shape for this
+    exact case)."""
+    import estate_inventory as ei
+    store.init_scan_run(sid, "drive", len(files), started_at, "wcag-aa", "h", owner=owner,
+                        status="discovered", scope={"kind": "drive", "inventory": ei.summarize(files)})
+    store.add_inventory(sid, [{"file": f["name"]} for f in files])
+
+
+def test_endpoint_sees_a_never_assessed_discover_only_scan(client):
+    """THE regression: found live 2026-08-21 on a real 170-file account that had only ever run
+    Discover — /assess/eligibility reported "0 documents will be opened and scored" because
+    _latest_inventory/_latest_scan_id_with_inventory both went through list_scans(), which
+    filters to completed_at IS NOT NULL and therefore cannot see a scan that is genuinely done
+    with discovery but has never been assessed (completed_at stays NULL forever under ADR 0020,
+    same as an in-flight scan — the two are indistinguishable to that filter)."""
+    c, store = client
+    _seed_discover_only_scan(store, "scan01", "demo", _SAMPLE_ESTATE)
+    res = c.get("/assess/eligibility")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["discovered"] == 6
+    assert body["eligible"] == 4
+    assert body["by_format"] == {"docx": 1, "pdf": 1, "pptx": 1, "xlsx": 1}
+
+
+def test_a_discover_only_scan_still_reports_lifecycle_exclusion(client):
+    """_latest_scan_id_with_inventory (the per-file half) must also see the discover-only scan —
+    this is what makes lifecycle_excluded/lifecycle_eligible_excluded work pre-Assess too."""
+    c, store = client
+    files = [{"id": "a", "name": "report.docx", "mimeType": ""},
+             {"id": "b", "name": "old.pdf", "mimeType": ""}]
+    store.init_scan_run("scan01", "drive", len(files), "2026-08-21T16:00:00+00:00", "wcag-aa", "h",
+                        owner="demo", status="discovered",
+                        scope={"kind": "drive", "inventory": estate_inventory.summarize(files)})
+    _seed_per_file(store, "scan01", [
+        {"file": "report.docx"},
+        {"file": "old.pdf", "status": "Archive Candidate"},
+    ])
+    body = c.get("/assess/eligibility").json()
+    assert body["lifecycle_excluded"] == 1
+    assert body["lifecycle_eligible_excluded"] == 1
+
+
+def test_an_assessed_scan_still_wins_over_an_older_discover_only_one(client):
+    """The fix must not make a stale discover-only scan outrank a genuinely newer, assessed one —
+    ordering is COALESCE(completed_at, discovered_at, started_at), so a later completed_at wins."""
+    c, store = client
+    _seed_discover_only_scan(store, "scan_old", "demo",
+                             [{"id": "a", "name": "one.docx", "mimeType": ""}],
+                             started_at="2026-08-18T09:00:00+00:00")
+    _seed_discovery(store, "scan_new", "demo", _SAMPLE_ESTATE,
+                    completed_at="2026-08-21T10:05:00+00:00")
+    body = c.get("/assess/eligibility").json()
+    assert body["discovered"] == 6   # the newer, assessed scan's estate — not the older one
+
+
 def test_codeset_catalog_endpoint(client):
     c, _ = client
     body = c.get("/assess/codeset").json()

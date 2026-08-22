@@ -1607,6 +1607,44 @@ class Store:
             # "certifiable / files" per row, so fill them here too rather than showing a gap.
             return [self._fill_run_aggregate(cur, r) for r in rows]
 
+    def list_scans_including_discovered(self, owner: str | None = None) -> list[dict]:
+        """Every scan, newest-first, INCLUDING an ADR 0020 Discover-only run that has never been
+        assessed — the one case `list_scans` exists specifically to hide.
+
+        Built for api/routes/assess.py's eligibility preview, which needs to answer "how many
+        documents would Assess score" from the LATEST discovery, not the latest ASSESSED scan.
+        `list_scans()` cannot serve this: it filters to `completed_at IS NOT NULL` to keep
+        in-flight runs out of the scan picker, but a Discover-only run reaches
+        status='discovered' with `completed_at` staying NULL forever until Assess runs — the
+        exact case this method exists to surface. Found live 2026-08-21: a real, fully-discovered
+        170-file estate reported "0 documents will be opened and scored" because the eligibility
+        check could not see its own scan.
+
+        Ordered by COALESCE(completed_at, discovered_at, started_at) — completed_at when
+        assessed, discovered_at (the instant discovery itself finished, ADR 0020) when not yet
+        assessed, started_at only for scans predating the discovered_at column. Mirrors
+        previous_run_for_source's identical fallback chain for the identical problem.
+
+        NOT a drop-in replacement for list_scans, and not meant to be used as one — at least
+        three other call sites (App.jsx's Time-travel detection, /schedule's "last successful
+        scan", and two "previous scan by array position" lookups in scans.py/report.py) depend on
+        list_scans' current, narrower "every row has a real completed_at" contract, and widening
+        it under them would corrupt array-position lookups the moment a NULL completed_at sorts
+        ahead of a real one (Postgres and SQLite disagree on default NULL ordering in
+        `ORDER BY ... DESC`, so this could pass tests and misbehave in production). Use this
+        method only where the caller genuinely wants "the latest scan, assessed or not."
+        """
+        with self._db.cursor() as cur:
+            where, params = "1=1", ()
+            if owner:
+                where = "owner_email=%s"; params = (owner,)
+            self._db.execute(cur,
+                "SELECT id,completed_at,source,rubric_hash,files,certifiable,uncertain,error,avg_score,assessed_at,scope "
+                f"FROM scan_runs WHERE {where} "
+                "ORDER BY COALESCE(completed_at, discovered_at, started_at) DESC", params)
+            rows = self._db.fetchall(cur)
+            return [self._fill_run_aggregate(cur, r) for r in rows]
+
     def mark_assessed(self, scan_id: str, when: str) -> None:
         """Stamp the scan as assessed (the user ran Assess). Results views gate on this."""
         with self._db.cursor() as cur:
