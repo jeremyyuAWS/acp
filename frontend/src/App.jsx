@@ -36,7 +36,7 @@ import { documentRows } from './assessMetrics.js'
 import RunDetails from './RunDetails.jsx'
 import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
-import Dashboard from './Dashboard.jsx'
+// Dashboard import removed — component retired from Assess tab (kept on disk)
 import { CAPABILITY_FALLBACK, ASSESSMENT_FALLBACK, fmtOf } from './capability.js'
 import Remediate from './Remediate.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
@@ -1376,7 +1376,7 @@ export default function App() {
               <RunDetails scanId={run.id} files={files} cap={cap} assessment={assessment}
                           onBack={() => { setRunDetails(false); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
             )}
-            {assessed && resultsReady && !runDetails && !assessFile && <><AssessSummary files={files} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} run={run} notStarted={run?.not_assessed?.count} onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onRunDetails={() => { setRunDetails(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onChangeScope={() => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><AssessWorklist files={files} cap={cap} assessment={assessment} onOpenFile={(row) => setAssessFile(row)} onBulkFix={(rows) => handleBulkFix(run.id, rows)} /><RuleBreakdown scanId={run.id} files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
+            {assessed && resultsReady && !runDetails && !assessFile && <><AssessSummary files={files} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} run={run} notStarted={run?.not_assessed?.count} onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onRunDetails={() => { setRunDetails(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onChangeScope={() => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><AssessWorklist files={files} cap={cap} assessment={assessment} onOpenFile={(row) => setAssessFile(row)} onBulkFix={(rows) => handleBulkFix(run.id, rows)} /><RuleBreakdown scanId={run.id} files={files} /></>}
           </>
         ) : placeholder)}
 
