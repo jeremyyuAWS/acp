@@ -482,17 +482,22 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                 scored yet (see pollDeferred). Distinguishes "about to start" from "genuinely
                 stuck" instead of leaving both read as an identical, silent 0%. */}
             {jobInfo && !workersDown && (
-              <div className="muted" style={{ fontSize: 12.5, margin: '2px 0 0' }}>
+              <div style={{ fontSize: 13, margin: '4px 0 0', display: 'flex', alignItems: 'center', gap: 6 }}>
                 {jobInfo.status === 'queued'
-                  ? <>⏳ Queued — waiting for a worker to pick this up
-                      {assessStartedAt && <> · {fmtElapsed(nowTick - assessStartedAt)}</>}</>
+                  ? <><span style={{ background: '#FAEEDA', color: '#854F0B', fontWeight: 600,
+                                     padding: '2px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>
+                        ⏳ Queued
+                      </span>
+                      <span className="muted">— waiting for a worker to pick this up
+                        {assessStartedAt && <> · {fmtElapsed(nowTick - assessStartedAt)}</>}
+                      </span></>
                   : jobInfo.status === 'dead'
-                    ? <span style={{ color: '#8A2A20' }}>⚠ This run failed repeatedly and stopped retrying
+                    ? <span style={{ color: '#8A2A20', fontWeight: 600 }}>⚠ This run failed repeatedly and stopped retrying
                         {jobInfo.error && <> — {jobInfo.error}</>}</span>
                     : jobInfo.status === 'running'
-                      ? <>🔧 A worker is on this now{jobInfo.phase && <> · {jobInfo.phase}</>}
-                          {jobInfo.locked_at && <> · claimed {fmtElapsed(Date.now() - new Date(jobInfo.locked_at).getTime())} ago</>}</>
-                      : assessStartedAt && <>Running · {fmtElapsed(nowTick - assessStartedAt)}</>}
+                      ? <span className="muted">🔧 A worker is on this now{jobInfo.phase && <> · {jobInfo.phase}</>}
+                          {jobInfo.locked_at && <> · claimed {fmtElapsed(Date.now() - new Date(jobInfo.locked_at).getTime())} ago</>}</span>
+                      : assessStartedAt && <span className="muted">Running · {fmtElapsed(nowTick - assessStartedAt)}</span>}
               </div>
             )}
             {(currentFile || currentPhase) && (
