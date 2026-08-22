@@ -822,8 +822,15 @@ def scan_inventory_csv(sid: str, request: Request):
         raise HTTPException(404, "scan not found")
     import csv
     import io
+    # lifecycle_rule_id/lifecycle_reason/lifecycle_override_* were missing here even though
+    # store.list_inventory already selects them (_INV_COLS) — an auditor exporting the estate saw
+    # THAT a file was tagged (lifecycle_status) but not WHICH rule tagged it, WHY, or whether a
+    # human overrode the recommendation (lifecycle rules #8). Added alongside lifecycle_status,
+    # not in place of it.
     cols = ["file", "owner", "size_kb", "mime", "format", "status", "doc_class",
-            "lifecycle_status", "path", "parent_folder", "created_at", "source_modified",
+            "lifecycle_status", "lifecycle_rule_id", "lifecycle_reason",
+            "lifecycle_override_reason", "lifecycle_overridden_by", "lifecycle_overridden_at",
+            "path", "parent_folder", "created_at", "source_modified",
             "discovered_at", "drive_file_id"]
     buf = io.StringIO()
     w = csv.writer(buf)
