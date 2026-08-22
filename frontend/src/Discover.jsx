@@ -211,9 +211,17 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // location-filtered view, so a narrowed location narrows the whole Discover surface coherently.
   const visibleFiles = locActive ? files.filter(locMatch) : files
   const hiddenByLoc = files.length - visibleFiles.length
+  // `files` is `file_records` (App.jsx's scan?.files), which ADR 0020 leaves empty until Assess
+  // actually opens each document — it is NOT what Discover found. Before Assess ever runs, or
+  // mid-run, files.length reads as 0-or-partial while the estate genuinely holds scope.inventory
+  // .discovered documents (found live 2026-08-22: a fresh Discover-only scan showed "0 documents
+  // discovered" here while the very same screen's own breakdown, sourced from scope.inventory,
+  // correctly said 170). Falls back to files.length so a scan predating scope.inventory — nothing
+  // recorded the estate size any other way — still shows its historical count instead of 0.
+  const discoveredCount = scope?.inventory?.discovered ?? files.length
   // Stated against the raw discovered count — the estate line describes discovery, which the
   // location view filter never restricts.
-  const scopeLine = scopeSentence(scope, files.length)
+  const scopeLine = scopeSentence(scope, discoveredCount)
   const ownerOf = (f) => delegations[f.owner] || f.owner
   const isDelegated = (f) => !!delegations[f.owner]
 
@@ -448,7 +456,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
 
       <div className="estatebar">
         <div>
-          <b>{files.length} documents</b> discovered across {sources.length} sources · {Object.keys(groups).length} departments
+          <b>{discoveredCount} documents</b> discovered across {sources.length} sources · {Object.keys(groups).length} departments
           {/* WHAT the count counts. "N documents discovered" alone is what let a one-folder scan
               reporting 1 and a whole-Drive scan reporting 8 look like the same measurement of a
               shrinking estate (see scanScope.js). Rendered for every recorded scope, not only
