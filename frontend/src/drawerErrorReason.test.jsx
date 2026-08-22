@@ -76,6 +76,7 @@ vi.mock('./api.js', () => ({
   remediateScan: inert, rescoreFile: inert, resetDemoData: inert, setAllowlist: inert,
   setCampaignStatus: inert, setDispositionPolicyEnabled: inert, setLangfuseBase: inert,
   setScanLocations: inert, setScopeRuleEnabled: inert, setWorkers: inert, suggestFix: inert,
+  getWorkerReplicas: inert, setWorkerReplicas: inert,
   updateHitlItem: inert, updateSettings: inert, uploadToDrive: inert,
   uploadToSharePoint: inert, validateAlt: inert,
 }))

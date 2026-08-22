@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { allRules } from './rules'
 import { WCAG } from './wcagCatalog.js'
-import { assessScan, getCapability, getScan, getScanTraces, refreshScanDriveToken, getQueueJob } from './api.js'
+import { assessScan, getCapability, getScan, getScanTraces, refreshScanDriveToken, getQueueJob, getJobs, setWorkers, getWorkerReplicas, setWorkerReplicas } from './api.js'
 import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
 import { TraceChip } from './Transparency.jsx'
 import { assessLine } from './phaseNarration.js'
@@ -129,6 +129,55 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     const id = setInterval(() => setNowTick(Date.now()), 1000)
     return () => clearInterval(id)
   }, [phase])
+  // Live worker strip — polled at 10s while running (lighter than QueuePanel's 2s; the
+  // user needs "is it alive?" not sub-second accuracy here).
+  const [workerSnap, setWorkerSnap] = useState(null)    // {workers, running, queued, worker_tier_alive}
+  const [workerBusy, setWorkerBusy] = useState(false)
+  useEffect(() => {
+    if (phase !== 'running') return undefined
+    let on = true
+    const load = () => getJobs().then((d) => {
+      if (!on) return
+      setWorkerSnap({ workers: d.workers ?? 0, running: d.stats?.running ?? 0,
+                      queued: d.stats?.queued ?? 0, alive: !!d.worker_tier_alive })
+    }).catch(() => {})
+    load()
+    const id = setInterval(load, 10000)
+    return () => { on = false; clearInterval(id) }
+  }, [phase])
+  const adjustWorkers = (delta) => {
+    if (!workerSnap || workerBusy) return
+    const next = Math.max(0, Math.min(16, workerSnap.workers + delta))
+    if (next === workerSnap.workers) return
+    setWorkerBusy(true)
+    setWorkerSnap((s) => ({ ...s, workers: next }))   // optimistic
+    setWorkers(next)
+      .then((d) => setWorkerSnap((s) => ({ ...s, workers: d.workers ?? next })))
+      .catch(() => setWorkerSnap((s) => ({ ...s, workers: workerSnap.workers })))
+      .finally(() => setWorkerBusy(false))
+  }
+  // Azure Container App replica control — fetched once when running starts; hidden when
+  // AZURE_SUBSCRIPTION_ID is absent on the backend (configured: false).
+  const [replicaSnap, setReplicaSnap] = useState(null)
+  const [replicaBusy, setReplicaBusy] = useState(false)
+  useEffect(() => {
+    if (phase !== 'running') return undefined
+    let on = true
+    getWorkerReplicas().then((d) => { if (on && d.configured) setReplicaSnap(d) }).catch(() => {})
+    return () => { on = false }
+  }, [phase])
+  const adjustReplicas = (delta) => {
+    if (!replicaSnap || replicaBusy) return
+    const next = Math.max(1, Math.min(replicaSnap.max_replicas ?? 5, replicaSnap.min_replicas + delta))
+    if (next === replicaSnap.min_replicas) return
+    const prev = replicaSnap.min_replicas
+    setReplicaBusy(true)
+    setReplicaSnap((s) => ({ ...s, min_replicas: next }))   // optimistic
+    setWorkerReplicas(next)
+      .then((d) => setReplicaSnap(d))
+      .catch(() => setReplicaSnap((s) => ({ ...s, min_replicas: prev })))
+      .finally(() => setReplicaBusy(false))
+  }
   // Remediation capability ({fmt: {sc: mode}}) — fetched once, seeded with the bundled
   // table so the auto-fixable counts are correct synchronously (and never regress to the
   // format-blind view if the fetch is slow or fails).
@@ -482,17 +531,63 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                 scored yet (see pollDeferred). Distinguishes "about to start" from "genuinely
                 stuck" instead of leaving both read as an identical, silent 0%. */}
             {jobInfo && !workersDown && (
-              <div className="muted" style={{ fontSize: 12.5, margin: '2px 0 0' }}>
+              <div style={{ fontSize: 13, margin: '4px 0 0', display: 'flex', alignItems: 'center', gap: 6 }}>
                 {jobInfo.status === 'queued'
-                  ? <>⏳ Queued — waiting for a worker to pick this up
-                      {assessStartedAt && <> · {fmtElapsed(nowTick - assessStartedAt)}</>}</>
+                  ? <><span style={{ background: '#FAEEDA', color: '#854F0B', fontWeight: 600,
+                                     padding: '2px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>
+                        ⏳ Queued
+                      </span>
+                      <span className="muted">— waiting for a worker to pick this up
+                        {assessStartedAt && <> · {fmtElapsed(nowTick - assessStartedAt)}</>}
+                      </span></>
                   : jobInfo.status === 'dead'
-                    ? <span style={{ color: '#8A2A20' }}>⚠ This run failed repeatedly and stopped retrying
+                    ? <span style={{ color: '#8A2A20', fontWeight: 600 }}>⚠ This run failed repeatedly and stopped retrying
                         {jobInfo.error && <> — {jobInfo.error}</>}</span>
                     : jobInfo.status === 'running'
-                      ? <>🔧 A worker is on this now{jobInfo.phase && <> · {jobInfo.phase}</>}
-                          {jobInfo.locked_at && <> · claimed {fmtElapsed(Date.now() - new Date(jobInfo.locked_at).getTime())} ago</>}</>
-                      : assessStartedAt && <>Running · {fmtElapsed(nowTick - assessStartedAt)}</>}
+                      ? <span className="muted">🔧 A worker is on this now{jobInfo.phase && <> · {jobInfo.phase}</>}
+                          {jobInfo.locked_at && <> · claimed {fmtElapsed(Date.now() - new Date(jobInfo.locked_at).getTime())} ago</>}</span>
+                      : assessStartedAt && <span className="muted">Running · {fmtElapsed(nowTick - assessStartedAt)}</span>}
+              </div>
+            )}
+            {workerSnap && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0 2px',
+                            fontSize: 12.5, flexWrap: 'wrap' }}>
+                <span style={{ color: workerSnap.alive ? '#1a7f37' : '#854F0B', fontWeight: 600 }}>
+                  {workerSnap.alive ? '● worker service online' : '● worker service offline'}
+                </span>
+                <span className="muted">·</span>
+                <span className="muted">{workerSnap.running} running · {workerSnap.queued} queued</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 4 }}>
+                  <button onClick={() => adjustWorkers(-1)} disabled={workerBusy || workerSnap.workers <= 0}
+                          aria-label="Remove an in-process worker"
+                          style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
+                                   background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
+                                   cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>−</button>
+                  <span style={{ fontSize: 13, fontWeight: 600, minWidth: 14, textAlign: 'center' }}>{workerSnap.workers}</span>
+                  <button onClick={() => adjustWorkers(+1)} disabled={workerBusy || workerSnap.workers >= 16}
+                          aria-label="Add an in-process worker"
+                          style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
+                                   background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
+                                   cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>+</button>
+                  <span className="muted" style={{ fontSize: 11 }}>in-process workers</span>
+                </span>
+                {replicaSnap && (<>
+                  <span className="muted">·</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <button onClick={() => adjustReplicas(-1)} disabled={replicaBusy || replicaSnap.min_replicas <= 1}
+                            aria-label="Remove a Container App replica"
+                            style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
+                                     background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
+                                     cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>−</button>
+                    <span style={{ fontSize: 13, fontWeight: 600, minWidth: 14, textAlign: 'center' }}>{replicaSnap.min_replicas}</span>
+                    <button onClick={() => adjustReplicas(+1)} disabled={replicaBusy || replicaSnap.min_replicas >= (replicaSnap.max_replicas ?? 5)}
+                            aria-label="Add a Container App replica"
+                            style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
+                                     background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
+                                     cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>+</button>
+                    <span className="muted" style={{ fontSize: 11 }}>Azure replicas (max {replicaSnap.max_replicas})</span>
+                  </span>
+                </>)}
               </div>
             )}
             {(currentFile || currentPhase) && (

@@ -37,7 +37,7 @@ import RunDetails from './RunDetails.jsx'
 import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
 import Dashboard from './Dashboard.jsx'
-import { CAPABILITY_FALLBACK, ASSESSMENT_FALLBACK } from './capability.js'
+import { CAPABILITY_FALLBACK, ASSESSMENT_FALLBACK, fmtOf } from './capability.js'
 import Remediate from './Remediate.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
 import ScanReviewModal from './ScanReviewModal.jsx'
@@ -122,6 +122,33 @@ const OCHIP_STYLE = {
   muted: { color: '#54636F', background: '#ECEFF4' },
 }
 
+
+// Group landed files by format — returns [{fmt, count}] sorted descending, max 5 formats.
+// Used in the format breakdown strip under the outcome chips.
+function formatBreakdown(files) {
+  if (!files || files.length === 0) return []
+  const counts = {}
+  for (const f of files) {
+    const fmt = (fmtOf(f) || 'other').toUpperCase()
+    counts[fmt] = (counts[fmt] || 0) + 1
+  }
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([fmt, count]) => ({ fmt, count }))
+}
+
+// Failed-by-format breakdown: only files with status==='error', same grouping.
+function failedByFormat(files) {
+  if (!files || files.length === 0) return []
+  return formatBreakdown(files.filter((f) => f.status === 'error'))
+}
+
+// Count of landed files that have at least one finding (status === 'uncertain').
+function findingsSoFar(files) {
+  if (!files) return 0
+  return files.filter((f) => f.status === 'uncertain').length
+}
 
 function progressPct(p) {
   if (!p) return 0
@@ -1172,12 +1199,46 @@ export default function App() {
               ))}
             </div>
           )}
-          {/* Expandable per-file transparency — collapsed by default, so it does not force everyone to
-              watch a scrolling log. Fed by the live file results get_scan streams. */}
+          {/* Live insights: findings spotted so far, format breakdown, failed-by-format.
+              All derived from progress.files (the per-file results streamed as they land) —
+              no extra API calls. Hidden until files actually start landing (chips already gate on this). */}
+          {progress.files && progress.files.length > 0 && (() => {
+            const withFindings = findingsSoFar(progress.files)
+            const fmts = formatBreakdown(progress.files)
+            const failFmts = failedByFormat(progress.files)
+            return (
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 16px',
+                            marginTop: 8, fontSize: 12, color: '#54636F' }}>
+                {fmts.length > 0 && (
+                  <span>
+                    {fmts.map(({ fmt, count }, i) => (
+                      <span key={fmt}>{i > 0 ? <span style={{ opacity: .4, margin: '0 4px' }}>·</span> : null}
+                        <b style={{ color: '#3C4858' }}>{fmt}</b> {count}
+                      </span>
+                    ))}
+                    <span style={{ opacity: .5, marginLeft: 6 }}>landed by format</span>
+                  </span>
+                )}
+                {withFindings > 0 && (
+                  <span style={{ color: '#9A6011' }}>
+                    ⚠ {withFindings} file{withFindings === 1 ? '' : 's'} with findings so far
+                  </span>
+                )}
+                {failFmts.length > 0 && (progress.outcomes?.failed || 0) > 0 && (
+                  <span style={{ color: '#A5314A' }}>
+                    {(progress.outcomes.failed).toLocaleString()} failed:{' '}
+                    {failFmts.map(({ fmt, count }, i) => (
+                      <span key={fmt}>{i > 0 ? ', ' : ''}{fmt} {count}</span>
+                    ))}
+                  </span>
+                )}
+              </div>
+            )
+          })()}
           {/* Why 250 selected → fewer assessed: the eligibility breakdown, so fewer-assessed is
               explained, not glossed over. Same three-denominator inventory EstateCoverage uses. */}
           <ScopeFunnel inventory={progress.inventory} blocked={progress.blocked} />
-          <ProcessingDetails files={progress.files} processing={progress.outcomes?.processing || 0} />
+          <ProcessingDetails files={progress.files} processing={progress.outcomes?.processing || 0} defaultOpen />
           {/* Live Assessment command center — KPIs + funnel + worker/lane, polled from /scans/{sid}/live.
               Inert until the endpoint returns an available snapshot, so it is a no-op on backends without
               it and adds nothing to the panel when there is nothing live to show. */}

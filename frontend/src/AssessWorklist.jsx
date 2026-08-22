@@ -46,17 +46,18 @@ const STATE_LABEL = {
   attention: 'need attention',
   awaiting_review: 'awaiting review',
   clear: 'with no findings',
-  unopened: 'failed to open',
+  unopened: 'could not be opened',
 }
 
-// The four filters, in triage order. `clear` deliberately has no button of its own — it is the
-// state with no work in it — but its population is named above the table, so choosing a filter
-// never makes a document vanish without a number saying how many went with it.
+// The five filters, in triage order. `clear` now has its own tab (user request 2026-08-22) so
+// it is reachable without choosing "All" — the population is named and the tab is disabled when
+// zero, so it adds information rather than clutter.
 const FILTERS = [
-  { key: 'attention', label: 'Needs attention', match: (r) => r.state === 'attention' },
+  { key: 'attention',       label: 'Needs attention', match: (r) => r.state === 'attention' },
   { key: 'awaiting_review', label: 'Awaiting review', match: (r) => r.state === 'awaiting_review' },
-  { key: 'unopened', label: 'Failed to open', match: (r) => r.state === 'unopened' },
-  { key: 'all', label: 'All', match: () => true },
+  { key: 'clear',           label: 'Clear',           match: (r) => r.state === 'clear' },
+  { key: 'unopened',        label: 'Could not open',  match: (r) => r.state === 'unopened' },
+  { key: 'all',             label: 'All',             match: () => true },
 ]
 
 /** Addition over the module's own row fields. An unopened row has no such field and adds nothing. */
@@ -141,7 +142,6 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
 
   const counts = {}
   for (const f of FILTERS) counts[f.key] = rows.filter(f.match).length
-  const clear = rows.filter((r) => r.state === 'clear').length
 
   const active = counts[chosen] ? chosen : (counts.attention ? 'attention' : 'all')
   const stateScoped = rows.filter(FILTERS.find((f) => f.key === active).match)
@@ -192,30 +192,47 @@ export default function AssessWorklist({ files, cap, assessment, criteria, level
 
   const populations = [
     ['attention', counts.attention], ['awaiting_review', counts.awaiting_review],
-    ['clear', clear], ['unopened', counts.unopened],
+    ['clear', counts.clear], ['unopened', counts.unopened],
   ].filter(([, n]) => n > 0)
 
   return (
     <section className="panel assessworklist">
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
-                    gap: 12, flexWrap: 'wrap' }}>
-        <div>
-          <span style={{ fontSize: 15, fontWeight: 650 }}>Documents</span>
-          {/* Named above the table so the populations are readable before anything is filtered. */}
-          <span className="muted" style={{ fontSize: 12.5 }}>
-            {' '}— {populations.map(([k, n]) => `${n} ${STATE_LABEL[k]}`).join(' · ')}
-          </span>
-        </div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {FILTERS.map((f) => (
-            <button key={f.key} type="button" className={f.key === active ? 'small' : 'ghost small'}
-                    aria-pressed={f.key === active}
-                    disabled={f.key !== 'all' && counts[f.key] === 0}
-                    onClick={() => setChosen(f.key)}>
-              {f.label} {counts[f.key]}
+                    gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
+        <span style={{ fontSize: 15, fontWeight: 650 }}>Documents</span>
+        <span className="muted" style={{ fontSize: 12.5 }}>
+          {populations.map(([k, n]) => `${n} ${STATE_LABEL[k]}`).join(' · ')}
+        </span>
+      </div>
+      {/* Filter bar — full-width underline style. Uses aria-pressed (toggle buttons) rather than
+          aria-selected (tabs) so tests and AT see the pressed state without a tablist context.
+          Disabled buttons are shown but non-interactive so the reader knows empty categories exist. */}
+      <div role="group" aria-label="Filter documents"
+           style={{ display: 'flex', gap: 0, borderBottom: '2px solid var(--line)', marginBottom: 12 }}>
+        {FILTERS.map((f) => {
+          const isActive = f.key === active
+          const isEmpty = f.key !== 'all' && counts[f.key] === 0
+          return (
+            <button key={f.key} type="button"
+                    aria-pressed={isActive}
+                    disabled={isEmpty}
+                    onClick={() => setChosen(f.key)}
+                    style={{
+                      padding: '7px 14px', fontSize: 13, fontWeight: isActive ? 650 : 400,
+                      border: 'none', borderBottom: isActive ? '2px solid var(--plum)' : '2px solid transparent',
+                      marginBottom: -2, borderRadius: 0,
+                      background: 'transparent',
+                      color: isEmpty ? 'var(--muted)' : isActive ? 'var(--plum)' : 'var(--ink)',
+                      cursor: isEmpty ? 'default' : 'pointer',
+                    }}>
+              {f.label}{' '}
+              <span style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums',
+                             color: isActive ? 'var(--plum)' : 'var(--muted)' }}>
+                {counts[f.key]}
+              </span>
             </button>
-          ))}
-        </div>
+          )
+        })}
       </div>
 
       {/* A19 severity filter + A24 auto-fixable toggle. Shown only when there is finding work in

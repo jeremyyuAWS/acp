@@ -23,6 +23,8 @@ googleapis-common-protos==1.75.0
 # --- Azure Blob remediated-output store (ADR 0010) — managed-identity auth, no key ---
 azure-storage-blob==12.24.0
 azure-identity==1.19.0
+# --- Azure Container Apps management (replica-count control via managed identity) ---
+azure-mgmt-appcontainers==5.0.0
 
 # --- PDF analyser engine ---
 pikepdf==10.8.0
