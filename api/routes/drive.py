@@ -195,12 +195,12 @@ _LOCATIONS_KEY = "scan_locations"
 def get_scan_locations(request: Request):
     """The folders each source is scoped to, as chosen on the Sources tab.
 
-    Mounted under /sources — an ALREADY-GATED prefix — rather than a new top-level path. core.py's
-    API_PREFIXES gate is DEFAULT-OPEN: a route group not listed there is served with no auth at
-    all, which is how /campaigns and /disposition once shipped unauthenticated. A new prefix would
-    have done exactly that here (verified: core.is_public("/scan-locations") returned True), and
-    this route writes server state. Reusing a gated prefix removes the possibility rather than
-    adding one more entry that has to stay in sync.
+    Mounted under /sources rather than a new top-level path — historical caution from when
+    core.py's gate was a manually-maintained prefix allowlist, DEFAULT-OPEN for anything not
+    listed (how /campaigns and /disposition, then five more route groups, shipped unauthenticated
+    over five weeks). The gate is fail-closed now (2026-08-22): any REGISTERED route requires auth
+    by default, so a new top-level router would no longer create that specific risk. Left mounted
+    here anyway — a working, already-tested placement with no reason to move it.
 
     A location set is a property of the CONNECTION, not of one scan. That is the whole reason
     this is persisted rather than passed per scan: "which folders do we scan" is a thing an

@@ -372,19 +372,110 @@ ALERT_KEY = os.environ.get("ACP_ALERT_KEY", "acp-alert-demo-key")
 # owners, no document content. NO DEFAULT VALUE: a monitoring credential that ships with a
 # well-known fallback is a backdoor, so an unset key disables the route rather than opening it.
 MONITOR_KEY = os.environ.get("ACP_MONITOR_KEY") or None
-# API routes require auth; everything else is the SPA (static file or client route).
-API_PREFIXES = (
-    "/scans", "/rubric", "/rules", "/inventory", "/schedule",
-    "/me", "/sources", "/folders", "/drive", "/hitl", "/ai",
-    "/settings", "/decisions", "/jobs", "/workers", "/admin",
-    "/campaigns", "/disposition", "/monitor", "/assess",
-    "/analytics", "/control", "/org-memory", "/scope", "/sharepoint",
-)
-# ^ Default-open gate: any route group NOT listed here is served without auth
-# (that's how the SPA's client routes fall through). Every new APIRouter MUST be
-# added — /campaigns and /disposition shipped unauthenticated because they
-# weren't. tests/test_auth_route_coverage.py now fails the suite when a
-# registered API route falls outside this tuple.
+# FAIL-CLOSED gate (2026-08-22, replacing a fail-open manually-maintained allowlist).
+#
+# The previous design was a hand-maintained tuple of "protected" prefixes (API_PREFIXES) with
+# everything else served unauthenticated by default — the natural default for a small surface,
+# but one that silently missed FIVE separate route groups over five weeks as the app grew
+# (/campaigns, /disposition, then /assess, /analytics, /control, /org-memory, /scope,
+# /sharepoint — the last including an unauthenticated file-upload endpoint). Each shipped
+# unauthenticated not because anyone decided it should be public, but because nobody remembered
+# to extend a list a mile from the route definition. tests/test_auth_route_coverage.py is the
+# guard that should have caught this and, for a stretch, silently couldn't (see that file's own
+# history) — a second line of defense is not a substitute for removing the failure mode itself.
+#
+# This checks the REAL, REGISTERED route table instead: any path FastAPI would actually dispatch
+# to requires auth by default, unless explicitly listed in ALWAYS_PUBLIC (or the one path-pattern
+# carve-out below). A new APIRouter is protected automatically the moment it's included — there
+# is no list left to forget.
+#
+# `_PROTECTED_ROUTES` is populated two ways, both safe against the app.py/core.py import order
+# (app.py imports core, not the reverse — core.py cannot import app.py at ITS OWN module level
+# without creating a cycle):
+#   1. Explicitly: app.py calls register_protected_routes() at module level, immediately after
+#      every router is included — the normal path in the real running app.
+#   2. Lazily: if is_public() is ever reached before that (a test that imports core directly
+#      without going through app.py first, or a future startup-ordering change), _protected_routes()
+#      below imports `app` itself — a LOCAL import, deferred until first actual use, which is safe
+#      specifically because is_public() is only ever called from inside the request-handling
+#      middleware, never at either module's IMPORT time. By the time any request is served,
+#      app.py has already finished executing top to bottom and sits fully built in sys.modules,
+#      so this local import is a cache hit, not a re-execution — no cycle, regardless of which
+#      module happened to import first.
+_PROTECTED_ROUTES: list | None = None
+
+
+def register_protected_routes(routes) -> None:
+    """Called by app.py at module level, immediately after `for _router in ROUTERS:
+    app.include_router(_router)` completes. Stores the real APIRoute objects so is_public() can
+    match a live request path against them via Starlette's own Route.matches() — not a
+    hand-rolled startswith(), which is exactly the kind of parallel, driftable string-matching
+    scheme this redesign exists to avoid. Parameterized routes (/scans/{sid}/trace/{kind},
+    /scope/rules/{rule_id}, .../{id:path}) only match correctly through the framework's own
+    path-compilation; a prefix/startswith scheme cannot see path parameters at all.
+
+    Also the override a test reaches for directly, to check is_public()'s MATCHING logic against
+    a small synthetic route set without booting the whole real app."""
+    global _PROTECTED_ROUTES
+    _PROTECTED_ROUTES = list(routes)
+
+
+def _protected_routes() -> list:
+    """The route list is_public() matches against — registered explicitly (the normal path) or,
+    failing that, imported lazily on first use. See the module comment above for why the lazy
+    import is safe here specifically (deferred past both modules' own import time)."""
+    global _PROTECTED_ROUTES
+    if _PROTECTED_ROUTES is None:
+        from app import app as _fastapi_app
+        _PROTECTED_ROUTES = enumerate_api_routes(_fastapi_app)
+    return _PROTECTED_ROUTES
+
+
+def enumerate_api_routes(app) -> list:
+    """Every real endpoint `app` will actually dispatch to — the APIRoute objects backing each
+    `include_router()` registration, unwrapped from FastAPI's opaque `_IncludedRouter` wrapper.
+
+    Takes `app` as a parameter rather than importing it, so this stays import-cycle-safe (core.py
+    is imported BY app.py) and callable from both the real startup path and its own test, which
+    both need identical logic — two implementations of "what routes exist" is how one of them
+    ends up silently checking a different (or empty) set than the real gate uses.
+
+    On FastAPI 0.137.1, `app.routes` does NOT hand back flat `APIRoute`s for anything added via
+    `include_router()` — each becomes an opaque `_IncludedRouter`, and `app.routes` holds none of
+    the original `APIRoute`s directly. `_IncludedRouter.original_router` is the actual `APIRouter`
+    instance passed to `include_router()`, whose own `.routes` are ordinary `APIRoute`s with their
+    final paths already resolved (nothing here uses `include_router(prefix=...)`, so no
+    prefix-joining is needed). Falls back to treating `r` itself as the router for older/newer
+    FastAPI internals that don't wrap routers this way."""
+    from fastapi.routing import APIRoute
+
+    def _expand(r):
+        if isinstance(r, APIRoute):
+            return [r]
+        router = getattr(r, "original_router", r)
+        return [sub for sub in getattr(router, "routes", ()) if isinstance(sub, APIRoute)]
+
+    return [route for r in app.routes for route in _expand(r)]
+
+
+def _matches_a_protected_route(path: str) -> bool:
+    """True iff `path` matches ANY registered API route's pattern, by method or not — even a
+    request with the wrong HTTP method for a real endpoint (Match.PARTIAL) is still a real API
+    path and must be gated, not waved through because the verb didn't line up. Only Match.NONE
+    against every registered route means "not a recognized backend path at all" — the SPA's own
+    client-side routes and static assets, which is the only thing this now falls through for.
+
+    Builds the minimal ASGI scope Route.matches() actually reads (type/path/method/path_params —
+    verified against the installed Starlette's own Route.matches source) rather than requiring
+    callers to construct a full request scope; the method is a placeholder since it never affects
+    whether NONE vs. PARTIAL/FULL is returned for THIS gate's purposes."""
+    from starlette.routing import Match
+    scope = {"type": "http", "path": path, "method": "GET", "path_params": {}}
+    for route in _protected_routes():
+        match, _ = route.matches(scope)
+        if match != Match.NONE:
+            return True
+    return False
 
 
 def is_public(path: str) -> bool:
@@ -395,7 +486,7 @@ def is_public(path: str) -> bool:
     # link. Matches singular "/trace/", NOT the authed "/traces" JSON endpoint.
     if path.startswith("/scans/") and "/trace/" in path:
         return True
-    if any(path == p or path.startswith(p + "/") for p in API_PREFIXES):
+    if _matches_a_protected_route(path):
         return False
     return True
 
