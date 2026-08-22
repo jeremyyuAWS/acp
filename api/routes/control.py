@@ -17,9 +17,27 @@ document nobody sees is recoverable, a document the wrong customer sees is not.
 """
 from __future__ import annotations
 
+import os
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
 
 import core
+
+# Azure Container Apps replica control — optional; gracefully absent when env vars are unset.
+# Required env vars: AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP, WORKER_APP_NAME (defaults
+# to "acp-worker"). The container's managed identity must have Contributor on the worker app.
+_AZ_SUB  = os.environ.get("AZURE_SUBSCRIPTION_ID")
+_AZ_RG   = os.environ.get("AZURE_RESOURCE_GROUP", "mdk-accessibility")
+_AZ_APP  = os.environ.get("WORKER_APP_NAME", "acp-worker")
+_AZ_CONFIGURED = bool(_AZ_SUB)
+
+
+def _az_client():
+    from azure.identity import DefaultAzureCredential
+    from azure.mgmt.appcontainers import ContainerAppsAPIClient
+    return ContainerAppsAPIClient(DefaultAzureCredential(), _AZ_SUB)
 
 router = APIRouter()
 
@@ -57,3 +75,66 @@ def estate(request: Request, dept: str = "", owner: str = ""):
         "filters": {"department": dept or None, "owner": owner or None},
         "filtered": bool(dept or owner),
     }
+
+
+# ---------------------------------------------------------------------------
+# Worker replica control — scales the acp-worker Container App's minReplicas
+# so the user can warm more workers before a large assessment run, then back
+# off to save cost when idle.  Requires AZURE_SUBSCRIPTION_ID env var and a
+# managed-identity Contributor grant on the acp-worker resource.
+# ---------------------------------------------------------------------------
+
+class ReplicaBody(BaseModel):
+    min_replicas: int = Field(..., ge=1, le=5,
+        description="Minimum warm replicas for the acp-worker Container App (1–5).")
+
+
+@router.get("/control/workers/replicas")
+def get_replicas():
+    """Current min/max replica settings for the acp-worker Container App.
+
+    Returns `configured: false` when AZURE_SUBSCRIPTION_ID is absent so the
+    frontend can hide the control rather than showing a broken state.
+    """
+    if not _AZ_CONFIGURED:
+        return {"configured": False, "min_replicas": None, "max_replicas": None}
+    try:
+        app = _az_client().container_apps.get(_AZ_RG, _AZ_APP)
+        scale = app.properties.template.scale
+        return {
+            "configured": True,
+            "min_replicas": scale.min_replicas,
+            "max_replicas": scale.max_replicas,
+            "app": _AZ_APP,
+        }
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"could not read replica config: {e}") from e
+
+
+@router.patch("/control/workers/replicas")
+def set_replicas(body: ReplicaBody):
+    """Set the minimum warm replicas for the acp-worker Container App.
+
+    Adjusts minReplicas only; maxReplicas stays at its current value so
+    Azure's autoscaler ceiling is not affected. A higher min keeps workers
+    warm before a large assessment; lower min reduces idle-container cost.
+    """
+    if not _AZ_CONFIGURED:
+        raise HTTPException(503, "AZURE_SUBSCRIPTION_ID not set — replica control is not available")
+    try:
+        client = _az_client()
+        app = client.container_apps.get(_AZ_RG, _AZ_APP)
+        app.properties.template.scale.min_replicas = body.min_replicas
+        poller = client.container_apps.begin_create_or_update(_AZ_RG, _AZ_APP, app)
+        updated = poller.result()
+        scale = updated.properties.template.scale
+        return {
+            "configured": True,
+            "min_replicas": scale.min_replicas,
+            "max_replicas": scale.max_replicas,
+            "app": _AZ_APP,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"could not update replica config: {e}") from e

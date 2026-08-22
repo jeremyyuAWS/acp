@@ -54,7 +54,7 @@ def test_defaults_workers_when_unset(monkeypatch):
     monkeypatch.setattr(core, "stop_scheduler", lambda: None)
     worker_main._stop.set()          # exit the loop immediately
     worker_main.run(poll_seconds=0.01, _install_signals=False)
-    assert seen["workers"] == "4"    # a worker container never idles at 0 by default
+    assert seen["workers"] == "12"   # a worker container defaults to 12 (safe range for 2vCPU)
 
 
 def test_drain_error_still_exits(monkeypatch):

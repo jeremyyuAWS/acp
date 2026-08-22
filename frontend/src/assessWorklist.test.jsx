@@ -231,7 +231,7 @@ describe('a document that failed to open is a run outcome, not an exclusion', ()
     await showAll(c)
     expect(named(c, 'locked.pdf').textContent, 'a failed read is described as an exclusion')
       .not.toMatch(/exclu/i)
-    expect(btn(c, /Failed to open/).textContent).not.toMatch(/exclu/i)
+    expect(btn(c, /Could not open/).textContent).not.toMatch(/exclu/i)
   })
 })
 
@@ -248,15 +248,15 @@ describe('a filter can narrow this list, never hide what it dropped', () => {
     // worklist has to carry its own denominator.
     expect(btn(c, /Needs attention/).textContent).toMatch(/Needs attention 3/)
     expect(btn(c, /Awaiting review/).textContent).toMatch(/Awaiting review 1/)
-    expect(btn(c, /Failed to open/).textContent).toMatch(/Failed to open 1/)
+    expect(btn(c, /Could not open/).textContent).toMatch(/Could not open 1/)
     expect(btn(c, /^All /).textContent).toMatch(/All 6/)
   })
 
-  it('names the population that has no filter button of its own', async () => {
+  it('names the clear population in the header and offers a Clear tab', async () => {
     const c = await mount({ files: ESTATE })
-    // `clear` documents are not a filter — there is no work in them — but dropping the count
-    // would mean one sixth of the estate appears nowhere on this panel.
     expect(c.textContent).toMatch(/1 with no findings/)
+    // Clear now has its own tab (user request 2026-08-22)
+    expect(btn(c, /^Clear/)).toBeTruthy()
   })
 
   it('prints the totals it is not showing', async () => {

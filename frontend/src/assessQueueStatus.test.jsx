@@ -24,6 +24,10 @@ vi.mock('./api.js', () => ({
   refreshScanDriveToken: (...a) => refreshScanDriveToken(...a),
   getScanTraces: (...a) => getScanTraces(...a),
   getQueueJob: (...a) => getQueueJob(...a),
+  getJobs: vi.fn(() => Promise.resolve({ workers: 0, stats: { running: 0, queued: 0 }, worker_tier_alive: false })),
+  setWorkers: vi.fn(() => Promise.resolve({ workers: 0 })),
+  getWorkerReplicas: vi.fn(() => Promise.resolve({ configured: false })),
+  setWorkerReplicas: vi.fn(() => Promise.resolve({ configured: false })),
 }))
 
 const { default: AssessRunner } = await import('./AssessRunner.jsx')

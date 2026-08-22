@@ -25,6 +25,8 @@ export function processingRows(files) {
       result: r.label,
       kind: r.kind,
       score: typeof f.score === 'number' ? f.score : null,
+      owner: f.owner || null,
+      location: f.parent_folder || null,
     }
   })
 }
