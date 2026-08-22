@@ -34,6 +34,8 @@ export default function ProcessingDetails({ files, processing = 0 }) {
             <tr>
               <th scope="col" style={cellHead}>File</th>
               <th scope="col" style={cellHead}>Format</th>
+              <th scope="col" style={cellHead}>Location</th>
+              <th scope="col" style={cellHead}>Owner</th>
               <th scope="col" style={cellHead}>Result</th>
               <th scope="col" style={{ ...cellHead, textAlign: 'right' }}>Score</th>
             </tr>
@@ -43,6 +45,10 @@ export default function ProcessingDetails({ files, processing = 0 }) {
               <tr key={r.file}>
                 <td style={cell}>{r.file}</td>
                 <td style={cell}>{r.format || '—'}</td>
+                <td style={{ ...cell, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', color: '#54636F' }}
+                    title={r.location || undefined}>{r.location || '—'}</td>
+                <td style={{ ...cell, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', color: '#54636F' }}
+                    title={r.owner || undefined}>{r.owner || '—'}</td>
                 <td style={{ ...cell, color: KIND_COLOR[r.kind], fontWeight: 500 }}>{r.result}</td>
                 <td style={{ ...cell, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                   {r.score == null ? '—' : r.score}
@@ -50,7 +56,7 @@ export default function ProcessingDetails({ files, processing = 0 }) {
               </tr>
             ))}
             {shown.length === 0 && (
-              <tr><td colSpan={4} style={{ ...cell, color: '#8891A3' }}>Nothing in this view yet.</td></tr>
+              <tr><td colSpan={6} style={{ ...cell, color: '#8891A3' }}>Nothing in this view yet.</td></tr>
             )}
           </tbody>
         </table>
