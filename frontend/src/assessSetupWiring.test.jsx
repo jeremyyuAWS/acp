@@ -236,7 +236,26 @@ describe('App composes the Assess tab the way the board specifies', () => {
     // from Discover, which is the one regression this whole relocation was held back over earlier.
     const s = app()
     expect(s).toMatch(/!\(view === 'assess' && assessPhase === 'running'\) && \([\s\S]{0,320}?Stop scan/)
-    expect(s).toMatch(/<LiveAssessmentLive[\s\S]{0,150}?onStop=\{\(\) => cancelScan\(liveScanId\)/)
+    // liveScanId || run?.id (2026-08-22): LiveAssessmentLive now also activates during an
+    // assess-only run (assessPhase === 'running'), where liveScanId is null — see the reload/
+    // resilience comment above this mount in App.jsx. Same cancelScan mechanism either way.
+    expect(s).toMatch(/<LiveAssessmentLive[\s\S]{0,150}?onStop=\{\(\) => cancelScan\(liveScanId \|\| run\?\.id\)/)
+  })
+
+  it('the live card activates during an assess-only run too, not just a scan (reload resilience, 2026-08-22)', () => {
+    // liveScanId/busy are set ONLY by doScan/reconnectScan/reconnectJob (the scan-side reconnect
+    // functions) — AssessRunner's own assess() never touches either. Before this, LiveAssessmentLive
+    // was mounted INSIDE the {busy && progress} scan banner, so it activated during Discover but
+    // stayed dark through an assess-only run, including a reload mid-assess: nothing set busy/
+    // liveScanId for that case at all, even though assessPhase IS correctly restored on reload
+    // (AssessRunner's sessionStorage resume calls setPhase('running'), reported up via onPhase).
+    //
+    // Mounted OUTSIDE that banner now (matches assess-related source found anywhere in the file,
+    // not just before <main> — a stricter "immediately before <main>" anchor would break the
+    // moment an unrelated line is added between them) with active widened to also cover
+    // assessPhase === 'running', and scanId falling back to run?.id when liveScanId is null.
+    const s = app()
+    expect(s).toMatch(/<LiveAssessmentLive scanId=\{liveScanId \|\| run\?\.id\}\s*active=\{busy \|\| assessPhase === 'running'\}/)
   })
 })
 
