@@ -17,6 +17,7 @@ const listDispositionPolicies = vi.fn()
 const createDispositionPolicy = vi.fn()
 const setDispositionPolicyEnabled = vi.fn()
 const previewDispositionPolicy = vi.fn()
+const updateDispositionPolicy = vi.fn()
 const previewDispositionDraft = vi.fn()
 const deleteDispositionPolicy = vi.fn()
 const reorderDispositionPolicies = vi.fn()
@@ -26,6 +27,7 @@ vi.mock('./api.js', () => ({
   createDispositionPolicy: (...a) => createDispositionPolicy(...a),
   setDispositionPolicyEnabled: (...a) => setDispositionPolicyEnabled(...a),
   previewDispositionPolicy: (...a) => previewDispositionPolicy(...a),
+  updateDispositionPolicy: (...a) => updateDispositionPolicy(...a),
   previewDispositionDraft: (...a) => previewDispositionDraft(...a),
   deleteDispositionPolicy: (...a) => deleteDispositionPolicy(...a),
   reorderDispositionPolicies: (...a) => reorderDispositionPolicies(...a),
@@ -41,6 +43,7 @@ beforeEach(() => {
   createDispositionPolicy.mockReset().mockResolvedValue({ policy_id: 'new1' })
   setDispositionPolicyEnabled.mockReset().mockResolvedValue({})
   previewDispositionPolicy.mockReset().mockResolvedValue({ would_match: 0 })
+  updateDispositionPolicy.mockReset().mockResolvedValue({})
   previewDispositionDraft.mockReset().mockResolvedValue({ would_match: 0 })
   deleteDispositionPolicy.mockReset().mockResolvedValue({ deleted: 'p1' })
   reorderDispositionPolicies.mockReset().mockResolvedValue([])
@@ -337,6 +340,93 @@ describe('the existing rules list', () => {
     await click(byLabel('Delete rule Superseded drafts')); await flush()
     const alert = container.querySelector('.lifecycle-rule [role="alert"]')
     expect(alert.textContent).toContain('already run')
+  })
+})
+
+// Lifecycle rules #2 — editing a SAVED rule in place, distinct from the new-rule builder below
+// (which only ever creates). Reuses draftProblem's validation and RuleFields' layout, so this
+// covers the wiring — pre-fill, save, cancel, the 409 refusal, the enabled-rule confirmation —
+// not the field-by-field parsing, already pinned in lifecycleRules.test.js.
+describe('editing a saved rule', () => {
+  it('pre-fills the edit form from the rule\'s own name, action and conditions', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0]])
+    await render(); await expand(); await flush()
+    await click(byLabel('Edit rule Legacy clinical policies'))
+    expect(byLabel('Rule name (editing Legacy clinical policies)').value).toBe('Legacy clinical policies')
+    expect(byLabel('Action (editing Legacy clinical policies)').value).toBe('archive')
+    expect(byLabel('Folder path starts with (editing Legacy clinical policies)').value).toBe('Clinical Guidelines/')
+    expect(byLabel('Last modified before (editing Legacy clinical policies)').value).toBe('2021-01-01')
+  })
+
+  it('saves the edited name/action/conditions and reloads the list', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[1]])   // disabled — no enable-confirmation in the way
+    await render(); await expand(); await flush()
+    await click(byLabel('Edit rule Superseded drafts'))
+    await setValue(byLabel('Rule name (editing Superseded drafts)'), 'Superseded drafts (renamed)')
+    await setValue(byLabel('Folder path starts with (editing Superseded drafts)'), 'Accessibility Program/_old/')
+    await click(byLabel('Save changes to Superseded drafts')); await flush()
+    expect(updateDispositionPolicy).toHaveBeenCalledWith('p2', {
+      name: 'Superseded drafts (renamed)', action: 'delete',
+      match: [{ field: 'parent_folder', op: 'prefix', value: 'Accessibility Program/_old/' },
+             { field: 'modified_at', op: 'before', value: '2023-01-01' }],
+    })
+    expect(listDispositionPolicies).toHaveBeenCalledTimes(2)   // the list reloads on success
+    expect(byLabel('Edit rule Superseded drafts')).toBeTruthy()  // back to view mode
+  })
+
+  it('cancel discards the in-progress edit without saving', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[1]])
+    await render(); await expand(); await flush()
+    await click(byLabel('Edit rule Superseded drafts'))
+    await setValue(byLabel('Rule name (editing Superseded drafts)'), 'discarded name')
+    await click(byLabel('Cancel editing Superseded drafts')); await flush()
+    expect(updateDispositionPolicy).not.toHaveBeenCalled()
+    expect(text()).toContain('Superseded drafts')          // the ORIGINAL name, still shown
+    expect(text()).not.toContain('discarded name')
+  })
+
+  it('refuses to save with no conditions, the same rule the create form enforces', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[1]])
+    await render(); await expand(); await flush()
+    await click(byLabel('Edit rule Superseded drafts'))
+    await setValue(byLabel('Folder path starts with (editing Superseded drafts)'), '')
+    await setValue(byLabel('Last modified before (editing Superseded drafts)'), '')
+    await click(byLabel('Save changes to Superseded drafts')); await flush()
+    expect(updateDispositionPolicy).not.toHaveBeenCalled()
+    const alert = container.querySelector('.lifecycle-rule [role="alert"]')
+    expect(alert.textContent).toContain('a rule with none would match every file in scope')
+  })
+
+  it('confirms before saving an edit to a rule that is currently enabled', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0]])   // enabled: 1
+    // .mockClear(): an earlier test in this file may have left window.confirm spied without
+    // restoring it, which would otherwise leak that call into this spy's own history and make
+    // "the confirm message" mean the wrong test's message.
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false).mockClear()
+    await render(); await expand(); await flush()
+    await click(byLabel('Edit rule Legacy clinical policies'))
+    await click(byLabel('Save changes to Legacy clinical policies')); await flush()
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(confirmSpy.mock.calls.at(-1)[0]).toContain('enabled')
+    expect(updateDispositionPolicy).not.toHaveBeenCalled()   // declined — nothing sent
+
+    confirmSpy.mockReturnValue(true)
+    await click(byLabel('Save changes to Legacy clinical policies')); await flush()
+    expect(updateDispositionPolicy).toHaveBeenCalled()
+    confirmSpy.mockRestore()
+  })
+
+  it('surfaces the history-change refusal (409) inline, same as every other write on this screen', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[1]])
+    updateDispositionPolicy.mockRejectedValue(
+      new Error("409: this rule has already run — its match can no longer be changed"))
+    await render(); await expand(); await flush()
+    await click(byLabel('Edit rule Superseded drafts'))
+    await setValue(byLabel('Folder path starts with (editing Superseded drafts)'), 'Accessibility Program/_old/')
+    await click(byLabel('Save changes to Superseded drafts')); await flush()
+    const alert = container.querySelector('.lifecycle-rule [role="alert"]')
+    expect(alert.textContent).toContain('already run')
+    expect(byLabel('Rule name (editing Superseded drafts)')).toBeTruthy()   // edit form stays open
   })
 })
 

@@ -208,6 +208,27 @@ export function parseMatch(match) {
 }
 
 /**
+ * The inverse of `draftToMatch`: a stored `match` (array or its JSON-string column form) → the
+ * per-condition string values an edit form's draft needs, keyed exactly like `emptyDraft()`'s
+ * `values`. Editing a saved rule (build-plan item #2) needs this to pre-fill the same field grid
+ * the create form uses, rather than a second, parallel edit UI.
+ *
+ * A condition whose (field, op) pair the builder does not offer — e.g. `triage_score`, which
+ * `ruleSentenceText` already reads back through its own last-resort fallback rather than a
+ * template — is silently dropped here too: an edit form can only offer conditions it knows how
+ * to build, the same limit the create form already has.
+ */
+export function matchToDraftValues(match) {
+  const values = Object.fromEntries(CONDITIONS.map((c) => [c.key, '']))
+  parseMatch(match).forEach((cond) => {
+    if (!cond || !cond.field || !cond.op) return
+    const tpl = BY_FIELD_OP.get(`${cond.field}:${cond.op}`)
+    if (tpl) values[tpl.key] = String(cond.value ?? '')
+  })
+  return values
+}
+
+/**
  * The rule, as a sentence, in segments so the component can bold the parts a reader scans for.
  * Returns [{ t, b }] where `b` marks bold. Example:
  *
