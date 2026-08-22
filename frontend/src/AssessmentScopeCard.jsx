@@ -31,7 +31,10 @@ function sourceLabel(scope) {
 //
 // "View criteria" expands an inline list of the selected success criteria, their names and
 // formats; it never re-opens the configuration interface.
-export default function AssessmentScopeCard({ run, fileCount = 0, state = 'done', onReassess }) {
+// docScope: per-document scope sentence from documentScopeSentence() — non-null when the
+// operator has marked specific documents in scope, restricting remediation to that subset.
+// Displayed as a warning so the user knows their document-level filter is active.
+export default function AssessmentScopeCard({ run, fileCount = 0, state = 'done', onReassess, docScope = null }) {
   const [showCriteria, setShowCriteria] = useState(false)
 
   const formats = SCOPE_FORMATS.map((f) => f.toUpperCase()).join(', ')
@@ -76,6 +79,13 @@ export default function AssessmentScopeCard({ run, fileCount = 0, state = 'done'
           {narrow && <span aria-label="narrow scope warning">⚠ </span>}
           {source && <>{source}{' · '}</>}
           {docCount.toLocaleString()} document{docCount === 1 ? '' : 's'} in scope
+        </div>
+      )}
+
+      {/* Per-document scope warning — only shown when the operator has marked specific docs */}
+      {docScope && (
+        <div style={{ marginTop: 4, color: '#854F0B', fontSize: 12.5 }}>
+          ⚠ {docScope}
         </div>
       )}
 

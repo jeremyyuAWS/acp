@@ -848,6 +848,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         fileCount={files.length}
         state="done"
         onReassess={() => onNavigate?.('assess')}
+        docScope={documentScopeSentence(documentSelection(files, triage))}
       />
       {/* HERO (§1) — the 5-second story + ONE primary action (§11). Every count is real:
           documents from the scan, issues fixed from applied-fix evidence, review from the
