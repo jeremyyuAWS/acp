@@ -17,11 +17,13 @@ export default function HitlBell() {
   const [center, setCenter] = useState(false)  // full-screen review center
   const [err, setErr] = useState(false)
   const wrap = useRef(null)
+  const mounted = useRef(true)
+  useEffect(() => () => { mounted.current = false }, [])
 
   const load = useCallback(() => {
     listAllHitl()
-      .then((rows) => { setItems(Array.isArray(rows) ? rows : []); setErr(false) })
-      .catch(() => setErr(true))
+      .then((rows) => { if (mounted.current) { setItems(Array.isArray(rows) ? rows : []); setErr(false) } })
+      .catch(() => { if (mounted.current) setErr(true) })
   }, [])
 
   useEffect(() => {
