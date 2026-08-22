@@ -355,8 +355,8 @@ def verify_ms_token(token: str) -> str | None:
 
 # ── Access-gate path policy ───────────────────────────────────────────────────
 # Paths that bypass all auth (needed before the user has a token).
-ALWAYS_PUBLIC = {"/healthz", "/config", "/hub", "/ai/status", "/alerts/webhook", "/capability",
-                 "/monitor/estate"}
+ALWAYS_PUBLIC = {"/healthz", "/readyz", "/config", "/hub", "/ai/status", "/alerts/webhook",
+                 "/capability", "/monitor/estate"}
 # Shared secret for the Grafana alert webhook (public path, key-validated).
 ALERT_KEY = os.environ.get("ACP_ALERT_KEY", "acp-alert-demo-key")
 # Shared secret for the production monitor's aggregate endpoint (public path, key-validated —
@@ -377,7 +377,8 @@ API_PREFIXES = (
     "/scans", "/rubric", "/rules", "/inventory", "/schedule",
     "/me", "/sources", "/folders", "/drive", "/hitl", "/ai",
     "/settings", "/decisions", "/jobs", "/workers", "/admin",
-    "/campaigns", "/disposition", "/monitor",
+    "/campaigns", "/disposition", "/monitor", "/assess",
+    "/analytics", "/control", "/org-memory", "/scope", "/sharepoint",
 )
 # ^ Default-open gate: any route group NOT listed here is served without auth
 # (that's how the SPA's client routes fall through). Every new APIRouter MUST be
