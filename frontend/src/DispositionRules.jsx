@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   listDispositionPolicies, createDispositionPolicy, setDispositionPolicyEnabled, previewDispositionPolicy,
-  deleteDispositionPolicy, reorderDispositionPolicies, listDispositionConflicts,
+  updateDispositionPolicy, deleteDispositionPolicy, reorderDispositionPolicies, listDispositionConflicts,
 } from './api.js'
 import {
   ACTIONS, CONDITIONS, LIFECYCLE_ACTIONS, actionSpec, draftProblem, draftToMatch, emptyDraft,
-  matchCountText, refusalText, ruleSentenceParts,
+  matchCountText, matchToDraftValues, refusalText, ruleSentenceParts,
 } from './lifecycleRules.js'
 
 // Discover, step 2 — "Lifecycle rules" (design board DiscoverRules.dc.html).
@@ -33,11 +33,13 @@ import {
 //     precedence block in handlers.py): the reversible outcome is kept and the file is flagged.
 //     Rules made here never set the delete-override config, so that default always holds for them.
 //
-// DELIBERATELY NOT HERE: an "Edit" button and a match count for an UNSAVED draft. Neither has a
-// backend — there is no policy-update route, and preview is POST /policies/{id}/preview, which
-// needs a saved id. Rather than fake either, the draft gets a plain-language restatement (which
-// needs no server) and the real count is fetched the moment the rule exists — still disabled, so
-// "before it is enabled" is preserved.
+// Lifecycle rules #2 — a saved rule can be edited in place (RuleRow's "Edit"), not only
+// duplicated or deleted. PUT /disposition/policies/{id} (`update_policy`) refuses to change a
+// rule's match/action/action_config once it has recorded ANY history — files it already flagged
+// carry its decision, and no record says which DEFINITION of the rule produced it, so an in-place
+// edit would silently change what those records mean. That 409 is surfaced the same way every
+// other refusal on this screen is; the route's own docstring is the fuller explanation of why
+// versioning (build-plan item #10) is the real fix and deliberately not this one's job.
 
 // Enabling a rule that would match at least this share of the tenant's estate gets an extra
 // warning line in the confirm dialog on top of the count. A stated line, not a backend limit —
@@ -80,10 +82,78 @@ function ActionTag({ action }) {
   )
 }
 
+/** The name/action/conditions field grid — shared by the create form (NewRule) and a saved rule's
+ *  edit form (RuleRow, lifecycle rules #2), so there is one field layout to keep in sync with
+ *  CONDITIONS rather than two. `labelFor` lets each caller give its inputs distinct aria-labels —
+ *  identity for NewRule (preserving its existing labels exactly), a per-rule suffix for an edit
+ *  form, since a rule's own name/action/condition inputs would otherwise collide with every other
+ *  rule's edit form and with NewRule's, all mounted on the same screen at once. */
+function RuleFields({ draft, setDraft, labelFor }) {
+  const setValue = (key, v) => setDraft((d) => ({ ...d, values: { ...d.values, [key]: v } }))
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span style={fieldLabel}>Name</span>
+        <input style={inp} type="text" value={draft.name} aria-label={labelFor('Rule name')}
+               placeholder="e.g. Finance retention"
+               onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} />
+      </label>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <span style={fieldLabel}>Action</span>
+        <select style={inp} value={draft.action} aria-label={labelFor('Action')}
+                onChange={(e) => setDraft((d) => ({ ...d, action: e.target.value }))}>
+          {ACTIONS.map((a) => <option key={a.action} value={a.action}>{a.label}</option>)}
+        </select>
+      </label>
+      {CONDITIONS.map((c) => (
+        <label key={c.key} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          <span style={fieldLabel}>{c.label}{c.unit ? ` (${c.unit})` : ''}</span>
+          <input style={inp} aria-label={labelFor(c.label)} placeholder={c.placeholder}
+                 type={c.kind === 'date' ? 'date' : 'text'}
+                 inputMode={c.kind === 'number' ? 'numeric' : undefined}
+                 value={draft.values[c.key]} onChange={(e) => setValue(c.key, e.target.value)} />
+        </label>
+      ))}
+    </div>
+  )
+}
+
 function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, isLast, rank }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const enabled = !!p.enabled
+  // Lifecycle rules #2 — edit a saved rule in place. The backend (PUT /disposition/policies/{id})
+  // refuses to change match/action/action_config once a rule has recorded ANY history (409) —
+  // name/requires_approval stay editable regardless — so this never tries to predict that
+  // client-side; the refusal reaches the person the same way every other write on this screen
+  // does, via `err`.
+  const [editing, setEditing] = useState(false)
+  const [editDraft, setEditDraft] = useState(null)
+  const [editBusy, setEditBusy] = useState(false)
+  const [editErr, setEditErr] = useState('')
+  const startEdit = () => {
+    setEditDraft({ name: p.name, action: p.action, values: matchToDraftValues(p.match) })
+    setEditErr('')
+    setEditing(true)
+  }
+  const cancelEdit = () => { setEditing(false); setEditDraft(null); setEditErr('') }
+  const saveEdit = () => {
+    const problem = draftProblem(editDraft)
+    if (problem) { setEditErr(problem); return }
+    // Enabling asks before it starts tagging (toggle, below); an edit to an ALREADY-enabled rule
+    // takes effect just as immediately, so it earns the same "you are about to change what's
+    // live" confirmation rather than saving silently.
+    if (enabled && !window.confirm(
+      `Save changes to "${editDraft.name.trim()}"? It is enabled, so the new conditions apply starting with your next Discover run.`
+    )) return
+    setEditBusy(true); setEditErr('')
+    Promise.resolve(updateDispositionPolicy(p.policy_id, {
+      name: editDraft.name.trim(), match: draftToMatch(editDraft), action: editDraft.action,
+    }))
+      .then(() => { setEditing(false); setEditDraft(null); onChanged() })
+      .catch((e) => setEditErr(refusalText(e)))
+      .finally(() => setEditBusy(false))
+  }
 
   const doSetEnabled = (next) => {
     setBusy(true); setErr('')
@@ -175,13 +245,29 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
         <ActionTag action={p.action} />
         <span className="muted" style={{ fontSize: 12 }}>{enabled ? 'Enabled' : 'Disabled — tags nothing yet'}</span>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          <button className="ghost small" onClick={runPreview} disabled={busy}>Preview matches</button>
-          <button className="ghost small" onClick={duplicate} disabled={busy}>Duplicate</button>
-          <button className="ghost small" onClick={remove} disabled={busy}
+          <button className="ghost small" onClick={runPreview} disabled={busy || editing}>Preview matches</button>
+          <button className="ghost small" onClick={startEdit} disabled={busy || editing}
+                  aria-label={`Edit rule ${p.name}`}>Edit</button>
+          <button className="ghost small" onClick={duplicate} disabled={busy || editing}>Duplicate</button>
+          <button className="ghost small" onClick={remove} disabled={busy || editing}
                   aria-label={`Delete rule ${p.name}`}>Delete</button>
         </span>
       </div>
-      <RuleSentence match={p.match} action={p.action} count={count} />
+      {editing ? (
+        <div style={{ marginTop: 10 }}>
+          <RuleFields draft={editDraft} setDraft={setEditDraft}
+                      labelFor={(l) => `${l} (editing ${p.name})`} />
+          <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' }}>
+            <button className="small" onClick={saveEdit} disabled={editBusy}
+                    aria-label={`Save changes to ${p.name}`}>{editBusy ? 'Saving…' : 'Save changes'}</button>
+            <button className="ghost small" onClick={cancelEdit} disabled={editBusy}
+                    aria-label={`Cancel editing ${p.name}`}>Cancel</button>
+          </div>
+          {editErr && <p style={alertStyle} role="alert">⚠ {editErr}</p>}
+        </div>
+      ) : (
+        <RuleSentence match={p.match} action={p.action} count={count} />
+      )}
       {err && <p style={alertStyle} role="alert">⚠ {err}</p>}
     </div>
   )
@@ -195,8 +281,6 @@ function NewRule({ onCreated }) {
   const spec = actionSpec(draft.action)
   const match = draftToMatch(draft)
   const problem = draftProblem(draft)
-
-  const setValue = (key, v) => setDraft((d) => ({ ...d, values: { ...d.values, [key]: v } }))
 
   const add = () => {
     if (problem) { setErr(problem); return }
@@ -223,30 +307,7 @@ function NewRule({ onCreated }) {
         <span style={{ fontSize: 13.5, fontWeight: 600 }}>New rule</span>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span style={fieldLabel}>Name</span>
-          <input style={inp} type="text" value={draft.name} aria-label="Rule name"
-                 placeholder="e.g. Finance retention"
-                 onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} />
-        </label>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span style={fieldLabel}>Action</span>
-          <select style={inp} value={draft.action} aria-label="Action"
-                  onChange={(e) => setDraft((d) => ({ ...d, action: e.target.value }))}>
-            {ACTIONS.map((a) => <option key={a.action} value={a.action}>{a.label}</option>)}
-          </select>
-        </label>
-        {CONDITIONS.map((c) => (
-          <label key={c.key} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-            <span style={fieldLabel}>{c.label}{c.unit ? ` (${c.unit})` : ''}</span>
-            <input style={inp} aria-label={c.label} placeholder={c.placeholder}
-                   type={c.kind === 'date' ? 'date' : 'text'}
-                   inputMode={c.kind === 'number' ? 'numeric' : undefined}
-                   value={draft.values[c.key]} onChange={(e) => setValue(c.key, e.target.value)} />
-          </label>
-        ))}
-      </div>
+      <RuleFields draft={draft} setDraft={setDraft} labelFor={(l) => l} />
 
       {/* The draft restated in the reader's words, live. It needs no server, so it is available
           at the moment the choice is being made rather than after the rule exists. */}

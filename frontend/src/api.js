@@ -1036,6 +1036,27 @@ export const createDispositionPolicy = (name, match, action, actionConfig = {}, 
       method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ name, match, action, action_config: actionConfig, requires_approval: requiresApproval }),
     }).then(j))
+// Edit a saved rule (lifecycle rules #2 — the create/duplicate/delete trio had no "edit in
+// place"). `updates` is a partial patch — {name?, match?, action?, action_config?,
+// requires_approval?} — mirroring PUT /disposition/policies/{id}'s own PolicyUpdate model: every
+// field optional, an omitted one left as it is. The route 409s if the rule already has recorded
+// history AND the caller is changing its match/action/action_config (never its name/approval) —
+// that refusal reaches the caller as a rejected promise, same as every other write here.
+export const updateDispositionPolicy = (policyId, updates) => (SIM
+  ? sim((() => {
+      const p = _simDisp.policies.find((x) => x.policy_id === policyId)
+      if (!p) return null
+      if (updates.name !== undefined) p.name = updates.name
+      if (updates.match !== undefined) p.match = JSON.stringify(updates.match)
+      if (updates.action !== undefined) p.action = updates.action
+      if (updates.action_config !== undefined) p.action_config = JSON.stringify(updates.action_config)
+      if (updates.requires_approval !== undefined) p.requires_approval = updates.requires_approval ? 1 : 0
+      return p
+    })())
+  : fetch(`${BASE}/disposition/policies/${encodeURIComponent(policyId)}`, {
+      method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(updates),
+    }).then(j))
 export const setDispositionPolicyEnabled = (policyId, enabled) => (SIM
   ? sim((() => {
       const p = _simDisp.policies.find((x) => x.policy_id === policyId)

@@ -18,7 +18,8 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import {
   ACTIONS, CONDITIONS, LIFECYCLE_ACTIONS, actionSpec, draftProblem, draftToMatch, emptyDraft,
-  formatRuleDate, matchCountText, parseMatch, refusalText, ruleSentenceParts, ruleSentenceText,
+  formatRuleDate, matchCountText, matchToDraftValues, parseMatch, refusalText, ruleSentenceParts,
+  ruleSentenceText,
 } from './lifecycleRules.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -199,6 +200,36 @@ describe('draft → the payload the backend validates', () => {
 
   it('starts every draft on the reversible action', () => {
     expect(emptyDraft().action).toBe('archive')
+  })
+})
+
+describe('matchToDraftValues — the inverse of draftToMatch, for editing a saved rule', () => {
+  it('round-trips a stored match back into the same per-condition values the builder wrote', () => {
+    const stored = draftToMatch(draft({
+      values: { folder: 'Finance/2019/', modifiedBefore: '2022-01-01', largerThanKb: '10000' },
+    }))
+    const values = matchToDraftValues(stored)
+    expect(values.folder).toBe('Finance/2019/')
+    expect(values.modifiedBefore).toBe('2022-01-01')
+    expect(values.largerThanKb).toBe('10000')
+    expect(values.notModifiedDays).toBe('')             // every other condition stays blank
+  })
+
+  it('parses the stored JSON-string form, the shape the column actually holds', () => {
+    const values = matchToDraftValues(JSON.stringify([{ field: 'parent_folder', op: 'prefix', value: 'HR/' }]))
+    expect(values.folder).toBe('HR/')
+  })
+
+  it('drops a condition the builder cannot create rather than crashing on it', () => {
+    const values = matchToDraftValues([{ field: 'triage_score', op: 'gt', value: 70 }])
+    expect(Object.values(values).every((v) => v === '')).toBe(true)
+  })
+
+  it('returns every key blank for no conditions, [], or a corrupt column', () => {
+    for (const m of [[], 'not json', null]) {
+      const values = matchToDraftValues(m)
+      expect(Object.values(values).every((v) => v === '')).toBe(true)
+    }
   })
 })
 
