@@ -1093,6 +1093,21 @@ export const previewDispositionPolicy = (policyId) => (SIM
       { doc_id: 'drive:sim2', path: 'Old Expense Policy.docx', department: 'Finance', age_days: 1220 },
       { doc_id: 'drive:sim3', path: 'Legacy Onboarding.pptx', department: 'HR', age_days: 1105 }] })
   : fetch(`${BASE}/disposition/policies/${encodeURIComponent(policyId)}/preview`, { method: 'POST', headers: headers() }).then(j))
+// Lifecycle rules #4 — preview a rule that does not exist yet: how many documents would
+// {match, action} select, right now? Same shape as previewDispositionPolicy but policy_id: null
+// (this draft has no id, not because one was lost) — POST /disposition/preview, api/routes/
+// disposition.py's preview_draft, which runs the SAME disposition.matches over the SAME documents
+// table, whole-estate, as the saved-policy preview above (the two share one evaluator on purpose,
+// so the count shown while typing can't drift from what the saved rule will produce).
+export const previewDispositionDraft = (match, action, actionConfig = {}) => (SIM
+  ? sim({ policy_id: null, would_match: 3, documents: [
+      { doc_id: 'drive:sim1', path: 'HR Handbook 2019.pdf', department: 'HR', age_days: 1460 },
+      { doc_id: 'drive:sim2', path: 'Old Expense Policy.docx', department: 'Finance', age_days: 1220 },
+      { doc_id: 'drive:sim3', path: 'Legacy Onboarding.pptx', department: 'HR', age_days: 1105 }] }, 180)
+  : fetch(`${BASE}/disposition/preview`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ match, action, action_config: actionConfig }),
+    }).then(j))
 export const executeDispositionPolicy = (policyId) => {
   if (SIM) {
     const p = _simDisp.policies.find((x) => x.policy_id === policyId)

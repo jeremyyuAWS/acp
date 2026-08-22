@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import {
-  ACTIONS, CONDITIONS, LIFECYCLE_ACTIONS, actionSpec, draftProblem, draftToMatch, emptyDraft,
+  ACTIONS, CONDITIONS, LIFECYCLE_ACTIONS, actionSpec, draftProblem, draftToMatch, emptyDraft, matchProblem,
   formatRuleDate, matchCountText, matchToDraftValues, parseMatch, refusalText, ruleSentenceParts,
   ruleSentenceText,
 } from './lifecycleRules.js'
@@ -189,6 +189,19 @@ describe('draft → the payload the backend validates', () => {
     expect(draftProblem(draft({ name: 'x', values: { notModifiedDays: '0' } }))).toMatch(/greater than zero/)
     expect(draftProblem(draft({ name: 'x', values: { folder: 'A/', modifiedBefore: '01/01/2021' } })))
       .toMatch(/YYYY-MM-DD/)
+  })
+
+  it('matchProblem ignores the name field — a person can preview before naming the rule', () => {
+    // Same conditions, no name at all: draftProblem still wants a name, matchProblem does not.
+    const noName = draft({ name: '', values: { folder: 'Finance/2019/' } })
+    expect(draftProblem(noName)).toBe('Give the rule a name.')
+    expect(matchProblem(noName)).toBe('')
+  })
+
+  it('matchProblem still refuses no conditions and a bad field, same messages as draftProblem', () => {
+    expect(matchProblem(draft({ name: '' })))
+      .toBe('Add at least one condition — a rule with none would match every file in scope.')
+    expect(matchProblem(draft({ name: '', values: { notModifiedDays: 'soon' } }))).toMatch(/number of days/)
   })
 
   it('accepts the board\'s example rule', () => {

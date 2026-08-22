@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   listDispositionPolicies, createDispositionPolicy, setDispositionPolicyEnabled, previewDispositionPolicy,
-  updateDispositionPolicy, deleteDispositionPolicy, reorderDispositionPolicies, listDispositionConflicts,
+  updateDispositionPolicy, previewDispositionDraft, deleteDispositionPolicy, reorderDispositionPolicies,
+  listDispositionConflicts,
 } from './api.js'
 import {
   ACTIONS, CONDITIONS, LIFECYCLE_ACTIONS, actionSpec, draftProblem, draftToMatch, emptyDraft,
-  matchCountText, matchToDraftValues, refusalText, ruleSentenceParts,
+  matchCountText, matchProblem, matchToDraftValues, refusalText, ruleSentenceParts,
 } from './lifecycleRules.js'
 
 // Discover, step 2 — "Lifecycle rules" (design board DiscoverRules.dc.html).
@@ -32,6 +33,12 @@ import {
 //   * Archive beats delete when both match (PRD §6, and the `else` branch of the delete/archive
 //     precedence block in handlers.py): the reversible outcome is kept and the file is flagged.
 //     Rules made here never set the delete-override config, so that default always holds for them.
+//
+// Lifecycle rules #4 — the draft's match count is live, fetched from POST /disposition/preview
+// (api/routes/disposition.py's preview_draft) as the conditions are typed, before the rule is
+// saved — see NewRule below. The saved-policy preview (POST /policies/{id}/preview) and this one
+// share ONE evaluator server-side (`_preview`), so the count shown while typing is the count the
+// saved rule will produce, not a separate estimate that could drift from it.
 //
 // Lifecycle rules #2 — a saved rule can be edited in place (RuleRow's "Edit"), not only
 // duplicated or deleted. PUT /disposition/policies/{id} (`update_policy`) refuses to change a
@@ -281,6 +288,33 @@ function NewRule({ onCreated }) {
   const spec = actionSpec(draft.action)
   const match = draftToMatch(draft)
   const problem = draftProblem(draft)
+  // matchProblem, not draftProblem: previewing a draft depends only on its CONDITIONS, not its
+  // name — gating it on the full submission check would mean a person filling in conditions
+  // first, name last, sees no count until the very last field.
+  const matchProb = matchProblem(draft)
+
+  // Lifecycle rules #4 — preview a rule BEFORE it is saved, not only after (previewDispositionPolicy
+  // needs a saved policy_id). Debounced so a person typing a folder path doesn't fire one request
+  // per keystroke; the last edit within the window is the one that gets asked. Whole-estate, same
+  // evaluator as the saved-rule preview (api/routes/disposition.py's shared `_preview`), so the
+  // count shown while typing can't drift from what the saved rule will produce.
+  const matchKey = JSON.stringify(match)
+  const [previewCount, setPreviewCount] = useState(null)
+  const [previewBusy, setPreviewBusy] = useState(false)
+  const [previewErr, setPreviewErr] = useState(false)
+  useEffect(() => {
+    setPreviewCount(null); setPreviewErr(false)
+    if (matchProb) return undefined   // no valid predicate yet — nothing to ask about
+    let live = true
+    setPreviewBusy(true)
+    const t = setTimeout(() => {
+      Promise.resolve(previewDispositionDraft(match, draft.action))
+        .then((r) => { if (live) setPreviewCount(r?.would_match ?? null) })
+        .catch(() => { if (live) setPreviewErr(true) })
+        .finally(() => { if (live) setPreviewBusy(false) })
+    }, 400)
+    return () => { live = false; clearTimeout(t); setPreviewBusy(false) }
+  }, [matchKey, draft.action, matchProb]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const add = () => {
     if (problem) { setErr(problem); return }
@@ -309,10 +343,14 @@ function NewRule({ onCreated }) {
 
       <RuleFields draft={draft} setDraft={setDraft} labelFor={(l) => l} />
 
-      {/* The draft restated in the reader's words, live. It needs no server, so it is available
-          at the moment the choice is being made rather than after the rule exists. */}
-      <RuleSentence match={match} action={draft.action} count={null}
-                    countOverride={problem ? '' : 'Add the rule to see how many files match — it is added disabled.'} />
+      {/* The draft restated in the reader's words, live — and, once there is a real predicate to
+          ask about, the live match count against the whole estate (lifecycle rules #4), fetched
+          from the SAME evaluator the saved-rule preview uses. Neither needs the rule to exist. */}
+      <RuleSentence match={match} action={draft.action} count={previewCount}
+                    countOverride={matchProb ? ''
+                      : previewBusy ? 'Checking how many files match…'
+                      : previewErr ? 'Could not check how many files this would match — you can still add it disabled.'
+                      : matchCountText(previewCount)} />
 
       <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <button className="small" onClick={add} disabled={busy || !!problem}>{busy ? 'Adding…' : 'Add rule'}</button>
