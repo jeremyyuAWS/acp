@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { allRules } from './rules'
 import { WCAG } from './wcagCatalog.js'
-import { assessScan, getCapability, getScan, getScanTraces, refreshScanDriveToken } from './api.js'
+import { assessScan, getCapability, getScan, getScanTraces, refreshScanDriveToken, getQueueJob } from './api.js'
 import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
 import { TraceChip } from './Transparency.jsx'
 import { assessLine } from './phaseNarration.js'
@@ -68,6 +68,13 @@ const autoOf = (cap, x, fmt) => isAuto(cap, fmt, scOf(x.wcag))
 // cannot drift apart again.
 const nameOf = (f) => (typeof f === 'string' ? f : f?.file || f?.name || null)
 
+// "3s" under a minute, "1m 12s" past it — short enough to sit inline next to a status line
+// without dominating it. Floors at 0 rather than going negative on a clock skew blip.
+const fmtElapsed = (ms) => {
+  const s = Math.max(0, Math.round(ms / 1000))
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
+}
+
 const SKEY = (id) => `acp-assess-${id || 'none'}`
 const loadSaved = (id) => { try { return JSON.parse(sessionStorage.getItem(SKEY(id)) || 'null') } catch { return null } }
 
@@ -108,6 +115,20 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   // fabrication. Found live 2026-07-29 as "Assess produces no score": the catch below computed
   // a result from an empty `files` and rendered a completed 0/100.
   const [scanGone, setScanGone] = useState(null)
+  // Real-time queue visibility for the deferred model (2026-08-22). Before this, "Opening &
+  // assessing 0 of 148…" looked IDENTICAL whether a worker was about to pick the job up or the
+  // worker tier was down entirely — the live incident this answers: a user watching a stuck 0%
+  // with no way to tell "about to start" from "never going to start". POST /assess already
+  // returned workers/worker_tier_alive/job_id; this is the first thing that reads them.
+  const [workersDown, setWorkersDown] = useState(false)
+  const [jobInfo, setJobInfo] = useState(null)          // {status, phase, locked_at} from GET /jobs/{id}
+  const [assessStartedAt, setAssessStartedAt] = useState(null)
+  const [nowTick, setNowTick] = useState(Date.now())     // re-renders the elapsed-time line every second
+  useEffect(() => {
+    if (phase !== 'running') return undefined
+    const id = setInterval(() => setNowTick(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [phase])
   // Remediation capability ({fmt: {sc: mode}}) — fetched once, seeded with the bundled
   // table so the auto-fixable counts are correct synchronously (and never regress to the
   // format-blind view if the fetch is slow or fails).
@@ -199,8 +220,14 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   // Deferred model (ADR 0020): Assess just KICKED OFF the real download+WCAG analysis. Poll the
   // scan until it's assessed, driving progress off the true per-file count, then compute the
   // result from the freshly-scored files. This is real work, not a cosmetic ticker.
-  const pollDeferred = (startedAt) => {
+  //
+  // `jobId` (2026-08-22) additionally polls GET /jobs/{id} — but ONLY while nothing has scored
+  // yet. Once real per-file progress is flowing, "queued vs a worker claimed it Ns ago" is a
+  // question that's already been answered by the fact of progress existing; polling the job row
+  // past that point is a request that tells the user nothing the file list doesn't already say.
+  const pollDeferred = (startedAt, jobId) => {
     clearInterval(timer.current)
+    setAssessStartedAt(startedAt)
     const tick = () => {
       getScan(runId).then((data) => {
         const run = data?.run || {}
@@ -209,6 +236,15 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
         const total = run.files || fs.length || 1
         setProgress(Math.min(scored.length, total))
         setCurrentPhase(`Opening & assessing ${scored.length} of ${total}…`)
+        if (scored.length === 0 && jobId) {
+          getQueueJob(jobId)
+            .then((j) => setJobInfo(j))
+            // A 404/network blip on the job-status side-channel must not blank out what's
+            // already showing — keep the last known status rather than flashing to nothing.
+            .catch(() => {})
+        } else if (scored.length > 0 && jobInfo) {
+          setJobInfo(null)   // real progress answers the question; stop showing the queue guess
+        }
         // Feed the per-document list straight off the poll — no extra request. `status` and
         // `score` are already in this payload; only the failing criteria need fetching.
         setLiveTotal(total)
@@ -283,6 +319,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
     const startedAt = Date.now()
     setPhase('running'); setResult(null); setResultFromCache(false); setProgress(0); setAccessFailed(false); setScanGone(null)
+    setWorkersDown(false); setJobInfo(null)
     // ADR 0020: in the deferred model the DOWNLOAD happens now, at Assess — but GIS Drive tokens
     // live ~1h and are held in-memory per scan, so a scan discovered a while ago (or after a
     // container restart) has a stale/absent token and every file would 401. Push a fresh Drive
@@ -290,9 +327,13 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     // SharePoint scan with no token). Then kick off the assessment.
     Promise.resolve(refreshScanDriveToken(runId)).catch(() => {}).then(() => assessScan(runId, opts?.level || level, opts ? !!opts.includeLifecycleFlagged : !ignoreLifecycle)).then((resp) => {
       if (resp && resp.deferred) {
+        // Same "no workers available" guard doScan (App.jsx) already applies to a fresh scan
+        // start — a queue with nobody to drain it is worth saying plainly rather than leaving
+        // the user to infer it from a bar that never moves.
+        if (!resp.workers && !resp.worker_tier_alive) setWorkersDown(true)
         // The analysis is running now — track it for real.
-        save({ phase: 'running', startedAt, level, deferred: true })
-        pollDeferred(startedAt)
+        save({ phase: 'running', startedAt, level, deferred: true, jobId: resp.job_id })
+        pollDeferred(startedAt, resp.job_id)
       } else {
         // Immediate model: results already exist. Optimistic reveal + cosmetic pass over them.
         onAssessed?.()
@@ -322,7 +363,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   // point, or finish if the expected duration already passed while away.
   useEffect(() => {
     if (saved?.phase === 'running') {
-      if (saved.deferred) { pollDeferred(saved.startedAt || Date.now()); return }
+      if (saved.deferred) { pollDeferred(saved.startedAt || Date.now(), saved.jobId); return }
       if (saved.startedAt) {
         if (Date.now() - saved.startedAt >= DURATION) {
           setProgress(docs.length); setResult(saved.result); setPhase('done')
@@ -423,6 +464,13 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
       <div role="status" aria-live="polite">
         {phase === 'running' && (
           <div className="assessrun">
+            {workersDown && (
+              <div role="alert" style={{ margin: '0 0 10px', padding: '10px 14px', borderRadius: 8,
+                   fontSize: 13, background: '#FBE9E7', border: '1px solid #E7B4AC', color: '#8A2A20' }}>
+                ⚠ <b>No workers available.</b> The assessment queue looks unmanned, so this run may
+                sit at 0% indefinitely rather than falling behind and catching up — check Monitor.
+              </div>
+            )}
             <div className="assessbar">
               <i style={{ width: `${pct}%` }} />
             </div>
@@ -430,6 +478,23 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               <span className="muted"><b style={{ color: '#1F5FA8' }}>Computing conformance</b> · {(liveTotal || docs.length).toLocaleString()} documents at WCAG 2.1 {level}</span>
               <span className="assesspct">{pct}%</span>
             </div>
+            {/* Real queue status, not a guess — GET /jobs/{id}, polled only while nothing has
+                scored yet (see pollDeferred). Distinguishes "about to start" from "genuinely
+                stuck" instead of leaving both read as an identical, silent 0%. */}
+            {jobInfo && !workersDown && (
+              <div className="muted" style={{ fontSize: 12.5, margin: '2px 0 0' }}>
+                {jobInfo.status === 'queued'
+                  ? <>⏳ Queued — waiting for a worker to pick this up
+                      {assessStartedAt && <> · {fmtElapsed(nowTick - assessStartedAt)}</>}</>
+                  : jobInfo.status === 'dead'
+                    ? <span style={{ color: '#8A2A20' }}>⚠ This run failed repeatedly and stopped retrying
+                        {jobInfo.error && <> — {jobInfo.error}</>}</span>
+                    : jobInfo.status === 'running'
+                      ? <>🔧 A worker is on this now{jobInfo.phase && <> · {jobInfo.phase}</>}
+                          {jobInfo.locked_at && <> · claimed {fmtElapsed(Date.now() - new Date(jobInfo.locked_at).getTime())} ago</>}</>
+                      : assessStartedAt && <>Running · {fmtElapsed(nowTick - assessStartedAt)}</>}
+              </div>
+            )}
             {(currentFile || currentPhase) && (
               <div className="assessfile">
                 {currentFile && <span className="assessfname" title={currentFile}>{currentFile}</span>}
