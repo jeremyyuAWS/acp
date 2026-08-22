@@ -1,20 +1,55 @@
 import { useState } from 'react'
 import { processingRows, filterRows, filterCounts, PROCESSING_FILTERS } from './processingDetails.js'
 
-// The expandable "Processing details" table — per-file transparency during a live run, without forcing
-// every user to watch a scrolling event log (the user's spec). Collapsed behind a toggle by default;
-// technical users open it, everyone else ignores it. `processing` is the count of files not yet landed
-// (their names are not knowable mid-fan-out), shown as a footer note rather than fabricated rows.
 const KIND_COLOR = { ok: '#2F7D51', warn: '#9A6011', bad: '#A5314A', muted: '#54636F' }
-const cellHead = { textAlign: 'left', padding: '4px 8px', borderBottom: '1px solid var(--line, #e4e7ef)', color: '#54636F', fontWeight: 600 }
 const cell = { padding: '3px 8px', borderTop: '1px solid var(--line, #eceff4)', whiteSpace: 'nowrap' }
+
+// Sort comparators keyed by column. null score sorts after numeric scores.
+const SORT = {
+  file:   (a, b) => a.file.localeCompare(b.file),
+  format: (a, b) => (a.format || '').localeCompare(b.format || ''),
+  result: (a, b) => a.result.localeCompare(b.result),
+  score:  (a, b) => {
+    if (a.score == null && b.score == null) return 0
+    if (a.score == null) return 1
+    if (b.score == null) return -1
+    return b.score - a.score   // higher score first
+  },
+}
+
+function SortTh({ col, label, sort, onSort, style }) {
+  const active = sort.col === col
+  const arrow = active ? (sort.asc ? ' ↑' : ' ↓') : ''
+  return (
+    <th scope="col"
+        onClick={() => onSort(col)}
+        style={{ textAlign: style?.textAlign || 'left', padding: '4px 8px',
+                 borderBottom: '1px solid var(--line, #e4e7ef)',
+                 color: active ? 'var(--plum, #46303F)' : '#54636F',
+                 fontWeight: 600, cursor: 'pointer', userSelect: 'none',
+                 whiteSpace: 'nowrap', ...style }}>
+      {label}{arrow}
+    </th>
+  )
+}
+
+function applySort(rows, { col, asc }) {
+  if (!col || !SORT[col]) return rows
+  const sorted = [...rows].sort(SORT[col])
+  return asc ? sorted : sorted.reverse()
+}
 
 export default function ProcessingDetails({ files, processing = 0, defaultOpen = false }) {
   const [filter, setFilter] = useState('all')
+  const [sort, setSort] = useState({ col: null, asc: true })
   const rows = processingRows(files)
   if (rows.length === 0 && processing === 0) return null
   const counts = filterCounts(rows)
-  const shown = filterRows(rows, filter)
+  const filtered = filterRows(rows, filter)
+  const shown = applySort(filtered, sort)
+
+  const onSort = (col) => setSort((s) => s.col === col ? { col, asc: !s.asc } : { col, asc: true })
+
   return (
     <details className="procdetails" style={{ marginTop: 8 }} open={defaultOpen || undefined}>
       <summary style={{ cursor: 'pointer', fontSize: 12.5, color: '#54636F' }}>
@@ -32,12 +67,16 @@ export default function ProcessingDetails({ files, processing = 0, defaultOpen =
           <caption className="sronly">Per-file processing status for the current scan.</caption>
           <thead>
             <tr>
-              <th scope="col" style={cellHead}>File</th>
-              <th scope="col" style={cellHead}>Format</th>
-              <th scope="col" style={cellHead}>Location</th>
-              <th scope="col" style={cellHead}>Owner</th>
-              <th scope="col" style={cellHead}>Result</th>
-              <th scope="col" style={{ ...cellHead, textAlign: 'right' }}>Score</th>
+              <SortTh col="file"   label="File"     sort={sort} onSort={onSort} />
+              <SortTh col="format" label="Format"   sort={sort} onSort={onSort} />
+              <th scope="col" style={{ textAlign: 'left', padding: '4px 8px',
+                                       borderBottom: '1px solid var(--line, #e4e7ef)',
+                                       color: '#54636F', fontWeight: 600 }}>Location</th>
+              <th scope="col" style={{ textAlign: 'left', padding: '4px 8px',
+                                       borderBottom: '1px solid var(--line, #e4e7ef)',
+                                       color: '#54636F', fontWeight: 600 }}>Owner</th>
+              <SortTh col="result" label="Result"   sort={sort} onSort={onSort} />
+              <SortTh col="score"  label="Score"    sort={sort} onSort={onSort} style={{ textAlign: 'right' }} />
             </tr>
           </thead>
           <tbody>
