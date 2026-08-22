@@ -28,6 +28,27 @@ import NextStep from './NextStep.jsx'
 import EstateTreemap from './EstateTreemap.jsx'
 import { CORE_SCS } from './activeScope.js'
 
+// Inline until PR #643 (process-health-pr1) merges — then replace with:
+// import ProcessHealthAlert from './ProcessHealthAlert.jsx'
+function ProcessHealthAlert({ level, label, children }) {
+  const styles = {
+    critical: { border: '#B42318', bg: '#FEF3F2', fg: '#7A271A', icon: '✕' },
+    warning:  { border: '#854F0B', bg: '#FFF7E6', fg: '#6B3A00', icon: '⚠' },
+    info:     { border: '#175CD3', bg: '#EFF8FF', fg: '#0B3A7A', icon: 'ℹ' },
+    recovered:{ border: '#067647', bg: '#ECFDF3', fg: '#074D31', icon: '✓' },
+  }
+  const s = styles[level] || styles.info
+  return (
+    <div role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 10,
+      padding: '10px 14px', borderRadius: 6, border: `1px solid ${s.border}`,
+      borderLeft: `4px solid ${s.border}`, background: s.bg, color: s.fg,
+      marginBottom: 12, fontSize: 13 }}>
+      <span aria-hidden="true" style={{ fontWeight: 700, flexShrink: 0 }}>{s.icon}</span>
+      <span><strong style={{ fontWeight: 700 }}>{label}</strong>{children && <> — {children}</>}</span>
+    </div>
+  )
+}
+
 // The estate dashboard — doubles as the exportable compliance report.
 export default function Overview({ run, files, trend, trendDates, onGo, scanList = [], onPickScan, me,
                                    onScan, busy = false, hasDriveToken = false, hasSPToken = false,
@@ -359,6 +380,19 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         onReassess={onScan ? () => onGo('assess') : undefined}
       />
       <div ref={reportRef}>
+      {/* Process health banners — rendered above the findings summary so a degraded run is
+          immediately visible. Amber when files errored out (could not be opened); red when the
+          worker job itself failed. Both conditions mean findings may be incomplete. */}
+      {run.status === 'failed' && (
+        <ProcessHealthAlert level="critical" label="Assessment process encountered worker errors">
+          results may be incomplete
+        </ProcessHealthAlert>
+      )}
+      {(run.error > 0) && (
+        <ProcessHealthAlert level="warning" label={`${run.error} document${run.error === 1 ? '' : 's'} could not be opened`}>
+          findings may be incomplete
+        </ProcessHealthAlert>
+      )}
       {/* The four the board specifies. `certifiable` and `audit-ready` came out with them: both
           are the score in other clothes, and #545 removed the score because severity weighting
           cannot tell "checked and passed" from "not checked". This screen exports as the
