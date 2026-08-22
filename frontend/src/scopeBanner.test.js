@@ -41,36 +41,40 @@ describe('ScopeBanner', () => {
 })
 
 describe('the screens that were missing it', () => {
-  for (const file of ['Remediate.jsx', 'Publish.jsx']) {
-    it(`${file} renders the banner`, () => {
-      const s = read(file)
-      expect(s).toContain("import ScopeBanner from './ScopeBanner.jsx'")
-      expect(s).toMatch(/<ScopeBanner\b/)
-    })
+  it('Publish.jsx renders the banner', () => {
+    const s = read('Publish.jsx')
+    expect(s).toContain("import ScopeBanner from './ScopeBanner.jsx'")
+    expect(s).toMatch(/<ScopeBanner\b/)
+  })
 
-    it(`${file} places it ABOVE the numbers it qualifies`, () => {
-      // Below the counts it is a footnote nobody reaches; the point is to be read first.
-      //
-      // Anchored to each screen's OWN first panel, not to the first `<section` in the file:
-      // Remediate defines helper components (GroupedFixes) above its main render, and one of
-      // them contains a panel — so a naive first-match compares against a section that is not on
-      // the screen at all and reports a failure that is purely an artifact of file order.
-      const anchor = { 'Remediate.jsx': 'rem-hero', 'Publish.jsx': 'Release Center' }[file]
-      const s = read(file)
-      const banner = s.indexOf('<ScopeBanner')
-      const first = s.indexOf(anchor)
-      expect(banner, 'no ScopeBanner rendered').toBeGreaterThan(-1)
-      expect(first, `anchor ${anchor} not found`).toBeGreaterThan(-1)
-      expect(banner, 'the banner renders after the content it qualifies').toBeLessThan(first)
-    })
-  }
+  it('Publish.jsx places it ABOVE the numbers it qualifies', () => {
+    const s = read('Publish.jsx')
+    const banner = s.indexOf('<ScopeBanner')
+    const first = s.indexOf('Release Center')
+    expect(banner, 'no ScopeBanner rendered').toBeGreaterThan(-1)
+    expect(first, 'anchor Release Center not found').toBeGreaterThan(-1)
+    expect(banner, 'the banner renders after the content it qualifies').toBeLessThan(first)
+  })
 
-  it('does not invent a findings count where none exists', () => {
-    // Remediate has no open-findings total in scope. Passing a fabricated number to fill the
-    // sentence would be precisely what this banner exists to prevent.
+  it('Remediate.jsx renders AssessmentScopeCard above the numbers it qualifies', () => {
+    // ScopeBanner was replaced by AssessmentScopeCard so the compact scope record is shared
+    // with the Overview tab. The invariant — scope shown above the numbers — is still met.
+    const s = read('Remediate.jsx')
+    expect(s).toContain("import AssessmentScopeCard from './AssessmentScopeCard.jsx'")
+    expect(s).toMatch(/<AssessmentScopeCard\b/)
+    const card = s.indexOf('<AssessmentScopeCard')
+    const hero = s.indexOf('rem-hero')
+    expect(card, 'no AssessmentScopeCard rendered').toBeGreaterThan(-1)
+    expect(hero, 'anchor rem-hero not found').toBeGreaterThan(-1)
+    expect(card, 'the scope card renders after the content it qualifies').toBeLessThan(hero)
+  })
+
+  it('Remediate.jsx does not pass a fabricated findings count to the scope card', () => {
+    // AssessmentScopeCard replaced ScopeBanner — it takes no findings prop. A fabricated count
+    // would be exactly what the scope summary exists to prevent.
     const rem = read('Remediate.jsx')
-    const call = rem.match(/<ScopeBanner[^>]*>/)[0]
-    expect(call).not.toMatch(/findings=\{(?!0\})/)
+    const call = rem.match(/<AssessmentScopeCard[^>]*\/>/)?.[0] || ''
+    expect(call).not.toMatch(/findings=/)
   })
 
   it('is wired in the screens that already had scope, without duplicating it', () => {
