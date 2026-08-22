@@ -253,7 +253,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .herotrend .muted { display: block; margin-bottom: 2px; font-size: 12px; }
 .spark { display: block; max-width: 100%; height: auto; }
 
-.scanprog { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; margin: 14px 0; }
+.scanprog { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; margin: 14px 0; position: sticky; top: 8px; z-index: 40; box-shadow: 0 2px 12px rgba(0,0,0,.07); }
 .scanprogline { display: flex; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 10px; }
 .spinner { width: 14px; height: 14px; border: 2px solid #ece7ec; border-top-color: var(--plum); border-radius: 50%; animation: spin 0.8s linear infinite; flex: 0 0 auto; }
 @keyframes spin { to { transform: rotate(360deg); } }

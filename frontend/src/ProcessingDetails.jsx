@@ -9,14 +9,14 @@ const KIND_COLOR = { ok: '#2F7D51', warn: '#9A6011', bad: '#A5314A', muted: '#54
 const cellHead = { textAlign: 'left', padding: '4px 8px', borderBottom: '1px solid var(--line, #e4e7ef)', color: '#54636F', fontWeight: 600 }
 const cell = { padding: '3px 8px', borderTop: '1px solid var(--line, #eceff4)', whiteSpace: 'nowrap' }
 
-export default function ProcessingDetails({ files, processing = 0 }) {
+export default function ProcessingDetails({ files, processing = 0, defaultOpen = false }) {
   const [filter, setFilter] = useState('all')
   const rows = processingRows(files)
   if (rows.length === 0 && processing === 0) return null
   const counts = filterCounts(rows)
   const shown = filterRows(rows, filter)
   return (
-    <details className="procdetails" style={{ marginTop: 8 }}>
+    <details className="procdetails" style={{ marginTop: 8 }} open={defaultOpen || undefined}>
       <summary style={{ cursor: 'pointer', fontSize: 12.5, color: '#54636F' }}>
         View processing details ({rows.length} landed{processing ? ` · ${processing} processing` : ''})
       </summary>
