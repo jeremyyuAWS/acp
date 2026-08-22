@@ -62,6 +62,7 @@ def _enqueue_analysis(scan_id: str, source: str, items: list[dict], *, ai: bool,
                 "items": [{"file": it["file"], "drive_file_id": it.get("drive_file_id"),
                            "mime": it.get("mime"), "path": it.get("path"),
                            "checksum": it.get("checksum"), "drive_id": it.get("drive_id"),
+                           "source_modified": it.get("source_modified"),
                            "shadow_candidate": name_counts[_logical_name(it["file"])] > 1,
                            "exclude_remediated": exclude_remediated} for it in chunk],
             }, scan_id=scan_id)
@@ -71,6 +72,7 @@ def _enqueue_analysis(scan_id: str, source: str, items: list[dict], *, ai: bool,
                 "scan_id": scan_id, "source": source, "file": it["file"],
                 "drive_file_id": it.get("drive_file_id"), "mime": it.get("mime"), "path": it.get("path"),
                 "checksum": it.get("checksum"), "drive_id": it.get("drive_id"),
+                "source_modified": it.get("source_modified"),
                 "shadow_candidate": name_counts[_logical_name(it["file"])] > 1,
                 "exclude_remediated": exclude_remediated,
                 "ai": ai, "pii": pii, "user": user, "incremental": incremental}, scan_id=scan_id)
@@ -1207,7 +1209,8 @@ def _scan_assess(payload: dict, job: dict) -> None:
         items.append({"file": r["file"], "drive_file_id": r.get("drive_file_id"),
                       "mime": src_mime if src_mime in _EXPORT_MAP else None,
                       "path": r.get("path"), "checksum": r.get("checksum"),
-                      "drive_id": r.get("drive_id")})
+                      "drive_id": r.get("drive_id"),
+                      "source_modified": r.get("source_modified")})
     # ── PERSIST THE EXCLUSION ONTO THE RUN ───────────────────────────────────────────────────
     # Recorded on `scan_runs.scope`, beside `skipped_out_of_scope`, because it is the same kind of
     # fact: part of the boundary of what this run covered. Without it the Overview reconciliation

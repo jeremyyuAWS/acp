@@ -474,6 +474,14 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
         # include_lifecycle_flagged (PRD §4.5) is the authorized override that pulls
         # archive/delete-flagged files back into Assess. This route already gates on the scan
         # owner (get_scan owner=... above), so reaching here IS the owner-gate.
+        # Phase 3a freeze: if no scope was captured at discover time (operator configured it
+        # after the discover ran), freeze the current operator scope NOW before enqueuing so
+        # _scan_assess / analyse_and_assess read the intended criteria, not an open slate.
+        if core.store.get_scan_scope(sid) is None:
+            from assessment_policy import active_scope as _active_scope, scope_as_json as _scope_as_json
+            _live = _active_scope(core.store)
+            if _live:
+                core.store.merge_scan_scope(sid, {"scan_scope": _scope_as_json(_live)})
         jid = core.store.enqueue_job(
             "scan_assess",
             {"scan_id": sid, "user": _owner(request),
