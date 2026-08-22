@@ -78,7 +78,7 @@ describe('the list cannot swamp the page', () => {
   const css = readFileSync(join(here, 'styles.css'), 'utf8')
 
   it('is height-capped and scrolls', () => {
-    expect(css).toMatch(/\.assesslist \{[^}]*max-height: 190px[^}]*overflow-y: auto/s)
+    expect(css).toMatch(/\.assesslist \{[^}]*max-height: 420px[^}]*overflow-y: auto/s)
   })
 
   it('truncates a long filename rather than wrapping the row', () => {
