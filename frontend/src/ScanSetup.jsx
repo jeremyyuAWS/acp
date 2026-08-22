@@ -39,8 +39,6 @@ const PRINCIPLES = [
 const OFFERED = SCOPE_UNIVERSE.filter((r) => TRACKED_17.has(r.sc))
 const CORE = 'acp-core-17'
 
-const FORMAT_LABEL = { docx: 'Word', pdf: 'PDF', pptx: 'PowerPoint', xlsx: 'Excel' }
-
 // What ACP can do for a criterion on the formats currently ticked.
 //
 // Reported as the SET, not the best of them. A criterion is often automated on one format and
@@ -218,7 +216,6 @@ export default function ScanSetup({ onScan, busy, hasDriveToken, hasSPToken }) {
   }).filter((g) => g.rows.length)
 
   const laneMatch = (r) => !laneFilter || laneFor(r.sc, formats)?.key === laneFilter
-  const fmtList = [...formats].map((f) => FORMAT_LABEL[f] || f.toUpperCase())
   const PROFILE_DESC = {
     // Keep the full "WCAG 2.1 AA — 17 ACP-supported checks" phrase: ACP tracks 17 criteria, and
     // "WCAG 2.1 AA" unqualified would imply the whole standard.
@@ -231,8 +228,8 @@ export default function ScanSetup({ onScan, busy, hasDriveToken, hasSPToken }) {
     <div className="scansetup">
       <h3 className="setuptitle">Configure your accessibility scan</h3>
       <p className="muted setupsub">
-        Choose what ACP should inspect. This applies to Discover, Assess and Remediate —
-        configure once, and every stage reports against it.
+        Choose which WCAG success criteria the assessment checks and which file types it evaluates.
+        Discovery is metadata-only and does not depend on this selection.
       </p>
 
       {/* ① CHECKS — profile-first. The 17 unfold only under Custom. Document type is no longer
@@ -329,14 +326,14 @@ export default function ScanSetup({ onScan, busy, hasDriveToken, hasSPToken }) {
         )}
 
         <div className="setupcount setuprun">
-          <b>{scCount} check{scCount === 1 ? '' : 's'} will run</b>
+          <b>{scCount} WCAG success {scCount === 1 ? 'criterion' : 'criteria'} selected</b>
           {laneSentence(runLanes) && <span className="muted"> · {laneSentence(runLanes)}</span>}
         </div>
         <div className="muted setupcount setupcount-sub">
-          {scCount} of {OFFERED.length} supported checks selected
+          {scCount} of {OFFERED.length} supported criteria
           {/* Pairs, not just criteria. "17 checks" over four file types reads as 68; the real
               number is smaller because the engine has no lane for some combinations. */}
-          {' · '}{pairCount} criterion × format pairs
+          {' · '}{pairCount} criterion–format combinations will be evaluated
         </div>
       </div>
 
@@ -346,17 +343,6 @@ export default function ScanSetup({ onScan, busy, hasDriveToken, hasSPToken }) {
         <div className="muted setupcount">
           {hasDriveToken ? 'Google Drive · connected' : 'No source connected — you can still try the sample corpus'}
           {hasSPToken ? ' · SharePoint / OneDrive · connected' : ''}
-        </div>
-      </div>
-
-      {/* A last decision-oriented read before the action: what runs, on what, from where. */}
-      <div className="setupsummary" role="status">
-        <b>Scan configuration</b>
-        <div className="setupsummary-grid">
-          <span><span className="muted">Files</span> {fmtList.join(' · ') || 'none'}</span>
-          <span><span className="muted">Checks</span> {scCount} of {availRows.length}{profile !== 'custom' ? ` (${profile === 'auto' ? 'Automated only' : 'Recommended'})` : ''}</span>
-          <span><span className="muted">Execution</span> {laneSentence(runLanes) || '—'}</span>
-          <span><span className="muted">Source</span> {hasDriveToken ? 'Google Drive' : 'Sample corpus'}</span>
         </div>
       </div>
 

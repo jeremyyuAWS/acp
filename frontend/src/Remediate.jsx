@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import ScopeBanner from './ScopeBanner.jsx'
+import AssessmentScopeCard from './AssessmentScopeCard.jsx'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
 import RemediationInbox from './RemediationInbox.jsx'
@@ -839,19 +839,16 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         </div>
       )}
 
-      {/* Above the hero, which carries the headline finding counts — the numbers a reader would
-          otherwise take as "the estate". No findings count is passed: there is no open-findings
-          total in scope here, and inventing one to fill the sentence would be the opposite of
-          what this banner is for. */}
-      {/* Redesign R4: the scope-counting banner is disclosure, not a permanent fixture on the work
-          surface. It stays one click away for anyone reconciling the count, without occupying the page. */}
-      <details className="rem-scope-disc" style={{ margin: '0 0 6px' }}>
-        <summary style={{ cursor: 'pointer', fontSize: 12.5, color: 'var(--muted)', padding: '4px 2px', userSelect: 'none' }}>
-          Assessment scope
-        </summary>
-        <ScopeBanner run={run} fileCount={files.length}
-                     docScope={documentScopeSentence(documentSelection(files, triage))} />
-      </details>
+      {/* Compact scope record — what was in scope for this assessment, always visible.
+          R4: replaced the old ScopeBanner <details> with a compact card that shows the three
+          axes at a glance (criteria, formats, source/doc count). Navigates to Assess tab for
+          rescoping, because scope is an Assess decision, not a Remediate one. */}
+      <AssessmentScopeCard
+        run={run}
+        fileCount={files.length}
+        state="done"
+        onReassess={() => onNavigate?.('assess')}
+      />
       {/* HERO (§1) — the 5-second story + ONE primary action (§11). Every count is real:
           documents from the scan, issues fixed from applied-fix evidence, review from the
           live HITL queue, savings from the recommendation model. */}

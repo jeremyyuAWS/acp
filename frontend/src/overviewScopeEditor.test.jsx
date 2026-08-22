@@ -1,17 +1,14 @@
 /**
- * The scan scope stays reachable from the FIRST TAB after a scan exists.
+ * The Overview tab shows a compact, read-only scope card instead of the full editable ScanSetup.
  *
- * App renders `view === 'overview'` as `run ? (assessed ? <Overview/> : gate) : placeholder`, and
- * `placeholder` is EmptyState — which is the only thing that rendered ScanSetup. So the criteria
- * and file-type controls were reachable exactly once per workspace: before its first scan. Every
- * session after that opened on the dashboard with no route back to the decision shaping every
- * number on it, and the only remaining editors were two panels inside Settings.
+ * The full editable form (AssessSetup.jsx) lives on the Assess tab, where the operator makes the
+ * scope decision before starting a run. Keeping it on the Overview (results) screen forced a
+ * configuration interface onto a reporting surface — the two purposes competed for the top of
+ * the page. The compact card satisfies both needs: it records what was in scope for reconciling
+ * counts, and it offers a "Change scope and reassess" link when rescanning is available.
  *
- * This asserts the state that regressed — a run that HAS been assessed — because the empty case
- * was never broken and testing it would pass either way.
- *
- * DOM-level, not browser-level: this repo's preview server runs vite rooted at the SHARED
- * checkout whatever worktree you are in (CLAUDE.md).
+ * Deliberately tests the ASSESSED state, because the pre-scan case was never broken and testing
+ * it would pass against a regression.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createElement } from 'react'
@@ -20,9 +17,6 @@ import { createTestRoot, unmountAll } from './testRoots.js'
 
 afterEach(unmountAll)
 
-// Spread the real module and override only the calls this render makes. Enumerating api.js's
-// exports by hand fails the day one is added — and fails as "No <name> export is defined on the
-// mock", which reads like a missing function rather than a stale test double.
 vi.mock('./api.js', async (importActual) => ({
   ...(await importActual()),
   getSettings: async () => ({ scan_scope: '' }),
@@ -46,39 +40,51 @@ async function render(props = {}) {
   return container
 }
 
-const scopePanel = (c) => [...c.querySelectorAll('details')]
-  .find((d) => /Scan scope/i.test(d.querySelector('summary')?.textContent || ''))
+// The scope card is role="note" per AssessmentScopeCard.jsx.
+const scopeCard = (c) => c.querySelector('[role="note"].scope-card')
 
-
-describe('the scan scope is editable from the first tab', () => {
-  it('offers it on an assessed run, not only before the first scan', async () => {
+describe('Assessment scope on the Overview tab', () => {
+  it('shows the compact scope card (not the full editable ScanSetup)', async () => {
     const c = await render({ onScan: vi.fn() })
-    expect(scopePanel(c), 'no scan-scope editor on the Overview tab').toBeTruthy()
+    expect(scopeCard(c), 'scope card missing from Overview').toBeTruthy()
+    // The old full editor contained profile radio buttons — those must NOT appear here.
+    expect(c.querySelector('[role="radio"]'), 'editable profile radios must not appear on results screen').toBeFalsy()
   })
 
-  it('renders the criterion controls inside it', async () => {
+  it('shows "Change scope and reassess" when rescanning is available', async () => {
     const c = await render({ onScan: vi.fn() })
-    const panel = scopePanel(c)
-    expect(panel).toBeTruthy()
-    // The criterion axis, by its controls rather than its prose: the checks step leads with a
-    // profile radiogroup (Recommended / Automated only / Custom). The format axis moved to Assess
-    // (AssessScope.jsx), so this editor no longer carries file-type chips. Asserting on the heading
-    // text would pass against a heading with an empty editor under it.
-    expect(panel.querySelectorAll('[role="radio"]').length,
-      'no criterion-profile controls').toBeGreaterThan(0)
+    const btns = [...c.querySelectorAll('button')]
+    const changeBtn = btns.find((b) => /change scope/i.test(b.textContent))
+    expect(changeBtn, 'no "Change scope and reassess" button when onScan is provided').toBeTruthy()
   })
 
-  it('stays collapsed, so it does not displace the metrics', async () => {
-    // The screen's primary job is still to report. <details> without `open` is the same
-    // secondary-action treatment Discover gives Upload.
-    const c = await render({ onScan: vi.fn() })
-    expect(scopePanel(c).hasAttribute('open')).toBe(false)
+  it('navigates to the Assess tab when "Change scope and reassess" is clicked', async () => {
+    const onGo = vi.fn()
+    const c = await render({ onScan: vi.fn(), onGo })
+    const btns = [...c.querySelectorAll('button')]
+    const changeBtn = btns.find((b) => /change scope/i.test(b.textContent))
+    await act(async () => { changeBtn.click() })
+    expect(onGo).toHaveBeenCalledWith('assess')
   })
 
-  it('is left out entirely when there is no way to rescan', async () => {
-    // No onScan means no scan can be started, and a scope editor whose save cannot be acted on
-    // is a control that lies about what it does.
+  it('hides "Change scope and reassess" when no onScan is provided', async () => {
     const c = await render({ onScan: undefined })
-    expect(scopePanel(c)).toBeFalsy()
+    const btns = [...c.querySelectorAll('button')]
+    const changeBtn = btns.find((b) => /change scope/i.test(b.textContent))
+    expect(changeBtn, '"Change scope" button must not appear when rescanning is not available').toBeFalsy()
+  })
+
+  it('still shows the scope card even without onScan — it is a read-only record', async () => {
+    const c = await render({ onScan: undefined })
+    expect(scopeCard(c), 'scope card should show as a read-only record even without onScan').toBeTruthy()
+  })
+
+  it('shows the scope summary line (WCAG level · criteria count)', async () => {
+    const c = await render({ onScan: vi.fn() })
+    const card = scopeCard(c)
+    // The card always names the standard: "WCAG 2.1 AA"
+    expect(card?.textContent).toMatch(/WCAG 2\.1 AA/)
+    // And shows N of 17 (or whatever SCOPE_SIZE / total is).
+    expect(card?.textContent).toMatch(/\d+ of \d+ criteria/)
   })
 })

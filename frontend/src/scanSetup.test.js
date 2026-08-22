@@ -110,7 +110,7 @@ describe('it does not overstate what a selection means', () => {
   const s = () => code('ScanSetup.jsx')
 
   it('counts pairs, not just criteria', () => {
-    expect(s()).toMatch(/pairCount\} criterion × format pairs/)
+    expect(s()).toMatch(/pairCount\} criterion.format combinations will be evaluated/)
   })
 
   it('reports the capability lane as a set, not the best of them', () => {
@@ -122,5 +122,35 @@ describe('it does not overstate what a selection means', () => {
   it('does not label the preset as plain WCAG 2.1 AA', () => {
     // ACP supports 17 criteria. "WCAG 2.1 AA" unqualified would imply the whole standard.
     expect(s()).toContain('WCAG 2.1 AA — 17 ACP-supported checks')
+  })
+})
+
+describe('the duplicate Scan configuration box is removed', () => {
+  const s = () => code('ScanSetup.jsx')
+
+  it('does not render a setupsummary box (it duplicated the controls immediately above it)', () => {
+    expect(s()).not.toContain('setupsummary')
+    expect(s()).not.toContain('Scan configuration')
+  })
+
+  it('does not claim discovery depends on WCAG criteria', () => {
+    // Discovery is metadata-only — it never opens a file and does not depend on the scan_scope.
+    expect(s()).not.toMatch(/Discover.*Assess.*Remediate/)
+    expect(s()).not.toMatch(/applies to Discover/)
+  })
+})
+
+describe('ScanSetup is retired from the Overview tab', () => {
+  // The full editable form lives on the Assess tab only (AssessSetup.jsx).
+  // Overview is a results surface; mixing a configuration UI into it was the regression
+  // this change removes. This assertion fires if ScanSetup is re-mounted there.
+  it('Overview.jsx does not mount ScanSetup', () => {
+    expect(code('Overview.jsx'), 'ScanSetup was re-mounted on the Overview tab — use AssessmentScopeCard instead')
+      .not.toMatch(/<ScanSetup\b/)
+  })
+
+  it('Overview.jsx imports AssessmentScopeCard, not ScanSetup', () => {
+    expect(code('Overview.jsx')).toContain("import AssessmentScopeCard from './AssessmentScopeCard.jsx'")
+    expect(code('Overview.jsx')).not.toContain("import ScanSetup")
   })
 })
