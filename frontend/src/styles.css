@@ -1316,7 +1316,7 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 /* Per-document progress under the bar: which files are done, and which criteria each one failed.
    Capped and scrollable — a 258-document estate must not push the rest of the page off screen,
    and the run is the thing being watched, not a list to read end to end. */
-.assesslist { list-style: none; margin: 8px 0 0; padding: 4px; max-height: 190px; overflow-y: auto;
+.assesslist { list-style: none; margin: 8px 0 0; padding: 4px; max-height: 420px; overflow-y: auto;
   border: 1px solid #E4E0E8; border-radius: 7px; background: #FCFBFD; }
 .assesslist li { display: flex; align-items: baseline; gap: 8px; padding: 3px 8px; font-size: 12px;
   border-radius: 4px; flex-wrap: wrap; }
