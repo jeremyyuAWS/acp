@@ -490,7 +490,7 @@ for s in json.loads(os.environ.get("APP_SECRETS_JSON") or "[]"):
       --command acp-worker \
       --secrets "${WORKER_SECRETS[@]}" \
       --env-vars $ADC_ENV $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV ACP_WORKERS=$WK_N \
-      --system-assigned --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 3 -o none
+      --system-assigned --cpu 2.0 --memory 4.0Gi --ephemeral-storage 8.0Gi --min-replicas 1 --max-replicas 3 -o none
     echo "   one-time: grant the worker's managed identity 'Storage Blob Data Contributor' on"
     echo "   the '$BLOB_ACCOUNT' account so its remediation Blob writes don't 403 — exact"
     echo "   commands are in docs/adr/0013-worker-durability-hardening.md (§2 runbook)."
