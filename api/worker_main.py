@@ -39,7 +39,7 @@ def run(poll_seconds: float = 2.0, _install_signals: bool = True) -> None:
     # A worker container with ACP_WORKERS=0 would boot and do nothing — almost certainly a
     # misconfig — so default the pool to a sensible size here rather than idle silently.
     if not os.environ.get("ACP_WORKERS"):
-        os.environ["ACP_WORKERS"] = "4"
+        os.environ["ACP_WORKERS"] = "10"
 
     if _install_signals:
         signal.signal(signal.SIGTERM, _handle_term)
