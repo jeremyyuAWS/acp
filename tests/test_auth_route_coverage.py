@@ -1,11 +1,15 @@
 """Every registered API route must be covered by the auth gate.
 
-core.is_public is DEFAULT-OPEN — any path not under core.API_PREFIXES is served
-without auth (that's how the SPA's static files and client routes fall through).
-The failure mode is silent: a new APIRouter whose prefix isn't added to
-API_PREFIXES ships every one of its endpoints unauthenticated (/campaigns and
-/disposition both did). This test walks the real FastAPI route table and fails
-on any API route that is_public would wave through unintentionally.
+core.is_public() is FAIL-CLOSED (2026-08-22): it matches a request path against the REAL,
+registered route table (core._PROTECTED_ROUTES, populated by app.py via
+register_protected_routes() at import time) rather than a hand-maintained prefix allowlist. The
+allowlist it replaced silently missed FIVE route groups over five weeks (/campaigns,
+/disposition, then /assess, /analytics, /control, /org-memory, /scope, /sharepoint — the last
+including an unauthenticated file upload) because nothing forced the list to stay in sync with
+the route table a mile away. This test still matters even though the gate now checks the real
+table itself: it is the guard against `is_public()` or `enumerate_api_routes()` regressing back
+toward a scheme that can silently drift, and against a route being added to ALWAYS_PUBLIC by
+mistake.
 """
 from __future__ import annotations
 import sys
@@ -21,41 +25,14 @@ INTENTIONALLY_PUBLIC = set(core.ALWAYS_PUBLIC)
 
 
 def _app_routes():
-    """Every real endpoint FastAPI will actually dispatch to.
-
-    `app.routes` does NOT hand back flat `APIRoute`s for anything added via
-    `include_router()` on this FastAPI version (0.137.1) — each becomes an
-    opaque `_IncludedRouter` wrapper, and `app.routes` holds none of the
-    original `APIRoute`s directly. A prior version of this helper filtered
-    `isinstance(r, APIRoute)` straight over `app.routes` and found ZERO
-    routes on every run — the assertion below then passed over an empty
-    list, which is indistinguishable from "everything is covered" without
-    actually checking anything. That is exactly how `/assess/eligibility`,
-    `/assess/codeset`, and `/assess/eligibility/scoped` shipped unauthenticated
-    for real: every request resolved to the shared 'demo' owner regardless of
-    who was signed in, and this guard never fired because it was silently
-    checking nothing (found live 2026-08-22, chasing a "why does eligibility
-    always read as owner=demo" bug).
-
-    `_IncludedRouter.original_router` is the actual `APIRouter` instance that
-    was passed to `include_router()`, and its own `.routes` are ordinary
-    `APIRoute`s with their final paths already resolved (nothing here uses
-    `include_router(prefix=...)`, so no prefix-joining is needed). Falls back
-    to treating `r` itself as the router for older/newer FastAPI internals —
-    a route contributing 0 routes is silently swallowed by either branch, so
-    the sanity floor in the test below is what actually catches a regression
-    of this exact kind.
-    """
+    """Every real endpoint FastAPI will actually dispatch to — delegates to
+    core.enumerate_api_routes(), the SAME function app.py calls at import time to populate the
+    real gate. Sharing one implementation is the point: two separate "what routes exist" walks
+    is how one of them ends up silently checking a different (or empty) set than the gate
+    actually uses — which is exactly how this file's own route-enumeration broke once already
+    (see git history / test_route_enumeration_actually_finds_routes below)."""
     from app import app
-    from fastapi.routing import APIRoute
-
-    def _expand(r):
-        if isinstance(r, APIRoute):
-            return [r]
-        router = getattr(r, "original_router", r)
-        return [sub for sub in getattr(router, "routes", ()) if isinstance(sub, APIRoute)]
-
-    return [route for r in app.routes for route in _expand(r)]
+    return core.enumerate_api_routes(app)
 
 
 def test_route_enumeration_actually_finds_routes():
@@ -67,6 +44,13 @@ def test_route_enumeration_actually_finds_routes():
 
 
 def test_every_api_route_is_auth_gated_or_intentionally_public():
+    """Narrower than it was under the old prefix allowlist, and honestly so: is_public() now
+    matches a path against the SAME registered-route table this test walks, so every route found
+    here is structurally guaranteed to be gated UNLESS it was explicitly added to ALWAYS_PUBLIC
+    (or matches the one path-pattern carve-out below). A new router can no longer slip through by
+    omission — there is no separate list left to forget. What this still catches: a route added to
+    ALWAYS_PUBLIC (or the carve-out) that shouldn't have been. That is a real, if narrower,
+    mistake to guard against, so this stays rather than being deleted as redundant."""
     uncovered = []
     for r in _app_routes():
         path = r.path
@@ -77,8 +61,8 @@ def test_every_api_route_is_auth_gated_or_intentionally_public():
         if core.is_public(path):
             uncovered.append(path)
     assert not uncovered, (
-        "these API routes are served WITHOUT auth — add their prefix to "
-        f"core.API_PREFIXES (or ALWAYS_PUBLIC if truly intended): {sorted(set(uncovered))}"
+        "these API routes are served WITHOUT auth — remove them from core.ALWAYS_PUBLIC (or the "
+        f"trace-redirect carve-out in is_public) if that was not intended: {sorted(set(uncovered))}"
     )
 
 

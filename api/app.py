@@ -84,6 +84,15 @@ async def _access_gate(request, call_next):
 for _router in ROUTERS:
     app.include_router(_router)
 
+# Feeds the fail-closed access gate the real, registered route table (core.py cannot import
+# `app` itself without a cycle — app.py imports core, not the reverse). Placed at module level,
+# immediately after every router is included, so there is no window where a real request could
+# be served before this runs: Python finishes importing app.py (and only then does uvicorn start
+# accepting connections) before any request reaches the middleware below. See core.py's
+# register_protected_routes/is_public docstrings for why this replaced a manually-maintained
+# prefix allowlist that silently missed five route groups over five weeks.
+core.register_protected_routes(core.enumerate_api_routes(app))
+
 
 @app.on_event("startup")
 def _start_job_workers():

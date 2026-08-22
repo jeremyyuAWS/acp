@@ -134,15 +134,28 @@ def test_the_monitor_key_has_no_default(monkeypatch):
     assert core.MONITOR_KEY is None
 
 
-def test_the_monitor_route_is_public_to_the_gate_but_prefixed_for_everything_else(monkeypatch):
-    """/monitor/estate validates its own key, so the gate must let it through; any FUTURE
-    /monitor/* route must be authed by default rather than falling through the default-open
-    hole that shipped /campaigns and /disposition unauthenticated."""
+def test_the_monitor_route_is_public_but_a_sibling_route_is_not(monkeypatch):
+    """/monitor/estate validates its own key, so the gate must let it through; any OTHER
+    registered /monitor/* route must be authed by default. Registers a small synthetic router
+    (rather than asserting against a fictional, never-registered path) because under the
+    fail-closed gate (2026-08-22) an unregistered path is not "protected by prefix" the way the
+    old API_PREFIXES scheme made it — it is simply not a real route, 404 either way, auth or not.
+    The guarantee worth pinning is about REAL routes: a real /monitor/* endpoint other than the
+    one explicit exception must come back gated, which is what would have caught /campaigns and
+    /disposition (and later /assess, /analytics, /control, /org-memory, /scope, /sharepoint)
+    shipping unauthenticated."""
     core = _core(monkeypatch)
+    from fastapi import APIRouter
+    fake = APIRouter()
+
+    @fake.get("/monitor/something-else")
+    def _stub():  # pragma: no cover — never actually called, only route-matched
+        return {}
+
+    core.register_protected_routes(fake.routes)
     assert "/monitor/estate" in core.ALWAYS_PUBLIC
-    assert "/monitor" in core.API_PREFIXES
     assert core.is_public("/monitor/estate") is True
-    assert core.is_public("/monitor/anything-added-later") is False
+    assert core.is_public("/monitor/something-else") is False
 
 
 def test_deploy_script_stamps_the_production_flag():
