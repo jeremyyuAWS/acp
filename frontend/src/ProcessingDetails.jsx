@@ -4,6 +4,28 @@ import { processingRows, filterRows, filterCounts, PROCESSING_FILTERS } from './
 const KIND_COLOR = { ok: '#2F7D51', warn: '#9A6011', bad: '#A5314A', muted: '#54636F' }
 const cell = { padding: '3px 8px', borderTop: '1px solid var(--line, #eceff4)', whiteSpace: 'nowrap' }
 
+// Background + text for each format pill. Muted but distinct — enough contrast to scan
+// a column of mixed formats without being loud beside the status colours.
+const FMT_PILL = {
+  DOCX: { bg: '#DBEAFE', fg: '#1D4ED8' },   // blue  — Word
+  PDF:  { bg: '#FEE2E2', fg: '#B91C1C' },   // red   — Acrobat
+  PPTX: { bg: '#FFEDD5', fg: '#C2410C' },   // orange — PowerPoint
+  XLSX: { bg: '#DCFCE7', fg: '#15803D' },   // green  — Excel
+}
+
+function FormatPill({ fmt }) {
+  if (!fmt) return <span style={{ color: '#8891A3' }}>—</span>
+  const p = FMT_PILL[fmt]
+  if (!p) return <span>{fmt}</span>
+  return (
+    <span style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 10,
+                   fontSize: 11, fontWeight: 600, letterSpacing: 0.2,
+                   background: p.bg, color: p.fg }}>
+      {fmt}
+    </span>
+  )
+}
+
 // Sort comparators keyed by column. null score/issues sort after numeric values.
 const SORT = {
   file:   (a, b) => a.file.localeCompare(b.file),
@@ -117,7 +139,7 @@ export default function ProcessingDetails({ files, processing = 0, defaultOpen =
                            title={r.folder}>{r.folder}</div>
                     )}
                   </td>
-                  <td style={cell}>{r.format || '—'}</td>
+                  <td style={cell}><FormatPill fmt={r.format} /></td>
                   <td style={{ ...cell, color: KIND_COLOR[r.kind], fontWeight: 500 }}>{r.result}</td>
                   <td style={{ ...cell, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                     {r.score == null ? '—' : r.score}

@@ -13,9 +13,9 @@ const FILES = [
 describe('processingRows', () => {
   it('maps status to a human result + semantic kind, and format from the filename', () => {
     const rows = processingRows(FILES)
-    expect(rows[0]).toMatchObject({ file: 'Policy.docx', format: 'DOCX', result: 'Passed', kind: 'ok', score: 98 })
-    expect(rows[1]).toMatchObject({ format: 'PDF', result: 'Needs review', kind: 'warn' })
-    expect(rows[2]).toMatchObject({ format: 'PPTX', result: 'Failed', kind: 'bad', score: null })
+    expect(rows[0]).toMatchObject({ file: 'Policy.docx', format: 'DOCX', result: 'Assessed — no issues', kind: 'ok', score: 98 })
+    expect(rows[1]).toMatchObject({ format: 'PDF', result: 'Assessed — issues found', kind: 'warn' })
+    expect(rows[2]).toMatchObject({ format: 'PPTX', result: "Couldn't assess", kind: 'bad', score: null })
     expect(rows[3]).toMatchObject({ result: 'Queued', kind: 'muted' })
   })
 
