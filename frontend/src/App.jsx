@@ -1135,18 +1135,6 @@ export default function App() {
       )}
 
       {err && <div className="err" role="alert">{err}</div>}
-      {scanUnavailable && (
-        <div className="err" role="alert">
-          <span>{scanUnavailable.reason}</span>{' '}
-          {scanUnavailable.recoveredTo
-            ? <span>Showing your most recent scan instead.</span>
-            : scanUnavailable.recovered
-              ? <span>You don’t have a scan of your own yet — run one from <b>Discover</b> to get a score.</span>
-              : <span>Looking for a scan you can open…</span>}
-          <button className="ghost small" style={{ marginLeft: 10 }}
-                  onClick={() => setScanUnavailable(null)}>Dismiss</button>
-        </div>
-      )}
       {busy && progress && (
         <div className="scanprog" role="status" aria-live="polite">
           <div className="scanprogline"><span className="spinner" />

@@ -163,9 +163,9 @@ describe('App recovers to a scan the user can actually load', () => {
     expect(app).toMatch(/'discover'/)
   })
 
-  it('renders an alert rather than an empty dashboard', () => {
-    expect(app).toMatch(/\{scanUnavailable && \(/)
-    expect(app).toMatch(/role="alert"/)
+  it('recovers silently — the banner JSX is no longer rendered', () => {
+    // The visible error banner was removed (2026-08-22): silent recovery still runs, no UI noise.
+    expect(app).not.toMatch(/\{scanUnavailable && \(/)
   })
 
   it('a fresh sign-in clears it', () => {
