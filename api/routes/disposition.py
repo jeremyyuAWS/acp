@@ -521,12 +521,20 @@ def execute_policy(policy_id: str, request: Request):
 
 
 @router.get("/disposition/audit")
-def disposition_audit(request: Request, limit: int = Query(200, ge=1, le=1000)):
+def disposition_audit(request: Request, limit: int = Query(200, ge=1, le=1000),
+                       doc_id: str | None = Query(None)):
     """Full disposition history, newest first — the visible face of the append-only
-    audit table (pending, applied, rejected, failed alike)."""
+    audit table (pending, applied, rejected, failed alike).
+
+    `doc_id` narrows this to one document's history — every rule that has ever tagged it, in
+    order, not just the current recommendation `scan_inventory.lifecycle_status` holds. Discover's
+    evaluator writes that key as "scan:<scan_id>:<file>" (handlers._evaluate_discover_lifecycle_rules),
+    the same convention the per-file override route (scans.py's lifecycle-override) already uses —
+    so a caller with a (scan_id, file) pair can always construct it without a lookup."""
     _require_admin(request)
     owner = _owner(request)
-    return _readable(core.store.list_disposition_audit(limit=limit, owner=owner), owner)
+    return _readable(
+        core.store.list_disposition_audit(limit=limit, doc_id=doc_id, owner=owner), owner)
 
 
 @router.get("/disposition/approvals")
