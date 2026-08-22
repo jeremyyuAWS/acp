@@ -17,6 +17,7 @@ const listDispositionPolicies = vi.fn()
 const createDispositionPolicy = vi.fn()
 const setDispositionPolicyEnabled = vi.fn()
 const previewDispositionPolicy = vi.fn()
+const previewDispositionDraft = vi.fn()
 const deleteDispositionPolicy = vi.fn()
 const reorderDispositionPolicies = vi.fn()
 const listDispositionConflicts = vi.fn()
@@ -25,6 +26,7 @@ vi.mock('./api.js', () => ({
   createDispositionPolicy: (...a) => createDispositionPolicy(...a),
   setDispositionPolicyEnabled: (...a) => setDispositionPolicyEnabled(...a),
   previewDispositionPolicy: (...a) => previewDispositionPolicy(...a),
+  previewDispositionDraft: (...a) => previewDispositionDraft(...a),
   deleteDispositionPolicy: (...a) => deleteDispositionPolicy(...a),
   reorderDispositionPolicies: (...a) => reorderDispositionPolicies(...a),
   listDispositionConflicts: (...a) => listDispositionConflicts(...a),
@@ -39,6 +41,7 @@ beforeEach(() => {
   createDispositionPolicy.mockReset().mockResolvedValue({ policy_id: 'new1' })
   setDispositionPolicyEnabled.mockReset().mockResolvedValue({})
   previewDispositionPolicy.mockReset().mockResolvedValue({ would_match: 0 })
+  previewDispositionDraft.mockReset().mockResolvedValue({ would_match: 0 })
   deleteDispositionPolicy.mockReset().mockResolvedValue({ deleted: 'p1' })
   reorderDispositionPolicies.mockReset().mockResolvedValue([])
   listDispositionConflicts.mockReset().mockResolvedValue({ conflicts: [] })
@@ -351,6 +354,61 @@ describe('the new-rule builder', () => {
     expect(draft.textContent).toContain(
       'Files under Finance/2019/ last modified before 1 Jan 2022 will be tagged for archive review.')
     expect(createDispositionPolicy).not.toHaveBeenCalled()   // a restatement, not a save
+  })
+
+  // Lifecycle rules #4 — a live preview of the DRAFT before it is saved, not only after
+  // (previewDispositionPolicy needs a saved policy_id). Debounced, so these wait past the window.
+  it('shows a live match count for the draft, before it is saved', async () => {
+    previewDispositionDraft.mockResolvedValue({ would_match: 40 })
+    await render(); await expand(); await flush()
+    await fillBoardExample()
+    expect(text()).toContain('Checking how many files match…')
+    await act(async () => { await new Promise((r) => setTimeout(r, 500)) })
+    expect(previewDispositionDraft).toHaveBeenCalledWith(
+      [{ field: 'parent_folder', op: 'prefix', value: 'Finance/2019/' },
+       { field: 'modified_at', op: 'before', value: '2022-01-01' }], 'archive')
+    expect(text()).toContain('Matches about 40 files.')
+    expect(createDispositionPolicy).not.toHaveBeenCalled()   // still just a preview
+  })
+
+  it('does not ask for a preview until at least one condition is valid', async () => {
+    await render(); await expand(); await flush()
+    await setValue(byLabel('Rule name'), 'Everything')
+    await act(async () => { await new Promise((r) => setTimeout(r, 500)) })
+    expect(previewDispositionDraft).not.toHaveBeenCalled()
+  })
+
+  it('previews before the rule has a name — a name has no bearing on which files match', async () => {
+    previewDispositionDraft.mockResolvedValue({ would_match: 7 })
+    await render(); await expand(); await flush()
+    await setValue(byLabel('Folder path starts with'), 'HR/')   // no name yet
+    await act(async () => { await new Promise((r) => setTimeout(r, 500)) })
+    expect(previewDispositionDraft).toHaveBeenCalled()
+    expect(text()).toContain('Matches about 7 files.')
+    expect(btnByText('Add rule').disabled).toBe(true)          // still can't submit — no name
+  })
+
+  it('debounces rapid edits into the last value typed, not one request per keystroke', async () => {
+    previewDispositionDraft.mockResolvedValue({ would_match: 1 })
+    await render(); await expand(); await flush()
+    const folder = byLabel('Folder path starts with')
+    await setValue(folder, 'F')
+    await setValue(folder, 'Fi')
+    await setValue(folder, 'Fin')
+    await setValue(folder, 'Finance/')
+    await act(async () => { await new Promise((r) => setTimeout(r, 500)) })
+    expect(previewDispositionDraft).toHaveBeenCalledTimes(1)
+    expect(previewDispositionDraft).toHaveBeenCalledWith(
+      [{ field: 'parent_folder', op: 'prefix', value: 'Finance/' }], 'archive')
+  })
+
+  it('surfaces a preview failure without blocking Add rule', async () => {
+    previewDispositionDraft.mockRejectedValue(new Error('network error'))
+    await render(); await expand(); await flush()
+    await fillBoardExample()
+    await act(async () => { await new Promise((r) => setTimeout(r, 500)) })
+    expect(text()).toContain('Could not check how many files this would match')
+    expect(btnByText('Add rule').disabled).toBe(false)
   })
 
   it('sends exactly the conditions that were filled in, coercing days to a number', async () => {

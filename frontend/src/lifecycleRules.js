@@ -278,23 +278,32 @@ export function draftToMatch(draft) {
 }
 
 /**
- * Why this draft cannot be submitted yet, or '' when it can.
+ * Why this draft's CONDITIONS cannot be previewed or matched yet, or '' when they can. Unlike
+ * `draftProblem` below, this ignores the name field — a name has no bearing on which documents a
+ * rule selects, and gating the live preview on it would mean a person filling in conditions
+ * first, name last, sees no count until the very last field.
  *
  * The condition-count check is the load-bearing one: a rule with no conditions matches EVERY file
  * in scope, so an accidental empty rule would tag the whole estate for review. It is refused here
  * rather than explained after the fact.
  */
-export function draftProblem(draft) {
-  if (!draft || !String(draft.name || '').trim()) return 'Give the rule a name.'
+export function matchProblem(draft) {
   const match = draftToMatch(draft)
   if (!match.length) return 'Add at least one condition — a rule with none would match every file in scope.'
   for (const c of CONDITIONS) {
-    const raw = (draft.values || {})[c.key]
+    const raw = (draft && draft.values || {})[c.key]
     if (raw === '' || raw == null) continue
     if (c.kind === 'number' && !(Number(raw) > 0)) return `“${c.label}” must be a number of days greater than zero.`
     if (c.kind === 'date' && !/^\d{4}-\d{2}-\d{2}$/.test(String(raw))) return `“${c.label}” must be a date, as YYYY-MM-DD.`
   }
   return ''
+}
+
+/** Why this draft cannot be SUBMITTED yet, or '' when it can. A name plus everything
+ *  `matchProblem` requires — see that function for why the two are checked separately. */
+export function draftProblem(draft) {
+  if (!draft || !String(draft.name || '').trim()) return 'Give the rule a name.'
+  return matchProblem(draft)
 }
 
 /**
