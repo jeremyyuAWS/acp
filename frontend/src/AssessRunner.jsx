@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { allRules } from './rules'
 import { WCAG } from './wcagCatalog.js'
-import { assessScan, getCapability, getScan, getScanTraces, refreshScanDriveToken, getQueueJob, getJobs, setWorkers } from './api.js'
+import { assessScan, getCapability, getScan, getScanTraces, refreshScanDriveToken, getQueueJob, getJobs, setWorkers, getWorkerReplicas, setWorkerReplicas } from './api.js'
 import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
 import { TraceChip } from './Transparency.jsx'
 import { assessLine } from './phaseNarration.js'
@@ -155,6 +155,28 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
       .then((d) => setWorkerSnap((s) => ({ ...s, workers: d.workers ?? next })))
       .catch(() => setWorkerSnap((s) => ({ ...s, workers: workerSnap.workers })))
       .finally(() => setWorkerBusy(false))
+  }
+  // Azure Container App replica control — fetched once when running starts; hidden when
+  // AZURE_SUBSCRIPTION_ID is absent on the backend (configured: false).
+  const [replicaSnap, setReplicaSnap] = useState(null)
+  const [replicaBusy, setReplicaBusy] = useState(false)
+  useEffect(() => {
+    if (phase !== 'running') return undefined
+    let on = true
+    getWorkerReplicas().then((d) => { if (on && d.configured) setReplicaSnap(d) }).catch(() => {})
+    return () => { on = false }
+  }, [phase])
+  const adjustReplicas = (delta) => {
+    if (!replicaSnap || replicaBusy) return
+    const next = Math.max(1, Math.min(replicaSnap.max_replicas ?? 5, replicaSnap.min_replicas + delta))
+    if (next === replicaSnap.min_replicas) return
+    const prev = replicaSnap.min_replicas
+    setReplicaBusy(true)
+    setReplicaSnap((s) => ({ ...s, min_replicas: next }))   // optimistic
+    setWorkerReplicas(next)
+      .then((d) => setReplicaSnap(d))
+      .catch(() => setReplicaSnap((s) => ({ ...s, min_replicas: prev })))
+      .finally(() => setReplicaBusy(false))
   }
   // Remediation capability ({fmt: {sc: mode}}) — fetched once, seeded with the bundled
   // table so the auto-fixable counts are correct synchronously (and never regress to the
@@ -549,6 +571,23 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                                    cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>+</button>
                   <span className="muted" style={{ fontSize: 11 }}>in-process workers</span>
                 </span>
+                {replicaSnap && (<>
+                  <span className="muted">·</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <button onClick={() => adjustReplicas(-1)} disabled={replicaBusy || replicaSnap.min_replicas <= 1}
+                            aria-label="Remove a Container App replica"
+                            style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
+                                     background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
+                                     cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>−</button>
+                    <span style={{ fontSize: 13, fontWeight: 600, minWidth: 14, textAlign: 'center' }}>{replicaSnap.min_replicas}</span>
+                    <button onClick={() => adjustReplicas(+1)} disabled={replicaBusy || replicaSnap.min_replicas >= (replicaSnap.max_replicas ?? 5)}
+                            aria-label="Add a Container App replica"
+                            style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
+                                     background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
+                                     cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>+</button>
+                    <span className="muted" style={{ fontSize: 11 }}>Azure replicas (max {replicaSnap.max_replicas})</span>
+                  </span>
+                </>)}
               </div>
             )}
             {(currentFile || currentPhase) && (

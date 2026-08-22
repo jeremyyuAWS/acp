@@ -788,6 +788,18 @@ export const clearDeadJobs = () => (SIM
 export const setWorkers = (count) => (SIM
   ? sim({ workers: count })
   : fetch(`${BASE}/workers?count=${count}`, { method: 'PUT', headers: headers() }).then(j))
+// Azure Container App replica control — returns {configured, min_replicas, max_replicas} or
+// {configured: false} when AZURE_SUBSCRIPTION_ID is unset in the backend.
+export const getWorkerReplicas = () => (SIM
+  ? sim({ configured: false, min_replicas: null, max_replicas: null })
+  : fetch(`${BASE}/control/workers/replicas`, { headers: headers() }).then(j))
+export const setWorkerReplicas = (minReplicas) => (SIM
+  ? sim({ configured: false, min_replicas: null, max_replicas: null })
+  : fetch(`${BASE}/control/workers/replicas`, {
+      method: 'PATCH',
+      headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ min_replicas: minReplicas }),
+    }).then(j))
 // Reset demo data — clears scan results (Grafana) and/or Langfuse traces. Keeps settings.
 export const resetDemoData = (scope = 'all') => (SIM
   ? sim({ scope, cleared_tables: [], langfuse_traces_deleted: 0 })
