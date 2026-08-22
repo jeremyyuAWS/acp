@@ -19,7 +19,7 @@ import AccessibilityStatus from './AccessibilityStatus.jsx'
 import EvidenceHeader, { fmtEvidence } from './EvidenceHeader.jsx'
 import { confirmCriterion, getFileStatus, getExamined, disposeCriterion, listDispositions } from './api.js'
 import { listScanDecisions } from './api.js'
-import { errorReasonFor, noFindingsLine, looksLikeFetchFailure } from './fileErrorReason.js'
+import { errorReasonFor, noFindingsLine, looksLikeFetchFailure, friendlyFileError } from './fileErrorReason.js'
 import { retentionSignal } from './retentionSignal.js'
 import { showsAssessmentHero } from './riskOverUnassessed.js'
 import DispositionControl from './DispositionControl.jsx'
@@ -988,10 +988,13 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
       <h4 className="drawerh">Findings {issues.length > 0 && <span className="muted">({issues.length})</span>}</h4>
       {issues.length === 0 ? (
         <p className="muted">
-          {noFindingsLine(st, errReason)}
+          {st === 'unanalysable' && errReason
+            ? <>Could not process this file — <span title={errReason}>{friendlyFileError(errReason)}</span></>
+            : noFindingsLine(st, errReason)}
           {/* One orienting clause, never a replacement for the reason itself. Without it the
               default reading of "could not process" is "this document is broken", which is the
-              reading that sent people to inspect files that were never fetched. */}
+              reading that sent people to inspect files that were never fetched. The raw error
+              string is preserved in the title attribute of the friendly message for debugging. */}
           {st === 'unanalysable' && looksLikeFetchFailure(errReason) && (
             <span> This looks like a problem reaching the source, not with the document itself.</span>
           )}
