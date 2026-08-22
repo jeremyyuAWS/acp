@@ -741,6 +741,12 @@ export default function App() {
     try {
       const fresh = await pollScanJob(job_id)
       setScan(fresh)
+      // A fresh, successfully-reconnected scan supersedes any earlier "scan not available"
+      // banner — found live 2026-08-21: a stale banner from an EARLIER failed reconnect (a
+      // sessionStorage active_job_id surviving a reload past the scan it pointed at) kept
+      // rendering "you don't have a scan of your own yet" directly above this scan's own real,
+      // correct results, because nothing here ever cleared it once new data arrived.
+      setScanUnavailable(null)
       resetScanScopedState()
       setScanList(await listScans())
     } catch (e) {
@@ -841,6 +847,9 @@ export default function App() {
         fresh = await pollScanJob(job_id)
       }
       setScan(fresh)
+      // See reconnectJob's identical line: a fresh successful scan supersedes any stale
+      // "scan not available" banner left over from an earlier failed reconnect attempt.
+      setScanUnavailable(null)
       // A re-scan is a new run, so nothing from the last one carries into it. The previous scan
       // is NOT lost — it stays in scan_runs and stays selectable in Time-travel, with its own
       // decisions and triage, however far through the workflow it got.
@@ -890,7 +899,9 @@ export default function App() {
       // state started empty anyway — but this runs from a startup effect that can land while a
       // different scan is already on screen, and a fourth path that resets a different subset is
       // exactly how the three before it drifted apart.
-      if (fresh) { setScan(fresh); resetScanScopedState(); setScanList(await listScans()); setView('overview') }
+      // See reconnectJob's identical line: a fresh successful scan supersedes any stale
+      // "scan not available" banner left over from an earlier failed reconnect attempt.
+      if (fresh) { setScan(fresh); setScanUnavailable(null); resetScanScopedState(); setScanList(await listScans()); setView('overview') }
     } catch { /* best-effort reconnect */ }
     finally { setBusy(false); setProgress(null); setLiveScanId(null) }
   }

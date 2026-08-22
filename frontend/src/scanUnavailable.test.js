@@ -172,3 +172,25 @@ describe('App recovers to a scan the user can actually load', () => {
     expect(app).toMatch(/setScanUnavailable\(null\)/)
   })
 })
+
+describe('a fresh successful scan clears a stale banner from an earlier one', () => {
+  // Found live 2026-08-21: a sessionStorage active_job_id surviving a hard reload (the in-memory
+  // auth token does not) pointed a post-reload reconnect at a scan from before the session
+  // dropped. That reconnect 404'd, setting scanUnavailable — and NOTHING cleared it afterward,
+  // so a brand-new, genuinely successful scan's real results rendered with the stale "you don't
+  // have a scan of your own yet" banner still on screen above them, because doScan/reconnectJob/
+  // reconnectScan's success paths only ever called setScan(fresh), never setScanUnavailable(null).
+  const app = code('App.jsx')
+
+  it('doScan and reconnectJob each clear it right after setting the fresh scan', () => {
+    // `code()` strips comments, so both call sites reduce to the same two-line shape —
+    // asserting the pattern appears twice (once per site) rather than trying to tell them
+    // apart by surrounding prose that will not be there once comments are stripped.
+    const matches = app.match(/setScan\(fresh\)\s*\n\s*setScanUnavailable\(null\)/g) || []
+    expect(matches.length).toBe(2)
+  })
+
+  it('reconnectScan clears it in the same statement it sets the fresh scan', () => {
+    expect(app).toMatch(/setScan\(fresh\); setScanUnavailable\(null\); resetScanScopedState\(\)/)
+  })
+})

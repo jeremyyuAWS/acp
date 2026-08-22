@@ -508,7 +508,7 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
 
 def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediated: bool = False,
                    scope_out: dict | None = None, inventory_out: list | None = None,
-                   exclude_ids: set | None = None) -> list[dict]:
+                   exclude_ids: set | None = None, raw_out: list | None = None) -> list[dict]:
     """BFS over a folder subtree — returns all scannable files in the folder AND
     every nested subfolder. Bounded by max_files (newest folders may be skipped
     once the cap is hit) and a cycle guard, so a huge tree can't run unbounded.
@@ -526,7 +526,12 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
     `scope_out`, when given, is filled in with WHAT THIS LISTING COVERED — see `_list`. This is
     the path that reported "1 document" on 2026-07-30 while the estate the user had in mind held
     eight: the folder held exactly one file, the listing was right, and NOTHING said the other
-    seven were in a part of the Drive this scan never looked at."""
+    seven were in a part of the Drive this scan never looked at.
+
+    `raw_out`, when given, is extended with the raw (pre-normalize) Drive listing — the same
+    shape `_search_drive` feeds `estate_inventory.summarize()`. `_search_folders` uses this to
+    build ONE combined inventory over every root rather than merging per-root summaries, which
+    `by_format`/`by_status` counts can't be recombined from without re-deriving them anyway."""
     remediated_folder_name = None
     if exclude_remediated:
         import core
@@ -598,12 +603,22 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
         for f in raw[:max_files]:
             if f.get("id") not in result_ids:
                 inventory_out.append(_drive_inventory_row(f))
+    if raw_out is not None:
+        raw_out.extend(raw[:max_files])
     if scope_out is not None:
+        # Parity with _search_drive: without this, a folder-scoped Drive scan (the common case —
+        # "Specific folders", not "Entire Drive") never gets a `scope.inventory` summary at all,
+        # so /assess/eligibility — which reads exactly that field — reported "0 documents will be
+        # opened and scored" for every folder-scoped account regardless of estate size. Found live
+        # 2026-08-21 minutes after #624 (which fixed a Discover-only scan's VISIBILITY) still left
+        # this account's Assess tab empty: the scan was now visible, but had nothing in
+        # scope.inventory to find, because this path never wrote it.
         scope_out.update({"kind": "folder", "folder_id": folder_id,
                           "folders_walked": len(seen_folders), "listed": listed,
                           "skipped_acp": skipped_acp, "skipped_mirror": skipped_mirror,
                           "skipped_excluded": skipped_excluded,
-                          "kept": len(result), "truncated": truncated, "cap": max_files})
+                          "kept": len(result), "truncated": truncated, "cap": max_files,
+                          "inventory": estate_inventory.summarize(raw[:max_files], truncated=truncated)})
     print(f"[scan] discovery (folder subtree): {len(seen_folders)} folder(s) walked · "
           f"{listed} listed · {skipped_acp} skipped as ACP-generated output · "
           f"{skipped_mirror} mirror folder(s) skipped · {len(result)} scannable", flush=True)
@@ -638,6 +653,13 @@ def _search_folders(svc, folder_ids: list[str], max_files: int = 1000,
     names: list[dict] = []
     truncated = False
     walked = listed = skipped_acp = skipped_mirror = skipped_excluded = 0
+    # Cross-root union for the inventory summary — a SEPARATE dedup from `merged`'s, because this
+    # one has to cover every file `_search_folder` saw (scannable and not), not just the analysis
+    # set. Recomputed once over the union rather than merged per-root: by_format/by_status/by_age
+    # counts and the sample caps in estate_inventory.summarize() can't be recombined from partial
+    # summaries without re-deriving them anyway.
+    raw_seen: set[str] = set()
+    all_raw: list[dict] = []
     for fid in folder_ids:
         remaining = max_files - len(merged)
         if remaining <= 0:
@@ -646,15 +668,22 @@ def _search_folders(svc, folder_ids: list[str], max_files: int = 1000,
             truncated = True
             break
         sub: dict = {}
+        raw_batch: list = []
         batch = _search_folder(svc, fid, remaining, exclude_remediated=exclude_remediated,
                                scope_out=sub, inventory_out=inventory_out,
-                               exclude_ids=exclude_ids)
+                               exclude_ids=exclude_ids, raw_out=raw_batch)
         for it in batch:
             key = it.get("id") or it.get("path") or it.get("name")
             if key in seen:
                 continue
             seen.add(key)
             merged.append(it)
+        for f in raw_batch:
+            key = f.get("id") or f.get("name")
+            if key in raw_seen:
+                continue
+            raw_seen.add(key)
+            all_raw.append(f)
         names.append({"id": fid, "name": _folder_name(svc, fid)})
         walked += int(sub.get("folders_walked") or 0)
         listed += int(sub.get("listed") or 0)
@@ -666,11 +695,16 @@ def _search_folders(svc, folder_ids: list[str], max_files: int = 1000,
         # `kind` stays "folder" for one root AND for many. isNarrowScope() keys off it, so a new
         # kind here would silently drop the ⚠ that stops a narrowed count reading as the estate —
         # the 2026-07-30 defect, re-introduced by a rename. `folders` carries the detail.
+        #
+        # `inventory`: parity with _search_drive/_search_folder — see _search_folder's comment on
+        # why its absence here meant /assess/eligibility saw nothing for a multi-folder scan
+        # (found live 2026-08-21).
         scope_out.update({"kind": "folder", "folder_id": folder_ids[0] if folder_ids else None,
                           "folders": names, "folders_walked": walked, "listed": listed,
                           "skipped_acp": skipped_acp, "skipped_mirror": skipped_mirror,
                           "skipped_excluded": skipped_excluded,
-                          "kept": len(merged), "truncated": truncated, "cap": max_files})
+                          "kept": len(merged), "truncated": truncated, "cap": max_files,
+                          "inventory": estate_inventory.summarize(all_raw, truncated=truncated)})
         if len(names) == 1:
             scope_out["folder_name"] = names[0]["name"]
     print(f"[scan] discovery ({len(folder_ids)} folder roots): {walked} folder(s) walked · "

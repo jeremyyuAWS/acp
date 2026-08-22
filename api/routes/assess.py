@@ -27,14 +27,18 @@ def _owner(request: Request) -> str:
 
 
 def _latest_inventory(owner: str) -> dict | None:
-    """The estate inventory from this owner's most recent completed scan, or None.
+    """The estate inventory from this owner's most recent scan that has one, or None.
 
-    `list_scans` returns completed scans newest-first with `scope` already decoded to a
-    dict, so the first row that carries an `inventory` block is the current estate. A
-    read-only lookup — no scan is triggered if none exists; the caller renders zeros.
+    Deliberately `list_scans_including_discovered`, not `list_scans`: this needs "the latest
+    discovery," not "the latest ASSESSED scan" — a Discover-only run (ADR 0020) never gets a
+    `completed_at`, so `list_scans` hides it, and this preview would report zeros for an estate
+    that was just fully discovered (found live 2026-08-21). Rows come back newest-first with
+    `scope` already decoded to a dict, so the first row that carries an `inventory` block is the
+    current estate. A read-only lookup — no scan is triggered if none exists; the caller renders
+    zeros.
     """
     try:
-        scans = core.store.list_scans(owner)
+        scans = core.store.list_scans_including_discovered(owner)
     except Exception:
         return None
     for s in scans:
@@ -85,11 +89,14 @@ def assess_eligibility(request: Request, codes: str | None = Query(None)):
 
 
 def _latest_scan_id_with_inventory(owner: str) -> str | None:
-    """The id of this owner's most recent completed scan that carries per-file inventory
-    rows, or None. `list_scans` is newest-first, so the first scan whose `scan_inventory`
-    is non-empty is the current per-file estate. Read-only; never triggers a scan."""
+    """The id of this owner's most recent scan that carries per-file inventory rows, or None.
+
+    Same fix as `_latest_inventory` above, same reason: `list_scans_including_discovered` so a
+    Discover-only run (no `completed_at` yet) is still found. Newest-first, so the first scan
+    whose `scan_inventory` is non-empty is the current per-file estate. Read-only; never triggers
+    a scan."""
     try:
-        scans = core.store.list_scans(owner)
+        scans = core.store.list_scans_including_discovered(owner)
     except Exception:
         return None
     for s in scans:
