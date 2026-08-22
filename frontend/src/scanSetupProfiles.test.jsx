@@ -142,12 +142,12 @@ describe('the footer says what the scan will actually do', () => {
     // lanes), rather than the "varies by format" the all-format default mostly produces.
     const { c } = await render({}, DOCX_SCOPE)
     const run = c.querySelector('.setuprun').textContent
-    expect(run).toMatch(/\d+ checks will run/)
+    // Renamed from "N checks will run" to "N WCAG success criteria selected" — clearer about
+    // what the count is (criteria, not execution runs) and avoids the ambiguous "checks".
+    expect(run).toMatch(/\d+ WCAG success (criterion|criteria) selected/)
     expect(run.toLowerCase()).toContain('automated')
-    // the persistent summary card is present and decision-oriented
-    const summary = [...c.querySelectorAll('.setupsummary')].map((e) => e.textContent).join(' ')
-    expect(summary).toContain('Scan configuration')
-    expect(summary).toContain('Files')
-    expect(summary).toContain('Execution')
+    // The duplicate Scan configuration summary box was removed — it restated the controls
+    // immediately above it. The setupcount-sub line still carries the pair count.
+    expect(c.querySelector('.setupsummary')).toBeFalsy()
   })
 })

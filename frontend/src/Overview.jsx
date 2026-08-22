@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import ScanSetup from './ScanSetup.jsx'
+import AssessmentScopeCard from './AssessmentScopeCard.jsx'
 import { Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
@@ -346,27 +346,18 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           <button className="exportbtn alt" onClick={() => openReport(run.id)} title="Backend-generated WCAG compliance report PDF">⤓ Compliance report (PDF)</button>
         )}
       </div>
-      {/* The scan scope, EDITABLE, on the first tab — after a scan as well as before one.
-          EmptyState renders ScanSetup only while `run` is null, so the criteria and file types
-          were reachable exactly once: on a workspace that had never scanned. Every session
-          after the first opened on this dashboard with no way back to the decision that shapes
-          every number on it, and the only remaining editors were two panels inside Settings.
-
-          Collapsed by default, and the same <details> pattern Discover uses to fold Upload in:
-          the primary job of this screen is still to report, so an always-open editor would
-          compete with the metrics for the top of the page. <details> is natively
-          keyboard-operable, so this adds no focus handling of its own.
-
-          Deliberately OUTSIDE reportRef — that node is what the PDF export rasterises, and a
-          collapsed control has no place in an exported compliance record. */}
-      {onScan && (
-        <details className="panel scopeeditor">
-          <summary>Scan scope <span className="muted">· which checks, and which file types</span></summary>
-          <ScanSetup onScan={onScan} busy={busy}
-                     hasDriveToken={hasDriveToken} hasSPToken={hasSPToken}
-                     onFileTypeChange={onFileTypeChange} />
-        </details>
-      )}
+      {/* Compact, read-only scope record — replaces the full editable ScanSetup.
+          The pre-run editor lives on the Assess tab (AssessSetup.jsx). This surface reports
+          results; the configuration decision belongs on the screen that gates the run.
+          Deliberately OUTSIDE reportRef — the PDF export rasterises that node, and a
+          scope card that names the boundary is fine in a report, but interactive controls
+          (change / reassess) have no meaning in a static export. */}
+      <AssessmentScopeCard
+        run={run}
+        fileCount={files.length}
+        state={busy ? 'running' : 'done'}
+        onReassess={onScan ? () => onGo('assess') : undefined}
+      />
       <div ref={reportRef}>
       {/* The four the board specifies. `certifiable` and `audit-ready` came out with them: both
           are the score in other clothes, and #545 removed the score because severity weighting
