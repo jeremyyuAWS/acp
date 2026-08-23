@@ -99,7 +99,9 @@ describe('a document that failed', () => {
     listScanDecisions.mockClear()
     const c = await open(failed)
     expect(c.textContent).toMatch(/Could not process this file/)
-    expect(c.textContent, 'the recorded reason is not on screen').toMatch(/404 when requesting/)
+    // The raw error string is in the title attribute (for debugging); the DOM shows the friendly
+    // version from friendlyFileError(). The HttpError 404 maps to "File not found ...".
+    expect(c.textContent, 'the recorded reason is not on screen').toMatch(/File not found.*moved or deleted/)
   })
 
   it('no longer claims the file is unreadable', async () => {
