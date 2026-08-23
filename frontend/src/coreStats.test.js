@@ -87,28 +87,14 @@ describe('both consumers read the shared lens (no drift)', () => {
   })
 })
 
-// Phase 2 — AssessRunner's result tiles are four decision-first KPI cards, every value read from
-// `result` (→ coreStats), and the duplicate "pass rate %" tile is gone (it was a third rendering
-// of the same estate failure the master ring + risk score already show). Guarded at source because
-// the tiles have no DOM test and a regression to a bare pass-rate% is invisible in a diff.
+// The four KPI cards (documents needing action, findings, addressable, effort) were removed from
+// AssessRunner in favour of AssessSummary — the negative guard below stays so the old pass-rate%
+// duplication cannot sneak back in.
 describe('the Assess KPI cards are grounded and de-duplicated', () => {
   const src = read('AssessRunner.jsx')
-
-  it('shows the four decision KPIs — documents needing action, findings, addressable, effort', () => {
-    expect(src).toMatch(/documents need action/)
-    expect(src).toMatch(/ACP fixes automatically/)
-    expect(src).toMatch(/human effort/)
-    expect(src).toMatch(/findings <span className="muted">· across/)
-  })
 
   it('drops the duplicate pass-rate % tile (kept once as the score ring below)', () => {
     expect(src).not.toMatch(/pass rate at \{result\.level\}/)
     expect(src).not.toMatch(/\{result\.pct\}%<\/b>/)
-  })
-
-  it('estimates human effort through the labelled heuristic, never a raw number', () => {
-    // effort.js honesty: rendered via fmtEffort ("est." prefix) with EFFORT_BASIS as the tooltip.
-    expect(src).toMatch(/fmtEffort\(effortMin\)/)
-    expect(src).toMatch(/title=\{EFFORT_BASIS\}/)
   })
 })

@@ -39,9 +39,9 @@ describe('AssessRunner drives the real analysis when it is deferred (ADR 0020)',
 
   it('shows a "sign in again" path when a deferred assess opens nothing (session-expired)', () => {
     const s = read('AssessRunner.jsx')
-    expect(s).toMatch(/setAccessFailed\(scored\.length === 0 && total > 0\)/)   // detect all-failed
+    expect(s).toMatch(/accessFail = scored\.length === 0 && total > 0/)          // detect all-failed
     expect(s).toMatch(/sign-in has most likely expired/i)
-    expect(s).toMatch(/phase === 'done' && result && !accessFailed/)            // don't show a false 0% result
+    expect(s).toMatch(/if \(!accessFail\) onAssessed\?/)                        // don't announce a false 0% result
   })
 
   it('the immediate model is unchanged (optimistic reveal + cosmetic ticker)', () => {
