@@ -171,10 +171,14 @@ def result_for(reg: Registration, findings: list[dict]) -> AssessmentResult:
     if blocking:
         # A recorded finding is a fact and outranks every coverage consideration. Partial
         # coverage limits what a CLEAN result can claim; it never softens a real failure.
+        for f in blocking:
+            f.setdefault("confidence", "confirmed")
         return AssessmentResult(status="FAIL", coverage=reg.coverage,
                                 confidence=reg.confidence, evidence=blocking,
                                 reason=reg.reason)
     if advisory:
+        for f in advisory:
+            f.setdefault("confidence", "needs-review")
         return AssessmentResult(status="REVIEW", coverage=reg.coverage,
                                 confidence=reg.confidence, evidence=advisory,
                                 reason=reg.reason)

@@ -2184,7 +2184,7 @@ def _analyse_html(path: Path) -> dict:
     # 1.1.1 Non-text Content — <img> without alt attribute (decorative: role=presentation is ok)
     for img in root.iter("img"):
         if img.get("alt") is None and img.get("role", "") not in ("presentation", "none"):
-            issues.append({"ruleId": "HTML_IMG_MISSING_ALT", "wcag": "1.1.1 Non-text Content", "severity": "CRITICAL"})
+            issues.append({"ruleId": "HTML_IMG_MISSING_ALT", "wcag": "1.1.1 Non-text Content", "severity": "SERIOUS"})
 
     # 2.4.4 Link Purpose (In Context) — empty or vague <a> text
     for a in root.iter("a"):
