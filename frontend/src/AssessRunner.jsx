@@ -130,9 +130,11 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   const [workerBusy, setWorkerBusy] = useState(false)
   const [workerMsg, setWorkerMsg] = useState(null)     // transient feedback after +/- click
   const workerMsgTimer = useRef(null)
-  // Stall detection: track when progress last advanced so we can warn if workers exist but nothing moves.
+  // Activity tracking: update on both completions and new assignments so "Last activity" is honest.
   const lastProgressRef = useRef(null)     // ms timestamp of last scored-count increase
   const lastProgressValRef = useRef(null)  // last known scored count, to detect movement
+  const lastInFlightRef = useRef(null)     // ms timestamp of last inFlight-count increase
+  const lastInFlightValRef = useRef(null)  // last known inFlight count
   useEffect(() => {
     if (phase !== 'running') return undefined
     let on = true
@@ -307,8 +309,15 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
       // system-wide totals. Best-effort — a blip must not break the main poll.
       getScanLive(runId).then((d) => {
         const q = d?.queue
-        if (q) setLiveQueue({ inFlight: q.in_flight ?? 0, queued: q.queued ?? 0,
-                               workersBusy: q.workers?.busy ?? 0, workersMax: q.workers?.max ?? 0 })
+        if (q) {
+          const lq = { inFlight: q.in_flight ?? 0, queued: q.queued ?? 0,
+                       workersBusy: q.workers?.busy ?? 0, workersMax: q.workers?.max ?? 0 }
+          if (lq.inFlight > (lastInFlightValRef.current ?? -1)) {
+            lastInFlightRef.current = Date.now()
+            lastInFlightValRef.current = lq.inFlight
+          }
+          setLiveQueue(lq)
+        }
       }).catch(() => {})
       getScan(runId).then((data) => {
         const run = data?.run || {}
@@ -593,25 +602,25 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                 </button>
               </div>
             )}
-            {workerSnap && workerSnap.workers > 0 && assessStartedAt
-              && (lastProgressRef.current ?? assessStartedAt) < nowTick - 5 * 60 * 1000 && (
+            {workerSnap && workerSnap.workers > 0 && assessStartedAt && (() => {
+              const lastActivityMs = Math.max(lastProgressRef.current ?? 0, lastInFlightRef.current ?? 0) || assessStartedAt
+              return lastActivityMs < nowTick - 5 * 60 * 1000
+            })() && (
               <div role="alert" style={{ margin: '8px 0', padding: '10px 14px', borderRadius: 8,
                    fontSize: 13, background: '#FAEEDA', border: '1px solid #D4A017', color: '#7A5800' }}>
-                ⚠ <b>Assessment may be stalled</b> — {workerSnap.workers} worker{workerSnap.workers === 1 ? '' : 's'} {workerSnap.workers === 1 ? 'is' : 'are'} configured
-                but no document has completed in the last{' '}
-                {lastProgressRef.current
-                  ? Math.round((nowTick - lastProgressRef.current) / 60000) + ' minutes'
-                  : '5 minutes'}.
+                ⚠ <b>Assessment may be stalled</b> — {assessN - progress} document{assessN - progress === 1 ? '' : 's'} remain,
+                but no worker has started or completed a document in the last 5 minutes.
                 Check that the worker service is reachable and that documents are not repeatedly failing.
               </div>
             )}
             {workerSnap && (() => {
               const externallyManaged = workerSnap.runtime_mode === 'distributed' && workerSnap.alive
-              const lastCompletionMs = lastProgressRef.current
-              const lastCompletionMins = lastCompletionMs
-                ? Math.round((nowTick - lastCompletionMs) / 60000) : null
-              const activeCount = liveQueue ? liveQueue.inFlight : workerSnap.running
-              const waitingCount = liveQueue ? liveQueue.queued : workerSnap.queued
+              const processingCount = liveQueue ? liveQueue.workersBusy : 0
+              const assignedCount = liveQueue ? Math.max(0, liveQueue.inFlight - liveQueue.workersBusy) : 0
+              const brokerQueued = liveQueue ? liveQueue.queued : Math.max(0, assessN - progress - processingCount - assignedCount)
+              const workerCount = liveQueue?.workersMax || workerSnap.workers
+              const lastActivityMs = Math.max(lastProgressRef.current ?? 0, lastInFlightRef.current ?? 0) || null
+              const lastActivityMins = lastActivityMs ? Math.round((nowTick - lastActivityMs) / 60000) : null
               return (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0 2px',
                             fontSize: 12.5, flexWrap: 'wrap' }}>
@@ -620,10 +629,15 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                   <span style={{ fontWeight: 400 }}>{workerSnap.alive ? 'online' : 'offline'}</span>
                 </span>
                 <span className="muted">·</span>
-                <span className="muted">{activeCount} active · {waitingCount} waiting</span>
-                {lastCompletionMins !== null && lastCompletionMins >= 1 && (
+                <span className="muted">
+                  {progress} of {assessN} completed
+                  {processingCount > 0 && <> · {processingCount} processing</>}
+                  {assignedCount > 0 && <> · {assignedCount} assigned next</>}
+                  {brokerQueued > 0 && <> · {brokerQueued} waiting</>}
+                </span>
+                {lastActivityMins !== null && lastActivityMins >= 1 && (
                   <><span className="muted">·</span>
-                  <span className="muted">Last completion: {lastCompletionMins} min ago</span></>
+                  <span className="muted">{workerCount} worker{workerCount === 1 ? '' : 's'} · Last activity {lastActivityMins} min ago</span></>
                 )}
                 {externallyManaged
                   ? <span className="muted" style={{ marginLeft: 4, fontStyle: 'italic' }}>
@@ -692,7 +706,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                                 ? <span className="alscs">{scs.map((c) => <b key={c}>{c}</b>)}</span>
                                 : <span className="alclean">no failures</span>}
                           </>
-                        : <span className="muted alscs">{f.status === 'analysed' ? 'scoring…' : 'queued'}</span>}
+                        : <span className="muted alscs">{f.status === 'analysed' ? 'Processing now' : 'Waiting'}</span>}
                     </li>
                   )
                 })}
