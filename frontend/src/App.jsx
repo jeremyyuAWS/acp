@@ -288,6 +288,7 @@ export default function App() {
   }, [])
   const [scanLoading, setScanLoading] = useState(false)
   const [busy, setBusy] = useState(false)
+  const isStaging = window.location.hostname.includes('staging')
   const [err, setErr] = useState(null)
   const [view, setView] = useState('overview')
   const [decisions, setDecisions] = useState({})
@@ -1045,6 +1046,15 @@ export default function App() {
         </div>
       </header>
       {me.scope && <div className="scopebar"><i className="scopedot" />access scope · <b>{me.scope}</b></div>}
+      {isStaging && (
+        <div role="status" style={{
+          background: '#FFFBEB', borderBottom: '1px solid #F0C77E',
+          padding: '4px 16px', fontSize: 12, fontWeight: 600, color: '#92400E',
+          letterSpacing: '0.05em', textAlign: 'center', userSelect: 'none'
+        }}>
+          ⚠ Staging environment — not production
+        </div>
+      )}
 
       <nav aria-label="Compliance workflow">
         <div className="tabs" role="tablist" aria-label="Compliance workflow">

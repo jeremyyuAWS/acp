@@ -89,6 +89,7 @@ export default function SignIn({ onSignedIn, notice = null }) {
   const [cfg, setCfg] = useState(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const isStaging = window.location.hostname.includes('staging')
 
   useEffect(() => {
     getConfig().then((c) => { setCfg(c); setLangfuseBase(c?.langfuse_trace_base) }).catch(() => setCfg({ auth: 'demo' }))
@@ -177,6 +178,15 @@ export default function SignIn({ onSignedIn, notice = null }) {
     return (
       <div className="signin">
         <div className="signin-card wide">
+          {isStaging && (
+            <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'center' }}>
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
+                             textTransform: 'uppercase', padding: '3px 10px', borderRadius: 20,
+                             background: '#FFF4E5', color: '#B45309', border: '1px solid #F0C77E' }}>
+                Staging
+              </span>
+            </div>
+          )}
           <Logo big />
           <p className="signin-sub">Loading…</p>
         </div>
@@ -188,6 +198,15 @@ export default function SignIn({ onSignedIn, notice = null }) {
     return (
       <div className="signin">
         <div className="signin-card wide">
+          {isStaging && (
+            <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'center' }}>
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
+                             textTransform: 'uppercase', padding: '3px 10px', borderRadius: 20,
+                             background: '#FFF4E5', color: '#B45309', border: '1px solid #F0C77E' }}>
+                Staging
+              </span>
+            </div>
+          )}
           <Logo big />
           <p className="signin-sub">Accessibility Platform</p>
           {notice && (
@@ -224,6 +243,15 @@ export default function SignIn({ onSignedIn, notice = null }) {
   return (
     <div className="signin">
       <div className="signin-card wide">
+        {isStaging && (
+          <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'center' }}>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
+                           textTransform: 'uppercase', padding: '3px 10px', borderRadius: 20,
+                           background: '#FFF4E5', color: '#B45309', border: '1px solid #F0C77E' }}>
+              Staging
+            </span>
+          </div>
+        )}
         <Logo big />
         <p className="signin-sub">Accessibility Platform</p>
         {notice && (
