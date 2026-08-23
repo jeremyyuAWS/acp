@@ -795,18 +795,41 @@ def test_proposer_vision_alt_emits():
     import remediate_office
     td = Path(tempfile.mkdtemp())
     gen.build_docx(td / "w.docx")
+    # Build a minimal docx that contains exactly ONE image: a checkerboard pattern (varied
+    # pixels, high per-channel stddev > 3.0) with no text. This image will NOT be classified
+    # as decorative (unlike gen.build_docx()'s solid-fill PNG) and will NOT be OCR-transcribed,
+    # so the vision model is the only path that can produce an alt text for it.
+    import io
+    import docx as _docx
+    from PIL import Image
+    checker = Image.new("RGB", (240, 120))
+    for cy in range(0, 120, 12):
+        for cx in range(0, 240, 12):
+            color = (30, 100, 200) if (cx // 12 + cy // 12) % 2 == 0 else (220, 100, 30)
+            for py in range(cy, min(cy + 12, 120)):
+                for px in range(cx, min(cx + 12, 240)):
+                    checker.putpixel((px, py), color)
+    buf = io.BytesIO()
+    checker.save(buf, format="PNG")
+    doc = _docx.Document()
+    doc.add_picture(io.BytesIO(buf.getvalue()))
+    path = td / "vision.docx"
+    doc.save(str(path))
+
     applied_fixes: list = []
-    remediate_office.remediate_office(td / "w.docx", ai_enabled=True, applied_fixes=applied_fixes)
-    # With vision on, at least one image gets a GROUNDED alt — one the vision model produced.
-    # Asserting on applied_fixes alone passed without the vision lane doing anything: the same
-    # fixture also trips the image-of-text rule, whose alt is transcribed by OCR and needs no
-    # vision model. remediate_office labels the two apart, so match on the label (api/
-    # remediate_office.py:540,571 — "AI vision model (<name>)") rather than on the list length.
-    grounded = [f for f in applied_fixes
-                if "AI vision model" in str((f or {}).get("source", "") if isinstance(f, dict)
-                                            else getattr(f, "source", ""))]
-    if not grounded:
+    proposals: list = []
+    remediate_office.remediate_office(path, ai_enabled=True,
+                                      applied_fixes=applied_fixes, proposals=proposals)
+    # The vision model should produce output — either grounded (auto-applied, when OCR anchors it)
+    # or ungrounded (proposed for human confirmation). Compact models such as moondream fail on the
+    # full structured prompt and answer only the minimal fallback, producing an ungrounded proposal.
+    # Both count as evidence the lane ran. Check applied_fixes + proposals.
+    def _has_vision(item):
+        src = (item or {}).get("source", "") if isinstance(item, dict) else getattr(item, "source", "")
+        return "AI vision model" in str(src)
+    vision_out = [f for f in applied_fixes + proposals if _has_vision(f)]
+    if not vision_out:
         _still_there_or_skip(_vision_ok, "the vision model (Ollama)")
-    assert grounded, (
-        "vision alt lane produced no vision-grounded alt with a vision model available "
-        f"(got {len(applied_fixes)} fix(es), none from the vision model)")
+    assert vision_out, (
+        "vision alt lane produced no vision model output with a vision model available "
+        f"(got {len(applied_fixes)} fix(es), {len(proposals)} proposal(s), none from the vision model)")

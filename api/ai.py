@@ -907,6 +907,12 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     else:
         prompt = _vision_prompt(filename, context)
     alt = _vision_generate(prompt, image_bytes, scan_id=scan_id, file=file)
+    # Compact models (moondream) return empty for the full _vision_prompt due to its negation
+    # clause and trailing label — documented at _minimal_vision_prompt. Same retry as
+    # describe_image, but only on the ungrounded path: the structured prompt includes OCR text
+    # that the minimal prompt would lose, so we only retry when there is nothing to anchor.
+    if not alt and not grounded:
+        alt = _vision_generate(_minimal_vision_prompt(), image_bytes, scan_id=scan_id, file=file)
     model_used = OLLAMA_VISION_MODEL
     # Acceptance-gated cloud escalation (ADR 0019 §2/§3c): a local result that did not ground
     # (ungrounded, or the local model returned nothing usable) MAY escalate to the configured cloud
