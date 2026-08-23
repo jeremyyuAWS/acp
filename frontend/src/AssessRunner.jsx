@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { allRules } from './rules'
 import { WCAG } from './wcagCatalog.js'
-import { assessScan, getCapability, getScan, getScanTraces, refreshScanDriveToken, getQueueJob, getJobs, setWorkers, getWorkerReplicas, setWorkerReplicas } from './api.js'
+import { assessScan, getCapability, getScan, getScanLive, getScanTraces, refreshScanDriveToken, getQueueJob, getJobs, setWorkers, getWorkerReplicas, setWorkerReplicas } from './api.js'
 import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
 import { TraceChip } from './Transparency.jsx'
 import { assessLine } from './phaseNarration.js'
@@ -145,6 +145,9 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     const id = setInterval(load, 10000)
     return () => { on = false; clearInterval(id) }
   }, [phase])
+  // Per-scan queue snapshot from GET /scans/{id}/live — accurate in-flight/waiting counts
+  // for THIS scan only, unlike workerSnap which counts across all jobs system-wide.
+  const [liveQueue, setLiveQueue] = useState(null)   // {inFlight, queued, workersBusy, workersMax}
   const adjustWorkers = (delta) => {
     if (!workerSnap || workerBusy) return
     const next = Math.max(0, Math.min(16, workerSnap.workers + delta))
@@ -278,6 +281,13 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     clearInterval(timer.current)
     setAssessStartedAt(startedAt)
     const tick = () => {
+      // Per-scan queue accuracy: /live returns THIS scan's in_flight/queued counts, not
+      // system-wide totals. Best-effort — a blip must not break the main poll.
+      getScanLive(runId).then((d) => {
+        const q = d?.queue
+        if (q) setLiveQueue({ inFlight: q.in_flight ?? 0, queued: q.queued ?? 0,
+                               workersBusy: q.workers?.busy ?? 0, workersMax: q.workers?.max ?? 0 })
+      }).catch(() => {})
       getScan(runId).then((data) => {
         const run = data?.run || {}
         const fs = data?.files || []
@@ -368,7 +378,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
     const startedAt = Date.now()
     setPhase('running'); setResult(null); setResultFromCache(false); setProgress(0); setAccessFailed(false); setScanGone(null)
-    setWorkersDown(false); setJobInfo(null)
+    setWorkersDown(false); setJobInfo(null); setLiveQueue(null)
     // ADR 0020: in the deferred model the DOWNLOAD happens now, at Assess — but GIS Drive tokens
     // live ~1h and are held in-memory per scan, so a scan discovered a while ago (or after a
     // container restart) has a stale/absent token and every file would 401. Push a fresh Drive
@@ -556,7 +566,9 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                   {workerSnap.alive ? '● worker service online' : '● worker service offline'}
                 </span>
                 <span className="muted">·</span>
-                <span className="muted">{workerSnap.running} running · {workerSnap.queued} queued</span>
+                {liveQueue
+                  ? <span className="muted">{liveQueue.inFlight} processing · {liveQueue.queued} waiting</span>
+                  : <span className="muted">{workerSnap.running} dispatched · {workerSnap.queued} queued</span>}
                 <span style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 4 }}>
                   <button onClick={() => adjustWorkers(-1)} disabled={workerBusy || workerSnap.workers <= 0}
                           aria-label="Remove an in-process worker"

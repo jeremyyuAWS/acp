@@ -7,9 +7,9 @@ const cell = { padding: '3px 8px', borderTop: '1px solid var(--line, #eceff4)', 
 // Background + text for each format pill. Muted but distinct — enough contrast to scan
 // a column of mixed formats without being loud beside the status colours.
 const FMT_PILL = {
-  DOCX: { bg: '#DBEAFE', fg: '#1D4ED8' },   // blue  — Word
-  PDF:  { bg: '#FEE2E2', fg: '#B91C1C' },   // red   — Acrobat
-  PPTX: { bg: '#FFEDD5', fg: '#C2410C' },   // orange — PowerPoint
+  DOCX: { bg: '#DBEAFE', fg: '#1D4ED8' },   // blue   — Word
+  PDF:  { bg: '#FEE2E2', fg: '#B91C1C' },   // red    — Acrobat
+  PPTX: { bg: '#EDE9FE', fg: '#6D28D9' },   // purple — PowerPoint
   XLSX: { bg: '#DCFCE7', fg: '#15803D' },   // green  — Excel
 }
 
