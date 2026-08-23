@@ -87,40 +87,36 @@ def test_it_covers_more_criteria_than_the_engagement_preset():
 
 
 def test_the_engagement_preset_names_two_pairs_the_engine_cannot_judge():
-    """Two real gaps, pinned rather than tolerated silently — and the reason this file does NOT
-    assert engagement-14 ⊆ Core 17 by format.
+    """One real gap remaining, pinned rather than tolerated silently — and the reason this file
+    does NOT assert engagement-14 ⊆ Core 17 by format.
 
     The presets answer different questions. Core 17 is what the ENGINE can judge, so every pair in
     it is backed by a lane. engagement-14 mirrors what a CUSTOMER agreed to assess, and a customer can
-    agree to something ACP cannot do. Both gaps verified against the tables directly:
+    agree to something ACP cannot do. Gap verified against the tables directly:
 
-        1.4.1 / pptx   RULE_FORMATS html-only, REVIEW_FORMATS docx+pdf+xlsx, registry empty
-        2.1.1 / pdf    RULE_FORMATS pptx-only, REVIEW_FORMATS empty,         registry empty
+        2.1.1 / pdf    RULE_FORMATS pptx-only, REVIEW_FORMATS empty, registry empty
 
-    Each can only ever read NOT_EVALUATED. That is honest behaviour — the scope says in-scope and
+    It can only ever read NOT_EVALUATED. That is honest behaviour — the scope says in-scope and
     the engine says not-evaluated — but it is a coverage gap someone should be able to find rather
     than rediscover.
 
-    Compared as a SET, not per criterion. The first version of this asserted pair-by-pair and
-    stopped at 1.4.1, reporting one gap when there were two; collecting them all and comparing
-    once is what surfaced the second. A third would fail here instead of joining them unnoticed,
-    and closing either fails here too — the discrepancy has to be looked at either way.
+    Compared as a SET, not per criterion. Closing the gap fails here too — the discrepancy has to
+    be looked at either way. (1.4.1/pptx was formerly here; it was closed by office_color_only_checks.)
     """
     core = pol.SCOPE_PRESETS[CORE]
     eng = pol.SCOPE_PRESETS["engagement-14"]
     beyond = {sc: sorted(set(f) - set(core.get(sc, ())))
               for sc, f in eng.items() if set(f) - set(core.get(sc, ()))}
-    assert beyond == {"1.4.1": ["pptx"], "2.1.1": ["pdf"]}, (
+    assert beyond == {"2.1.1": ["pdf"]}, (
         f"the engagement scope's unjudgeable pairs changed: {beyond}. If a pair was ADDED, the "
         "engagement now claims coverage ACP cannot deliver; if one was fixed, drop it from this "
         "expectation.")
 
 
 def test_the_asymmetries_are_real_and_not_flattened():
-    """A flat 17 × 4 grid would claim eleven pairs the engine cannot judge. These four are the
+    """A flat 17 × 4 grid would claim ten pairs the engine cannot judge. These three are the
     ones a well-meaning 'tidy-up' would most likely square off."""
     core = pol.SCOPE_PRESETS[CORE]
     assert set(core["2.1.1"]) == {"pptx"}
     assert set(core["2.4.3"]) == {"pdf", "pptx"}
-    assert "pptx" not in core["1.4.1"]
     assert "pdf" not in core["2.1.2"]

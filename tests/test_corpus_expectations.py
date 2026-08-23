@@ -28,11 +28,11 @@ PAIRS = [(sc, f) for sc, fmts in pol.SCOPE_PRESETS["acp-core-17"].items() for f 
 
 
 def test_there_are_pairs_to_check():
-    assert len(PAIRS) == 61
+    assert len(PAIRS) == 62
 
 
 def test_clean_verdict_matches_the_engine_on_a_clean_scan():
-    """Zero findings through the REAL _rule_outcome, for all 61 pairs."""
+    """Zero findings through the REAL _rule_outcome, for all 62 pairs."""
     for sc, fmt in PAIRS:
         want = pol._rule_outcome(sc, fmt, 0, 0)
         got = ce.clean_verdict(sc, fmt)

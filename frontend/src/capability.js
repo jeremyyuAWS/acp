@@ -64,6 +64,7 @@ export const CAPABILITY_FALLBACK = {
     "1.1.1": "assisted",
     "1.3.1": "auto",
     "1.3.2": "auto",
+    "1.4.1": "human",
     "1.4.2": "assisted",
     "1.3.3": "assisted",
     "1.4.3": "auto",
@@ -163,10 +164,10 @@ export const ASSESSMENT_FALLBACK = {
     "3.1.5": "review", "4.1.2": "review"
   },
   "pptx": {
-    "1.1.1": "review", "1.3.1": "auto", "1.4.2": "review", "1.3.2": "auto", "1.3.3": "review",
-    "1.4.3": "auto", "1.4.5": "review", "1.4.6": "auto", "1.4.9": "review", "2.1.1": "human",
-    "2.4.2": "auto", "2.4.4": "review", "2.4.6": "review", "2.4.9": "review", "3.1.1": "auto",
-    "3.1.2": "review", "3.1.5": "review"
+    "1.1.1": "review", "1.3.1": "auto", "1.4.1": "review", "1.4.2": "review", "1.3.2": "auto",
+    "1.3.3": "review", "1.4.3": "auto", "1.4.5": "review", "1.4.6": "auto", "1.4.9": "review",
+    "2.1.1": "human", "2.4.2": "auto", "2.4.4": "review", "2.4.6": "review", "2.4.9": "review",
+    "3.1.1": "auto", "3.1.2": "review", "3.1.5": "review"
   },
   "pdf": {
     "1.1.1": "review", "1.3.1": "review", "1.3.2": "review", "1.3.3": "review", "1.4.3": "auto",

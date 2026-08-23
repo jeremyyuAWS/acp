@@ -49,7 +49,7 @@ colour (1.4.1) are 🟡 — not 🟢 — even though ACP has detectors for them.
 | 1.4.5 | Images of Text | AA | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 |
 | 1.4.10 | Reflow | AA | 🟡 | ⚪ | 🟡 | ⚪ | 🟢 |
 | 1.4.12 | Text Spacing | AA | 🟡 | ⚪ | 🟡 | 🟡 | 🟢 |
-| 1.4.1 | Use of Color | A | 🟡 | 🟡 | ⚪ | 🟡 | 🟢 |
+| 1.4.1 | Use of Color | A | 🟡 | 🟡 | 🟡 | 🟡 | 🟢 |
 | 1.4.3 | Contrast (Minimum) | AA | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 |
 | 1.4.11 | Non-text Contrast | AA | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 |
 | 2.4.2 | Page Titled | A | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 |
@@ -68,7 +68,7 @@ evidence-backed flag (🟡). 🔴/⚪/🔵 are not ACP assessments.
 |--------|:----------:|:------:|:--------:|:-------:|:-----:|:-----:|
 | DOCX | **17 / 20** | 4 | 13 | 0 | 3 | — |
 | XLSX | **15 / 20** | 5 | 10 | 0 | 5 | — |
-| PPTX | **18 / 20** | 5 | 13 | 1 | 1 | — |
+| PPTX | **19 / 20** | 5 | 14 | 1 | 0 | — |
 | PDF | **16 / 20** | 3 | 13 | 0 | 4 | — |
 | HTML | **18 / 20** | 10 | 8 | 0 | 0 | 2 |
 
