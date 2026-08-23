@@ -382,11 +382,22 @@ export const getScanRemediationDiffs = (scanId) => {
 }
 // Audit trail (maturity Phase 4): chronological provenance of one document in one scan —
 // scanned → AI drafted → human decided → fix written → published. Every event is a real
-// persisted row; [] on any error (the History panel simply doesn't render).
+// persisted row.
+//
+// This one REJECTS on failure rather than resolving to [], which is the opposite of the
+// best-effort posture its neighbours take, and deliberately so. Everywhere else `[] on any
+// error` is a fair trade: a missing "Recent AI fixes" panel costs a nicety. Here the empty
+// array IS the product's claim — an audit trail that renders as "nothing has happened to this
+// document" is a statement to an auditor, and a transport failure must never be able to make
+// it. The two states are different sentences and only the caller can say which it is in, so
+// the API layer hands back what actually happened and lets it.
+//
+// Callers must therefore carry a .catch — DocumentAudit and FileDrawer both do. The SIM and
+// no-argument branches still resolve to [] because those genuinely are empty, not unknown.
 export const getDocumentTimeline = (scanId, file) => {
   if (SIM || !scanId || !file) return sim([])
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/timeline?file=${encodeURIComponent(file)}`,
-               { headers: headers() }).then(j).catch(() => [])
+               { headers: headers() }).then(j)
 }
 // R18 · Comments on a finding — the human discussion thread anchored to one finding
 // (scan × file × criterion × instance). SIM has no backend, so it keeps the thread in memory for

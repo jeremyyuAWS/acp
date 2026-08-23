@@ -95,12 +95,18 @@ const TIMELINE_STAGES = [
 ]
 function AssessmentTimeline({ scanId, file }) {
   const [events, setEvents] = useState(null)
+  const [err, setErr] = useState('')
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState(() => new Set())
   useEffect(() => {
     if (!open || events !== null || !scanId || !file) return
     let live = true
-    getDocumentTimeline(scanId, file).then((r) => { if (live) setEvents(Array.isArray(r) ? r : []) })
+    // getDocumentTimeline rejects on a transport failure rather than resolving to [] — an empty
+    // timeline is a claim about the document, and a failed request is not entitled to make it.
+    // Without this catch the panel would sit on 'loading…' forever and log an unhandled rejection.
+    getDocumentTimeline(scanId, file)
+      .then((r) => { if (live) { setEvents(Array.isArray(r) ? r : []); setErr('') } })
+      .catch((e) => { if (live) setErr(e?.message || 'unavailable') })
     return () => { live = false }
   }, [open, events, scanId, file])
   if (!scanId || !file) return null
@@ -122,8 +128,11 @@ function AssessmentTimeline({ scanId, file }) {
   return (
     <details className="covmanifest" onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary className="covmanifest-sum">Assessment Timeline{events?.length ? ` (${events.length} recorded events)` : ''}</summary>
-      {events === null && <p className="muted" style={{ fontSize: 12 }}>loading…</p>}
-      {events !== null && !events.length && (
+      {events === null && !err && <p className="muted" style={{ fontSize: 12 }}>loading…</p>}
+      {/* A failed read says so. It must not fall through to "no recorded events", which is a
+          statement about the document rather than about the request. */}
+      {err && <p className="muted" style={{ fontSize: 12 }}>Timeline could not be loaded: {err}.</p>}
+      {events !== null && !events.length && !err && (
         <p className="muted" style={{ fontSize: 12 }}>No recorded events for this document yet.</p>
       )}
       {events?.length > 0 && (

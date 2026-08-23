@@ -20,12 +20,12 @@ import { auditTrail, auditSummary, stamp } from './documentAudit.js'
 //            marked as derived, so a reader can see which attributions the log actually made.
 //
 // AN EMPTY TRAIL IS NOT PROOF, and this one has a specific reason to say so. `api.getDocumentTimeline`
-// ends in `.catch(() => [])`, so a transport failure and a document with no history arrive at this
-// component as the same empty array — and in the SIM build it returns `[]` unconditionally. An audit
-// surface that renders that as "nothing has happened to this document" is asserting something it
-// cannot know, so the empty state says what it does and does not establish. (Making the client
-// distinguish the two is an api.js change, deliberately not made here: that file is read by most of
-// the app and several PRs are in flight against it.)
+// now REJECTS on a transport failure instead of resolving to `[]`, so this component can tell a
+// failed read from a document with no history and says which it is — the `err` branch below. That
+// distinction did not exist when this file was written; the empty state's wording still matters
+// because one case survives it: in the SIM build the call returns `[]` unconditionally, so an empty
+// trail there is a property of the build and not of the document. The empty state therefore keeps
+// saying what it does and does not establish rather than reading as "nothing has happened".
 
 const kicker = { fontSize: 11.5, letterSpacing: '.07em', textTransform: 'uppercase',
                  color: 'var(--muted)', fontWeight: 600 }

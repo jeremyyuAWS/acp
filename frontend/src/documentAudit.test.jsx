@@ -155,6 +155,21 @@ describe('DocumentAudit rendering', () => {
     expect(empty).toMatch(/not evidence that nothing happened/)
   })
 
+  it('a FAILED read says so, and does NOT fall through to the empty-trail sentence', async () => {
+    // The distinction this component exists to keep. `getDocumentTimeline` rejects on a transport
+    // failure rather than resolving to [], so "we could not read the trail" and "this document has
+    // no recorded history" are different renders. Collapsing them would let a 500 assert that
+    // nothing ever happened to the document.
+    getDocumentTimeline.mockRejectedValue(new Error('timeline unavailable'))
+    const c = await mount({ scanId: 's1', file: 'a.docx' })
+    const panel = c.querySelector('[aria-label="Audit trail"]')
+    expect(panel.textContent).toMatch(/could not be loaded/)
+    expect(panel.textContent).toMatch(/timeline unavailable/)
+    // scoped to the empty-state element, not the panel: the failure copy is allowed to mention
+    // absence, the empty-state claim is not allowed to appear at all.
+    expect(c.querySelector('.audit-empty')).toBe(null)
+  })
+
   it('shows when, what, and by whom for each event, oldest first', async () => {
     getDocumentTimeline.mockResolvedValue([EV.human, EV.scan, EV.fix])
     const c = await mount({ scanId: 's1', file: 'a.docx' })
