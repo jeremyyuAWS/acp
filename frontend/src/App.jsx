@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } from 'react'
 import HitlBell from './HitlBell.jsx'
 import { assessmentLine, outcomesFromRun, outcomeChips } from './assessmentProgress.js'
+import { scanPollDecision } from './scanPollDecision.js'
 import LiveAssessmentLive from './LiveAssessmentLive.jsx'
 import ProcessingDetails from './ProcessingDetails.jsx'
 import ScopeFunnel from './ScopeFunnel.jsx'
@@ -290,6 +291,10 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const isStaging = window.location.hostname.includes('staging')
   const [err, setErr] = useState(null)
+  // A scan the user stopped on purpose. Deliberately NOT `err`: "scan failed: …" over someone's own
+  // Stop press is a wrong account of what happened, and the red treatment sends them looking for a
+  // fault that does not exist.
+  const [stopped, setStopped] = useState(null)
   const [view, setView] = useState('overview')
   const [decisions, setDecisions] = useState({})
   const [triage, setTriage] = useState({})              // per-scan triage, lifted from Remediate for time-travel
@@ -370,6 +375,13 @@ export default function App() {
   // The in-flight durable scan's id — what the banner's Stop button cancels. null when
   // no queued scan is being polled (sync scans finish in-request and can't be stopped).
   const [liveScanId, setLiveScanId] = useState(null)
+  // Did the user press Stop for the run currently being polled? A ref, not state, for the same
+  // reason notifyArmedRef is: the poll loop below runs inside a closure captured at scan start and
+  // would never see a state update. Reset at the top of every run, so a stop never leaks into the
+  // next scan. See scanPollDecision.js for why the loop cannot infer this from the scan itself —
+  // a queued scan that is cancelled simply stops existing, and absence is what it looked like all
+  // along.
+  const scanCancelledRef = useRef(false)
   // "Notify me when complete" (slice 3c): the button drives `notifyArmed` for its label; the ref is what
   // the async scan-completion code reads, since it fires long after this render's closure was captured.
   const [notifyArmed, setNotifyArmed] = useState(false)
@@ -788,9 +800,35 @@ export default function App() {
   // connection default below — that is what "this run only" means. Absent (a scan started without
   // the wizard), the saved connection scope is used, so a scheduled or card-launched scan still
   // honours what the source is configured to cover.
+  // Stop the run currently being polled. Two things happen and BOTH are needed:
+  //
+  //  1. the flag, set FIRST and unconditionally — it is what ends the poll loop. A cancelled QUEUED
+  //     scan is invisible to the poll (no scan_runs row is ever created for it), so nothing the
+  //     server returns can end the loop on its own. Set before the await so the very next tick
+  //     stops, rather than one round-trip later.
+  //  2. the request, whose failure is now SHOWN. It used to be `.catch(() => {})`, so a cancel the
+  //     server refused — a 409, an expired session, an offline tab — looked exactly like a cancel
+  //     that worked. That silence is half of why this button was reported as doing nothing.
+  //
+  // The flag stands even if the request fails: the user asked this tab to stop polling, and it
+  // stops. The message says plainly that the server may still be running the work, so "I stopped
+  // watching" is never mistaken for "the work is definitely stopped".
+  const stopScan = (scanId) => {
+    scanCancelledRef.current = true
+    if (!scanId) return Promise.resolve()
+    return Promise.resolve(cancelScan(scanId)).catch((e) => {
+      setStopped(`Stopped watching this scan, but the server did not confirm the cancel `
+        + `(${e?.message || 'request failed'}) — it may still be running. Check Monitor.`)
+    })
+  }
+
   const doScan = async (source, folder = null, runScope = null) => {
     if (busy) return                              // a scan/assessment is already running — don't launch another
     setBusy(true); setErr(null); setProgress({ phase: 'queued' })
+    // A stop belongs to the run that was stopped. Clearing both here is what stops the previous
+    // run's notice hanging over this one, and stops a stale flag ending this scan the moment it
+    // starts.
+    setStopped(null); scanCancelledRef.current = false
     const prevAvg = scan?.run?.avg_score
     // SIM: sim functions handle any source string synthetically.
     // Real: map to a backend-valid source based on what tokens are present.
@@ -847,27 +885,34 @@ export default function App() {
           const elapsed = Math.round((Date.now() - t0) / 1000)
           let g = null
           try { g = await getScan(scan_id); misses = 0; foundOnce = true } catch { g = null; misses++ }
+          // The exit ladder lives in scanPollDecision.js — pure, ordered, and tested. It was four
+          // inline branches with no test reachable from anywhere, which is how the fifth (the user
+          // pressing Stop) stayed missing: a QUEUED scan that is cancelled has no scan_runs row and
+          // never will, so the poll sees exactly what it saw before the cancel — nothing.
+          const decision = scanPollDecision({
+            cancelled: scanCancelledRef.current, scan: g, foundOnce, misses,
+          })
           // A deploy mid-scan drops this tab's identity; the owner-scoped lookup then 404s
           // FOREVER (found live 2026-07-11: silent console spam, banner wedged on
           // "Connecting…"). Persistent misses → say what happened instead of spinning.
-          //
-          // Gated on foundOnce (found live 2026-08-21): a scan that has NEVER been claimed by a
-          // worker has no scan_runs row yet at all, so getScan 404s from the very first poll —
-          // that is expected, not a session loss, and firing "your session ended" over it is a
-          // wrong diagnosis of a real, different problem (a stuck queue). Only "found, then
-          // repeatedly vanished" is a real session-loss signal.
-          if (foundOnce && misses >= 8) {
+          if (decision.action === 'session-lost') {
             window.dispatchEvent(new CustomEvent('acp:session-expired', { detail: { reason:
               'The app was updated and this tab’s session ended. Sign in again — your scan kept running server-side and will be here when you return.' } }))
             return
           }
+          // Stopped by the person watching it. A clean return, NOT a throw: the catch below
+          // prefixes "scan failed:", and a scan the user deliberately stopped did not fail.
+          if (decision.action === 'stopped') {
+            setStopped('Scan stopped. Documents already analysed were kept.')
+            return
+          }
           // Never once claimed after ~45s of trying: say that plainly instead of either the wrong
           // session-expiry message above or spinning silently for the full 10-minute cap.
-          if (!foundOnce && misses >= 45) {
+          if (decision.action === 'never-started') {
             throw new Error('this scan never started — the queue may be stuck. Try again, or check Monitor.')
           }
           setProgress(g ? queuedProgress(g, elapsed) : { phase: foundOnce ? 'connecting' : 'queued', elapsed })
-          if (g && g.run && g.run.status !== 'running') fresh = g
+          if (decision.action === 'settled') fresh = decision.scan
         }
         if (!fresh) throw new Error('scan still processing — watch it finish in the Monitor queue')
       } else {
@@ -913,6 +958,16 @@ export default function App() {
         const elapsed = Math.round((Date.now() - t0) / 1000)
         let g = null
         try { g = await getScan(scan_id); misses = 0 } catch { g = null; misses++ }
+        // A reconnected scan HAS a scan_runs row, so a server-side cancel already settles this
+        // loop through the status check below — this is not the queued-scan gap. It is here so
+        // Stop ends the poll on the same tick on both paths instead of after another round-trip,
+        // and so a cancel the server refused still stops this tab polling. The miss thresholds
+        // here are deliberately left alone: reconnect has no foundOnce notion (it only ever runs
+        // for a scan that already existed), so scanPollDecision's gating would not fit.
+        if (scanCancelledRef.current) {
+          setStopped('Scan stopped. Documents already analysed were kept.')
+          return
+        }
         // Same deploy-dropped-identity guard as doScan: persistent owner-scoped 404s mean
         // this tab can no longer see its scan — say so instead of spinning forever.
         if (misses >= 8) {
@@ -1169,6 +1224,15 @@ export default function App() {
       )}
 
       {err && <div className="err" role="alert">{err}</div>}
+      {/* A deliberate stop is not a fault, so it is reported as status rather than as an alert —
+          role="status" and the muted panel treatment, not role="alert" and the red one. */}
+      {stopped && (
+        <div className="panel scanstopped" role="status" style={{ marginBottom: 12 }}>
+          <span style={{ fontSize: 13 }}>■ {stopped}</span>
+          <button className="ghost small" style={{ marginLeft: 10 }}
+                  onClick={() => setStopped(null)}>Dismiss</button>
+        </div>
+      )}
       {busy && progress && (
         <div className="scanprog" role="status" aria-live="polite">
           <div className="scanprogline"><span className="spinner" />
@@ -1201,7 +1265,7 @@ export default function App() {
                 {!(view === 'assess' && assessPhase === 'running') && (
                   <button className="ghost small"
                           title="Stop this scan — files already analysed are kept"
-                          onClick={() => cancelScan(liveScanId).catch(() => {})}>■ Stop scan</button>
+                          onClick={() => stopScan(liveScanId)}>■ Stop scan</button>
                 )}
               </span>
             )}
@@ -1315,7 +1379,7 @@ export default function App() {
           caused contradictory "Document 0 of 148" vs "10 of 148 · 7%" readings simultaneously. */}
       <LiveAssessmentLive scanId={liveScanId || run?.id}
                           active={busy || (assessPhase === 'running' && view !== 'assess')}
-                          onStop={() => cancelScan(liveScanId || run?.id).catch(() => {})} />
+                          onStop={() => stopScan(liveScanId || run?.id)} />
 
       <main id="main-content" tabIndex={-1}>
       <ErrorBoundary key={view}>

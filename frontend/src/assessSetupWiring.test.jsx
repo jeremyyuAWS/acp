@@ -238,8 +238,16 @@ describe('App composes the Assess tab the way the board specifies', () => {
     expect(s).toMatch(/!\(view === 'assess' && assessPhase === 'running'\) && \([\s\S]{0,320}?Stop scan/)
     // liveScanId || run?.id (2026-08-22): LiveAssessmentLive now also activates during an
     // assess-only run (assessPhase === 'running'), where liveScanId is null — see the reload/
-    // resilience comment above this mount in App.jsx. Same cancelScan mechanism either way.
-    expect(s).toMatch(/<LiveAssessmentLive[\s\S]{0,150}?onStop=\{\(\) => cancelScan\(liveScanId \|\| run\?\.id\)/)
+    // resilience comment above this mount in App.jsx. Same stop mechanism either way.
+    //
+    // Both Stops now go through `stopScan`, not a bare `cancelScan` call: the request alone could
+    // not end a QUEUED scan's poll loop (no scan_runs row ever appears for one, so the poll has
+    // nothing to see), and its failures used to be swallowed. Asserting the shared helper is the
+    // point — two call sites that each rolled their own is what let one of them drift.
+    expect(s).toMatch(/<LiveAssessmentLive[\s\S]{0,150}?onStop=\{\(\) => stopScan\(liveScanId \|\| run\?\.id\)/)
+    expect(s).toMatch(/onClick=\{\(\) => stopScan\(liveScanId\)\}>■ Stop scan/)
+    // and neither may go back to swallowing the outcome
+    expect(s).not.toMatch(/cancelScan\([^)]*\)\.catch\(\(\) => \{\}\)/)
   })
 
   it('the live card activates during an assess-only run too, not just a scan (reload resilience, 2026-08-22)', () => {
