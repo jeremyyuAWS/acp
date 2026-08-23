@@ -33,6 +33,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -41,7 +42,8 @@ REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "install_tesseract.sh"
 
 requires_bash = pytest.mark.skipif(
-    not shutil.which("bash") or not SCRIPT.exists(), reason="needs bash and the script")
+    not shutil.which("bash") or not SCRIPT.exists() or sys.platform != "linux",
+    reason="needs bash, the script, and a Linux environment (uses apt-get and GNU timeout)")
 
 
 def _stub(tmp_path, log: Path, *, update="fail", install="fail",
