@@ -145,7 +145,8 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
       if (!on) return
       setWorkerSnap({ workers: d.workers ?? 0, running: d.stats?.running ?? 0,
                       queued: d.stats?.queued ?? 0, alive: !!d.worker_tier_alive,
-                      suggested: d.suggested_workers ?? 4 })
+                      suggested: d.suggested_workers ?? 4,
+                      runtime_mode: d.runtime_mode ?? 'auto' })
     }).catch(() => {})
     load()
     const id = setInterval(load, 10000)
@@ -591,7 +592,9 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                       : assessStartedAt && <span className="muted">Running · {fmtElapsed(nowTick - assessStartedAt)}</span>}
               </div>
             )}
-            {workerSnap && workerSnap.workers === 0 && !workersDown && (
+            {/* Zero-workers warning: only for local pool management, not externally-managed tiers */}
+            {workerSnap && workerSnap.workers === 0 && !workersDown
+              && !(workerSnap.runtime_mode === 'distributed' && workerSnap.alive) && (
               <div role="alert" style={{ margin: '8px 0', padding: '10px 14px', borderRadius: 8,
                    fontSize: 13, background: '#FBE9E7', border: '1px solid #E7B4AC', color: '#8A2A20',
                    display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -609,37 +612,53 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               <div role="alert" style={{ margin: '8px 0', padding: '10px 14px', borderRadius: 8,
                    fontSize: 13, background: '#FAEEDA', border: '1px solid #D4A017', color: '#7A5800' }}>
                 ⚠ <b>Assessment may be stalled</b> — {workerSnap.workers} worker{workerSnap.workers === 1 ? '' : 's'} {workerSnap.workers === 1 ? 'is' : 'are'} configured
-                but no document has completed in the last 5 minutes.
+                but no document has completed in the last{' '}
+                {lastProgressRef.current
+                  ? Math.round((nowTick - lastProgressRef.current) / 60000) + ' minutes'
+                  : '5 minutes'}.
                 Check that the worker service is reachable and that documents are not repeatedly failing.
               </div>
             )}
-            {workerSnap && (
+            {workerSnap && (() => {
+              const externallyManaged = workerSnap.runtime_mode === 'distributed' && workerSnap.alive
+              const lastCompletionMs = lastProgressRef.current
+              const lastCompletionMins = lastCompletionMs
+                ? Math.round((nowTick - lastCompletionMs) / 60000) : null
+              const activeCount = liveQueue ? liveQueue.inFlight : workerSnap.running
+              const waitingCount = liveQueue ? liveQueue.queued : workerSnap.queued
+              return (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0 2px',
                             fontSize: 12.5, flexWrap: 'wrap' }}>
                 <span style={{ color: workerSnap.alive ? '#1a7f37' : '#854F0B', fontWeight: 600 }}>
-                  {workerSnap.alive ? '● Worker service' : '● Worker service'}&nbsp;
+                  ● Worker service&nbsp;
                   <span style={{ fontWeight: 400 }}>{workerSnap.alive ? 'online' : 'offline'}</span>
                 </span>
                 <span className="muted">·</span>
-                {liveQueue
-                  ? <span className="muted">{liveQueue.inFlight} active · {liveQueue.queued} waiting</span>
-                  : <span className="muted">{workerSnap.running} dispatched · {workerSnap.queued} queued</span>}
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 4 }}>
-                  <span className="muted" style={{ fontSize: 11 }}>Worker concurrency:</span>
-                  <button onClick={() => adjustWorkers(-1)} disabled={workerBusy || workerSnap.workers <= 0}
-                          aria-label="Remove an in-process worker"
-                          style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
-                                   background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
-                                   cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>−</button>
-                  <span style={{ fontSize: 13, fontWeight: 600, minWidth: 18, textAlign: 'center' }}>{workerSnap.workers}</span>
-                  <button onClick={() => adjustWorkers(+1)} disabled={workerBusy || workerSnap.workers >= 16}
-                          aria-label="Add an in-process worker"
-                          style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
-                                   background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
-                                   cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>+</button>
-                  {workerMsg && <span style={{ fontSize: 11, color: workerMsg.startsWith('Failed') ? '#8A2A20' : '#1a7f37',
-                                              fontWeight: 600, marginLeft: 2 }}>{workerMsg}</span>}
-                </span>
+                <span className="muted">{activeCount} active · {waitingCount} waiting</span>
+                {lastCompletionMins !== null && lastCompletionMins >= 1 && (
+                  <><span className="muted">·</span>
+                  <span className="muted">Last completion: {lastCompletionMins} min ago</span></>
+                )}
+                {externallyManaged
+                  ? <span className="muted" style={{ marginLeft: 4, fontStyle: 'italic' }}>
+                      Worker capacity is managed by your deployment administrator.
+                    </span>
+                  : <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 4 }}>
+                      <span className="muted" style={{ fontSize: 11 }}>Worker concurrency:</span>
+                      <button onClick={() => adjustWorkers(-1)} disabled={workerBusy || workerSnap.workers <= 0}
+                              aria-label="Remove an in-process worker"
+                              style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
+                                       background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
+                                       cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>−</button>
+                      <span style={{ fontSize: 13, fontWeight: 600, minWidth: 18, textAlign: 'center' }}>{workerSnap.workers}</span>
+                      <button onClick={() => adjustWorkers(+1)} disabled={workerBusy || workerSnap.workers >= 16}
+                              aria-label="Add an in-process worker"
+                              style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
+                                       background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
+                                       cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>+</button>
+                      {workerMsg && <span style={{ fontSize: 11, color: workerMsg.startsWith('Failed') ? '#8A2A20' : '#1a7f37',
+                                                  fontWeight: 600, marginLeft: 2 }}>{workerMsg}</span>}
+                    </span>}
                 {replicaSnap && (<>
                   <span className="muted">·</span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -658,7 +677,8 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                   </span>
                 </>)}
               </div>
-            )}
+            )
+          })()}
             {(currentFile || currentPhase) && (
               <div className="assessfile">
                 {currentFile && <span className="assessfname" title={currentFile}>{currentFile}</span>}
