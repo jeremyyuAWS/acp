@@ -60,6 +60,17 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toContain('Assessing 22 documents')
     expect(html).toContain('Idle')
   })
+
+  it('uses the indeterminate class when nothing has completed yet', () => {
+    // At 0% the bar is invisible — indeterminate shimmer shows the run is alive, not stalled.
+    const starting = { ...SNAP, kpis: { ...SNAP.kpis, completed: 0 } }
+    expect(render(starting)).toContain('class="track indeterminate"')
+  })
+
+  it('uses a determinate bar once the first file completes', () => {
+    // 8 of 22 done — progress is measurable, shimmer gives way to the real fill.
+    expect(render(SNAP)).not.toContain('indeterminate')
+  })
 })
 
 describe('Stop — board-exact placement, inline with what stopping does', () => {

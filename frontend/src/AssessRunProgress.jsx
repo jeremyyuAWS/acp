@@ -67,8 +67,11 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
           </div>}
         </div>
 
-        <div className="track" style={{ height: 8, borderRadius: 999, background: 'var(--line,#eceff2)',
-                                        overflow: 'hidden', margin: '10px 0' }}>
+        {/* Indeterminate (shimmer) when nothing has scored yet — a 0-width bar looks
+            broken; the shimmer says "working" without claiming false precision. */}
+        <div className={pct === 0 ? 'track indeterminate' : 'track'}
+             style={{ height: 8, borderRadius: 999, background: 'var(--line,#eceff2)',
+                      overflow: 'hidden', margin: '10px 0' }}>
           <i style={{ display: 'block', height: '100%', width: `${pct}%`, background: '#4A2C4D',
                       transition: 'width .3s' }} />
         </div>
