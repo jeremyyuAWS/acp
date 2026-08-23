@@ -21,9 +21,10 @@ export default function PrivateAiBadge({ aiEnabled }) {
   return (
     <span
       className="privai"
-      title={`Private AI — all inference runs on a self-hosted local model${st.model ? ` (${st.model})` : ''}. `
+      title={`Private AI — all inference runs on a self-hosted local model. `
+        + `Text: ${st.model || 'local'}. Vision: ${st.vision_model || 'local'}. `
         + 'No document content leaves your environment; no OpenAI/Anthropic, no external tokens.'}>
-      🔒 Private AI · local
+      🔒 Private AI · {st.vision_model || 'local'}
     </span>
   )
 }

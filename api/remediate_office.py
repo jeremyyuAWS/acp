@@ -179,9 +179,11 @@ def _derive_alt(attrs: str, caption: str | None) -> tuple[str, str] | None:
 
 
 # Genuine vision alt text is opt-in (AI on + a vision model reachable) and bounded:
-# CPU vision inference is ~30-90s per image, so cap how many images one document will
-# caption. Beyond the cap, remaining unlabelled images defer to review as before.
-_VISION_MAX_IMAGES = 25
+# CPU vision inference is ~30-90 s/image, so cap how many images one document will
+# caption. Default 10: 10 × 90 s ≈ 15 min worst-case vs 25 × 90 s ≈ 37 min.
+# Raise ACP_VISION_MAX_IMAGES when a GPU vision backend is configured.
+# Beyond the cap, remaining unlabelled images defer to review as before.
+_VISION_MAX_IMAGES = int(os.environ.get("ACP_VISION_MAX_IMAGES", "10"))
 # Skip degenerate images the model can't meaningfully describe (1x1 spacers etc.).
 _MIN_IMG_BYTES = 64
 _R_EMBED = re.compile(r'r:embed="(rId\d+)"')

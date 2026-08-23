@@ -18,15 +18,18 @@ StructTreeRoot) are a separate structural-tagging finding and still route to hum
 review, as does any figure the vision model can't caption (AI off / unavailable).
 """
 from __future__ import annotations
+import os
 import re
 import sys
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
-# Bound worst-case latency: vision inference is slow on CPU, so cap figures captioned
-# per document; the rest defer to review (the residual re-scan routes them to HITL).
-_VISION_MAX_FIGURES = 25
+# Bound worst-case latency: vision inference is slow on CPU (~30-90 s/image), so cap
+# figures captioned per document; the rest defer to review (the residual re-scan routes
+# them to HITL). Default 10: 10 × 90 s ≈ 15 min worst-case vs 25 × 90 s ≈ 37 min.
+# Raise ACP_VISION_MAX_FIGURES when a GPU vision backend is configured.
+_VISION_MAX_FIGURES = int(os.environ.get("ACP_VISION_MAX_FIGURES", "10"))
 # Render at 150 DPI — enough detail for vision without excessive cost (mirrors the
 # vendored PdfAltTextFixer).
 _RENDER_SCALE = 150 / 72
