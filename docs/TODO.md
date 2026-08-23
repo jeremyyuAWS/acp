@@ -79,7 +79,7 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 
 | Criterion | HTML | DOCX | XLSX | PPTX | PDF |
 |---|---|---|---|---|---|
-| `1.4.1` | pass/fail | partial | partial | — | review |
+| `1.4.1` | pass/fail | partial | partial | review | review |
 | `1.3.5` | pass/fail | — | — | — | — |
 | `2.5.3` | pass/fail | — | — | — | — |
 | `4.1.2` | pass/fail | partial | partial | review | partial |

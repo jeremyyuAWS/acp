@@ -339,6 +339,7 @@ _SDT_TAG = re.compile(r'<w:tag\s+w:val="([^"]*)"')
 _PPTX_TITLE_PH = re.compile(r'<p:ph\b(?=[^>]*\btype="(?:ctrTitle|title)")[^>]*>')
 _A_RUN = re.compile(r"<a:r>(.*?)</a:r>", re.S)
 _A_HLINK = re.compile(r'<a:hlinkClick[^>]*r:id="(rId\w+)"')
+_A_U_NONE = re.compile(r'<a:rPr\b[^>]*\bu="none"')   # underline explicitly removed on a run
 _AT = re.compile(r"<a:t\b[^>]*>([^<]*)</a:t>")  # tolerate xml:space="preserve" etc.
 
 
@@ -1952,6 +1953,7 @@ def checks_for(path: Path, ext: str) -> list[dict]:
                 + pptx_focus_order_checks(path) + pptx_nontext_contrast_checks(path)
                 + office_reflow_checks(path, ext) + office_text_spacing_checks(path, ext)
                 + pptx_resize_text_checks(path) + pptx_complex_bg_contrast_checks(path)
+                + office_color_only_checks(path, ext)
                 + office_non_text_content_checks(path, ext))
     if ext == ".pdf":
         return (pdf_contrast_checks(path) + pdf_bypass_blocks_check(path) + pdf_form_field_checks(path)
@@ -2177,6 +2179,29 @@ def office_color_only_checks(path: Path, ext: str) -> list[dict]:
                         f"{colour_only} hyperlink(s) have their underline removed — a link set apart "
                         "from body text by colour alone fails for colour-blind users; verify each "
                         "link is identifiable without relying on colour",
+                        evidence={"method": "structural", "metric": "Colour-only links",
+                                  "value": colour_only}))
+            if ext == ".pptx":
+                # Each hyperlink in DrawingML lives inside an <a:r> run whose <a:rPr> carries a
+                # child <a:hlinkClick r:id="rIdN"/>. When the same <a:rPr> also has u="none" the
+                # underline is explicitly suppressed — the link is set apart from surrounding text
+                # by colour alone. Every slide part is checked; linked text in shapes, tables and
+                # text frames all use the same run structure.
+                colour_only = 0
+                for slide_name in sorted(n for n in zf.namelist()
+                                         if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)):
+                    xml = _read(zf, slide_name)
+                    if not xml:
+                        continue
+                    for run_inner in _A_RUN.findall(xml):
+                        if _A_HLINK.search(run_inner) and _A_U_NONE.search(run_inner):
+                            colour_only += 1
+                if colour_only:
+                    findings.append(_review_finding(
+                        "PPTX_COLOR_ONLY_LINK", "1.4.1 Use of Color",
+                        f"{colour_only} hyperlink(s) have their underline removed — a link set apart "
+                        "from surrounding text by colour alone fails for colour-blind users; verify "
+                        "each link is identifiable without relying on colour",
                         evidence={"method": "structural", "metric": "Colour-only links",
                                   "value": colour_only}))
     except Exception:

@@ -188,9 +188,9 @@ REVIEW_FORMATS: dict[str, frozenset[str]] = {
     "4.1.2": frozenset({"pptx"}),
     # Use of Color — colour-only status/links. xlsx is ABSENT for the same reason as 4.1.2 above:
     # it is registry-backed now (formats/xlsx office_color_only_checks, PARTIAL), so the registry
-    # branch owns its clean-file verdict. docx stays here (not yet migrated to registry-only); pdf
-    # is review-lane only (colour-only link, ADR 0025).
-    "1.4.1": frozenset({"docx", "pdf"}),
+    # branch owns its clean-file verdict. docx and pptx stay here (not yet migrated to registry-
+    # only); pdf is review-lane only (colour-only link, ADR 0025).
+    "1.4.1": frozenset({"docx", "pdf", "pptx"}),
     "2.4.3": frozenset({"pptx"}),                   # Focus Order — title not first in reading order
     # Non-text Contrast — faint shape outline. xlsx is ABSENT: registry-backed (formats/xlsx,
     # PARTIAL) so a clean workbook reads REVIEW via the registry, not "not evaluated". docx/pdf/pptx
