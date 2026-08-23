@@ -14,7 +14,8 @@ describe('Release Center: honest policy panel', () => {
     const s = pub()
     expect(s).toMatch(/import \{ releaseDestination, releaseDestinationPhrase, releaseConfirmLines \} from '\.\/releasePolicy\.js'/)
     expect(s).toMatch(/getSettings\(\)\.then\(/)
-    expect(s).toMatch(/const driveMirrorEnabled = !!settings\.drive_mirror_enabled/)
+    expect(s).toMatch(/mirrorState\(settings\)/)
+    expect(s).toMatch(/driveMirrorEnabled = ms === MIRROR\.ON/)
   })
 
   it('shows a policy panel with the destination and the “why not in place” explainer', () => {

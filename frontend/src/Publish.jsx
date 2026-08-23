@@ -6,6 +6,7 @@ import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilter
 import { openReport, publishFile, publishAllFiles, listHitlQueue, getSettings, getSourceStatus, rescoreFile } from './api.js'
 import { releaseDestination, releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 import { SET_STATUS, certificationUniverse, releaseSetStatus } from './graduation.js'
+import { mirrorState, MIRROR } from './deliveryPolicy.js'
 
 // Step 9 · Publish. Marks re-validated documents as published: the conformance status
 // is recorded in the audit trail and the fixed copy (already in Blob + the Drive
@@ -43,14 +44,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   // a copy actually lands instead of a hard-coded guess. Best-effort — if it can't be read we fall
   // back to the always-true half (a durable Blob copy) rather than assert a Drive folder we're
   // unsure of.
-  const [settings, setSettings] = useState({ drive_mirror_enabled: false, drive_mirror_folder: 'Remediated' })
+  const [settings, setSettings] = useState(null)
   useEffect(() => {
     let live = true
     getSettings().then((s) => { if (live && s) setSettings(s) }).catch(() => {})
     return () => { live = false }
   }, [])
-  const driveMirrorEnabled = !!settings.drive_mirror_enabled
-  const driveMirrorFolder = settings.drive_mirror_folder || 'Remediated'
+  const ms = mirrorState(settings)
+  const driveMirrorEnabled = ms === MIRROR.ON
+  const driveMirrorFolder = settings?.drive_mirror_folder?.trim() || 'Remediated'
   const anyDrive = ready.some((f) => f.drive_file_id)
   // A release is confirmed before it runs: { kind: 'all' } or { kind: 'file', file }. The buttons
   // set this; the modal's confirm calls the real publish path below.
@@ -264,7 +266,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         <summary style={{ cursor: 'pointer', fontWeight: 600, listStyle: 'revert' }}>What “release” does <span className="muted" style={{ fontWeight: 400 }}>· what happens to every verified document</span></summary>
         <div className="pubsteps" style={{ marginTop: 12 }}>
           <div className="pubstep"><b>✓ Marked released</b><span className="muted">the re-validated fixed copy becomes the document of record</span></div>
-          <div className="pubstep"><b>⤓ Fixed copy in Blob</b><span className="muted">the accessible copy lives in ACP Blob storage and the Drive “remediated” mirror</span></div>
+          <div className="pubstep"><b>⤓ Fixed copy in Blob</b><span className="muted">{driveMirrorEnabled && anyDrive ? `the accessible copy lives in ACP Blob storage and the Drive “${driveMirrorFolder}” mirror` : 'the accessible copy lives in ACP Blob storage'}</span></div>
           <div className="pubstep"><b>📦 Original untouched</b><span className="muted">the fixed copy is written to a separate “remediated” folder — the source file is never overwritten</span></div>
           <div className="pubstep"><b>🏷 Audit recorded</b><span className="muted">the verified-in-scope status + timestamp are written to the audit log</span></div>
         </div>
@@ -322,7 +324,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             {publishedEntries.length > 8 && <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>+{publishedEntries.length - 8} more</div>}
           </div>
         ) : (
-          <p className="muted" style={{ marginTop: 12 }}>Releasing writes the fixed copy to the Drive “remediated” folder and records each release in the audit trail here.</p>
+          <p className="muted" style={{ marginTop: 12 }}>{driveMirrorEnabled ? `Releasing writes the fixed copy to the Drive “${driveMirrorFolder}” folder and Azure Blob storage and records each release in the audit trail here.` : 'Releasing writes the fixed copy to Azure Blob storage and records each release in the audit trail here.'}</p>
         )}
       </section>
       {sel && <FileDrawer file={sel} scanId={run.id} onClose={() => setSel(null)} />}
