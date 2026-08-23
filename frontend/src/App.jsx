@@ -1072,11 +1072,11 @@ export default function App() {
       {me.scope && <div className="scopebar"><i className="scopedot" />access scope · <b>{me.scope}</b></div>}
       {isStaging && (
         <div role="status" style={{
-          background: '#FFFBEB', borderBottom: '1px solid #F0C77E',
-          padding: '4px 16px', fontSize: 12, fontWeight: 600, color: '#92400E',
-          letterSpacing: '0.05em', textAlign: 'center', userSelect: 'none'
+          background: '#B45309', borderBottom: '2px solid #92400E',
+          padding: '6px 16px', fontSize: 12, fontWeight: 700, color: '#fff',
+          letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'center', userSelect: 'none'
         }}>
-          ⚠ Staging environment — not production
+          Staging — not production
         </div>
       )}
 
@@ -1310,7 +1310,11 @@ export default function App() {
           logic (and the OUTER scan-banner's Stop-suppression above, when view === 'assess' &&
           assessPhase === 'running') was written assuming this card would be live during assess.
           It never was, until this line. */}
-      <LiveAssessmentLive scanId={liveScanId || run?.id} active={busy || assessPhase === 'running'}
+      {/* Suppress when the Assess tab is open and an assess is running — AssessRunner.jsx owns
+          that view and shows an authoritative progress panel from the same data. Showing both
+          caused contradictory "Document 0 of 148" vs "10 of 148 · 7%" readings simultaneously. */}
+      <LiveAssessmentLive scanId={liveScanId || run?.id}
+                          active={busy || (assessPhase === 'running' && view !== 'assess')}
                           onStop={() => cancelScan(liveScanId || run?.id).catch(() => {})} />
 
       <main id="main-content" tabIndex={-1}>

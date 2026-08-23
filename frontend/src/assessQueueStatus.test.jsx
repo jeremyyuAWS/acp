@@ -76,7 +76,7 @@ describe('no workers available, surfaced at kickoff', () => {
     await clickText('Assess')
     await settle()
 
-    expect(text()).toMatch(/no workers available/i)
+    expect(text()).toMatch(/no worker capacity/i)
     expect(realErrors()).toEqual([])
   })
 
@@ -88,7 +88,7 @@ describe('no workers available, surfaced at kickoff', () => {
     await clickText('Assess')
     await settle()
 
-    expect(text()).not.toMatch(/no workers available/i)
+    expect(text()).not.toMatch(/no worker capacity/i)
   })
 })
 

@@ -38,10 +38,11 @@ export default function DeliveryPanel({ files = [], settings: settingsProp, onDo
   const note = replaceNote(summary.deliveries)
 
   return (
-    <section className="panel" data-testid="delivery-panel" aria-label="Delivery — where the corrected copies go">
-      <div className="proghd">
-        <h2 style={{ margin: 0 }}>📦 Delivery <span className="muted" style={{ fontSize: 12 }}>· where each fixed file ends up</span></h2>
-      </div>
+    <details className="panel rem-sec" data-testid="delivery-panel" aria-label="Delivery — where the corrected copies go">
+      <summary className="rem-sec-sum">
+        <h2 className="rem-sec-title">📦 Delivery <span className="muted" style={{ fontSize: 12 }}>· where each fixed file ends up</span></h2>
+      </summary>
+      <div className="rem-sec-body">
 
       {/* THE CLAIM. One element, one destination sentence, scoped so a vocabulary test can assert
           on what the screen actually promises without also reading the explanatory copy below. */}
@@ -99,6 +100,7 @@ export default function DeliveryPanel({ files = [], settings: settingsProp, onDo
           {note && <li>{note}</li>}
         </ul>
       </details>
-    </section>
+      </div>
+    </details>
   )
 }

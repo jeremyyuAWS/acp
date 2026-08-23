@@ -824,6 +824,10 @@ def jobs(request: Request, status: str | None = None, limit: int = 100):
             # Standalone worker container's heartbeat (#113) — in the split topology the
             # API's own pool is 0, so Monitor must show the tier that actually runs jobs.
             "worker_tier_alive": core.store.worker_tier_alive(),
+            # Conservative starting recommendation. Local AI workloads are memory- and
+            # GPU-constrained, not CPU-constrained; 4 is a safe floor the user can raise.
+            "suggested_workers": 4,
+            "runtime_mode": core._RUNTIME_MODE,
             "stats": core.store.job_stats(owner=owner),
             "dead_letters": core.store.dead_letter_breakdown(owner=owner),
             "jobs": core.store.list_jobs(status=status, limit=limit, owner=owner)}

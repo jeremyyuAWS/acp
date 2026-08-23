@@ -675,7 +675,15 @@ def reload_scheduler():
 # Opt-in: set ACP_WORKERS>0 to run N in-process worker threads that drain the
 # `jobs` table (async assess + remediation). Off by default so existing behavior
 # is unchanged until the handlers + enqueue paths are wired.
-WORKERS = int(os.environ.get("ACP_WORKERS", "0") or "0")
+#
+# ACP_RUNTIME_MODE controls the default when ACP_WORKERS is not set:
+#   "single-node"  — one process handles both API and worker duties; default 4 workers.
+#   "distributed"  — a separate worker container handles the queue; default 0 (correct for Azure).
+#   "auto"         — backward-compatible default: 0 (matches prior behaviour).
+# Explicit ACP_WORKERS always wins regardless of mode.
+_RUNTIME_MODE = os.environ.get("ACP_RUNTIME_MODE", "auto")
+_WORKER_DEFAULT = "4" if _RUNTIME_MODE == "single-node" else "0"
+WORKERS = int(os.environ.get("ACP_WORKERS", _WORKER_DEFAULT) or _WORKER_DEFAULT)
 _worker_handles: list = []
 _worker_seq = 0          # monotonic id source so scaled-in workers get fresh ids
 _MAX_WORKERS = 16        # safety cap on live scaling

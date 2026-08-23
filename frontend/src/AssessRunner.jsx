@@ -131,15 +131,22 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   }, [phase])
   // Live worker strip — polled at 10s while running (lighter than QueuePanel's 2s; the
   // user needs "is it alive?" not sub-second accuracy here).
-  const [workerSnap, setWorkerSnap] = useState(null)    // {workers, running, queued, worker_tier_alive}
+  const [workerSnap, setWorkerSnap] = useState(null)  // {workers, running, queued, alive, suggested}
   const [workerBusy, setWorkerBusy] = useState(false)
+  const [workerMsg, setWorkerMsg] = useState(null)     // transient feedback after +/- click
+  const workerMsgTimer = useRef(null)
+  // Stall detection: track when progress last advanced so we can warn if workers exist but nothing moves.
+  const lastProgressRef = useRef(null)     // ms timestamp of last scored-count increase
+  const lastProgressValRef = useRef(null)  // last known scored count, to detect movement
   useEffect(() => {
     if (phase !== 'running') return undefined
     let on = true
     const load = () => getJobs().then((d) => {
       if (!on) return
       setWorkerSnap({ workers: d.workers ?? 0, running: d.stats?.running ?? 0,
-                      queued: d.stats?.queued ?? 0, alive: !!d.worker_tier_alive })
+                      queued: d.stats?.queued ?? 0, alive: !!d.worker_tier_alive,
+                      suggested: d.suggested_workers ?? 4,
+                      runtime_mode: d.runtime_mode ?? 'auto' })
     }).catch(() => {})
     load()
     const id = setInterval(load, 10000)
@@ -150,14 +157,32 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   const [liveQueue, setLiveQueue] = useState(null)   // {inFlight, queued, workersBusy, workersMax}
   const adjustWorkers = (delta) => {
     if (!workerSnap || workerBusy) return
-    const next = Math.max(0, Math.min(16, workerSnap.workers + delta))
+    // First click from zero: jump straight to the server's suggested count rather than to 1.
+    const next = (delta === 1 && workerSnap.workers === 0)
+      ? (workerSnap.suggested ?? 4)
+      : Math.max(0, Math.min(16, workerSnap.workers + delta))
     if (next === workerSnap.workers) return
+    const diff = next - workerSnap.workers
+    const count = Math.abs(diff)
+    const noun = count === 1 ? 'worker' : 'workers'
+    clearTimeout(workerMsgTimer.current)
+    setWorkerMsg(diff > 0 ? `Starting ${count} ${noun}…` : `Stopping ${count} ${noun}…`)
     setWorkerBusy(true)
     setWorkerSnap((s) => ({ ...s, workers: next }))   // optimistic
     setWorkers(next)
-      .then((d) => setWorkerSnap((s) => ({ ...s, workers: d.workers ?? next })))
-      .catch(() => setWorkerSnap((s) => ({ ...s, workers: workerSnap.workers })))
-      .finally(() => setWorkerBusy(false))
+      .then((d) => {
+        const actual = d.workers ?? next
+        setWorkerSnap((s) => ({ ...s, workers: actual }))
+        setWorkerMsg(actual > 0 ? `${actual} ${actual === 1 ? 'worker' : 'workers'} active` : 'Workers stopped')
+      })
+      .catch(() => {
+        setWorkerSnap((s) => ({ ...s, workers: workerSnap.workers }))
+        setWorkerMsg('Failed to update — try again')
+      })
+      .finally(() => {
+        setWorkerBusy(false)
+        workerMsgTimer.current = setTimeout(() => setWorkerMsg(null), 3500)
+      })
   }
   // Azure Container App replica control — fetched once when running starts; hidden when
   // AZURE_SUBSCRIPTION_ID is absent on the backend (configured: false).
@@ -192,7 +217,9 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   }, [])
   const timer = useRef(null)
   const phaseTimer = useRef(null)
-  useEffect(() => () => { clearInterval(timer.current); clearTimeout(phaseTimer.current) }, [])
+  useEffect(() => () => {
+    clearInterval(timer.current); clearTimeout(phaseTimer.current); clearTimeout(workerMsgTimer.current)
+  }, [])
   // Report the phase up so the parent gates the Master Score on completion — it must not
   // appear until the assessment has actually run over all parsable files (phase 'done').
   useEffect(() => { onPhase?.(phase) }, [phase]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -293,6 +320,10 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
         const fs = data?.files || []
         const scored = fs.filter((f) => f.score != null)
         const total = run.files || fs.length || 1
+        if (scored.length > (lastProgressValRef.current ?? -1)) {
+          lastProgressRef.current = Date.now()
+          lastProgressValRef.current = scored.length
+        }
         setProgress(Math.min(scored.length, total))
         setCurrentPhase(`Opening & assessing ${scored.length} of ${total}…`)
         if (scored.length === 0 && jobId) {
@@ -526,8 +557,10 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
             {workersDown && (
               <div role="alert" style={{ margin: '0 0 10px', padding: '10px 14px', borderRadius: 8,
                    fontSize: 13, background: '#FBE9E7', border: '1px solid #E7B4AC', color: '#8A2A20' }}>
-                ⚠ <b>No workers available.</b> The assessment queue looks unmanned, so this run may
-                sit at 0% indefinitely rather than falling behind and catching up — check Monitor.
+                ⛔ <b>Assessment cannot continue.</b> No worker capacity was available when this run
+                started — the queue is unmanned and documents will not be processed. Use the worker
+                concurrency control below to start local workers, or check your deployment's
+                worker tier.
               </div>
             )}
             <div className="assessbar">
@@ -559,30 +592,73 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                       : assessStartedAt && <span className="muted">Running · {fmtElapsed(nowTick - assessStartedAt)}</span>}
               </div>
             )}
-            {workerSnap && (
+            {/* Zero-workers warning: only for local pool management, not externally-managed tiers */}
+            {workerSnap && workerSnap.workers === 0 && !workersDown
+              && !(workerSnap.runtime_mode === 'distributed' && workerSnap.alive) && (
+              <div role="alert" style={{ margin: '8px 0', padding: '10px 14px', borderRadius: 8,
+                   fontSize: 13, background: '#FBE9E7', border: '1px solid #E7B4AC', color: '#8A2A20',
+                   display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <span>⛔ <b>No local workers active</b> — {(liveTotal || docs.length).toLocaleString()} documents are queued but nothing is processing them.</span>
+                <button onClick={() => adjustWorkers(+1)} disabled={workerBusy}
+                        style={{ padding: '4px 12px', borderRadius: 5, border: '1px solid #C0392B',
+                                 background: '#C0392B', color: '#fff', fontSize: 12, fontWeight: 600,
+                                 cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                  Start {workerSnap.suggested ?? 4} workers
+                </button>
+              </div>
+            )}
+            {workerSnap && workerSnap.workers > 0 && assessStartedAt
+              && (lastProgressRef.current ?? assessStartedAt) < nowTick - 5 * 60 * 1000 && (
+              <div role="alert" style={{ margin: '8px 0', padding: '10px 14px', borderRadius: 8,
+                   fontSize: 13, background: '#FAEEDA', border: '1px solid #D4A017', color: '#7A5800' }}>
+                ⚠ <b>Assessment may be stalled</b> — {workerSnap.workers} worker{workerSnap.workers === 1 ? '' : 's'} {workerSnap.workers === 1 ? 'is' : 'are'} configured
+                but no document has completed in the last{' '}
+                {lastProgressRef.current
+                  ? Math.round((nowTick - lastProgressRef.current) / 60000) + ' minutes'
+                  : '5 minutes'}.
+                Check that the worker service is reachable and that documents are not repeatedly failing.
+              </div>
+            )}
+            {workerSnap && (() => {
+              const externallyManaged = workerSnap.runtime_mode === 'distributed' && workerSnap.alive
+              const lastCompletionMs = lastProgressRef.current
+              const lastCompletionMins = lastCompletionMs
+                ? Math.round((nowTick - lastCompletionMs) / 60000) : null
+              const activeCount = liveQueue ? liveQueue.inFlight : workerSnap.running
+              const waitingCount = liveQueue ? liveQueue.queued : workerSnap.queued
+              return (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0 2px',
                             fontSize: 12.5, flexWrap: 'wrap' }}>
                 <span style={{ color: workerSnap.alive ? '#1a7f37' : '#854F0B', fontWeight: 600 }}>
-                  {workerSnap.alive ? '● worker service online' : '● worker service offline'}
+                  ● Worker service&nbsp;
+                  <span style={{ fontWeight: 400 }}>{workerSnap.alive ? 'online' : 'offline'}</span>
                 </span>
                 <span className="muted">·</span>
-                {liveQueue
-                  ? <span className="muted">{liveQueue.inFlight} processing · {liveQueue.queued} waiting</span>
-                  : <span className="muted">{workerSnap.running} dispatched · {workerSnap.queued} queued</span>}
-                <span style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 4 }}>
-                  <button onClick={() => adjustWorkers(-1)} disabled={workerBusy || workerSnap.workers <= 0}
-                          aria-label="Remove an in-process worker"
-                          style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
-                                   background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
-                                   cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>−</button>
-                  <span style={{ fontSize: 13, fontWeight: 600, minWidth: 14, textAlign: 'center' }}>{workerSnap.workers}</span>
-                  <button onClick={() => adjustWorkers(+1)} disabled={workerBusy || workerSnap.workers >= 16}
-                          aria-label="Add an in-process worker"
-                          style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
-                                   background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
-                                   cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>+</button>
-                  <span className="muted" style={{ fontSize: 11 }}>in-process workers</span>
-                </span>
+                <span className="muted">{activeCount} active · {waitingCount} waiting</span>
+                {lastCompletionMins !== null && lastCompletionMins >= 1 && (
+                  <><span className="muted">·</span>
+                  <span className="muted">Last completion: {lastCompletionMins} min ago</span></>
+                )}
+                {externallyManaged
+                  ? <span className="muted" style={{ marginLeft: 4, fontStyle: 'italic' }}>
+                      Worker capacity is managed by your deployment administrator.
+                    </span>
+                  : <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 4 }}>
+                      <span className="muted" style={{ fontSize: 11 }}>Worker concurrency:</span>
+                      <button onClick={() => adjustWorkers(-1)} disabled={workerBusy || workerSnap.workers <= 0}
+                              aria-label="Remove an in-process worker"
+                              style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
+                                       background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
+                                       cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>−</button>
+                      <span style={{ fontSize: 13, fontWeight: 600, minWidth: 18, textAlign: 'center' }}>{workerSnap.workers}</span>
+                      <button onClick={() => adjustWorkers(+1)} disabled={workerBusy || workerSnap.workers >= 16}
+                              aria-label="Add an in-process worker"
+                              style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
+                                       background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
+                                       cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>+</button>
+                      {workerMsg && <span style={{ fontSize: 11, color: workerMsg.startsWith('Failed') ? '#8A2A20' : '#1a7f37',
+                                                  fontWeight: 600, marginLeft: 2 }}>{workerMsg}</span>}
+                    </span>}
                 {replicaSnap && (<>
                   <span className="muted">·</span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -601,7 +677,8 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                   </span>
                 </>)}
               </div>
-            )}
+            )
+          })()}
             {(currentFile || currentPhase) && (
               <div className="assessfile">
                 {currentFile && <span className="assessfname" title={currentFile}>{currentFile}</span>}
