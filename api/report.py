@@ -503,6 +503,90 @@ def _manual_verification_section(files, h2, body, cell, muted) -> list:
     return el
 
 
+def _criterion_compliance_section(files, h2, body, cell, muted) -> list:
+    """Per-criterion compliance summary (backlog R14). Scoped to criteria that fired at least
+    one finding — open (still blocking on a non-certifiable document) or cleared (finding present
+    on a certifiable document, either remediated or no longer blocking). A full 87-criterion dump
+    of everything that was evaluated would be noise; only the ones with evidence appear here.
+
+    A criterion can be open in some documents and cleared in others — both columns are shown.
+    Criteria that ran and found nothing are never listed (clean runs are silent in the appendix).
+    """
+    crit_data: dict[str, dict] = {}
+    for f in files:
+        fname = f.get("file", "")
+        st = _status(f)
+        for i in (f.get("issues") or []):
+            c = i.get("wcag") or ""
+            name = _crit_name(c) if c else ""
+            if not name:
+                continue
+            if name not in crit_data:
+                crit_data[name] = {"open": set(), "cleared": set(), "rules": set()}
+            rule = i.get("ruleId") or ""
+            if rule:
+                crit_data[name]["rules"].add(rule)
+            if st == "certifiable":
+                crit_data[name]["cleared"].add(fname)
+            else:
+                crit_data[name]["open"].add(fname)
+
+    if not crit_data:
+        return []
+
+    def _sc_sort_key(name: str) -> list:
+        parts = name.split(" ")[0].split(".")
+        try:
+            return [int(p) for p in parts]
+        except ValueError:
+            return [99, 99, 99]
+
+    ordered = sorted(
+        crit_data.items(),
+        key=lambda kv: (0 if kv[1]["open"] else 1, _sc_sort_key(kv[0])),
+    )
+
+    el = [Paragraph("Criteria with findings", h2)]
+    el.append(Paragraph(
+        "Every criterion that fired at least one finding in this scan — open (blocking) or "
+        "cleared (remediated or no longer blocking). Criteria the engine ran and found nothing "
+        "are not listed.", muted))
+    el.append(Spacer(1, 6))
+
+    hdr_style = ParagraphStyle("ch", parent=cell.parent if hasattr(cell, "parent") else cell,
+                                textColor=MUTED, fontSize=8)
+    rows = [[Paragraph(h, hdr_style) for h in ("Criterion", "Open", "Cleared", "Rule(s)")]]
+    for name, data in ordered:
+        open_n = len(data["open"])
+        cleared_n = len(data["cleared"])
+        rules_str = ", ".join(sorted(r for r in data["rules"] if r))
+        if len(rules_str) > 52:
+            rules_str = rules_str[:49] + "…"
+        open_cell = (Paragraph(f'<font color="#A32D2D"><b>{open_n}</b></font>', cell)
+                     if open_n else Paragraph("—", muted))
+        cleared_cell = (Paragraph(f'<font color="#3B6D11"><b>{cleared_n}</b></font>', cell)
+                        if cleared_n else Paragraph("—", muted))
+        rows.append([
+            Paragraph(f"<b>{_esc(name)}</b>", cell),
+            open_cell,
+            cleared_cell,
+            Paragraph(_esc(rules_str) if rules_str else "—", muted),
+        ])
+
+    t = Table(rows, colWidths=[2.8 * inch, 0.65 * inch, 0.75 * inch, 2.9 * inch], repeatRows=1)
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, LINE),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ZEBRA]),
+        ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    el.append(t)
+    el.append(Spacer(1, 8))
+    return el
+
+
 def _provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, muted) -> list:
     """How this result was produced — method, pipeline & reproducibility (backlog R11 / R12 / R-D /
     R-E). Every figure is COUNTED from the same facts the rest of the report uses; a stage whose
@@ -723,15 +807,29 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
 
         for e in doc["applied"][:_EVIDENCE_MAX_PER_FILE]:
             when = (e.get("reviewed_at") or "")[:19].replace("T", " ")
-            if e.get("decision"):
-                # Attribution is only ever what decision_log recorded — the authenticated
-                # reviewer's email, or the literal 'reviewer' when the platform had no
-                # signed-in identity to record. Never an invented name.
-                sign_off = f"{e['decision']} by {e.get('reviewer') or 'reviewer'}" + (f" · {when} UTC" if when else "")
+            # R-C — four assurance cases, from highest to lowest certainty.
+            # Tier 1a: deterministic fixer, no AI, no human decision (fully automatic).
+            # Tier 1b: deterministic fixer, no AI, but a human also confirmed it.
+            # Tier 2:  AI-generated + human-approved + re-scan-validated (highest trust for AI).
+            # Tier 3:  AI-generated + re-scan-validated, no human approval recorded.
+            has_ai = bool(e.get("value"))
+            has_decision = bool(e.get("decision"))
+            decision_str = (f"{e['decision']} by {e.get('reviewer') or 'reviewer'}"
+                            + (f" · {when} UTC" if when else ""))
+            if has_ai and has_decision:
+                badge = "<font color='#3B6D11'>&#x25CF; AI &middot; human-confirmed</font>"
+                sign_off = decision_str
+            elif has_ai:
+                badge = "<font color='#854F0B'>&#x25CF; AI &middot; re-scan-validated</font>"
+                sign_off = "AI-generated fix · validated on re-scan · no human approval recorded"
+            elif has_decision:
+                badge = "<font color='#3B6D11'>&#x25CF; Deterministic &middot; human-confirmed</font>"
+                sign_off = decision_str
             else:
-                sign_off = "auto-applied (deterministic fixer) — no human decision recorded"
+                badge = "<font color='#3B6D11'>&#x25CF; Deterministic</font>"
+                sign_off = "deterministic fixer · auto-applied · no human decision needed"
             lines = [
-                Paragraph(f"<b>{_esc(e['criterion'])}</b> &nbsp;<font color='#3B6D11'>✓ validated on re-scan</font>", cell),
+                Paragraph(f"{badge} &nbsp;<b>{_esc(e['criterion'])}</b> &nbsp;<font color='#3B6D11'>&#x2713; validated on re-scan</font>", cell),
                 Paragraph(f"<font color='#6c6470'>Before</font> &nbsp;{_esc(e.get('before'))}", cell),
                 Paragraph(f"<font color='#6c6470'>After</font> &nbsp;<b>{_esc(e.get('after'))}</b>", cell),
             ]
@@ -1252,6 +1350,11 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
 
     # ── Pass rate by WCAG principle / POUR (R8) ──────────────────────────────
     el.extend(_pour_section(facts, h2, body, cell, _muted))
+
+    # ── Per-criterion compliance table (backlog R14) ──────────────────────────
+    # Scoped to criteria that fired at least one finding — a 87-row dump of every evaluated
+    # criterion would be noise. Only the ones with evidence land here.
+    el.extend(_criterion_compliance_section(files, h2, body, cell, _muted))
 
     # ── Remediation evidence appendix (backlog R1) ───────────────────────────
     # Applied-and-verified fixes vs proposals awaiting approval, kept strictly apart.
