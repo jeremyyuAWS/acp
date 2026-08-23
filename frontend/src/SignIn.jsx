@@ -179,12 +179,15 @@ export default function SignIn({ onSignedIn, notice = null }) {
       <div className="signin">
         <div className="signin-card wide">
           {isStaging && (
-            <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'center' }}>
-              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
-                             textTransform: 'uppercase', padding: '3px 10px', borderRadius: 20,
-                             background: '#FFF4E5', color: '#B45309', border: '1px solid #F0C77E' }}>
+            <div style={{ margin: '-24px -28px 20px', padding: '14px 0 10px',
+                          background: '#B45309', textAlign: 'center', borderRadius: '8px 8px 0 0' }}>
+              <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: '0.12em',
+                            textTransform: 'uppercase', color: '#fff', lineHeight: 1 }}>
                 Staging
-              </span>
+              </div>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', marginTop: 3 }}>
+                not production
+              </div>
             </div>
           )}
           <Logo big />
@@ -199,12 +202,15 @@ export default function SignIn({ onSignedIn, notice = null }) {
       <div className="signin">
         <div className="signin-card wide">
           {isStaging && (
-            <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'center' }}>
-              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
-                             textTransform: 'uppercase', padding: '3px 10px', borderRadius: 20,
-                             background: '#FFF4E5', color: '#B45309', border: '1px solid #F0C77E' }}>
+            <div style={{ margin: '-24px -28px 20px', padding: '14px 0 10px',
+                          background: '#B45309', textAlign: 'center', borderRadius: '8px 8px 0 0' }}>
+              <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: '0.12em',
+                            textTransform: 'uppercase', color: '#fff', lineHeight: 1 }}>
                 Staging
-              </span>
+              </div>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', marginTop: 3 }}>
+                not production
+              </div>
             </div>
           )}
           <Logo big />
