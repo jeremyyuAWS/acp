@@ -51,6 +51,7 @@ vi.mock('./api.js', () => ({
   getQueueJob: vi.fn(), queueHitlReview: vi.fn(), queueHitlVerify: vi.fn(),
   updateHitlItem: vi.fn(), openTraceUrl: vi.fn(), confirmCriterion: vi.fn(),
   downloadRemediated: vi.fn(),
+  getScanLive: vi.fn(() => Promise.resolve({ queue: null })),
   getJobs: vi.fn(() => Promise.resolve({ workers: 0, stats: { running: 0, queued: 0 }, worker_tier_alive: false })),
   setWorkers: vi.fn(() => Promise.resolve({ workers: 0 })),
   getWorkerReplicas: vi.fn(() => Promise.resolve({ configured: false })),
