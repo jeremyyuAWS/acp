@@ -72,7 +72,7 @@ describe('source — the lifecycle columns are read from the route that actually
   })
 
   it('Discover reads it through the complete-or-nothing loader', () => {
-    expect(discover).toMatch(/import \{ loadDiscoveryInventory, mergeLifecycle \} from '\.\/discoveryInventory\.js'/)
+    expect(discover).toMatch(/import \{ loadDiscoveryInventory, mergeLifecycle, inventoryOnlyRows \} from '\.\/discoveryInventory\.js'/)
     // Named import, not the whole import LINE: the line grew a second name when the unreadable
     // breakdown started reading the scan's decision log, and pinning the line made a correct
     // addition fail. What matters here is that this reader comes from api.js.

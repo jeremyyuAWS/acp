@@ -17,7 +17,8 @@ import DiscoveryCompleteness from './DiscoveryCompleteness.jsx'
 import { acknowledgementSummary } from './discoveryRecommendations.js'
 import { hasClassificationData, NO_CLASSIFICATION_TITLE, NO_CLASSIFICATION_BODY,
          NO_CLASSIFICATION_WHY } from './classificationData.js'
-import { loadDiscoveryInventory, mergeLifecycle } from './discoveryInventory.js'
+import { loadDiscoveryInventory, mergeLifecycle, inventoryOnlyRows } from './discoveryInventory.js'
+import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
 import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation } from './api.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
 
@@ -103,6 +104,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // every run listed before scan_runs.discovered_at existed.
   const runForExport = { id: scanId, discovered_at: null, completed_at: null }
   const [sel, setSel] = useState(null)
+  const [estOnlyFile, setEstOnlyFile] = useState(null)
   const [showPicker, setShowPicker] = useState(false)   // Drive folder picker modal (Choose folder to scan)
   const [showSites, setShowSites] = useState(false)     // SharePoint site picker modal
   const [open, setOpen] = useState(() => new Set())
@@ -167,6 +169,9 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   }, [scanId, reloadInventory])
   // Un-merged when the read has not completed — mergeLifecycle passes `files` straight through.
   const estateFiles = useMemo(() => mergeLifecycle(files, inv), [files, inv])
+  // Images, videos, and unsupported formats discovery listed but never opened — not assessable.
+  // Returns [] when the inventory read is incomplete or missing (same guard as mergeLifecycle).
+  const nonAssessable = useMemo(() => inventoryOnlyRows(files, inv), [files, inv])
 
   // WHY the unreadable files could not be read. The reason is recorded per file in the scan's
   // decision log (`scan.file_error`) and was reachable only one drawer at a time; the aggregate
@@ -751,8 +756,30 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         </div>
       )}
 
-      {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
+      {/* Files discovery listed but never opened: images, videos, unsupported formats. Kept in the
+          estate count but carry no WCAG assessment — shown here so the user can browse the whole
+          discovered estate, not just the assessable subset. Absent when inv is still loading. */}
+      {nonAssessable.length > 0 && (
+        <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
+          <p className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>
+            <b style={{ color: 'var(--ink)' }}>{nonAssessable.length.toLocaleString()}</b> other
+            file{nonAssessable.length === 1 ? '' : 's'} discovered — images, videos, and unsupported
+            formats listed by discovery but not opened for WCAG assessment. Click any to see details.
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 8px', maxHeight: 200, overflow: 'auto' }}>
+            {nonAssessable.map((f) => (
+              <button key={f.file} className="linklike" style={{ fontSize: 12 }}
+                      onClick={() => setEstOnlyFile(f)}>
+                {f.file}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); f._estateOnly ? setEstOnlyFile(f) : setSel(f) }} />}
       {sel && <FileDrawer file={sel} context="discover" onClose={() => setSel(null)} overrideOwner={ownerOf(sel)} delegatedFrom={isDelegated(sel) ? sel.owner : null} scanId={scanId} />}
+      {estOnlyFile && <EstateOnlyDrawer file={estOnlyFile} onClose={() => setEstOnlyFile(null)} />}
     </>
   )
 }
