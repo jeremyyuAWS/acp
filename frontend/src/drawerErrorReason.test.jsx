@@ -103,7 +103,11 @@ describe('a document that failed', () => {
     listScanDecisions.mockClear()
     const c = await open(failed)
     expect(c.textContent).toMatch(/Could not process this file/)
-    expect(c.textContent, 'the recorded reason is not on screen').toMatch(/404 when requesting/)
+    // PR #649: the raw reason lives in a title attribute (debug access) and the visible
+    // text shows the friendly bucket — check both so neither half can regress silently.
+    expect(c.textContent, 'the friendly error is not shown').toMatch(/File not found — it may have been moved or deleted/)
+    const rawTitle = c.querySelector('[title*="HttpError"]')?.title ?? ''
+    expect(rawTitle, 'the recorded reason is not accessible').toMatch(/404 when requesting/)
   })
 
   it('no longer claims the file is unreadable', async () => {
