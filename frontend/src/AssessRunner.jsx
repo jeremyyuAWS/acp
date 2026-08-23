@@ -3,15 +3,13 @@ import { allRules } from './rules'
 import { WCAG } from './wcagCatalog.js'
 import { assessScan, getCapability, getScan, getScanLive, getScanTraces, refreshScanDriveToken, getQueueJob, getJobs, setWorkers, getWorkerReplicas, setWorkerReplicas } from './api.js'
 import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
-import { TraceChip } from './Transparency.jsx'
 import { assessLine } from './phaseNarration.js'
 import { coreStats } from './coreStats.js'
 // Separate line on purpose: coreStats.test.js pins the exact `import { coreStats } from
 // './coreStats.js'` line as its no-drift guard, and widening the braces would have meant
 // loosening someone else's assertion to accommodate this change.
 import { scOfWcag } from './coreStats.js'
-import { SCOPE_SCS, SCOPE_SIZE, SCOPE_LABEL } from './activeScope.js'
-import { fmtEffort, estimateEffortMin, EFFORT_BASIS } from './effort.js'
+import { SCOPE_SCS, SCOPE_LABEL } from './activeScope.js'
 
 // Re-assess the whole estate against a chosen WCAG 2.1 conformance level. A finding blocks
 // conformance when its level is at or below the target (A ⊆ AA ⊆ AAA), so the numbers
@@ -103,9 +101,6 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   const [failedScs, setFailedScs] = useState({})
   const scsWanted = useRef(new Set())
   const [result, setResult] = useState(saved?.result || null)
-  // Track whether the current result came from a previous session (cached) or was
-  // computed in this session — so we can label cached results clearly.
-  const [resultFromCache, setResultFromCache] = useState(saved?.phase === 'done' && !!saved?.result)
   // A deferred assess that opened NOTHING (0 scored of N) usually means the Drive sign-in expired
   // between Discover and Assess — surface a clear "sign in again" path instead of a silent 0%.
   const [accessFailed, setAccessFailed] = useState(false)
@@ -363,13 +358,14 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
           const computed = computeResultFrom(scored, level)
           setProgress(scored.length); setCurrentFile(null); setCurrentPhase('')
           // Opened nothing → almost always an expired Drive sign-in in the deferred model.
-          setAccessFailed(scored.length === 0 && total > 0)
+          const accessFail = scored.length === 0 && total > 0
+          setAccessFailed(accessFail)
           setResult(computed); setPhase('done')
           // Persist BEFORE announcing. The announcement makes App refetch the scan, which changes
           // `files` → `docs.length` → the resume effect below re-reads sessionStorage; if that
           // still said 'running' the effect would start a SECOND poller over a finished run.
           save({ phase: 'done', level, result: computed })
-          onAssessed?.()
+          if (!accessFail) onAssessed?.()          // don't announce a false 0% result
           // The worker has only just written file_records. Every OTHER surface holding this scan
           // is still rendering the payload fetched before Assess — under ADR 0020 that is the
           // inventory fallback (status 'discovered', score null, issues []), which the inventory
@@ -408,7 +404,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     if (!runId) return
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
     const startedAt = Date.now()
-    setPhase('running'); setResult(null); setResultFromCache(false); setProgress(0); setAccessFailed(false); setScanGone(null)
+    setPhase('running'); setResult(null); setProgress(0); setAccessFailed(false); setScanGone(null)
     setWorkersDown(false); setJobInfo(null); setLiveQueue(null)
     // ADR 0020: in the deferred model the DOWNLOAD happens now, at Assess — but GIS Drive tokens
     // live ~1h and are held in-memory per scan, so a scan discovered a while ago (or after a
@@ -465,16 +461,6 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docs.length])
-
-  const note = result && (result.level === 'A'
-    ? 'Level A is the floor — only must-have criteria block conformance.'
-    : result.level === 'AA'
-      // The legal claim ("the legal target for ADA Title II, the EAA and Section 508") was removed
-      // on the product owner's call. What is left is the fact this screen can actually stand
-      // behind: which findings count at this target. Which regulation applies to a given customer
-      // is not something an assessment run knows.
-      ? 'At Level AA both Level A and Level AA findings count towards conformance.'
-      : 'Level AAA is the enhanced bar — every A, AA and AAA finding counts, so conformance is strictest here.')
 
   const pct = phase === 'running' ? Math.round((progress / Math.max(1, assessN, docs.length)) * 100) : 0
 
@@ -732,74 +718,6 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
             <div style={{ marginTop: 8 }}>
               <button className="ghost small" onClick={() => assess()} disabled={phase === 'running' || scanBusy}>↻ Re-run Assess</button>
             </div>
-          </div>
-        )}
-        {phase === 'done' && result && !accessFailed && (
-          <div className="assessres">
-            {resultFromCache && (
-              <p className="muted" style={{ fontSize: 12, margin: '0 0 8px', fontStyle: 'italic' }}>
-                Showing results from a previous assessment — click Assess to run again.
-              </p>
-            )}
-            {/* Actionability-first verdict (Scan → Understand → Fix): answer "what do I need to
-                fix, and can ACP fix it?" in plain language BEFORE the WCAG taxonomy below. All
-                counts are the agreed-scope numbers, so they reconcile with the tiles + the
-                "By WCAG criterion" table. */}
-            {result.failing > 0 ? (
-              <div style={{ margin: '0 0 12px', padding: '12px 14px', borderRadius: 8, background: '#FBF1E3', border: '1px solid #E8C98A' }}>
-                <div style={{ fontSize: 14.5, fontWeight: 700, color: '#7A4A0B' }}>⚠ Needs attention — what to fix</div>
-                <div style={{ fontSize: 13.5, margin: '5px 0 0', color: '#3D3A34', lineHeight: 1.5 }}>
-                  <b>{result.coreFindings.toLocaleString()}</b> issue{result.coreFindings !== 1 ? 's' : ''} across <b>{result.coreCriteria.toLocaleString()}</b> of the <b>{result.scopeTotal ?? SCOPE_SIZE}</b> WCAG criteria in your {result.scopeLabel || SCOPE_LABEL}, in <b>{result.failing.toLocaleString()}</b> of <b>{result.total.toLocaleString()}</b> document{result.total !== 1 ? 's' : ''}.
-                  {' '}<b style={{ color: '#3B6D11' }}>{result.coreAutoFix.toLocaleString()}</b> ACP can fix automatically · <b style={{ color: '#854F0B' }}>{(result.coreFindings - result.coreAutoFix).toLocaleString()}</b> need a person.
-                </div>
-              </div>
-            ) : (
-              <div style={{ margin: '0 0 12px', padding: '12px 14px', borderRadius: 8, background: '#EDF6E4', border: '1px solid #B7D89B' }}>
-                <div style={{ fontSize: 14.5, fontWeight: 700, color: '#3B6D11' }}>✓ Ready to certify</div>
-                <div style={{ fontSize: 13.5, margin: '5px 0 0', color: '#3D3A34' }}>
-                  No blocking findings at WCAG 2.1 {result.level} — all {result.total.toLocaleString()} document{result.total !== 1 ? 's' : ''} pass the {result.scopeTotal ?? SCOPE_SIZE} criteria in your {result.scopeLabel || SCOPE_LABEL}.
-                </div>
-              </div>
-            )}
-            {/* Four decision-first KPI cards. Every number is read from `result` (→ coreStats, the
-                one estate lens AssessRunner + RiskScore share), so they cannot disagree with the
-                verdict above or the "By WCAG criterion" table below. The old "pass rate %" tile is
-                deliberately GONE: it was a third rendering of the same estate failure already shown
-                as the master-score ring and the risk score below — the duplication the redesign
-                removes. Documents are now framed as "need action" (the decision), not "pass %". */}
-            {(() => {
-              const person = result.coreFindings - result.coreAutoFix
-              const addrPct = result.coreFindings ? Math.round((result.coreAutoFix / result.coreFindings) * 100) : 0
-              const effortMin = estimateEffortMin({ auto: result.coreAutoFix, person })
-              const denom = result.scopeTotal ?? SCOPE_SIZE
-              const scopeLbl = result.scopeLabel || SCOPE_LABEL
-              return (
-                <div className="assesstiles">
-                  {/* KPI 1 — documents requiring action (the decision), not a pass rate */}
-                  <div className="atile" title={`${result.failing.toLocaleString()} of ${result.total.toLocaleString()} documents have at least one finding that blocks WCAG 2.1 ${result.level}; ${result.conformant.toLocaleString()} pass as-is.`}>
-                    <b style={{ color: result.failing ? '#854F0B' : '#3B6D11' }}>{result.failing.toLocaleString()}<span className="atile-den"> / {result.total.toLocaleString()}</span></b>
-                    <span>documents need action <span className="muted">· {result.conformant.toLocaleString()} currently pass</span></span>
-                  </div>
-                  {/* KPI 2 — findings, with their criteria denominator */}
-                  <div className="atile" title={`${result.coreFindings.toLocaleString()} findings across ${result.coreCriteria.toLocaleString()} of the ${denom} WCAG criteria in your ${scopeLbl}. Counted over the same list the "By WCAG criterion" table below defaults to, so the two reconcile.`}>
-                    <b>{result.coreFindings.toLocaleString()}</b>
-                    <span>findings <span className="muted">· across {result.coreCriteria.toLocaleString()} of {denom} criteria</span></span>
-                  </div>
-                  {/* KPI 3 — ACP-addressable (deterministic auto-fix) */}
-                  <div className="atile" title={`${result.coreAutoFix.toLocaleString()} of ${result.coreFindings.toLocaleString()} findings ACP can fix automatically (deterministic) from the Remediate tab; the remaining ${person.toLocaleString()} need a person.`}>
-                    <b style={{ color: '#3B6D11' }}>{result.coreAutoFix.toLocaleString()}<span className="atile-den"> · {addrPct}%</span></b>
-                    <span>ACP fixes automatically <span className="muted">· {person.toLocaleString()} need a person</span></span>
-                  </div>
-                  {/* KPI 4 — estimated human effort (planning heuristic; est./EFFORT_BASIS per effort.js) */}
-                  <div className="atile" title={EFFORT_BASIS}>
-                    <b style={{ color: '#854F0B' }}>{fmtEffort(effortMin)}</b>
-                    <span>human effort <span className="muted">· {person.toLocaleString()} findings need review</span></span>
-                  </div>
-                </div>
-              )
-            })()}
-            <p className="muted assessnote">{note}</p>
-            <div style={{ marginTop: 8 }}><TraceChip scanId={runId} kind="session" label="View this scan's traces" /></div>
           </div>
         )}
       </div>
