@@ -161,6 +161,79 @@ def test_sharepoint_inventories_all_types_but_returns_only_supported(monkeypatch
     assert mp4["owner"] == "Sam SP" and mp4["mime"] == "video/mp4"
 
 
+# ── OS metadata blocklist (.DS_Store, Thumbs.db, …) ────────────────────────────
+
+_MIXED_WITH_OS_METADATA = [
+    _f("d1", "deck.pptx", PPTX),                             # assessable
+    _f("d2", "report.pdf", PDF),                             # assessable
+    _f("m1", "logo.png", "image/png"),                       # media  → metadata_only
+    _f("ds", ".DS_Store", "application/octet-stream"),       # macOS metadata — must be blocked
+    _f("th", "Thumbs.db", "application/octet-stream"),       # Windows metadata — must be blocked
+    _f("di", "desktop.ini", "application/octet-stream"),     # Windows metadata — must be blocked
+    _f("F1", "a-subfolder", FOLDER),                         # a folder — never content
+]
+
+
+def test_drive_os_metadata_excluded_from_inventory_and_analysis():
+    """OS metadata files (.DS_Store, Thumbs.db, desktop.ini) must not appear in inventory_out
+    or the estate summary — they are filesystem artefacts, not user documents."""
+    scope: dict = {}
+    inv: list = []
+    result = scanner._search_drive(FakeDrive(_MIXED_WITH_OS_METADATA), max_files=500,
+                                   scope_out=scope, inventory_out=inv)
+
+    # Analysis set: only the two real documents.
+    assert {it["name"] for it in result} == {"deck.pptx", "report.pdf"}
+
+    # inventory_out: the image is there; none of the OS metadata files appear.
+    inv_names = {r["file"] for r in inv}
+    assert ".DS_Store" not in inv_names
+    assert "Thumbs.db" not in inv_names
+    assert "desktop.ini" not in inv_names
+    assert "logo.png" in inv_names
+
+    # Estate summary: only the real non-folder files count toward discovered.
+    est = scope["inventory"]
+    assert est["discovered"] == 3          # deck.pptx + report.pdf + logo.png (OS metadata excluded)
+    assert est["assessment_eligible"] == 2
+
+
+def test_sharepoint_os_metadata_excluded_from_inventory_and_analysis(monkeypatch):
+    """OS metadata files returned by SharePoint are dropped before they reach the estate row or
+    inventory_out — same rule as the Drive path."""
+    _graph(monkeypatch, [
+        {"id": "p1", "name": "policy.pdf", "file": {"mimeType": "application/pdf"},
+         "size": 2048, "parentReference": {"path": "/drive/root:/Policies"}},
+        {"id": "ds", "name": ".DS_Store", "file": {"mimeType": "application/octet-stream"},
+         "parentReference": {"path": "/drive/root:/Policies"}},
+        {"id": "th", "name": "Thumbs.db", "file": {"mimeType": "application/octet-stream"},
+         "parentReference": {"path": "/drive/root:/Policies"}},
+    ])
+    inv: list = []
+    files = scanner._sp_list("tok", max_files=50, inventory_out=inv)
+    assert [f["name"] for f in files] == ["policy.pdf"]
+    inv_names = {r["file"] for r in inv}
+    assert ".DS_Store" not in inv_names
+    assert "Thumbs.db" not in inv_names
+
+
+def test_is_os_metadata_function():
+    """estate_inventory.is_os_metadata is the single source of truth for the blocklist."""
+    import estate_inventory as ei
+    # Known OS metadata names.
+    assert ei.is_os_metadata(".DS_Store")
+    assert ei.is_os_metadata("Thumbs.db")
+    assert ei.is_os_metadata("desktop.ini")
+    assert ei.is_os_metadata(".localized")
+    assert ei.is_os_metadata("ehthumbs.db")
+    # Real user files must not be blocked.
+    assert not ei.is_os_metadata("report.pdf")
+    assert not ei.is_os_metadata("brief.docx")
+    assert not ei.is_os_metadata("README")
+    assert not ei.is_os_metadata("backup.zip")
+    assert not ei.is_os_metadata(".htaccess")  # a real dotfile, not OS metadata
+
+
 # ── handlers: persist all, assess only the assessable ───────────────────────────
 
 def _discover_list_stub(**payload_meta):

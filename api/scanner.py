@@ -440,6 +440,11 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
         raw_seen = max(raw_seen, len(batch))
         before = len(by_id)
         for f in batch:
+            # OS metadata files (.DS_Store, Thumbs.db, …) are synced by cloud agents but are
+            # never user documents. Drop them before the inventory so they do not inflate
+            # unsupported-file counts or consume lifecycle-rule evaluation capacity.
+            if estate_inventory.is_os_metadata(f.get("name", "") or ""):
+                continue
             # The estate inventory keeps EVERY file — the un-filtered denominator the dashboard
             # funnel reports. Scanning still keeps only the scannable subset just below; this only
             # changes what we COUNT, never what we assess or remediate.
@@ -584,6 +589,8 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
                     queue.append(f["id"])
                     continue
                 listed += 1
+                if estate_inventory.is_os_metadata(f.get("name", "") or ""):
+                    continue  # OS metadata files (.DS_Store, Thumbs.db, …) — not user content
                 if exclude_remediated and provenance.is_acp_generated(f):
                     skipped_acp += 1  # ACP's own output — never a source document
                 else:
@@ -1156,6 +1163,10 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 segments = parent.split(":", 1)[-1].strip("/").split("/")
                 if skip_folders.intersection(segments):
                     continue
+                # OS metadata files (.DS_Store, Thumbs.db, …) are synced by cloud agents but are
+                # not user documents. Skip before the estate row so they do not appear in counts.
+                if estate_inventory.is_os_metadata(name):
+                    continue
                 # The estate row for EVERY file (scannable or not), classified the same way the Drive
                 # inventory is. Placed after dedup + folder-skip so it counts exactly what a scan sees.
                 # It also carries the triage fields estate_inventory._sample_meta reads off a Drive file
@@ -1538,6 +1549,8 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         for p in sorted(corpus.rglob("*")):
             if not p.is_file():
                 continue
+            if estate_inventory.is_os_metadata(p.name):
+                continue  # OS metadata files (.DS_Store, Thumbs.db, …) — not user content
             meta = _local_stat_meta(p, corpus)
             if p.suffix.lower() in scannable:
                 result.append({"name": p.name, "path": str(p),
@@ -1645,6 +1658,8 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
             for f in batch:
                 if f.get("mimeType") == estate_inventory.FOLDER_MIME:
                     continue
+                if estate_inventory.is_os_metadata(f.get("name", "") or ""):
+                    continue  # OS metadata files (.DS_Store, Thumbs.db, …) — not user content
                 if f.get("id") not in result_ids:
                     inventory_out.append(_drive_inventory_row(f))
         if scope_out is not None:

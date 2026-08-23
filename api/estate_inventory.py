@@ -54,12 +54,39 @@ _SUPPORTED_EXT = {
 _IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".svg", ".heic", ".ico"}
 _AV_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 
+# OS / filesystem metadata files that cloud-sync agents (Drive, OneDrive, Dropbox) routinely
+# carry into shared folders alongside real documents. They are never user documents and must
+# not appear in the estate inventory or consume discovery capacity. Matched by exact name,
+# case-sensitive (Drive and SharePoint preserve case).
+_OS_METADATA_NAMES = frozenset({
+    ".DS_Store",          # macOS directory metadata
+    "Thumbs.db",          # Windows thumbnail cache
+    "desktop.ini",        # Windows folder view settings
+    ".localized",         # macOS locale preference marker
+    ".Spotlight-V100",    # macOS Spotlight index directory
+    ".Trashes",           # macOS per-volume trash directory
+    ".fseventsd",         # macOS file-system event log directory
+    ".TemporaryItems",    # macOS temporary items directory
+    "ehthumbs.db",        # Windows Media Center thumbnail cache
+    "ehthumbs_vista.db",  # Windows Vista thumbnail cache
+})
+
 FOLDER_MIME = "application/vnd.google-apps.folder"
 
 # The formats that carry at least one applicable accessibility test. The single source of truth for
 # WHICH criteria per format lives in remediation_capability; this is only the assessable-format set,
 # which changes far less often. Kept here (not imported) so the taxonomy has no heavy dependency.
 SUPPORTED_FORMATS = ("docx", "pdf", "pptx", "xlsx", "html")
+
+
+def is_os_metadata(name: str) -> bool:
+    """True for known macOS/Windows filesystem metadata files that cloud sync carries into folders.
+
+    These files are never user documents.  The scanner calls this before adding a file to the
+    estate inventory so that OS metadata does not inflate unsupported-file counts or consume
+    lifecycle-rule evaluation capacity.  Matched by exact filename, case-sensitive.
+    """
+    return name in _OS_METADATA_NAMES
 
 
 def _format_of(name: str, mime: str) -> str:
