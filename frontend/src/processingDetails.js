@@ -33,6 +33,16 @@ function actionOf(f) {
   return null
 }
 
+// A Drive folder value is a long opaque ID (only alphanumeric/dash/underscore, no slashes).
+// SharePoint paths contain '/' and local paths are short readable names — only the Drive case
+// is meaningless to display, so suppress it rather than showing a hash to the user.
+function folderOf(f) {
+  const v = f.parent_folder || null
+  if (!v) return null
+  if (/^[A-Za-z0-9_-]{20,}$/.test(v)) return null
+  return v
+}
+
 export function processingRows(files) {
   return (files || []).map((f) => {
     const r = resultOf(f)
@@ -44,7 +54,7 @@ export function processingRows(files) {
       kind: r.kind,
       score: typeof f.score === 'number' ? f.score : null,
       issues: Array.isArray(f.issues) ? f.issues.length : null,
-      folder: f.parent_folder || null,
+      folder: folderOf(f),
       owner: f.owner || null,
       action: actionOf(f),
     }
