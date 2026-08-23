@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { statusCounts, NOT_ASSESSED } from './docStatus.js'
+import { SEV_DOT } from './severityColors.js'
 
 // arcs grow from 0 on mount → reads as "live"
 export function Donut({ segments, size = 138, thickness = 18, caption, onPick }) {
@@ -103,7 +104,7 @@ export function statusSegments(run, files) {
   ].filter((s) => s.value > 0)
 }
 
-const SEV = { CRITICAL: '#1F5FA8', SERIOUS: '#4A8FE0', MODERATE: '#BF8C00', MINOR: '#888780' }
+const SEV = SEV_DOT
 export function severityItems(files) {
   const c = {}
   files.forEach((f) => (f.issues || []).forEach((i) => { c[i.severity] = (c[i.severity] || 0) + 1 }))

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import AssessmentScopeCard from './AssessmentScopeCard.jsx'
 import { Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
+import { SEV_DOT, SEV_BG, SEV_FG, SEV_TIP } from './severityColors.js'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer, { statusOf } from './FileDrawer.jsx'
 import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
@@ -566,7 +567,35 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       <div className="chartrow">
         <section className="panel"><h2>Compliance status <span className="muted" style={{ fontWeight: 400 }}>· click to drill in</span></h2><Donut segments={statusSegments(run, files)} caption="documents" onPick={pickStatus} /><Insight text={INS.status} /></section>
         <section className="panel"><h2>Findings by severity <span className="muted" style={{ fontWeight: 400 }}>· blocking findings</span></h2>
-          {severity.length ? <Bars items={severity} onPick={pickSeverity} /> : <p className="muted">No blocking findings.</p>}
+          {sevTotal > 0 ? (
+            <>
+              <p style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 10px' }}>
+                <b style={{ color: 'var(--ink)' }}>{sevTotal}</b> finding occurrence{sevTotal !== 1 ? 's' : ''} across <b style={{ color: 'var(--ink)' }}>{files.filter((f) => (f.issues || []).some((i) => i.severity !== 'REVIEW')).length}</b> assessed document{files.filter((f) => (f.issues || []).some((i) => i.severity !== 'REVIEW')).length !== 1 ? 's' : ''}
+              </p>
+              {['CRITICAL', 'SERIOUS', 'MODERATE', 'MINOR'].map((sev) => {
+                const item = severity.find((s) => s.label === sev.toLowerCase())
+                const count = item ? item.value : 0
+                if (!count) return null
+                const pct = Math.round((count / sevTotal) * 100)
+                return (
+                  <div key={sev} title={SEV_TIP[sev]}
+                       onClick={() => pickSeverity({ label: sev.toLowerCase() })}
+                       style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 8px',
+                                borderRadius: 8, marginBottom: 3, cursor: 'pointer',
+                                background: SEV_BG[sev] }}>
+                    <span style={{ width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
+                                   background: SEV_DOT[sev] }} />
+                    <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: SEV_FG[sev] }}>
+                      {sev.charAt(0) + sev.slice(1).toLowerCase()}
+                    </span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: SEV_FG[sev] }}>{count}</span>
+                    <span style={{ fontSize: 11.5, color: 'var(--muted)', minWidth: 32, textAlign: 'right' }}>{pct}%</span>
+                  </div>
+                )
+              })}
+              <Bars items={severity} onPick={pickSeverity} style={{ marginTop: 8 }} />
+            </>
+          ) : <p className="muted">No blocking findings.</p>}
           {advisoryFindings > 0 && (
             <p className="muted" style={{ fontSize: 11.5, margin: '8px 0 0' }}>
               Plus <b>{advisoryFindings}</b> advisory finding{advisoryFindings === 1 ? '' : 's'} (review-recommended),
