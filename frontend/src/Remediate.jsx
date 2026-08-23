@@ -206,48 +206,51 @@ function GroupedFixes({ fixGroups, appliedFixes = [], impact }) {
   const [showDetail, setShowDetail] = useState(false)
   if (!fixGroups.length) return null
   return (
-    <section className="panel">
-      <div className="fixhd">
-        <h2 style={{ margin: 0 }}>Recent AI fixes <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>· what was corrected automatically</span></h2>
-      </div>
-      <div className="fixgroups">
-        {fixGroups.map((g) => <span className="fixgroup" key={g.sc}><span aria-hidden="true">✓</span> {g.phrase}</span>)}
-        {appliedFixes.length > 0 && (
-          <button className="linkbtn" onClick={() => setShowDetail((v) => !v)}>{showDetail ? 'Hide details' : 'View details →'}</button>
+    <details className="panel rem-sec">
+      <summary className="rem-sec-sum">
+        <h2 className="rem-sec-title">Recent AI fixes <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>· what was corrected automatically</span></h2>
+        <span className="reviewpill">{fixGroups.length}</span>
+      </summary>
+      <div className="rem-sec-body">
+        <div className="fixgroups">
+          {fixGroups.map((g) => <span className="fixgroup" key={g.sc}><span aria-hidden="true">✓</span> {g.phrase}</span>)}
+          {appliedFixes.length > 0 && (
+            <button className="linkbtn" onClick={() => setShowDetail((v) => !v)}>{showDetail ? 'Hide details' : 'View details →'}</button>
+          )}
+        </div>
+        {impact && impact.length > 0 && (
+          <div className="impactrow" aria-label="Accessibility improvements by category">
+            <span className="impacthd muted">Accessibility improvements</span>
+            {impact.map((c) => (
+              <span className="impacttile" key={c.category}><b>{c.count}</b> <span className="muted">{c.category}</span></span>
+            ))}
+          </div>
+        )}
+        {showDetail && appliedFixes.length > 0 && (
+          <div className="recentfixes" style={{ marginTop: 12 }}>
+            {appliedFixes.slice(0, 12).map((a, i) => {
+              const sc = scOf(a.rule_id)
+              return (
+                <details className="recentfix" key={i}>
+                  <summary>
+                    {/* Through ProposalThumb, not a raw <img>: it is the one place that checks a
+                        thumb is really a base64 image data-URL before it reaches an `src`, and it
+                        letterboxes rather than cover-cropping — a PDF's thumb is a whole rendered
+                        page, which a cover-crop would reduce to a slice of margin. */}
+                    <ProposalThumb thumb={a.thumb} size={36} alt={appliedFixAlt(a.file)}
+                                   className="recentfix-thumb" />
+                    <span className="fmtchip">{((a.file || '').split('.').pop() || 'DOC').toUpperCase()}</span>
+                    <span className="muted" style={{ fontSize: 12 }}>WCAG {sc} · {ITEM_NAME[sc] || 'non-text content'} · {a.file}</span>
+                    <span className="fixauto" style={{ marginLeft: 'auto', fontSize: 12 }}>⚡ auto-applied</span>
+                  </summary>
+                  <div className="diffbox after"><span className="difftag">applied</span>{a.value}{a.source ? <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>· {a.source}</span> : null}</div>
+                </details>
+              )
+            })}
+          </div>
         )}
       </div>
-      {impact && impact.length > 0 && (
-        <div className="impactrow" aria-label="Accessibility improvements by category">
-          <span className="impacthd muted">Accessibility improvements</span>
-          {impact.map((c) => (
-            <span className="impacttile" key={c.category}><b>{c.count}</b> <span className="muted">{c.category}</span></span>
-          ))}
-        </div>
-      )}
-      {showDetail && appliedFixes.length > 0 && (
-        <div className="recentfixes" style={{ marginTop: 12 }}>
-          {appliedFixes.slice(0, 12).map((a, i) => {
-            const sc = scOf(a.rule_id)
-            return (
-              <details className="recentfix" key={i}>
-                <summary>
-                  {/* Through ProposalThumb, not a raw <img>: it is the one place that checks a
-                      thumb is really a base64 image data-URL before it reaches an `src`, and it
-                      letterboxes rather than cover-cropping — a PDF's thumb is a whole rendered
-                      page, which a cover-crop would reduce to a slice of margin. */}
-                  <ProposalThumb thumb={a.thumb} size={36} alt={appliedFixAlt(a.file)}
-                                 className="recentfix-thumb" />
-                  <span className="fmtchip">{((a.file || '').split('.').pop() || 'DOC').toUpperCase()}</span>
-                  <span className="muted" style={{ fontSize: 12 }}>WCAG {sc} · {ITEM_NAME[sc] || 'non-text content'} · {a.file}</span>
-                  <span className="fixauto" style={{ marginLeft: 'auto', fontSize: 12 }}>⚡ auto-applied</span>
-                </summary>
-                <div className="diffbox after"><span className="difftag">applied</span>{a.value}{a.source ? <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>· {a.source}</span> : null}</div>
-              </details>
-            )
-          })}
-        </div>
-      )}
-    </section>
+    </details>
   )
 }
 
@@ -1087,7 +1090,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       {/* ── DOCUMENTS (§5) — file triage + remediation plan merged into ONE list: per-doc
           progress · fixes · items needing you · scope · Open. Everything about a doc here. ── */}
       <RemSection id="rem-docs" title="Documents" count={docList.length}
-                  defaultOpen={docList.length > 0}>
+                  defaultOpen={false}>
         <div className="rem-sec-hd">
           <button className="exportbtn" onClick={downloadRemediationReport} disabled={reportBusy}
                   title="A signed record of every change applied, with a checkbox per item and how to verify it in Word / PowerPoint / Excel / Acrobat on Mac and Windows">

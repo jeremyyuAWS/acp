@@ -54,13 +54,17 @@ describe('v2 Remediate: collapsible sections', () => {
     expect(s).toMatch(/count != null && <span className="reviewpill">\{count\}<\/span>/)
   })
 
-  it('derives defaultOpen from content rather than hard-coding it', () => {
+  it('derives defaultOpen from content for Verification; Documents starts collapsed by default', () => {
     const s = rem()
-    // Documents opens only when there are documents; Verification only when something is
-    // running or verified. A constant would either nag forever or hide the section exactly
-    // when it matters.
-    expect(s).toMatch(/id="rem-docs"[\s\S]{0,200}?defaultOpen=\{docList\.length > 0\}/)
+    // Verification opens when something is running or verified — hiding it when nothing has
+    // started is the right default, and forcing it open when verification is complete is more
+    // useful than leaving the reader to find it.
     expect(s).toMatch(/id="rem-verify"[\s\S]{0,400}?defaultOpen=\{verifyState === 'running' \|\| revalidated\.length > 0\}/)
+    // Documents is deliberately collapsed on first load: the list can be very long and the
+    // main action (Review queue) is below it — starting collapsed means that queue is always
+    // visible without scrolling. The user opens Documents when they want to triage or review
+    // individual files.
+    expect(s).toMatch(/id="rem-docs"[\s\S]{0,200}?defaultOpen=\{false\}/)
   })
 
   it('leaves Deferred closed even though it has items', () => {

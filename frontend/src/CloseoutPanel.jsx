@@ -28,10 +28,11 @@ export default function CloseoutPanel({ docs = [], onReverify, onReview, onRemed
   const handler = { [NEXT.REVERIFY]: onReverify, [NEXT.REMEDIATE]: onRemediate, [NEXT.REVIEW]: onReview, [NEXT.PUBLISH]: onPublish }[next.key]
 
   return (
-    <section className="panel" data-testid="closeout-panel" aria-label="After delivery — verification, record and handoff">
-      <div className="proghd">
-        <h2 style={{ margin: 0 }}>🔁 After delivery <span className="muted" style={{ fontSize: 12 }}>· what was verified, what was recorded, what is next</span></h2>
-      </div>
+    <details className="panel rem-sec" data-testid="closeout-panel" aria-label="After delivery — verification, record and handoff">
+      <summary className="rem-sec-sum">
+        <h2 className="rem-sec-title">🔁 After delivery <span className="muted" style={{ fontSize: 12 }}>· what was verified, what was recorded, what is next</span></h2>
+      </summary>
+      <div className="rem-sec-body">
 
       {/* 1 · Re-verification. Counted separately because "cleared", "still failing" and "no
           evidence" answer different questions, and collapsing the third into either of the other
@@ -98,7 +99,8 @@ export default function CloseoutPanel({ docs = [], onReverify, onReview, onRemed
           </p>
         )}
       </div>
-    </section>
+      </div>
+    </details>
   )
 }
 
