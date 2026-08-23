@@ -1,6 +1,7 @@
 import { documentRow, findingsByCriterion, SEVERITIES, SEVERITY_LABEL } from './assessMetrics.js'
 import { criterionOf } from './wcagFinding.js'
 import { RULE_DETAILS } from './ruleDetails.js'
+import { SEV_DOT, SEV_BG, SEV_FG } from './severityColors.js'
 
 // Level 3 of the drill-down: ONE document's findings, grouped by WCAG success criterion.
 //
@@ -34,12 +35,9 @@ import { RULE_DETAILS } from './ruleDetails.js'
 // rule is that it quietly becomes a hidden set, so nothing here hides anything — and there are no
 // sort or filter controls, which would let a reader reorder the one ordering that carries meaning.
 
-const SEV_COLOR = { CRITICAL: '#8E1B14', SERIOUS: '#B3261E', MODERATE: '#B07A00', MINOR: '#B9B3BE',
-                    UNKNOWN: '#9A93A0' }
-const SEV_TAG_BG = { CRITICAL: '#F6E2E0', SERIOUS: '#FDEDEC', MODERATE: '#FFF6E3', MINOR: '#F2F0F4',
-                     UNKNOWN: '#F2F0F4' }
-const SEV_TAG_FG = { CRITICAL: '#8E1B14', SERIOUS: '#B3261E', MODERATE: '#B07A00',
-                     MINOR: 'var(--muted)', UNKNOWN: 'var(--muted)' }
+const SEV_COLOR = { ...SEV_DOT, UNKNOWN: '#9A93A0' }
+const SEV_TAG_BG = { ...SEV_BG, UNKNOWN: '#F2F0F4' }
+const SEV_TAG_FG = { ...SEV_FG, MINOR: 'var(--muted)', UNKNOWN: 'var(--muted)' }
 
 const kicker = { fontSize: 11.5, letterSpacing: '.07em', textTransform: 'uppercase',
                  color: 'var(--muted)', fontWeight: 600 }

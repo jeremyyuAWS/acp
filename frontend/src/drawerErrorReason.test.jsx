@@ -91,6 +91,10 @@ async function open(file, scanId = 'scan-1') {
   await act(async () => {
     root.render(createElement(FileDrawer, { file, scanId, onClose: () => {} }))
   })
+  // Flush the .then() microtask from the listScanDecisions useEffect and the resulting
+  // setErrReason re-render. The first act flushes the effect call itself; this one flushes
+  // the state update it produces. React 18 concurrent mode does not guarantee both in one pass.
+  await act(async () => {})
   return container
 }
 
@@ -99,9 +103,11 @@ describe('a document that failed', () => {
     listScanDecisions.mockClear()
     const c = await open(failed)
     expect(c.textContent).toMatch(/Could not process this file/)
-    // The raw error string is in the title attribute (for debugging); the DOM shows the friendly
-    // version from friendlyFileError(). The HttpError 404 maps to "File not found ...".
-    expect(c.textContent, 'the recorded reason is not on screen').toMatch(/File not found.*moved or deleted/)
+    // PR #649: the raw reason lives in a title attribute (debug access) and the visible
+    // text shows the friendly bucket — check both so neither half can regress silently.
+    expect(c.textContent, 'the friendly error is not shown').toMatch(/File not found — it may have been moved or deleted/)
+    const rawTitle = c.querySelector('[title*="HttpError"]')?.title ?? ''
+    expect(rawTitle, 'the recorded reason is not accessible').toMatch(/404 when requesting/)
   })
 
   it('no longer claims the file is unreadable', async () => {

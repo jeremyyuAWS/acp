@@ -5277,8 +5277,8 @@ class Store:
             return self._db.fetchone(cur)
 
     def list_disposition_audit(self, result: str | None = None,
-                               policy_id: str | None = None, limit: int = 500,
-                               owner: str | None = None) -> list[dict]:
+                               policy_id: str | None = None, doc_id: str | None = None,
+                               limit: int = 500, owner: str | None = None) -> list[dict]:
         q, params = "SELECT * FROM disposition_audit", []
         conds = []
         if owner:
@@ -5287,6 +5287,8 @@ class Store:
             conds.append("result=%s"); params.append(result)
         if policy_id:
             conds.append("policy_id=%s"); params.append(policy_id)
+        if doc_id:
+            conds.append("doc_id=%s"); params.append(doc_id)
         if conds:
             q += " WHERE " + " AND ".join(conds)
         q += " ORDER BY ts DESC LIMIT %s"; params.append(limit)

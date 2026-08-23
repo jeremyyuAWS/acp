@@ -12,7 +12,7 @@
       "wcag_sc": "1.1.1",
       "wcag_display": "Non-text Content",
       "wcag_level": "A",
-      "severity": "CRITICAL",
+      "severity": "SERIOUS",
       "fix_mode": "auto",
       "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/AltTextRule.cs"
     },
@@ -55,7 +55,7 @@
     {
       "id": "DOCX-CONTRAST-001",
       "title": "Insufficient colour contrast",
-      "description": "Text colour against its background must meet the 4.5:1 minimum contrast ratio for normal-sized text (3:1 for large text ≥18pt or 14pt bold).",
+      "description": "Text colour against its background must meet the 4.5:1 minimum contrast ratio for normal-sized text (3:1 for large text \u226518pt or 14pt bold).",
       "wcag": "SC_1_4_3",
       "wcag_sc": "1.4.3",
       "wcag_display": "Contrast (Minimum)",
@@ -67,7 +67,7 @@
     {
       "id": "DOCX-HEAD-001",
       "title": "Heading structure incorrect",
-      "description": "Heading styles must not skip levels (e.g. Heading 1 → Heading 3 with no Heading 2). Skipped levels break navigation for screen reader users who jump by heading.",
+      "description": "Heading styles must not skip levels (e.g. Heading 1 \u2192 Heading 3 with no Heading 2). Skipped levels break navigation for screen reader users who jump by heading.",
       "wcag": "SC_1_3_1",
       "wcag_sc": "1.3.1",
       "wcag_display": "Info and Relationships",
@@ -122,7 +122,7 @@
       "wcag_sc": "1.1.1",
       "wcag_display": "Non-text Content",
       "wcag_level": "A",
-      "severity": "CRITICAL",
+      "severity": "SERIOUS",
       "fix_mode": "auto",
       "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/AltTextRule.cs"
     },
@@ -232,7 +232,7 @@
       "wcag_sc": "1.1.1",
       "wcag_display": "Non-text Content",
       "wcag_level": "A",
-      "severity": "CRITICAL",
+      "severity": "SERIOUS",
       "fix_mode": "auto",
       "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/AltTextRule.cs"
     },
@@ -366,7 +366,7 @@
       "wcag_sc": "1.1.1",
       "wcag_display": "Non-text Content",
       "wcag_level": "A",
-      "severity": "CRITICAL",
+      "severity": "SERIOUS",
       "fix_mode": "auto",
       "source": "deploy/public/vendor/worker-python/analysers/rules/pdf/image_alt_text.py"
     },
