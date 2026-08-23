@@ -252,10 +252,12 @@ describe('App composes the Assess tab the way the board specifies', () => {
     //
     // Mounted OUTSIDE that banner now (matches assess-related source found anywhere in the file,
     // not just before <main> — a stricter "immediately before <main>" anchor would break the
-    // moment an unrelated line is added between them) with active widened to also cover
-    // assessPhase === 'running', and scanId falling back to run?.id when liveScanId is null.
+    // moment an unrelated line is added between them) with active covering assessPhase === 'running'
+    // but suppressed when view === 'assess' (AssessRunner owns that panel and shows authoritative
+    // progress; showing both caused contradictory counts). scanId falls back to run?.id when
+    // liveScanId is null.
     const s = app()
-    expect(s).toMatch(/<LiveAssessmentLive scanId=\{liveScanId \|\| run\?\.id\}\s*active=\{busy \|\| assessPhase === 'running'\}/)
+    expect(s).toMatch(/<LiveAssessmentLive scanId=\{liveScanId \|\| run\?\.id\}\s*active=\{busy \|\| \(assessPhase === 'running' && view !== 'assess'\)\}/)
   })
 })
 
