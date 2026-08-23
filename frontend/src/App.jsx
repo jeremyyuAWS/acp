@@ -1002,6 +1002,30 @@ export default function App() {
         <div className="userbox">
           {me.role && <span className="chip" title={me.scope}>{me.role}</span>}
           {rubric && me.allow?.includes('settings') && <span className="chip">{rubric.target} · rubric {rubric.hash.slice(0, 8)}</span>}
+          {/* Process-health chip — visible only once a discovery run has completed. Shows
+              the highest-severity signal for the run: worker failure > unreadable files > healthy.
+              Uses allFiles (not files) so the type-filter never hides error-status rows from
+              the count, and the indicator describes the full run rather than the current view. */}
+          {run?.completed_at && (() => {
+            const unreadable = allFiles.filter(f => f.status === 'error').length
+            const workerError = run?.status === 'failed'
+            const [chipColor, chipBg, chipLabel, chipTip] = workerError
+              ? ['#7A271A', '#FEF3F2', 'Worker error', 'Assessment stopped due to a processing failure. Some files were not scored.']
+              : unreadable > 0
+              ? ['#6B3A00', '#FFF7E6', `${unreadable} unreadable`, `${unreadable} file${unreadable !== 1 ? 's' : ''} could not be opened and were skipped.`]
+              : ['#074D31', '#ECFDF3', 'Healthy', 'All files were processed successfully.']
+            return (
+              <span title={chipTip} style={{
+                fontSize: 11, fontWeight: 700, letterSpacing: '0.04em',
+                padding: '2px 8px', borderRadius: 20,
+                background: chipBg, color: chipColor,
+                border: `1px solid ${chipColor}22`,
+                cursor: 'default', userSelect: 'none'
+              }}>
+                {chipLabel}
+              </span>
+            )
+          })()}
           {/* Global mode (applies across scanning, explanations, and remediation). The
               scan-only options (Deep scan, Queued) live on the Sources tab where you scan. */}
           <PrivateAiBadge aiEnabled={aiEnabled} />
