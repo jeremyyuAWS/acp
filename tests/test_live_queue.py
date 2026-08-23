@@ -66,6 +66,21 @@ def test_pool_max_absent_reports_busy_only():
     assert s["workers"] == {"busy": 3}                  # no max known → don't invent one
 
 
+def test_workers_busy_is_in_flight_by_construction_not_an_independent_signal():
+    """`workers.busy` is DERIVED from in_flight, so the two can never disagree.
+
+    Worth pinning because a consumer read it as a second, independent measurement and computed
+    "assigned next" as `in_flight - workers.busy` — a figure that is structurally always 0, so the
+    category could never appear on screen. There is no scan-scoped "claimed but not yet started"
+    count in this block; anything that needs one has to add it here first rather than subtract two
+    numbers that are the same number.
+    """
+    for n in (0, 1, 6, 40):
+        s = lq.compose({"files": 100, "files_done": 0}, _act(in_flight=n), pool_max=8, now=NOW)
+        assert s["workers"]["busy"] == s["in_flight"] == n
+        assert s["in_flight"] - s["workers"]["busy"] == 0     # the always-zero subtraction
+
+
 def test_for_scan_degrades_safely_when_activity_store_is_unavailable():
     """The fetch wrapper must never raise into a running screen. With a store that returns a run but no
     reachable activity/core (the .robenv case), it still returns the safe block from the run alone."""

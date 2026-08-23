@@ -615,9 +615,17 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
             )}
             {workerSnap && (() => {
               const externallyManaged = workerSnap.runtime_mode === 'distributed' && workerSnap.alive
+              // NO "assigned next" COUNT. It was `inFlight - workersBusy`, and the backend sets
+              // `workers.busy = in_flight` by construction (live_queue.compose), so that subtraction
+              // is always exactly 0 — a category that could never appear, taking up room in a strip
+              // whose whole job is to say where the work is. The distinction it was reaching for
+              // (claimed-by-a-worker vs actively-being-assessed) is real, but nothing scan-scoped
+              // reports it: `workerSnap.running` is the jobs table system-wide, across every scan
+              // and every user, so subtracting a per-scan number from it would produce a figure
+              // belonging to neither. Rather than invent one, the strip reports the two counts that
+              // ARE measured. Restoring this needs a per-scan claimed count from the backend first.
               const processingCount = liveQueue ? liveQueue.workersBusy : 0
-              const assignedCount = liveQueue ? Math.max(0, liveQueue.inFlight - liveQueue.workersBusy) : 0
-              const brokerQueued = liveQueue ? liveQueue.queued : Math.max(0, assessN - progress - processingCount - assignedCount)
+              const brokerQueued = liveQueue ? liveQueue.queued : Math.max(0, assessN - progress - processingCount)
               const workerCount = liveQueue?.workersMax || workerSnap.workers
               const lastActivityMs = Math.max(lastProgressRef.current ?? 0, lastInFlightRef.current ?? 0) || null
               const lastActivityMins = lastActivityMs ? Math.round((nowTick - lastActivityMs) / 60000) : null
@@ -632,7 +640,6 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                 <span className="muted">
                   {progress} of {assessN} completed
                   {processingCount > 0 && <> · {processingCount} processing</>}
-                  {assignedCount > 0 && <> · {assignedCount} assigned next</>}
                   {brokerQueued > 0 && <> · {brokerQueued} waiting</>}
                 </span>
                 {lastActivityMins !== null && lastActivityMins >= 1 && (

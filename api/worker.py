@@ -18,6 +18,7 @@ design question and is the next step). It can be exercised today via the store
 queue methods and the tests in tests/test_jobs.py.
 """
 from __future__ import annotations
+import os
 import random
 import threading
 import time
@@ -25,6 +26,35 @@ import uuid
 
 # Registry: job type -> handler(payload: dict, job: dict) -> None
 HANDLERS: dict[str, callable] = {}
+
+# How often the heartbeat extends a running job's lease.
+HEARTBEAT_INTERVAL_S = 120
+
+
+def max_unverified_lease_s() -> int:
+    """How long we will keep extending a lease on the heartbeat's word alone, in seconds.
+
+    THE HEARTBEAT PROVES LIVENESS, NOT PROGRESS. It runs on its own daemon thread and calls
+    `touch_job` on a timer; it never asks the handler whether anything is actually happening. So a
+    worker whose handler is wedged — blocked on a socket with no timeout, spinning, deadlocked —
+    goes on extending its own lease forever, and `store.reclaim_stuck_jobs` (which only reclaims
+    leases that have gone STALE) can never reach it. The 30-minute lease protects against a worker
+    that DIES. It does nothing about one that hangs, which is the failure that leaves a queue
+    showing "N active · 0 waiting" and draining nothing.
+
+    So the extensions are bounded. Past this ceiling the heartbeat stops touching the job, the
+    lease goes stale on its own, and the sweeper reclaims it like any other dead worker. The
+    ceiling is generous by default because the cost of getting it wrong in the other direction is
+    worse: reclaiming a job whose handler is still running means two workers do the same work.
+    That risk already exists in the 30-minute path — this does not add it, it just makes a hung
+    job reachable at all.
+
+    0 disables the ceiling entirely (extend forever, the pre-existing behaviour).
+    """
+    try:
+        return max(0, int(os.environ.get("ACP_JOB_MAX_LEASE_S", "3600") or "3600"))
+    except ValueError:
+        return 3600
 
 
 class FatalJobError(Exception):
@@ -106,10 +136,21 @@ class JobWorker:
                                 backoff_seconds=_backoff_seconds(job["attempts"]))
             return True
         # Heartbeat: extend the lease every 2 min while the handler runs, so a
-        # slow-but-alive job (e.g. a long PII scan) isn't reclaimed by the sweeper.
+        # slow-but-alive job (e.g. a long PII scan) isn't reclaimed by the sweeper —
+        # but only up to max_unverified_lease_s(), because this thread can only prove
+        # the PROCESS is alive, never that the WORK is moving. See that function.
         stop_hb = threading.Event()
+        ceiling = max_unverified_lease_s()
+        started = time.monotonic()
         def _heartbeat():
-            while not stop_hb.wait(120):
+            while not stop_hb.wait(HEARTBEAT_INTERVAL_S):
+                if ceiling and (time.monotonic() - started) >= ceiling:
+                    # Say it once, then stop extending. The sweeper takes it from here; without
+                    # this line a job that goes quiet here looks identical to one that finished.
+                    print(f"[worker] job {job['id']} ({job.get('type')}) has held its lease for "
+                          f"{ceiling}s without completing — no longer extending it, so the sweeper "
+                          f"can reclaim it. The handler may still be running.", flush=True)
+                    return
                 try:
                     self.store.touch_job(job["id"])
                 except Exception:
