@@ -4745,6 +4745,83 @@ class Store:
                 "UPDATE jobs SET locked_at=%s, updated_at=%s WHERE id=%s AND status='running'",
                 (now, now, job_id))
 
+    # Job types whose payload names documents that COUNT toward a scan's finalize total.
+    # A dead-letter on one of these has to leave a file_records row behind — see
+    # _record_dead_scan_files. Deliberately not `rescore_file`: that re-scores a document whose
+    # row already exists, so its failure leaves the previous result standing rather than a gap.
+    _COUNTED_FILE_JOBS = ("scan_file", "scan_batch")
+
+    def _dead_job_files(self, job: dict) -> list[dict]:
+        """The documents a dead per-file job was carrying: [{file, drive_file_id}].
+
+        Two payload shapes, and missing the second one is how a whole batch disappears:
+        `scan_file` names ONE `file`; `scan_batch` (ADR 0008, estates over the batch threshold)
+        carries `items` — up to ACP_SCAN_BATCH_SIZE documents that all vanish together.
+        """
+        if job.get("type") not in self._COUNTED_FILE_JOBS:
+            return []
+        payload = job.get("payload") or {}
+        if isinstance(payload, str):
+            import json as _j
+            try:
+                payload = _j.loads(payload)
+            except Exception:
+                return []
+        if payload.get("items"):
+            return [{"file": it.get("file"), "drive_file_id": it.get("drive_file_id")}
+                    for it in payload["items"] if isinstance(it, dict) and it.get("file")]
+        return [{"file": payload["file"], "drive_file_id": payload.get("drive_file_id")}] \
+            if payload.get("file") else []
+
+    def _record_dead_scan_files(self, job: dict, error: str, now_iso: str) -> None:
+        """Leave an 'error' file_records row for every document a dead-lettered job was carrying.
+
+        WHY THIS EXISTS. `count_files_done` counts file_records against `scan_runs.files`, and
+        `scan_finalize` fires only when the two meet. The handlers already record an error row for
+        every failure they CATCH — a bad download, a per-file timeout — precisely so the counter
+        keeps advancing. But a job that DEAD-LETTERS never returns through that code: retries are
+        exhausted, or `force_dead` fired (an expired Drive token takes this path immediately, with
+        no retries at all). No row was written, so the document was counted nowhere:
+
+            files_done            counts file_records            → not counted
+            run.error / "unable to assess"  file_records status='error'  → not counted
+            jobs queued / running  the job is 'dead'              → not counted
+
+        The document simply left the accounting. `files - files_done` then reports it as NOT
+        STARTED forever, `count_files_done` can never reach the total, `scan_finalize` never fires,
+        and the run sits at 0% with nothing able to end it — `rescue_unfinalized_scans` cannot help
+        either, because it requires `file_records >= files`, the very thing that is missing.
+
+        One expired token mid-run was therefore enough to wedge a whole estate permanently.
+
+        Best-effort by construction: a telemetry write must never turn a dead-letter into an
+        exception inside the queue. The row is an upsert, so a late-finishing orphan thread that
+        does produce a real result simply replaces it.
+        """
+        rows = self._dead_job_files(job)
+        if not rows:
+            return
+        scan_id = job.get("scan_id")
+        if not scan_id:
+            return
+        for r in rows:
+            try:
+                self.save_file_result(scan_id, {
+                    "file": r["file"], "engine": "n/a", "status": "error", "score": None,
+                    "compliant": 0, "skipped_rules": 0, "issues": [],
+                    "drive_file_id": r.get("drive_file_id")}, now_iso)
+            except Exception:
+                pass
+            # The REASON, in the one place the UI already looks for it: fileErrorReason.js reads
+            # `scan.file_error` rows to say why a document has no findings, and refuses to invent a
+            # reason when none was recorded. Without this the drawer would say the reason was not
+            # recorded — which would be true, and useless, when the queue knew it all along.
+            try:
+                self.log_decision("system", "scan.file_error", scan_id=scan_id, file=r["file"],
+                                  detail=f"job dead-lettered: {error}"[:200])
+            except Exception:
+                pass
+
     def fail_job(self, job_id: str, error: str, backoff_seconds: float = 0.0,
                  force_dead: bool = False) -> str:
         """Requeue a failed job with backoff, or dead-letter it once attempts are
@@ -4755,6 +4832,8 @@ class Store:
             return "missing"
         now = datetime.now(timezone.utc)
         if force_dead or job["attempts"] >= job["max_attempts"]:
+            # BEFORE the payload is scrubbed — scrubbing is what removes the file names this needs.
+            self._record_dead_scan_files(job, error, now.isoformat())
             scrubbed = self._scrub_payload_secrets(job_id)
             with self._db.cursor() as cur:
                 if scrubbed is not None:
