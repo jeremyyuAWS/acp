@@ -91,6 +91,10 @@ async function open(file, scanId = 'scan-1') {
   await act(async () => {
     root.render(createElement(FileDrawer, { file, scanId, onClose: () => {} }))
   })
+  // Flush the .then() microtask from the listScanDecisions useEffect and the resulting
+  // setErrReason re-render. The first act flushes the effect call itself; this one flushes
+  // the state update it produces. React 18 concurrent mode does not guarantee both in one pass.
+  await act(async () => {})
   return container
 }
 
