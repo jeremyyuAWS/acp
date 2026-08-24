@@ -516,7 +516,7 @@ per-document certificate renderer alongside it).
 | # | Item | Guardrail |
 |---|---|---|
 | ~~R9~~ | ~~**Human-review KPI block**~~ — **SHIPPED** | `_assurance_section`: reviewed / approved / rejected / remediated band from immutable `decision_log`; effort as fixes-cleared ÷ findings (basis named, no modelled saving); edited-draft count and avg review time (only when real timestamps) from `hitl_analytics`. |
-| R10 | **Assurance/confidence bars** (deterministic vs AI vs human). | Reframe as real ratios: e.g. "fixes that cleared re-scan ÷ fixes attempted", "deterministic SCs ÷ evaluated SCs". No invented "92%". |
+| ~~R10~~ | ~~**Assurance/confidence bars**~~ — **SHIPPED** | `_mode_bar()`: stacked horizontal bar showing deterministic ÷ AI-assisted ÷ human-only split of evaluated criteria, with legend. Prose names all three modes with real counts and percentages; "fixed ÷ attempted" omitted (attempted not tracked, per ADR 0016). |
 | ~~R11~~ | ~~**"How ACP reached this decision" methodology**~~ — **SHIPPED** | `_provenance_section` (R11): evaluated/auto/ai counts from real scan facts; method narrative names the deterministic engine, AI-assisted review, revalidation re-scan, and human approval gate. |
 | ~~R12~~ | ~~**Compliance timeline**~~ — **SHIPPED** | `_provenance_section` (R12): pipeline rendered as `scanned N → evaluated N → N finding(s) → N AI-assisted → N approval(s) → N remediated & re-validated → N/N certifiable`; each count from scan facts. |
 
