@@ -22,7 +22,7 @@ import ScanScopeChip from './ScanScopeChip.jsx'
 import EstateCoverage from './EstateCoverage.jsx'
 import AssessmentReconciliation from './AssessmentReconciliation.jsx'
 import EstateProgressPanel from './EstateProgressPanel.jsx'
-import { reconcileBuckets } from './estateFunnel.js'
+import { reconcileBuckets, assessmentEligible } from './estateFunnel.js'
 import { reconciliationInputs } from './reconciliationInputs.js'
 import { assessMetrics, coverageSentence, SEVERITIES, SEVERITY_LABEL } from './assessMetrics.js'
 import AssertionScope from './AssertionScope.jsx'
@@ -208,9 +208,22 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const lifecycleBucket = rec ? rec.rows.find((r) => r.key === 'lifecycle') : null
   const lifecycleAwaiting = lifecycleBucket && lifecycleBucket.measured ? lifecycleBucket.value : null
 
+  // assessment-eligible count for the funnel — from the scan's own inventory summary, so
+  // it tracks the real discovery-side filter, not a derivation from file rows (which only
+  // covers the opened subset).
+  const eligible = assessmentEligible(run?.scope?.inventory)
+  // Actual count of files given a WCAG verdict — may be smaller than `n` when the run was
+  // cancelled, interrupted, or narrowed by document-type scope. `assessedBucket.value`
+  // and `analysed` are the same number from different sources; bucket wins when measured
+  // because it uses the same reconciliation the panel below does.
+  const assessedCount = (assessedBucket?.measured ? assessedBucket.value : null) ?? analysed
+
   const stages = [
     { label: 'Discover', v: n, go: 'discover' },
-    { label: 'Assess', v: n, go: 'assess' },
+    // Only insert an "Eligible" stage when it is strictly less than discovered — when
+    // everything is eligible the stage adds noise without narrowing the funnel.
+    ...(eligible != null && eligible < n ? [{ label: 'Eligible', v: eligible, go: 'discover' }] : []),
+    { label: 'Assess', v: assessedCount, go: 'assess' },
     { label: 'Remediate', v: needFix, go: 'remediate' },
     { label: 'Verify', v: verify, go: 'remediate' },
     { label: 'Publish', v: publish, go: 'monitor' },
@@ -409,6 +422,38 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         <div className="metric" title="Unresolved findings across all assessed documents — the same total the Assess tab reports for this run.">
           <span>findings</span><b>{tile(metrics ? metrics.totalFindings : null)}</b></div>
       </div>
+      {/* OUTCOME SUMMARY — the one-line answer to "how many files discovered / eligible / assessed /
+          need action?" that a stakeholder should not have to derive from four separate tiles. Only
+          rendered when the scan has something to say: the rec bucket must be present (discovered > 0)
+          and at least assessed or needing-attention must be measured so the sentence is not just
+          "X discovered". */}
+      {rec != null && (assessedBucket?.measured || (stageAssessed && metrics)) && (
+        <p className="muted" style={{ margin: '0 0 10px', fontSize: 13, lineHeight: 1.6 }}>
+          {[
+            `${rec.discovered.toLocaleString()} discovered`,
+            eligible != null && `${eligible.toLocaleString()} eligible for WCAG assessment`,
+            assessedBucket?.measured && `${(assessedBucket.value || 0).toLocaleString()} assessed`,
+            stageAssessed && metrics && metrics.documentsNeedingAttention > 0
+              && `${metrics.documentsNeedingAttention.toLocaleString()} need action`,
+            lifecycleAwaiting != null && `${lifecycleAwaiting.toLocaleString()} lifecycle candidate${lifecycleAwaiting !== 1 ? 's' : ''}`,
+          ].filter(Boolean).join(' · ')}
+        </p>
+      )}
+      {/* 0-FILE EMPTY STATE — a scan that completed but found nothing in its source. The metric
+          tiles show em-dashes and the reconciliation renders nothing, so without this prompt the
+          screen offers only "Run assessment →" beside a "0 documents discovered" count, which has
+          nothing to assess. Direct the user to their source configuration instead. */}
+      {n === 0 && run.status !== 'running' && run.status !== 'failed' && (
+        <section className="panel" style={{ textAlign: 'center', padding: '24px 20px', marginBottom: 16 }}>
+          <p style={{ fontSize: 15, fontWeight: 600, margin: '0 0 6px' }}>No documents found in this scan</p>
+          <p className="muted" style={{ margin: '0 0 14px', fontSize: 13 }}>
+            The scan completed but discovered no files. Check that your source folder is configured
+            and contains documents in a supported format (PDF, Word, PowerPoint, Excel, HTML),
+            then return to the Discover tab to re-scan.
+          </p>
+          <button onClick={() => onGo && onGo('discover')}>Go to Discover →</button>
+        </section>
+      )}
       {/* WHAT THE COUNT COUNTS. Discover has said this since scanScope.js; the Overview did not,
           and it is the screen where two scans get compared. On 2026-07-30 a folder scan of "UTSW
           DEMO V2" (4 listed, 4 kept) was read against a whole-Drive scan of the same account
@@ -509,11 +554,22 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       ) : (
         <section className="panel overview-runassess" aria-label="Assessment not yet run">
           <h2>Assessment <span className="muted" style={{ fontWeight: 400 }}>· not yet run</span></h2>
-          <p className="muted" style={{ margin: '4px 0 12px' }}>
-            {n.toLocaleString()} document{n === 1 ? '' : 's'} discovered. Run an assessment to score them
-            against WCAG 2.1 — findings, coverage and the severity breakdown appear here once it finishes.
-          </p>
-          <button onClick={() => onGo && onGo('assess')}>Run assessment →</button>
+          {n > 0 ? (
+            <>
+              <p className="muted" style={{ margin: '4px 0 12px' }}>
+                {n.toLocaleString()} document{n === 1 ? '' : 's'} discovered
+                {eligible != null && eligible < n && ` · ${eligible.toLocaleString()} eligible for WCAG assessment`}.{' '}
+                Run an assessment to score them against WCAG 2.1 — findings, coverage and the
+                severity breakdown appear here once it finishes.
+              </p>
+              <button onClick={() => onGo && onGo('assess')}>Run assessment →</button>
+            </>
+          ) : (
+            <p className="muted" style={{ margin: '4px 0 0' }}>
+              No documents have been discovered yet. Configure a source and run a scan from
+              the Discover tab first.
+            </p>
+          )}
         </section>
       )}
 
