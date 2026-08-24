@@ -712,10 +712,18 @@ export const autoPopulateHitlQueue = (scanId) => (SIM
 export const listAllHitl = (status = null) => (SIM
   ? sim([], 60)
   : fetch(`${BASE}/hitl/queue${status ? `?status=${status}` : ''}`, { headers: headers() }).then(j))
+// Items whose PUT is in flight: keyed by item id, set BEFORE the fetch so that a
+// listHitlQueue reload triggered by the acp:hitl-changed event (which Remediate.jsx fires
+// before calling updateHitlItem) cannot resurrect an item the reviewer just actioned.
+// The entry is cleared when the PUT settles — success or failure — so an undo after a
+// network error correctly re-surfaces the item on the next reload.
+const _pendingActs = new Map()
+
 // List HITL items for a scan, optionally filtered by status.
 export const listHitlQueue = (scanId, status = null) => (SIM
   ? sim([])
-  : fetch(`${BASE}/hitl/queue?scan_id=${encodeURIComponent(scanId)}${status ? `&status=${status}` : ''}`, { headers: headers() }).then(j))
+  : fetch(`${BASE}/hitl/queue?scan_id=${encodeURIComponent(scanId)}${status ? `&status=${status}` : ''}`, { headers: headers() }).then(j)
+      .then((items) => (items || []).filter((it) => !_pendingActs.has(it.id))))
 // Update a HITL item (approved / rejected / skipped) with an optional reviewer note
 // and/or the reviewer's final (AI-drafted or hand-edited) approved_value.
 // opts (optional) carries review telemetry for the Intelligent Review Workspace:
@@ -725,9 +733,12 @@ export const listHitlQueue = (scanId, status = null) => (SIM
 // opts.approvedValues — one final text per proposal, positionally (the row holds one proposal
 // per image). A null/'' entry accepts that proposal's own draft. The server writes them into
 // the document; approved_value stays the single headline value, for the audit log.
-export const updateHitlItem = (itemId, status, reviewerNote = null, approvedValue = null, opts = {}) => (SIM
-  ? sim({ id: itemId, status })
-  : fetch(`${BASE}/hitl/queue/${encodeURIComponent(itemId)}`, {
+export const updateHitlItem = (itemId, status, reviewerNote = null, approvedValue = null, opts = {}) => {
+  if (SIM) return sim({ id: itemId, status })
+  // Register the item SYNCHRONOUSLY before the fetch so that any listHitlQueue call
+  // resolving while the PUT is still in flight (the race that caused I.2) filters it out.
+  _pendingActs.set(itemId, Date.now())
+  return fetch(`${BASE}/hitl/queue/${encodeURIComponent(itemId)}`, {
       method: 'PUT',
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ status, reviewer_note: reviewerNote, approved_value: approvedValue,
@@ -739,7 +750,11 @@ export const updateHitlItem = (itemId, status, reviewerNote = null, approvedValu
         // conveys nothing, no text alternative required) or 'essential_exception' (1.4.5/1.4.9 —
         // a logo/brand mark is exempt). Recorded in the audit trail as WHY the finding is resolved.
         resolution: opts.resolution ?? null }),
-    }).then(j))
+    }).then(j).then(
+      (result) => { _pendingActs.delete(itemId); return result },
+      (err)    => { _pendingActs.delete(itemId); throw err },
+    )
+}
 // HITL review telemetry for the workspace dashboard — decisions by action, approval rate,
 // edit rate (confidence-calibration signal), avg review time (reviewer-time-saved). Scan-scoped.
 export const getHitlAnalytics = (scanId = null) => (SIM
