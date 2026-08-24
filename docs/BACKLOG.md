@@ -554,11 +554,16 @@ thing the PRD does not mention.
   needs many genuinely distinct documents per criterion, or a narrower claim scoped to the band
   actually sampled — not more of the same shape.**
 
-- [ ] **P4.3 — Evidence modes A–E; find the minimum viable evidence package.** (PRD §11.) The
-  highest-value experiment in the document and the cheapest, because ACP already emits most of
-  the package — findings carry `locator`/`location`, OCR text in `detail`, and the OOXML walk is
-  `formats.office.images`. Compare full-page render / object crop / crop + context / crop +
-  deterministic evidence / all of it. Blocked on nothing.
+- [x] **P4.3 — Evidence modes A–E; find the minimum viable evidence package.** (PRD §11.) Done.
+  Added `EVIDENCE_MODES` dict (A–E) and `_build_prompt(item, mode)` to `judge_drafts.py`; mode B
+  is the default (source/OCR only, matching prior behaviour). Mode A is blind baseline; C adds
+  surrounding context text; D adds OOXML attributes + element locator; E adds image crop for
+  vision models. New `bench_evidence_modes.py` runs all text modes (A–D) in one pass against the
+  same shuffled item set, printing per-mode calibration r (Pearson vs `truth_facts`), mean
+  usefulness, and inter-judge agreement, plus an interpretation note comparing B vs D. Mode E
+  (image crop, vision model) is excluded and must be run separately via
+  `judge_drafts.py --evidence-mode E`. PHI boundary and httpx-only transport unchanged.
+  *(Source-verified 2026-08-24.)*
 
 - [x] **P4.4 — Independent verification: the generator must not approve its own remediation.**
   (PRD §20.) Done for 3.1.2 — the only criterion where the check is complete today. Added
