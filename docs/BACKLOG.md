@@ -503,17 +503,15 @@ that silently drops half a proposal is worse than one that argues with it.
 **Read P4.0 first. It is the prerequisite for every other item in this phase**, and it is the one
 thing the PRD does not mention.
 
-- [ ] **P4.0 — Decide whether an AI-assessed lane may auto-apply, and under what evidence gate.**
-  Measured, not predicted: `score_remediation.py` scored `qwen2.5vl` **3B, 7B and 32B and
-  `moondream` at an identical 50% VRR / 0% regression / 0% damage**. That is structural. No
-  ungrounded vision draft is ever auto-applied — the honesty split routes all of them to
-  `proposals` — so the model changes what a reviewer *sees*, never what the document *gets*.
-  **Until this gate moves, every model, prompt, evidence-mode and routing experiment below
-  returns the same table**, and a sweep across four models will read as "parameter count does not
-  matter" when it actually means "no model output reached a document."
-  The precedent already ships: grounded (OCR-anchored) alt auto-applies today, ungrounded does
-  not. Generalising *that* mechanism is the decision, not inventing one.
-  *Effort: a decision plus an ADR. `[?]` — needs a decision, not code.*
+- [x] **P4.0 — Decide whether an AI-assessed lane may auto-apply, and under what evidence gate.**
+  Done. ADR 0041 records the decision: auto-apply is permitted for **Group A SCs** (1.1.1
+  structural, 2.4.4, 3.1.2, 4.1.2) when the P4.4 three-condition gate passes — (1) SC is in
+  Group A, (2) `hitl_queue.validated=True` set by the independent verifier, (3) fix is
+  re-checkable by structural re-scan. **Group B is permanently human-review-only** (the
+  silencing asymmetry: a wrong Group B fix removes its own detector finding, so no re-scan
+  can detect the failure). The 50% VRR will move once Group A routing is wired
+  (`apply_alt.py` checks `validated` before deciding to apply vs. queue for human review).
+  *(Source-verified 2026-08-24.)*
 
 - [x] **P4.1 — Split the eight review-lane SCs by whether the negative is deterministically
   provable.** Done. ADR 0040 formalises the split:
