@@ -76,7 +76,29 @@ ACP_GOOGLE_CLIENT_ID=<your-web-client-id>.apps.googleusercontent.com
 > it's done you're capped at 100 OAuth "test users". See the multi-tenancy notes
 > below before going public.
 
-## 4. Other production settings
+## 4. Set the public base URL
+
+```
+ACP_PUBLIC_URL=https://acp.yourcompany.com
+```
+
+This controls two things in generated PDF reports:
+
+- **QR codes.** Each report embeds a QR code that links to the live scan for re-scan
+  and verify flows. Without `ACP_PUBLIC_URL` the PDF encodes an `acp://` URI that no
+  browser handles — the QR code renders but cannot be opened.
+- **Reproducibility / digest verification.** The "Reproduce and verify" section of the
+  PDF tells the reader how to re-run the scan via `POST /scans` and verify the rubric
+  hash at `GET /rubric`. Those URLs are built from `ACP_PUBLIC_URL`; without it the
+  links are relative and unusable from outside the host.
+
+> **Rubric sensitivity.** The digest embedded in the PDF is tied to the rubric's
+> `conformance_target`. If you replace or update the active ruleset (changing its
+> `conformance_target`), existing PDF digests will **not** match what `/rubric` returns —
+> the verify step will flag a mismatch even for correct re-runs. Changing the ruleset
+> invalidates all prior report digests; note this in any change-management process.
+
+## 5. Other production settings
 
 ```
 ACP_DATABASE_URL=postgres://…              # never run on SQLite in prod
@@ -90,7 +112,7 @@ ACP_WORKERS=<n>                            # or live-scale from Monitor
 - Grafana / Langfuse expose **all** scan data — keep them admin-only; don't link
   them from a multi-user front door.
 
-## 5. Known limits (read before scaling up)
+## 6. Known limits (read before scaling up)
 
 - **Not multi-tenant.** All scans share one set of tables with no owner column —
   every signed-in user sees every other user's results. Fine for a single trusted
