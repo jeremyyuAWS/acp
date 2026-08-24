@@ -700,12 +700,42 @@ def _provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, mut
               f"<b>{cert}</b>/<b>{total}</b> certifiable"]
     el.append(Paragraph("<b>Pipeline.</b> " + "  →  ".join(stages), cell))
     el.append(Spacer(1, 6))
-    # R-D — reproduce from the stamped ruleset. Same inputs, same findings.
+    # R-D — actionable reproduce instructions: three steps, not a prose assertion.
+    # The full hash is included (not truncated) because the auditor must verify it exactly.
     rubric = meta.get("hash") if meta else None
     if rubric:
-        el.append(Paragraph(
-            f"<b>Reproduce.</b> Re-run this scan against rubric hash <b>{_esc(str(rubric)[:32])}…</b> "
-            "(the stamped ruleset); the same documents yield the same findings.", muted))
+        src = _esc(run.get("source") or "same source as above")
+        sid = _esc(str(run.get("id", "—")))
+        rd_rows = [
+            ["1", Paragraph(
+                f"<b>Verify the rubric.</b> GET /rubric → confirm the response carries "
+                f"<font name='Courier' size='7'>{_esc(str(rubric))}</font> "
+                "as its <b>hash</b> field. A mismatch means a different ruleset is active — "
+                "findings will diverge regardless of the document set.", muted)],
+            ["2", Paragraph(
+                f"<b>Re-run the scan.</b> POST /scans?source={src} against the same document "
+                f"set used for scan <b>{sid}</b>. The scan must complete successfully "
+                "(status: complete, not error or cancelled).", muted)],
+            ["3", Paragraph(
+                f"<b>Compare findings.</b> The new scan's failing WCAG criteria and per-file "
+                f"scores must match scan <b>{sid}</b>. Any divergence indicates a rubric "
+                "version change, a document change, or a non-deterministic AI step — "
+                "each is a distinct fact about the pipeline, not a test failure.", muted)],
+        ]
+        num_style = ParagraphStyle("rdnum", parent=muted, fontSize=8, alignment=1)
+        rd_t = Table(
+            [[Paragraph(n, num_style), cell_p] for n, cell_p in rd_rows],
+            colWidths=[0.22 * inch, 6.38 * inch])
+        rd_t.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("BACKGROUND", (0, 0), (-1, -1), ZEBRA), ("BOX", (0, 0), (-1, -1), 0.5, LINE),
+            ("LINEBELOW", (0, 0), (-1, -2), 0.4, LINE),
+        ]))
+        el.append(Paragraph("<b>Reproduce this result.</b>", muted))
+        el.append(Spacer(1, 3))
+        el.append(rd_t)
     # R-E — supersedes, only when a previous scan of this estate exists.
     prev_at = (diff or {}).get("prev_at")
     if prev_at:

@@ -14,10 +14,20 @@ sys.path.insert(0, str(ROOT / "api"))
 def _text(facts, meta=None, diff=None, cert=1, total=1) -> str:
     import report
     from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import Table
     ss = getSampleStyleSheet()
     el = report._provenance_section({"id": "s1"}, facts, meta, diff, cert, total,
                                     ss["Heading2"], ss["BodyText"], ss["BodyText"], ss["BodyText"])
-    return " ".join(str(getattr(e, "text", "") or "") for e in el)
+    parts = []
+    for e in el:
+        if isinstance(e, Table):
+            for row in e._cellvalues:
+                for cell in row:
+                    for item in (cell if isinstance(cell, list) else [cell]):
+                        parts.append(str(getattr(item, "text", "") or ""))
+        else:
+            parts.append(str(getattr(e, "text", "") or ""))
+    return " ".join(parts)
 
 
 def _facts(evaluated=6, findings=2, auto=4, ai=2, approvals=1, remediated=1, docs=1):
@@ -38,9 +48,14 @@ def test_method_and_pipeline_carry_the_real_counts():
 
 def test_reproduce_line_renders_only_with_a_rubric_hash():
     with_hash = _text(_facts(), meta={"hash": "abc123def456"})
-    assert "Reproduce." in with_hash and "abc123def456" in with_hash
+    # The header paragraph and each step are now in a labelled table — check the surface,
+    # not the exact label, so minor rewording doesn't silently pass a missing section.
+    assert "Reproduce this result" in with_hash
+    assert "abc123def456" in with_hash           # full hash, not truncated
+    assert "Verify the rubric" in with_hash      # step 1 — check hash before re-running
+    assert "POST /scans" in with_hash            # step 2 — actionable API call
     without = _text(_facts(), meta={})
-    assert "Reproduce." not in without
+    assert "Reproduce" not in without
 
 
 def test_supersedes_renders_only_with_a_previous_scan():
