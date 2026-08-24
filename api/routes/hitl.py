@@ -109,9 +109,15 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     item = core.store.get_hitl_item(item_id)
     if item is None:
         raise HTTPException(404, "item not found")
-    valid = {"pending", "approved", "rejected", "skipped"}
+    valid = {"pending", "approved", "rejected", "skipped", "in_review"}
     if body.status not in valid:
         raise HTTPException(422, f"status must be one of {sorted(valid)}")
+    # in_review is a lightweight "I am working this" claim — no decision, no reviewed_at,
+    # no side-effects. Return early so the certify gate, job queue, and telemetry paths
+    # (which all assume a terminal decision) never see it.
+    if body.status == "in_review":
+        actor = getattr(getattr(request, "state", None), "user_email", None)
+        return core.store.claim_hitl_item(item_id, actor)
     if body.reject_reason is not None and body.reject_reason not in REJECT_REASONS:
         raise HTTPException(422, f"reject_reason must be one of {sorted(REJECT_REASONS)}")
     if body.resolution is not None and body.resolution not in RESOLUTIONS:
@@ -222,6 +228,10 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
                     detail="all findings resolved (auto-fixed + human-approved) — certified & advanced to Publish")
         except Exception:
             pass
+    # Notify external systems of terminal decisions (approved / rejected / skipped).
+    # Uses the resolved item dict so the payload includes the reviewer note and approved value.
+    if body.status in {"approved", "rejected", "skipped"} and updated:
+        core.fire_webhook([updated], event="hitl.resolved")
     return updated
 
 
@@ -232,7 +242,11 @@ class HitlAssign(BaseModel):
 @router.patch("/hitl/queue/{item_id}/assign")
 def hitl_assign(item_id: str, body: HitlAssign):
     """Assign (or unassign) a reviewer to a HITL queue item. Persists to the DB so the
-    assignment survives page reloads and is visible to other sessions."""
+    assignment survives page reloads and is visible to other sessions.
+    Fires hitl.assigned when an assignee is set (not on clear)."""
     if core.store.get_hitl_item(item_id) is None:
         raise HTTPException(404, "item not found")
-    return core.store.assign_hitl_item(item_id, body.assignee)
+    result = core.store.assign_hitl_item(item_id, body.assignee)
+    if body.assignee and result:
+        core.fire_webhook([result], event="hitl.assigned")
+    return result

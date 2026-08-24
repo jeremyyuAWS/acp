@@ -98,6 +98,13 @@ function QueueRow({ f, decisions, selected, onSelect, showFile = true }) {
           {r.laneShort && <span className="muted" style={{ fontSize: 11 }}>{r.laneShort}</span>}
           {r.effort !== '—' && <span className="muted" style={{ fontSize: 11 }}>{r.effort}</span>}
           {r.severity && <span className={`revcard-sev sev-${String(r.severity).toLowerCase()}`} style={{ fontSize: 10 }}>{r.severity}</span>}
+          {f?.status === 'in_review' && !r.resolved && (
+            <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '.04em',
+                           background: 'var(--accent-subtle,#e8f0fe)', color: 'var(--accent,#3b6fd6)',
+                           borderRadius: 4, padding: '1px 5px', marginLeft: 'auto' }}>
+              In review
+            </span>
+          )}
           {r.resolved && <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>✓ resolved</span>}
         </span>
       </span>
