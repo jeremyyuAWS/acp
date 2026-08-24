@@ -59,7 +59,7 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     expect(assessmentIn('1.4.11', 'docx')).toBe('review')  // docx DrawingML shapes now covered too
     // not built for these formats yet → grey ⚪ N/A, honestly
     expect(assessmentIn('2.4.3', 'docx')).toBe('na')
-    expect(assessmentIn('1.4.1', 'pptx')).toBe('na')
+    expect(assessmentIn('1.4.1', 'pptx')).toBe('review')  // colour-only hyperlinks
   })
 
   it('2.4.6 is 🟡 review on every document format — level-stepping is not descriptiveness', () => {
@@ -99,7 +99,7 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     // evaluated". 1.4.1 and 4.1.2 were already 🟡 via the controls-gated review overlay and stay so
     // (now table-backed too). The criterion crosses buckets rather than leaving, so it sums to 20.
     xlsx: { auto: 5, review: 10, human: 0, gap: 0, at: 0, na: 5, certifiable: 5 },
-    pptx: { auto: 5, review: 13, human: 1, gap: 0, at: 0, na: 1, certifiable: 5 },
+    pptx: { auto: 5, review: 14, human: 1, gap: 0, at: 0, na: 0, certifiable: 5 },
     // pdf is 13🟡/4⚪ rather than 12/5 because 2.4.3 (focus order) moved ⚪ → 🟡: its /Tabs = /S
     // detector is registry-backed now (formats/pdf, HEURISTIC), so it reads REVIEW — a proxy, not a
     // certified pass. 4.1.2 earlier made the same ⚪ → 🟡 move (AcroForm-only, so 🟡 not 🟢). Each

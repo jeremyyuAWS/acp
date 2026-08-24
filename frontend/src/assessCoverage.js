@@ -51,7 +51,7 @@ const AT = new Set(['2.1.1|html', '2.1.2|html'])
 const REVIEW_ONLY = new Set([
   '2.1.2|docx', '2.1.2|pptx', '2.1.2|xlsx',   // interactive-control detector
   '4.1.2|docx', '4.1.2|pptx', '4.1.2|xlsx',
-  '1.4.1|docx', '1.4.1|xlsx', '1.4.1|pdf',    // Use of Color — colour-only status / links (pdf: colour-only link)
+  '1.4.1|docx', '1.4.1|xlsx', '1.4.1|pdf', '1.4.1|pptx',  // Use of Color — colour-only status / links
   '2.4.3|pptx',                               // Focus Order — title not first
   '1.4.11|pptx', '1.4.11|docx', '1.4.11|pdf', // Non-text Contrast — faint shape outline
   // ADR 0024 Tier A — render-gated structural proxies. (1.4.3 hybrid is NOT here: 1.4.3 stays

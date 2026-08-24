@@ -188,9 +188,9 @@ REVIEW_FORMATS: dict[str, frozenset[str]] = {
     "4.1.2": frozenset({"pptx"}),
     # Use of Color — colour-only status/links. xlsx is ABSENT for the same reason as 4.1.2 above:
     # it is registry-backed now (formats/xlsx office_color_only_checks, PARTIAL), so the registry
-    # branch owns its clean-file verdict. docx stays here (not yet migrated to registry-only); pdf
-    # is review-lane only (colour-only link, ADR 0025).
-    "1.4.1": frozenset({"docx", "pdf"}),
+    # branch owns its clean-file verdict. docx and pptx stay here (not yet migrated to registry-
+    # only); pdf is review-lane only (colour-only link, ADR 0025).
+    "1.4.1": frozenset({"docx", "pdf", "pptx"}),
     "2.4.3": frozenset({"pptx"}),                   # Focus Order — title not first in reading order
     # Non-text Contrast — faint shape outline. xlsx is ABSENT: registry-backed (formats/xlsx,
     # PARTIAL) so a clean workbook reads REVIEW via the registry, not "not evaluated". docx/pdf/pptx
@@ -384,7 +384,7 @@ def _certify(rule_id: str, fmt: str | None) -> str:
 SCOPE_PRESETS: dict[str, dict[str, frozenset[str]]] = {
     # ACP Core 17 — the DEFAULT engagement scope, and the one an operator should almost always
     # pick. Every criterion Mova iO tracks (MOVA_TRACKED), on every format the engine can reach a
-    # verdict for. 17 criteria, 61 pairs.
+    # verdict for. 17 criteria, 62 pairs.
     #
     # It is exactly SCOPE_UNIVERSE ∩ MOVA_TRACKED — the same intersection ScanScope.jsx computes
     # to decide which rows to offer (#168) — so the preset and the grid cannot disagree about what
@@ -394,14 +394,14 @@ SCOPE_PRESETS: dict[str, dict[str, frozenset[str]]] = {
     # this repo puts that guarantee.
     #
     # Its per-format asymmetries are the engine's real coverage, not an editorial choice: 2.1.1 is
-    # pptx-only, 2.4.3 is pdf+pptx, 1.4.1 has no pptx lane, 2.1.2 has no pdf lane. A flat
-    # 17 × 4 grid would claim eleven pairs the engine cannot judge.
+    # pptx-only, 2.4.3 is pdf+pptx, 2.1.2 has no pdf lane. A flat 17 × 4 grid would claim ten
+    # pairs the engine cannot judge.
     "acp-core-17": {
         "1.1.1": frozenset({"docx", "pdf", "pptx", "xlsx"}),
         "1.3.1": frozenset({"docx", "pdf", "pptx", "xlsx"}),
         "1.3.2": frozenset({"docx", "pdf", "pptx", "xlsx"}),
         "1.3.3": frozenset({"docx", "pdf", "pptx", "xlsx"}),
-        "1.4.1": frozenset({"docx", "pdf", "xlsx"}),
+        "1.4.1": frozenset({"docx", "pdf", "pptx", "xlsx"}),
         "1.4.3": frozenset({"docx", "pdf", "pptx", "xlsx"}),
         "1.4.5": frozenset({"docx", "pdf", "pptx", "xlsx"}),
         "1.4.11": frozenset({"docx", "pdf", "pptx", "xlsx"}),

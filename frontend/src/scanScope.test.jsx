@@ -155,11 +155,18 @@ describe('saving', () => {
 describe('the grid', () => {
   it('renders no checkbox where the engine has no verdict for the pair', async () => {
     const c = await render('engagement-14')
-    // 1.4.1 has no pptx lane on either axis, so that cell must not be a checkbox at all —
-    // a disabled box would read as "off", implying a choice nobody made.
-    const row = SCOPE_UNIVERSE.find((r) => r.sc === '1.4.1')
-    expect(row.formats).not.toContain('pptx')
-    expect(byLabel(c, '1.4.1 Use of Color, PPTX')).toBeFalsy()
+    // 2.1.1 Keyboard applies only to PPTX (static deck); DOCX has no lane, so that cell
+    // must not be a checkbox at all — a disabled box would read as "off", implying a choice
+    // nobody made.
+    const rowKB = SCOPE_UNIVERSE.find((r) => r.sc === '2.1.1')
+    expect(rowKB.formats).not.toContain('docx')
+    expect(byLabel(c, '2.1.1 Keyboard, DOCX')).toBeFalsy()
+    expect(byLabel(c, '2.1.1 Keyboard, PPTX')).toBeTruthy()
+    // 1.4.1 Use of Color now has a pptx review lane (colour-only hyperlinks in DrawingML),
+    // so both PPTX and DOCX checkboxes must be present.
+    const row141 = SCOPE_UNIVERSE.find((r) => r.sc === '1.4.1')
+    expect(row141.formats).toContain('pptx')
+    expect(byLabel(c, '1.4.1 Use of Color, PPTX')).toBeTruthy()
     expect(byLabel(c, '1.4.1 Use of Color, DOCX')).toBeTruthy()
   })
 
