@@ -53,9 +53,24 @@ def test_reproduce_line_renders_only_with_a_rubric_hash():
     assert "Reproduce this result" in with_hash
     assert "abc123def456" in with_hash           # full hash, not truncated
     assert "Verify the rubric" in with_hash      # step 1 — check hash before re-running
-    assert "POST /scans" in with_hash            # step 2 — actionable API call
+    assert "POST" in with_hash and "/scans" in with_hash   # step 2 — actionable API call
     without = _text(_facts(), meta={})
     assert "Reproduce" not in without
+
+
+def test_reproduce_embeds_base_url_and_source(monkeypatch):
+    import report
+    import types
+    fake_core = types.SimpleNamespace(PUBLIC_URL="https://acp.example.com")
+    monkeypatch.setitem(sys.modules, "core", fake_core)
+    # reload so _provenance_section picks up the monkeypatched module
+    import importlib; importlib.reload(report)
+    t = _text(_facts(), meta={"hash": "deadbeef"})
+    assert "https://acp.example.com/rubric" in t   # base URL on step 1
+    assert "https://acp.example.com/scans" in t    # base URL on step 2
+    # source absent → placeholder, not a prose phrase in the query string
+    assert "same source as above" not in t
+    importlib.reload(report)  # restore for subsequent tests
 
 
 def test_supersedes_renders_only_with_a_previous_scan():

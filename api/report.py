@@ -715,16 +715,24 @@ def _provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, mut
     # The full hash is included (not truncated) because the auditor must verify it exactly.
     rubric = meta.get("hash") if meta else None
     if rubric:
-        src = _esc(run.get("source") or "same source as above")
+        try:
+            import core as _core
+            _rd_base = (_core.PUBLIC_URL or "").rstrip("/")
+        except Exception:
+            _rd_base = ""
+        src_val = run.get("source") or ""
+        src_param = f"?source={_esc(src_val)}" if src_val else "?source=&lt;source&gt;"
         sid = _esc(str(run.get("id", "—")))
         rd_rows = [
             ["1", Paragraph(
-                f"<b>Verify the rubric.</b> GET /rubric → confirm the response carries "
+                f"<b>Verify the rubric.</b> <font name='Courier' size='7'>"
+                f"GET {_esc(_rd_base)}/rubric</font> → confirm the response carries "
                 f"<font name='Courier' size='7'>{_esc(str(rubric))}</font> "
                 "as its <b>hash</b> field. A mismatch means a different ruleset is active — "
                 "findings will diverge regardless of the document set.", muted)],
             ["2", Paragraph(
-                f"<b>Re-run the scan.</b> POST /scans?source={src} against the same document "
+                f"<b>Re-run the scan.</b> <font name='Courier' size='7'>"
+                f"POST {_esc(_rd_base)}/scans{src_param}</font> against the same document "
                 f"set used for scan <b>{sid}</b>. The scan must complete successfully "
                 "(status: complete, not error or cancelled).", muted)],
             ["3", Paragraph(
