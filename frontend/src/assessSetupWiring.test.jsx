@@ -244,7 +244,10 @@ describe('App composes the Assess tab the way the board specifies', () => {
     // not end a QUEUED scan's poll loop (no scan_runs row ever appears for one, so the poll has
     // nothing to see), and its failures used to be swallowed. Asserting the shared helper is the
     // point — two call sites that each rolled their own is what let one of them drift.
-    expect(s).toMatch(/<LiveAssessmentLive[\s\S]{0,150}?onStop=\{\(\) => stopScan\(liveScanId \|\| run\?\.id\)/)
+    // Window widened from 150: the `active` gate gained a clause and an explanatory comment when
+    // Discover was excluded, which pushed onStop past the old bound. The assertion is about the
+    // two Stops sharing one helper, not about how many characters sit between them.
+    expect(s).toMatch(/<LiveAssessmentLive[\s\S]{0,400}?onStop=\{\(\) => stopScan\(liveScanId \|\| run\?\.id\)/)
     expect(s).toMatch(/onClick=\{\(\) => stopScan\(liveScanId\)\}>■ Stop scan/)
     // and neither may go back to swallowing the outcome
     expect(s).not.toMatch(/cancelScan\([^)]*\)\.catch\(\(\) => \{\}\)/)
@@ -265,7 +268,14 @@ describe('App composes the Assess tab the way the board specifies', () => {
     // progress; showing both caused contradictory counts). scanId falls back to run?.id when
     // liveScanId is null.
     const s = app()
-    expect(s).toMatch(/<LiveAssessmentLive scanId=\{liveScanId \|\| run\?\.id\}\s*active=\{busy \|\| \(assessPhase === 'running' && view !== 'assess'\)\}/)
+    // Asserted by SHAPE rather than by the exact gate text. The clause list grew when Discover was
+    // excluded too (see discoverNoAssessCard.test.js, which owns the per-view truth table and
+    // evaluates the real expression); pinning the literal here just meant this test failed for a
+    // change it does not describe. What it cares about is that the card is mounted with the
+    // run?.id fallback and activates on assessPhase, not only on `busy`.
+    expect(s).toMatch(/<LiveAssessmentLive scanId=\{liveScanId \|\| run\?\.id\}/)
+    expect(s).toMatch(/active=\{busy \|\| \(assessPhase === 'running'/)
+    expect(s).toMatch(/view !== 'assess'/)
   })
 })
 

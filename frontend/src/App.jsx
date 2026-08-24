@@ -1376,9 +1376,22 @@ export default function App() {
           It never was, until this line. */}
       {/* Suppress when the Assess tab is open and an assess is running — AssessRunner.jsx owns
           that view and shows an authoritative progress panel from the same data. Showing both
-          caused contradictory "Document 0 of 148" vs "10 of 148 · 7%" readings simultaneously. */}
+          caused contradictory "Document 0 of 148" vs "10 of 148 · 7%" readings simultaneously.
+
+          DISCOVER is suppressed for the same reason, a step earlier in the funnel. That tab is
+          the inventory: it already carries its own scan progress and its own "148 documents
+          discovered across 1 source" panel. Adding an ASSESS card on top put two progress
+          readings of two different phases on one screen — "Assessing 148 documents · Document 0
+          of 148 · Idle" sitting directly above the discovery count it has nothing to do with.
+          Discover answers "what do we have"; how far the assessment has got belongs to Assess,
+          which owns a better view of it.
+
+          Only the assess-phase clause is narrowed. `busy` is left alone deliberately: it is set
+          by doScan/reconnectScan, so it means a DISCOVER run is in flight, and that progress is
+          exactly what someone on this tab wants to see. */}
       <LiveAssessmentLive scanId={liveScanId || run?.id}
-                          active={busy || (assessPhase === 'running' && view !== 'assess')}
+                          active={busy || (assessPhase === 'running'
+                                           && view !== 'assess' && view !== 'discover')}
                           onStop={() => stopScan(liveScanId || run?.id)} />
 
       <main id="main-content" tabIndex={-1}>
