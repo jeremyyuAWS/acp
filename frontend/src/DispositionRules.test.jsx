@@ -147,6 +147,71 @@ describe('the existing rules list', () => {
     expect(text()).not.toContain('Matches none of the files')  // never a manufactured zero
   })
 
+  // Suppressed-matches breakdown — the PreviewPanel explains how raw matches split into
+  // effective (will receive the action), superseded (another rule wins), and unable-to-evaluate
+  // (missing metadata prevented the match). Only shown when there's something worth explaining.
+
+  it('shows no breakdown row when everything is effective', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0]])
+    previewDispositionPolicy.mockResolvedValue({
+      would_match: 2, documents: [{doc_id:'d1',path:'/a'},{doc_id:'d2',path:'/b'}],
+      effective: 2, superseded: 0, exempted: 0, unable_to_evaluate: 0,
+    })
+    await render(); await expand(); await flush()
+    await click(btnByText('Preview matches')); await flush()
+    expect(text()).not.toContain('will receive the action')
+    expect(text()).not.toContain('overridden by another rule')
+    expect(text()).not.toContain("couldn't be evaluated")
+  })
+
+  it('shows breakdown when some matches are superseded by another rule', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0]])
+    previewDispositionPolicy.mockResolvedValue({
+      would_match: 5, documents: Array.from({length:5},(_,i)=>({doc_id:`d${i}`,path:`/p${i}`})),
+      effective: 3, superseded: 2, exempted: 0, unable_to_evaluate: 0,
+    })
+    await render(); await expand(); await flush()
+    await click(btnByText('Preview matches')); await flush()
+    expect(text()).toContain('3')
+    expect(text()).toContain('will receive the action')
+    expect(text()).toContain('2')
+    expect(text()).toContain('overridden by another rule')
+  })
+
+  it('shows exempted count in the breakdown when > 0', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0]])
+    previewDispositionPolicy.mockResolvedValue({
+      would_match: 4, documents: Array.from({length:4},(_,i)=>({doc_id:`d${i}`,path:`/p${i}`})),
+      effective: 3, superseded: 0, exempted: 1, unable_to_evaluate: 0,
+    })
+    await render(); await expand(); await flush()
+    await click(btnByText('Preview matches')); await flush()
+    expect(text()).toContain('exempted')
+  })
+
+  it("shows unable-to-evaluate note when some files couldn't be assessed", async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0]])
+    previewDispositionPolicy.mockResolvedValue({
+      would_match: 10, documents: Array.from({length:10},(_,i)=>({doc_id:`d${i}`,path:`/p${i}`})),
+      effective: 10, superseded: 0, exempted: 0, unable_to_evaluate: 3,
+    })
+    await render(); await expand(); await flush()
+    await click(btnByText('Preview matches')); await flush()
+    expect(text()).toContain('3')
+    expect(text()).toContain("couldn't be evaluated")
+    expect(text()).toContain('metadata')
+  })
+
+  it('shows no breakdown when the response lacks breakdown fields (old server)', async () => {
+    // Older server responses without the breakdown fields must not render broken UI.
+    listDispositionPolicies.mockResolvedValue([RULES[0]])
+    previewDispositionPolicy.mockResolvedValue({ would_match: 5, documents: [] })
+    await render(); await expand(); await flush()
+    await click(btnByText('Preview matches')); await flush()
+    expect(text()).not.toContain('will receive the action')
+    expect(text()).not.toContain("couldn't be evaluated")
+  })
+
   it('confirms before disabling, warns about persisted tags, and only disables on accept', async () => {
     listDispositionPolicies.mockResolvedValue([RULES[0]])   // RULES[0] is enabled
     await render(); await expand(); await flush()

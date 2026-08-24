@@ -5337,7 +5337,8 @@ class Store:
         """
         with self._db.cursor() as cur:
             q = ("SELECT si.scan_id, si.file, si.path, si.parent_folder, si.created_at, "
-                 "si.source_modified, si.owner, si.doc_class, si.size_kb, sr.source "
+                 "si.source_modified, si.owner, si.doc_class, si.size_kb, "
+                 "si.lifecycle_status, sr.source "
                  "FROM scan_inventory si JOIN scan_runs sr ON sr.id = si.scan_id "
                  "WHERE sr.status='discovered'")
             params: tuple = ()
@@ -5350,7 +5351,8 @@ class Store:
                  "path": r.get("path"), "parent_folder": r.get("parent_folder"),
                  "created_at": r.get("created_at"), "source_modified": r.get("source_modified"),
                  "owner": r.get("owner"), "doc_class": r.get("doc_class"),
-                 "size_kb": r.get("size_kb")}
+                 "size_kb": r.get("size_kb"),
+                 "lifecycle_status": r.get("lifecycle_status")}
                 for r in rows]
 
     # ── Per-file WCAG scope rules (PRD §4.4 / AC-09 — C4) ───────────────────────
