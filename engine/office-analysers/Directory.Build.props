@@ -19,9 +19,7 @@
 	</PropertyGroup>
 
   <ItemGroup  Condition="'$(MSBuildProjectExtension)' != '.esproj'">
-    <!-- Version pinned to prevent runner-to-runner flapping: an unpinned reference
-         can resolve to a newer SonarAnalyzer that elevates informational rules to errors. -->
-    <PackageReference Include="SonarAnalyzer.CSharp" Version="10.33.0.1635">
+    <PackageReference Include="SonarAnalyzer.CSharp">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
