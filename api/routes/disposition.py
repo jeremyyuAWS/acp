@@ -280,6 +280,7 @@ def _preview(match: list[dict], action: str, policy_id: str | None, owner: str) 
     superseded = 0
     exempted = 0
     unable_to_evaluate = 0
+    unable_to_evaluate_fields: dict[str, int] = {}
 
     for doc in docs:
         # Exempted docs (legal hold, PRD §6) are never tagged regardless of any rule.
@@ -293,9 +294,12 @@ def _preview(match: list[dict], action: str, policy_id: str | None, owner: str) 
         if not eval_result["matched"]:
             # A condition failed with no observed value — the file might have matched if the
             # metadata were recorded; surface it as unable_to_evaluate rather than silently missing.
-            if any(c["outcome"] == "fail" and c["observed_value"] is None
-                   for c in eval_result["conditions"]):
+            missing_fields = [c["field"] for c in eval_result["conditions"]
+                              if c["outcome"] == "fail" and c["observed_value"] is None]
+            if missing_fields:
                 unable_to_evaluate += 1
+                for f in missing_fields:
+                    unable_to_evaluate_fields[f] = unable_to_evaluate_fields.get(f, 0) + 1
             continue
 
         selected.append(doc)
@@ -340,6 +344,7 @@ def _preview(match: list[dict], action: str, policy_id: str | None, owner: str) 
         "superseded": superseded,
         "exempted": exempted,
         "unable_to_evaluate": unable_to_evaluate,
+        "unable_to_evaluate_fields": unable_to_evaluate_fields,
     }
 
 
