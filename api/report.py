@@ -756,11 +756,18 @@ def _provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, mut
         el.append(Spacer(1, 3))
         el.append(rd_t)
     # R-E — supersedes, only when a previous scan of this estate exists.
+    # Include the previous scan ID so auditors can trace the custody chain by ID, not just date.
     prev_at = (diff or {}).get("prev_at")
+    prev_sid = (diff or {}).get("prev_id")
     if prev_at:
+        date_str = _esc(str(prev_at)[:10])
+        if prev_sid:
+            prev_ref = (f"scan <font name='Courier' size='7'>{_esc(str(prev_sid))}</font>"
+                        f" ({date_str})")
+        else:
+            prev_ref = date_str
         el.append(Paragraph(
-            f"<b>Supersedes.</b> This result supersedes the previous scan of this estate "
-            f"({_esc(str(prev_at)[:10])}).", muted))
+            f"<b>Supersedes.</b> This result supersedes {prev_ref}.", muted))
     el.append(Spacer(1, 8))
     return el
 
