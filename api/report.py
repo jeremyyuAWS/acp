@@ -34,7 +34,10 @@ the report's core honesty guarantee.
 """
 from __future__ import annotations
 import io
+import logging
 from pathlib import Path
+
+_LOG = logging.getLogger(__name__)
 
 from reportlab.graphics.charts.barcharts import HorizontalBarChart
 from reportlab.graphics.charts.piecharts import Pie
@@ -545,6 +548,11 @@ _MANUAL_VERIFY = {
             "Windows / VoiceOver on macOS)",
             "Confirm the document is Tagged and declares a Title, a Language and a logical reading "
             "order; with a screen reader, confirm headings and alt text are announced."),
+    "HTML": ("Browser DevTools → Accessibility panel, or install the axe DevTools extension "
+             "(Chrome/Edge/Firefox)",
+             "Confirm every image has a non-empty alt attribute, form inputs have associated labels, "
+             "the page has a main landmark, headings form a logical outline with no skipped levels, "
+             "and the axe / DevTools checker reports no critical violations."),
 }
 
 
@@ -565,7 +573,7 @@ def _manual_verification_section(files, h2, body, cell, muted) -> list:
         "each document format in this scan, here is how to confirm the result with a mainstream "
         "tool — the steps are generic to the format, not tied to any one document.", muted))
     el.append(Spacer(1, 6))
-    label = {"DOCX": "Word", "PPTX": "PowerPoint", "XLSX": "Excel", "PDF": "PDF"}
+    label = {"DOCX": "Word", "PPTX": "PowerPoint", "XLSX": "Excel", "PDF": "PDF", "HTML": "HTML"}
     rows = [["Format", "Tool", "What to confirm"]]
     for k in fmts:
         tool, steps = _MANUAL_VERIFY[k]
@@ -1070,7 +1078,10 @@ def _ai_governance_section(run, h2, body, cell, muted) -> list:
     try:
         import core
         r = core.store.ai_cost_rollup(scan_id=run["id"])
+    except ImportError:
+        return []      # no core in test/offline context — expected, not a bug
     except Exception:
+        _LOG.warning("ai_governance_section: rollup failed for scan %s", run.get("id"), exc_info=True)
         return []
     if not r or not r.get("calls"):
         # Nothing to attest AND nothing to hide: an all-deterministic scan needed no model.
