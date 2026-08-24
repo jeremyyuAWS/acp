@@ -515,17 +515,18 @@ thing the PRD does not mention.
   not. Generalising *that* mechanism is the decision, not inventing one.
   *Effort: a decision plus an ADR. `[?]` — needs a decision, not code.*
 
-- [ ] **P4.1 — Split the eight review-lane SCs by whether the negative is deterministically
-  provable.** The PRD treats all eight as one problem. They are two.
-  **Group A — provable** (1.1.1, 2.4.4, 3.1.2, 4.1.2): "does every image carry a non-junk
-  `descr` or a decorative marker?" is a yes/no over the OOXML, and ACP answers it at **1.00
-  recall / 1.00 precision** today with no model involved. An LLM cannot improve the PASS decision
-  here; it can only add a semantic-quality opinion, which is a different and less verifiable
-  claim. Group A needs an ADR, not an experiment.
-  **Group B — judgement** (1.3.2, 1.3.3, 1.4.5, 2.4.6, and the hard half of 1.1.1): is the
-  reading order *meaningful*, is this image of text *essential*, is this heading *descriptive*,
-  is this alt text *correct*. Only here does model quality decide the answer, and only here do
-  the PRD's experiments earn their cost.
+- [x] **P4.1 — Split the eight review-lane SCs by whether the negative is deterministically
+  provable.** Done. ADR 0040 formalises the split:
+  **Group A — provable** (1.1.1 structural part, 2.4.4, 3.1.2, 4.1.2): FAIL fires on an
+  absent/junk OOXML attribute; ACP answers at 1.00 recall/precision today with no model. An LLM
+  cannot improve the PASS decision — it can only add a semantic quality opinion, which is a
+  different claim. Group A is eligible for auto-apply via P4.4's independent structural re-scan;
+  P4.2/P4.3 experiments do not apply.
+  **Group B — judgement** (1.3.2, 1.3.3, 1.4.5, 2.4.6, and the semantic part of 1.1.1): FAIL
+  fires on a semantic quality judgement only a human or a calibrated model can settle. Model
+  quality determines the answer; P4.2/P4.3 experiments apply here only. Group B is permanently
+  human-review-only under the current evidence gate (1.1.1 silences its own detector on a wrong
+  but non-junk alt). *(Source-verified 2026-08-24.)*
 
 - [ ] **P4.2 — Corpus density: the 99% PASS-precision gate needs ~300 observations per SC, not
   20–30.** By the rule of three, *n* trials with zero observed failures bound the true rate at
