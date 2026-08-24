@@ -772,13 +772,16 @@ def _provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, mut
     return el
 
 
-def _assurance_section(facts, h2, body, cell, muted) -> list:
+def _assurance_section(facts, h2, body, cell, muted, hitl=None) -> list:
     """Human review & assurance (backlog R9 / R10). Every figure has a real denominator: review
     outcomes counted from the immutable decision_log; the deterministic-assurance ratio as
     deterministic ÷ evaluated criteria; the effort figure as fixes-cleared ÷ findings with that
     basis named. NO "% effort saved" and NO "cleared ÷ attempted" — the attempted denominator is
     not tracked (only re-scan-cleared fixes are recorded), so that ratio is omitted, not invented
-    (ADR 0016). Omitted entirely when nothing was reviewed, remediated or evaluated."""
+    (ADR 0016). Omitted entirely when nothing was reviewed, remediated or evaluated.
+
+    hitl: optional hitl_analytics() result — adds avg review time (if real timestamps) and the
+    edited-draft count (how many approved reviews included a human correction to the AI text)."""
     f = facts or {}
     review = f.get("review") or {}
     docs = f.get("documents") or []
@@ -789,6 +792,9 @@ def _assurance_section(facts, h2, body, cell, muted) -> list:
     reviewed = review.get("reviewed", 0)
     if not reviewed and not remediated and not evaluated:
         return []
+    h = hitl or {}
+    edited = (h.get("by_action") or {}).get("edit", 0)
+    avg_ms = h.get("avg_review_ms")
     el = [Paragraph("Human review &amp; assurance", h2)]
     # R9 — the review outcomes, from the immutable log (approved/rejected + what the platform cleared).
     band = _stat_band([
@@ -812,10 +818,18 @@ def _assurance_section(facts, h2, body, cell, muted) -> list:
             "re-cleared the post-fix re-scan.", muted))
     # R9 effort — only as the honest ratio, basis named; never a modelled time saving.
     if findings:
+        edited_clause = (f" Of the approved reviews, <b>{edited}</b> included human edits to the AI draft."
+                         if edited else "")
         el.append(Paragraph(
             f"<b>Effort.</b> <b>{remediated}</b> of <b>{findings}</b> finding(s) were cleared by an "
             f"applied, re-validated fix (<b>{round(100 * remediated / findings)}%</b>) — basis: "
-            "fixes-cleared ÷ findings, not a modelled hours-saved figure.", muted))
+            f"fixes-cleared ÷ findings, not a modelled hours-saved figure.{edited_clause}", muted))
+    # R9 avg review time — only when real timestamps exist (never estimated or defaulted).
+    if avg_ms is not None:
+        avg_s = round(avg_ms / 1000, 1)
+        el.append(Paragraph(
+            f"<b>Avg review time.</b> <b>{avg_s} s</b> per finding — measured from reviewer "
+            "action timestamps recorded at decision time.", muted))
     el.append(Spacer(1, 8))
     return el
 
@@ -1517,7 +1531,13 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     el.extend(_provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, _muted))
 
     # ── Human review & assurance (R9/R10) ────────────────────────────────────
-    el.extend(_assurance_section(facts, h2, body, cell, _muted))
+    _hitl: dict | None = None
+    try:
+        import core as _core
+        _hitl = _core.store.hitl_analytics(run["id"])
+    except Exception:
+        pass
+    el.extend(_assurance_section(facts, h2, body, cell, _muted, hitl=_hitl))
 
     # ── How to verify this independently (R13) ───────────────────────────────
     el.extend(_manual_verification_section(files, h2, body, cell, _muted))
