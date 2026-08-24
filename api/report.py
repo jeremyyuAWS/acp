@@ -544,7 +544,7 @@ def _pour_section(facts, h2, body, cell, muted) -> list:
 _MANUAL_VERIFY = {
     "DOCX": ("Microsoft Word → Review → Check Accessibility",
              "Confirm no errors under Missing Alternative Text, Table Header Row, or Document Title; "
-             "the checker should report no accessibility issues."),
+             "the checker should report no errors under these headings."),
     "PPTX": ("Microsoft PowerPoint → Review → Check Accessibility",
              "Confirm each slide's reading order (Home → Arrange → Selection Pane) and that every "
              "image carries alt text."),
@@ -593,6 +593,73 @@ def _manual_verification_section(files, h2, body, cell, muted) -> list:
         ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
     el.append(t)
     el.append(Spacer(1, 8))
+    return el
+
+
+def _limitations_section(facts, unassessed, unanalysable, h2, body, muted) -> list:
+    """P-13 — Material limitations of this assessment, near the executive summary.
+
+    Lists the high-level constraints on what this report asserts: criteria deferred to human
+    review, criteria with no automated validator for these formats, and documents that could
+    not be fully assessed. The detailed criterion lists appear in 'What this report covers'
+    below; this section names the constraints so an auditor reading the executive summary
+    does not have to scroll to find them.
+
+    Password-protection cause, OCR status, and ownership metadata are not yet recorded in
+    the scan record; the unanalysable count absorbs all three without distinguishing them.
+    """
+    scope = (facts or {}).get("scope") or {}
+    human_only = scope.get("human_only_criteria") or []
+    not_eval = scope.get("not_evaluated_criteria") or []
+
+    def _sc(c: object) -> str:
+        return c["sc"] if isinstance(c, dict) else str(c)
+
+    parts = []
+    if human_only:
+        n = len(human_only)
+        sc_list = ", ".join(_sc(c) for c in human_only[:8])
+        suffix = f" and {n - 8} more" if n > 8 else ""
+        parts.append(
+            f"<b>{n} success {'criterion requires' if n == 1 else 'criteria require'} "
+            f"human or assistive-technology review</b> and cannot be resolved automatically "
+            f"({sc_list}{suffix}). Findings in these lanes are queued for a qualified reviewer "
+            "and are never auto-cleared."
+        )
+    if not_eval:
+        n = len(not_eval)
+        parts.append(
+            f"<b>{n} {'criterion has' if n == 1 else 'criteria have'} no automated validator "
+            f"for the file {'format' if n == 1 else 'formats'} in this scan</b> and "
+            f"{'was' if n == 1 else 'were'} not evaluated. This is not the same as inapplicable — "
+            "some of these criteria do apply to the formats; ACP does not yet check them."
+        )
+    if unanalysable:
+        parts.append(
+            f"<b>{unanalysable} document(s) could not be opened or analysed</b>. Common causes "
+            "include password protection, an unsupported format variant, or content that requires "
+            "OCR to read. This report makes no accessibility assertion about "
+            f"{'this file' if unanalysable == 1 else 'these files'}."
+        )
+    if unassessed:
+        parts.append(
+            f"<b>{unassessed} document(s) were in scope but never assessed</b> — not opened, "
+            f"not scored. This report makes no assertion about "
+            f"{'it' if unassessed == 1 else 'them'}."
+        )
+
+    if not parts:
+        return []
+
+    el = [Paragraph("Limitations of this assessment", h2)]
+    el.append(Paragraph(
+        "The following constraints bound the claims in this report. Full criterion lists and "
+        "document-level breakdowns appear under 'What this report covers' below.", muted))
+    el.append(Spacer(1, 5))
+    for p in parts:
+        el.append(Paragraph("• " + p, muted))
+        el.append(Spacer(1, 3))
+    el.append(Spacer(1, 5))
     return el
 
 
@@ -1359,6 +1426,7 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     cert = counts.get("certifiable", 0)
     total = len(files) or 1
     unassessed = counts.get(NOT_ASSESSED, 0)
+    unanalysable = counts.get("unanalysable", 0)
     assessed = total - unassessed
     pct = round(cert / assessed * 100) if assessed else 0
     avg = "—" if run.get("avg_score") is None else run["avg_score"]
@@ -1392,8 +1460,8 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
                         f"Run Assess over them before drawing any conclusion about this "
                         f"estate as a whole.")
     else:
-        verdict = (f"All <b>{total}</b> assessed document(s) came back with zero open blocking "
-                   f"findings among the {std} criteria ACP checked.")
+        verdict = (f"No automated failures detected — all <b>{total}</b> assessed document(s) "
+                   f"returned no blocking findings among the <b>{std}</b> criteria ACP evaluated.")
     if remediated_docs:
         verdict += (f" {remediated_docs} document(s) were remediated by the platform, "
                     f"clearing {resolved_total} finding(s).")
@@ -1403,7 +1471,6 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     # Make it impossible to miss that some files were not scored. The verdict above already
     # mentions this inline, but a reader skimming for a percentage can miss the caveat buried
     # in a dense paragraph. A stand-alone notice breaks that pattern.
-    unanalysable = counts.get("unanalysable", 0)
     if unassessed or unanalysable:
         _parts = []
         if unassessed:
@@ -1415,6 +1482,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
             '<font color="#854F0B">' + " and ".join(_parts) +
             " — this report makes no conformance claim about those files.</font>",
             lead))
+
+    # ── P-13: Limitations of this assessment ─────────────────────────────────
+    el.extend(_limitations_section(facts, unassessed, unanalysable, h2, body, _muted))
 
     # ── Certification summary band ───────────────────────────────────────────
     el.append(Paragraph("Outcome summary", h2))
@@ -1684,10 +1754,10 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     el.append(Spacer(1, 14))
     el.append(Paragraph("What this report is, and is not", h2))
     el.append(Paragraph(
-        f"Based on this scan, <b>{cert} of {total}</b> document(s) came back with no open "
-        f"blocking findings among the {std} criteria ACP checked. This is a record of what was "
-        "detected, what was changed and what was re-verified afterwards — machine-generated audit "
-        "evidence produced by an automated + AI-assisted pipeline. It is not a conformance "
+        f"Based on this scan, <b>{cert} of {assessed}</b> assessed document(s) returned no "
+        f"automated failures among the <b>{std}</b> criteria ACP evaluated. This is a record of "
+        "what was detected, what was changed and what was re-checked afterwards — "
+        "machine-generated audit evidence produced by an automated + AI-assisted pipeline. It is not a conformance "
         "determination: ACP does not assert that a document satisfies WCAG, and this report does "
         "not constitute a legal conformance guarantee or a signed VPAT. A qualified reviewer "
         "should confirm AI-assisted judgements before any external attestation.", body))
