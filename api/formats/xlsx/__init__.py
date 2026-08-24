@@ -122,3 +122,35 @@ register(
     reason=("embedded ActiveX/OLE controls are flagged for a human to confirm an accessible name "
             "and role; the name and role live in code that no static read can examine"),
 )
+
+
+def _no_keyboard_trap(path):
+    """2.1.2 for xlsx — an embedded control (ActiveX/OLE) that may trap keyboard focus.
+
+    office_control_review_checks emits BOTH 2.1.2 and 4.1.2; this filters to 2.1.2 so
+    evaluate() attributes the finding to the registered rule. 4.1.2 keeps its own lane above.
+    Same requires=frozenset() rationale: the detector self-gates on embedded-control parts.
+    """
+    from office_structure import office_control_review_checks
+    return [f for f in office_control_review_checks(path, ".xlsx")
+            if str(f.get("wcag", "")).startswith("2.1.2")]
+
+
+# ── 2.1.2 No Keyboard Trap ────────────────────────────────────────────────────────────
+# An embedded ActiveX/OLE control in a workbook may trap keyboard focus — whether focus can
+# move away depends on the control's own implementation and on Excel's handling, which no static
+# read settles. The detector names each control for a reviewer to test. PARTIAL: it reaches the
+# raw activeX/oleObject package parts, not every interactive affordance. MEDIUM confidence for
+# the same reason as 4.1.2: the control IS present and IS named exactly, but whether it traps
+# is advisory (a judgement about runtime behaviour). requires is empty — same rationale as 4.1.2.
+register(
+    rule="2.1.2",
+    fmt="xlsx",
+    detector=_no_keyboard_trap,
+    requires=frozenset(),
+    coverage=Coverage.PARTIAL,
+    confidence=Confidence.MEDIUM,
+    reason=("embedded ActiveX/OLE controls are named for a reviewer to test with a keyboard; "
+            "whether focus can actually move away from a control is runtime behaviour that "
+            "depends on the control's own implementation and is not recorded in the file"),
+)

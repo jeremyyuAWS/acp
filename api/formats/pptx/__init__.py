@@ -12,7 +12,29 @@ from rule_registry import register
 
 from formats.pptx.detectors import (
     focus_order, name_role_value, no_keyboard_trap, nontext_contrast,
-    reflow, resize_text, text_spacing,
+    reflow, resize_text, text_spacing, use_of_color,
+)
+
+
+# ── 1.4.1 Use of Color ───────────────────────────────────────────────────────────────
+# Hyperlinks whose underline is explicitly suppressed (u="none"), leaving colour as the only
+# cue distinguishing the link from surrounding text. PARTIAL: the detector reaches DrawingML
+# runs with a hlinkClick target and u="none" rPr exactly; other ways colour can carry meaning
+# in a presentation (colour-keyed chart series, shaded table cells, icon-less status markers)
+# are outside scope. HIGH confidence within that: the underline suppression is a direct
+# structural read. A clean result means no such links were found, not that the deck has no
+# colour-only information anywhere else.
+register(
+    rule="1.4.1",
+    fmt="pptx",
+    detector=use_of_color.detect,
+    requires={Capability.LINKS, Capability.FONTS},
+    coverage=Coverage.PARTIAL,
+    confidence=Confidence.HIGH,
+    reason=("hyperlinks are checked exactly for an explicitly removed underline (u=\"none\" on "
+            "the run's rPr), which leaves colour as the only cue; colour used as the sole "
+            "carrier of meaning elsewhere — chart series, shaded table cells, status markers "
+            "without an icon — is not examined"),
 )
 
 
