@@ -1150,6 +1150,59 @@ def _ai_governance_section(run, h2, body, cell, muted) -> list:
     return el
 
 
+def _assessment_scope_block(run: dict, meta: dict, facts: dict | None,
+                            fmt_str: str, h2, body, cell, muted) -> list:
+    """Assessment scope declaration (P-12).
+
+    A concise block near the top of the report stating exactly what was in scope: source,
+    file types, scan window, rubric + conformance target, AI-assisted flag. Placed after
+    the decision card so the reader sees the scope before interpreting any percentage.
+    """
+    scope = (facts or {}).get("scope") or {}
+    estate = scope.get("estate") or {}
+    by_mode = scope.get("by_mode") or {}
+    ai_flag = by_mode.get("ai-assisted", 0) > 0
+
+    source_map = {"drive": "Google Drive", "folder": "Local folder", "upload": "Direct upload"}
+    source_label = source_map.get(run.get("source", ""), run.get("source") or "—")
+
+    started = (run.get("started_at") or "")[:16].replace("T", " ")
+    completed = (run.get("completed_at") or "")[:16].replace("T", " ")
+    window = (f"{started} — {completed} UTC" if started and started != completed
+              else f"{completed} UTC" if completed else "—")
+
+    excluded = estate.get("excluded", 0)
+    excl_note = f" · {excluded} file(s) excluded by policy" if excluded else ""
+
+    rubric_str = (f"v{meta.get('version', '—')} · hash {(meta.get('hash') or '—')[:12]}…"
+                  if meta.get("version") else "—")
+    ai_note = ("Deterministic + AI-assisted checks" if ai_flag
+               else "Deterministic checks only — no AI operations")
+
+    el = [Paragraph("Assessment scope", h2)]
+    rows = [
+        [Paragraph("<b>Source</b>", cell), Paragraph(_esc(source_label), cell),
+         Paragraph("<b>Scan window</b>", cell), Paragraph(_esc(window), cell)],
+        [Paragraph("<b>File types assessed</b>", cell), Paragraph(_esc(fmt_str or "—"), cell),
+         Paragraph("<b>Method</b>", cell), Paragraph(_esc(ai_note), cell)],
+        [Paragraph("<b>Standard &amp; target</b>", cell),
+         Paragraph(_esc((meta.get("target") or "WCAG 2.1 AA") + excl_note), cell),
+         Paragraph("<b>Rubric</b>", cell), Paragraph(_esc(rubric_str), cell)],
+    ]
+    t = Table(rows, colWidths=[1.3 * inch, 2.25 * inch, 1.3 * inch, 2.25 * inch])
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+        ("TEXTCOLOR", (0, 0), (0, -1), MUTED), ("TEXTCOLOR", (2, 0), (2, -1), MUTED),
+        ("BACKGROUND", (0, 0), (-1, -1), ZEBRA), ("BOX", (0, 0), (-1, -1), 0.75, LINE),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, LINE), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    el.append(t)
+    el.append(Spacer(1, 4))
+    return el
+
+
 def build_report(run: dict, files: list, meta: dict, decisions: dict | None = None,
                  evidence: list | None = None, facts: dict | None = None) -> bytes:
     buf = io.BytesIO()
@@ -1234,7 +1287,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
                 open_fails[c] = open_fails.get(c, 0) + 1
     cert = counts.get("certifiable", 0)
     total = len(files) or 1
-    pct = round(cert / total * 100)
+    unassessed = counts.get(NOT_ASSESSED, 0)
+    assessed = total - unassessed
+    pct = round(cert / assessed * 100) if assessed else 0
     avg = "—" if run.get("avg_score") is None else run["avg_score"]
     resolved_total = sum(resolved_crit.values())
     total_eval = sum(d.get("evaluated", 0) for d in ((facts or {}).get("documents") or []))
@@ -1246,8 +1301,6 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     # count was 'clean', so the report read "All 2 analysed document(s) meet WCAG 2.1 AA with
     # zero open blocking findings" about two spreadsheets nobody had opened. In a document a
     # customer files as evidence, that sentence is the whole liability.
-    unassessed = counts.get(NOT_ASSESSED, 0)
-    assessed = total - unassessed
     if counts.get("issues") or counts.get("uncertain") or counts.get("unanalysable") or unassessed:
         verdict = (f"<b>{cert} of {assessed}</b> assessed document(s) came back with zero open "
                    f"blocking findings among the {std} criteria ACP checked. "
@@ -1275,11 +1328,28 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
                     f"clearing {resolved_total} finding(s).")
     el.append(Paragraph(verdict, lead))
 
+    # ── P-9: Partial-assessment notice ───────────────────────────────────────
+    # Make it impossible to miss that some files were not scored. The verdict above already
+    # mentions this inline, but a reader skimming for a percentage can miss the caveat buried
+    # in a dense paragraph. A stand-alone notice breaks that pattern.
+    unanalysable = counts.get("unanalysable", 0)
+    if unassessed or unanalysable:
+        _parts = []
+        if unassessed:
+            _parts.append(f"<b>{unassessed}</b> document(s) were listed in scope but never assessed")
+        if unanalysable:
+            _parts.append(f"<b>{unanalysable}</b> document(s) could not be opened or analysed")
+        el.append(Paragraph(
+            '<font color="#854F0B"><b>⚠ Partial assessment — </b></font>'
+            '<font color="#854F0B">' + " and ".join(_parts) +
+            " — this report makes no conformance claim about those files.</font>",
+            lead))
+
     # ── Certification summary band ───────────────────────────────────────────
     el.append(Paragraph("Outcome summary", h2))
     el.append(_stat_band([
         Paragraph(f'<font size="22" color="#3B6D11"><b>{pct}%</b></font><br/>'
-                  f'<font size="8.5" color="#6c6470">no blocking findings · {cert} of {total} documents</font>', body),
+                  f'<font size="8.5" color="#6c6470">no blocking findings · {cert} of {assessed} assessed</font>', body),
         Paragraph(f'<font size="22"><b>{avg}</b></font><br/>'
                   f'<font size="8.5" color="#6c6470">average score / 100'
                   + (f' · {total_eval} criteria evaluated' if total_eval else '')
@@ -1290,28 +1360,33 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
                   f'<font size="8.5" color="#6c6470">could not be analysed</font>', body),
     ], []))
 
-    # ── Scope & methodology ──────────────────────────────────────────────────
+    # ── P-11: Criteria outcome breakdown ─────────────────────────────────────
+    # Complements the document-level stat band above: shows how many WCAG criteria were
+    # handled by the deterministic/AI engine vs. deferred to humans vs. skipped entirely.
+    _scope_facts = (facts or {}).get("scope") or {}
+    _catalog_size = _scope_facts.get("catalog_size", 0)
+    _not_eval_ct = len(_scope_facts.get("not_evaluated_criteria") or [])
+    _human_only_ct = len(_scope_facts.get("human_only_criteria") or [])
+    _with_findings = len(set(open_fails) | set(resolved_crit))
+    _passed_auto = max(0, _catalog_size - _not_eval_ct - _human_only_ct - _with_findings)
+    if _catalog_size:
+        el.append(_stat_band([
+            Paragraph(f'<font size="18" color="#3B6D11"><b>{_passed_auto}</b></font><br/>'
+                      f'<font size="8.5" color="#6c6470">criteria — no findings</font>', body),
+            Paragraph(f'<font size="18"><b>{_with_findings}</b></font><br/>'
+                      f'<font size="8.5" color="#6c6470">criteria with findings</font>', body),
+            Paragraph(f'<font size="18" color="#6c6470"><b>{_human_only_ct}</b></font><br/>'
+                      f'<font size="8.5" color="#6c6470">require human review</font>', body),
+            Paragraph(f'<font size="18" color="#9a948f"><b>{_not_eval_ct}</b></font><br/>'
+                      f'<font size="8.5" color="#6c6470">not evaluated for these formats</font>', body),
+        ], []))
+
+    # ── P-12: Assessment scope declaration ───────────────────────────────────
     fmt_counts: dict[str, int] = {}
     for f in files:
         fmt_counts[_fmt(f)] = fmt_counts.get(_fmt(f), 0) + 1
     fmt_str = " · ".join(f"{n} {k}" for k, n in sorted(fmt_counts.items(), key=lambda x: -x[1])) or "—"
-    el.append(Paragraph("Scope &amp; methodology", h2))
-    scope = Table([[
-        Paragraph("<b>Standard</b><br/>"
-                  f'<font color="#6c6470">' + std + ', the ADA / EAA reference standard</font>', cell),
-        Paragraph("<b>Documents in scope</b><br/>"
-                  f'<font color="#6c6470">{total} document(s) — {fmt_str}</font>', cell),
-        Paragraph("<b>Method</b><br/>"
-                  '<font color="#6c6470">Deterministic engine checks + AI-assisted review of '
-                  'semantic criteria; read-only, documents never retained</font>', cell),
-    ]], colWidths=[2.35 * inch] * 3)
-    scope.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), ZEBRA), ("BOX", (0, 0), (-1, -1), 0.75, LINE),
-        ("INNERGRID", (0, 0), (-1, -1), 0.5, LINE), ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-        ("LEFTPADDING", (0, 0), (-1, -1), 10), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-    ]))
-    el.append(scope)
+    el.extend(_assessment_scope_block(run, meta, facts, fmt_str, h2, body, cell, _muted))
 
     # ── Compliance velocity — trend vs the caller's previous scan ────────────
     # Best-effort and lazy: rendering must never fail because history is absent,

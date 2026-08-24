@@ -542,7 +542,7 @@ honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~
 
 ### Polish / technical debt (surfaced during R15 implementation, 2026-08-24)
 
-**All items shipped** (verified against `origin/main` 2026-08-24).
+**All P-1–P-8 shipped** (verified against `origin/main` 2026-08-24). **P-9–P-12 shipped** this PR.
 
 | # | Location | Item |
 |---|---|---|
@@ -554,6 +554,10 @@ honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~
 | ~~P-6~~ | `api/blob.py` | ~~`BlobStore.put()` uses `overwrite=True` unconditionally.~~ **DONE** (#706): gates on `overwrite=False` with collision logging. |
 | ~~P-7~~ | `api/report.py` | ~~Score denominator is undisclosed.~~ **DONE**: scope section explicitly states separate denominators (discovered / assessable / scored) and caps the meaning of a 100 score. |
 | ~~P-8~~ | deployment docs | ~~`ACP_PUBLIC_URL` must be documented.~~ **DONE** (#711): added to `.env.example` and `docs/production-hardening.md` with QR-code and rubric-sensitivity notes. |
+| ~~P-9~~ | `api/report.py` | ~~Partial-assessment caveat buried in the verdict paragraph — a reader skimming for a percentage can miss it.~~ **DONE**: stand-alone highlighted notice when `unassessed > 0` or `unanalysable > 0`. |
+| ~~P-10~~ | `api/report.py` | ~~Stat band denominator `cert / total` includes unassessed files, overstating coverage.~~ **DONE**: denominator changed to `assessed` (total − unassessed); label says "N of M assessed". |
+| ~~P-11~~ | `api/report.py` | ~~No criteria-level outcome breakdown — auditors see file counts but not WCAG criterion outcomes.~~ **DONE**: second stat band row from `facts["scope"]`: passed / with findings / human-review / not-evaluated. |
+| ~~P-12~~ | `api/report.py` | ~~No assessment scope declaration at the top of the report.~~ **DONE**: 3×4 table (source / scan window / file types / method / standard+target / rubric) replaces old "Scope & methodology" card. |
 
 ---
 
