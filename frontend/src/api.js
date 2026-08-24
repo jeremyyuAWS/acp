@@ -755,6 +755,12 @@ export const updateHitlItem = (itemId, status, reviewerNote = null, approvedValu
       (err)    => { _pendingActs.delete(itemId); throw err },
     )
 }
+export const assignHitlItem = (itemId, assignee) =>
+  fetch(`${BASE}/hitl/queue/${encodeURIComponent(itemId)}/assign`, {
+    method: 'PATCH',
+    headers: headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ assignee: assignee || null }),
+  }).then(j)
 // HITL review telemetry for the workspace dashboard — decisions by action, approval rate,
 // edit rate (confidence-calibration signal), avg review time (reviewer-time-saved). Scan-scoped.
 export const getHitlAnalytics = (scanId = null) => (SIM
