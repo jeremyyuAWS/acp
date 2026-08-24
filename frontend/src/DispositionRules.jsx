@@ -123,7 +123,20 @@ function PreviewPanel({ docs, enabled, fetchedAt, onRefresh, busy, breakdown }) 
           <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
             + <b style={{ color: 'inherit' }}>{breakdown.unable_to_evaluate}</b>{' '}
             file{breakdown.unable_to_evaluate === 1 ? '' : 's'} couldn't be evaluated —
-            a required metadata field wasn't recorded, so they may or may not match
+            {breakdown.unable_to_evaluate_fields && Object.keys(breakdown.unable_to_evaluate_fields).length > 0
+              ? <>{' '}missing metadata:{' '}
+                  {Object.entries(breakdown.unable_to_evaluate_fields)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([field, count], i) => (
+                      <span key={field}>
+                        {i > 0 && ' · '}
+                        <b style={{ color: 'inherit' }}>{field}</b>
+                        {breakdown.unable_to_evaluate > 1 && ` (${count})`}
+                      </span>
+                    ))}
+                </>
+              : <>{' '}a required metadata field wasn't recorded, so they may or may not match</>
+            }
           </span>
         </div>
       )}
@@ -356,6 +369,7 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
           superseded: r.superseded ?? 0,
           exempted: r.exempted ?? 0,
           unable_to_evaluate: r.unable_to_evaluate ?? 0,
+          unable_to_evaluate_fields: r.unable_to_evaluate_fields ?? {},
         } : null)
         setPreviewFetchedAt(new Date())
         setPreviewOpen(true)
