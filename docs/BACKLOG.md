@@ -415,11 +415,11 @@ third is the correctness fix with the widest blast radius.
 
 ## Phase 2 — next week
 
-- [ ] **P2.1 — Corpus ground truth: 5 → 61 pairs.** `config/rule-catalog.json` maps only DOCX
-  rules to criteria, so 11 of the 16 rule IDs in the regenerated manifest cannot be tied to an
-  SC. Until this lands, **nothing measures whether any detector is correct** — every lane in the
-  capability report is a claim the engine makes about itself. Highest-value item for a customer
-  who will ask "how do you know?"
+- [x] **P2.1 — Corpus ground truth: 5 → 61 pairs.** Done — **61 pairs mapped.** `config/rule-catalog.json`
+  now covers all xlsx, pdf, and pptx rule IDs in addition to the original DOCX entries; every rule
+  in the catalog is tied to a WCAG SC. Alongside the mapping, 34 new `docs/rules/*.md` stubs were
+  written to satisfy the ADR 0002 §4 contract, and `frontend/src/ruleDetails.js` was regenerated to
+  include all 70 rules. Merged as #683 (squash `3675c088`) 2026-08-24.
 - [x] **P2.2 — Reconcile the three scope editors.** Resolved by REMOVAL rather than by the
   reconciliation this item asked for, which is why it is worth writing down rather than just
   ticking. The item read: *"`ScanSetup`, `FileTypeConfig` and `ScanScope` each write all of
