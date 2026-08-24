@@ -25,7 +25,7 @@ import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_RANK } from './ontology.js'
-import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl } from './api.js'
+import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl } from './api.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
 import QueuePanel from './QueuePanel.jsx'
@@ -355,7 +355,12 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     if (SIM) { setQueue(buildHumanQueue(files, {})); return }
     autoPopulateHitlQueue(runId)
       .then(() => listHitlQueue(runId, 'pending'))
-      .then((items) => setQueue((items || []).map((it) => ({ ...dbItemToUi(it, files), _raw: it }))))
+      .then((items) => {
+        setQueue((items || []).map((it) => ({ ...dbItemToUi(it, files), _raw: it })))
+        const seeded = {}
+        ;(items || []).forEach((it) => { if (it.assignee) seeded[it.file] = it.assignee })
+        if (Object.keys(seeded).length) setAssignees?.((a) => ({ ...seeded, ...a }))
+      })
       .catch(() => setQueue(buildHumanQueue(files, {})))
   }, [runId]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1059,11 +1064,17 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             }}
             assignees={assignees}
             myEmail={myEmail}
-            onAssign={(file, email) => setAssignees?.((a) => {
-              const next = { ...a }
-              if (email) next[file] = email; else delete next[file]
-              return next
-            })}
+            onAssign={(file, email) => {
+              setAssignees?.((a) => {
+                const next = { ...a }
+                if (email) next[file] = email; else delete next[file]
+                return next
+              })
+              // Persist to DB for every pending item that belongs to this file
+              queue.filter((it) => it._raw?.file === file).forEach((it) => {
+                assignHitlItem(it._raw.id, email || null).catch(() => {})
+              })
+            }}
           />
         )}
       </section>
