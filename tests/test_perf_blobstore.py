@@ -1,0 +1,142 @@
+"""Tests for P-6 (blob silent-overwrite fix) and performance quick-wins.
+
+P-6: upload_remediated must attempt overwrite=False first; on 409 log and retry.
+Perf-1: _CATALOG_JSON loaded once at module level, not per-call.
+Perf-2: get_scan_scope() caches per scan_id (no repeated DB queries).
+Perf-3: JobWorker default poll_interval reduced from 2.0 s to 0.5 s.
+"""
+import sys
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "api"))
+
+
+@pytest.fixture(autouse=True)
+def _mock_azure(monkeypatch):
+    """Stub the azure SDK so blob.py loads cleanly without the real package."""
+    content_settings = MagicMock()
+    azure_blob_mod = MagicMock()
+    azure_blob_mod.ContentSettings = content_settings
+    monkeypatch.setitem(sys.modules, "azure", MagicMock())
+    monkeypatch.setitem(sys.modules, "azure.storage", MagicMock())
+    monkeypatch.setitem(sys.modules, "azure.storage.blob", azure_blob_mod)
+    monkeypatch.setitem(sys.modules, "azure.identity", MagicMock())
+
+
+# ── P-6: upload_remediated detect-and-log on 409 ─────────────────────────────
+
+def _make_409():
+    exc = Exception("BlobAlreadyExists")
+    exc.status_code = 409
+    exc.error_code = "BlobAlreadyExists"
+    return exc
+
+
+def test_upload_remediated_first_call_uses_overwrite_false():
+    import blob
+    blob_client = MagicMock()
+    svc = MagicMock()
+    svc.get_blob_client.return_value = blob_client
+    with patch.object(blob, "_service_client", return_value=svc):
+        blob.upload_remediated("owner@x.com", "s1", "out.docx", b"data", "application/octet-stream")
+    first_call = blob_client.upload_blob.call_args_list[0]
+    assert first_call.kwargs.get("overwrite") is False, (
+        "first upload_blob call must use overwrite=False"
+    )
+
+
+def test_upload_remediated_retries_with_overwrite_true_on_409(caplog):
+    import blob
+    import logging
+    blob_client = MagicMock()
+    blob_client.upload_blob.side_effect = [_make_409(), None]
+    svc = MagicMock()
+    svc.get_blob_client.return_value = blob_client
+    with patch.object(blob, "_service_client", return_value=svc):
+        with caplog.at_level(logging.WARNING, logger="blob"):
+            blob.upload_remediated("owner@x.com", "s1", "out.docx", b"data", "application/octet-stream")
+    assert blob_client.upload_blob.call_count == 2
+    second_call = blob_client.upload_blob.call_args_list[1]
+    assert second_call.kwargs.get("overwrite") is True, (
+        "second upload_blob call must use overwrite=True"
+    )
+    assert any("overwriting existing blob" in r.message for r in caplog.records), (
+        "WARNING must be logged before the overwrite retry"
+    )
+
+
+def test_upload_remediated_propagates_non_409_exception():
+    import blob
+    blob_client = MagicMock()
+    blob_client.upload_blob.side_effect = ConnectionError("network failure")
+    svc = MagicMock()
+    svc.get_blob_client.return_value = blob_client
+    with patch.object(blob, "_service_client", return_value=svc):
+        with pytest.raises(ConnectionError):
+            blob.upload_remediated("owner@x.com", "s1", "out.docx", b"data", "application/octet-stream")
+    assert blob_client.upload_blob.call_count == 1, "must not retry on non-409 errors"
+
+
+def test_upload_remediated_noop_when_blob_storage_unconfigured():
+    import blob
+    with patch.object(blob, "_service_client", return_value=None):
+        result = blob.upload_remediated("owner@x.com", "s1", "out.docx", b"data", "application/octet-stream")
+    assert result is None
+
+
+# ── Perf-1: catalog loaded once at module level ───────────────────────────────
+
+def test_catalog_json_loaded_at_module_level():
+    import store
+    assert isinstance(store._CATALOG_JSON, dict), "_CATALOG_JSON must be a dict"
+    assert store._CATALOG_JSON, "_CATALOG_JSON must not be empty"
+
+
+def test_catalog_json_has_engine_keys():
+    import store
+    assert any(isinstance(v, list) for v in store._CATALOG_JSON.values()), (
+        "_CATALOG_JSON must have at least one extension key mapping to a list of rules"
+    )
+
+
+# ── Perf-2: get_scan_scope caches per scan_id ────────────────────────────────
+
+def test_get_scan_scope_caches_result(isolated_store):
+    """Second call must return the cached value without hitting the DB."""
+    isolated_store.init_scan_run(
+        "s_scope", "local", 1, "2026-01-01T00:00:00Z", "test-rubric", "abc123"
+    )
+    scope1 = isolated_store.get_scan_scope("s_scope")
+    original_execute = isolated_store._db.execute
+    query_count = [0]
+
+    def _counting_execute(cur, sql, params=()):
+        if "scan_runs" in sql and "scope" in sql.lower() and sql.strip().upper().startswith("SELECT"):
+            query_count[0] += 1
+        return original_execute(cur, sql, params)
+
+    isolated_store._db.execute = _counting_execute
+    scope2 = isolated_store.get_scan_scope("s_scope")
+    assert query_count[0] == 0, "second get_scan_scope call must not query the DB"
+    assert scope2 == scope1
+
+
+def test_get_scan_scope_caches_none_for_missing_scan(isolated_store):
+    """None result (missing scan) is also cached so we avoid repeated DB misses."""
+    result1 = isolated_store.get_scan_scope("nonexistent-scan")
+    assert result1 is None
+    assert "nonexistent-scan" in isolated_store._scope_cache, "None result must be cached"
+    result2 = isolated_store.get_scan_scope("nonexistent-scan")
+    assert result2 is None
+
+
+# ── Perf-3: worker poll interval default ─────────────────────────────────────
+
+def test_job_worker_default_poll_interval_is_half_second():
+    from worker import JobWorker
+    w = JobWorker(MagicMock())
+    assert w.poll_interval == 0.5, f"expected 0.5s poll_interval, got {w.poll_interval}"

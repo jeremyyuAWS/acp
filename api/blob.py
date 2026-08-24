@@ -12,6 +12,7 @@ Blob path: {owner_email}/{scan_id}/{filename} (ACP_BLOB_CONTAINER, default
 file-storage abstraction (ADR 0010's own non-goals).
 """
 from __future__ import annotations
+import logging
 import os
 
 _ACCOUNT = os.environ.get("ACP_BLOB_ACCOUNT", "")
@@ -21,6 +22,7 @@ _CONTAINER = os.environ.get("ACP_BLOB_CONTAINER", "remediated")
 # mistaken for a remediated artifact.
 _RENDER_CONTAINER = os.environ.get("ACP_BLOB_RENDER_CONTAINER", "thumbnails")
 _ENABLED = bool(_ACCOUNT)
+_LOG = logging.getLogger(__name__)
 
 _client = None
 
@@ -57,7 +59,15 @@ def upload_remediated(owner: str | None, scan_id: str, filename: str, data: byte
         return None
     from azure.storage.blob import ContentSettings
     blob = svc.get_blob_client(container=_CONTAINER, blob=_blob_path(owner, scan_id, filename))
-    blob.upload_blob(data, overwrite=True, content_settings=ContentSettings(content_type=content_type))
+    settings = ContentSettings(content_type=content_type)
+    try:
+        blob.upload_blob(data, overwrite=False, content_settings=settings)
+    except Exception as exc:
+        if getattr(exc, "status_code", None) == 409 or getattr(exc, "error_code", "") == "BlobAlreadyExists":
+            _LOG.warning("upload_remediated: overwriting existing blob scan=%s file=%s", scan_id, filename)
+            blob.upload_blob(data, overwrite=True, content_settings=settings)
+        else:
+            raise
     return blob.url
 
 

@@ -118,7 +118,7 @@ def _backoff_seconds(attempts: int, base: float = 2.0, cap: float = 300.0) -> fl
 
 
 class JobWorker:
-    def __init__(self, store, *, worker_id: str | None = None, poll_interval: float = 2.0):
+    def __init__(self, store, *, worker_id: str | None = None, poll_interval: float = 0.5):
         self.store = store
         self.worker_id = worker_id or f"worker-{uuid.uuid4().hex[:8]}"
         self.poll_interval = poll_interval

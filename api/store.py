@@ -8,6 +8,7 @@ serializing writes and survives container restarts across all replicas.
 """
 from __future__ import annotations
 import contextlib
+import json
 import os
 import re
 import time
@@ -568,6 +569,15 @@ from assessment_policy import (  # noqa: F401,E402  (re-export)
 # evaluated criteria into a per-principle pass rate for the certification report (backlog R8).
 _WCAG_PRINCIPLE = {"1": "Perceivable", "2": "Operable", "3": "Understandable", "4": "Robust"}
 
+# Rule catalog loaded once at import time (grouped by engine — the raw JSON shape, NOT the flat
+# RULE_CATALOG list). Used by _save_file_manifest via catalog.get(ext, []). Single read instead
+# of one per file in the fan-out path.
+_CATALOG_JSON: dict = json.loads(
+    (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text()
+)
+# Sentinel for scope cache: distinguishes "not cached yet" from None ("no restriction").
+_SCOPE_ABSENT = object()
+
 
 # `from assessment_policy import X` binds a VALUE, not a reference — so any global that module
 # REBINDS at runtime would freeze here at its pre-init snapshot. `_CAN_CERTIFY_PASS` and
@@ -817,6 +827,7 @@ class Store:
             _PgAdapter(_DATABASE_URL) if _DATABASE_URL else _SQLiteAdapter(str(_SQLITE_PATH))
         )
         self._db.init_schema()
+        self._scope_cache: dict = {}
 
     def _save_file_manifest(self, cur, sid: str, f: dict, catalog: dict) -> None:
         """Compute and persist the per-rule execution manifest for one file."""
@@ -866,9 +877,7 @@ class Store:
         # into `_rule_outcome` explicitly — `in_scope`'s storeless fallback cannot see any scope.
         scope = scope_from_json((report.get("scope") or {}).get("scan_scope"))
         import json as _json
-        catalog = _json.loads(
-            (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text()
-        )
+        catalog = _CATALOG_JSON
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO scan_runs(id,started_at,completed_at,source,rubric_name,rubric_hash,"
@@ -1241,8 +1250,7 @@ class Store:
         # rescore_reused) applies the SAME resolution, so this file's traces and its score agree.
         scope = self.scope_for_file(scan_id, f["file"], scope)
         import json as _json
-        catalog = _json.loads(
-            (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text())
+        catalog = _CATALOG_JSON
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped,checksum,size_kb,pages,sheets,source_modified) "
@@ -2065,18 +2073,25 @@ class Store:
         _scope_for_listing / _scoped_for_scoring). None is returned ONLY when the row or the
         `scan_scope` key is genuinely absent or empty.
         """
+        cached = self._scope_cache.get(scan_id, _SCOPE_ABSENT)
+        if cached is not _SCOPE_ABSENT:
+            return cached
         import json as _json
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT scope FROM scan_runs WHERE id=%s", (scan_id,))
             row = self._db.fetchone(cur)
         if not row:
+            self._scope_cache[scan_id] = None
             return None
         raw = row.get("scope")
         if not raw:
+            self._scope_cache[scan_id] = None
             return None
         # NOT guarded: a stored-but-corrupt scope raises here rather than reading as unrestricted.
         data = _json.loads(raw) if isinstance(raw, str) else raw
-        return scope_from_json((data or {}).get("scan_scope"))
+        result = scope_from_json((data or {}).get("scan_scope"))
+        self._scope_cache[scan_id] = result
+        return result
 
     def get_scan_scope_rules(self, scan_id: str) -> list[dict]:
         """The per-file WCAG scope rules FROZEN into this scan at discover (PRD §4.4 / C4), or []
@@ -3289,12 +3304,8 @@ class Store:
             return self._db.fetchone(cur)
 
     def _full_catalog_rules(self) -> dict[str, list[dict]]:
-        """Load rule-catalog.json grouped by engine (docx/pptx/xlsx/pdf/html)."""
-        import json as _json
-        cat = _json.loads(
-            (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text()
-        )
-        return {k: v for k, v in cat.items() if isinstance(v, list)}
+        """Return rule-catalog.json grouped by engine (docx/pptx/xlsx/pdf/html)."""
+        return {k: v for k, v in _CATALOG_JSON.items() if isinstance(v, list)}
 
     def get_scan_manifest(self, scan_id: str) -> dict:
         """Return per-file rule-execution manifest for a scan.
