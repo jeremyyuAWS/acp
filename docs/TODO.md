@@ -57,21 +57,28 @@ Regenerate with `python scripts/gen_todo_status.py`; CI fails if this block is s
 
 This is a behaviour change, not bookkeeping: several detectors compute the AA and AAA thresholds in one pass, so AAA findings were previously scored against AA-target files.
 
-**Capability registry — 20 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
+**Capability registry — 27 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
 
 | Criterion | Format | Coverage | Confidence | Not covered |
 |---|---|---|---|---|
 | `1.1.1` | docx | **partial** | high | charts, SmartArt, grouped shapes and embedded OLE objects are non-text content this walk does not reach, and w |
 | `1.4.1` | docx | **partial** | high | colour used as the sole carrier of meaning anywhere else — shaded table rows, coloured glyphs, chart series ke |
+| `1.4.1` | pdf | **partial** | high | colour used as the sole carrier of meaning elsewhere — colour-keyed legends, chart series, status indicators — |
+| `1.4.1` | pptx | **partial** | high | colour used as the sole carrier of meaning elsewhere — chart series, shaded table cells, status markers withou |
 | `1.4.1` | xlsx | **partial** | medium | colour used in cell fills, charts and images is not examined, and whether colour is the sole cue is left to a  |
+| `1.4.10` | docx | **partial** | high | whether a wide table actually requires horizontal scrolling at 320px is a rendered outcome not recorded in the |
 | `1.4.10` | pptx | **partial** | high | whether the widest table actually requires horizontal scrolling at 320px is a rendered outcome not recorded in |
 | `1.4.11` | docx | **partial** | high | gradient or image fills, theme-colour indirection, and non-shape non-text elements such as focus indicators an |
+| `1.4.11` | pdf | **partial** | medium | gradient fills, bitmap images and most icon glyphs are not examined, and whether a low-contrast element convey |
 | `1.4.11` | pptx | **partial** | high | gradient or image fills, theme-colour indirection, and non-shape non-text elements such as focus indicators an |
 | `1.4.11` | xlsx | **partial** | medium | theme-coloured shapes, gradients, images and control affordances are not examined, and whether a shape conveys |
+| `1.4.12` | docx | **partial** | high | whether the fixed spacing clips text when a user applies the WCAG 1.4.12 overrides is a rendered outcome not r |
+| `1.4.12` | pdf | **partial** | high | whether text actually clips when the override is applied is a rendered outcome not recorded in the file, and o |
 | `1.4.12` | pptx | **partial** | high | whether the fixed box clips the text when a user applies the WCAG 1.4.12 overrides is a rendered outcome not r |
 | `1.4.4` | pptx | **partial** | high | whether the contained text visually clips when the user enlarges to 200% is a rendered outcome not recorded in |
 | `2.1.2` | docx | **partial** | high | whether focus can actually move away from a control is runtime behaviour that depends on the control's own imp |
 | `2.1.2` | pptx | **partial** | high | whether focus can actually move away from a control is runtime behaviour that depends on the control's own imp |
+| `2.1.2` | xlsx | **partial** | medium | whether focus can actually move away from a control is runtime behaviour that depends on the control's own imp |
 | `2.4.3` | pdf | **heuristic** | medium | actually comparing the widget order to the structure order needs a /StructTreeRoot walk that is not built |
 | `2.4.3` | pptx | **partial** | high | other focus-order conditions (non-placeholder shape sequences, embedded control tab order) are not examined |
 | `2.4.4` | docx | **partial** | high | whether otherwise-descriptive text actually names THIS destination — a link reading 'Annual Report' that point |
@@ -86,7 +93,7 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 
 | Criterion | HTML | DOCX | XLSX | PPTX | PDF |
 |---|---|---|---|---|---|
-| `1.4.1` | pass/fail | partial | partial | review | review |
+| `1.4.1` | pass/fail | partial | partial | partial | partial |
 | `1.3.5` | pass/fail | — | — | — | — |
 | `2.5.3` | pass/fail | — | — | — | — |
 | `4.1.2` | pass/fail | partial | partial | partial | partial |
@@ -95,7 +102,7 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 
 **Undeclared coverage** — detectors emitting for a (criterion, format) that no scope table admits. `scripts/gen_matrix_coverage.py` reports these; all known instances (`1.4.11` xlsx, `2.4.3` pdf, `4.1.2` pdf) are now declared in the registry.
 
-**Undeclared remediation (7)** — a pair ACP assesses (a detector emits it, a review lane admits it, or the registry declares it) with no entry in `api/remediation_capability.REMEDIATION`. Registration says what the DETECTOR examines and nothing about whether a FIXER writes, so the two go stale separately. `scripts/gen_matrix_coverage.py` reports each as an explicit gap with an unknown (null) remediation ceiling rather than inferring "no remediation" from the assessment axis — the inference that hid a working PDF form-field fixer behind "No Remediation" until `4.1.2` pdf got its lane. Open: `1.4.1` pptx, `1.4.1` pdf, `1.4.10` docx, `1.4.11` pdf, `1.4.12` docx, `1.4.12` pdf, `2.1.2` xlsx.
+**Undeclared remediation (0)** — a pair ACP assesses (a detector emits it, a review lane admits it, or the registry declares it) with no entry in `api/remediation_capability.REMEDIATION`. Registration says what the DETECTOR examines and nothing about whether a FIXER writes, so the two go stale separately. `scripts/gen_matrix_coverage.py` reports each as an explicit gap with an unknown (null) remediation ceiling rather than inferring "no remediation" from the assessment axis — the inference that hid a working PDF form-field fixer behind "No Remediation" until `4.1.2` pdf got its lane. Open: none — every assessed pair has a declared lane.
 
 <!-- END GENERATED: coverage-status -->
 

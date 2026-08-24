@@ -12,7 +12,7 @@ from rule_registry import register
 
 from formats.docx.detectors import (language_parts, link_purpose, name_role_value,
                                     no_keyboard_trap, non_text_content, nontext_contrast,
-                                    use_of_color)
+                                    reflow, text_spacing, use_of_color)
 
 # ── 4.1.2 Name, Role, Value ───────────────────────────────────────────────────────────
 # PARTIAL, not FULL: sound over interactive content controls, silent on ActiveX, embedded OLE
@@ -230,4 +230,45 @@ register(
             "for a non-junk descr or a decorative marker; charts, SmartArt, grouped shapes and "
             "embedded OLE objects are non-text content this walk does not reach, and whether a "
             "descr that is present actually describes its image is a judgement not made"),
+)
+
+
+# ── 1.4.10 Reflow ────────────────────────────────────────────────────────────────────
+# Tables too wide to reflow to a 320px viewport without two-dimensional scrolling. Column
+# count and narrowest-column width are read from the table grid (w:gridCol/@w:w); whether the
+# table actually requires horizontal scrolling at 320px is a rendered outcome not in the file.
+# PARTIAL: only wide tables (≥ _WIDE_TABLE_COLS columns) or tables with a narrow narrowest
+# column are flagged — other reflow conditions (deeply nested content, absolute-positioned
+# sidebars) are outside scope. HIGH confidence within that: the grid-column declarations are
+# an exact structural read.
+register(
+    rule="1.4.10",
+    fmt="docx",
+    detector=reflow.detect,
+    requires={Capability.TABLES},
+    coverage=Coverage.PARTIAL,
+    confidence=Confidence.HIGH,
+    reason=("tables are measured for column count and narrowest-column width from the grid-column "
+            "declarations in document XML; whether a wide table actually requires horizontal "
+            "scrolling at 320px is a rendered outcome not recorded in the file"),
+)
+
+
+# ── 1.4.12 Text Spacing ──────────────────────────────────────────────────────────────
+# Paragraphs using exact (fixed) line spacing block the user's line-height override, which can
+# clip text when the WCAG 1.4.12 overrides are applied. The spacing element is read directly
+# from the paragraph properties (w:spacing w:lineRule="exact"); whether text actually clips
+# is a rendered outcome not in the file. PARTIAL because only fixed-spacing paragraphs are
+# examined; other text-spacing barriers (character spacing overrides, paragraph-before/after
+# spacing) are outside scope. HIGH confidence within that: the attribute is a direct read.
+register(
+    rule="1.4.12",
+    fmt="docx",
+    detector=text_spacing.detect,
+    requires={Capability.FONTS},
+    coverage=Coverage.PARTIAL,
+    confidence=Confidence.HIGH,
+    reason=("paragraphs using exact (fixed) line spacing are identified from the spacing element "
+            "in document XML; whether the fixed spacing clips text when a user applies the WCAG "
+            "1.4.12 overrides is a rendered outcome not recorded in the file"),
 )

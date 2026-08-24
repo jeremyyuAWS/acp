@@ -141,7 +141,9 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "1.4.5": ASSISTED,   # images-of-text — OCR the text back out for a human to paste
         "1.4.8": ASSISTED,   # justified text — exact one-click left-align card, human elects
         "1.4.9": ASSISTED,   # images-of-text (AAA, no exception) — same OCR proposer as 1.4.5
+        "1.4.10": HUMAN,     # reflow — wide table; whether it scrolls at 320px is a rendered outcome
         "1.4.11": ASSISTED,  # the shade that reaches 3:1, measured — exact card, human elects
+        "1.4.12": HUMAN,     # text spacing — exact (fixed) line spacing; clip outcome is rendered, not in the file
         # HUMAN, and unlike 1.4.1 and 1.4.11 above this one is not a conservative call that a
         # later proposer will overturn. Those two looked unprefillable and turned out to have an
         # exact remedy hiding in the detected SIGNAL — restore the underline, use this shade.
@@ -204,6 +206,7 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "1.4.11": HUMAN,     # non-text contrast — a drawing shape whose fill-vs-outline is <3:1,
                              # flagged for REVIEW by xlsx_nontext_contrast_checks. No write-back
                              # restyles a shape, so a person adjusts the border/fill. 🟡/👤.
+        "2.1.2": HUMAN,      # keyboard trap — runtime behaviour of any embedded control; not in the file
         "2.4.2": AUTO,
         "2.4.4": ASSISTED,   # vague cell-hyperlink text → descriptive link-text proposal (propose_link_texts, xlsx)
         "2.4.6": ASSISTED,   # default sheet tabs / table columns → AI-named label proposal (propose_xlsx_labels)
@@ -235,6 +238,7 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "1.4.2": ASSISTED,   # auto-starting audio — exact play-on-click card, human elects
         "1.3.2": AUTO,       # shapes reordered to visual top-to-bottom reading order
         "1.3.3": ASSISTED,
+        "1.4.1": HUMAN,      # colour-only hyperlink — no pptx write-back restores the suppressed underline
         "1.4.3": AUTO,       # low-contrast run recolour
         "1.4.4": HUMAN,      # resize text — fixed text box that may clip at 200%; reviewer verifies rendered output
         "1.4.5": ASSISTED,
@@ -269,11 +273,14 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "1.3.1": ASSISTED,   # tag structure — deterministic heading-map proposal, human confirms
         "1.3.2": ASSISTED,   # reading order — vision proposal for an untagged/scanned PDF
         "1.3.3": ASSISTED,
+        "1.4.1": HUMAN,      # colour-only link — no PDF write-back adds a non-colour cue; a human re-styles
         "1.4.3": AUTO,       # text fill colours recoloured in content streams vs the resolved
                              # background (text-scoped; abstains where it can't resolve one)
         "1.4.5": ASSISTED,
         "1.4.6": AUTO,       # cleared incidentally by the 1.4.3 recolour (it targets 7:1 first)
         "1.4.9": ASSISTED,
+        "1.4.11": HUMAN,     # non-text contrast — solid-colour shape; no write-back recolours PDF shapes
+        "1.4.12": HUMAN,     # text spacing — line-pitch measurement; clip outcome is rendered, not in the file
         "2.4.1": AUTO,       # bookmark outline built from the document's headings
         "2.4.2": AUTO,       # /Title + ViewerPreferences DisplayDocTitle
         "2.4.3": AUTO,       # focus order — remediate_pdf sets /Tabs = /S on every page carrying
