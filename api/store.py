@@ -4191,6 +4191,16 @@ class Store:
             self._db.execute(cur, "UPDATE hitl_queue SET assignee=%s WHERE id=%s", (assignee, item_id))
         return self.get_hitl_item(item_id)
 
+    def claim_hitl_item(self, item_id: str, claimant: str | None) -> dict | None:
+        """Transition a queue item to 'in_review' and record the claimant as assignee.
+        Deliberately does NOT set reviewed_at — in_review is a 'I am working this' signal,
+        not a terminal decision. update_hitl_item handles approved/rejected/skipped."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE hitl_queue SET status='in_review', assignee=COALESCE(%s, assignee) WHERE id=%s",
+                (claimant, item_id))
+        return self.get_hitl_item(item_id)
+
     # ── Admin settings (persisted; survives restarts) ─────────────────────────
     def get_setting(self, key: str, default: str | None = None) -> str | None:
         with self._db.cursor() as cur:
