@@ -477,8 +477,7 @@ the flagship **R1** and quick-wins **R2 / R3 / R4 / R6 / R7 / R8** plus **R-A / 
 below with its rendering code named. The report is no longer "a scan summary": it carries the
 certification-decision block, per-issue evidence appendix with sign-off, scope-of-assertion,
 chain-of-custody digest, richer inventory, and the POUR breakdown. The genuine remainder is the
-honesty-gated KPI/assurance work (**R9 / R10**), and the larger dependency-bearing items (**R15 / R-D–R-E**) — none verified in this pass, so
-none struck.
+honesty-gated KPI/assurance work (**R9 / R10**), and the remaining dependency-bearing item (**R-E**). ~~R15~~ and ~~R-D~~ have since shipped (PRs #689, #698, #704, #711).
 
 **Hard rule for this whole section (ADR 0016 / `4fc6bc1`):** every number is a
 real, derivable ratio shown with its basis, or it is omitted. NO fabricated
@@ -532,24 +531,27 @@ per-document certificate renderer alongside it).
 | ~~R-A~~ | ~~**Scope-of-assertion / negative-assurance statement**~~ — **SHIPPED** | `_scope_section` ("What this report covers · and what it does not", R-A) states validator-set size vs the full 87, per-document evaluated / not-evaluated / by-mode, the criteria never run, the file types never opened, and the whole-estate funnel — the over-claim guard against a "100%" misread. |
 | ~~R-B~~ | ~~**Immutable audit-log excerpt**~~ — **SHIPPED** | The evidence appendix renders each fix's sign-off inline from the immutable `decision_log` — "{decision} by {reviewer} · {when} UTC", with the approved value — under "what changed, and on whose authority". |
 | ~~R-C~~ | ~~**Per-fix assurance-level disclosure**~~ — **SHIPPED (PR #665)** | `_evidence_section` now renders a colored tier badge per fix: Deterministic / Deterministic+human / AI+human / AI+re-scan. |
-| R-D | **Reproduce-this-result instructions** — "re-run: POST /scans with rubric hash `<h>`; expect identical findings." | Pairs with R4 chain-of-custody; makes reproducibility actionable, not just asserted. |
+| ~~R-D~~ | ~~**Reproduce-this-result instructions**~~ — **SHIPPED (#698 / #704)** | `_provenance_section` renders a bordered 3-step table: verify rubric hash at `GET /rubric`, re-run via `POST /scans?source=…`, compare findings. `ACP_PUBLIC_URL` prefixes the URLs; source param taken from `run["source"]`. |
 | R-E | **"Supersedes" lineage** — "this certificate supersedes cert `<id>` from `<date>`" (per-document version chain). | Extends the estate-level velocity section already in `report.py` to a per-document custody chain. |
 
 Sequencing suggestion: R1 (flagship) + R2/R3/R6 + R-A first (they land the biggest
 trust jump on data that already exists), then R4/R5/R-B/R-C (~~R11/R12 done~~), then the
-honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/R-D/R-E (~~R13/R14/R-C done~~).
+honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~R-D~~ /R-E (~~R13/R14/R-C done~~).
 
 ### Polish / technical debt (surfaced during R15 implementation, 2026-08-24)
+
+**All items shipped** (verified against `origin/main` 2026-08-24).
+
 | # | Location | Item |
 |---|---|---|
-| P-1 | `api/report.py` ~456 | `_MANUAL_VERIFY` dict has no `"html"` key — an HTML scan silently skips the manual-verification table. Add an entry or a fallback row. |
-| P-2 | `api/report.py` ~197 | `_esc()` silently truncates strings to 400 chars. A criterion description or URL longer than that is swallowed with no indication in the PDF. Raise the limit or add an ellipsis to signal truncation. |
-| P-3 | `api/report.py` ~786 | Evidence truncation note says "full evidence available via API" — but no such endpoint exists. Remove the claim or implement a `/scans/{id}/evidence` endpoint. |
-| P-4 | `api/report.py` ~865 | `_ai_governance_section` has a bare `except Exception: pass` that hides every failure silently. At minimum log the exception; consider re-raising for unexpected errors. |
-| P-5 | `api/report.py` ~201 | `_decision_block` docstring still tags R2/R3 as "backlog" — both shipped. Update to reflect current status. |
-| P-6 | `api/blob.py` ~60 | `BlobStore.put()` uses `overwrite=True` unconditionally — remediated output files are silently clobbered on re-upload. Either key by content hash or gate on `overwrite=False` so re-uploads are detectable. |
-| P-7 | `api/report.py` (stat band) | Score denominator is undisclosed: the band shows a percentage but never states "N criteria evaluated out of 87 in the rubric." An auditor cannot verify the math without it. |
-| P-8 | deployment docs | `ACP_PUBLIC_URL` must be set to the public base URL for QR codes to resolve; without it the PDF embeds an `acp://` URI that no browser handles. Also note: the verify digest is rubric-version-sensitive — if the active rubric's `conformance_target` changes, existing PDF digests will no longer match the endpoint's recomputed value. |
+| ~~P-1~~ | `api/report.py` | ~~`_MANUAL_VERIFY` dict has no `"html"` key — an HTML scan silently skips the manual-verification table.~~ **DONE** (#699): `"HTML"` key added with axe DevTools instructions. |
+| ~~P-2~~ | `api/report.py` | ~~`_esc()` silently truncates strings to 400 chars.~~ **DONE**: limit raised to 2000 with an ellipsis on overflow. |
+| ~~P-3~~ | `api/report.py` | ~~Evidence truncation note says "full evidence available via API" — but no such endpoint exists.~~ **DONE**: false claim removed. |
+| ~~P-4~~ | `api/report.py` | ~~`_ai_governance_section` has a bare `except Exception: pass` that hides every failure silently.~~ **DONE** (#699): now logs with `_LOG.warning(..., exc_info=True)`. |
+| ~~P-5~~ | `api/report.py` | ~~`_decision_block` docstring still tags R2/R3 as "backlog".~~ **DONE**: docstring updated. |
+| ~~P-6~~ | `api/blob.py` | ~~`BlobStore.put()` uses `overwrite=True` unconditionally.~~ **DONE** (#706): gates on `overwrite=False` with collision logging. |
+| ~~P-7~~ | `api/report.py` | ~~Score denominator is undisclosed.~~ **DONE**: scope section explicitly states separate denominators (discovered / assessable / scored) and caps the meaning of a 100 score. |
+| ~~P-8~~ | deployment docs | ~~`ACP_PUBLIC_URL` must be documented.~~ **DONE** (#711): added to `.env.example` and `docs/production-hardening.md` with QR-code and rubric-sensitivity notes. |
 
 ---
 
