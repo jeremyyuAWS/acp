@@ -8,6 +8,7 @@ serializing writes and survives container restarts across all replicas.
 """
 from __future__ import annotations
 import contextlib
+import json
 import os
 import re
 import time
@@ -568,6 +569,15 @@ from assessment_policy import (  # noqa: F401,E402  (re-export)
 # evaluated criteria into a per-principle pass rate for the certification report (backlog R8).
 _WCAG_PRINCIPLE = {"1": "Perceivable", "2": "Operable", "3": "Understandable", "4": "Robust"}
 
+# Rule catalog loaded once at import time (grouped by engine — the raw JSON shape, NOT the flat
+# RULE_CATALOG list). Used by _save_file_manifest via catalog.get(ext, []). Single read instead
+# of one per file in the fan-out path.
+_CATALOG_JSON: dict = json.loads(
+    (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text()
+)
+# Sentinel for scope cache: distinguishes "not cached yet" from None ("no restriction").
+_SCOPE_ABSENT = object()
+
 
 # `from assessment_policy import X` binds a VALUE, not a reference — so any global that module
 # REBINDS at runtime would freeze here at its pre-init snapshot. `_CAN_CERTIFY_PASS` and
@@ -628,6 +638,9 @@ class _SQLiteAdapter:
 
     def execute(self, cur, sql: str, params: tuple = ()) -> None:
         cur.execute(sql.replace("%s", "?"), params)
+
+    def executemany(self, cur, sql: str, params_list) -> None:
+        cur.executemany(sql.replace("%s", "?"), params_list)
 
     def fetchall(self, cur) -> list[dict]:
         cols = [d[0] for d in cur.description]
@@ -801,6 +814,10 @@ class _PgAdapter:
     def execute(self, cur, sql: str, params: tuple = ()) -> None:
         cur.execute(sql, params)
 
+    def executemany(self, cur, sql: str, params_list) -> None:
+        import psycopg2.extras
+        psycopg2.extras.execute_batch(cur, sql, params_list)
+
     def fetchall(self, cur) -> list[dict]:
         return [dict(r) for r in (cur.fetchall() or [])]
 
@@ -817,6 +834,9 @@ class Store:
             _PgAdapter(_DATABASE_URL) if _DATABASE_URL else _SQLiteAdapter(str(_SQLITE_PATH))
         )
         self._db.init_schema()
+        self._scope_cache: dict = {}
+        self._scope_rules_cache: dict = {}
+        self._inventory_cache: dict = {}
 
     def _save_file_manifest(self, cur, sid: str, f: dict, catalog: dict) -> None:
         """Compute and persist the per-rule execution manifest for one file."""
@@ -833,6 +853,7 @@ class Store:
         counts: dict[str, int] = {}
         for i in f.get("issues", []):
             counts[i["ruleId"]] = counts.get(i["ruleId"], 0) + 1
+        manifest_rows = []
         for rule in rules:
             rid = rule["id"]
             if rid in error_ids:
@@ -841,12 +862,13 @@ class Store:
                 status = "FAIL"
             else:
                 status = "PASS"
-            self._db.execute(cur,
-                "INSERT INTO scan_file_manifests(scan_id,file,rule_id,status,finding_count) "
-                "VALUES(%s,%s,%s,%s,%s) "
-                "ON CONFLICT(scan_id,file,rule_id) DO UPDATE SET "
-                "status=EXCLUDED.status,finding_count=EXCLUDED.finding_count",
-                (sid, f["file"], rid, status, counts.get(rid, 0)))
+            manifest_rows.append((sid, f["file"], rid, status, counts.get(rid, 0)))
+        self._db.executemany(cur,
+            "INSERT INTO scan_file_manifests(scan_id,file,rule_id,status,finding_count) "
+            "VALUES(%s,%s,%s,%s,%s) "
+            "ON CONFLICT(scan_id,file,rule_id) DO UPDATE SET "
+            "status=EXCLUDED.status,finding_count=EXCLUDED.finding_count",
+            manifest_rows)
 
     def save_scan(self, report: dict) -> str:
         # Reuse the scan_id generated in run_scan() so the Langfuse trace ID
@@ -866,9 +888,7 @@ class Store:
         # into `_rule_outcome` explicitly — `in_scope`'s storeless fallback cannot see any scope.
         scope = scope_from_json((report.get("scope") or {}).get("scan_scope"))
         import json as _json
-        catalog = _json.loads(
-            (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text()
-        )
+        catalog = _CATALOG_JSON
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO scan_runs(id,started_at,completed_at,source,rubric_name,rubric_hash,"
@@ -886,12 +906,12 @@ class Store:
                     (sid, f["file"], f["engine"], f["status"], f["score"],
                      int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id"), f.get("acp_stamped"),
                      f.get("checksum"), f.get("size_kb"), f.get("pages"), f.get("sheets"), f.get("source_modified")))
-                for i in f["issues"]:
-                    self._db.execute(cur,
+                if f["issues"]:
+                    self._db.executemany(cur,
                         "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location) "
                         "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
-                        (sid, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
-                         i.get("page"), _issue_location(i)))
+                        [(sid, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
+                          i.get("page"), _issue_location(i)) for i in f["issues"]])
                 # Per-rule trace: one row per catalog rule per file — PASS/FAIL/REVIEW/NOT_EVALUATED.
                 # Counts feed the per-rule trace, so they must reflect the conformance target:
                 # an AAA finding picked up as a by-product of an AA check is not this scan's
@@ -899,16 +919,18 @@ class Store:
                 fail_counts, review_counts = _split_sc_counts(
                     filter_issues_to_target(f["issues"], target))
                 fmt = _file_format(f["file"])
+                trace_rows = []
                 for rule in RULE_CATALOG:
                     rid = rule["id"]
                     fc, rc = fail_counts.get(rid, 0), review_counts.get(rid, 0)
                     outcome = _rule_outcome(rid, fmt, fc, rc, target, scope)
-                    count = fc if fc else rc   # findings that drove the outcome
-                    self._db.execute(cur,
-                        "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "
-                        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) "
-                        "ON CONFLICT(scan_id,file,rule_id) DO UPDATE SET outcome=EXCLUDED.outcome,finding_count=EXCLUDED.finding_count",
-                        (sid, f["file"], rid, rule["name"], rule.get("plain"), rule["level"], rule["fix_mode"], outcome, count))
+                    count = fc if fc else rc
+                    trace_rows.append((sid, f["file"], rid, rule["name"], rule.get("plain"), rule["level"], rule["fix_mode"], outcome, count))
+                self._db.executemany(cur,
+                    "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                    "ON CONFLICT(scan_id,file,rule_id) DO UPDATE SET outcome=EXCLUDED.outcome,finding_count=EXCLUDED.finding_count",
+                    trace_rows)
                 self._save_file_manifest(cur, sid, f, catalog)
                 # Sensitive-data (PII) findings — masked samples only (ADR 0006).
                 for pf in (f.get("pii") or {}).get("findings", []):
@@ -1241,8 +1263,7 @@ class Store:
         # rescore_reused) applies the SAME resolution, so this file's traces and its score agree.
         scope = self.scope_for_file(scan_id, f["file"], scope)
         import json as _json
-        catalog = _json.loads(
-            (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text())
+        catalog = _CATALOG_JSON
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped,checksum,size_kb,pages,sheets,source_modified) "
@@ -1255,26 +1276,29 @@ class Store:
                  int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id"), f.get("acp_stamped"),
                  f.get("checksum"), f.get("size_kb"), f.get("pages"), f.get("sheets"), f.get("source_modified")))
             self._db.execute(cur, "DELETE FROM issue_records WHERE scan_id=%s AND file=%s", (scan_id, f["file"]))
-            for i in f.get("issues", []):
-                self._db.execute(cur,
+            issues = f.get("issues", [])
+            if issues:
+                self._db.executemany(cur,
                     "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location) "
                     "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
-                    (scan_id, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
-                     i.get("page"), _issue_location(i)))
+                    [(scan_id, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
+                      i.get("page"), _issue_location(i)) for i in issues])
             fail_counts, review_counts = _split_sc_counts(
                 filter_issues_to_target(f.get("issues", []), target))
             fmt = _file_format(f["file"])
+            trace_rows = []
             for rule in RULE_CATALOG:
                 rid = rule["id"]
                 fc, rc = fail_counts.get(rid, 0), review_counts.get(rid, 0)
                 outcome = _rule_outcome(rid, fmt, fc, rc, target, scope)
                 count = fc if fc else rc
-                self._db.execute(cur,
-                    "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file,rule_id) DO UPDATE SET "
-                    "outcome=EXCLUDED.outcome,finding_count=EXCLUDED.finding_count",
-                    (scan_id, f["file"], rid, rule["name"], rule.get("plain"), rule["level"],
-                     rule["fix_mode"], outcome, count))
+                trace_rows.append((scan_id, f["file"], rid, rule["name"], rule.get("plain"), rule["level"],
+                                   rule["fix_mode"], outcome, count))
+            self._db.executemany(cur,
+                "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file,rule_id) DO UPDATE SET "
+                "outcome=EXCLUDED.outcome,finding_count=EXCLUDED.finding_count",
+                trace_rows)
             self._save_file_manifest(cur, scan_id, f, catalog)
             for pf in (f.get("pii") or {}).get("findings", []):
                 self._db.execute(cur,
@@ -2065,46 +2089,67 @@ class Store:
         _scope_for_listing / _scoped_for_scoring). None is returned ONLY when the row or the
         `scan_scope` key is genuinely absent or empty.
         """
+        cached = self._scope_cache.get(scan_id, _SCOPE_ABSENT)
+        if cached is not _SCOPE_ABSENT:
+            return cached
         import json as _json
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT scope FROM scan_runs WHERE id=%s", (scan_id,))
             row = self._db.fetchone(cur)
         if not row:
+            self._scope_cache[scan_id] = None
             return None
         raw = row.get("scope")
         if not raw:
+            self._scope_cache[scan_id] = None
             return None
         # NOT guarded: a stored-but-corrupt scope raises here rather than reading as unrestricted.
         data = _json.loads(raw) if isinstance(raw, str) else raw
-        return scope_from_json((data or {}).get("scan_scope"))
+        result = scope_from_json((data or {}).get("scan_scope"))
+        self._scope_cache[scan_id] = result
+        return result
 
     def get_scan_scope_rules(self, scan_id: str) -> list[dict]:
         """The per-file WCAG scope rules FROZEN into this scan at discover (PRD §4.4 / C4), or []
         for a scan with none (including legacy scans predating the field). Read by the score and
         trace paths so both resolve every file against the same rule set — the frozen-scope
         discipline get_scan_scope follows, applied to C4's rule layer."""
+        cached = self._scope_rules_cache.get(scan_id, _SCOPE_ABSENT)
+        if cached is not _SCOPE_ABSENT:
+            return cached
         import json as _json
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT scope FROM scan_runs WHERE id=%s", (scan_id,))
             row = self._db.fetchone(cur)
         if not row:
+            self._scope_rules_cache[scan_id] = []
             return []
         raw = row.get("scope")
         if not raw:
+            self._scope_rules_cache[scan_id] = []
             return []
         data = _json.loads(raw) if isinstance(raw, str) else raw
         rules = (data or {}).get("scope_rules") or []
-        return rules if isinstance(rules, list) else []
+        result = rules if isinstance(rules, list) else []
+        self._scope_rules_cache[scan_id] = result
+        return result
 
     def _inventory_attrs(self, scan_id: str, file: str) -> dict:
         """The file's path / owner / parent_folder from its scan_inventory row — the attributes a
         per-file scope rule matches on (department is not on scan_inventory today, so
-        department-selector rules do not resolve at this layer; folder/owner do)."""
-        with self._db.cursor() as cur:
-            self._db.execute(cur,
-                "SELECT path, owner, parent_folder FROM scan_inventory WHERE scan_id=%s AND file=%s",
-                (scan_id, file))
-            return self._db.fetchone(cur) or {}
+        department-selector rules do not resolve at this layer; folder/owner do).
+
+        Lazy bulk-load: first call for a given scan_id fetches ALL inventory rows for the
+        scan at once and caches them by filename, so subsequent calls (other files in the same
+        scan batch) return from memory rather than issuing another point-SELECT."""
+        if scan_id not in self._inventory_cache:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT file, path, owner, parent_folder FROM scan_inventory WHERE scan_id=%s",
+                    (scan_id,))
+                rows = self._db.fetchall(cur)
+            self._inventory_cache[scan_id] = {r["file"]: r for r in rows}
+        return self._inventory_cache[scan_id].get(file, {})
 
     def scope_for_file(self, scan_id: str, file: str, global_scope):
         """This file's effective criterion×format scope: `global_scope` narrowed to the WCAG
@@ -3289,12 +3334,8 @@ class Store:
             return self._db.fetchone(cur)
 
     def _full_catalog_rules(self) -> dict[str, list[dict]]:
-        """Load rule-catalog.json grouped by engine (docx/pptx/xlsx/pdf/html)."""
-        import json as _json
-        cat = _json.loads(
-            (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text()
-        )
-        return {k: v for k, v in cat.items() if isinstance(v, list)}
+        """Return rule-catalog.json grouped by engine (docx/pptx/xlsx/pdf/html)."""
+        return {k: v for k, v in _CATALOG_JSON.items() if isinstance(v, list)}
 
     def get_scan_manifest(self, scan_id: str) -> dict:
         """Return per-file rule-execution manifest for a scan.
