@@ -524,7 +524,7 @@ per-document certificate renderer alongside it).
 |---|---|---|
 | ~~R13~~ | ~~**Manual-verification instructions**~~ — **SHIPPED** | `_manual_verification_section` (R13): per-format table (DOCX/PPTX/XLSX/PDF) with mainstream tool + generic checks; rendered only for formats present in the scan. Wired at `build_report()`. |
 | ~~R14~~ | ~~**Per-criterion evidence-of-compliance rows**~~ — **SHIPPED (PR #665)** | `_criterion_table_section`: lists only criteria with open or cleared findings; columns: Criterion · Severity · Rule · Docs affected · Status. |
-| R15 | **QR code → immutable online report** (audit trail, remediation history, verification log, version history). | Needs a hosted **immutable** artifact + a versioned verification endpoint. Partially there via Blob remediated copies + publish; the immutability/versioning guarantee is the real work. Larger. |
+| ~~R15~~ | ~~**QR code → immutable online report**~~ — **SHIPPED (PR #689)** | `_verify_section` + `_qr_flowable` in `report.py`: SHA-256 content digest (scan payload canonical JSON) printed as hex + QR code side-by-side in the PDF; `/public/verify/{scan_id}` endpoint (unauthenticated) recomputes and returns the same digest so any holder can confirm the report is unaltered. `ACP_PUBLIC_URL` controls the URL embedded in the QR. Remaining: hosted immutable artifact, per-document version chain (`R-E`). |
 
 ### My additions (review, 2026-07-09) — weighted toward *auditor* trust
 | # | Item | Why |
@@ -537,7 +537,19 @@ per-document certificate renderer alongside it).
 
 Sequencing suggestion: R1 (flagship) + R2/R3/R6 + R-A first (they land the biggest
 trust jump on data that already exists), then R4/R5/R-B/R-C (~~R11/R12 done~~), then the
-honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then R15/R-D/R-E (~~R13/R14/R-C done~~).
+honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/R-D/R-E (~~R13/R14/R-C done~~).
+
+### Polish / technical debt (surfaced during R15 implementation, 2026-08-24)
+| # | Location | Item |
+|---|---|---|
+| P-1 | `api/report.py` ~456 | `_MANUAL_VERIFY` dict has no `"html"` key — an HTML scan silently skips the manual-verification table. Add an entry or a fallback row. |
+| P-2 | `api/report.py` ~197 | `_esc()` silently truncates strings to 400 chars. A criterion description or URL longer than that is swallowed with no indication in the PDF. Raise the limit or add an ellipsis to signal truncation. |
+| P-3 | `api/report.py` ~786 | Evidence truncation note says "full evidence available via API" — but no such endpoint exists. Remove the claim or implement a `/scans/{id}/evidence` endpoint. |
+| P-4 | `api/report.py` ~865 | `_ai_governance_section` has a bare `except Exception: pass` that hides every failure silently. At minimum log the exception; consider re-raising for unexpected errors. |
+| P-5 | `api/report.py` ~201 | `_decision_block` docstring still tags R2/R3 as "backlog" — both shipped. Update to reflect current status. |
+| P-6 | `api/blob.py` ~60 | `BlobStore.put()` uses `overwrite=True` unconditionally — remediated output files are silently clobbered on re-upload. Either key by content hash or gate on `overwrite=False` so re-uploads are detectable. |
+| P-7 | `api/report.py` (stat band) | Score denominator is undisclosed: the band shows a percentage but never states "N criteria evaluated out of 87 in the rubric." An auditor cannot verify the math without it. |
+| P-8 | deployment docs | `ACP_PUBLIC_URL` must be set to the public base URL for QR codes to resolve; without it the PDF embeds an `acp://` URI that no browser handles. Also note: the verify digest is rubric-version-sensitive — if the active rubric's `conformance_target` changes, existing PDF digests will no longer match the endpoint's recomputed value. |
 
 ---
 
