@@ -7,8 +7,9 @@ import ProcessingDetails from './ProcessingDetails.jsx'
 import ScopeFunnel from './ScopeFunnel.jsx'
 import { armNotifyOnComplete, notifyScanComplete, notificationsSupported, notifyPermission } from './scanNotify.js'
 import { refreshDriveToken } from './driveAuth.js'
+import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, getScanLocations, remediateScan, SESSION_EXPIRED } from './api'
+import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, getScanLocations, remediateScan, SESSION_EXPIRED } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -341,6 +342,22 @@ export default function App() {
     return () => clearInterval(iv)
   }, [hasDriveToken])
   const [hasSPToken, setHasSPToken] = useState(() => !!sessionStorage.getItem('sp_token'))
+
+  // Keep a long-running SharePoint scan's MSAL token fresh. Mirrors the Drive keep-alive above.
+  // Best-effort; no-op without MSAL configured or without an active SharePoint session.
+  useEffect(() => {
+    if (!hasSPToken) return
+    const iv = setInterval(async () => {
+      try {
+        const a = await getActiveScan()
+        if (!a?.id) return
+        const tok = await refreshSPToken()
+        setSPToken(tok)
+        await refreshScanSPToken(a.id)
+      } catch { /* best-effort keep-alive */ }
+    }, 20 * 60 * 1000)
+    return () => clearInterval(iv)
+  }, [hasSPToken])
   const [delegations, setDelegations] = useState(loadDelegations)
   const [fileTypeConfig, setFileTypeConfig] = useState(loadFileTypeConfig)
   const [rolePrivileges, setRolePrivileges] = useState(loadRolePrivileges)
