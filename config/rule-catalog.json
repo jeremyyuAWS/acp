@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "2026.06.2",
+    "version": "2026.08.1",
     "note": "Each rule maps to one WCAG 2.1 success criterion. wcag_sc is the dotted SC number; wcag is the rubric key. fix_mode: auto = deterministic engine fix; ai-assisted = engine drafts, human approves; human-only = must be verified by a person."
   },
   "docx": [
@@ -13,8 +13,8 @@
       "wcag_display": "Non-text Content",
       "wcag_level": "A",
       "severity": "SERIOUS",
-      "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/AltTextRule.cs"
+      "fix_mode": "ai-assisted",
+      "source": "api/formats/docx/detectors/non_text_content.py"
     },
     {
       "id": "DOCX-TITLE-001",
@@ -55,19 +55,19 @@
     {
       "id": "DOCX-CONTRAST-001",
       "title": "Insufficient colour contrast",
-      "description": "Text colour against its background must meet the 4.5:1 minimum contrast ratio for normal-sized text (3:1 for large text \u226518pt or 14pt bold).",
+      "description": "Text colour against its background must meet the 4.5:1 minimum contrast ratio for normal-sized text (3:1 for large text ≥18pt or 14pt bold).",
       "wcag": "SC_1_4_3",
       "wcag_sc": "1.4.3",
       "wcag_display": "Contrast (Minimum)",
       "wcag_level": "AA",
       "severity": "SERIOUS",
-      "fix_mode": "human-only",
+      "fix_mode": "auto",
       "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/ColourContrastRule.cs"
     },
     {
       "id": "DOCX-HEAD-001",
       "title": "Heading structure incorrect",
-      "description": "Heading styles must not skip levels (e.g. Heading 1 \u2192 Heading 3 with no Heading 2). Skipped levels break navigation for screen reader users who jump by heading.",
+      "description": "Heading styles must not skip levels (e.g. Heading 1 → Heading 3 with no Heading 2). Skipped levels break navigation for screen reader users who jump by heading.",
       "wcag": "SC_1_3_1",
       "wcag_sc": "1.3.1",
       "wcag_display": "Info and Relationships",
@@ -97,7 +97,7 @@
       "wcag_display": "Language of Parts",
       "wcag_level": "AA",
       "severity": "MODERATE",
-      "fix_mode": "human-only",
+      "fix_mode": "ai-assisted",
       "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/LanguageOfPartsRule.cs"
     },
     {
@@ -111,6 +111,102 @@
       "severity": "MINOR",
       "fix_mode": "auto",
       "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/BookmarksRule.cs"
+    },
+    {
+      "id": "DOCX-ORDER-001",
+      "title": "Floating text may disrupt reading order",
+      "description": "Text boxes and other floating shapes have an undefined position in the document's reading order. Screen readers may announce them out of sequence relative to surrounding paragraph text.",
+      "wcag": "SC_1_3_2",
+      "wcag_sc": "1.3.2",
+      "wcag_display": "Meaningful Sequence",
+      "wcag_level": "A",
+      "severity": "MODERATE",
+      "fix_mode": "ai-assisted",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "DOCX-SENSORY-001",
+      "title": "Instructions rely on sensory characteristics",
+      "description": "Instructions that identify content solely by shape, visual position, size, or sound cannot be understood by users who are blind or deaf. Re-word to include a non-sensory alternative.",
+      "wcag": "SC_1_3_3",
+      "wcag_sc": "1.3.3",
+      "wcag_display": "Sensory Characteristics",
+      "wcag_level": "A",
+      "severity": "MODERATE",
+      "fix_mode": "ai-assisted",
+      "source": "api/textchecks.py"
+    },
+    {
+      "id": "DOCX-COLOR-001",
+      "title": "Information conveyed by colour alone",
+      "description": "Hyperlinks with underlines removed rely on colour as the sole visual cue. Users who cannot distinguish colours will miss the link indicator. Restore the underline or add another non-colour cue.",
+      "wcag": "SC_1_4_1",
+      "wcag_sc": "1.4.1",
+      "wcag_display": "Use of Color",
+      "wcag_level": "A",
+      "severity": "MODERATE",
+      "fix_mode": "ai-assisted",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "DOCX-IMGTEXT-001",
+      "title": "Text baked into an image",
+      "description": "An image appears to contain readable text. Text rendered into images cannot be resized, translated, or read by assistive technology. Replace with real document text.",
+      "wcag": "SC_1_4_5",
+      "wcag_sc": "1.4.5",
+      "wcag_display": "Images of Text",
+      "wcag_level": "AA",
+      "severity": "MODERATE",
+      "fix_mode": "ai-assisted",
+      "source": "api/textchecks.py"
+    },
+    {
+      "id": "DOCX-NTCONTRAST-001",
+      "title": "Non-text element has insufficient contrast",
+      "description": "A shape border or drawing element has a contrast ratio below 3:1 against its adjacent background. Informational graphics and UI components must meet this threshold so they remain visible to low-vision users.",
+      "wcag": "SC_1_4_11",
+      "wcag_sc": "1.4.11",
+      "wcag_display": "Non-text Contrast",
+      "wcag_level": "AA",
+      "severity": "MODERATE",
+      "fix_mode": "ai-assisted",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "DOCX-KBTRAP-001",
+      "title": "Embedded control may trap keyboard focus",
+      "description": "The document contains an interactive control (form field, ActiveX object, or embedded object) that may not allow keyboard focus to leave. Verify the user can move away using Tab or Escape.",
+      "wcag": "SC_2_1_2",
+      "wcag_sc": "2.1.2",
+      "wcag_display": "No Keyboard Trap",
+      "wcag_level": "A",
+      "severity": "SERIOUS",
+      "fix_mode": "human-only",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "DOCX-HEADLABEL-001",
+      "title": "Heading or label is not descriptive",
+      "description": "Every heading must clearly describe the topic of its section. Vague or empty headings (e.g. 'Section 1', 'Untitled') prevent screen reader users from understanding the document's structure at a glance.",
+      "wcag": "SC_2_4_6",
+      "wcag_sc": "2.4.6",
+      "wcag_display": "Headings and Labels",
+      "wcag_level": "AA",
+      "severity": "MODERATE",
+      "fix_mode": "auto",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "DOCX-NRV-001",
+      "title": "Content control has no accessible name",
+      "description": "A structured document tag (content control) does not carry an accessible name in its w:alias or w:tag attribute. Assistive technology announces this name when focus reaches the control.",
+      "wcag": "SC_4_1_2",
+      "wcag_sc": "4.1.2",
+      "wcag_display": "Name, Role, Value",
+      "wcag_level": "A",
+      "severity": "SERIOUS",
+      "fix_mode": "auto",
+      "source": "api/formats/docx/detectors/name_role_value.py"
     }
   ],
   "pptx": [
@@ -123,8 +219,8 @@
       "wcag_display": "Non-text Content",
       "wcag_level": "A",
       "severity": "SERIOUS",
-      "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/AltTextRule.cs"
+      "fix_mode": "ai-assisted",
+      "source": "api/formats/pptx/detectors/non_text_content.py"
     },
     {
       "id": "PPTX-TITLE-001",
@@ -171,7 +267,7 @@
       "wcag_display": "Meaningful Sequence",
       "wcag_level": "A",
       "severity": "SERIOUS",
-      "fix_mode": "human-only",
+      "fix_mode": "auto",
       "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/ReadingOrderRule.cs"
     },
     {
@@ -195,8 +291,8 @@
       "wcag_display": "Contrast (Minimum)",
       "wcag_level": "AA",
       "severity": "SERIOUS",
-      "fix_mode": "human-only",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/ColourContrastRule.cs"
+      "fix_mode": "auto",
+      "source": "api/office_structure.py"
     },
     {
       "id": "PPTX-LINK-001",
@@ -221,6 +317,138 @@
       "severity": "MODERATE",
       "fix_mode": "human-only",
       "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/AnimationOrderRule.cs"
+    },
+    {
+      "id": "PPTX-SENSORY-001",
+      "title": "Instructions rely on sensory characteristics",
+      "description": "Instructions that identify content solely by shape, visual position, size, or sound cannot be understood by users who are blind or deaf. Re-word to include a non-sensory alternative.",
+      "wcag": "SC_1_3_3",
+      "wcag_sc": "1.3.3",
+      "wcag_display": "Sensory Characteristics",
+      "wcag_level": "A",
+      "severity": "MODERATE",
+      "fix_mode": "ai-assisted",
+      "source": "api/textchecks.py"
+    },
+    {
+      "id": "PPTX-RESIZE-001",
+      "title": "Text box clips content at 200% zoom",
+      "description": "A text box with fixed dimensions may clip its content when text is enlarged to 200%. Users who need large text should be able to read all slide content without horizontal scrolling or loss of content.",
+      "wcag": "SC_1_4_4",
+      "wcag_sc": "1.4.4",
+      "wcag_display": "Resize Text",
+      "wcag_level": "AA",
+      "severity": "MODERATE",
+      "fix_mode": "human-only",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "PPTX-IMGTEXT-001",
+      "title": "Text baked into an image",
+      "description": "An image appears to contain readable text. Text rendered into images cannot be resized, translated, or read by assistive technology. Replace with real slide text.",
+      "wcag": "SC_1_4_5",
+      "wcag_sc": "1.4.5",
+      "wcag_display": "Images of Text",
+      "wcag_level": "AA",
+      "severity": "MODERATE",
+      "fix_mode": "ai-assisted",
+      "source": "api/textchecks.py"
+    },
+    {
+      "id": "PPTX-REFLOW-001",
+      "title": "Wide table may not reflow at narrow viewport",
+      "description": "A table wider than the slide content area may require two-dimensional scrolling when the presentation is viewed at 320 CSS pixels. Prefer narrower tables or portrait layouts that reflow to one column.",
+      "wcag": "SC_1_4_10",
+      "wcag_sc": "1.4.10",
+      "wcag_display": "Reflow",
+      "wcag_level": "AA",
+      "severity": "MODERATE",
+      "fix_mode": "human-only",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "PPTX-NTCONTRAST-001",
+      "title": "Non-text element has insufficient contrast",
+      "description": "A shape border or informational graphic has a contrast ratio below 3:1 against its background. UI components and graphics that convey meaning must meet this threshold for low-vision users.",
+      "wcag": "SC_1_4_11",
+      "wcag_sc": "1.4.11",
+      "wcag_display": "Non-text Contrast",
+      "wcag_level": "AA",
+      "severity": "MODERATE",
+      "fix_mode": "human-only",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "PPTX-SPACING-001",
+      "title": "Fixed line spacing may clip text",
+      "description": "Text runs with an exact (fixed) line height setting may clip descenders or clip adjacent lines when a user's OS increases text spacing. Prefer proportional line spacing over an exact point value.",
+      "wcag": "SC_1_4_12",
+      "wcag_sc": "1.4.12",
+      "wcag_display": "Text Spacing",
+      "wcag_level": "AA",
+      "severity": "MODERATE",
+      "fix_mode": "human-only",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "PPTX-KBTRAP-001",
+      "title": "Embedded control may trap keyboard focus",
+      "description": "The presentation contains an embedded control (ActiveX, OLE object) that may not allow keyboard focus to move away. Verify the user can leave the control using Tab or Escape.",
+      "wcag": "SC_2_1_2",
+      "wcag_sc": "2.1.2",
+      "wcag_display": "No Keyboard Trap",
+      "wcag_level": "A",
+      "severity": "SERIOUS",
+      "fix_mode": "human-only",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "PPTX-FOCUSORDER-001",
+      "title": "Placeholder focus order may not match reading order",
+      "description": "The tab order of placeholders on a slide is determined by their z-index, which may not match the intended visual reading sequence. Reorder placeholders so keyboard navigation follows reading order.",
+      "wcag": "SC_2_4_3",
+      "wcag_sc": "2.4.3",
+      "wcag_display": "Focus Order",
+      "wcag_level": "A",
+      "severity": "MODERATE",
+      "fix_mode": "human-only",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "PPTX-HEADLABEL-001",
+      "title": "Slide title placeholder is empty",
+      "description": "A slide has a Title placeholder that exists but contains no text. An empty title provides no navigation landmark for screen reader users jumping between slides by heading.",
+      "wcag": "SC_2_4_6",
+      "wcag_sc": "2.4.6",
+      "wcag_display": "Headings and Labels",
+      "wcag_level": "AA",
+      "severity": "MODERATE",
+      "fix_mode": "ai-assisted",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "PPTX-LANGPART-001",
+      "title": "Language of parts not marked",
+      "description": "Text runs in a language different from the presentation's default must declare their language via the a:rPr lang attribute. Without this, screen readers mispronounce foreign-language passages.",
+      "wcag": "SC_3_1_2",
+      "wcag_sc": "3.1.2",
+      "wcag_display": "Language of Parts",
+      "wcag_level": "AA",
+      "severity": "MODERATE",
+      "fix_mode": "ai-assisted",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "PPTX-NRV-001",
+      "title": "Embedded control has no accessible name",
+      "description": "An ActiveX or OLE control embedded in the presentation does not expose an accessible name or role. Assistive technology cannot identify or operate a control whose name and role are not declared.",
+      "wcag": "SC_4_1_2",
+      "wcag_sc": "4.1.2",
+      "wcag_display": "Name, Role, Value",
+      "wcag_level": "A",
+      "severity": "SERIOUS",
+      "fix_mode": "human-only",
+      "source": "api/office_structure.py"
     }
   ],
   "xlsx": [
@@ -233,8 +461,8 @@
       "wcag_display": "Non-text Content",
       "wcag_level": "A",
       "severity": "SERIOUS",
-      "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/AltTextRule.cs"
+      "fix_mode": "ai-assisted",
+      "source": "api/formats/xlsx/detectors/non_text_content.py"
     },
     {
       "id": "XLSX-TITLE-001",
@@ -353,8 +581,92 @@
       "wcag_display": "Link Purpose (In Context)",
       "wcag_level": "A",
       "severity": "MODERATE",
-      "fix_mode": "human-only",
+      "fix_mode": "ai-assisted",
       "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/LinkPurposeRule.cs"
+    },
+    {
+      "id": "XLSX-SENSORY-001",
+      "title": "Instructions rely on sensory characteristics",
+      "description": "Instructions that identify content solely by shape, visual position, size, or sound cannot be understood by users who are blind or deaf. Re-word to include a non-sensory alternative.",
+      "wcag": "SC_1_3_3",
+      "wcag_sc": "1.3.3",
+      "wcag_display": "Sensory Characteristics",
+      "wcag_level": "A",
+      "severity": "MODERATE",
+      "fix_mode": "ai-assisted",
+      "source": "api/textchecks.py"
+    },
+    {
+      "id": "XLSX-COLOR-001",
+      "title": "Information conveyed by colour alone",
+      "description": "A conditional-format colour scale or colour-coded status indicator conveys meaning through colour alone. Users who cannot distinguish colours will miss this information. Add a text label, icon, or pattern to supplement the colour cue.",
+      "wcag": "SC_1_4_1",
+      "wcag_sc": "1.4.1",
+      "wcag_display": "Use of Color",
+      "wcag_level": "A",
+      "severity": "MODERATE",
+      "fix_mode": "human-only",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "XLSX-CONTRAST-001",
+      "title": "Insufficient colour contrast",
+      "description": "Cell text colour against its background must meet the 4.5:1 minimum contrast ratio for normal-sized text (3:1 for large text ≥18pt or 14pt bold).",
+      "wcag": "SC_1_4_3",
+      "wcag_sc": "1.4.3",
+      "wcag_display": "Contrast (Minimum)",
+      "wcag_level": "AA",
+      "severity": "SERIOUS",
+      "fix_mode": "auto",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "XLSX-IMGTEXT-001",
+      "title": "Text baked into an image",
+      "description": "An embedded image appears to contain readable text. Text rendered into images cannot be resized, translated, or read by assistive technology. Replace with real cell content.",
+      "wcag": "SC_1_4_5",
+      "wcag_sc": "1.4.5",
+      "wcag_display": "Images of Text",
+      "wcag_level": "AA",
+      "severity": "MODERATE",
+      "fix_mode": "ai-assisted",
+      "source": "api/textchecks.py"
+    },
+    {
+      "id": "XLSX-NTCONTRAST-001",
+      "title": "Non-text element has insufficient contrast",
+      "description": "A drawing shape border or fill has a contrast ratio below 3:1 against its background. Informational graphics and UI components must meet this threshold so they remain visible to low-vision users.",
+      "wcag": "SC_1_4_11",
+      "wcag_sc": "1.4.11",
+      "wcag_display": "Non-text Contrast",
+      "wcag_level": "AA",
+      "severity": "MODERATE",
+      "fix_mode": "human-only",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "XLSX-LANGPART-001",
+      "title": "Language of parts cannot be declared",
+      "description": "SpreadsheetML rich-text run properties (CT_RPrElt) have no language element, so language-of-parts cannot be recorded in the file. Text in a language different from the workbook default cannot be marked up and must be re-authored to avoid mispronunciation.",
+      "wcag": "SC_3_1_2",
+      "wcag_sc": "3.1.2",
+      "wcag_display": "Language of Parts",
+      "wcag_level": "AA",
+      "severity": "MODERATE",
+      "fix_mode": "human-only",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "XLSX-NRV-001",
+      "title": "Embedded control has no accessible name",
+      "description": "An ActiveX or OLE control embedded in the workbook does not expose an accessible name or role in a form that static analysis can read. Assistive technology cannot identify or operate the control without it.",
+      "wcag": "SC_4_1_2",
+      "wcag_sc": "4.1.2",
+      "wcag_display": "Name, Role, Value",
+      "wcag_level": "A",
+      "severity": "SERIOUS",
+      "fix_mode": "human-only",
+      "source": "api/office_structure.py"
     }
   ],
   "pdf": [
@@ -367,8 +679,8 @@
       "wcag_display": "Non-text Content",
       "wcag_level": "A",
       "severity": "SERIOUS",
-      "fix_mode": "auto",
-      "source": "deploy/public/vendor/worker-python/analysers/rules/pdf/image_alt_text.py"
+      "fix_mode": "ai-assisted",
+      "source": "api/formats/pdf/detectors/non_text_content.py"
     },
     {
       "id": "pdf.tagged",
@@ -379,7 +691,7 @@
       "wcag_display": "Info and Relationships",
       "wcag_level": "A",
       "severity": "SERIOUS",
-      "fix_mode": "human-only",
+      "fix_mode": "ai-assisted",
       "source": "deploy/public/vendor/worker-python/analysers/rules/pdf/tagged_pdf.py"
     },
     {
@@ -415,7 +727,7 @@
       "wcag_display": "Meaningful Sequence",
       "wcag_level": "A",
       "severity": "MODERATE",
-      "fix_mode": "human-only",
+      "fix_mode": "ai-assisted",
       "source": "deploy/public/vendor/worker-python/analysers/rules/pdf/reading_order.py"
     },
     {
@@ -441,6 +753,102 @@
       "severity": "MINOR",
       "fix_mode": "auto",
       "source": "deploy/public/vendor/worker-python/analysers/rules/pdf/bookmarks.py"
+    },
+    {
+      "id": "pdf.sensory-characteristics",
+      "title": "Instructions rely on sensory characteristics",
+      "description": "Instructions that identify content solely by shape, visual position, size, or sound cannot be understood by users who are blind or deaf. Re-word to include a non-sensory alternative.",
+      "wcag": "SC_1_3_3",
+      "wcag_sc": "1.3.3",
+      "wcag_display": "Sensory Characteristics",
+      "wcag_level": "A",
+      "severity": "MODERATE",
+      "fix_mode": "ai-assisted",
+      "source": "api/textchecks.py"
+    },
+    {
+      "id": "pdf.low-contrast",
+      "title": "Insufficient colour contrast",
+      "description": "Text fill colours in content streams must meet the 4.5:1 minimum contrast ratio against the resolved background for normal-sized text. The engine recolours failing text where the background can be structurally resolved.",
+      "wcag": "SC_1_4_3",
+      "wcag_sc": "1.4.3",
+      "wcag_display": "Contrast (Minimum)",
+      "wcag_level": "AA",
+      "severity": "SERIOUS",
+      "fix_mode": "auto",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "pdf.images-of-text",
+      "title": "Text baked into an image",
+      "description": "An image appears to contain readable text. Text rendered into images cannot be resized, translated, or read by assistive technology. Extract the text into real PDF content.",
+      "wcag": "SC_1_4_5",
+      "wcag_sc": "1.4.5",
+      "wcag_display": "Images of Text",
+      "wcag_level": "AA",
+      "severity": "MODERATE",
+      "fix_mode": "ai-assisted",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "pdf.focus-order",
+      "title": "Tab order not set to structure order",
+      "description": "Pages containing AcroForm widgets must set /Tabs = /S in their page dictionary so the PDF viewer follows structure order when Tab is pressed. Without this, keyboard navigation order is undefined.",
+      "wcag": "SC_2_4_3",
+      "wcag_sc": "2.4.3",
+      "wcag_display": "Focus Order",
+      "wcag_level": "A",
+      "severity": "MODERATE",
+      "fix_mode": "auto",
+      "source": "api/formats/pdf/detectors/focus_order.py"
+    },
+    {
+      "id": "pdf.link-purpose",
+      "title": "Link text is a raw URL",
+      "description": "A hyperlink's visible text is the raw URL rather than a description of the destination. Screen reader users who navigate by links cannot determine the purpose of a raw URL link out of context.",
+      "wcag": "SC_2_4_4",
+      "wcag_sc": "2.4.4",
+      "wcag_display": "Link Purpose (In Context)",
+      "wcag_level": "A",
+      "severity": "MODERATE",
+      "fix_mode": "human-only",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "pdf.headings-labels",
+      "title": "Tagged PDF has no heading structure",
+      "description": "A tagged PDF with no heading tags (H1–H6) provides no navigable structure. Screen reader users who jump by heading cannot skim the document. The engine proposes a heading map derived from font-size hierarchy for human confirmation.",
+      "wcag": "SC_2_4_6",
+      "wcag_sc": "2.4.6",
+      "wcag_display": "Headings and Labels",
+      "wcag_level": "AA",
+      "severity": "MODERATE",
+      "fix_mode": "ai-assisted",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "pdf.language-of-parts",
+      "title": "Language of parts not marked",
+      "description": "Passages of text in a language different from the document's /Lang must carry a /Lang attribute on their enclosing structure element. Without it, screen readers mispronounce foreign-language passages.",
+      "wcag": "SC_3_1_2",
+      "wcag_sc": "3.1.2",
+      "wcag_display": "Language of Parts",
+      "wcag_level": "AA",
+      "severity": "MODERATE",
+      "fix_mode": "ai-assisted",
+      "source": "api/office_structure.py"
+    },
+    {
+      "id": "pdf.form-field-name",
+      "title": "Form field has no accessible name",
+      "description": "An AcroForm terminal field's /TU (tooltip / accessible name) entry is absent or generic. Screen readers announce /TU when focus reaches the field. The engine copies a meaningful /T value into /TU where available.",
+      "wcag": "SC_4_1_2",
+      "wcag_sc": "4.1.2",
+      "wcag_display": "Name, Role, Value",
+      "wcag_level": "A",
+      "severity": "SERIOUS",
+      "fix_mode": "auto",
+      "source": "api/formats/pdf/detectors/name_role_value.py"
     }
   ]
 }
