@@ -10,7 +10,8 @@ from assessment import Confidence, Coverage
 from capabilities import Capability
 from rule_registry import register
 
-from formats.pdf.detectors import focus_order, name_role_value, nontext_contrast, text_spacing, use_of_color
+from formats.pdf.detectors import (focus_order, link_purpose, name_role_value, nontext_contrast,
+                                   text_spacing, use_of_color)
 
 # ── 4.1.2 Name, Role, Value ───────────────────────────────────────────────────────────
 # PARTIAL, not FULL: sound over AcroForm fields, silent on tagged-structure components.
@@ -81,6 +82,31 @@ register(
     reason=("solid-colour non-text elements are measured with the WCAG contrast formula on sampled "
             "pages; gradient fills, bitmap images and most icon glyphs are not examined, and "
             "whether a low-contrast element conveys meaning is left to a human"),
+)
+
+# ── 2.4.4 Link Purpose (In Context) ──────────────────────────────────────────────────
+# PARTIAL, not FULL: the technique catches one specific failure pattern — a link annotation
+# whose URI appears verbatim in the page text (the bare URL is the link label). Links whose
+# display text is a generic filler phrase ("click here", "more info") or otherwise misleads
+# about the destination are outside scope. Within that subset the check is exact — a literal
+# string match — so HIGH confidence: when a raw URL is found, it is a definite bad label with
+# no human judgement needed to confirm.
+#
+# MECHANISM MIGRATION: the pair moves from `store.RULE_FORMATS` + `_certify` to the coverage
+# gate. A failing document still reports FAIL. A clean scan now reports REVIEW ("we checked
+# what the technique reaches") instead of the overclaiming PASS the legacy path returned —
+# because the technique proves only that no link's URI appeared verbatim as its visible text,
+# not that every link's text is meaningful.
+register(
+    rule="2.4.4",
+    fmt="pdf",
+    detector=link_purpose.detect,
+    requires={Capability.LINKS},
+    coverage=Coverage.PARTIAL,
+    confidence=Confidence.HIGH,
+    reason=("link annotations are checked for a URI that appears verbatim in the page text — a "
+            "raw URL used as the link label; generic filler phrases and links whose text does not "
+            "literally match the URI are not examined"),
 )
 
 # ── 1.4.12 Text Spacing ───────────────────────────────────────────────────────────────

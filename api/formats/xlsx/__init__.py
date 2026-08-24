@@ -136,6 +136,44 @@ def _no_keyboard_trap(path):
             if str(f.get("wcag", "")).startswith("2.1.2")]
 
 
+def _language_parts(path):
+    """3.1.2 for xlsx — foreign passages the workbook never identifies with a language mark.
+
+    Delegates to the dedicated detector module so the docstring, rationale and test coverage
+    all live in one place. Lazy import keeps this package importable by tooling that only
+    reads the registry.
+    """
+    from formats.xlsx.detectors.language_parts import detect
+    return detect(path)
+
+
+# ── 3.1.2 Language of Parts ───────────────────────────────────────────────────────────
+# PARTIAL: a passage must reach textchecks._MIN_SEG_WORDS (12) words in a language other than
+# the document's own before langdetect is trusted, so a shorter foreign phrase or a single
+# borrowed word is under the floor and unflagged. MEDIUM confidence: "which language a passage
+# IS" is a statistical detection, not a certainty — and unlike docx/pptx this detector cannot
+# supply a `marked` dict to cross-check (SpreadsheetML's rich-text run properties have no
+# per-run language element at all). A clean result means "no unmarked foreign passage long
+# enough for us to be sure", a real check over a strict subset.
+#
+# PERMANENTLY HUMAN for remediation: the format has no element to write a language mark into
+# (see apply_text_values.py and remediation_capability.py). This does not affect detection.
+# MECHANISM MIGRATION from RULE_FORMATS + _certify: verdict unchanged (a finding → FAIL,
+# clean scan → REVIEW instead of the overclaiming PASS the legacy path returned).
+register(
+    rule="3.1.2",
+    fmt="xlsx",
+    detector=_language_parts,
+    requires={Capability.TEXT},
+    coverage=Coverage.PARTIAL,
+    confidence=Confidence.MEDIUM,
+    reason=("passages of at least 12 words in a language other than the workbook's own are "
+            "flagged when no language mark is present; SpreadsheetML has no per-run language "
+            "element, so shorter phrases and statistical uncertainty in langdetect's detection "
+            "are both unflagged, and no write-back can ever clear this finding"),
+)
+
+
 # ── 2.1.2 No Keyboard Trap ────────────────────────────────────────────────────────────
 # An embedded ActiveX/OLE control in a workbook may trap keyboard focus — whether focus can
 # move away depends on the control's own implementation and on Excel's handling, which no static

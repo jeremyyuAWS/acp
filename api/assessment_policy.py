@@ -109,14 +109,15 @@ RULE_FORMATS: dict[str, frozenset[str]] = {
     "2.4.1": frozenset({"html", "pdf"}),
     # 2.4.4 / 3.1.2 docx are ABSENT, migrated to the capability registry (ADR 0031), the same shape
     # as 4.1.2 below: the docx link-purpose and language-of-parts checks reach a SUBSET of their
-    # criterion, which this table cannot express but coverage=PARTIAL can. The other formats keep
-    # their pass/fail lane here. `_ALL_FORMATS` minus docx = the four non-docx formats.
+    # criterion, which this table cannot express but coverage=PARTIAL can. pdf 2.4.4 and xlsx 3.1.2
+    # are now also ABSENT for the same reason — both are registry-backed with PARTIAL coverage.
+    # `_ALL_FORMATS` minus {docx, pdf} for 2.4.4; `_ALL_FORMATS` minus {docx, xlsx} for 3.1.2.
     "2.4.2": _ALL_FORMATS, "2.4.3": frozenset({"html"}),
-    "2.4.4": frozenset({"html", "pptx", "xlsx", "pdf"}),
+    "2.4.4": frozenset({"html", "pptx", "xlsx"}),
     "2.4.6": _ALL_FORMATS, "2.4.7": frozenset({"html"}), "2.4.9": frozenset({"docx", "html", "pptx"}),
     "2.4.10": frozenset({"docx"}),
     "2.5.3": frozenset({"html"}), "2.5.8": frozenset({"html"}), "3.1.1": _ALL_FORMATS,
-    "3.1.2": frozenset({"html", "pptx", "xlsx", "pdf"}),
+    "3.1.2": frozenset({"html", "pptx", "pdf"}),
     "3.1.4": frozenset({"html"}), "3.1.5": _ALL_FORMATS, "3.3.2": frozenset({"docx", "html"}),
     # docx is ABSENT here, and that is the migration rather than a regression. #144 added it,
     # which made a FAILING Word file report FAIL correctly but left a CLEAN one reading
@@ -174,7 +175,12 @@ _SUPERSEDING_OUTCOMES = frozenset({"PASS", NOT_EVALUATED, _LEGACY_NOT_EVALUATED}
 # PASS, because ACP did not verify conformance (ADR 0016). Currently backed by the shipped
 # office interactive-control detector (office_structure.office_control_review_checks).
 REVIEW_FORMATS: dict[str, frozenset[str]] = {
-    "2.1.2": frozenset({"docx", "pptx", "xlsx"}),   # No Keyboard Trap — controls present
+    # 2.1.2 No Keyboard Trap: REMOVED — docx, pptx, and xlsx are all registry-backed now
+    # (formats/docx, formats/pptx, formats/xlsx — each with PARTIAL coverage). The review-lane
+    # branch runs BEFORE the registry branch and returns NOT_EVALUATED on a clean file, so leaving
+    # a format here would silently shadow the coverage declaration and produce the wrong answer
+    # for a file with no controls found.
+    #
     # 4.1.2 Name/Role/Value: REMOVED — all three formats (docx, xlsx, pptx) are now registry-backed.
     # The _rule_outcome review-lane branch runs BEFORE the registry branch and returns NOT_EVALUATED
     # on a clean file, so leaving a format here would silently shadow the coverage declaration and
