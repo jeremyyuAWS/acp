@@ -573,11 +573,18 @@ thing the PRD does not mention.
   sentences containing "Château Margaux" / "Bonne Maman" even in otherwise-English text — a
   real engine false-positive that needs an engine fix, not a fixture adjustment.
 
-- [ ] **P4.6 — Confidence calibration, with the sample-size caveat from P4.2.** (PRD §17.) A
-  local model's self-reported `"confidence": 0.97` in a JSON blob is not a calibrated
-  probability and must never be used as one. Measure empirical precision per bucket, keep PASS
-  and FAIL thresholds asymmetric, and note that each bucket needs its own *n* before it means
-  anything.
+- [x] **P4.6 — Confidence calibration, with the sample-size caveat from P4.2.** (PRD §17.) Done.
+  `scripts/calibrate_confidence.py` consumes a JSON array of `{model, criterion, confidence,
+  model_verdict, truth_verdict}` items and produces a per-(criterion, bucket) calibration table:
+  empirical PASS precision, false-PASS rate, rule-of-three 95% upper bound, and a per-bucket
+  shortage count showing how far from a ≤1% gate each bucket is. PASS and FAIL precision are
+  reported separately (asymmetric cost: false PASS bypasses human review; false FAIL wastes
+  reviewer time). `--demo` runs on synthetic data illustrating the classic overconfidence pattern
+  — stated 97%, actual ~87% PASS precision. Note: local models do not currently emit a structured
+  `confidence` field; `suggest_fix()` returns text. This script is the measurement instrument for
+  when confidence elicitation is added to the model prompts. Each bucket needs its own *n* (300
+  PASS predictions with zero false PASSes to claim ≤1% false-PASS at 95% confidence by the rule
+  of three); pooling across criteria or buckets overstates the evidence.
 
 - [~] **P4.7 — Reproducibility metadata on every recorded result.** (PRD §26.) Model, revision,
   quantisation, runtime, prompt version, fixture version, hardware, temperature, seed.
