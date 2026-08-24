@@ -516,7 +516,7 @@ per-document certificate renderer alongside it).
 | # | Item | Guardrail |
 |---|---|---|
 | ~~R9~~ | ~~**Human-review KPI block**~~ — **SHIPPED** | `_assurance_section`: reviewed / approved / rejected / remediated band from immutable `decision_log`; effort as fixes-cleared ÷ findings (basis named, no modelled saving); edited-draft count and avg review time (only when real timestamps) from `hitl_analytics`. |
-| ~~R10~~ | ~~**Assurance/confidence bars** (deterministic vs AI vs human)~~ — **DONE** | `_assurance_section`: second stat band shows `auto` / `ai-assisted` / `human-only` criteria counts from `facts["scope"]["by_mode"]`; text paragraph names the basis. "Fixes cleared ÷ attempted" omitted — attempted denominator not tracked (ADR 0016). |
+| ~~R10~~ | ~~**Assurance/confidence bars**~~ — **SHIPPED** | `_mode_bar()`: stacked horizontal bar showing deterministic ÷ AI-assisted ÷ human-only split of evaluated criteria, with legend. Prose names all three modes with real counts and percentages; "fixed ÷ attempted" omitted (attempted not tracked, per ADR 0016). |
 | ~~R11~~ | ~~**"How ACP reached this decision" methodology**~~ — **SHIPPED** | `_provenance_section` (R11): evaluated/auto/ai counts from real scan facts; method narrative names the deterministic engine, AI-assisted review, revalidation re-scan, and human approval gate. |
 | ~~R12~~ | ~~**Compliance timeline**~~ — **SHIPPED** | `_provenance_section` (R12): pipeline rendered as `scanned N → evaluated N → N finding(s) → N AI-assisted → N approval(s) → N remediated & re-validated → N/N certifiable`; each count from scan facts. |
 
@@ -542,7 +542,9 @@ honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~
 
 ### Polish / technical debt (surfaced during R15 implementation, 2026-08-24)
 
-**All P-1–P-8 shipped** (verified against `origin/main` 2026-08-24). **P-9–P-12 shipped** this PR.
+**All P-1–P-8 shipped** (verified against `origin/main` 2026-08-24). **P-9–P-12 shipped** (#725).
+
+**Sequencing (2026-08-24):** P-1–P-8 → P-9–P-12 (honesty/completeness) → P-13/P-16/P-18/P-20 → R9/R10 w/ P-15 → P-14/P-17 → R-D/R-E → P-19/presentation.
 
 | # | Location | Item |
 |---|---|---|
@@ -558,6 +560,14 @@ honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~
 | ~~P-10~~ | `api/report.py` | ~~Stat band denominator `cert / total` includes unassessed files, overstating coverage.~~ **DONE**: denominator changed to `assessed` (total − unassessed); label says "N of M assessed". |
 | ~~P-11~~ | `api/report.py` | ~~No criteria-level outcome breakdown — auditors see file counts but not WCAG criterion outcomes.~~ **DONE**: second stat band row from `facts["scope"]`: passed / with findings / human-review / not-evaluated. |
 | ~~P-12~~ | `api/report.py` | ~~No assessment scope declaration at the top of the report.~~ **DONE**: 3×4 table (source / scan window / file types / method / standard+target / rubric) replaces old "Scope & methodology" card. |
+| P-13 | `api/report.py` | **Add a limitations & exceptions section** generated from actual scan state (not boilerplate): password-protected docs, criteria needing human review, unavailable ownership metadata, unassessed external content, OCR failures. Material limitations near the executive summary. |
+| P-14 | `api/report.py`, `api/store.py` | **Use stable finding identifiers.** Every finding gets a durable ID that survives rendering, export, reassessment, and remediation. Expose it in headings, links, and evidence references. |
+| P-15 | `api/report.py`, `api/store.py` | **Clarify finding status and history.** Seven states: Open · Remediation attempted · Awaiting re-scan · Verified resolved · Accepted exception · False positive · Reopened. Do not label something "fixed" merely because remediation ran. Groundwork for R9/R10. |
+| P-16 | `api/report.py` | **Add report provenance and freshness.** Display: report-generated timestamp + TZ, assessment-completion timestamp, data cutoff, scan ID, report schema/version, application build/commit, rubric name/version/hash. Label as a snapshot if assessment is still running or data has changed. |
+| P-17 | `api/report.py` | **Improve evidence presentation.** Per finding: file + location, criterion, detector/method, observed value, expected condition, relevant page/element, confidence or manual-review flag, evidence-collection timestamp. Long evidence expands rather than disappearing; redacted values are marked as redacted. |
+| P-18 | `api/report.py` | **Report-level reconciliation checks before rendering.** Validate: outcome counts = criteria evaluated; file totals reconcile across sections; severity totals = detailed findings; remediation totals match finding statuses; every evidence item exists; every rubric hash resolves. Fail loudly or display a report-integrity warning. |
+| P-19 | `api/report.py` | **Print/PDF/AT behaviour.** Tables must repeat headers across pages; rows must not split into unreadable fragments; URLs and finding IDs must be usable in print; charts need text equivalents; colour is never the only status indicator; heading order and table semantics are correct; QR codes have adjacent human-readable URLs; page headers identify the scan and report date. |
+| P-20 | `api/report.py` | **Remove ambiguous assurance language.** Audit and replace: "Compliant", "Passed", "Complete", "Verified", "All issues", "No accessibility issues". Prefer bounded claims: "No automated failures detected among the N criteria evaluated. M criteria were not fully evaluated, including K requiring manual review." |
 
 ---
 

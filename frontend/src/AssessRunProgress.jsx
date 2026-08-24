@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { normalizeLive } from './liveAssessment.js'
 
 // The Assess RUNNING screen (approved board assess-03). It replaces the mid-run KPI scoreboard
@@ -30,16 +31,137 @@ function stepLabel(cur) {
   return 'Assessing this document'
 }
 
+function fmtElapsedSecs(s) {
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  return r ? `${m}m ${r}s` : `${m}m`
+}
+
+// One preparation step row: icon (✓ / pulsing dot / ○), label, right-aligned detail.
+function PrepStep({ label, detail, status }) {
+  return (
+    <div role="listitem" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <span style={{ width: 16, flexShrink: 0, display: 'flex', alignItems: 'center',
+                     justifyContent: 'center' }} aria-hidden="true">
+        {status === 'done' && <span style={{ color: 'var(--green,#1a7f45)', fontSize: 13.5 }}>✓</span>}
+        {status === 'active' && <span className="prep-pulse" />}
+        {status === 'pending' && <span style={{ color: 'var(--muted)', fontSize: 13 }}>○</span>}
+      </span>
+      <span style={{ flex: 1, fontSize: 13.5,
+                     color: status === 'pending' ? 'var(--muted)' : 'var(--ink)' }}>
+        {label}
+      </span>
+      {detail && (
+        <span className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>
+          {detail}
+        </span>
+      )}
+    </div>
+  )
+}
+
+// Four-step preparation checklist shown while 0 files have completed (indeterminate phase).
+// Each step infers its completion state from real snapshot data — no fabricated percentages.
+// One pulsing dot (●) marks the active step; done steps show ✓; not-yet-started show ○.
+function PrepChecklist({ m, total, elapsed }) {
+  const q = m.queue
+  const workers = q ? q.workers : null
+  const workersCount = workers ? (workers.busy + (workers.idle ?? 0)) : 0
+  const workersMax = workers ? workers.max : null
+
+  const invDone = total > 0
+  // Workers considered fully started when all slots are filled, OR when some workers are
+  // active and the queue already has work (they are busy enough to have queued items).
+  const workersDone = workers !== null && (
+    (workersMax !== null && workersCount >= workersMax) ||
+    (workersCount > 0 && q && (q.queued > 0 || q.inFlight > 0))
+  )
+  const queueDone = !!(q && (q.queued > 0 || q.inFlight > 0))
+
+  const phases = [
+    {
+      label: 'Validating scan inventory',
+      done: invDone,
+      detail: invDone ? `${total.toLocaleString()} files` : null,
+    },
+    {
+      label: 'Starting assessment workers',
+      done: workersDone,
+      detail: workersMax != null
+        ? `${workersCount} of ${workersMax} ready`
+        : workersCount > 0 ? `${workersCount} ready` : null,
+    },
+    {
+      label: 'Building the document queue',
+      done: queueDone,
+      detail: q && q.queued > 0 ? `${q.queued.toLocaleString()} queued` : null,
+    },
+    // This step is never "done" here — pct > 0 transitions the parent to the determinate bar.
+    { label: 'Opening the first documents', done: false, detail: null },
+  ]
+
+  const firstActiveIdx = phases.findIndex(p => !p.done)
+  const steps = phases.map((p, i) => ({
+    ...p,
+    status: p.done ? 'done' : i === firstActiveIdx ? 'active' : 'pending',
+  }))
+
+  const isStalled = elapsed >= 120
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+                    gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 14.5, fontWeight: 650 }}>Preparing assessment</div>
+        {/* elapsed ticks every second — aria-hidden keeps it out of the polite live region */}
+        <div className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}
+             aria-hidden="true">
+          {fmtElapsedSecs(elapsed)} elapsed
+        </div>
+      </div>
+
+      {/* aria-live on the step list so completions are announced politely, not on every tick. */}
+      <div aria-live="polite" aria-atomic="false" role="list" aria-label="Preparation steps"
+           style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+        {steps.map((s, i) => <PrepStep key={i} {...s} />)}
+      </div>
+
+      {isStalled && (
+        <p role="alert" style={{ margin: '12px 0 0', fontSize: 12.5, lineHeight: 1.5,
+                                 color: 'var(--amber,#92400e)' }}>
+          Preparation is taking longer than usual.
+          {workers && workersMax != null && ` ${workersCount} of ${workersMax} workers are ready.`}
+          {' '}No documents have been assessed yet.
+        </p>
+      )}
+    </div>
+  )
+}
+
 export default function AssessRunProgress({ snapshot, throughput, onStop }) {
   const m = normalizeLive(snapshot)
+
+  const total = m.available ? (m.totals.eligible || m.totals.discovered || 0) : 0
+  const completed = m.available && snapshot?.kpis ? Number(snapshot.kpis.completed) || 0 : 0
+  const pct = total ? Math.min(100, Math.round((completed / total) * 100)) : 0
+  const isPreparing = m.available && pct === 0
+
+  // Elapsed seconds since this screen first appeared — stops ticking once real progress begins.
+  const [startedAt] = useState(() => Date.now())
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    if (!isPreparing) return
+    setElapsed(Math.round((Date.now() - startedAt) / 1000))
+    const t = setInterval(() => setElapsed(Math.round((Date.now() - startedAt) / 1000)), 1000)
+    return () => clearInterval(t)
+  }, [isPreparing, startedAt])
+
   if (!m.available) return null
 
-  const total = m.totals.eligible || m.totals.discovered || 0
-  const completed = snapshot && snapshot.kpis ? Number(snapshot.kpis.completed) || 0 : 0
   // The document IN FLIGHT is the one after those completed — 1-based, clamped so it never reads
   // "Document 23 of 22" on the last frame before the run leaves 'running'.
   const position = total ? Math.min(total, completed + (m.active ? 1 : 0)) : completed
-  const pct = total ? Math.min(100, Math.round((completed / total) * 100)) : 0
   const cur = m.queue ? m.queue.current : null
   const eta = throughput && (throughput.etaText || (throughput.calibrating ? 'estimating…' : null))
 
@@ -50,45 +172,55 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
         {/* aria-live on the heading only: the document-of-N line changes every couple of seconds and
             a live region over it would spam a screen reader; the phase and the estate size do not. */}
         <h3 style={{ margin: 0, fontSize: 16 }}>
-          Assessing {total.toLocaleString()} document{total === 1 ? '' : 's'}
+          {isPreparing
+            ? total > 0
+              ? `Preparing to assess ${total.toLocaleString()} document${total === 1 ? '' : 's'}`
+              : 'Preparing assessment'
+            : `Assessing ${total.toLocaleString()} document${total === 1 ? '' : 's'}`}
         </h3>
-        {m.phaseLabel && <span className="muted" style={{ fontSize: 13 }}>{m.phaseLabel}</span>}
+        {!isPreparing && m.phaseLabel && (
+          <span className="muted" style={{ fontSize: 13 }}>{m.phaseLabel}</span>
+        )}
       </header>
 
       <div className="assess-run-card" style={{ border: '1px solid var(--line,#e4e8ec)', borderRadius: 12,
                                                 padding: '14px 16px', background: 'var(--panel,#fff)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
-                      alignItems: 'baseline' }}>
-          <div style={{ fontSize: 15, fontWeight: 650 }} aria-live="polite">
-            {total ? `Document ${position} of ${total.toLocaleString()}` : 'Preparing…'}
-          </div>
-          {eta && <div className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>
-            {eta}
-          </div>}
-        </div>
+        {isPreparing ? (
+          <PrepChecklist m={m} total={total} elapsed={elapsed} />
+        ) : (
+          <>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
+                          alignItems: 'baseline' }}>
+              <div style={{ fontSize: 15, fontWeight: 650 }} aria-live="polite">
+                {total ? `Document ${position} of ${total.toLocaleString()}` : 'Preparing…'}
+              </div>
+              {eta && <div className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>
+                {eta}
+              </div>}
+            </div>
 
-        {/* Indeterminate (shimmer) when nothing has scored yet — a 0-width bar looks
-            broken; the shimmer says "working" without claiming false precision. */}
-        <div className={pct === 0 ? 'track indeterminate' : 'track'}
-             style={{ height: 8, borderRadius: 999, background: 'var(--line,#eceff2)',
-                      overflow: 'hidden', margin: '10px 0' }}>
-          <i style={{ display: 'block', height: '100%', width: `${pct}%`, background: '#4A2C4D',
-                      transition: 'width .3s' }} />
-        </div>
+            <div className="track"
+                 style={{ height: 8, borderRadius: 999, background: 'var(--line,#eceff2)',
+                          overflow: 'hidden', margin: '10px 0' }}>
+              <i style={{ display: 'block', height: '100%', width: `${pct}%`, background: '#4A2C4D',
+                          transition: 'width .3s' }} />
+            </div>
 
-        {cur ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            {cur.file && (
-              <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12.5 }}>
-                {cur.file}
+            {cur ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {cur.file && (
+                  <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12.5 }}>
+                    {cur.file}
+                  </div>
+                )}
+                <div className="muted" style={{ fontSize: 12.5 }} aria-live="polite">{stepLabel(cur)}</div>
+              </div>
+            ) : (
+              <div className="muted" style={{ fontSize: 12.5 }}>
+                {(m.queue && m.queue.laneLabel) || 'Preparing…'}
               </div>
             )}
-            <div className="muted" style={{ fontSize: 12.5 }} aria-live="polite">{stepLabel(cur)}</div>
-          </div>
-        ) : (
-          <div className="muted" style={{ fontSize: 12.5 }}>
-            {(m.queue && m.queue.laneLabel) || 'Preparing…'}
-          </div>
+          </>
         )}
       </div>
 

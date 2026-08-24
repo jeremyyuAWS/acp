@@ -522,8 +522,12 @@ def drive_service(request=None):
 
 
 # ── HITL webhook ──────────────────────────────────────────────────────────────
-def fire_webhook(items: list[dict]) -> None:
-    """POST new HITL items to the configured webhook URL (best-effort, non-blocking)."""
+def fire_webhook(items: list[dict], *, event: str = "hitl.queued") -> None:
+    """POST HITL events to the configured webhook URL (best-effort, non-blocking).
+
+    Supported events: hitl.queued (new items), hitl.assigned (reviewer set),
+    hitl.resolved (approved / rejected / skipped).
+    """
     if not HITL_WEBHOOK or not items:
         return
     import threading
@@ -531,7 +535,7 @@ def fire_webhook(items: list[dict]) -> None:
     def _post():
         try:
             import httpx
-            httpx.post(HITL_WEBHOOK, json={"event": "hitl.queued", "items": items}, timeout=8)
+            httpx.post(HITL_WEBHOOK, json={"event": event, "items": items}, timeout=8)
         except Exception as e:
             print(f"HITL webhook failed: {e}", flush=True)
     threading.Thread(target=_post, daemon=True).start()

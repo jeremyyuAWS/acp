@@ -61,15 +61,25 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toContain('Idle')
   })
 
-  it('uses the indeterminate class when nothing has completed yet', () => {
-    // At 0% the bar is invisible — indeterminate shimmer shows the run is alive, not stalled.
+  it('shows a preparation checklist rather than a sweeping bar when nothing has completed yet', () => {
+    // At 0% we replace the full-width shimmer with a localized step list so the screen
+    // communicates what ACP is doing rather than just animating across the page.
     const starting = { ...SNAP, kpis: { ...SNAP.kpis, completed: 0 } }
-    expect(render(starting)).toContain('class="track indeterminate"')
+    const html = render(starting)
+    expect(html).toContain('Preparing to assess 22 documents')
+    expect(html).not.toContain('track indeterminate')
+    expect(html).toContain('Validating scan inventory')
+    expect(html).toContain('Starting assessment workers')
+    expect(html).toContain('Building the document queue')
+    expect(html).toContain('Opening the first documents')
   })
 
-  it('uses a determinate bar once the first file completes', () => {
-    // 8 of 22 done — progress is measurable, shimmer gives way to the real fill.
-    expect(render(SNAP)).not.toContain('indeterminate')
+  it('switches to the determinate bar once the first file completes', () => {
+    // 8 of 22 done — progress is measurable; the checklist gives way to the real fill bar.
+    const html = render(SNAP)
+    expect(html).toContain('Assessing 22 documents')
+    expect(html).not.toContain('Preparing assessment')
+    expect(html).not.toContain('Validating scan inventory')
   })
 })
 
