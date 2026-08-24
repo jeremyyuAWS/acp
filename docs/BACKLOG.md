@@ -110,9 +110,10 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
 
 ### Testing / verification holes
 
-- [ ] **R10 — CI fixture-verification harness for the R8 understated cells.** The office/PDF detectors
-  can't run locally (no venv here); confirming `xlsx 1.4.1/1.4.11/4.1.2` and `pdf 2.4.3` actually *emit*
-  on a built fixture needs a CI run before editing the capability table. This is the honest gate on R8.
+- [x] **R10 — CI fixture-verification harness for the R8 understated cells.** Done. `tests/test_r10_fixture_cells.py`
+  adds 9 tests covering xlsx 1.4.1, 1.4.11, 4.1.2 and pdf 2.4.3 — hand-crafted zip fixtures (stdlib only)
+  for xlsx, `pytest.importorskip` guards for pdf (pikepdf/reportlab). All 9 pass in CI. *(Source-verified
+  2026-08-24. PR #673 merged.)*
 - [ ] **R11 — Multi-user / concurrency load test.** The durable Postgres queue + `owner_email` isolation
   is code-verified but not stress-tested with concurrent users — the exact 3-users-scanning-their-own-
   Drives pilot scenario. Re-run: a fan-out load harness against a staging estate.
@@ -132,9 +133,10 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   - Re-run this test the same way after any R2/R3 fix: force a `1.1.1` draft, then re-read the AI-cost
     zone — a genuine GPU call must show up as **cloud**, and the draft must be image-derived (🟡), not a
     filename template.
-- [ ] **R13 — Test the isolation-off invariant.** Setting `ACCESS_CODE` on a Google-configured deploy
-  silently collapses everyone to the `demo` estate (`app.py:127`, `if ACCESS_CODE / elif GOOGLE_CLIENT_ID`),
-  guarded only by a startup warning. Add a test asserting isolation stays ON for a PHI deploy.
+- [x] **R13 — Test the isolation-off invariant.** Done. `tests/test_isolation_invariant.py` adds 7 tests:
+  3 isolation-ON (GOOGLE_CLIENT_ID set, ACCESS_CODE absent) and 4 isolation-OFF (both set — verifies
+  `_owner()` returns `'demo'`, not the user's email). Asserts the `if ACCESS_CODE / elif GOOGLE_CLIENT_ID`
+  gate in `app.py:127` behaves as documented. *(Source-verified 2026-08-24. PR #674 merged.)*
 
 ---
 
@@ -472,8 +474,10 @@ third is the correctness fix with the widest blast radius.
   deletion paths for a BAA; confirm nothing logs document content.
 - [ ] **P3.4 — Power BI export.** Given the data is in Postgres, a read-only view plus DirectQuery
   is likely cheaper and better than an export feature.
-- [ ] **P3.5 — `vite@8` / `esbuild` CVEs.** 1 moderate + 1 high, **dev-only** (never loaded by a
-  user's browser). Breaking major across both SPAs — worth doing, not worth doing this week.
+- [x] **P3.5 — `vite@8` / `esbuild` CVEs.** Done. `frontend/package.json` upgraded vite `^5.4.11` →
+  `^8.2.2` and `@vitejs/plugin-react` `^4.3.4` → `^5.2.0`. Fixes GHSA-67mh-4wv8-2f99 (moderate esbuild)
+  and one high CVE. Dev-only; vitest 4.1.9 compatible with vite 8. *(Source-verified 2026-08-24. PR
+  #672 merged.)*
 
 ---
 
@@ -660,8 +664,11 @@ argued.
 - [ ] **I.2 — Fix the production approval gate.** The UI approval silently failed three times
   today; the API worked instantly every time. Worth understanding before it blocks a release
   nobody can approve.
-- [ ] **I.3 — Raise `num_predict` for 32B.** 400 fixed `qwen3:14b` and still truncates
-  `qwen3:32b` (2 of 4 drafts empty). Only matters if a reasoning model is ever deployed.
+- [x] **I.3 — Raise `num_predict` for 32B.** Done. Raised ceilings in `api/ai.py` (120→200, 140→250,
+  400→800, 220→400, 200→400) and `api/providers.py` (128→200). Root cause: reasoning models emit a
+  thinking pass before answering — the old caps ran out mid-thought, returning empty responses. Since
+  `num_predict` is a ceiling, raising it costs nothing when the model finishes early. *(Source-verified
+  2026-08-24. PR #675 open, CI green.)*
 
 ---
 
