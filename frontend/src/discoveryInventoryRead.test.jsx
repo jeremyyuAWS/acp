@@ -163,3 +163,20 @@ describe('a file the inventory did not cover is its own bucket, not "no recommen
     expect(text()).toContain('The buckets add up to the 2 files discovered')
   })
 })
+
+describe('discovery-only run — no WCAG files, only unsupported formats in the inventory', () => {
+  it('shows the Continue to Assess button even when files=[]; it must not be gated on WCAG results', async () => {
+    // Simulate a user whose estate contains ONLY images/videos/unsupported formats.
+    // The scan produced zero WCAG file_records (files=[]) but the inventory carries those rows.
+    h.rows = [
+      { file: 'Media/photo.png', path: 'Media/photo.png', status: 'discovered' },
+      { file: 'Media/video.mp4', path: 'Media/video.mp4', status: 'discovered' },
+    ]
+    await render({ files: [] })
+    // The button must exist — a discovery-only run should still be able to advance to Assess.
+    const assess = container.querySelector('button[data-advance="assess"]')
+    expect(assess, 'Continue to Assess button is missing on a discovery-only run').not.toBeNull()
+    // No pending WCAG actions and no acknowledgement to gate on, so it must be enabled.
+    expect(assess.disabled).toBe(false)
+  })
+})
