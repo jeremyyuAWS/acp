@@ -11,8 +11,12 @@ WHICH OUTCOMES RETRACT, and why it is not simply "the finding now passes". Measu
 `_rule_outcome` for every ai-assisted criterion, a clean scan almost never yields PASS:
 
     1.1.1 · 1.4.5 · 2.4.4 · 3.1.2    REVIEW on every format
-    1.4.9 · 2.4.9 · 4.1.2(office)    NOT_EVALUATED
+    1.4.9 · 2.4.9 · 2.1.2(office)    NOT_EVALUATED
     3.3.2 docx/html · 4.1.2 html     PASS
+
+(4.1.2 office was here, but docx/xlsx/pptx all migrated to the capability registry; a clean
+scan now returns REVIEW for those pairs. 2.1.2 pptx is the exemplar that remains in
+REVIEW_FORMATS, so it still falls back to NOT_EVALUATED when controls are absent.)
 
 REVIEW is the resting state of the criteria the inbox mostly holds, because those detectors
 find whether alt text EXISTS and cannot certify that it is any good. Retracting on REVIEW would
@@ -115,18 +119,21 @@ def test_a_retracted_item_comes_back_if_the_finding_regresses(st):
     assert "3.3.2" in _ids(st.list_hitl_queue(scan_id="s1"))
 
 
-def test_an_item_that_falls_back_to_not_evaluated_retracts(st):
-    """The other superseding outcome, and the commoner of the two in practice.
+def test_a_migrated_pptx_412_item_does_not_retract_on_review(st):
+    """pptx 4.1.2 was migrated from REVIEW_FORMATS to the capability registry (PR #696).
 
-    4.1.2 on PPTX sits in REVIEW_FORMATS, so a recorded blocking finding surfaces as FAIL (and
-    queues), while clearing it drops the pair to NOT_EVALUATED rather than PASS — no detector
-    certifies name/role/value on a slide deck. NOT_EVALUATED is "we did not look", which is not
-    work either, so the item must retract just the same.
+    Before the migration: clearing all findings dropped the outcome to NOT_EVALUATED, and the
+    hitl item retracted (NOT_EVALUATED is in _SUPERSEDING_OUTCOMES).
 
-    This used to be written against DOCX. It moved to PPTX when docx 4.1.2 was migrated to the
-    capability registry: PARTIAL coverage makes a clean Word file read REVIEW, not
-    NOT_EVALUATED, so docx no longer exercises the fall-back-to-superseding path this test is
-    about. The docx behaviour is pinned separately below rather than folded in here.
+    After the migration: the registry reports PARTIAL coverage, so a clean scan now returns
+    REVIEW instead. REVIEW is deliberately NOT in _SUPERSEDING_OUTCOMES — naming every visible
+    control in a presentation does not answer the question for controls the technique cannot
+    reach (embedded OLE objects, focusable regions only exposed at runtime), so the question
+    remains genuinely open for a human. The item stays.
+
+    This makes pptx 4.1.2 consistent with docx 4.1.2 (already migrated before PR #696) and
+    pdf 4.1.2. The no-longer-reachable NOT_EVALUATED retraction path has no natural ai-assisted
+    exemplar remaining in REVIEW_FORMATS, so it is not separately pinned.
     """
     def _rec(*, failing):
         issues = [{"ruleId": "PPTX-NRV-001", "wcag": "4.1.2", "severity": "CRITICAL"}] if failing else []
@@ -140,8 +147,8 @@ def test_an_item_that_falls_back_to_not_evaluated_retracts(st):
     assert _outcome(st, "s1", "app.pptx", "4.1.2") == "FAIL"
 
     st.save_file_result("s1", _rec(failing=False), "t2")
-    assert _outcome(st, "s1", "app.pptx", "4.1.2") == "NOT_EVALUATED"
-    assert "4.1.2" not in _ids(st.list_hitl_queue(scan_id="s1"))
+    assert _outcome(st, "s1", "app.pptx", "4.1.2") == "REVIEW"
+    assert "4.1.2" in _ids(st.list_hitl_queue(scan_id="s1"))
 
 
 def test_a_partial_coverage_pair_does_not_retract_when_its_findings_clear(st):
