@@ -662,6 +662,32 @@ def test_proposer_language_parts_emits():
     assert out[0].get("proposed_value"), "language proposal carries no code"
 
 
+def test_verify_language_part_confirms_proposal():
+    """P4.4 — independent verifier agrees with what the generator proposed."""
+    if not _langdetect_ok():
+        pytest.skip("langdetect not available")
+    import proposals
+    # Same bilingual fixture as the proposer test — the verifier must agree on each span.
+    text = (
+        "The quick brown fox jumps over the lazy dog every single morning here today. "
+        "Le renard brun rapide saute par-dessus le chien paresseux chaque matin ici aussi.")
+    props = proposals.propose_language_parts(text)
+    assert props, "no proposals to verify"
+    for p in props:
+        assert proposals.verify_language_part(p["before"], p["proposed_value"]), (
+            f"verifier disagreed with generator on '{p['before'][:40]}' → {p['proposed_value']}")
+
+
+def test_verify_language_part_rejects_wrong_code():
+    """P4.4 — verifier returns False when the proposed lang code is wrong."""
+    if not _langdetect_ok():
+        pytest.skip("langdetect not available")
+    import proposals
+    fr_text = "Le renard brun rapide saute par-dessus le chien paresseux chaque matin ici aussi."
+    assert proposals.verify_language_part(fr_text, "de") is False, (
+        "verifier should reject 'de' for a French passage")
+
+
 def test_proposer_link_text_emits():
     """html 2.4.4 — a deterministic link-purpose proposal derived from the target."""
     import proposals

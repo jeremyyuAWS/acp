@@ -95,8 +95,13 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   `ScanScopeChip.jsx` reads from `run.scan_scope` (frozen criterion→formats map) and `run.scope`
   (file/source boundary), with a "change scope & re-scan" affordance that opens the review modal with
   a pre-populated impact estimate. Mounted in `Overview.jsx:428`. *(Source-verified 2026-08-24.)*
-- [ ] **R7 — Phase 3c: per-user config (owner default + per-user override).** Governance model chosen
-  ("owner sets a default, users can override"); not implemented.
+- [x] **R7 — Phase 3c: per-user config (owner default + per-user override).** Done. Storage
+  (`store.py:set/get/clear_user_setting`, `resolve_setting`), policy engine
+  (`assessment_policy.py:active_scope`, `_widen_union` — widen-only per ADR 0035), scan-time wiring
+  (`scanner.py:2643`), and API (`GET/PUT/DELETE /settings/mine`) were already in place.
+  `MyScanScope.jsx` (the user-facing editor: owner floor locked-on, user adds only) was built but
+  unmounted. Wired it as a **"My Scope" tab** in `Settings.jsx` alongside Owners / Users / My Data.
+  *(Source-verified 2026-08-24.)*
 - [x] **R8 — WCAG capability completion (the 12 not-ready cells).** Done. Source-verified against
   `remediation_capability.py` + `api/formats/*`, split 4/4/4: **~~4 quick table-fixes~~** ✓ done — all
   four cells (`xlsx 1.4.1`, `xlsx 1.4.11`, `xlsx 4.1.2`, `pdf 2.4.3` heuristic `/Tabs=/S`) are
@@ -510,17 +515,18 @@ thing the PRD does not mention.
   not. Generalising *that* mechanism is the decision, not inventing one.
   *Effort: a decision plus an ADR. `[?]` — needs a decision, not code.*
 
-- [ ] **P4.1 — Split the eight review-lane SCs by whether the negative is deterministically
-  provable.** The PRD treats all eight as one problem. They are two.
-  **Group A — provable** (1.1.1, 2.4.4, 3.1.2, 4.1.2): "does every image carry a non-junk
-  `descr` or a decorative marker?" is a yes/no over the OOXML, and ACP answers it at **1.00
-  recall / 1.00 precision** today with no model involved. An LLM cannot improve the PASS decision
-  here; it can only add a semantic-quality opinion, which is a different and less verifiable
-  claim. Group A needs an ADR, not an experiment.
-  **Group B — judgement** (1.3.2, 1.3.3, 1.4.5, 2.4.6, and the hard half of 1.1.1): is the
-  reading order *meaningful*, is this image of text *essential*, is this heading *descriptive*,
-  is this alt text *correct*. Only here does model quality decide the answer, and only here do
-  the PRD's experiments earn their cost.
+- [x] **P4.1 — Split the eight review-lane SCs by whether the negative is deterministically
+  provable.** Done. ADR 0040 formalises the split:
+  **Group A — provable** (1.1.1 structural part, 2.4.4, 3.1.2, 4.1.2): FAIL fires on an
+  absent/junk OOXML attribute; ACP answers at 1.00 recall/precision today with no model. An LLM
+  cannot improve the PASS decision — it can only add a semantic quality opinion, which is a
+  different claim. Group A is eligible for auto-apply via P4.4's independent structural re-scan;
+  P4.2/P4.3 experiments do not apply.
+  **Group B — judgement** (1.3.2, 1.3.3, 1.4.5, 2.4.6, and the semantic part of 1.1.1): FAIL
+  fires on a semantic quality judgement only a human or a calibrated model can settle. Model
+  quality determines the answer; P4.2/P4.3 experiments apply here only. Group B is permanently
+  human-review-only under the current evidence gate (1.1.1 silences its own detector on a wrong
+  but non-junk alt). *(Source-verified 2026-08-24.)*
 
 - [ ] **P4.2 — Corpus density: the 99% PASS-precision gate needs ~300 observations per SC, not
   20–30.** By the rule of three, *n* trials with zero observed failures bound the true rate at
@@ -556,12 +562,14 @@ thing the PRD does not mention.
   `formats.office.images`. Compare full-page render / object crop / crop + context / crop +
   deterministic evidence / all of it. Blocked on nothing.
 
-- [ ] **P4.4 — Independent verification: the generator must not approve its own remediation.**
-  (PRD §20.) Cheap, high safety value, and needs no policy change to *measure*. Prefer
-  deterministic verification wherever it is complete — 3.1.2 is fully closable today (set
-  `w:lang`, re-run langdetect on the span, no model prose trusted), 2.4.4 is partial (uniqueness
-  yes, accuracy-to-target no), and 1.1.1 is not verifiable at all, which is the asymmetry that
-  matters: **a wrong alt does not merely fail, it silences the detector.**
+- [x] **P4.4 — Independent verification: the generator must not approve its own remediation.**
+  (PRD §20.) Done for 3.1.2 — the only criterion where the check is complete today. Added
+  `proposals.verify_language_part(segment_text, proposed_lang)` as a separate verifier step
+  (re-runs `detect_langs` independently of the generator); wired at the 3.1.2 enqueue call in
+  `handlers._propose_text_findings` so proposals that pass set `validated=True` on the queue
+  row, and two regression tests cover agreement and rejection. 2.4.4 (uniqueness yes,
+  accuracy-to-target no) and 1.1.1 (not verifiable — a wrong alt silences the detector)
+  remain human-review-only. *(Source-verified 2026-08-24.)*
 
 - [ ] **P4.5 — Extend the adversarial fixtures.** (PRD §13/§14.) Partially built:
   `gen_sc_corpus.py` already carries decorative-that-looks-informative, logo-vs-image-of-text,
