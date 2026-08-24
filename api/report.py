@@ -1001,7 +1001,13 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
                 f"({note})</font>", cell)]
             for pr in p["proposals"][:6]:
                 why = f" <font color='#6c6470'>— {_esc(pr.get('rationale'))}</font>" if pr.get("rationale") else ""
-                lines.append(Paragraph(f"<font color='#6c6470'>Proposed</font> &nbsp;{_esc(pr.get('proposed_value'))}{why}", cell))
+                src = (f" <font color='#6c6470'>({_esc(pr['source'])})</font>"
+                       if pr.get("source") else "")
+                lines.append(Paragraph(
+                    f"<font color='#6c6470'>Proposed</font> &nbsp;{_esc(pr.get('proposed_value'))}{why}{src}", cell))
+                if pr.get("why_review"):
+                    lines.append(Paragraph(
+                        f"<font color='#6c6470'>Basis</font> &nbsp;{_esc(pr['why_review'])}", cell))
             t = Table([[lines]], colWidths=[7.1 * inch])
             t.setStyle(TableStyle([
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
