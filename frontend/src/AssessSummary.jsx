@@ -136,6 +136,7 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
   const tone = TONE[m.status] || TONE.attention
   const r = reconcile(m)
   const gaps = m.unableToAssess > 0 || m.documentsUnopened.length > 0
+  const lifecycleExcluded = run?.scope?.lifecycle_eligible_excluded ?? 0
   // The by-severity addends, printed as an equation so the partition is checkable on screen — the
   // same reason the worklist prints its per-row sum. UNKNOWN joins only when it is non-zero, and the
   // whole thing reconciles to Total findings (assessMetrics guarantees sevSum === totalFindings).
@@ -176,6 +177,7 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
         <div style={{ fontSize: 17, fontWeight: 650 }}>Assessment results</div>
         <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>
           {assessedAt ? `${assessedAt} · ` : ''}WCAG 2.1 Level {level} · {m.coverageSelected} selected criteria
+          {lifecycleExcluded > 0 && ` · ${lifecycleExcluded} excluded by lifecycle policy`}
         </div>
       </div>
 
