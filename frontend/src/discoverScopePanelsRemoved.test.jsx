@@ -59,19 +59,23 @@ describe('Discover no longer asks which criteria to assess against', () => {
 })
 
 describe('both components are kept, and recorded as retired', () => {
-  for (const name of ['ScanScope', 'MyScanScope']) {
-    it(`${name}.jsx still exists and is mounted nowhere`, () => {
-      expect(existsSync(join(here, `${name}.jsx`)), 'kept so restoring is one commit').toBe(true)
-      const screens = ['App.jsx', 'Discover.jsx', 'Overview.jsx', 'Settings.jsx', 'ScanSetup.jsx']
-        .filter((f) => existsSync(join(here, f)))
-        .filter((f) => new RegExp(`<${name}\\s*[/>]`).test(code(f)))
-      expect(screens, `if ${name} is mounted again, delete this case`).toEqual([])
-    })
-  }
+  it('ScanScope.jsx still exists and is mounted nowhere', () => {
+    expect(existsSync(join(here, 'ScanScope.jsx')), 'kept so restoring is one commit').toBe(true)
+    const screens = ['App.jsx', 'Discover.jsx', 'Overview.jsx', 'Settings.jsx', 'ScanSetup.jsx']
+      .filter((f) => existsSync(join(here, f)))
+      .filter((f) => /<ScanScope\s*[/>]/.test(code(f)))
+    expect(screens, 'if ScanScope is mounted again, delete this case').toEqual([])
+  })
 
-  it('neither is duplicated into Settings', () => {
-    // The original guard, and still the reason these were moved rather than relocated: two editors
-    // of one setting is how an operator reads a stale value in one place after saving in the other.
-    expect(read('Settings.jsx')).not.toContain('ScanScope')
+  it('MyScanScope.jsx still exists (R7: now mounted as My Scope tab in Settings)', () => {
+    expect(existsSync(join(here, 'MyScanScope.jsx')), 'kept so restoring is one commit').toBe(true)
+  })
+
+  it('the org-scope picker (ScanScope) is not duplicated into Settings', () => {
+    // MyScanScope (per-user override) is intentionally in Settings as the My Scope tab (R7).
+    // ScanScope (org-level default picker) must stay out — two editors for the org default is
+    // how an operator reads a stale value in one place after saving in the other.
+    expect(read('Settings.jsx')).not.toContain("import ScanScope from './ScanScope.jsx'")
+    expect(read('Settings.jsx')).not.toMatch(/<ScanScope\s*\/>/)
   })
 })
