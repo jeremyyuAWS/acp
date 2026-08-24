@@ -108,6 +108,52 @@ STATUS_LABEL = {"certifiable": "no blocking findings", "issues": "open findings"
 SEV_COLOR = {"CRITICAL": RED, "SERIOUS": AMBER, "MODERATE": BLUE, "MINOR": GREY}
 SEV_ORDER = ["CRITICAL", "SERIOUS", "MODERATE", "MINOR"]
 
+# P-15: per-finding status states and display order (most urgent first)
+FINDING_STATUSES = [
+    "Open", "Reopened", "Remediation attempted", "Awaiting re-scan",
+    "Verified resolved", "Accepted exception", "False positive",
+]
+FINDING_STATUS_COLOR = {
+    "Open": AMBER, "Reopened": RED, "Remediation attempted": PLUM,
+    "Awaiting re-scan": BLUE, "Verified resolved": GREEN,
+    "Accepted exception": MUTED, "False positive": MUTED,
+}
+# Explicit status strings accepted from issue["status"] (lowercase, underscores or spaces)
+_FINDING_STATUS_MAP = {
+    "open": "Open", "reopened": "Reopened",
+    "remediation_attempted": "Remediation attempted", "remediation attempted": "Remediation attempted",
+    "awaiting_rescan": "Awaiting re-scan", "awaiting re-scan": "Awaiting re-scan",
+    "awaiting_re-scan": "Awaiting re-scan",
+    "verified_resolved": "Verified resolved", "verified resolved": "Verified resolved",
+    "accepted_exception": "Accepted exception", "accepted exception": "Accepted exception",
+    "false_positive": "False positive", "false positive": "False positive",
+}
+
+
+def _finding_status(issue: dict, file_is_certifiable: bool) -> str:
+    """P-15: map one issue dict to one of the seven named finding states.
+
+    Explicit issue["status"] wins; otherwise derived from boolean flags and the
+    file-level certifiable flag.  Certifiable means the re-scan confirmed the
+    document no longer fails — any finding present on a certifiable doc was
+    cleared by that re-scan and is "Verified resolved", NOT merely "remediated".
+    """
+    explicit = (issue.get("status") or "").strip().lower().replace("-", "_")
+    mapped = _FINDING_STATUS_MAP.get(explicit) or _FINDING_STATUS_MAP.get(explicit.replace("_", " "))
+    if mapped:
+        return mapped
+    if issue.get("false_positive") or issue.get("fp"):
+        return "False positive"
+    if issue.get("accepted_exception") or issue.get("exception"):
+        return "Accepted exception"
+    if issue.get("reopened"):
+        return "Reopened"
+    if issue.get("awaiting_rescan") or issue.get("rescan_needed"):
+        return "Awaiting re-scan"
+    if issue.get("remediated_at") or issue.get("remediation_attempted"):
+        return "Verified resolved" if file_is_certifiable else "Remediation attempted"
+    return "Verified resolved" if file_is_certifiable else "Open"
+
 
 def _crit_name(c):
     return WCAG_META.get(c, (str(c).replace("SC_", "").replace("_", "."), "", ""))[0]
@@ -1670,10 +1716,15 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     for f in ordered:
         st = _status(f)
         issues = f.get("issues") or []
-        if st == "certifiable" and issues:
-            find = "remediated" if (f.get("remediated_at") or f.get("drive_write_url")) else "non-blocking"
-        elif issues:
-            find = f"{len(issues)} open finding(s)"
+        if issues:
+            # P-15: per-finding status breakdown — never collapse to "remediated" just because
+            # a timestamp exists; "Verified resolved" requires a re-scan to confirm.
+            _cert = (st == "certifiable")
+            _sc: dict[str, int] = {}
+            for _i in issues:
+                _s = _finding_status(_i, _cert)
+                _sc[_s] = _sc.get(_s, 0) + 1
+            find = " · ".join(f"{_sc[s]} {s}" for s in FINDING_STATUSES if s in _sc)
         elif f["status"] == "error":
             find = "could not analyse"
         elif st == NOT_ASSESSED:
