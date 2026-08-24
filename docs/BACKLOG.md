@@ -78,10 +78,14 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
 
 ### Features (the four demo pillars + capability completion)
 
-- [ ] **R4 — Remediate drawer redesign.** Action / Coverage / Evidence views + resolve the fix-status
-  contradictions. **Spec'd, not built** (`scratchpad/remediate-drawer-redesign-spec.md`). Biggest UX
-  gap for the *Remediation* pillar. (3a fixed the scope-freeze half of the honesty problem; this is the
-  UI half.)
+- [x] **R4 — Remediate drawer redesign.** Done. `RemediationInbox.jsx` is a 717-line two-column
+  master/detail layout (35% queue + 65% workspace) matching the spec exactly: one dominant summary in
+  the hero (deduped counters), `AssessmentScopeCard` replacing the old scope banner, no
+  Approve/Reject on collapsed rows (`QueueRow` is select-only), lane chips (`r.laneShort`) visible
+  on rows as quiet text, group-by-document default, workspace sections follow Problem → Evidence →
+  How to fix → Decision, mode-specific actions ("Save edited fix" / "Reject & handle manually" /
+  "Defer" / "Not applicable"), auto-advance on act. "AI Work Inbox" renamed — `reviewQueueNaming.test.jsx`
+  asserts the term does not appear. *(Source-verified 2026-08-24.)*
 - [x] **R5 — Continuous Monitoring: wire the Monitor tab to real source-staleness.** Done.
   `Monitor.jsx:133` calls `getSourceStatus(run.id)`, gated on `!SIM` so the demo keeps its
   illustrative surfaces. The drift state (`stale_count`, `untracked_count`, stale file list) feeds
