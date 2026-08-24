@@ -88,7 +88,10 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
             jtype, {"source": source, "scan_id": scan_id, "folder": folder, "folders": folders,
                     "exclude_folders": exclude_folders, "ai": ai,
                     "user": user, "pii": pii, "batch": batch,
-                    "exclude_remediated": exclude_remediated, "incremental": incremental},
+                    "exclude_remediated": exclude_remediated, "incremental": incremental,
+                    # Carry tokens in the payload so the worker container can authenticate
+                    # without sharing the API's in-memory token store (split topology, no Redis).
+                    "drive_token": token, "sp_token": sp_token},
             scan_id=scan_id)
         return {"scan_id": scan_id, "job_id": job_id, "queued": True,
                 "fanout": fanout, "batch": batch, "workers": core.WORKERS,
