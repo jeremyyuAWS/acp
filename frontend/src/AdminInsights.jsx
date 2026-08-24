@@ -80,7 +80,7 @@ export function AdminInsights({ me }) {
     <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 20 }}>
-        <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>Admin Insights</h1>
+        <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>Estate Insights</h1>
         <span style={{ fontSize: 13, color: 'var(--muted)' }}>Estate analytics</span>
       </div>
 
