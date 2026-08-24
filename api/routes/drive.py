@@ -48,7 +48,8 @@ def me(request: Request):
     # /settings enforces — so the scope editor can be hidden for non-owners POST-auth.
     verified = getattr(request.state, "user_email", None) or u.get("emailAddress")
     return {"email": u.get("emailAddress"), "name": u.get("displayName"), "photo": u.get("photoLink"),
-            "is_scope_owner": core.is_scope_owner(verified)}
+            "is_scope_owner": core.is_scope_owner(verified),
+            "is_admin": core.is_admin(verified)}
 
 
 @router.get("/sources")

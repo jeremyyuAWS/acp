@@ -424,6 +424,9 @@ export const addFindingComment = (scanId, { findingKey, body, file = '', ruleId 
                  body: JSON.stringify({ finding_key: findingKey, body, file, rule_id: ruleId }) }).then(j)
 }
 export const getMe = () => (SIM ? sim(simIdentity()) : fetch(`${BASE}/me`, { headers: headers() }).then(j))
+export const getAdminAnalytics = (period = '30d', source = null) =>
+  fetch(`${BASE}/admin/analytics/overview?period=${period}${source ? `&source=${encodeURIComponent(source)}` : ''}`,
+        { headers: headers() }).then(j)
 export const getSources = () => (SIM ? sim(simGetSources()) : fetch(`${BASE}/sources`, { headers: headers() }).then(j))
 export const getRubric = () => (SIM
   ? sim({ name: 'WCAG 2.1 AA', version: '1', hash: 'e85fcf7e14f9040c', target: 'WCAG 2.1 AA', threshold: 90, criteria: {} })
