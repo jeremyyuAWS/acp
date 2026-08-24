@@ -65,6 +65,65 @@ from pathlib import Path
 
 EVAL_ROOT = (Path.home() / "Downloads" / "acp-docx-eval").resolve()
 
+# P4.3 evidence modes — what the judge is told about the source document.
+# The MODE is what varies across runs; the DRAFT and CRITERION are always included.
+# Running all text modes (A–D) against the same items measures whether deterministic evidence
+# the engine already has improves the judge's calibration vs. ground truth.
+EVIDENCE_MODES: dict[str, str] = {
+    "A": "criterion + draft only (blind baseline — no source evidence at all)",
+    "B": "A + source/OCR text (current default — what the engine sees in the document)",
+    "C": "B + surrounding context text (paragraph(s) before/after the element)",
+    "D": "C + OOXML attributes and element locator (deterministic, zero inference)",
+    "E": "D + image crop as vision content (requires image_b64 in the item; vision-capable model)",
+}
+
+# Item schema for P4.3 (all fields beyond model/criterion/source/draft are optional):
+#   locator:      str   — XPath-style pointer to the element ("para[3]/drawing[0]")
+#   context_text: str   — text surrounding the element in the document
+#   ooxml_attrs:  dict  — OOXML attribute dump from ACP's engine walk
+#   image_b64:    str   — base64-encoded PNG crop of the element (mode E only)
+#   truth_facts:  float — ground-truth fact-coverage score from OCR (existing calibration hook)
+
+
+def _build_prompt(item: dict, mode: str) -> str:
+    """Build the judge prompt for a single item under the given evidence mode."""
+    parts = [RUBRIC, f"--- CRITERION ---\n{item['criterion']}"]
+
+    if mode == "A":
+        pass  # no source evidence — judge scores the draft blind
+
+    else:
+        # Mode B+: include source (OCR transcript or brief engine description)
+        source = item.get("source", "")
+        if source:
+            parts.append(f"--- SOURCE (what the document actually contains) ---\n{source}")
+
+        if mode in ("C", "D", "E"):
+            ctx = item.get("context_text", "")
+            if ctx:
+                parts.append(
+                    f"--- CONTEXT (text surrounding this element in the document) ---\n{ctx}")
+
+        if mode in ("D", "E"):
+            locator = item.get("locator", "")
+            ooxml = item.get("ooxml_attrs")
+            if locator:
+                parts.append(f"--- ELEMENT LOCATOR ---\n{locator}")
+            if ooxml:
+                parts.append(
+                    "--- OOXML ATTRIBUTES (computed by the engine, no inference) ---\n"
+                    + json.dumps(ooxml, indent=2))
+
+        if mode == "E":
+            if not item.get("image_b64"):
+                parts.append(
+                    "(Mode E: no image_b64 present in this item — image evidence omitted.)")
+            # image is passed separately in the API call; the text prompt just notes it
+
+    parts.append(f"--- DRAFT ---\n{item['draft']}")
+    return "\n\n".join(parts)
+
+
 RUBRIC = """You are grading a single draft produced by an accessibility remediation tool.
 The reader is a hospital: these documents carry clinical and benefits information, and a
 patient using a screen reader hears ONLY this text in place of the image.
@@ -162,11 +221,13 @@ def _parse(raw: str | None) -> dict | None:
         return None
 
 
-def judge_item(item: dict, judges: list[str]) -> dict:
-    """One item, every judge. Blind: the model name never reaches the prompt."""
-    prompt = (f"{RUBRIC}\n\n--- CRITERION ---\n{item['criterion']}\n"
-              f"--- SOURCE (what the document actually contains) ---\n{item['source']}\n"
-              f"--- DRAFT ---\n{item['draft']}\n")
+def judge_item(item: dict, judges: list[str], mode: str = "B") -> dict:
+    """One item, every judge. Blind: the model name never reaches the prompt.
+
+    mode controls which evidence fields are included in the prompt (P4.3).
+    Default is "B" — source/OCR only — which matches pre-P4.3 behaviour.
+    """
+    prompt = _build_prompt(item, mode)
     out = {}
     for name in judges:
         try:
@@ -181,9 +242,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--input", type=Path, required=True,
-                    help="JSON list of {model, criterion, source, draft, truth_facts?}")
+                    help="JSON list of {model, criterion, source, draft, truth_facts?, "
+                         "context_text?, locator?, ooxml_attrs?, image_b64?}")
     ap.add_argument("--out", type=Path)
     ap.add_argument("--seed", type=int, default=7, help="shuffle seed, recorded for repeatability")
+    ap.add_argument(
+        "--evidence-mode", choices=list(EVIDENCE_MODES), default="B", metavar="MODE",
+        help="Evidence package given to the judge (P4.3). "
+             + "  ".join(f"{k}={v}" for k, v in EVIDENCE_MODES.items()))
     args = ap.parse_args()
 
     src = _guard(args.input)
@@ -192,11 +258,12 @@ def main() -> int:
         "ANTHROPIC_API_KEY" if n == "anthropic" else "OPENAI_API_KEY")]
     if not judges:
         raise SystemExit("No judge available — set ANTHROPIC_API_KEY and/or OPENAI_API_KEY.")
-    print(f"judges: {', '.join(judges)}   items: {len(items)}")
+    print(f"judges: {', '.join(judges)}   items: {len(items)}   "
+          f"evidence-mode: {args.evidence_mode} ({EVIDENCE_MODES[args.evidence_mode]})")
 
     random.Random(args.seed).shuffle(items)      # order bias is real; the seed makes it repeatable
     for i, it in enumerate(items, 1):
-        it["scores"] = judge_item(it, judges)
+        it["scores"] = judge_item(it, judges, mode=args.evidence_mode)
         got = {j: (s or {}).get("usefulness") for j, s in it["scores"].items()}
         print(f"  [{i}/{len(items)}] {it['criterion']:6} {it.get('model', '?'):16} {got}",
               flush=True)
@@ -246,13 +313,14 @@ def main() -> int:
               f"{statistics.mean(s['usefulness'] for s in ss):>9.2f}{len(ss):>5}")
 
     if args.out:
-        # Wrap results with metadata so the shuffle seed, judge models, and run timestamp are
-        # machine-readable alongside the items — not lost in terminal scrollback. The seed is
-        # what makes a shuffle repeatable; without it the order is unrecoverable post-hoc.
+        # Wrap results with metadata so the shuffle seed, judge models, evidence mode, and run
+        # timestamp are machine-readable alongside the items — not lost in terminal scrollback.
         out_doc = {
             "metadata": {
                 "seed": args.seed,
                 "judges": judges,
+                "evidence_mode": args.evidence_mode,
+                "evidence_mode_description": EVIDENCE_MODES[args.evidence_mode],
                 "run_at": datetime.datetime.utcnow().isoformat() + "Z",
             },
             "results": items,

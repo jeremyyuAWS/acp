@@ -72,15 +72,17 @@ const alertStyle = { fontSize: 12.5, color: '#A32D2D', margin: '8px 0 0', lineHe
 const MAX_PREVIEW_INLINE = 25
 
 /** Inline table of files that matched a rule preview. */
-function PreviewPanel({ docs, enabled, fetchedAt, onRefresh, busy }) {
+function PreviewPanel({ docs, enabled, fetchedAt, onRefresh, busy, breakdown }) {
   const shown = docs.slice(0, MAX_PREVIEW_INLINE)
   const extra = docs.length - shown.length
   const COLS = ['Name', 'Location', 'Owner', 'Modified', 'Type', 'Size']
+  const hasSuppressions = breakdown && (breakdown.superseded > 0 || breakdown.exempted > 0)
+  const hasUnable = breakdown && breakdown.unable_to_evaluate > 0
   return (
     <div style={{ marginTop: 10, border: line, borderRadius: 9, overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', flexWrap: 'wrap',
                     background: 'color-mix(in srgb, var(--plum) 4%, transparent)',
-                    borderBottom: docs.length ? line : 'none' }}>
+                    borderBottom: hasSuppressions || hasUnable || docs.length ? line : 'none' }}>
         <span style={{ fontSize: 12, fontWeight: 600 }}>
           {enabled
             ? `${docs.length} file${docs.length === 1 ? '' : 's'} matched`
@@ -96,6 +98,48 @@ function PreviewPanel({ docs, enabled, fetchedAt, onRefresh, busy }) {
           {busy ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
+      {hasSuppressions && (
+        <div style={{ display: 'flex', gap: 14, padding: '5px 12px', flexWrap: 'wrap',
+                      borderBottom: docs.length ? line : 'none',
+                      background: 'color-mix(in srgb, var(--plum) 2%, transparent)' }}>
+          <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+            <b style={{ color: 'inherit' }}>{breakdown.effective}</b> will receive the action
+          </span>
+          {breakdown.superseded > 0 && (
+            <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+              <b style={{ color: 'inherit' }}>{breakdown.superseded}</b> overridden by another rule
+            </span>
+          )}
+          {breakdown.exempted > 0 && (
+            <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+              <b style={{ color: 'inherit' }}>{breakdown.exempted}</b> exempted (held)
+            </span>
+          )}
+        </div>
+      )}
+      {hasUnable && (
+        <div style={{ padding: '5px 12px', borderBottom: docs.length ? line : 'none',
+                      background: 'color-mix(in srgb, var(--plum) 2%, transparent)' }}>
+          <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+            + <b style={{ color: 'inherit' }}>{breakdown.unable_to_evaluate}</b>{' '}
+            file{breakdown.unable_to_evaluate === 1 ? '' : 's'} couldn't be evaluated —
+            {breakdown.unable_to_evaluate_fields && Object.keys(breakdown.unable_to_evaluate_fields).length > 0
+              ? <>{' '}missing metadata:{' '}
+                  {Object.entries(breakdown.unable_to_evaluate_fields)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([field, count], i) => (
+                      <span key={field}>
+                        {i > 0 && ' · '}
+                        <b style={{ color: 'inherit' }}>{field}</b>
+                        {breakdown.unable_to_evaluate > 1 && ` (${count})`}
+                      </span>
+                    ))}
+                </>
+              : <>{' '}a required metadata field wasn't recorded, so they may or may not match</>
+            }
+          </span>
+        </div>
+      )}
       {docs.length === 0 ? (
         <p className="muted" style={{ fontSize: 12.5, padding: '10px 12px', margin: 0 }}>
           No files currently match this rule.
@@ -213,6 +257,7 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewDocs, setPreviewDocs] = useState(null)
   const [previewFetchedAt, setPreviewFetchedAt] = useState(null)
+  const [previewBreakdown, setPreviewBreakdown] = useState(null)
   // Lifecycle rules #2 — edit a saved rule in place. The backend (PUT /disposition/policies/{id})
   // refuses to change match/action/action_config once a rule has recorded ANY history (409) —
   // name/requires_approval stay editable regardless — so this never tries to predict that
@@ -319,6 +364,13 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
       .then((r) => {
         onCount(p.policy_id, r?.would_match ?? null)
         setPreviewDocs(r?.documents ?? [])
+        setPreviewBreakdown(r?.effective != null ? {
+          effective: r.effective,
+          superseded: r.superseded ?? 0,
+          exempted: r.exempted ?? 0,
+          unable_to_evaluate: r.unable_to_evaluate ?? 0,
+          unable_to_evaluate_fields: r.unable_to_evaluate_fields ?? {},
+        } : null)
         setPreviewFetchedAt(new Date())
         setPreviewOpen(true)
       })
@@ -410,7 +462,8 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
           {previewOpen && previewDocs != null && (
             <PreviewPanel docs={previewDocs} enabled={enabled}
                           fetchedAt={previewFetchedAt}
-                          onRefresh={runPreview} busy={busy} />
+                          onRefresh={runPreview} busy={busy}
+                          breakdown={previewBreakdown} />
           )}
         </>
       )}

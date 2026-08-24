@@ -570,6 +570,43 @@ def f_clean(d):
         "the false-positive control: nothing wrong, every PASS-capable cell should certify"
 
 
+# ── P4.5 adversarial fixtures ─────────────────────────────────────────────────
+
+def f_alt_caption_junk(d):
+    # "Figure N: ..." is a caption label that references the figure's position in the document
+    # rather than describing its content. A screen reader reading "Figure 1: Coverage by plan
+    # type" learns the figure number and a vague topic, not the actual chart values. This is
+    # a junk pattern — but the engine does NOT currently detect it as such because the text is
+    # non-empty and passes the filename/whitespace/generic-word filters. Fixture documents the
+    # gap: the engine returns no finding where ideally it should fire 1.1.1.
+    #
+    # Note: the paragraph deliberately avoids positional words ("above", "below") that would
+    # independently trigger the 1.3.3 sensory-characteristics detector and obscure the test.
+    d.add_heading("Annual Coverage Overview", level=1)
+    _add_image(d, _content_png(seed=7), alt="Figure 1: Coverage by plan type")
+    d.add_paragraph("The chart shows a breakdown of coverage across plan types.")
+    return {}, (
+        "ADVERSARIAL/GAP: alt is a figure-caption reference ('Figure 1: Coverage by plan "
+        "type'). Caption labels name the figure's document position rather than its content, "
+        "which is a junk pattern. The engine does not currently detect this — silence is the "
+        "actual engine output. A 1.1.1 finding here would be correct but does not fire today.")
+
+
+def f_alt_surrounds_duplicate_ok(d):
+    # Re-using the adjacent paragraph description verbatim as the alt is redundant but not
+    # wrong. The alt conveys real information even if a sighted reader can already get it from
+    # the surrounding text. WCAG does not require alt text to be unique across the document, and
+    # flagging redundancy as a violation would make every well-described chart a finding.
+    desc = ("A bar chart showing quarterly revenue for 2025: Q1 $2.1M, Q2 $2.4M, "
+            "Q3 $2.9M, Q4 $3.2M, with consistent growth across all four quarters.")
+    d.add_heading("Financial Summary", level=1)
+    d.add_paragraph(desc)
+    _add_image(d, _content_png(seed=8), alt=desc)
+    return {}, ("ADVERSARIAL: image alt re-uses the adjacent paragraph description verbatim. "
+                "Redundant but non-junk — the alt conveys real information, so a 1.1.1 finding "
+                "here is a false positive on surrounding-text duplication.")
+
+
 # name -> (builder, post-processing hook, kind)
 FIXTURES = [
     ("alt-missing",            f_alt_missing,          None,            "violation"),
@@ -604,6 +641,9 @@ FIXTURES = [
     ("field-unlabeled",        f_unlabeled_field,      None,            "edge"),
     ("no-docx-lane",           f_no_docx_lane,         None,            "control"),
     ("clean",                  f_clean,                None,            "clean"),
+    # P4.5 adversarial fixtures
+    ("alt-caption-junk",       f_alt_caption_junk,     None,            "adversarial"),
+    ("alt-surrounds-dup-ok",   f_alt_surrounds_duplicate_ok, None,      "adversarial"),
 ]
 
 

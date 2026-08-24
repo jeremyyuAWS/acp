@@ -118,7 +118,9 @@ def test_the_response_carries_the_saved_previews_shape_with_a_null_id(client):
     c, st = client
     _docs(st)
     body = c.post("/disposition/preview", json={"match": FINANCE, "action": "archive"}).json()
-    assert set(body) == {"policy_id", "action", "would_match", "total", "documents"}
+    assert set(body) == {"policy_id", "action", "would_match", "total", "documents",
+                         "effective", "superseded", "exempted", "unable_to_evaluate",
+                         "unable_to_evaluate_fields"}
     assert body["policy_id"] is None
     assert len(body["documents"]) == body["would_match"]
     assert body["total"] == 3   # all seeded documents, regardless of how many the rule matched

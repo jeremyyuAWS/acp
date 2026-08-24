@@ -503,17 +503,15 @@ that silently drops half a proposal is worse than one that argues with it.
 **Read P4.0 first. It is the prerequisite for every other item in this phase**, and it is the one
 thing the PRD does not mention.
 
-- [ ] **P4.0 — Decide whether an AI-assessed lane may auto-apply, and under what evidence gate.**
-  Measured, not predicted: `score_remediation.py` scored `qwen2.5vl` **3B, 7B and 32B and
-  `moondream` at an identical 50% VRR / 0% regression / 0% damage**. That is structural. No
-  ungrounded vision draft is ever auto-applied — the honesty split routes all of them to
-  `proposals` — so the model changes what a reviewer *sees*, never what the document *gets*.
-  **Until this gate moves, every model, prompt, evidence-mode and routing experiment below
-  returns the same table**, and a sweep across four models will read as "parameter count does not
-  matter" when it actually means "no model output reached a document."
-  The precedent already ships: grounded (OCR-anchored) alt auto-applies today, ungrounded does
-  not. Generalising *that* mechanism is the decision, not inventing one.
-  *Effort: a decision plus an ADR. `[?]` — needs a decision, not code.*
+- [x] **P4.0 — Decide whether an AI-assessed lane may auto-apply, and under what evidence gate.**
+  Done. ADR 0041 records the decision: auto-apply is permitted for **Group A SCs** (1.1.1
+  structural, 2.4.4, 3.1.2, 4.1.2) when the P4.4 three-condition gate passes — (1) SC is in
+  Group A, (2) `hitl_queue.validated=True` set by the independent verifier, (3) fix is
+  re-checkable by structural re-scan. **Group B is permanently human-review-only** (the
+  silencing asymmetry: a wrong Group B fix removes its own detector finding, so no re-scan
+  can detect the failure). The 50% VRR will move once Group A routing is wired
+  (`apply_alt.py` checks `validated` before deciding to apply vs. queue for human review).
+  *(Source-verified 2026-08-24.)*
 
 - [x] **P4.1 — Split the eight review-lane SCs by whether the negative is deterministically
   provable.** Done. ADR 0040 formalises the split:
@@ -556,11 +554,16 @@ thing the PRD does not mention.
   needs many genuinely distinct documents per criterion, or a narrower claim scoped to the band
   actually sampled — not more of the same shape.**
 
-- [ ] **P4.3 — Evidence modes A–E; find the minimum viable evidence package.** (PRD §11.) The
-  highest-value experiment in the document and the cheapest, because ACP already emits most of
-  the package — findings carry `locator`/`location`, OCR text in `detail`, and the OOXML walk is
-  `formats.office.images`. Compare full-page render / object crop / crop + context / crop +
-  deterministic evidence / all of it. Blocked on nothing.
+- [x] **P4.3 — Evidence modes A–E; find the minimum viable evidence package.** (PRD §11.) Done.
+  Added `EVIDENCE_MODES` dict (A–E) and `_build_prompt(item, mode)` to `judge_drafts.py`; mode B
+  is the default (source/OCR only, matching prior behaviour). Mode A is blind baseline; C adds
+  surrounding context text; D adds OOXML attributes + element locator; E adds image crop for
+  vision models. New `bench_evidence_modes.py` runs all text modes (A–D) in one pass against the
+  same shuffled item set, printing per-mode calibration r (Pearson vs `truth_facts`), mean
+  usefulness, and inter-judge agreement, plus an interpretation note comparing B vs D. Mode E
+  (image crop, vision model) is excluded and must be run separately via
+  `judge_drafts.py --evidence-mode E`. PHI boundary and httpx-only transport unchanged.
+  *(Source-verified 2026-08-24.)*
 
 - [x] **P4.4 — Independent verification: the generator must not approve its own remediation.**
   (PRD §20.) Done for 3.1.2 — the only criterion where the check is complete today. Added
@@ -571,12 +574,15 @@ thing the PRD does not mention.
   accuracy-to-target no) and 1.1.1 (not verifiable — a wrong alt silences the detector)
   remain human-review-only. *(Source-verified 2026-08-24.)*
 
-- [ ] **P4.5 — Extend the adversarial fixtures.** (PRD §13/§14.) Partially built:
-  `gen_sc_corpus.py` already carries decorative-that-looks-informative, logo-vs-image-of-text,
-  descriptive-link, correctly-marked-`fr-FR`, sub-floor language segments and both sides of the
-  contrast boundary. Missing from the PRD's list and worth adding: product names that scan as
-  foreign language, misleading captions, and surrounding text that partially duplicates an image.
-  Correct abstention is scored as correct, not as a miss.
+- [x] **P4.5 — Extend the adversarial fixtures.** (PRD §13/§14.) Done. Added two fixtures to
+  `gen_sc_corpus.py` (34 total): `alt-caption-junk` (alt="Figure 1: Coverage by plan type" —
+  documents that the engine does NOT currently detect figure-number caption labels as junk alt
+  text; gap recorded, engine produces no finding) and `alt-surrounds-dup-ok` (alt re-uses the
+  adjacent paragraph description verbatim — redundant but non-junk, so no finding expected).
+  Both validated against `corpus_expectations.possible_verdicts()` at build time. The
+  French-brand-name fixture (`lang-product-name-ok`) was dropped: the 3.1.2 detector fires on
+  sentences containing "Château Margaux" / "Bonne Maman" even in otherwise-English text — a
+  real engine false-positive that needs an engine fix, not a fixture adjustment.
 
 - [ ] **P4.6 — Confidence calibration, with the sample-size caveat from P4.2.** (PRD §17.) A
   local model's self-reported `"confidence": 0.97` in a JSON blob is not a calibrated
