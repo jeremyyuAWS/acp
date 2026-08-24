@@ -83,12 +83,33 @@ ACP_DATABASE_URL=postgres://…              # never run on SQLite in prod
 ACP_ALERT_KEY=<long-random>                # Grafana→/alerts/webhook shared secret
 LANGFUSE_SECRET_KEY / LANGFUSE_PUBLIC_KEY  # via secrets, not baked in
 ACP_WORKERS=<n>                            # or live-scale from Monitor
+ACP_PUBLIC_URL=https://your-acp-host.example.com   # required for live QR codes
 ```
 
 - Put all secrets in the platform's secret store (e.g. Container Apps secrets),
   not in env literals or committed files.
 - Grafana / Langfuse expose **all** scan data — keep them admin-only; don't link
   them from a multi-user front door.
+
+### `ACP_PUBLIC_URL` — required for scannable QR codes
+
+PDF reports embed a QR code pointing to the `/public/verify/{scan_id}` endpoint so
+auditors can independently recompute the content digest. **Without `ACP_PUBLIC_URL`
+the QR encodes an `acp://verify/…` URI**, which no browser handles natively —
+auditors would need the ACP CLI to use it.
+
+```
+ACP_PUBLIC_URL=https://your-acp-host.example.com
+```
+
+No trailing slash. The report appends `/public/verify/{scan_id}` automatically.
+
+**Rubric-version sensitivity.** The verify digest is computed from the canonical
+scan payload, which includes the rubric's `conformance_target`. If you later change
+the active rubric's conformance target, the endpoint will recompute a different
+digest for that scan, and older PDFs will appear to fail verification. To preserve
+backward compatibility: treat the rubric as append-only and version any change to
+`conformance_target` as a new rubric entry rather than an in-place edit.
 
 ## 5. Known limits (read before scaling up)
 

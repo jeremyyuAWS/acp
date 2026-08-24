@@ -540,16 +540,31 @@ trust jump on data that already exists), then R4/R5/R-B/R-C (~~R11/R12 done~~), 
 honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/R-D/R-E (~~R13/R14/R-C done~~).
 
 ### Polish / technical debt (surfaced during R15 implementation, 2026-08-24)
+
+**Sequencing (2026-08-24):** P-1–P-8 → P-9–P-12 (honesty/completeness) → P-13/P-16/P-18/P-20 → R9/R10 w/ P-15 → P-14/P-17 → R-D/R-E → P-19/presentation.
+
 | # | Location | Item |
 |---|---|---|
-| P-1 | `api/report.py` ~456 | `_MANUAL_VERIFY` dict has no `"html"` key — an HTML scan silently skips the manual-verification table. Add an entry or a fallback row. |
-| P-2 | `api/report.py` ~197 | `_esc()` silently truncates strings to 400 chars. A criterion description or URL longer than that is swallowed with no indication in the PDF. Raise the limit or add an ellipsis to signal truncation. |
-| P-3 | `api/report.py` ~786 | Evidence truncation note says "full evidence available via API" — but no such endpoint exists. Remove the claim or implement a `/scans/{id}/evidence` endpoint. |
-| P-4 | `api/report.py` ~865 | `_ai_governance_section` has a bare `except Exception: pass` that hides every failure silently. At minimum log the exception; consider re-raising for unexpected errors. |
-| P-5 | `api/report.py` ~201 | `_decision_block` docstring still tags R2/R3 as "backlog" — both shipped. Update to reflect current status. |
-| P-6 | `api/blob.py` ~60 | `BlobStore.put()` uses `overwrite=True` unconditionally — remediated output files are silently clobbered on re-upload. Either key by content hash or gate on `overwrite=False` so re-uploads are detectable. |
-| P-7 | `api/report.py` (stat band) | Score denominator is undisclosed: the band shows a percentage but never states "N criteria evaluated out of 87 in the rubric." An auditor cannot verify the math without it. |
-| P-8 | deployment docs | `ACP_PUBLIC_URL` must be set to the public base URL for QR codes to resolve; without it the PDF embeds an `acp://` URI that no browser handles. Also note: the verify digest is rubric-version-sensitive — if the active rubric's `conformance_target` changes, existing PDF digests will no longer match the endpoint's recomputed value. |
+| ~~P-1~~ | ~~`api/report.py`~~ | ~~`_MANUAL_VERIFY` dict has no `"html"` key — an HTML scan silently skips the manual-verification table.~~ **DONE #699** |
+| ~~P-2~~ | ~~`api/report.py`~~ | ~~`_esc()` silently truncates strings to 400 chars with no indication in the PDF.~~ **DONE #700** |
+| ~~P-3~~ | ~~`api/report.py`~~ | ~~Evidence truncation note says "full evidence available via API" — but no such endpoint exists.~~ **DONE #700** |
+| ~~P-4~~ | ~~`api/report.py`~~ | ~~`_ai_governance_section` has a bare `except Exception: pass` that hides every failure silently.~~ **DONE #699** |
+| ~~P-5~~ | ~~`api/report.py`~~ | ~~`_decision_block` docstring still tags R2/R3 as "backlog" — both shipped.~~ **DONE #700** |
+| ~~P-6~~ | ~~`api/blob.py`~~ | ~~`BlobStore.put()` uses `overwrite=True` unconditionally — remediated output files are silently clobbered on re-upload.~~ **DONE #706** |
+| ~~P-7~~ | ~~`api/report.py` (stat band)~~ | ~~Score denominator is undisclosed: the band shows a percentage but never states "N criteria evaluated out of 87 in the rubric."~~ **DONE #700** |
+| ~~P-8~~ | ~~deployment docs~~ | ~~`ACP_PUBLIC_URL` must be set to the public base URL for QR codes to resolve; without it the PDF embeds an `acp://` URI that no browser handles. Also note: the verify digest is rubric-version-sensitive.~~ **DONE** (added to `docs/production-hardening.md`) |
+| P-9 | `api/report.py` | **Incomplete assessments must be unmistakable.** Show files attempted/completed/failed/skipped; criteria evaluated/not-applicable/unsupported/not-evaluated; a visible "Partial assessment" status when appropriate; whether the score excludes unassessed content. |
+| P-10 | `api/report.py` | **Explain the full score denominator.** Beyond "N of 87 criteria evaluated," expose: not-applicable count, not-evaluated count, passing/failing breakdown, and whether any weight was applied (and link to the rubric version). |
+| P-11 | `api/report.py` | **Separate automated results from manual-review requirements.** Six outcome states per criterion: Passed automatically · Failed automatically · Manual verification required · Not applicable · Not evaluated · Evaluation error. Summary reports counts for all six. |
+| P-12 | `api/report.py` | **Declare assessment scope.** Add a concise scope block near the top: sources/folders included, file types, exclusions and why, scan start/end times, rubric + conformance target, scanner/build version, AI-assisted-checks flag, any filters or sampling. |
+| P-13 | `api/report.py` | **Add a limitations & exceptions section** generated from actual scan state (not boilerplate): password-protected docs, criteria needing human review, unavailable ownership metadata, unassessed external content, OCR failures. Material limitations near the executive summary. |
+| P-14 | `api/report.py`, `api/store.py` | **Use stable finding identifiers.** Every finding gets a durable ID that survives rendering, export, reassessment, and remediation. Expose it in headings, links, and evidence references. |
+| P-15 | `api/report.py`, `api/store.py` | **Clarify finding status and history.** Seven states: Open · Remediation attempted · Awaiting re-scan · Verified resolved · Accepted exception · False positive · Reopened. Do not label something "fixed" merely because remediation ran. Groundwork for R9/R10. |
+| P-16 | `api/report.py` | **Add report provenance and freshness.** Display: report-generated timestamp + TZ, assessment-completion timestamp, data cutoff, scan ID, report schema/version, application build/commit, rubric name/version/hash. Label as a snapshot if assessment is still running or data has changed. |
+| P-17 | `api/report.py` | **Improve evidence presentation.** Per finding: file + location, criterion, detector/method, observed value, expected condition, relevant page/element, confidence or manual-review flag, evidence-collection timestamp. Long evidence expands rather than disappearing; redacted values are marked as redacted. |
+| P-18 | `api/report.py` | **Report-level reconciliation checks before rendering.** Validate: outcome counts = criteria evaluated; file totals reconcile across sections; severity totals = detailed findings; remediation totals match finding statuses; every evidence item exists; every rubric hash resolves. Fail loudly or display a report-integrity warning. |
+| P-19 | `api/report.py` | **Print/PDF/AT behaviour.** Tables must repeat headers across pages; rows must not split into unreadable fragments; URLs and finding IDs must be usable in print; charts need text equivalents; colour is never the only status indicator; heading order and table semantics are correct; QR codes have adjacent human-readable URLs; page headers identify the scan and report date. |
+| P-20 | `api/report.py` | **Remove ambiguous assurance language.** Audit and replace: "Compliant", "Passed", "Complete", "Verified", "All issues", "No accessibility issues". Prefer bounded claims: "No automated failures detected among the N criteria evaluated. M criteria were not fully evaluated, including K requiring manual review." |
 
 ---
 
