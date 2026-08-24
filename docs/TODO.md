@@ -540,16 +540,20 @@ trust jump on data that already exists), then R4/R5/R-B/R-C (~~R11/R12 done~~), 
 honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/R-D/R-E (~~R13/R14/R-C done~~).
 
 ### Polish / technical debt (surfaced during R15 implementation, 2026-08-24)
-| # | Location | Item |
-|---|---|---|
-| P-1 | `api/report.py` ~456 | `_MANUAL_VERIFY` dict has no `"html"` key — an HTML scan silently skips the manual-verification table. Add an entry or a fallback row. |
-| P-2 | `api/report.py` ~197 | `_esc()` silently truncates strings to 400 chars. A criterion description or URL longer than that is swallowed with no indication in the PDF. Raise the limit or add an ellipsis to signal truncation. |
-| P-3 | `api/report.py` ~786 | Evidence truncation note says "full evidence available via API" — but no such endpoint exists. Remove the claim or implement a `/scans/{id}/evidence` endpoint. |
-| P-4 | `api/report.py` ~865 | `_ai_governance_section` has a bare `except Exception: pass` that hides every failure silently. At minimum log the exception; consider re-raising for unexpected errors. |
-| P-5 | `api/report.py` ~201 | `_decision_block` docstring still tags R2/R3 as "backlog" — both shipped. Update to reflect current status. |
-| P-6 | `api/blob.py` ~60 | `BlobStore.put()` uses `overwrite=True` unconditionally — remediated output files are silently clobbered on re-upload. Either key by content hash or gate on `overwrite=False` so re-uploads are detectable. |
-| P-7 | `api/report.py` (stat band) | Score denominator is undisclosed: the band shows a percentage but never states "N criteria evaluated out of 87 in the rubric." An auditor cannot verify the math without it. |
-| P-8 | deployment docs | `ACP_PUBLIC_URL` must be set to the public base URL for QR codes to resolve; without it the PDF embeds an `acp://` URI that no browser handles. Also note: the verify digest is rubric-version-sensitive — if the active rubric's `conformance_target` changes, existing PDF digests will no longer match the endpoint's recomputed value. |
+| # | Status | Location | Item |
+|---|---|---|---|
+| P-1 | ✓ done (#699) | `api/report.py` ~456 | `_MANUAL_VERIFY` dict has no `"html"` key — an HTML scan silently skips the manual-verification table. Add an entry or a fallback row. |
+| P-2 | ✓ done (#700) | `api/report.py` ~197 | `_esc()` silently truncates strings to 400 chars. A criterion description or URL longer than that is swallowed with no indication in the PDF. Raise the limit or add an ellipsis to signal truncation. |
+| P-3 | ✓ done (#700) | `api/report.py` ~786 | Evidence truncation note says "full evidence available via API" — but no such endpoint exists. Remove the claim or implement a `/scans/{id}/evidence` endpoint. |
+| P-4 | ✓ done (#700) | `api/report.py` ~865 | `_ai_governance_section` has a bare `except Exception: pass` that hides every failure silently. At minimum log the exception; consider re-raising for unexpected errors. |
+| P-5 | ✓ done (#699) | `api/report.py` ~201 | `_decision_block` docstring still tags R2/R3 as "backlog" — both shipped. Update to reflect current status. |
+| P-6 | ✓ done (#706) | `api/blob.py` ~60 | `BlobStore.put()` uses `overwrite=True` unconditionally — remediated output files are silently clobbered on re-upload. Either key by content hash or gate on `overwrite=False` so re-uploads are detectable. |
+| P-7 | ✓ done (#700) | `api/report.py` (stat band) | Score denominator is undisclosed: the band shows a percentage but never states "N criteria evaluated out of 87 in the rubric." An auditor cannot verify the math without it. |
+| P-8 | ✓ done (#711) | deployment docs | `ACP_PUBLIC_URL` must be set to the public base URL for QR codes to resolve; without it the PDF embeds an `acp://` URI that no browser handles. Also note: the verify digest is rubric-version-sensitive — if the active rubric's `conformance_target` changes, existing PDF digests will no longer match the endpoint's recomputed value. |
+| P-9 | ✓ done | `api/report.py` `build_report` | Partial-assessment notice is only inline in the verdict paragraph — a reader skimming for a percentage can miss the caveat. Add a stand-alone highlighted notice when `unassessed > 0` or `unanalysable > 0`. |
+| P-10 | ✓ done | `api/report.py` `build_report` | Stat band shows `cert / total` — but `total` includes unassessed files, so the percentage overstates how much was actually assessed. Denominator should be `assessed` (total − unassessed). |
+| P-11 | ✓ done | `api/report.py` `build_report` | No criteria-level outcome breakdown. The document-level stat band tells auditors how many files are certifiable, but not how many WCAG criteria passed, had findings, were deferred to humans, or were not evaluated for these formats. Add a second stat band row from `facts["scope"]`. |
+| P-12 | ✓ done | `api/report.py` `build_report` | No "assessment scope" declaration at the top of the report. Source, file types, scan window, rubric version + hash, conformance target, and AI-vs-deterministic flag are available from `run`/`meta`/`facts` but not rendered. Replace the old 3-column "Scope & methodology" card with a detailed 3×4 scope table. |
 
 ---
 
