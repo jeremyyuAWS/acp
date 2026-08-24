@@ -34,7 +34,10 @@ the report's core honesty guarantee.
 """
 from __future__ import annotations
 import io
+import logging
 from pathlib import Path
+
+_LOG = logging.getLogger(__name__)
 
 from reportlab.graphics.charts.barcharts import HorizontalBarChart
 from reportlab.graphics.charts.piecharts import Pie
@@ -273,11 +276,14 @@ def _esc(s) -> str:
     """Escape for reportlab's mini-HTML paragraph markup; bound the length."""
     if s is None or s == "":
         return "—"
-    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))[:400]
+    escaped = str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    if len(escaped) > 2000:
+        return escaped[:2000] + "…"
+    return escaped
 
 
 def _decision_block(run, files, meta, facts, h2, body, muted) -> list:
-    """What ACP checked, fixed and verified (backlog R2/R3).
+    """What ACP checked, fixed and verified (R2/R3).
 
     Answers, before anything else, the question a reader actually has: what was done to these
     documents, and what is still open? Every figure is COUNTED from stored rows; the digest is
@@ -545,6 +551,11 @@ _MANUAL_VERIFY = {
             "Windows / VoiceOver on macOS)",
             "Confirm the document is Tagged and declares a Title, a Language and a logical reading "
             "order; with a screen reader, confirm headings and alt text are announced."),
+    "HTML": ("Browser DevTools → Accessibility panel, or install the axe DevTools extension "
+             "(Chrome/Edge/Firefox)",
+             "Confirm every image has a non-empty alt attribute, form inputs have associated labels, "
+             "the page has a main landmark, headings form a logical outline with no skipped levels, "
+             "and the axe / DevTools checker reports no critical violations."),
 }
 
 
@@ -565,7 +576,7 @@ def _manual_verification_section(files, h2, body, cell, muted) -> list:
         "each document format in this scan, here is how to confirm the result with a mainstream "
         "tool — the steps are generic to the format, not tied to any one document.", muted))
     el.append(Spacer(1, 6))
-    label = {"DOCX": "Word", "PPTX": "PowerPoint", "XLSX": "Excel", "PDF": "PDF"}
+    label = {"DOCX": "Word", "PPTX": "PowerPoint", "XLSX": "Excel", "PDF": "PDF", "HTML": "HTML"}
     rows = [["Format", "Tool", "What to confirm"]]
     for k in fmts:
         tool, steps = _MANUAL_VERIFY[k]
@@ -700,12 +711,42 @@ def _provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, mut
               f"<b>{cert}</b>/<b>{total}</b> certifiable"]
     el.append(Paragraph("<b>Pipeline.</b> " + "  →  ".join(stages), cell))
     el.append(Spacer(1, 6))
-    # R-D — reproduce from the stamped ruleset. Same inputs, same findings.
+    # R-D — actionable reproduce instructions: three steps, not a prose assertion.
+    # The full hash is included (not truncated) because the auditor must verify it exactly.
     rubric = meta.get("hash") if meta else None
     if rubric:
-        el.append(Paragraph(
-            f"<b>Reproduce.</b> Re-run this scan against rubric hash <b>{_esc(str(rubric)[:32])}…</b> "
-            "(the stamped ruleset); the same documents yield the same findings.", muted))
+        src = _esc(run.get("source") or "same source as above")
+        sid = _esc(str(run.get("id", "—")))
+        rd_rows = [
+            ["1", Paragraph(
+                f"<b>Verify the rubric.</b> GET /rubric → confirm the response carries "
+                f"<font name='Courier' size='7'>{_esc(str(rubric))}</font> "
+                "as its <b>hash</b> field. A mismatch means a different ruleset is active — "
+                "findings will diverge regardless of the document set.", muted)],
+            ["2", Paragraph(
+                f"<b>Re-run the scan.</b> POST /scans?source={src} against the same document "
+                f"set used for scan <b>{sid}</b>. The scan must complete successfully "
+                "(status: complete, not error or cancelled).", muted)],
+            ["3", Paragraph(
+                f"<b>Compare findings.</b> The new scan's failing WCAG criteria and per-file "
+                f"scores must match scan <b>{sid}</b>. Any divergence indicates a rubric "
+                "version change, a document change, or a non-deterministic AI step — "
+                "each is a distinct fact about the pipeline, not a test failure.", muted)],
+        ]
+        num_style = ParagraphStyle("rdnum", parent=muted, fontSize=8, alignment=1)
+        rd_t = Table(
+            [[Paragraph(n, num_style), cell_p] for n, cell_p in rd_rows],
+            colWidths=[0.22 * inch, 6.38 * inch])
+        rd_t.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("BACKGROUND", (0, 0), (-1, -1), ZEBRA), ("BOX", (0, 0), (-1, -1), 0.5, LINE),
+            ("LINEBELOW", (0, 0), (-1, -2), 0.4, LINE),
+        ]))
+        el.append(Paragraph("<b>Reproduce this result.</b>", muted))
+        el.append(Spacer(1, 3))
+        el.append(rd_t)
     # R-E — supersedes, only when a previous scan of this estate exists.
     prev_at = (diff or {}).get("prev_at")
     if prev_at:
@@ -960,7 +1001,7 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
         el.append(Spacer(1, 6))
         el.append(Paragraph(
             f"Evidence shown for the first {_EVIDENCE_MAX_FILES} of {len(evidence)} remediated "
-            "documents. The remainder are available via the per-file remediation API.", muted))
+            "documents; the remainder are omitted from this PDF for length.", muted))
     return el
 
 
@@ -1040,7 +1081,10 @@ def _ai_governance_section(run, h2, body, cell, muted) -> list:
     try:
         import core
         r = core.store.ai_cost_rollup(scan_id=run["id"])
+    except ImportError:
+        return []      # no core in test/offline context — expected, not a bug
     except Exception:
+        _LOG.warning("ai_governance_section: rollup failed for scan %s", run.get("id"), exc_info=True)
         return []
     if not r or not r.get("calls"):
         # Nothing to attest AND nothing to hide: an all-deterministic scan needed no model.
@@ -1172,6 +1216,7 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     pct = round(cert / total * 100)
     avg = "—" if run.get("avg_score") is None else run["avg_score"]
     resolved_total = sum(resolved_crit.values())
+    total_eval = sum(d.get("evaluated", 0) for d in ((facts or {}).get("documents") or []))
 
     # ── Executive summary — plain-language verdict ───────────────────────────
     # `total` counts every document in the estate, INCLUDING any nobody scored, so it is not the
@@ -1215,7 +1260,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
         Paragraph(f'<font size="22" color="#3B6D11"><b>{pct}%</b></font><br/>'
                   f'<font size="8.5" color="#6c6470">no blocking findings · {cert} of {total} documents</font>', body),
         Paragraph(f'<font size="22"><b>{avg}</b></font><br/>'
-                  f'<font size="8.5" color="#6c6470">average score / 100</font>', body),
+                  f'<font size="8.5" color="#6c6470">average score / 100'
+                  + (f' · {total_eval} criteria evaluated' if total_eval else '')
+                  + '</font>', body),
         Paragraph(f'<font size="22" color="#854F0B"><b>{counts.get("issues", 0)}</b></font><br/>'
                   f'<font size="8.5" color="#6c6470">documents with open findings</font>', body),
         Paragraph(f'<font size="22" color="#9a948f"><b>{counts.get("unanalysable", 0)}</b></font><br/>'

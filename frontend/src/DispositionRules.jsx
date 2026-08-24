@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { confirm } from './ConfirmDialog.jsx'
 import {
   listDispositionPolicies, createDispositionPolicy, setDispositionPolicyEnabled, previewDispositionPolicy,
   updateDispositionPolicy, previewDispositionDraft, deleteDispositionPolicy, reorderDispositionPolicies,
@@ -150,16 +151,24 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
     // Enabling asks before it starts tagging (toggle, below); an edit to an ALREADY-enabled rule
     // takes effect just as immediately, so it earns the same "you are about to change what's
     // live" confirmation rather than saving silently.
-    if (enabled && !window.confirm(
-      `Save changes to "${editDraft.name.trim()}"? It is enabled, so the new conditions apply starting with your next Discover run.`
-    )) return
-    setEditBusy(true); setEditErr('')
-    Promise.resolve(updateDispositionPolicy(p.policy_id, {
-      name: editDraft.name.trim(), match: draftToMatch(editDraft), action: editDraft.action,
-    }))
-      .then(() => { setEditing(false); setEditDraft(null); onChanged() })
-      .catch((e) => setEditErr(refusalText(e)))
-      .finally(() => setEditBusy(false))
+    const doSave = () => {
+      setEditBusy(true); setEditErr('')
+      Promise.resolve(updateDispositionPolicy(p.policy_id, {
+        name: editDraft.name.trim(), match: draftToMatch(editDraft), action: editDraft.action,
+      }))
+        .then(() => { setEditing(false); setEditDraft(null); onChanged() })
+        .catch((e) => setEditErr(refusalText(e)))
+        .finally(() => setEditBusy(false))
+    }
+    if (enabled) {
+      confirm({
+        title: `Save changes to "${editDraft.name.trim()}"?`,
+        message: 'It is enabled, so the new conditions apply starting with your next Discover run.',
+        variant: 'warning', confirmLabel: 'Save',
+      }).then((ok) => { if (ok) doSave() })
+      return
+    }
+    doSave()
   }
 
   const doSetEnabled = (next) => {
@@ -182,22 +191,34 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
         onCount(p.policy_id, n)
         setBusy(false)
         if (n == null) {
-          if (window.confirm(`Enable "${p.name}"? It will start tagging matching files immediately. (Could not check how many files it would match.)`)) doSetEnabled(true)
+          confirm({
+            title: `Enable "${p.name}"?`,
+            message: 'It will start tagging matching files immediately. (Could not check how many files it would match.)',
+            variant: 'default', confirmLabel: 'Enable',
+          }).then((ok) => { if (ok) doSetEnabled(true) })
           return
         }
         const pct = total ? Math.round((n / total) * 100) : null
         const outcome = actionSpec(p.action).outcome
-        let msg = `Enable "${p.name}"? This will ${n === 0 ? 'currently tag no files' : `tag ${n} file${n === 1 ? '' : 's'}${pct != null ? ` (${pct}% of your estate)` : ''} as ${outcome}`}, and any future match, until you disable it.`
+        const msg = `This will ${n === 0 ? 'currently tag no files' : `tag ${n} file${n === 1 ? '' : 's'}${pct != null ? ` (${pct}% of your estate)` : ''} as ${outcome}`}, and any future match, until you disable it.`
         // BROAD_RULE_PCT: an arbitrary but stated line, not a backend limit — half the estate is
         // the point past which "this folder" usually stops being what a rule author meant.
-        if (pct != null && pct >= BROAD_RULE_PCT) {
-          msg += `\n\n⚠ That's ${pct}% of your estate — check the conditions are as narrow as you intended before enabling.`
-        }
-        if (window.confirm(msg)) doSetEnabled(true)
+        const broad = pct != null && pct >= BROAD_RULE_PCT
+        confirm({
+          title: `Enable "${p.name}"?`,
+          message: msg,
+          warning: broad ? `⚠ That's ${pct}% of your estate — check the conditions are as narrow as you intended before enabling.` : undefined,
+          variant: broad ? 'warning' : 'default',
+          confirmLabel: 'Enable',
+        }).then((ok) => { if (ok) doSetEnabled(true) })
       })
       .catch((e) => {
         setBusy(false)
-        if (window.confirm(`Enable "${p.name}"? (Could not check how many files it would match: ${refusalText(e)})`)) doSetEnabled(true)
+        confirm({
+          title: `Enable "${p.name}"?`,
+          message: `Could not check how many files it would match: ${refusalText(e)}`,
+          variant: 'default', confirmLabel: 'Enable anyway',
+        }).then((ok) => { if (ok) doSetEnabled(true) })
       })
   }
   const runPreview = () => {
@@ -213,12 +234,18 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
   // edit-after-history guard) — the route 409s and refusalText surfaces its message rather than
   // this button trying to predict history client-side and getting it wrong.
   const remove = () => {
-    if (!window.confirm(`Delete "${p.name}"? This can't be undone.`)) return
-    setBusy(true); setErr('')
-    Promise.resolve(deleteDispositionPolicy(p.policy_id))
-      .then(() => onChanged())
-      .catch((e) => setErr(refusalText(e)))
-      .finally(() => setBusy(false))
+    confirm({
+      title: `Delete "${p.name}"?`,
+      message: "This can't be undone.",
+      variant: 'danger', confirmLabel: 'Delete',
+    }).then((ok) => {
+      if (!ok) return
+      setBusy(true); setErr('')
+      Promise.resolve(deleteDispositionPolicy(p.policy_id))
+        .then(() => onChanged())
+        .catch((e) => setErr(refusalText(e)))
+        .finally(() => setBusy(false))
+    })
   }
   const duplicate = () => {
     setBusy(true); setErr('')

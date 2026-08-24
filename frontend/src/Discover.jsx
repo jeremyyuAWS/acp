@@ -716,7 +716,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         )
       })()}
 
-      {files.length > 0 && (
+      {(files.length > 0 || nonAssessable.length > 0) && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12,
                       margin: '20px 0 4px', paddingTop: 14, borderTop: '1px solid var(--line)' }}>
           {pendingActions > 0 ? (

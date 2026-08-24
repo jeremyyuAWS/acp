@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
+import { confirm, alert as dlgAlert } from './ConfirmDialog.jsx'
 import { generateCaptions, generateAltText, generateInsights } from './aiRemote.js'
 import { blobToBase64 } from './mediaExtract.js'
 import { Bars } from './charts.jsx'
@@ -455,8 +456,12 @@ export default function Upload({ onCertified, me }) {
     // The archive is unconditional here too, and the note says so rather than offering
     // "Drive version history preserves the originals" as the alternative — a revision history is
     // a different promise from a copy, and it was being used to justify not making one.
-    if (!window.confirm('Replace ' + eligible.length + ' file' + (eligible.length !== 1 ? 's' : '') + ' in your Google Drive?'
-        + '\n\nEach original is copied to _mova-originals/ first. Any file whose copy fails is skipped, not replaced.')) return
+    const ok = await confirm({
+      title: 'Replace ' + eligible.length + ' file' + (eligible.length !== 1 ? 's' : '') + ' in Google Drive?',
+      message: 'Each original is copied to _mova-originals/ first. Any file whose copy fails is skipped, not replaced.',
+      variant: 'default', confirmLabel: 'Replace',
+    })
+    if (!ok) return
     const token = sessionStorage.getItem('gd_token')
     if (!token) return
     setBulkSaving(true); setBulkSaved(false)
@@ -492,9 +497,10 @@ export default function Upload({ onCertified, me }) {
     // Said out loud. A silent partial success reads as "all N replaced", which is the number the
     // button implied when it was clicked.
     if (unsaved.length) {
-      window.alert(unsaved.length + ' of ' + eligible.length + ' file'
-        + (eligible.length !== 1 ? 's were' : ' was') + ' NOT replaced:\n\n' + unsaved.join('\n')
-        + '\n\nTheir originals are unchanged.')
+      dlgAlert({
+        title: unsaved.length + ' of ' + eligible.length + ' file' + (eligible.length !== 1 ? 's were' : ' was') + ' NOT replaced',
+        message: unsaved.join('\n') + '\n\nTheir originals are unchanged.',
+      })
     }
   }
 

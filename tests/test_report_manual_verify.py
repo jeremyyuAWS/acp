@@ -54,6 +54,17 @@ def test_no_known_format_renders_nothing():
     assert _section([]) == []
 
 
+def test_html_scans_get_a_verification_row():
+    # P-1: HTML was missing from _MANUAL_VERIFY — HTML scans silently skipped the section.
+    els = _section([{"file": "page.html"}, {"file": "doc.pdf"}])
+    rows = _table_rows(els)
+    assert rows is not None, "manual verification section rendered nothing for an HTML scan"
+    labels = [str(getattr(r[0], "text", r[0])) for r in rows[1:]]   # skip header row
+    assert any("HTML" in lbl for lbl in labels), "no HTML row in verification table"
+    txt = _cell_text(els)
+    assert "axe" in txt or "DevTools" in txt    # the recommended tool for HTML
+
+
 # ── POUR bars ─────────────────────────────────────────────────────────────────
 
 def test_pour_bars_draw_only_evaluated_principles():
