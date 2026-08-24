@@ -802,11 +802,12 @@ def _mode_bar(by_mode: dict, total: int) -> Drawing:
 
 def _assurance_section(facts, h2, body, cell, muted, hitl=None) -> list:
     """Human review & assurance (backlog R9 / R10). Every figure has a real denominator: review
-    outcomes counted from the immutable decision_log; the deterministic-assurance ratio as
-    deterministic ÷ evaluated criteria; the effort figure as fixes-cleared ÷ findings with that
-    basis named. NO "% effort saved" and NO "cleared ÷ attempted" — the attempted denominator is
-    not tracked (only re-scan-cleared fixes are recorded), so that ratio is omitted, not invented
-    (ADR 0016). Omitted entirely when nothing was reviewed, remediated or evaluated.
+    outcomes counted from the immutable decision_log; the mode split as real per-mode counts
+    (deterministic / AI-assisted / human-only); the effort figure as fixes-cleared ÷ findings
+    with that basis named. NO "% effort saved" and NO "cleared ÷ attempted" — the attempted
+    denominator is not tracked (only re-scan-cleared fixes are recorded), so that ratio is
+    omitted, not invented (ADR 0016). Omitted entirely when nothing was reviewed, remediated or
+    evaluated.
 
     hitl: optional hitl_analytics() result — adds avg review time (if real timestamps) and the
     edited-draft count (how many approved reviews included a human correction to the AI text)."""
