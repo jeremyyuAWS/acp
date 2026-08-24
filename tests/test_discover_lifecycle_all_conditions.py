@@ -94,11 +94,12 @@ def _items():
     ]
 
 
-def _policy(st, name, action, match, *, action_config=None, enabled=True):
+def _policy(st, name, action, match, *, action_config=None, enabled=True, owner="admin@x.com"):
     pid = "p-" + name
     st.create_disposition_policy(
         pid, name=name, match=json.dumps(match), action=action,
-        action_config=json.dumps(action_config or {}), requires_approval=False, enabled=enabled)
+        action_config=json.dumps(action_config or {}), requires_approval=False, enabled=enabled,
+        owner_email=owner)
     return pid
 
 
