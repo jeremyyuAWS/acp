@@ -668,7 +668,7 @@ argued.
   400→800, 220→400, 200→400) and `api/providers.py` (128→200). Root cause: reasoning models emit a
   thinking pass before answering — the old caps ran out mid-thought, returning empty responses. Since
   `num_predict` is a ceiling, raising it costs nothing when the model finishes early. *(Source-verified
-  2026-08-24. PR #675 open, CI green.)*
+  2026-08-24. PR #675 merged.)*
 
 ---
 
