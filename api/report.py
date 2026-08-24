@@ -33,6 +33,7 @@ awaiting approval, which are never presented as remediated. That separation is
 the report's core honesty guarantee.
 """
 from __future__ import annotations
+import hashlib
 import io
 import logging
 import os
@@ -283,6 +284,16 @@ def _esc(s) -> str:
     if len(escaped) > 2000:
         return escaped[:2000] + "…"
     return escaped
+
+
+def _finding_id(file: str, criterion: str, location: str = "") -> str:
+    """Deterministic 8-char hex ID stable for the same (file, criterion, location) triple.
+
+    Stable across renders, exports, and re-assessments of the same finding. Does not include
+    scan_id so the same logical finding in different scans of the same document has the same ID.
+    """
+    key = f"{file}|{criterion}|{location or ''}".encode()
+    return hashlib.sha256(key).hexdigest()[:8]
 
 
 def _decision_block(run, files, meta, facts, h2, body, muted) -> list:
@@ -1085,8 +1096,12 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
             else:
                 badge = "<font color='#3B6D11'>&#x25CF; Deterministic</font>"
                 sign_off = "deterministic fixer · auto-applied · no human decision needed"
+            _fid = _finding_id(doc["file"], e.get("criterion", ""),
+                               e.get("location") or e.get("before", "")[:60])
             lines = [
-                Paragraph(f"{badge} &nbsp;<b>{_esc(e['criterion'])}</b> &nbsp;<font color='#3B6D11'>&#x2713; validated on re-scan</font>", cell),
+                Paragraph(f"{badge} &nbsp;<b>{_esc(e['criterion'])}</b>"
+                          f" &nbsp;<font color='#3B6D11'>&#x2713; validated on re-scan</font>"
+                          f" &nbsp;<font color='#6c6470' size='7'>FND-{_fid}</font>", cell),
                 Paragraph(f"<font color='#6c6470'>Before</font> &nbsp;{_esc(e.get('before'))}", cell),
                 Paragraph(f"<font color='#6c6470'>After</font> &nbsp;<b>{_esc(e.get('after'))}</b>", cell),
             ]
@@ -1118,9 +1133,10 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
         for p in doc["proposed"]:
             note = ("validated on re-scan — awaiting approval" if p.get("validated")
                     else "awaiting human approval")
+            _pfid = _finding_id(doc["file"], p.get("criterion", ""))
             lines = [Paragraph(
                 f"<b>{_esc(p['criterion'])}</b> &nbsp;<font color='#854F0B'>proposed — not remediated "
-                f"({note})</font>", cell)]
+                f"({note})</font> &nbsp;<font color='#6c6470' size='7'>FND-{_pfid}</font>", cell)]
             for pr in p["proposals"][:6]:
                 why = f" <font color='#6c6470'>— {_esc(pr.get('rationale'))}</font>" if pr.get("rationale") else ""
                 src = (f" <font color='#6c6470'>({_esc(pr['source'])})</font>"
