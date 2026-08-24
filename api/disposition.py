@@ -146,6 +146,115 @@ def matches(doc: dict, match: list[dict]) -> bool:
     return True
 
 
+# Derived fields that come from a different source column — used by _condition_reason
+# to say "source_modified is not recorded" rather than "modified_age_days is not recorded".
+_DERIVED_FROM = {
+    "age_days": "created_at",
+    "modified_age_days": "source_modified",
+    "modified_at": "source_modified",
+    "parent_folder": "path",
+}
+
+_OP_WORDS = {
+    "gt": "greater than", "gte": "at least",
+    "lt": "less than",    "lte": "at most",
+}
+
+
+def _condition_reason(op: str, field: str, observed, expected, passed: bool) -> str:
+    """Human-readable explanation for one condition's outcome."""
+    absent = observed is None
+    src = _DERIVED_FROM.get(field)
+    absent_label = f"'{src}' not recorded" if src else f"'{field}' not recorded"
+
+    if not passed:
+        if absent and op in ("gt", "gte", "lt", "lte", "before", "after", "eq"):
+            return absent_label
+        if absent and op in ("contains", "prefix"):
+            return f"{absent_label}; treated as empty string, which does not satisfy {op!r} {expected!r}"
+        if op == "before":
+            return f"'{observed}' is not before '{expected}'"
+        if op == "after":
+            return f"'{observed}' is not after '{expected}'"
+        if op in _OP_WORDS:
+            return f"{observed} is not {_OP_WORDS[op]} {expected}"
+        if op == "prefix":
+            return f"'{observed}' does not start with '{expected}'"
+        if op == "contains":
+            return f"'{observed}' does not contain '{expected}'"
+        if op == "eq":
+            return f"'{observed}' does not equal '{expected}'"
+        if op == "ne":
+            return f"'{observed}' equals '{expected}'"
+        return "condition not satisfied"
+    # passed
+    if absent and op == "ne":
+        return f"field not recorded; any absent value is not equal to '{expected}'"
+    if op == "before":
+        return f"'{observed}' is before '{expected}'"
+    if op == "after":
+        return f"'{observed}' is after '{expected}'"
+    if op in _OP_WORDS:
+        return f"{observed} is {_OP_WORDS[op]} {expected}"
+    if op == "prefix":
+        return f"'{observed}' starts with '{expected}'"
+    if op == "contains":
+        return f"'{observed}' contains '{expected}'"
+    if op in ("eq", "ne"):
+        return f"'{observed}' {'equals' if op == 'eq' else 'does not equal'} '{expected}'"
+    return "condition satisfied"
+
+
+def evaluate(doc: dict, match: list[dict]) -> dict:
+    """Evaluate `match` conditions against `doc` and return per-condition provenance.
+
+    Returns::
+
+        {
+          "matched": bool,
+          "conditions": [
+            {
+              "field": str,
+              "op": str,
+              "value": <expected>,
+              "observed_value": <actual, or None when absent>,
+              "outcome": "pass" | "fail",
+              "reason": str
+            },
+            ...
+          ]
+        }
+
+    ``matched`` is True only when every condition passes — identical to ``matches()``.
+    The per-condition rows make it possible to explain to a reviewer exactly why a file
+    did or did not satisfy a rule, including when a missing metadata field was the cause.
+    """
+    values = {
+        **doc,
+        "age_days": _days_since(doc.get("created_at")),
+        "modified_age_days": _days_since(doc.get("source_modified")),
+        "modified_at": doc.get("source_modified"),
+        "parent_folder": _parent_folder(doc.get("path")),
+    }
+    rows = []
+    all_passed = True
+    for cond in match:
+        field, op, expected = cond["field"], cond["op"], cond.get("value")
+        observed = values.get(field)
+        passed = bool(_OPS[op](observed, expected))
+        if not passed:
+            all_passed = False
+        rows.append({
+            "field": field,
+            "op": op,
+            "value": expected,
+            "observed_value": observed,
+            "outcome": "pass" if passed else "fail",
+            "reason": _condition_reason(op, field, observed, expected, passed),
+        })
+    return {"matched": all_passed, "conditions": rows}
+
+
 # ── Candidate precedence (PRD §6) ───────────────────────────────────────────────
 # Moved here from api/handlers._evaluate_discover_lifecycle_rules (Lifecycle Rules build-plan
 # item #6, "identify which rule wins") so the discover-time evaluator and the conflicts report
