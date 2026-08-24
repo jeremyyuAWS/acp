@@ -73,26 +73,49 @@ def _days_ago_iso(n: int) -> str:
     return (datetime.now(timezone.utc) - timedelta(days=n)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _create_text_file(svc, name: str, content: str, parent_id: str,
-                      modified_days_ago: int) -> dict:
-    """Create a plain-text file in Drive with a backdated modifiedTime.
+def _patch_modified_time(creds, file_id: str, mod_time: str) -> str:
+    """Set modifiedTime via a direct PATCH, bypassing client-library schema checks.
 
-    The setModifiedTime=true query param tells Drive to use the modifiedTime
-    from the request body rather than setting it to 'now'.
+    Some versions of google-api-python-client omit setModifiedTime from their
+    discovery schema, causing a TypeError when passed as a kwarg.  A raw urllib
+    PATCH with ?setModifiedTime=true always works regardless of library version.
     """
+    import json
+    import urllib.request
+    auth_headers: dict = {}
+    creds.apply(auth_headers)
+    url = (
+        f"https://www.googleapis.com/drive/v3/files/{file_id}"
+        "?setModifiedTime=true&fields=modifiedTime"
+    )
+    req = urllib.request.Request(
+        url,
+        data=json.dumps({"modifiedTime": mod_time}).encode(),
+        headers={**auth_headers, "Content-Type": "application/json"},
+        method="PATCH",
+    )
+    with urllib.request.urlopen(req) as resp:
+        return json.loads(resp.read()).get("modifiedTime", mod_time)
+
+
+def _create_text_file(svc, name: str, content: str, parent_id: str,
+                      modified_days_ago: int, *, creds=None) -> dict:
+    """Create a plain-text file in Drive with a backdated modifiedTime."""
     from googleapiclient.http import MediaInMemoryUpload
+    mod_time = _days_ago_iso(modified_days_ago)
     body = {
         "name": name,
         "parents": [parent_id],
         "mimeType": "text/plain",
-        "modifiedTime": _days_ago_iso(modified_days_ago),
     }
     media = MediaInMemoryUpload(content.encode(), mimetype="text/plain")
     result = svc.files().create(
         body=body, media_body=media,
         fields="id,name,modifiedTime,createdTime,size,webViewLink",
-        setModifiedTime=True,           # honour modifiedTime in body
     ).execute()
+    # Backdate modifiedTime via direct PATCH (avoids library schema issues)
+    if creds is not None:
+        result["modifiedTime"] = _patch_modified_time(creds, result["id"], mod_time)
     return result
 
 
@@ -174,14 +197,14 @@ def main() -> None:
 
     for name, description, modified_days_ago in _TEST_FILES:
         content = f"{description}\n\nmodifiedTime target: {_days_ago_iso(modified_days_ago)}\n"
-        result = _create_text_file(svc, name, content, folder_id, modified_days_ago)
+        result = _create_text_file(svc, name, content, folder_id, modified_days_ago, creds=creds)
         created.append(result)
         print(f"  ✓ {name:50s}  modifiedTime={result.get('modifiedTime', '?')}")
 
     # Large file (>1 MB) for size_kb>1000 rule testing
     large_content = _make_large_content(1050)
     result = _create_text_file(svc, "lifecycle-test-large-placeholder.txt",
-                               large_content, folder_id, modified_days_ago=400)
+                               large_content, folder_id, modified_days_ago=400, creds=creds)
     created.append(result)
     size_b = int(result.get("size") or 0)
     print(f"  ✓ lifecycle-test-large-placeholder.txt   {size_b // 1024} KB, "
