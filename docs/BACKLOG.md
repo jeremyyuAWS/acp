@@ -110,9 +110,10 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
 
 ### Testing / verification holes
 
-- [ ] **R10 — CI fixture-verification harness for the R8 understated cells.** The office/PDF detectors
-  can't run locally (no venv here); confirming `xlsx 1.4.1/1.4.11/4.1.2` and `pdf 2.4.3` actually *emit*
-  on a built fixture needs a CI run before editing the capability table. This is the honest gate on R8.
+- [x] **R10 — CI fixture-verification harness for the R8 understated cells.** Done. `tests/test_r10_fixture_cells.py`
+  adds 9 tests covering xlsx 1.4.1, 1.4.11, 4.1.2 and pdf 2.4.3 — hand-crafted zip fixtures (stdlib only)
+  for xlsx, `pytest.importorskip` guards for pdf (pikepdf/reportlab). All 9 pass in CI. *(Source-verified
+  2026-08-24. PR #673 merged.)*
 - [ ] **R11 — Multi-user / concurrency load test.** The durable Postgres queue + `owner_email` isolation
   is code-verified but not stress-tested with concurrent users — the exact 3-users-scanning-their-own-
   Drives pilot scenario. Re-run: a fan-out load harness against a staging estate.
