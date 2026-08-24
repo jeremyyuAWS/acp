@@ -35,6 +35,8 @@ the report's core honesty guarantee.
 from __future__ import annotations
 import io
 import logging
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 _LOG = logging.getLogger(__name__)
@@ -69,6 +71,7 @@ LOGO = Path(__file__).resolve().parent / "assets" / "mova-logo.png"
 # of the documents it reports on. A scan of a Spanish estate still produces an English report,
 # so this is a property of this module's strings and moves only when they are translated.
 REPORT_LANG = "en-US"
+REPORT_SCHEMA_VERSION = "1"
 
 # SC id → (display name, WCAG level, one-line plain-language description). Drives the
 # criteria table and keeps the report self-explanatory for a non-specialist reader.
@@ -1283,7 +1286,16 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     std = target.strip() if target.strip().upper().startswith("WCAG") else f"WCAG 2.1 {target.strip()}"
 
     # ── Header band: logo + title ────────────────────────────────────────────
-    when = run["completed_at"][:19].replace("T", " ")
+    report_generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    _completed_raw = run.get("completed_at") or ""
+    if _completed_raw:
+        assessment_completed = _completed_raw[:19].replace("T", " ")
+        _snapshot_label = ""
+    else:
+        assessment_completed = "in progress"
+        _snapshot_label = " · SNAPSHOT — scan still running"
+    build_commit = os.environ.get("BUILD_COMMIT", "")
+    _commit_str = f" · build {build_commit[:8]}" if build_commit else ""
     title_block = [
         # NOT "Conformance Report". This document reports what ACP checked, what it changed
         # and what it re-verified; it does not determine conformance, and the title was the
@@ -1293,7 +1305,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
         # (frontend pdfReport.js) is a genuine conformance report about the mova.io product and
         # keeps its name — the distinction is who is asserting what about whom.
         Paragraph("Accessibility Assessment Report", H),
-        Paragraph(f"{std} · generated {when} UTC", sub),
+        Paragraph(
+            f"{std} · Assessment completed {assessment_completed} UTC"
+            f" · Report generated {report_generated_at} UTC{_snapshot_label}", sub),
     ]
     logo = Image(str(LOGO), width=1.32 * inch, height=1.32 * inch * 264 / 800) if LOGO.exists() else Spacer(1, 1)
     head = Table([[logo, title_block]], colWidths=[1.55 * inch, 5.55 * inch])
@@ -1302,9 +1316,14 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
                               ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
     el.append(head)
     el.append(HRFlowable(width="100%", thickness=1.2, color=PLUM, spaceBefore=6, spaceAfter=10))
+    _rubric_name = meta.get("name") or ""
+    _rubric_display = (f"{_rubric_name} v" if _rubric_name else "v") + (meta.get("version") or "—")
     el.append(Paragraph(
-        f"Scan <b>{run['id']}</b> · rubric v{meta.get('version', '—')} · stamped hash <b>{meta.get('hash', '—')}</b> — "
-        "results are reproducible from this hash. Scans run read-only; documents are never retained.", sub))
+        f"Scan <b>{run['id']}</b>"
+        f" · rubric {_esc(_rubric_display)}"
+        f" · hash <b>{(meta.get('hash') or '—')[:12]}</b>"
+        f" · schema v{REPORT_SCHEMA_VERSION}{_commit_str} — "
+        "results are reproducible from the rubric hash. Scans run read-only; documents are never retained.", sub))
 
     # ── Certification decision (R2) ──────────────────────────────────────────
     # Answers "can I ship this?" before any chart. The plain-language WHY (R3) is the
