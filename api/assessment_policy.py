@@ -175,27 +175,19 @@ _SUPERSEDING_OUTCOMES = frozenset({"PASS", NOT_EVALUATED, _LEGACY_NOT_EVALUATED}
 # office interactive-control detector (office_structure.office_control_review_checks).
 REVIEW_FORMATS: dict[str, frozenset[str]] = {
     "2.1.2": frozenset({"docx", "pptx", "xlsx"}),   # No Keyboard Trap — controls present
-    # Name/Role/Value — controls present. docx AND xlsx are ABSENT because both are registry-backed
-    # now (formats/docx, formats/xlsx, coverage=PARTIAL), exactly as pdf already was. The review-lane
-    # branch in _rule_outcome runs BEFORE the registry branch and answers NOT_EVALUATED on a
-    # clean file, so leaving a format here would silently outrank the coverage declaration
-    # and keep the very answer this migration exists to fix. Both mechanisms describe the same
-    # pair; only the finer one should be consulted.
+    # 4.1.2 Name/Role/Value: REMOVED — all three formats (docx, xlsx, pptx) are now registry-backed.
+    # The _rule_outcome review-lane branch runs BEFORE the registry branch and returns NOT_EVALUATED
+    # on a clean file, so leaving a format here would silently shadow the coverage declaration and
+    # produce the wrong answer for a file with no controls found. pptx was the last remaining format;
+    # it now mirrors docx and xlsx (migrated earlier) via formats/pptx/detectors/name_role_value.
     #
-    # Nothing is lost for the controls the review lane covered: an ActiveX or OLE control still
-    # emits the advisory, and the registry branch turns any review finding into REVIEW. What
-    # changes is the CLEAN case, which now reads REVIEW instead of "we did not look".
-    "4.1.2": frozenset({"pptx"}),
-    # Use of Color — colour-only status/links. xlsx is ABSENT for the same reason as 4.1.2 above:
-    # it is registry-backed now (formats/xlsx office_color_only_checks, PARTIAL), so the registry
-    # branch owns its clean-file verdict. docx and pptx stay here (not yet migrated to registry-
-    # only); pdf is review-lane only (colour-only link, ADR 0025).
-    "1.4.1": frozenset({"docx", "pdf", "pptx"}),
+    # 1.4.1 Use of Color: REMOVED — docx, pdf, and pptx are all registry-backed now
+    # (formats/docx, formats/pdf, formats/pptx — each with PARTIAL coverage). A scan that finds
+    # no colour-only links reads REVIEW ("we checked what we can") instead of NOT_EVALUATED.
+    #
+    # 1.4.11 Non-text Contrast: REMOVED — docx, pdf, and pptx are all registry-backed now.
+    # A clean-file now reads REVIEW through the registry, not NOT_EVALUATED.
     "2.4.3": frozenset({"pptx"}),                   # Focus Order — title not first in reading order
-    # Non-text Contrast — faint shape outline. xlsx is ABSENT: registry-backed (formats/xlsx,
-    # PARTIAL) so a clean workbook reads REVIEW via the registry, not "not evaluated". docx/pdf/pptx
-    # remain review-lane here.
-    "1.4.11": frozenset({"pptx", "docx", "pdf"}),
     # ADR 0024 Tier A — render-gated structural proxies (no rendering). 1.4.3 is NOT here: its
     # hybrid text-over-non-solid REVIEW rides the existing 1.4.3 pass/fail lane (a solid-fill FAIL
     # still wins), so it must not be diverted to the review-only lane.

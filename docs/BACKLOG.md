@@ -97,10 +97,13 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   a pre-populated impact estimate. Mounted in `Overview.jsx:428`. *(Source-verified 2026-08-24.)*
 - [ ] **R7 — Phase 3c: per-user config (owner default + per-user override).** Governance model chosen
   ("owner sets a default, users can override"); not implemented.
-- [ ] **R8 — WCAG capability completion (the 12 not-ready cells).** Source-verified against
+- [~] **R8 — WCAG capability completion (the 12 not-ready cells).** Source-verified against
   `remediation_capability.py` + `api/formats/*`, split 4/4/4: **~4 quick table-fixes** — detector ships
-  but isn't declared (`xlsx 1.4.1`, `xlsx 1.4.11`, `xlsx 4.1.2`, `pdf 2.4.3` heuristic `/Tabs=/S`);
-  **~4 real detector builds** — no detector (`pdf 1.4.1`, `pptx 1.4.11`, `pdf 1.4.11`, `pptx 4.1.2`);
+  but isn't declared (`xlsx 1.4.1`, `xlsx 1.4.11`, `xlsx 4.1.2`, `pdf 2.4.3` heuristic `/Tabs=/S`):
+  done in PR #684 (pending merge). **~4 real detector builds** — detectors added by PRs #676/#679,
+  REVIEW_FORMATS migration done in PR #695 (this): `pdf 1.4.1`, `pptx 1.4.11`, `pdf 1.4.11`,
+  `pptx 4.1.2` + `docx 1.4.1`, `docx 1.4.11` also migrated (registry-backed since #679). Clean scan now
+  resolves to REVIEW not NOT_EVALUATED.
   **3 appliers** — assessable, human-only fix (`2.4.4 pdf`, `3.1.2 xlsx`, `2.1.2 docx`); **~4 are
   legitimately N/A** (interaction SCs on static docs: `pptx 2.1.1/2.1.2/2.4.3`, `xlsx 2.1.2` — see the
   `ASSESSMENT_OVERRIDES` rationale). The quick-fixes are gated on R10.
