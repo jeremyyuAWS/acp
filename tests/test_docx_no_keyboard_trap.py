@@ -73,12 +73,14 @@ def test_the_lane_is_human_and_that_is_a_conclusion():
 
 
 def test_it_can_never_certify_a_pass():
-    """The clearest case in the registry. A document with no controls has nothing to trap focus
-    in — the criterion never ARISES rather than being satisfied — and NOT_EVALUATED is the honest
-    word for that. A signal reads REVIEW. Neither is ever PASS, and no future detector changes
-    that, because the evidence does not exist statically."""
+    """Registry-backed PARTIAL coverage: the detector runs over the embedded-control subset and
+    returns []. NEEDS_REVIEW_ON_CLEAN takes effect because PARTIAL means 'we checked what we can
+    reach, not everything'. A clean file therefore reads REVIEW — 'nothing found in the subset
+    we checked' — not NOT_EVALUATED (which means 'we did not look'). A finding reads REVIEW too
+    (advisory). Neither is ever PASS, and no future detector changes that, because the evidence
+    does not exist statically."""
     assert pol._rule_outcome("2.1.2", "docx", 0, 1, "AA", None) == pol.REVIEW
-    assert pol._rule_outcome("2.1.2", "docx", 0, 0, "AA", None) == pol.NOT_EVALUATED
+    assert pol._rule_outcome("2.1.2", "docx", 0, 0, "AA", None) == pol.REVIEW
 
 
 # ── the detector ──────────────────────────────────────────────────────────────

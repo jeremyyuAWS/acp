@@ -14,13 +14,13 @@ can ever return PASS:
 
     1.3.1  1.4.3  2.4.2  3.1.1        <- the deterministic lane; a full confusion matrix exists
 
-Eight more are REVIEW-lane (1.1.1, 1.3.2, 1.3.3, 1.4.5, 2.4.4, 2.4.6, 3.1.2, 4.1.2): a review
-detector does not certify conformance (ADR 0016), so a CLEAN file there resolves to REVIEW or
-NOT_EVALUATED and NEVER to PASS. There is no true-negative class on those pairs, which means
-"false positive rate" in the usual sense is undefined for them — a clean fixture does not score
-as "correctly passed", because the engine is not permitted to say so. Three (1.4.1, 1.4.11,
-2.1.2) have no .docx lane at all, and a fixture there exists to prove the engine stays silent
-rather than inventing a verdict.
+Eleven are REVIEW-lane (1.1.1, 1.3.2, 1.3.3, 1.4.1, 1.4.5, 1.4.11, 2.1.2, 2.4.4, 2.4.6, 3.1.2,
+4.1.2): a review detector does not certify conformance (ADR 0016), so a CLEAN file there resolves
+to REVIEW and NEVER to PASS. There is no true-negative class on those pairs, which means "false
+positive rate" in the usual sense is undefined for them — a clean fixture does not score as
+"correctly passed", because the engine is not permitted to say so. The R8 migration (PR #709)
+moved 1.4.1, 1.4.11 and 2.1.2 from "no .docx lane" to registry-backed REVIEW lanes, so the
+count above reflects the current state; the f_no_docx_lane fixture retains the name for history.
 
 So each fixture declares its expectation per criterion, and EVERY declaration is checked against
 corpus_expectations.possible_verdicts() at generation time. A fixture that expects PASS on 1.1.1
@@ -549,12 +549,13 @@ def f_no_docx_lane(d):
     d.add_heading("Notice", level=1)
     d.add_paragraph("Press and hold the slider, then drag it to set your contribution.")
     _run(d.add_paragraph(), "Contribution level", color=(0x11, 0x11, 0x11))
-    return {"1.4.1": ce.REVIEW, "2.1.2": ce.NOT_EVALUATED,
+    return {"1.4.1": ce.REVIEW, "2.1.2": ce.REVIEW,
             "1.4.11": ce.REVIEW}, \
-        ("CONTROL: 1.4.1 and 1.4.11 now have docx lanes via the capability registry (R8 migration). "
-         "A clean file resolves to REVIEW ('we checked what our technique reaches'). "
-         "2.1.2 still reads NOT_EVALUATED — it remains in REVIEW_FORMATS with no registry entry, "
-         "so silence means 'we did not look'. The engine must stay silent on 2.1.2 here.")
+        ("CONTROL: 1.4.1, 1.4.11 and 2.1.2 now all have docx lanes via the capability registry "
+         "(R8 migration, PR #709). A clean file resolves to REVIEW for all three — "
+         "'we checked what our technique reaches, found nothing, but cannot certify'. "
+         "2.1.2's detector self-gates on embedded ActiveX/OLE parts; absent those parts, "
+         "it returns [] and the registry's NEEDS_REVIEW_ON_CLEAN coverage gate takes effect.")
 
 
 def f_clean(d):
