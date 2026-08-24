@@ -64,8 +64,8 @@ const TABS = [
   ['remediate',     'Remediate',     'fix issues',          3],
   ['publish',       'Release',       'approve & deploy',    4],
   ['monitor',       'Monitor',       'track compliance',    5],
-  ['graph',         'Knowledge Graph', 'explore findings',   0],
   ['analytics',     'Admin Insights', 'estate analytics',   0],
+  ['graph',         'Knowledge Graph', 'explore findings',   0],
 ]
 
 function timeAgo(iso) {
