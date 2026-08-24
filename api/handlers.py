@@ -1675,9 +1675,32 @@ def _scan_batch(payload: dict, job: dict) -> None:
     svc = _make_svc(source, toks)
     rubric_hash = core.active_rubric().hash
     incremental = bool(payload.get("incremental", True))
-    for it in items:
+    try:
+        workers = max(1, int(_os.environ.get("ACP_SCAN_BATCH_WORKERS", "4") or "4"))
+    except ValueError:
+        workers = 4
+
+    def _run_one(it):
         _analyse_and_persist_one(scan_id, it, source, pii, svc, toks, now, _lf, user=user,
                                  rubric_hash=rubric_hash, incremental=incremental)
+
+    if workers <= 1 or len(items) <= 1:
+        for it in items:
+            _run_one(it)
+    else:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(workers, len(items))) as ex:
+            futures = [ex.submit(_run_one, it) for it in items]
+        # collect results after all complete; re-raise first exception if any
+        exc = None
+        for f in futures:
+            try:
+                f.result()
+            except Exception as e:
+                if exc is None:
+                    exc = e
+        if exc is not None:
+            raise exc
     _lf.flush()  # send any file spans before the batch job exits
     done, total = core.store.count_files_done(scan_id)   # ADR 0013: count, not a running counter
     if done >= total > 0:

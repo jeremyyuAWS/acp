@@ -836,6 +836,7 @@ class Store:
         self._db.init_schema()
         self._scope_cache: dict = {}
         self._scope_rules_cache: dict = {}
+        self._inventory_cache: dict = {}
 
     def _save_file_manifest(self, cur, sid: str, f: dict, catalog: dict) -> None:
         """Compute and persist the per-rule execution manifest for one file."""
@@ -905,12 +906,12 @@ class Store:
                     (sid, f["file"], f["engine"], f["status"], f["score"],
                      int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id"), f.get("acp_stamped"),
                      f.get("checksum"), f.get("size_kb"), f.get("pages"), f.get("sheets"), f.get("source_modified")))
-                for i in f["issues"]:
-                    self._db.execute(cur,
+                if f["issues"]:
+                    self._db.executemany(cur,
                         "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location) "
                         "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
-                        (sid, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
-                         i.get("page"), _issue_location(i)))
+                        [(sid, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
+                          i.get("page"), _issue_location(i)) for i in f["issues"]])
                 # Per-rule trace: one row per catalog rule per file — PASS/FAIL/REVIEW/NOT_EVALUATED.
                 # Counts feed the per-rule trace, so they must reflect the conformance target:
                 # an AAA finding picked up as a by-product of an AA check is not this scan's
@@ -1275,12 +1276,13 @@ class Store:
                  int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id"), f.get("acp_stamped"),
                  f.get("checksum"), f.get("size_kb"), f.get("pages"), f.get("sheets"), f.get("source_modified")))
             self._db.execute(cur, "DELETE FROM issue_records WHERE scan_id=%s AND file=%s", (scan_id, f["file"]))
-            for i in f.get("issues", []):
-                self._db.execute(cur,
+            issues = f.get("issues", [])
+            if issues:
+                self._db.executemany(cur,
                     "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location) "
                     "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
-                    (scan_id, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
-                     i.get("page"), _issue_location(i)))
+                    [(scan_id, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
+                      i.get("page"), _issue_location(i)) for i in issues])
             fail_counts, review_counts = _split_sc_counts(
                 filter_issues_to_target(f.get("issues", []), target))
             fmt = _file_format(f["file"])
@@ -2135,12 +2137,19 @@ class Store:
     def _inventory_attrs(self, scan_id: str, file: str) -> dict:
         """The file's path / owner / parent_folder from its scan_inventory row — the attributes a
         per-file scope rule matches on (department is not on scan_inventory today, so
-        department-selector rules do not resolve at this layer; folder/owner do)."""
-        with self._db.cursor() as cur:
-            self._db.execute(cur,
-                "SELECT path, owner, parent_folder FROM scan_inventory WHERE scan_id=%s AND file=%s",
-                (scan_id, file))
-            return self._db.fetchone(cur) or {}
+        department-selector rules do not resolve at this layer; folder/owner do).
+
+        Lazy bulk-load: first call for a given scan_id fetches ALL inventory rows for the
+        scan at once and caches them by filename, so subsequent calls (other files in the same
+        scan batch) return from memory rather than issuing another point-SELECT."""
+        if scan_id not in self._inventory_cache:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT file, path, owner, parent_folder FROM scan_inventory WHERE scan_id=%s",
+                    (scan_id,))
+                rows = self._db.fetchall(cur)
+            self._inventory_cache[scan_id] = {r["file"]: r for r in rows}
+        return self._inventory_cache[scan_id].get(file, {})
 
     def scope_for_file(self, scan_id: str, file: str, global_scope):
         """This file's effective criterion×format scope: `global_scope` narrowed to the WCAG
