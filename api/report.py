@@ -273,11 +273,14 @@ def _esc(s) -> str:
     """Escape for reportlab's mini-HTML paragraph markup; bound the length."""
     if s is None or s == "":
         return "—"
-    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))[:400]
+    escaped = str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    if len(escaped) > 2000:
+        return escaped[:2000] + "…"
+    return escaped
 
 
 def _decision_block(run, files, meta, facts, h2, body, muted) -> list:
-    """What ACP checked, fixed and verified (backlog R2/R3).
+    """What ACP checked, fixed and verified (R2/R3).
 
     Answers, before anything else, the question a reader actually has: what was done to these
     documents, and what is still open? Every figure is COUNTED from stored rows; the digest is
@@ -990,7 +993,7 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
         el.append(Spacer(1, 6))
         el.append(Paragraph(
             f"Evidence shown for the first {_EVIDENCE_MAX_FILES} of {len(evidence)} remediated "
-            "documents. The remainder are available via the per-file remediation API.", muted))
+            "documents; the remainder are omitted from this PDF for length.", muted))
     return el
 
 
@@ -1202,6 +1205,7 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     pct = round(cert / total * 100)
     avg = "—" if run.get("avg_score") is None else run["avg_score"]
     resolved_total = sum(resolved_crit.values())
+    total_eval = sum(d.get("evaluated", 0) for d in ((facts or {}).get("documents") or []))
 
     # ── Executive summary — plain-language verdict ───────────────────────────
     # `total` counts every document in the estate, INCLUDING any nobody scored, so it is not the
@@ -1245,7 +1249,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
         Paragraph(f'<font size="22" color="#3B6D11"><b>{pct}%</b></font><br/>'
                   f'<font size="8.5" color="#6c6470">no blocking findings · {cert} of {total} documents</font>', body),
         Paragraph(f'<font size="22"><b>{avg}</b></font><br/>'
-                  f'<font size="8.5" color="#6c6470">average score / 100</font>', body),
+                  f'<font size="8.5" color="#6c6470">average score / 100'
+                  + (f' · {total_eval} criteria evaluated' if total_eval else '')
+                  + '</font>', body),
         Paragraph(f'<font size="22" color="#854F0B"><b>{counts.get("issues", 0)}</b></font><br/>'
                   f'<font size="8.5" color="#6c6470">documents with open findings</font>', body),
         Paragraph(f'<font size="22" color="#9a948f"><b>{counts.get("unanalysable", 0)}</b></font><br/>'
