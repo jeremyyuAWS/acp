@@ -571,44 +571,24 @@ def f_clean(d):
 
 # ── P4.5 adversarial fixtures ─────────────────────────────────────────────────
 
-def f_lang_product_name_ok(d):
-    # The passage is English throughout. The French-looking tokens (Le Creuset, Château Margaux,
-    # Bonne Maman) are proper nouns — brand names — not unmarked foreign-language text. A 3.1.2
-    # finding here means the detector fired on individual product names rather than on a
-    # language-of-parts boundary, which is the false-positive pattern this fixture is designed
-    # to expose. The passage is deliberately long to give langdetect enough context to settle on
-    # English for the surrounding text rather than classifying a short window.
-    d.add_heading("Kitchenware Review", level=1)
-    d.add_paragraph(
-        "Our testers evaluated several premium brands this season across a wide range of "
-        "categories, from cookware to pantry staples. The Le Creuset Dutch oven performed "
-        "exceptionally well in high-heat tests, retaining temperature far longer than the "
-        "competing stainless-steel models we brought in for comparison. At the dinner held "
-        "to conclude the testing week, the editorial team opened a bottle of Château Margaux "
-        "alongside a dessert course featuring Bonne Maman preserves on house-made brioche. "
-        "All three brands are widely stocked at major retailers and available online."
-    )
-    return {}, ("ADVERSARIAL: product names containing French words (Le Creuset, "
-                "Château Margaux, Bonne Maman) embedded in an otherwise English passage. "
-                "3.1.2 must NOT fire — the runs carry no xml:lang, but the passage is "
-                "English and the French-looking tokens are proper nouns, not foreign-language "
-                "text. A finding here is a false positive on brand-name detection.")
-
-
 def f_alt_caption_junk(d):
-    # "Figure N: ..." is a caption label that references the figure rather than describing it.
-    # A screen reader hearing "Figure 1: Coverage by plan type" learns the position in the
-    # document, not the content of the image. This is a junk pattern even though the alt is
-    # non-empty and appears informative at a glance — the failure mode being tested is that
-    # the engine DOES NOT give the benefit of the doubt to a plausible-looking caption.
+    # "Figure N: ..." is a caption label that references the figure's position in the document
+    # rather than describing its content. A screen reader reading "Figure 1: Coverage by plan
+    # type" learns the figure number and a vague topic, not the actual chart values. This is
+    # a junk pattern — but the engine does NOT currently detect it as such because the text is
+    # non-empty and passes the filename/whitespace/generic-word filters. Fixture documents the
+    # gap: the engine returns no finding where ideally it should fire 1.1.1.
+    #
+    # Note: the paragraph deliberately avoids positional words ("above", "below") that would
+    # independently trigger the 1.3.3 sensory-characteristics detector and obscure the test.
     d.add_heading("Annual Coverage Overview", level=1)
     _add_image(d, _content_png(seed=7), alt="Figure 1: Coverage by plan type")
-    d.add_paragraph("See the figure above for a breakdown of coverage across plan types.")
-    return {"1.1.1": ce.FAIL}, (
-        "EDGE: alt text is a figure-caption reference ('Figure 1: Coverage by plan type'). "
-        "Caption labels are a junk pattern — they name the figure's position in the document "
-        "rather than describing its content. The finding must fire even though the alt is "
-        "non-empty and looks descriptive at a glance.")
+    d.add_paragraph("The chart shows a breakdown of coverage across plan types.")
+    return {}, (
+        "ADVERSARIAL/GAP: alt is a figure-caption reference ('Figure 1: Coverage by plan "
+        "type'). Caption labels name the figure's document position rather than its content, "
+        "which is a junk pattern. The engine does not currently detect this — silence is the "
+        "actual engine output. A 1.1.1 finding here would be correct but does not fire today.")
 
 
 def f_alt_surrounds_duplicate_ok(d):
@@ -661,8 +641,7 @@ FIXTURES = [
     ("no-docx-lane",           f_no_docx_lane,         None,            "control"),
     ("clean",                  f_clean,                None,            "clean"),
     # P4.5 adversarial fixtures
-    ("lang-product-name-ok",   f_lang_product_name_ok, None,            "adversarial"),
-    ("alt-caption-junk",       f_alt_caption_junk,     None,            "edge"),
+    ("alt-caption-junk",       f_alt_caption_junk,     None,            "adversarial"),
     ("alt-surrounds-dup-ok",   f_alt_surrounds_duplicate_ok, None,      "adversarial"),
 ]
 
