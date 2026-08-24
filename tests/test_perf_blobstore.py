@@ -134,6 +134,61 @@ def test_get_scan_scope_caches_none_for_missing_scan(isolated_store):
     assert result2 is None
 
 
+# ── Perf-4: get_scan_scope_rules caches per scan_id ─────────────────────────
+
+def test_get_scan_scope_rules_caches_result(isolated_store):
+    """Second call must return the cached list without hitting the DB."""
+    isolated_store.init_scan_run(
+        "s_rules", "local", 1, "2026-01-01T00:00:00Z", "test-rubric", "abc123"
+    )
+    rules1 = isolated_store.get_scan_scope_rules("s_rules")
+    original_execute = isolated_store._db.execute
+    query_count = [0]
+
+    def _counting_execute(cur, sql, params=()):
+        if "scan_runs" in sql and sql.strip().upper().startswith("SELECT"):
+            query_count[0] += 1
+        return original_execute(cur, sql, params)
+
+    isolated_store._db.execute = _counting_execute
+    rules2 = isolated_store.get_scan_scope_rules("s_rules")
+    assert query_count[0] == 0, "second get_scan_scope_rules call must not query the DB"
+    assert rules2 == rules1
+
+
+def test_get_scan_scope_rules_caches_empty_for_missing_scan(isolated_store):
+    """Empty result for a missing scan is cached so we avoid repeated DB misses."""
+    result1 = isolated_store.get_scan_scope_rules("nonexistent-rules-scan")
+    assert result1 == []
+    assert "nonexistent-rules-scan" in isolated_store._scope_rules_cache, \
+        "empty result must be cached in _scope_rules_cache"
+    result2 = isolated_store.get_scan_scope_rules("nonexistent-rules-scan")
+    assert result2 == []
+
+
+# ── Perf-5: executemany on DB adapters ───────────────────────────────────────
+
+def test_sqlite_executemany_inserts_multiple_rows(isolated_store):
+    """executemany must insert all rows in one call via SQLite's native executemany."""
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.executemany(
+            cur,
+            "INSERT INTO scan_runs(id, source, files, started_at, rubric_name, rubric_hash) "
+            "VALUES(%s,%s,%s,%s,%s,%s)",
+            [
+                ("em_scan1", "local", 1, "2026-01-01T00:00:00Z", "r", "h1"),
+                ("em_scan2", "local", 2, "2026-01-01T00:00:00Z", "r", "h2"),
+            ],
+        )
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(
+            cur, "SELECT COUNT(*) AS n FROM scan_runs WHERE id IN (%s,%s)",
+            ("em_scan1", "em_scan2")
+        )
+        row = isolated_store._db.fetchone(cur)
+    assert row["n"] == 2, "executemany must insert both rows"
+
+
 # ── Perf-3: worker poll interval default ─────────────────────────────────────
 
 def test_job_worker_default_poll_interval_is_half_second():

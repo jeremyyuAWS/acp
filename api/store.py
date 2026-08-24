@@ -639,6 +639,9 @@ class _SQLiteAdapter:
     def execute(self, cur, sql: str, params: tuple = ()) -> None:
         cur.execute(sql.replace("%s", "?"), params)
 
+    def executemany(self, cur, sql: str, params_list) -> None:
+        cur.executemany(sql.replace("%s", "?"), params_list)
+
     def fetchall(self, cur) -> list[dict]:
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
@@ -811,6 +814,10 @@ class _PgAdapter:
     def execute(self, cur, sql: str, params: tuple = ()) -> None:
         cur.execute(sql, params)
 
+    def executemany(self, cur, sql: str, params_list) -> None:
+        import psycopg2.extras
+        psycopg2.extras.execute_batch(cur, sql, params_list)
+
     def fetchall(self, cur) -> list[dict]:
         return [dict(r) for r in (cur.fetchall() or [])]
 
@@ -828,6 +835,7 @@ class Store:
         )
         self._db.init_schema()
         self._scope_cache: dict = {}
+        self._scope_rules_cache: dict = {}
 
     def _save_file_manifest(self, cur, sid: str, f: dict, catalog: dict) -> None:
         """Compute and persist the per-rule execution manifest for one file."""
@@ -844,6 +852,7 @@ class Store:
         counts: dict[str, int] = {}
         for i in f.get("issues", []):
             counts[i["ruleId"]] = counts.get(i["ruleId"], 0) + 1
+        manifest_rows = []
         for rule in rules:
             rid = rule["id"]
             if rid in error_ids:
@@ -852,12 +861,13 @@ class Store:
                 status = "FAIL"
             else:
                 status = "PASS"
-            self._db.execute(cur,
-                "INSERT INTO scan_file_manifests(scan_id,file,rule_id,status,finding_count) "
-                "VALUES(%s,%s,%s,%s,%s) "
-                "ON CONFLICT(scan_id,file,rule_id) DO UPDATE SET "
-                "status=EXCLUDED.status,finding_count=EXCLUDED.finding_count",
-                (sid, f["file"], rid, status, counts.get(rid, 0)))
+            manifest_rows.append((sid, f["file"], rid, status, counts.get(rid, 0)))
+        self._db.executemany(cur,
+            "INSERT INTO scan_file_manifests(scan_id,file,rule_id,status,finding_count) "
+            "VALUES(%s,%s,%s,%s,%s) "
+            "ON CONFLICT(scan_id,file,rule_id) DO UPDATE SET "
+            "status=EXCLUDED.status,finding_count=EXCLUDED.finding_count",
+            manifest_rows)
 
     def save_scan(self, report: dict) -> str:
         # Reuse the scan_id generated in run_scan() so the Langfuse trace ID
@@ -908,16 +918,18 @@ class Store:
                 fail_counts, review_counts = _split_sc_counts(
                     filter_issues_to_target(f["issues"], target))
                 fmt = _file_format(f["file"])
+                trace_rows = []
                 for rule in RULE_CATALOG:
                     rid = rule["id"]
                     fc, rc = fail_counts.get(rid, 0), review_counts.get(rid, 0)
                     outcome = _rule_outcome(rid, fmt, fc, rc, target, scope)
-                    count = fc if fc else rc   # findings that drove the outcome
-                    self._db.execute(cur,
-                        "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "
-                        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) "
-                        "ON CONFLICT(scan_id,file,rule_id) DO UPDATE SET outcome=EXCLUDED.outcome,finding_count=EXCLUDED.finding_count",
-                        (sid, f["file"], rid, rule["name"], rule.get("plain"), rule["level"], rule["fix_mode"], outcome, count))
+                    count = fc if fc else rc
+                    trace_rows.append((sid, f["file"], rid, rule["name"], rule.get("plain"), rule["level"], rule["fix_mode"], outcome, count))
+                self._db.executemany(cur,
+                    "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                    "ON CONFLICT(scan_id,file,rule_id) DO UPDATE SET outcome=EXCLUDED.outcome,finding_count=EXCLUDED.finding_count",
+                    trace_rows)
                 self._save_file_manifest(cur, sid, f, catalog)
                 # Sensitive-data (PII) findings — masked samples only (ADR 0006).
                 for pf in (f.get("pii") or {}).get("findings", []):
@@ -1272,17 +1284,19 @@ class Store:
             fail_counts, review_counts = _split_sc_counts(
                 filter_issues_to_target(f.get("issues", []), target))
             fmt = _file_format(f["file"])
+            trace_rows = []
             for rule in RULE_CATALOG:
                 rid = rule["id"]
                 fc, rc = fail_counts.get(rid, 0), review_counts.get(rid, 0)
                 outcome = _rule_outcome(rid, fmt, fc, rc, target, scope)
                 count = fc if fc else rc
-                self._db.execute(cur,
-                    "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file,rule_id) DO UPDATE SET "
-                    "outcome=EXCLUDED.outcome,finding_count=EXCLUDED.finding_count",
-                    (scan_id, f["file"], rid, rule["name"], rule.get("plain"), rule["level"],
-                     rule["fix_mode"], outcome, count))
+                trace_rows.append((scan_id, f["file"], rid, rule["name"], rule.get("plain"), rule["level"],
+                                   rule["fix_mode"], outcome, count))
+            self._db.executemany(cur,
+                "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file,rule_id) DO UPDATE SET "
+                "outcome=EXCLUDED.outcome,finding_count=EXCLUDED.finding_count",
+                trace_rows)
             self._save_file_manifest(cur, scan_id, f, catalog)
             for pf in (f.get("pii") or {}).get("findings", []):
                 self._db.execute(cur,
@@ -2098,18 +2112,25 @@ class Store:
         for a scan with none (including legacy scans predating the field). Read by the score and
         trace paths so both resolve every file against the same rule set — the frozen-scope
         discipline get_scan_scope follows, applied to C4's rule layer."""
+        cached = self._scope_rules_cache.get(scan_id, _SCOPE_ABSENT)
+        if cached is not _SCOPE_ABSENT:
+            return cached
         import json as _json
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT scope FROM scan_runs WHERE id=%s", (scan_id,))
             row = self._db.fetchone(cur)
         if not row:
+            self._scope_rules_cache[scan_id] = []
             return []
         raw = row.get("scope")
         if not raw:
+            self._scope_rules_cache[scan_id] = []
             return []
         data = _json.loads(raw) if isinstance(raw, str) else raw
         rules = (data or {}).get("scope_rules") or []
-        return rules if isinstance(rules, list) else []
+        result = rules if isinstance(rules, list) else []
+        self._scope_rules_cache[scan_id] = result
+        return result
 
     def _inventory_attrs(self, scan_id: str, file: str) -> dict:
         """The file's path / owner / parent_folder from its scan_inventory row — the attributes a
