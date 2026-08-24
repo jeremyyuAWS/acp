@@ -227,7 +227,8 @@ REMEDIATION: dict[str, dict[str, str]] = {
                              # content-control appliers), xlsx has no such applier.
     },
     # PowerPoint — slide-level deterministic fixes (title, contrast, reading order, language);
-    # tables/keyboard/link/heading criteria have no pptx remediator, so they are human.
+    # review-only criteria (resize-text, reflow, non-text contrast, text spacing, focus order,
+    # keyboard trap, name/role/value) have no pptx remediator, so they are human.
     "pptx": {
         "1.1.1": ASSISTED,
         "1.3.1": AUTO,       # multi-row tables get firstRow="1" (_pptx_mark_table_headers) — round-trip proven
@@ -235,9 +236,13 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "1.3.2": AUTO,       # shapes reordered to visual top-to-bottom reading order
         "1.3.3": ASSISTED,
         "1.4.3": AUTO,       # low-contrast run recolour
+        "1.4.4": HUMAN,      # resize text — fixed text box that may clip at 200%; reviewer verifies rendered output
         "1.4.5": ASSISTED,
         "1.4.6": AUTO,       # same recolour reaches the AAA threshold
         "1.4.9": ASSISTED,
+        "1.4.10": HUMAN,     # reflow — wide table; whether it two-dim scrolls at 320px is a rendered call
+        "1.4.11": HUMAN,     # non-text contrast — shape outline vs fill; no write-back applier for pptx shapes
+        "1.4.12": HUMAN,     # text spacing — exact (fixed) line spacing; clip outcome is rendered, not in the file
         # 2.1.1 Keyboard is the ONE remaining human-only document lane, and it is correctly so —
         # not a coverage gap. A .pptx is a static document with no interactive/keyboard model to
         # remediate; keyboard operability is a property of the runtime that PRESENTS it (the slide
@@ -246,13 +251,16 @@ REMEDIATION: dict[str, dict[str, str]] = {
         # to a human rather than fabricate a fix (ADR 0016). docx/xlsx/pdf carry zero human-only
         # lanes; this is the single, intentional exception.
         "2.1.1": HUMAN,
+        "2.1.2": HUMAN,      # keyboard trap — runtime behaviour of any embedded control; not in the file
         "2.4.2": AUTO,       # missing slide/document title
+        "2.4.3": HUMAN,      # focus order — placeholder reorder is a layout decision; no deterministic fix
         "2.4.4": ASSISTED,   # link purpose — same link-text proposer as docx (a:hlinkClick)
         "2.4.6": ASSISTED,   # empty title placeholder — AI names the slide from its own content
         "2.4.9": ASSISTED,   # reused link text — link-text proposer, per destination
         "3.1.1": AUTO,       # presentation language (docProps/core.xml)
         "3.1.2": ASSISTED,
         "3.1.5": ASSISTED,
+        "4.1.2": HUMAN,      # name/role/value — embedded ActiveX/OLE control; name/role not in the file
     },
     # PDF — only language/title/outline are safe to set deterministically. Contrast and structure
     # (re-tagging) need re-authoring; figure alt and reading order are AI proposals.

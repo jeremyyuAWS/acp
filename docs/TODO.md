@@ -57,22 +57,29 @@ Regenerate with `python scripts/gen_todo_status.py`; CI fails if this block is s
 
 This is a behaviour change, not bookkeeping: several detectors compute the AA and AAA thresholds in one pass, so AAA findings were previously scored against AA-target files.
 
-**Capability registry — 13 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
+**Capability registry — 20 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
 
 | Criterion | Format | Coverage | Confidence | Not covered |
 |---|---|---|---|---|
 | `1.1.1` | docx | **partial** | high | charts, SmartArt, grouped shapes and embedded OLE objects are non-text content this walk does not reach, and w |
 | `1.4.1` | docx | **partial** | high | colour used as the sole carrier of meaning anywhere else — shaded table rows, coloured glyphs, chart series ke |
 | `1.4.1` | xlsx | **partial** | medium | colour used in cell fills, charts and images is not examined, and whether colour is the sole cue is left to a  |
+| `1.4.10` | pptx | **partial** | high | whether the widest table actually requires horizontal scrolling at 320px is a rendered outcome not recorded in |
 | `1.4.11` | docx | **partial** | high | gradient or image fills, theme-colour indirection, and non-shape non-text elements such as focus indicators an |
+| `1.4.11` | pptx | **partial** | high | gradient or image fills, theme-colour indirection, and non-shape non-text elements such as focus indicators an |
 | `1.4.11` | xlsx | **partial** | medium | theme-coloured shapes, gradients, images and control affordances are not examined, and whether a shape conveys |
+| `1.4.12` | pptx | **partial** | high | whether the fixed box clips the text when a user applies the WCAG 1.4.12 overrides is a rendered outcome not r |
+| `1.4.4` | pptx | **partial** | high | whether the contained text visually clips when the user enlarges to 200% is a rendered outcome not recorded in |
 | `2.1.2` | docx | **partial** | high | whether focus can actually move away from a control is runtime behaviour that depends on the control's own imp |
+| `2.1.2` | pptx | **partial** | high | whether focus can actually move away from a control is runtime behaviour that depends on the control's own imp |
 | `2.4.3` | pdf | **heuristic** | medium | actually comparing the widget order to the structure order needs a /StructTreeRoot walk that is not built |
+| `2.4.3` | pptx | **partial** | high | other focus-order conditions (non-placeholder shape sequences, embedded control tab order) are not examined |
 | `2.4.4` | docx | **partial** | high | whether otherwise-descriptive text actually names THIS destination — a link reading 'Annual Report' that point |
 | `3.1.1` | html | **full** | high | whether the declared language is the CORRECT one is a content question 3.1.1 does not ask |
 | `3.1.2` | docx | **partial** | high | a shorter foreign phrase or a single borrowed word is under the length floor langdetect needs to be trusted, a |
 | `4.1.2` | docx | **partial** | high | ActiveX controls, embedded OLE objects and other form content are not examined, which would need reading each  |
 | `4.1.2` | pdf | **partial** | high | components expressed through the tagged-structure tree are not examined, which needs a /StructTreeRoot walker  |
+| `4.1.2` | pptx | **partial** | high | a clean result means no such controls were found and the criterion does not arise for this deck |
 | `4.1.2` | xlsx | **partial** | medium | the name and role live in code that no static read can examine |
 
 **The four Required format gaps** this file's header has tracked since the first snapshot — auto-detected for HTML, historically UNCHECKED for PDF/Office:
@@ -82,13 +89,13 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 | `1.4.1` | pass/fail | partial | partial | review | review |
 | `1.3.5` | pass/fail | — | — | — | — |
 | `2.5.3` | pass/fail | — | — | — | — |
-| `4.1.2` | pass/fail | partial | partial | review | partial |
+| `4.1.2` | pass/fail | partial | partial | partial | partial |
 
 `partial` / `heuristic` / `full` come from the registry and mean a real detector runs. `review` means a review-lane detector surfaces evidence but never certifies. `—` means no signal of any kind — the genuine remaining gap.
 
 **Undeclared coverage** — detectors emitting for a (criterion, format) that no scope table admits. `scripts/gen_matrix_coverage.py` reports these; all known instances (`1.4.11` xlsx, `2.4.3` pdf, `4.1.2` pdf) are now declared in the registry.
 
-**Undeclared remediation (14)** — a pair ACP assesses (a detector emits it, a review lane admits it, or the registry declares it) with no entry in `api/remediation_capability.REMEDIATION`. Registration says what the DETECTOR examines and nothing about whether a FIXER writes, so the two go stale separately. `scripts/gen_matrix_coverage.py` reports each as an explicit gap with an unknown (null) remediation ceiling rather than inferring "no remediation" from the assessment axis — the inference that hid a working PDF form-field fixer behind "No Remediation" until `4.1.2` pdf got its lane. Open: `1.4.1` pptx, `1.4.1` pdf, `1.4.4` pptx, `1.4.10` docx, `1.4.10` pptx, `1.4.11` pptx, `1.4.11` pdf, `1.4.12` docx, `1.4.12` pptx, `1.4.12` pdf, `2.1.2` xlsx, `2.1.2` pptx, `2.4.3` pptx, `4.1.2` pptx.
+**Undeclared remediation (7)** — a pair ACP assesses (a detector emits it, a review lane admits it, or the registry declares it) with no entry in `api/remediation_capability.REMEDIATION`. Registration says what the DETECTOR examines and nothing about whether a FIXER writes, so the two go stale separately. `scripts/gen_matrix_coverage.py` reports each as an explicit gap with an unknown (null) remediation ceiling rather than inferring "no remediation" from the assessment axis — the inference that hid a working PDF form-field fixer behind "No Remediation" until `4.1.2` pdf got its lane. Open: `1.4.1` pptx, `1.4.1` pdf, `1.4.10` docx, `1.4.11` pdf, `1.4.12` docx, `1.4.12` pdf, `2.1.2` xlsx.
 
 <!-- END GENERATED: coverage-status -->
 
