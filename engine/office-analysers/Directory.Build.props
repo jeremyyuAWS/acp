@@ -12,10 +12,16 @@
 		<TreatWarningsAsErrors>false</TreatWarningsAsErrors>
 		<EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
 		<LangVersion>latest</LangVersion>
+		<!-- S101 naming (A11y treated as lowercase), S2094 empty record/class,
+		     S1135 TODO comment — all informational; suppressed so EnforceCodeStyleInBuild
+		     does not upgrade them to errors on runners with newer SonarAnalyzer versions. -->
+		<NoWarn>$(NoWarn);S101;S2094;S1135</NoWarn>
 	</PropertyGroup>
 
   <ItemGroup  Condition="'$(MSBuildProjectExtension)' != '.esproj'">
-    <PackageReference Include="SonarAnalyzer.CSharp">
+    <!-- Version pinned to prevent runner-to-runner flapping: an unpinned reference
+         can resolve to a newer SonarAnalyzer that elevates informational rules to errors. -->
+    <PackageReference Include="SonarAnalyzer.CSharp" Version="10.33.0.1635">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
