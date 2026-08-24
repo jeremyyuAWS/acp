@@ -772,6 +772,34 @@ def _provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, mut
     return el
 
 
+def _mode_bar(by_mode: dict, total: int) -> Drawing:
+    """Stacked horizontal bar — deterministic | AI-assisted | human-only criteria (R10).
+    Same 440pt width as _pour_bars for visual consistency across the report."""
+    MODES = [
+        ("auto",        GREEN, "Deterministic"),
+        ("ai-assisted", AMBER, "AI-assisted"),
+        ("human-only",  PLUM,  "Human-only"),
+        ("unknown",     GREY,  "Unknown"),
+    ]
+    W = 440
+    d = Drawing(W, 36)
+    x = 0.0
+    leg_x = 0
+    for key, color, label in MODES:
+        n = by_mode.get(key, 0)
+        if not n or not total:
+            continue
+        w = W * n / total
+        d.add(Rect(x, 20, w, 12, fillColor=color, strokeColor=None))
+        pct = round(100 * n / total)
+        d.add(Rect(leg_x, 4, 8, 8, fillColor=color, strokeColor=None))
+        d.add(String(leg_x + 11, 5, f"{label}  {n} ({pct}%)",
+                     fontName="Helvetica", fontSize=7.5, fillColor=MUTED))
+        x += w
+        leg_x += 140
+    return d
+
+
 def _assurance_section(facts, h2, body, cell, muted, hitl=None) -> list:
     """Human review & assurance (backlog R9 / R10). Every figure has a real denominator: review
     outcomes counted from the immutable decision_log; the deterministic-assurance ratio as
@@ -787,7 +815,8 @@ def _assurance_section(facts, h2, body, cell, muted, hitl=None) -> list:
     docs = f.get("documents") or []
     evaluated = sum(d.get("evaluated", 0) for d in docs)
     findings = sum(d.get("findings", 0) for d in docs)
-    auto = ((f.get("scope") or {}).get("by_mode") or {}).get("auto", 0)
+    by_mode = ((f.get("scope") or {}).get("by_mode")) or {}
+    auto = by_mode.get("auto", 0)
     remediated = f.get("remediated_total", 0)
     reviewed = review.get("reviewed", 0)
     if not reviewed and not remediated and not evaluated:
@@ -809,13 +838,21 @@ def _assurance_section(facts, h2, body, cell, muted, hitl=None) -> list:
     ], [])
     el.append(band)
     el.append(Spacer(1, 8))
-    # R10 — deterministic assurance ratio, on a real denominator.
+    # R10 — stacked bar + prose showing all three decision modes on a real denominator.
     if evaluated:
+        el.append(_mode_bar(by_mode, evaluated))
+        el.append(Spacer(1, 4))
+        ai_n = by_mode.get("ai-assisted", 0)
+        hu_n = by_mode.get("human-only", 0)
+        clauses = [f"<b>{auto}</b> of <b>{evaluated}</b> ({round(100 * auto / evaluated)}%) "
+                   "decided by the deterministic engine"]
+        if ai_n:
+            clauses.append(f"<b>{ai_n}</b> ({round(100 * ai_n / evaluated)}%) used AI-assisted review")
+        if hu_n:
+            clauses.append(f"<b>{hu_n}</b> ({round(100 * hu_n / evaluated)}%) required human-only action")
         el.append(Paragraph(
-            f"<b>Assurance.</b> <b>{auto}</b> of <b>{evaluated}</b> evaluated criteria "
-            f"(<b>{round(100 * auto / evaluated)}%</b>) were decided by the deterministic engine; "
-            "the rest used AI-assisted review a person can confirm. Every remediation counted here "
-            "re-cleared the post-fix re-scan.", muted))
+            "<b>Assurance.</b> Of the evaluated criteria: " + "; ".join(clauses) +
+            ". Every remediation counted here re-cleared the post-fix re-scan.", muted))
     # R9 effort — only as the honest ratio, basis named; never a modelled time saving.
     if findings:
         edited_clause = (f" Of the approved reviews, <b>{edited}</b> included human edits to the AI draft."

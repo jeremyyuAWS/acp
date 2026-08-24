@@ -122,3 +122,53 @@ def test_avg_review_time_absent_when_hitl_not_passed():
     """R9: backward-compatible — passing no hitl arg renders the section without review-time."""
     t = _text(_facts())
     assert "Avg review time" not in t
+
+
+# ── R10 — mode bar + prose ────────────────────────────────────────────────────
+
+def _mode_facts(auto=6, ai=3, human=1):
+    """Facts dict with a realistic three-mode by_mode split."""
+    total = auto + ai + human
+    return {"documents": [{"evaluated": total, "findings": total}],
+            "scope": {"by_mode": {"auto": auto, "ai-assisted": ai, "human-only": human}},
+            "remediated_total": auto,
+            "review": {"reviewed": ai + human, "approved": ai, "rejected": 0, "skipped": 0}}
+
+
+def test_r10_mode_bar_is_a_drawing():
+    """R10: _mode_bar returns a Drawing (the visual bar rendered into the section)."""
+    from reportlab.graphics.shapes import Drawing
+    import report
+    d = report._mode_bar({"auto": 7, "ai-assisted": 2, "human-only": 1}, 10)
+    assert isinstance(d, Drawing)
+
+
+def test_r10_mode_bar_omits_zero_modes():
+    """R10: modes with n=0 produce no legend label — the bar stays clean when a mode is absent."""
+    import report
+    d = report._mode_bar({"auto": 10, "ai-assisted": 0}, 10)
+    texts = [s.text for s in d.contents if hasattr(s, "text")]
+    assert any("Deterministic" in t for t in texts)
+    assert not any("AI-assisted" in t for t in texts)
+
+
+def test_r10_assurance_names_all_three_modes():
+    """R10: when all three fix modes are present, the prose names each with real counts."""
+    t = _text(_mode_facts(auto=6, ai=3, human=1))
+    assert "Assurance." in t
+    assert "deterministic engine" in t
+    assert "AI-assisted review" in t
+    assert "human-only action" in t
+
+
+def test_r10_assurance_omits_absent_modes():
+    """R10: modes with zero criteria don't appear in the prose — no '0 used AI-assisted review'."""
+    t = _text(_facts(auto=10, evaluated=10))     # only auto mode in by_mode
+    assert "AI-assisted" not in t
+    assert "human-only" not in t
+
+
+def test_r10_no_invented_ratio():
+    """R10: 'attempted' denominator is never mentioned — omitted not invented (ADR 0016)."""
+    t = _text(_mode_facts())
+    assert "attempted" not in t
