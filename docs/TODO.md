@@ -545,14 +545,14 @@ honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/R-D
 
 | # | Location | Item |
 |---|---|---|
-| ~~P-1~~ | ~~`api/report.py`~~ | ~~`_MANUAL_VERIFY` dict has no `"html"` key — an HTML scan silently skips the manual-verification table.~~ **DONE #699** |
-| ~~P-2~~ | ~~`api/report.py`~~ | ~~`_esc()` silently truncates strings to 400 chars with no indication in the PDF.~~ **DONE #700** |
-| ~~P-3~~ | ~~`api/report.py`~~ | ~~Evidence truncation note says "full evidence available via API" — but no such endpoint exists.~~ **DONE #700** |
-| ~~P-4~~ | ~~`api/report.py`~~ | ~~`_ai_governance_section` has a bare `except Exception: pass` that hides every failure silently.~~ **DONE #699** |
-| ~~P-5~~ | ~~`api/report.py`~~ | ~~`_decision_block` docstring still tags R2/R3 as "backlog" — both shipped.~~ **DONE #700** |
-| ~~P-6~~ | ~~`api/blob.py`~~ | ~~`BlobStore.put()` uses `overwrite=True` unconditionally — remediated output files are silently clobbered on re-upload.~~ **DONE #706** |
-| ~~P-7~~ | ~~`api/report.py` (stat band)~~ | ~~Score denominator is undisclosed: the band shows a percentage but never states "N criteria evaluated out of 87 in the rubric."~~ **DONE #700** |
-| ~~P-8~~ | ~~deployment docs~~ | ~~`ACP_PUBLIC_URL` must be set to the public base URL for QR codes to resolve; without it the PDF embeds an `acp://` URI that no browser handles. Also note: the verify digest is rubric-version-sensitive.~~ **DONE** (added to `docs/production-hardening.md`) |
+| ~~P-1~~ | `api/report.py` | ~~`_MANUAL_VERIFY` dict has no `"html"` key — an HTML scan silently skips the manual-verification table.~~ **DONE** (#699): `"HTML"` key added with axe DevTools instructions. |
+| ~~P-2~~ | `api/report.py` | ~~`_esc()` silently truncates strings to 400 chars.~~ **DONE**: limit raised to 2000 with an ellipsis on overflow. |
+| ~~P-3~~ | `api/report.py` | ~~Evidence truncation note says "full evidence available via API" — but no such endpoint exists.~~ **DONE**: false claim removed. |
+| ~~P-4~~ | `api/report.py` | ~~`_ai_governance_section` has a bare `except Exception: pass` that hides every failure silently.~~ **DONE** (#699): now logs with `_LOG.warning(..., exc_info=True)`. |
+| ~~P-5~~ | `api/report.py` | ~~`_decision_block` docstring still tags R2/R3 as "backlog".~~ **DONE**: docstring updated. |
+| ~~P-6~~ | `api/blob.py` | ~~`BlobStore.put()` uses `overwrite=True` unconditionally.~~ **DONE** (#706): gates on `overwrite=False` with collision logging. |
+| ~~P-7~~ | `api/report.py` | ~~Score denominator is undisclosed.~~ **DONE**: scope section explicitly states separate denominators (discovered / assessable / scored) and caps the meaning of a 100 score. |
+| ~~P-8~~ | deployment docs | ~~`ACP_PUBLIC_URL` must be documented.~~ **DONE** (#711): added to `.env.example` and `docs/production-hardening.md` with QR-code and rubric-sensitivity notes. |
 | P-9 | `api/report.py` | **Incomplete assessments must be unmistakable.** Show files attempted/completed/failed/skipped; criteria evaluated/not-applicable/unsupported/not-evaluated; a visible "Partial assessment" status when appropriate; whether the score excludes unassessed content. |
 | P-10 | `api/report.py` | **Explain the full score denominator.** Beyond "N of 87 criteria evaluated," expose: not-applicable count, not-evaluated count, passing/failing breakdown, and whether any weight was applied (and link to the rubric version). |
 | P-11 | `api/report.py` | **Separate automated results from manual-review requirements.** Six outcome states per criterion: Passed automatically · Failed automatically · Manual verification required · Not applicable · Not evaluated · Evaluation error. Summary reports counts for all six. |
