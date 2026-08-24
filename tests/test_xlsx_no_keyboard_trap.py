@@ -65,10 +65,14 @@ def test_the_lane_is_human_and_that_is_a_conclusion():
 
 
 def test_it_can_never_certify_a_pass():
-    """A workbook with no controls has nothing to trap focus — NOT_EVALUATED, not a pass.
-    A signal reads REVIEW. Neither is ever PASS."""
+    """Registry-backed PARTIAL coverage: the detector runs over the embedded-control subset and
+    returns []. NEEDS_REVIEW_ON_CLEAN takes effect because PARTIAL means 'we checked what we can
+    reach, not everything'. A clean file therefore reads REVIEW — 'nothing found in the subset
+    we checked' — not NOT_EVALUATED (which means 'we did not look'). A finding reads REVIEW too
+    (advisory). Neither is ever PASS, and no future detector changes that, because the evidence
+    does not exist statically."""
     assert pol._rule_outcome("2.1.2", "xlsx", 0, 1, "AA", None) == pol.REVIEW
-    assert pol._rule_outcome("2.1.2", "xlsx", 0, 0, "AA", None) == pol.NOT_EVALUATED
+    assert pol._rule_outcome("2.1.2", "xlsx", 0, 0, "AA", None) == pol.REVIEW
 
 
 # ── the detector ─────────────────────────────────────────────────────────────
