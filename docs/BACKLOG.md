@@ -59,22 +59,17 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   `curl https://<ACP_FQDN>/healthz` (version), `gh run list --workflow deploy.yml` (runs sit
   completed/cancelled). **Fix:** `workflow_dispatch` + approve the `production` environment, or a
   manual `bash deploy/public/redeploy.sh` under `az login`.
-- [~] **R2 — RunPod serverless vision: env is set, but the runtime does NOT select it.** The four
-  RunPod env vars ARE now on `acp-app` (verified `az containerapp show` 2026-08-14:
-  `ACP_VISION_PROVIDER=runpod_serverless`, `RUNPOD_ENDPOINT_ID=er7oqd0gq6ulsb`, `RUNPOD_API_KEY` →
-  secretRef `runpod-api-key`, `RUNPOD_VISION_MODEL=Qwen/Qwen2.5-VL-7B-Instruct`) — so the *config*
-  half is done. **But live testing (R12) proves vision still never reaches the GPU**: every AI call
-  is recorded in the `local` processing zone, and a real 1.1.1 draft falls back to a filename-guess
-  template ("this text model cannot see the image"). So `active_vision_provider()` is landing on
-  local despite the env, which means `serverless_vision_provider()` is returning `None` — its guard
-  is `not (eid and key)`, so the most likely cause is the **`runpod-api-key` secret not resolving to
-  a valid key at runtime** (empty/absent → silent local fallback; ties to **R3**). **Fix / re-check:**
-  `az containerapp secret list -g mdk-accessibility -n acp-app` (and `-n acp-worker`) to confirm the
-  secret is populated with a valid key on BOTH apps, then read `providers.py:serverless_vision_provider`
-  / backend logs for why it's `None`. Env being set is necessary, not sufficient — the secret is the
-  open link.
-- [?] **R3 — Rotate the RunPod API key.** It was pasted in plaintext into an ops chat. Decision/action,
-  not code: RunPod → API Keys → revoke + reissue, update `~/.zshrc` and the `runpod-api-key` secret.
+- [~] **R2 — RunPod serverless vision: env is set, but the runtime does NOT select it.** Root cause
+  diagnosed (2026-08-24): the `runpod-api-key` Azure secret is **empty** on both apps, so
+  `RUNPOD_API_KEY` is `""` at runtime → `serverless_vision_provider()` guard `not (eid and key)` is
+  True → returns `None` → silent local CPU fallback. The code is correct; only the secret is missing.
+  **Fix (blocked on R3):** complete R3 first (new key), then run
+  `RUNPOD_ENDPOINT_ID=er7oqd0gq6ulsb RUNPOD_API_KEY=<new-key> bash deploy/public/set_integration_env.sh`.
+  Full steps: `docs/runbooks/runpod-key-rotation.md`.
+- [?] **R3 — Rotate the RunPod API key.** It was pasted in plaintext into an ops chat. Ops only, no
+  code. Runbook: `docs/runbooks/runpod-key-rotation.md`. Steps: RunPod console → API Keys → revoke +
+  reissue → run `set_integration_env.sh` → update `~/.zshrc` → verify via AI-cost zone counter (must
+  show `cloud`, not `local`, on a 1.1.1 draft).
 
 ### Features (the four demo pillars + capability completion)
 
