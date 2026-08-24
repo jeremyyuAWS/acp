@@ -49,16 +49,16 @@ const AT = new Set(['2.1.1|html', '2.1.2|html'])
 // backs 2.1.2 (No Keyboard Trap) + 4.1.2 (Name/Role/Value). Per file these resolve to 🟡 only when
 // controls are found; at the format level they mean "ACP has a review method here".
 const REVIEW_ONLY = new Set([
-  '2.1.2|docx', '2.1.2|pptx', '2.1.2|xlsx',   // interactive-control detector
-  '4.1.2|docx', '4.1.2|pptx', '4.1.2|xlsx',
+  '2.1.2|docx', '2.1.2|xlsx',   // interactive-control detector (no remediation lane)
+  '4.1.2|docx', '4.1.2|xlsx',
   '1.4.1|docx', '1.4.1|xlsx', '1.4.1|pdf', '1.4.1|pptx',  // Use of Color — colour-only status / links
-  '2.4.3|pptx',                               // Focus Order — title not first
-  '1.4.11|pptx', '1.4.11|docx', '1.4.11|pdf', // Non-text Contrast — faint shape outline
+  '1.4.11|docx', '1.4.11|pdf', // Non-text Contrast — faint shape outline
   // ADR 0024 Tier A — render-gated structural proxies. (1.4.3 hybrid is NOT here: 1.4.3 stays
   // 🟢 auto at the format level; its text-over-non-solid REVIEW is a per-file finding.)
-  '1.4.4|pptx',                               // Resize Text — fixed-size text box
-  '1.4.10|docx', '1.4.10|pptx',               // Reflow — table too wide
-  '1.4.12|docx', '1.4.12|pptx', '1.4.12|pdf', // Text Spacing — exact line spacing (docx/pptx); tight line pitch (pdf)
+  '1.4.10|docx',               // Reflow — table too wide (docx; pptx now declared in ASSESSMENT_FALLBACK)
+  '1.4.12|docx', '1.4.12|pdf', // Text Spacing — exact line spacing (docx); tight line pitch (pdf)
+  // pptx pairs (1.4.4, 1.4.10, 1.4.11, 1.4.12, 2.1.2, 2.4.3, 4.1.2) are now declared in
+  // ASSESSMENT_FALLBACK via the registry and REMEDIATION table — no longer listed here.
 ])
 
 export const GAP_REASON = {
