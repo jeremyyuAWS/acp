@@ -232,3 +232,53 @@ def test_mixed_effective_superseded_unable():
     assert r["unable_to_evaluate"] == 1  # d2
     assert r["superseded"] == 2   # both d1 and d3 overridden by p1
     assert r["effective"] == 0
+
+
+# ── unable_to_evaluate_fields ─────────────────────────────────────────────────
+
+def test_unable_fields_names_the_missing_field():
+    doc = _doc()
+    del doc["department"]
+    r = _run(MATCH_FINANCE, "archive", "p1", [doc], [_pol("p1", "archive", MATCH_FINANCE)])
+    assert r["unable_to_evaluate_fields"] == {"department": 1}
+
+
+def test_unable_fields_empty_when_no_unable():
+    r = _run(MATCH_FINANCE, "archive", "p1", [_doc()], [_pol("p1", "archive", MATCH_FINANCE)])
+    assert r["unable_to_evaluate_fields"] == {}
+
+
+def test_unable_fields_counts_multiple_docs_missing_same_field():
+    doc1 = _doc(doc_id="d1")
+    del doc1["department"]
+    doc2 = _doc(doc_id="d2")
+    del doc2["department"]
+    r = _run(MATCH_FINANCE, "archive", "p1", [doc1, doc2], [_pol("p1", "archive", MATCH_FINANCE)])
+    assert r["unable_to_evaluate"] == 2
+    assert r["unable_to_evaluate_fields"] == {"department": 2}
+
+
+def test_unable_fields_tracks_each_missing_field_per_doc():
+    # Two conditions; one doc missing both fields, another missing only one.
+    match = [
+        {"field": "department", "op": "eq", "value": "Finance"},
+        {"field": "size_kb", "op": "gt", "value": 999},
+    ]
+    doc_both_missing = _doc(doc_id="d1")
+    del doc_both_missing["department"]
+    del doc_both_missing["size_kb"]
+    doc_dept_missing = _doc(doc_id="d2", size_kb=100)  # size_kb present but fails; dept missing
+    del doc_dept_missing["department"]
+    r = _run(match, "archive", "p1", [doc_both_missing, doc_dept_missing],
+             [_pol("p1", "archive", match)])
+    # Both docs are unable_to_evaluate (both have at least one missing field)
+    assert r["unable_to_evaluate"] == 2
+    # department missing in both; size_kb missing only in d1
+    assert r["unable_to_evaluate_fields"]["department"] == 2
+    assert r["unable_to_evaluate_fields"]["size_kb"] == 1
+
+
+def test_unable_fields_not_in_result_shape_test():
+    # Confirms the key is always present in the response (even when empty).
+    r = _run([], "archive", "p1", [_doc()], [_pol("p1", "archive", [])])
+    assert "unable_to_evaluate_fields" in r

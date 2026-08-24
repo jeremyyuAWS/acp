@@ -202,6 +202,46 @@ describe('the existing rules list', () => {
     expect(text()).toContain('metadata')
   })
 
+  it('shows the missing field names in the unable-to-evaluate note', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0]])
+    previewDispositionPolicy.mockResolvedValue({
+      would_match: 8, documents: Array.from({length:8},(_,i)=>({doc_id:`d${i}`,path:`/p${i}`})),
+      effective: 8, superseded: 0, exempted: 0, unable_to_evaluate: 3,
+      unable_to_evaluate_fields: { department: 2, size_kb: 1 },
+    })
+    await render(); await expand(); await flush()
+    await click(btnByText('Preview matches')); await flush()
+    expect(text()).toContain("couldn't be evaluated")
+    expect(text()).toContain('department')
+    expect(text()).toContain('size_kb')
+  })
+
+  it('omits per-field counts when only one file is unable to evaluate', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0]])
+    previewDispositionPolicy.mockResolvedValue({
+      would_match: 5, documents: Array.from({length:5},(_,i)=>({doc_id:`d${i}`,path:`/p${i}`})),
+      effective: 5, superseded: 0, exempted: 0, unable_to_evaluate: 1,
+      unable_to_evaluate_fields: { department: 1 },
+    })
+    await render(); await expand(); await flush()
+    await click(btnByText('Preview matches')); await flush()
+    expect(text()).toContain('department')
+    // No "(1)" when only one file — redundant next to the headline count
+    expect(text()).not.toMatch(/department\s*\(1\)/)
+  })
+
+  it('falls back to generic message when unable_to_evaluate_fields is absent (old server)', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0]])
+    previewDispositionPolicy.mockResolvedValue({
+      would_match: 5, documents: Array.from({length:5},(_,i)=>({doc_id:`d${i}`,path:`/p${i}`})),
+      effective: 5, superseded: 0, exempted: 0, unable_to_evaluate: 2,
+    })
+    await render(); await expand(); await flush()
+    await click(btnByText('Preview matches')); await flush()
+    expect(text()).toContain("couldn't be evaluated")
+    expect(text()).toContain("wasn't recorded")
+  })
+
   it('shows no breakdown when the response lacks breakdown fields (old server)', async () => {
     // Older server responses without the breakdown fields must not render broken UI.
     listDispositionPolicies.mockResolvedValue([RULES[0]])
