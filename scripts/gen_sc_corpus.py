@@ -549,11 +549,12 @@ def f_no_docx_lane(d):
     d.add_heading("Notice", level=1)
     d.add_paragraph("Press and hold the slider, then drag it to set your contribution.")
     _run(d.add_paragraph(), "Contribution level", color=(0x11, 0x11, 0x11))
-    return {"1.4.1": ce.NOT_EVALUATED, "2.1.2": ce.NOT_EVALUATED,
-            "1.4.11": ce.NOT_EVALUATED}, \
-        ("CONTROL: content that WOULD implicate 1.4.1 / 1.4.11 / 2.1.2 if a .docx lane existed. "
-         "None does. The engine must stay silent — a verdict here is invention, and this is the "
-         "fixture that catches an LLM assessor asked to 'score all 17'")
+    return {"1.4.1": ce.REVIEW, "2.1.2": ce.NOT_EVALUATED,
+            "1.4.11": ce.REVIEW}, \
+        ("CONTROL: 1.4.1 and 1.4.11 now have docx lanes via the capability registry (R8 migration). "
+         "A clean file resolves to REVIEW ('we checked what our technique reaches'). "
+         "2.1.2 still reads NOT_EVALUATED — it remains in REVIEW_FORMATS with no registry entry, "
+         "so silence means 'we did not look'. The engine must stay silent on 2.1.2 here.")
 
 
 def f_clean(d):
