@@ -48,6 +48,7 @@ import A11ySelfCheck from './A11ySelfCheck.jsx'
 import { scanPhaseLine, NARRATION_STEPS, activityLine } from './phaseNarration.js'
 import { useScanRefetch } from './scanRefetch.js'
 import { pickDefaultScan } from './defaultScan.js'
+import ConfirmDialog from './ConfirmDialog.jsx'
 
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
 const SHOW_A11Y = import.meta.env.DEV || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('a11y'))
@@ -1572,6 +1573,7 @@ export default function App() {
           onConfirm={(runScope) => { const { source, folder } = pendingScan; setPendingScan(null); doScan(source, folder, runScope) }}
           onCancel={() => setPendingScan(null)} />
       )}
+      <ConfirmDialog />
     </div>
   )
 }
