@@ -13,25 +13,9 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 ACP = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ACP / "api"))
-
-# Stub heavy optional deps that aren't installed in the test env so that
-# importing routes (which pull in report.py → reportlab, handlers.py → lxml) works.
-# `report` is imported at module level by routes/scans.py; stub it directly so the
-# whole reportlab import chain is skipped, regardless of import order.
-for _m in (
-    "reportlab", "reportlab.lib", "reportlab.lib.pagesizes", "reportlab.lib.styles",
-    "reportlab.lib.units", "reportlab.lib.colors", "reportlab.platypus",
-    "reportlab.graphics", "reportlab.graphics.charts",
-    "reportlab.graphics.charts.barcharts", "reportlab.pdfgen",
-    "lxml", "lxml.html",
-    "report",
-    "remediate", "handlers",
-):
-    sys.modules.setdefault(_m, MagicMock())
 
 import pytest
 
