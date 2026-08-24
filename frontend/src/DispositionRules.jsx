@@ -246,7 +246,7 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
     if (enabled) {
       confirm({
         title: `Save changes to "${editDraft.name.trim()}"?`,
-        message: 'It is enabled, so the new conditions apply starting with your next Discover run.',
+        message: 'It is enabled, so the new conditions apply starting with your next Discover run. Files already tagged under the old conditions keep their status until then.',
         variant: 'warning', confirmLabel: 'Save',
       }).then((ok) => { if (ok) doSave() })
       return
@@ -261,11 +261,18 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
       .catch((e) => setErr(refusalText(e)))
       .finally(() => setBusy(false))
   }
-  // Disabling never needs confirmation — it only stops future tagging, nothing to undo. Enabling
-  // does: it's the moment a rule starts acting, so it previews first and asks, naming the count
-  // and the share of the estate a person is committing to — not just "are you sure?".
+  // Disabling warns that existing tags persist — files already tagged keep their lifecycle status
+  // until the next Discover run re-evaluates them. Enabling previews first and asks, naming the
+  // count and the share of the estate a person is committing to — not just "are you sure?".
   const toggle = () => {
-    if (enabled) { doSetEnabled(false); return }
+    if (enabled) {
+      confirm({
+        title: `Disable "${p.name}"?`,
+        message: 'It will stop tagging files in future Discover runs. Files already tagged by this rule keep their lifecycle status until the next run re-evaluates them.',
+        variant: 'default', confirmLabel: 'Disable',
+      }).then((ok) => { if (ok) doSetEnabled(false) })
+      return
+    }
     setBusy(true); setErr('')
     Promise.resolve(previewDispositionPolicy(p.policy_id))
       .then((r) => {

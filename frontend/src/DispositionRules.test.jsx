@@ -147,12 +147,17 @@ describe('the existing rules list', () => {
     expect(text()).not.toContain('Matches none of the files')  // never a manufactured zero
   })
 
-  it('disables a rule with no confirmation and no preview', async () => {
+  it('confirms before disabling, warns about persisted tags, and only disables on accept', async () => {
     listDispositionPolicies.mockResolvedValue([RULES[0]])   // RULES[0] is enabled
     await render(); await expand(); await flush()
     await click(byLabel('Enable rule Legacy clinical policies')); await flush()
-    expect(confirmMock).not.toHaveBeenCalled()
     expect(previewDispositionPolicy).not.toHaveBeenCalled()
+    expect(confirmMock).toHaveBeenCalled()
+    expect(confirmMock.mock.calls.at(-1)[0].message).toContain('keep their lifecycle status')
+    expect(setDispositionPolicyEnabled).not.toHaveBeenCalled()   // declined by default
+
+    confirmMock.mockResolvedValue(true)
+    await click(byLabel('Enable rule Legacy clinical policies')); await flush()
     expect(setDispositionPolicyEnabled).toHaveBeenCalledWith('p1', false)
   })
 
@@ -393,13 +398,14 @@ describe('editing a saved rule', () => {
     expect(alert.textContent).toContain('a rule with none would match every file in scope')
   })
 
-  it('confirms before saving an edit to a rule that is currently enabled', async () => {
+  it('confirms before saving an edit to a rule that is currently enabled, warning about persisted tags', async () => {
     listDispositionPolicies.mockResolvedValue([RULES[0]])   // enabled: 1
     await render(); await expand(); await flush()
     await click(byLabel('Edit rule Legacy clinical policies'))
     await click(byLabel('Save changes to Legacy clinical policies')); await flush()
     expect(confirmMock).toHaveBeenCalled()
     expect(confirmMock.mock.calls.at(-1)[0].message).toContain('enabled')
+    expect(confirmMock.mock.calls.at(-1)[0].message).toContain('old conditions keep their status')
     expect(updateDispositionPolicy).not.toHaveBeenCalled()   // declined — nothing sent
 
     confirmMock.mockResolvedValue(true)
