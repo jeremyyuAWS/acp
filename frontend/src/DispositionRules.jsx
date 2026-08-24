@@ -69,6 +69,85 @@ const sentenceBox = {
 }
 const alertStyle = { fontSize: 12.5, color: '#A32D2D', margin: '8px 0 0', lineHeight: 1.5 }
 
+const MAX_PREVIEW_INLINE = 25
+
+/** Inline table of files that matched a rule preview. */
+function PreviewPanel({ docs, enabled, fetchedAt, onRefresh, busy }) {
+  const shown = docs.slice(0, MAX_PREVIEW_INLINE)
+  const extra = docs.length - shown.length
+  const COLS = ['Name', 'Location', 'Owner', 'Modified', 'Type', 'Size']
+  return (
+    <div style={{ marginTop: 10, border: line, borderRadius: 9, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', flexWrap: 'wrap',
+                    background: 'color-mix(in srgb, var(--plum) 4%, transparent)',
+                    borderBottom: docs.length ? line : 'none' }}>
+        <span style={{ fontSize: 12, fontWeight: 600 }}>
+          {enabled
+            ? `${docs.length} file${docs.length === 1 ? '' : 's'} matched`
+            : `Hypothetical preview — ${docs.length} file${docs.length === 1 ? '' : 's'} would match if enabled`}
+        </span>
+        {fetchedAt && (
+          <span className="muted" style={{ fontSize: 11 }}>
+            as of {fetchedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </span>
+        )}
+        <button className="ghost small" onClick={onRefresh} disabled={busy}
+                style={{ marginLeft: 'auto' }}>
+          {busy ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+      {docs.length === 0 ? (
+        <p className="muted" style={{ fontSize: 12.5, padding: '10px 12px', margin: 0 }}>
+          No files currently match this rule.
+        </p>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr>
+                {COLS.map((h) => (
+                  <th key={h} style={{ textAlign: 'left', padding: '6px 10px', fontWeight: 600,
+                                       fontSize: 11, letterSpacing: '.03em', color: 'var(--muted)',
+                                       borderBottom: line, textTransform: 'uppercase',
+                                       background: 'var(--surface)' }}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((doc, i) => {
+                const path = doc.path || doc.doc_id || '—'
+                const name = path.split('/').filter(Boolean).pop() || path
+                const folder = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) || '/' : '—'
+                const modDate = (doc.source_modified || '').substring(0, 10) || '—'
+                const sz = doc.size_kb != null ? `${doc.size_kb} KB` : '—'
+                return (
+                  <tr key={doc.doc_id || i}
+                      style={{ borderBottom: i < shown.length - 1 ? line : 'none' }}>
+                    <td style={{ padding: '7px 10px', fontWeight: 500, whiteSpace: 'nowrap' }}>{name}</td>
+                    <td style={{ padding: '7px 10px', color: 'var(--muted)', maxWidth: 200, overflow: 'hidden',
+                                 textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{folder}</td>
+                    <td style={{ padding: '7px 10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{doc.owner || '—'}</td>
+                    <td style={{ padding: '7px 10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{modDate}</td>
+                    <td style={{ padding: '7px 10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{doc.doc_class || '—'}</td>
+                    <td style={{ padding: '7px 10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{sz}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          {extra > 0 && (
+            <p className="muted" style={{ fontSize: 11.5, padding: '6px 12px', margin: 0 }}>
+              + {extra} more not shown
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** The rule as a sentence, with the parts a reader scans for in bold, plus the match count. */
 function RuleSentence({ match, action, count, countOverride }) {
   return (
@@ -130,6 +209,10 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const enabled = !!p.enabled
+  // Preview expansion — docs stored locally; parent only needs the count.
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewDocs, setPreviewDocs] = useState(null)
+  const [previewFetchedAt, setPreviewFetchedAt] = useState(null)
   // Lifecycle rules #2 — edit a saved rule in place. The backend (PUT /disposition/policies/{id})
   // refuses to change match/action/action_config once a rule has recorded ANY history (409) —
   // name/requires_approval stay editable regardless — so this never tries to predict that
@@ -226,10 +309,20 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
     Promise.resolve(previewDispositionPolicy(p.policy_id))
       // `?? null` and not `?? 0`: a response without a count is an unanswered question, and
       // rendering it as zero would be the measured-zero lie this screen exists to avoid.
-      .then((r) => onCount(p.policy_id, r?.would_match ?? null))
+      .then((r) => {
+        onCount(p.policy_id, r?.would_match ?? null)
+        setPreviewDocs(r?.documents ?? [])
+        setPreviewFetchedAt(new Date())
+        setPreviewOpen(true)
+      })
       .catch((e) => setErr(refusalText(e)))
       .finally(() => setBusy(false))
   }
+  const previewBtnLabel = previewOpen
+    ? 'Hide matches'
+    : count != null
+      ? `Show ${count} match${count === 1 ? '' : 'es'}`
+      : 'Preview matches'
   // Only a rule with zero disposition_audit history can be deleted (mirrors the backend's
   // edit-after-history guard) — the route 409s and refusalText surfaces its message rather than
   // this button trying to predict history client-side and getting it wrong.
@@ -279,7 +372,12 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
         <ActionTag action={p.action} />
         <span className="muted" style={{ fontSize: 12 }}>{enabled ? 'Enabled' : 'Disabled — tags nothing yet'}</span>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          <button className="ghost small" onClick={runPreview} disabled={busy || editing}>Preview matches</button>
+          <button className="ghost small"
+                  onClick={previewOpen ? () => setPreviewOpen(false) : runPreview}
+                  disabled={busy || editing}
+                  aria-expanded={previewOpen}>
+            {previewBtnLabel}
+          </button>
           <button className="ghost small" onClick={startEdit} disabled={busy || editing}
                   aria-label={`Edit rule ${p.name}`}>Edit</button>
           <button className="ghost small" onClick={duplicate} disabled={busy || editing}>Duplicate</button>
@@ -300,7 +398,14 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
           {editErr && <p style={alertStyle} role="alert">⚠ {editErr}</p>}
         </div>
       ) : (
-        <RuleSentence match={p.match} action={p.action} count={count} />
+        <>
+          <RuleSentence match={p.match} action={p.action} count={count} />
+          {previewOpen && previewDocs != null && (
+            <PreviewPanel docs={previewDocs} enabled={enabled}
+                          fetchedAt={previewFetchedAt}
+                          onRefresh={runPreview} busy={busy} />
+          )}
+        </>
       )}
       {err && <p style={alertStyle} role="alert">⚠ {err}</p>}
     </div>
