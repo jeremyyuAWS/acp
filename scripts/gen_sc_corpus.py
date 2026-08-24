@@ -569,6 +569,63 @@ def f_clean(d):
         "the false-positive control: nothing wrong, every PASS-capable cell should certify"
 
 
+# ── P4.5 adversarial fixtures ─────────────────────────────────────────────────
+
+def f_lang_product_name_ok(d):
+    # The passage is English throughout. The French-looking tokens (Le Creuset, Château Margaux,
+    # Bonne Maman) are proper nouns — brand names — not unmarked foreign-language text. A 3.1.2
+    # finding here means the detector fired on individual product names rather than on a
+    # language-of-parts boundary, which is the false-positive pattern this fixture is designed
+    # to expose. The passage is deliberately long to give langdetect enough context to settle on
+    # English for the surrounding text rather than classifying a short window.
+    d.add_heading("Kitchenware Review", level=1)
+    d.add_paragraph(
+        "Our testers evaluated several premium brands this season across a wide range of "
+        "categories, from cookware to pantry staples. The Le Creuset Dutch oven performed "
+        "exceptionally well in high-heat tests, retaining temperature far longer than the "
+        "competing stainless-steel models we brought in for comparison. At the dinner held "
+        "to conclude the testing week, the editorial team opened a bottle of Château Margaux "
+        "alongside a dessert course featuring Bonne Maman preserves on house-made brioche. "
+        "All three brands are widely stocked at major retailers and available online."
+    )
+    return {}, ("ADVERSARIAL: product names containing French words (Le Creuset, "
+                "Château Margaux, Bonne Maman) embedded in an otherwise English passage. "
+                "3.1.2 must NOT fire — the runs carry no xml:lang, but the passage is "
+                "English and the French-looking tokens are proper nouns, not foreign-language "
+                "text. A finding here is a false positive on brand-name detection.")
+
+
+def f_alt_caption_junk(d):
+    # "Figure N: ..." is a caption label that references the figure rather than describing it.
+    # A screen reader hearing "Figure 1: Coverage by plan type" learns the position in the
+    # document, not the content of the image. This is a junk pattern even though the alt is
+    # non-empty and appears informative at a glance — the failure mode being tested is that
+    # the engine DOES NOT give the benefit of the doubt to a plausible-looking caption.
+    d.add_heading("Annual Coverage Overview", level=1)
+    _add_image(d, _content_png(seed=7), alt="Figure 1: Coverage by plan type")
+    d.add_paragraph("See the figure above for a breakdown of coverage across plan types.")
+    return {"1.1.1": ce.FAIL}, (
+        "EDGE: alt text is a figure-caption reference ('Figure 1: Coverage by plan type'). "
+        "Caption labels are a junk pattern — they name the figure's position in the document "
+        "rather than describing its content. The finding must fire even though the alt is "
+        "non-empty and looks descriptive at a glance.")
+
+
+def f_alt_surrounds_duplicate_ok(d):
+    # Re-using the adjacent paragraph description verbatim as the alt is redundant but not
+    # wrong. The alt conveys real information even if a sighted reader can already get it from
+    # the surrounding text. WCAG does not require alt text to be unique across the document, and
+    # flagging redundancy as a violation would make every well-described chart a finding.
+    desc = ("A bar chart showing quarterly revenue for 2025: Q1 $2.1M, Q2 $2.4M, "
+            "Q3 $2.9M, Q4 $3.2M, with consistent growth across all four quarters.")
+    d.add_heading("Financial Summary", level=1)
+    d.add_paragraph(desc)
+    _add_image(d, _content_png(seed=8), alt=desc)
+    return {}, ("ADVERSARIAL: image alt re-uses the adjacent paragraph description verbatim. "
+                "Redundant but non-junk — the alt conveys real information, so a 1.1.1 finding "
+                "here is a false positive on surrounding-text duplication.")
+
+
 # name -> (builder, post-processing hook, kind)
 FIXTURES = [
     ("alt-missing",            f_alt_missing,          None,            "violation"),
@@ -603,6 +660,10 @@ FIXTURES = [
     ("field-unlabeled",        f_unlabeled_field,      None,            "edge"),
     ("no-docx-lane",           f_no_docx_lane,         None,            "control"),
     ("clean",                  f_clean,                None,            "clean"),
+    # P4.5 adversarial fixtures
+    ("lang-product-name-ok",   f_lang_product_name_ok, None,            "adversarial"),
+    ("alt-caption-junk",       f_alt_caption_junk,     None,            "edge"),
+    ("alt-surrounds-dup-ok",   f_alt_surrounds_duplicate_ok, None,      "adversarial"),
 ]
 
 

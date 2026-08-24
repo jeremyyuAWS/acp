@@ -571,12 +571,12 @@ thing the PRD does not mention.
   accuracy-to-target no) and 1.1.1 (not verifiable — a wrong alt silences the detector)
   remain human-review-only. *(Source-verified 2026-08-24.)*
 
-- [ ] **P4.5 — Extend the adversarial fixtures.** (PRD §13/§14.) Partially built:
-  `gen_sc_corpus.py` already carries decorative-that-looks-informative, logo-vs-image-of-text,
-  descriptive-link, correctly-marked-`fr-FR`, sub-floor language segments and both sides of the
-  contrast boundary. Missing from the PRD's list and worth adding: product names that scan as
-  foreign language, misleading captions, and surrounding text that partially duplicates an image.
-  Correct abstention is scored as correct, not as a miss.
+- [x] **P4.5 — Extend the adversarial fixtures.** (PRD §13/§14.) Done. Added three fixtures to
+  `gen_sc_corpus.py` (35 total): `lang-product-name-ok` (French brand names in English prose —
+  3.1.2 must not fire on proper nouns), `alt-caption-junk` (alt="Figure 1: Coverage by plan
+  type" — caption label as alt must FAIL 1.1.1), and `alt-surrounds-dup-ok` (alt that re-uses
+  adjacent paragraph description verbatim — redundant but non-junk, so no finding). All
+  validated against `corpus_expectations.possible_verdicts()` at build time.
 
 - [ ] **P4.6 — Confidence calibration, with the sample-size caveat from P4.2.** (PRD §17.) A
   local model's self-reported `"confidence": 0.97` in a JSON blob is not a calibrated
