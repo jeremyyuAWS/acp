@@ -427,3 +427,42 @@ def test_the_disclaimer_is_stated_not_implied(isolated_store):
     t = _clean_estate_report(isolated_store)
     assert "not a statement that the document conforms to WCAG" in t
     assert "not a conformance determination" in t
+
+
+# ── R5: AI reasoning inline (why_review + source on proposals) ───────────────
+
+def test_proposal_source_rendered_in_evidence_appendix(isolated_store):
+    """R5: the model/method that produced a proposal appears in the PDF next to the
+    proposed value — auditors see how the draft was made, not just what it says."""
+    from report import build_report
+    s = isolated_store
+    sid, f = "r5s", "r5.pptx"
+    s.enqueue_proposals(sid, f, "1.1.1", [{
+        "locator": "slide1#r1", "before": "(no alt text)",
+        "proposed_value": "A pie chart of Q1 revenue by region",
+        "rationale": "vision description only — no text in the image",
+        "source": "AI vision model (llava-3)",
+    }], validated=False, rule_name="Non-text Content")
+    ev = s.get_remediation_evidence(sid)
+    t = _pdf_text(build_report(_RUN, _FILES, _META, evidence=ev))
+    assert "AI vision model (llava-3)" in t
+
+
+def test_proposal_why_review_rendered_as_basis_in_evidence_appendix(isolated_store):
+    """R5: the 'why this needed human review' reasoning (confidence basis, not a number)
+    appears as a 'Basis' line so reviewers see what the platform could not verify automatically."""
+    from report import build_report
+    s = isolated_store
+    sid, f = "r5w", "r5.pptx"
+    s.enqueue_proposals(sid, f, "1.1.1", [{
+        "locator": "slide1#r2", "before": "(no alt text)",
+        "proposed_value": "A company logo",
+        "rationale": "vision description only — no text in the image to anchor it",
+        "source": "AI vision model (llava-3)",
+        "why_review": ("The image contains no readable text, so nothing in the document "
+                       "can corroborate this description."),
+    }], validated=False, rule_name="Non-text Content")
+    ev = s.get_remediation_evidence(sid)
+    t = _pdf_text(build_report(_RUN, _FILES, _META, evidence=ev))
+    assert "Basis" in t
+    assert "The image contains no readable text" in t
