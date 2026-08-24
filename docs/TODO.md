@@ -477,8 +477,7 @@ the flagship **R1** and quick-wins **R2 / R3 / R4 / R6 / R7 / R8** plus **R-A / 
 below with its rendering code named. The report is no longer "a scan summary": it carries the
 certification-decision block, per-issue evidence appendix with sign-off, scope-of-assertion,
 chain-of-custody digest, richer inventory, and the POUR breakdown. The genuine remainder is the
-honesty-gated KPI/assurance work (**R9 / R10**), the methodology/timeline narratives (**R11 / R12**),
-and the larger dependency-bearing items (**R13–R15 / R-C–R-E**) — none verified in this pass, so
+honesty-gated KPI/assurance work (**R9 / R10**), and the larger dependency-bearing items (**R13–R15 / R-C–R-E**) — none verified in this pass, so
 none struck.
 
 **Hard rule for this whole section (ADR 0016 / `4fc6bc1`):** every number is a
@@ -517,8 +516,8 @@ per-document certificate renderer alongside it).
 |---|---|---|
 | R9 | **Human-review KPI block** (reviewed / auto-remediated / edited / rejected / effort). | Derive counts from `hitl_queue` + `decision_log`. "Avg review time" only if real timestamps exist; "effort saved" only as (auto-cleared ÷ total findings) with that basis shown — else OMIT. |
 | R10 | **Assurance/confidence bars** (deterministic vs AI vs human). | Reframe as real ratios: e.g. "fixes that cleared re-scan ÷ fixes attempted", "deterministic SCs ÷ evaluated SCs". No invented "92%". |
-| R11 | **"How ACP reached this decision" methodology** (rules executed, OCR, revalidation, approvals, final cert). | The rule count must be the **actual** number run for *this* document (from the manifest/`RULE_FORMATS`), not a marketing figure. |
-| R12 | **Compliance timeline** (scan → findings → AI recs → human review → remediations → validation → certified). | Narrative of the real pipeline; counts from the same sources. Cheap. |
+| ~~R11~~ | ~~**"How ACP reached this decision" methodology**~~ — **SHIPPED** | `_provenance_section` (R11): evaluated/auto/ai counts from real scan facts; method narrative names the deterministic engine, AI-assisted review, revalidation re-scan, and human approval gate. |
+| ~~R12~~ | ~~**Compliance timeline**~~ — **SHIPPED** | `_provenance_section` (R12): pipeline rendered as `scanned N → evaluated N → N finding(s) → N AI-assisted → N approval(s) → N remediated & re-validated → N/N certifiable`; each count from scan facts. |
 
 ### Larger / has a dependency
 | # | Item | Notes |
@@ -537,7 +536,7 @@ per-document certificate renderer alongside it).
 | R-E | **"Supersedes" lineage** — "this certificate supersedes cert `<id>` from `<date>`" (per-document version chain). | Extends the estate-level velocity section already in `report.py` to a per-document custody chain. |
 
 Sequencing suggestion: R1 (flagship) + R2/R3/R6 + R-A first (they land the biggest
-trust jump on data that already exists), then R4/R5/R11/R-B/R-C, then the
+trust jump on data that already exists), then R4/R5/R-B/R-C (~~R11/R12 done~~), then the
 honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then R13–R15/R-D/R-E.
 
 ---
