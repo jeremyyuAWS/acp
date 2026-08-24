@@ -207,7 +207,8 @@ def scan(sid: str, request: Request):
     res = core.store.get_scan(sid, owner=_owner(request))
     if res is None:
         raise HTTPException(404, "scan not found")
-    return res
+    import activity as _activity
+    return {**res, "activity": _activity.current(sid)}
 
 
 @router.get("/scans/{sid}/files/{filename:path}/status")

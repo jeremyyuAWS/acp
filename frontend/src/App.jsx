@@ -119,10 +119,10 @@ function queuedProgress(g, elapsed) {
   const run = g && g.run
   const total = (run && run.files) || 0
   const done = (run && run.files_done) || 0
-  if (!total) return { phase: 'discovering', elapsed }        // estate not listed yet
+  if (!total) return { phase: 'discovering', elapsed, activity: g?.activity ?? null }
   const phase = done < total ? 'analysing' : 'scoring'
   const pct = Math.round(12 + Math.min(1, done / total) * (95 - 12))
-  return { phase, files_found: total, files_done: done, current: null, elapsed, pct }
+  return { phase, files_found: total, files_done: done, current: null, elapsed, pct, activity: g?.activity ?? null }
 }
 
 // Shown on results views (Overview / Dashboard / Monitor) until the user runs Assess —
@@ -785,6 +785,11 @@ export default function App() {
           {scanPhaseLine(progress.phase, { deepScan, step: narrationStep }) && (
             <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
               {scanPhaseLine(progress.phase, { deepScan, step: narrationStep })}
+            </div>
+          )}
+          {progress.activity?.text && (
+            <div className="muted" style={{ marginTop: 2, fontSize: 11 }} data-testid="scan-activity">
+              {progress.activity.text}
             </div>
           )}
         </div>
