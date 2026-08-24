@@ -249,14 +249,103 @@ def _preview(match: list[dict], action: str, policy_id: str | None, owner: str) 
     Read-only by construction: reads `documents` plus any not-yet-assessed scan inventory (see
     `_all_candidates`), runs `disposition.matches` in Python, writes nothing. No file is touched,
     no disposition_audit row appended, no policy row created.
+
+    Returns a breakdown alongside `would_match`:
+      effective          — raw matches where this rule would be the winning action
+      superseded         — raw matches where a higher-priority enabled archive/delete rule wins
+      exempted           — files that match but carry lifecycle_status="Exempted" (legal hold);
+                           they are never tagged regardless of any rule
+      unable_to_evaluate — files that did NOT match, but only because a required metadata field
+                           was absent; they might have matched had the data been recorded
     """
     docs = _all_candidates(owner)
-    selected = [d for d in docs if disposition.matches(d, match)]
-    # `total` is `docs` already fetched to run the predicate over — free to report, and it's
-    # what turns "would_match: 812" into a percentage a person can judge a rule's breadth by
-    # (Lifecycle Rules build-plan item #5, "warns about unusually broad rules").
-    return {"policy_id": policy_id, "action": action,
-            "would_match": len(selected), "total": len(docs), "documents": selected}
+
+    # Superseded computation requires knowing the full enabled policy list in priority order.
+    # Only meaningful for saved archive/delete rules — draft rules (no policy_id) have no rank,
+    # and tag/leave/rename/move rules don't compete with archive/delete for the same action slot.
+    all_enabled_policies = []
+    other_ad_policies = []
+    this_policy_row = None
+    if policy_id and action in ("archive", "delete"):
+        all_enabled_policies = [p for p in core.store.list_disposition_policies(owner=owner)
+                                 if p.get("enabled")]
+        this_policy_row = next((p for p in all_enabled_policies
+                                if p.get("policy_id") == policy_id), None)
+        other_ad_policies = [p for p in all_enabled_policies
+                             if p.get("policy_id") != policy_id
+                             and p.get("action") in ("archive", "delete")]
+
+    selected = []
+    effective = 0
+    superseded = 0
+    exempted = 0
+    unable_to_evaluate = 0
+    unable_to_evaluate_fields: dict[str, int] = {}
+
+    for doc in docs:
+        # Exempted docs (legal hold, PRD §6) are never tagged regardless of any rule.
+        if doc.get("lifecycle_status") == "Exempted":
+            if disposition.matches(doc, match):
+                exempted += 1
+            continue
+
+        eval_result = disposition.evaluate(doc, match)
+
+        if not eval_result["matched"]:
+            # A condition failed with no observed value — the file might have matched if the
+            # metadata were recorded; surface it as unable_to_evaluate rather than silently missing.
+            missing_fields = [c["field"] for c in eval_result["conditions"]
+                              if c["outcome"] == "fail" and c["observed_value"] is None]
+            if missing_fields:
+                unable_to_evaluate += 1
+                for f in missing_fields:
+                    unable_to_evaluate_fields[f] = unable_to_evaluate_fields.get(f, 0) + 1
+            continue
+
+        selected.append(doc)
+
+        # Determine effective vs superseded for saved archive/delete rules only.
+        if not this_policy_row or action not in ("archive", "delete"):
+            effective += 1
+            continue
+
+        # Check whether any other enabled archive/delete rule also matches this doc.
+        other_matched = []
+        for p in other_ad_policies:
+            try:
+                other_match = json.loads(p.get("match") or "[]")
+            except Exception:
+                continue
+            if disposition.matches(doc, other_match):
+                other_matched.append(p)
+
+        if not other_matched:
+            effective += 1
+            continue
+
+        # Resolve in priority order — all_enabled_policies is already sorted by the store.
+        full_matched = [p for p in all_enabled_policies
+                        if p.get("policy_id") == policy_id or p in other_matched]
+        chosen, _, _ = disposition.resolve_candidate(full_matched, owner)
+        if chosen and chosen.get("policy_id") == policy_id:
+            effective += 1
+        else:
+            superseded += 1
+
+    # `total` is `docs` already fetched — free to report, and it's what turns "would_match: 812"
+    # into a percentage a person can judge a rule's breadth by (Lifecycle Rules item #5).
+    return {
+        "policy_id": policy_id,
+        "action": action,
+        "would_match": len(selected),
+        "total": len(docs),
+        "documents": selected,
+        "effective": effective,
+        "superseded": superseded,
+        "exempted": exempted,
+        "unable_to_evaluate": unable_to_evaluate,
+        "unable_to_evaluate_fields": unable_to_evaluate_fields,
+    }
 
 
 @router.post("/disposition/policies/{policy_id}/preview")
