@@ -7,8 +7,9 @@ import ProcessingDetails from './ProcessingDetails.jsx'
 import ScopeFunnel from './ScopeFunnel.jsx'
 import { armNotifyOnComplete, notifyScanComplete, notificationsSupported, notifyPermission } from './scanNotify.js'
 import { refreshDriveToken } from './driveAuth.js'
+import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, getScanLocations, remediateScan, SESSION_EXPIRED } from './api'
+import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -336,11 +337,30 @@ export default function App() {
         if (!a?.id) return
         await refreshDriveToken()
         await refreshScanDriveToken(a.id)
-      } catch { /* best-effort keep-alive */ }
+        setTokenRefreshError(null)
+      } catch { setTokenRefreshError('Google Drive session may have expired — files added since then may be skipped. Reconnect Drive to continue.') }
     }, 20 * 60 * 1000)
     return () => clearInterval(iv)
   }, [hasDriveToken])
   const [hasSPToken, setHasSPToken] = useState(() => !!sessionStorage.getItem('sp_token'))
+  const [tokenRefreshError, setTokenRefreshError] = useState(null)
+
+  // Keep a long-running SharePoint scan's MSAL token fresh. Mirrors the Drive keep-alive above.
+  // Best-effort; no-op without MSAL configured or without an active SharePoint session.
+  useEffect(() => {
+    if (!hasSPToken) return
+    const iv = setInterval(async () => {
+      try {
+        const a = await getActiveScan()
+        if (!a?.id) return
+        const tok = await refreshSPToken()
+        setSPToken(tok)
+        await refreshScanSPToken(a.id)
+        setTokenRefreshError(null)
+      } catch { setTokenRefreshError('SharePoint session may have expired — files added since then may be skipped. Re-sign in to SharePoint to continue.') }
+    }, 20 * 60 * 1000)
+    return () => clearInterval(iv)
+  }, [hasSPToken])
   const [delegations, setDelegations] = useState(loadDelegations)
   const [fileTypeConfig, setFileTypeConfig] = useState(loadFileTypeConfig)
   const [rolePrivileges, setRolePrivileges] = useState(loadRolePrivileges)
@@ -1109,13 +1129,19 @@ export default function App() {
               wrong half of a switch, and invisible. So this does the same complete teardown as
               sign out and differs only in saying what it is for. */}
           <button className="ghost small" title="Sign out and choose a different Google or Microsoft account"
-                  onClick={() => {
+                  onClick={async () => {
+            // Best-effort: clear the running scan's backend token store so the worker
+            // doesn't keep credentials that are about to become invalid.
+            try { const a = await getActiveScan(); if (a?.id) await clearScanTokens(a.id) } catch { /* ignore */ }
             clearAllTokens()
             clearActivityStorage()
             try { sessionStorage.clear() } catch { /* ignore */ }
             window.location.reload()
           }}>switch account</button>
-          <button className="ghost small" onClick={() => {
+          <button className="ghost small" onClick={async () => {
+            // Best-effort: clear the running scan's backend token store so the worker
+            // doesn't keep credentials that are about to become invalid.
+            try { const a = await getActiveScan(); if (a?.id) await clearScanTokens(a.id) } catch { /* ignore */ }
             clearAllTokens()
             clearActivityStorage()
             // Hard reload guarantees a 100% fresh in-memory state for whoever signs in next
@@ -1125,6 +1151,20 @@ export default function App() {
           }}>sign out</button>
         </div>
       </header>
+      {tokenRefreshError && (
+        <div role="alert" style={{
+          background: '#fffbeb', borderBottom: '2px solid #f59e0b',
+          padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 10,
+          fontSize: 14, color: '#78350f',
+        }}>
+          <span aria-hidden="true">⚠️</span>
+          <span style={{ flex: 1 }}>{tokenRefreshError}</span>
+          <button onClick={() => setTokenRefreshError(null)} aria-label="Dismiss session warning"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: '#92400e', lineHeight: 1, padding: '0 4px' }}>
+            ✕
+          </button>
+        </div>
+      )}
       {me.scope && <div className="scopebar"><i className="scopedot" />access scope · <b>{me.scope}</b></div>}
       {isStaging && (
         <div role="status" style={{

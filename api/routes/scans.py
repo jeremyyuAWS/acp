@@ -1226,6 +1226,32 @@ def refresh_scan_drive_token(sid: str, request: Request):
     return {"scan_id": sid, "refreshed": True}
 
 
+@router.post("/scans/{sid}/sp-token")
+def refresh_scan_sp_token(sid: str, request: Request):
+    """Refresh the SharePoint token of a RUNNING scan. MSAL tokens expire ~1h; the frontend
+    silently re-acquires one and POSTs it here so a scan that outlasts the token keeps its
+    SharePoint auth. Owner-checked; updates the ephemeral per-scan token store."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    token = request.headers.get("x-sp-token")
+    if not token:
+        raise HTTPException(422, "x-sp-token header required")
+    core.register_scan_tokens(sid, sp=token)
+    return {"scan_id": sid, "refreshed": True}
+
+
+@router.delete("/scans/{sid}/tokens")
+def clear_scan_tokens(sid: str, request: Request):
+    """Clear the token store for a scan — called on sign-out so a running scan's worker does not
+    keep stale Drive/SharePoint credentials after the user has signed out. Best-effort: a 404
+    (scan finished or never existed) is treated as success since the goal is just to not leave
+    tokens around."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        return {"scan_id": sid, "cleared": True}
+    core.clear_scan_tokens(sid)
+    return {"scan_id": sid, "cleared": True}
+
+
 @router.post("/scans/{sid}/publish")
 def publish_files(sid: str, request: Request, body: dict):
     """Publish one or more re-validated files — ADR 0010 archive-copy, NON-destructive.
