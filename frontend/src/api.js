@@ -451,6 +451,10 @@ export const refreshScanDriveToken = (scanId) => (SIM
 export const refreshScanSPToken = (scanId) => (SIM
   ? sim({ refreshed: true })
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/sp-token`, { method: 'POST', headers: headers() }).then(j))
+// Revoke the scan's token store on sign-out so the worker doesn't keep stale credentials.
+export const clearScanTokens = (scanId) => (SIM
+  ? sim({ cleared: true })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/tokens`, { method: 'DELETE', headers: headers() }).then(j))
 export const getScan = (id) => (SIM ? sim(simGetScan(id)) : fetch(`${BASE}/scans/${id}`, { headers: headers() }).then(j))
 // The merged live-assessment snapshot (KPIs + funnel + worker/queue block) for the running screen.
 // SIM has no live pipeline → available:false (the panel renders nothing).

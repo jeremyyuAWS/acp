@@ -9,7 +9,7 @@ import { armNotifyOnComplete, notifyScanComplete, notificationsSupported, notify
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, getScanLocations, remediateScan, SESSION_EXPIRED } from './api'
+import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -1129,13 +1129,19 @@ export default function App() {
               wrong half of a switch, and invisible. So this does the same complete teardown as
               sign out and differs only in saying what it is for. */}
           <button className="ghost small" title="Sign out and choose a different Google or Microsoft account"
-                  onClick={() => {
+                  onClick={async () => {
+            // Best-effort: clear the running scan's backend token store so the worker
+            // doesn't keep credentials that are about to become invalid.
+            try { const a = await getActiveScan(); if (a?.id) await clearScanTokens(a.id) } catch { /* ignore */ }
             clearAllTokens()
             clearActivityStorage()
             try { sessionStorage.clear() } catch { /* ignore */ }
             window.location.reload()
           }}>switch account</button>
-          <button className="ghost small" onClick={() => {
+          <button className="ghost small" onClick={async () => {
+            // Best-effort: clear the running scan's backend token store so the worker
+            // doesn't keep credentials that are about to become invalid.
+            try { const a = await getActiveScan(); if (a?.id) await clearScanTokens(a.id) } catch { /* ignore */ }
             clearAllTokens()
             clearActivityStorage()
             // Hard reload guarantees a 100% fresh in-memory state for whoever signs in next
