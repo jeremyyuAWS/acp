@@ -261,7 +261,7 @@ def explain_finding(
         r = httpx.post(
             f"{OLLAMA_BASE_URL}/api/generate",
             json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
-                  "options": {"temperature": 0.3, "num_predict": 120}},
+                  "options": {"temperature": 0.3, "num_predict": 200}},
             headers=_OLLAMA_HEADERS,
             # CPU inference of a 3B model: first call loads the model (~15s) then
             # generates. 90s bounds the worst cold-start; the old 150s left the UI's
@@ -1034,7 +1034,7 @@ def describe_reading_order(page_bytes: bytes, *, filename: str = "",
         r = httpx.post(
             f"{OLLAMA_BASE_URL}/api/generate",
             json={"model": OLLAMA_VISION_MODEL, "prompt": prompt, "images": [b64],
-                  "stream": False, "options": {"temperature": 0.2, "num_predict": 140}},
+                  "stream": False, "options": {"temperature": 0.2, "num_predict": 250}},
             headers=_OLLAMA_HEADERS,
             timeout=OLLAMA_VISION_TIMEOUT,
         )
@@ -1142,7 +1142,7 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
                   # ran out mid-thought, and the failure was indistinguishable from a model that
                   # cannot do the task. Every comparison of a reasoning model against this lane was
                   # measuring the cap.
-                  "options": {"temperature": 0.4, "num_predict": 400}},
+                  "options": {"temperature": 0.4, "num_predict": 800}},
             headers=_OLLAMA_HEADERS,
             timeout=90,
         )
@@ -1199,7 +1199,7 @@ def simplify_text(text: str, *, scan_id: str | None = None, file: str | None = N
         r = httpx.post(
             f"{OLLAMA_BASE_URL}/api/generate",
             json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
-                  "options": {"temperature": 0.3, "num_predict": 220}},
+                  "options": {"temperature": 0.3, "num_predict": 400}},
             headers=_OLLAMA_HEADERS,
             timeout=OLLAMA_VISION_TIMEOUT,
         )
@@ -1282,7 +1282,7 @@ def _ollama_narrative(facts: dict) -> tuple[str, str] | None:
         r = httpx.post(
             f"{OLLAMA_BASE_URL}/api/generate",
             json={"model": OLLAMA_MODEL, "prompt": _p, "stream": False,
-                  "options": {"temperature": 0.4, "num_predict": 200}},
+                  "options": {"temperature": 0.4, "num_predict": 400}},
             headers=_OLLAMA_HEADERS, timeout=150)
         r.raise_for_status()
         _data = r.json()
