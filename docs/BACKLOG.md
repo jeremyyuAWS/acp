@@ -101,9 +101,12 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   `remediation_capability.py` + `api/formats/*`, split 4/4/4: **~~4 quick table-fixes~~** ✓ done — all
   four cells (`xlsx 1.4.1`, `xlsx 1.4.11`, `xlsx 4.1.2`, `pdf 2.4.3` heuristic `/Tabs=/S`) are
   registered as PARTIAL/MEDIUM, confirmed by R10 CI fixtures (PR #673) and locked by regression tests
-  in `test_rule_registry.py` (R8 quick-fixes). *(Source-verified 2026-08-24. PR merged.)*
-  Remaining: **~4 real detector builds** — no detector (`pdf 1.4.1`, `pptx 1.4.11`, `pdf 1.4.11`,
-  `pptx 4.1.2`); **3 appliers** — assessable, human-only fix (`2.4.4 pdf`, `3.1.2 xlsx`, `2.1.2
+  in `test_rule_registry.py` (R8 quick-fixes). *(Source-verified 2026-08-24. PR #684 merged.)*
+  **~~4 real detector builds~~** ✓ done — detectors added by PRs #676/#679, REVIEW_FORMATS migration
+  done in PR #696: `pdf 1.4.1`, `pptx 1.4.11`, `pdf 1.4.11`, `pptx 4.1.2` + `docx 1.4.1`, `docx 1.4.11`
+  also migrated (registry-backed since #679). Clean scan now resolves to REVIEW not NOT_EVALUATED.
+  *(PR #696 merged.)*
+  Remaining: **3 appliers** — assessable, human-only fix (`2.4.4 pdf`, `3.1.2 xlsx`, `2.1.2
   docx`); **~4 are legitimately N/A** (interaction SCs on static docs: `pptx 2.1.1/2.1.2/2.4.3`,
   `xlsx 2.1.2` — see the `ASSESSMENT_OVERRIDES` rationale).
 - [ ] **R9 — (optional) Archive auto-fire.** Lifecycle Archive is override-only on real scans; auto-fire
