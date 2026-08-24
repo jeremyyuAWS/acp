@@ -79,6 +79,16 @@ def test_supersedes_renders_only_with_a_previous_scan():
     assert "Supersedes." not in _text(_facts(), diff=None)
 
 
+def test_supersedes_includes_scan_id_when_available():
+    sup = _text(_facts(), diff={"prev_at": "2026-08-01T00:00:00Z",
+                                "prev_id": "scan-20260801-abc123"})
+    assert "scan-20260801-abc123" in sup
+    assert "2026-08-01" in sup
+    # date-only fallback when prev_id is absent
+    date_only = _text(_facts(), diff={"prev_at": "2026-08-01T00:00:00Z"})
+    assert "Supersedes." in date_only and "2026-08-01" in date_only
+
+
 def test_nothing_measured_renders_no_section():
     assert _text(_facts(evaluated=0, findings=0)) == ""
     assert _text(None) == ""

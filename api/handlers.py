@@ -991,19 +991,32 @@ def _scan_discover(payload: dict, job: dict) -> None:
     folders = payload.get("folders")
     exclude_folders = payload.get("exclude_folders")
     toks = core.get_scan_tokens(scan_id)
+    # Prefer token from durable job payload — in-memory store is per-replica and invisible to a
+    # worker container that does not share the API's memory (split topology without Redis).
+    drive_token = payload.get("drive_token") or toks.get("drive")
+    sp_tok = payload.get("sp_token") or toks.get("sp")
     rb = Rubric.load_active(ACP / "config")
-    svc = None if source in ("local", "sharepoint") else _drive_service(toks.get("drive"))
-    effective_folder = folder if folder else (None if folders else ("root" if toks.get("drive") else None))
+    svc = None if source in ("local", "sharepoint") else _drive_service(drive_token)
+    effective_folder = folder if folder else (None if folders else ("root" if drive_token else None))
     scope: dict = {}
     # `inventory` collects per-file rows for the NON-scannable estate (media / unsupported /
     # extensionless) — every accessible file that is NOT in the assessable `items` set. The
     # scannable rows are built from `items` below; together they inventory the WHOLE estate
     # (PRD Phase A2) while only the assessable subset is ever downloaded and analysed.
     inventory: list[dict] = []
+    started = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    defer = _defer_analysis_to_assess()
+    # Create the scan_runs row NOW, before the file listing, so GET /scans/{id} returns a result
+    # as soon as a worker claims the job. The frontend polls once per second and gives up at 45
+    # consecutive misses — a large-estate listing takes longer than that window and triggers the
+    # false "this scan never started" error. total=0 is updated by set_scan_files once _list()
+    # returns; scope is written by merge_scan_scope once the listing scope dict is populated.
+    core.store.init_scan_run(scan_id, source, 0, started, rb.name, rb.hash, owner=user,
+                             status="running")
     # scope_files gates what is READ, not what is scored. This is the PRODUCTION listing path
     # (ADR 0007 fan-out); run_scan's is the local one, and wiring only that would leave a
     # hospital's PDFs being downloaded and OCR'd in the deployment that matters.
-    items = _list(source, svc, folder=effective_folder, sp_token=toks.get("sp"),
+    items = _list(source, svc, folder=effective_folder, sp_token=sp_tok,
                   max_files=FANOUT_MAX_FILES, **({"folders": folders} if folders else {}),
                   **({"exclude_folders": exclude_folders} if exclude_folders else {}),
                   exclude_remediated=bool(payload.get("exclude_remediated", False)),
@@ -1013,8 +1026,6 @@ def _scan_discover(payload: dict, job: dict) -> None:
     # rule applies whether the fan-out runs now or later at Assess.
     _exclude_rem = bool(payload.get("exclude_remediated", False))
 
-    started = _dt.datetime.now(_dt.timezone.utc).isoformat()
-    defer = _defer_analysis_to_assess()
     incremental = bool(payload.get("incremental", True))
     # Freeze the enabled per-file WCAG scope rules into this scan alongside scan_scope (PRD §4.4 /
     # C4). The score and trace paths both resolve each file against THIS frozen set, so an admin
@@ -1028,8 +1039,11 @@ def _scan_discover(payload: dict, job: dict) -> None:
         ]
     except Exception:
         scope["scope_rules"] = []
-    core.store.init_scan_run(scan_id, source, len(items), started, rb.name, rb.hash, owner=user,
-                             status="discovered" if defer else "running", scope=scope)
+    # Update the file count and full scope now that listing is complete.
+    core.store.set_scan_files(scan_id, len(items))
+    core.store.merge_scan_scope(scan_id, scope)
+    if defer:
+        core.store.set_scan_status(scan_id, "discovered")
     # Normalise the source listing to the common analysis-item shape. `mime` stays the Google-
     # native EXPORT selector _download keys off; `source_mime` (the real MIME) is carried for the
     # inventory row's `mime` column, along with the source metadata each listing now surfaces.

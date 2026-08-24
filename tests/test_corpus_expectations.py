@@ -71,10 +71,11 @@ def test_review_lane_pairs_can_never_pass():
 
 
 def test_a_clean_review_lane_is_not_evaluated_not_pass():
-    """2.1.2 x docx by name, because it is the example a corpus author is most likely to get
-    wrong: nothing fired, so nothing was reviewed, so nobody looked."""
-    assert ce.clean_verdict("2.1.2", "docx") == ce.NOT_EVALUATED
-    assert pol._rule_outcome("2.1.2", "docx", 0, 0) == ce.NOT_EVALUATED
+    """2.4.3 x pptx by name — a REVIEW_FORMATS pair whose detector finding nothing means nothing
+    was reviewed, so nobody looked. 2.1.2 on docx/pptx/xlsx was the original exemplar; it moved
+    to the capability registry (PARTIAL coverage → REVIEW on clean) in PR #709."""
+    assert ce.clean_verdict("2.4.3", "pptx") == ce.NOT_EVALUATED
+    assert pol._rule_outcome("2.4.3", "pptx", 0, 0) == ce.NOT_EVALUATED
 
 
 def test_most_of_the_core_17_cannot_certify_a_pass():
@@ -88,8 +89,9 @@ def test_most_of_the_core_17_cannot_certify_a_pass():
 
 
 def test_validate_rejects_an_unreachable_expectation():
+    # 2.4.3 x pptx is a REVIEW_FORMATS pair — clean scan → NOT_EVALUATED, never PASS.
     problems = ce.validate([
-        {"file": "clean.docx", "sc": "2.1.2", "format": "docx", "expected": "pass"},
+        {"file": "clean.pptx", "sc": "2.4.3", "format": "pptx", "expected": "pass"},
     ])
     assert len(problems) == 1
     assert "can never PASS" in problems[0]
@@ -97,8 +99,9 @@ def test_validate_rejects_an_unreachable_expectation():
 
 
 def test_validate_accepts_a_reachable_one():
+    # 2.1.2 x docx is now registry-backed (PARTIAL coverage → REVIEW on clean, not NOT_EVALUATED).
     assert ce.validate([
-        {"file": "clean.docx", "sc": "2.1.2", "format": "docx", "expected": "not_evaluated"},
+        {"file": "clean.docx", "sc": "2.1.2", "format": "docx", "expected": "review"},
         {"file": "broken.docx", "sc": "2.1.2", "format": "docx", "expected": "fail"},
         {"file": "lang.docx", "sc": "3.1.1", "format": "docx", "expected": "pass"},
     ]) == []

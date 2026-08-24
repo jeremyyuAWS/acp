@@ -19,10 +19,12 @@ import store  # noqa: E402
 
 # ── review-lane resolution (4.1.2 is a catalog rule; office is its review lane) ──
 def test_review_lane_no_signal_is_not_evaluated_never_pass():
-    # A control-free office doc: no advisory finding → genuine N/A, NOT a fabricated pass.
-    # 2.1.2 is the exemplar: pptx 4.1.2 was migrated to the registry (PR #696) and now reports
-    # REVIEW on a clean file by the coverage route (asserted below in test_review_lane_is_format_scoped).
-    assert store._rule_outcome("2.1.2", "pptx", 0, 0) == store.NOT_EVALUATED
+    # A REVIEW_FORMATS pair with no signal: genuine N/A, NOT a fabricated pass.
+    # 2.4.3 pptx (Focus Order) is the exemplar: still in the REVIEW_FORMATS lane, so silence
+    # means "we did not look", not "we looked and everything is fine".
+    # 2.1.2 (No Keyboard Trap) has been migrated to the registry for all three office formats
+    # and now reports REVIEW on a clean file — asserted in test_review_lane_is_format_scoped.
+    assert store._rule_outcome("2.4.3", "pptx", 0, 0) == store.NOT_EVALUATED
 
 
 def test_review_lane_with_signal_is_review():
@@ -47,10 +49,16 @@ def test_review_lane_is_format_scoped():
     # the same route as pdf and docx above — the technique ran and covered part of the criterion.
     assert store._rule_outcome("4.1.2", "pptx", 0, 0) == store.REVIEW
     assert store._rule_outcome("4.1.2", "pptx", 0, 1) == store.REVIEW
-    # 2.1.2 pptx exemplifies the REVIEW_FORMATS lane that remains: signal → REVIEW, silence →
+    # 2.1.2 (No Keyboard Trap) is now registry-backed for docx, pptx, and xlsx. A clean file
+    # returns REVIEW ("we checked for controls and found none, but PARTIAL coverage means a human
+    # should confirm") rather than NOT_EVALUATED ("we did not look").
+    assert store._rule_outcome("2.1.2", "pptx", 0, 0) == store.REVIEW
+    assert store._rule_outcome("2.1.2", "docx", 0, 0) == store.REVIEW
+    assert store._rule_outcome("2.1.2", "xlsx", 0, 0) == store.REVIEW
+    # 2.4.3 pptx exemplifies the REVIEW_FORMATS lane that remains: signal → REVIEW, silence →
     # NOT_EVALUATED ("we did not look"). Contrast the registry lane above: "looked partially".
-    assert store._rule_outcome("2.1.2", "pptx", 0, 0) == store.NOT_EVALUATED
-    assert store._rule_outcome("2.1.2", "pptx", 0, 1) == store.REVIEW
+    assert store._rule_outcome("2.4.3", "pptx", 0, 0) == store.NOT_EVALUATED
+    assert store._rule_outcome("2.4.3", "pptx", 0, 1) == store.REVIEW
     # A format with neither a review lane nor a registry entry still reads "we did not look".
     assert store._rule_outcome("2.4.3", "xlsx", 0, 0) == store.NOT_EVALUATED
     # html keeps its real pass/fail lane for 4.1.2.
@@ -292,7 +300,7 @@ def test_three_arg_call_is_back_compatible():
     # Existing callers pass 3 args; review_count defaults to 0.
     assert store._rule_outcome("3.1.1", "pdf", 0) == "PASS"           # 🟢 auto → pass
     assert store._rule_outcome("1.1.1", "pdf", 0) == store.REVIEW     # 🟡 review-lane → verify
-    assert store._rule_outcome("2.1.2", "pptx", 0) == store.NOT_EVALUATED  # REVIEW_FORMATS → N/A
+    assert store._rule_outcome("2.4.3", "pptx", 0) == store.NOT_EVALUATED  # REVIEW_FORMATS → N/A
 
 
 # ── count split by advisory severity ────────────────────────────────────────────

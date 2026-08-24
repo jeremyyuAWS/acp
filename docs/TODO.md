@@ -57,7 +57,7 @@ Regenerate with `python scripts/gen_todo_status.py`; CI fails if this block is s
 
 This is a behaviour change, not bookkeeping: several detectors compute the AA and AAA thresholds in one pass, so AAA findings were previously scored against AA-target files.
 
-**Capability registry — 27 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
+**Capability registry — 29 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
 
 | Criterion | Format | Coverage | Confidence | Not covered |
 |---|---|---|---|---|
@@ -82,8 +82,10 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 | `2.4.3` | pdf | **heuristic** | medium | actually comparing the widget order to the structure order needs a /StructTreeRoot walk that is not built |
 | `2.4.3` | pptx | **partial** | high | other focus-order conditions (non-placeholder shape sequences, embedded control tab order) are not examined |
 | `2.4.4` | docx | **partial** | high | whether otherwise-descriptive text actually names THIS destination — a link reading 'Annual Report' that point |
+| `2.4.4` | pdf | **partial** | high | generic filler phrases and links whose text does not literally match the URI are not examined |
 | `3.1.1` | html | **full** | high | whether the declared language is the CORRECT one is a content question 3.1.1 does not ask |
 | `3.1.2` | docx | **partial** | high | a shorter foreign phrase or a single borrowed word is under the length floor langdetect needs to be trusted, a |
+| `3.1.2` | xlsx | **partial** | medium | SpreadsheetML has no per-run language element, so shorter phrases and statistical uncertainty in langdetect's  |
 | `4.1.2` | docx | **partial** | high | ActiveX controls, embedded OLE objects and other form content are not examined, which would need reading each  |
 | `4.1.2` | pdf | **partial** | high | components expressed through the tagged-structure tree are not examined, which needs a /StructTreeRoot walker  |
 | `4.1.2` | pptx | **partial** | high | a clean result means no such controls were found and the criterion does not arise for this deck |
@@ -477,8 +479,7 @@ the flagship **R1** and quick-wins **R2 / R3 / R4 / R6 / R7 / R8** plus **R-A / 
 below with its rendering code named. The report is no longer "a scan summary": it carries the
 certification-decision block, per-issue evidence appendix with sign-off, scope-of-assertion,
 chain-of-custody digest, richer inventory, and the POUR breakdown. The genuine remainder is the
-honesty-gated KPI/assurance work (**R9 / R10**), and the larger dependency-bearing items (**R15 / R-D–R-E**) — none verified in this pass, so
-none struck.
+honesty-gated KPI/assurance work (**R9 / R10**), and the remaining dependency-bearing item (**R-E**). ~~R15~~ and ~~R-D~~ have since shipped (PRs #689, #698, #704, #711).
 
 **Hard rule for this whole section (ADR 0016 / `4fc6bc1`):** every number is a
 real, derivable ratio shown with its basis, or it is omitted. NO fabricated
@@ -532,28 +533,31 @@ per-document certificate renderer alongside it).
 | ~~R-A~~ | ~~**Scope-of-assertion / negative-assurance statement**~~ — **SHIPPED** | `_scope_section` ("What this report covers · and what it does not", R-A) states validator-set size vs the full 87, per-document evaluated / not-evaluated / by-mode, the criteria never run, the file types never opened, and the whole-estate funnel — the over-claim guard against a "100%" misread. |
 | ~~R-B~~ | ~~**Immutable audit-log excerpt**~~ — **SHIPPED** | The evidence appendix renders each fix's sign-off inline from the immutable `decision_log` — "{decision} by {reviewer} · {when} UTC", with the approved value — under "what changed, and on whose authority". |
 | ~~R-C~~ | ~~**Per-fix assurance-level disclosure**~~ — **SHIPPED (PR #665)** | `_evidence_section` now renders a colored tier badge per fix: Deterministic / Deterministic+human / AI+human / AI+re-scan. |
-| R-D | **Reproduce-this-result instructions** — "re-run: POST /scans with rubric hash `<h>`; expect identical findings." | Pairs with R4 chain-of-custody; makes reproducibility actionable, not just asserted. |
+| ~~R-D~~ | ~~**Reproduce-this-result instructions**~~ — **SHIPPED (#698 / #704)** | `_provenance_section` renders a bordered 3-step table: verify rubric hash at `GET /rubric`, re-run via `POST /scans?source=…`, compare findings. `ACP_PUBLIC_URL` prefixes the URLs; source param taken from `run["source"]`. |
 | R-E | **"Supersedes" lineage** — "this certificate supersedes cert `<id>` from `<date>`" (per-document version chain). | Extends the estate-level velocity section already in `report.py` to a per-document custody chain. |
 
 Sequencing suggestion: R1 (flagship) + R2/R3/R6 + R-A first (they land the biggest
 trust jump on data that already exists), then R4/R5/R-B/R-C (~~R11/R12 done~~), then the
-honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/R-D/R-E (~~R13/R14/R-C done~~).
+honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~R-D~~ /R-E (~~R13/R14/R-C done~~).
 
 ### Polish / technical debt (surfaced during R15 implementation, 2026-08-24)
-| # | Status | Location | Item |
-|---|---|---|---|
-| P-1 | ✓ done (#699) | `api/report.py` ~456 | `_MANUAL_VERIFY` dict has no `"html"` key — an HTML scan silently skips the manual-verification table. Add an entry or a fallback row. |
-| P-2 | ✓ done (#700) | `api/report.py` ~197 | `_esc()` silently truncates strings to 400 chars. A criterion description or URL longer than that is swallowed with no indication in the PDF. Raise the limit or add an ellipsis to signal truncation. |
-| P-3 | ✓ done (#700) | `api/report.py` ~786 | Evidence truncation note says "full evidence available via API" — but no such endpoint exists. Remove the claim or implement a `/scans/{id}/evidence` endpoint. |
-| P-4 | ✓ done (#700) | `api/report.py` ~865 | `_ai_governance_section` has a bare `except Exception: pass` that hides every failure silently. At minimum log the exception; consider re-raising for unexpected errors. |
-| P-5 | ✓ done (#699) | `api/report.py` ~201 | `_decision_block` docstring still tags R2/R3 as "backlog" — both shipped. Update to reflect current status. |
-| P-6 | ✓ done (#706) | `api/blob.py` ~60 | `BlobStore.put()` uses `overwrite=True` unconditionally — remediated output files are silently clobbered on re-upload. Either key by content hash or gate on `overwrite=False` so re-uploads are detectable. |
-| P-7 | ✓ done (#700) | `api/report.py` (stat band) | Score denominator is undisclosed: the band shows a percentage but never states "N criteria evaluated out of 87 in the rubric." An auditor cannot verify the math without it. |
-| P-8 | ✓ done (#711) | deployment docs | `ACP_PUBLIC_URL` must be set to the public base URL for QR codes to resolve; without it the PDF embeds an `acp://` URI that no browser handles. Also note: the verify digest is rubric-version-sensitive — if the active rubric's `conformance_target` changes, existing PDF digests will no longer match the endpoint's recomputed value. |
-| P-9 | ✓ done | `api/report.py` `build_report` | Partial-assessment notice is only inline in the verdict paragraph — a reader skimming for a percentage can miss the caveat. Add a stand-alone highlighted notice when `unassessed > 0` or `unanalysable > 0`. |
-| P-10 | ✓ done | `api/report.py` `build_report` | Stat band shows `cert / total` — but `total` includes unassessed files, so the percentage overstates how much was actually assessed. Denominator should be `assessed` (total − unassessed). |
-| P-11 | ✓ done | `api/report.py` `build_report` | No criteria-level outcome breakdown. The document-level stat band tells auditors how many files are certifiable, but not how many WCAG criteria passed, had findings, were deferred to humans, or were not evaluated for these formats. Add a second stat band row from `facts["scope"]`. |
-| P-12 | ✓ done | `api/report.py` `build_report` | No "assessment scope" declaration at the top of the report. Source, file types, scan window, rubric version + hash, conformance target, and AI-vs-deterministic flag are available from `run`/`meta`/`facts` but not rendered. Replace the old 3-column "Scope & methodology" card with a detailed 3×4 scope table. |
+
+**All P-1–P-8 shipped** (verified against `origin/main` 2026-08-24). **P-9–P-12 shipped** this PR.
+
+| # | Location | Item |
+|---|---|---|
+| ~~P-1~~ | `api/report.py` | ~~`_MANUAL_VERIFY` dict has no `"html"` key — an HTML scan silently skips the manual-verification table.~~ **DONE** (#699): `"HTML"` key added with axe DevTools instructions. |
+| ~~P-2~~ | `api/report.py` | ~~`_esc()` silently truncates strings to 400 chars.~~ **DONE**: limit raised to 2000 with an ellipsis on overflow. |
+| ~~P-3~~ | `api/report.py` | ~~Evidence truncation note says "full evidence available via API" — but no such endpoint exists.~~ **DONE**: false claim removed. |
+| ~~P-4~~ | `api/report.py` | ~~`_ai_governance_section` has a bare `except Exception: pass` that hides every failure silently.~~ **DONE** (#699): now logs with `_LOG.warning(..., exc_info=True)`. |
+| ~~P-5~~ | `api/report.py` | ~~`_decision_block` docstring still tags R2/R3 as "backlog".~~ **DONE**: docstring updated. |
+| ~~P-6~~ | `api/blob.py` | ~~`BlobStore.put()` uses `overwrite=True` unconditionally.~~ **DONE** (#706): gates on `overwrite=False` with collision logging. |
+| ~~P-7~~ | `api/report.py` | ~~Score denominator is undisclosed.~~ **DONE**: scope section explicitly states separate denominators (discovered / assessable / scored) and caps the meaning of a 100 score. |
+| ~~P-8~~ | deployment docs | ~~`ACP_PUBLIC_URL` must be documented.~~ **DONE** (#711): added to `.env.example` and `docs/production-hardening.md` with QR-code and rubric-sensitivity notes. |
+| ~~P-9~~ | `api/report.py` | ~~Partial-assessment caveat buried in the verdict paragraph — a reader skimming for a percentage can miss it.~~ **DONE**: stand-alone highlighted notice when `unassessed > 0` or `unanalysable > 0`. |
+| ~~P-10~~ | `api/report.py` | ~~Stat band denominator `cert / total` includes unassessed files, overstating coverage.~~ **DONE**: denominator changed to `assessed` (total − unassessed); label says "N of M assessed". |
+| ~~P-11~~ | `api/report.py` | ~~No criteria-level outcome breakdown — auditors see file counts but not WCAG criterion outcomes.~~ **DONE**: second stat band row from `facts["scope"]`: passed / with findings / human-review / not-evaluated. |
+| ~~P-12~~ | `api/report.py` | ~~No assessment scope declaration at the top of the report.~~ **DONE**: 3×4 table (source / scan window / file types / method / standard+target / rubric) replaces old "Scope & methodology" card. |
 
 ---
 

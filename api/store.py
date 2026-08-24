@@ -238,6 +238,7 @@ _SCHEMA = [
     # _row_approved_values still fell back to the card's `proposed_value` — the UI label "Mark as
     # decorative" — and the file was left owing the document a value nobody ever meant to write.
     "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS resolution TEXT",
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS assignee TEXT",
     # Per-file, per-rule-id (from rule-catalog.json) execution manifest.
     # PASS = rule ran, no findings; FAIL = findings found; ERROR = engine error.
     """CREATE TABLE IF NOT EXISTS scan_file_manifests (
@@ -4181,6 +4182,13 @@ class Store:
                 "UPDATE hitl_queue SET status=%s, reviewed_at=%s, reviewer_note=%s, "
                 "approved_value=COALESCE(%s, approved_value), resolution=%s WHERE id=%s",
                 (status, now, reviewer_note, approved_value, resolution, item_id))
+        return self.get_hitl_item(item_id)
+
+    def assign_hitl_item(self, item_id: str, assignee: str | None) -> dict | None:
+        """Set or clear the reviewer assigned to a HITL item. Separate from update_hitl_item
+        so assignment can happen without also recording a review decision."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "UPDATE hitl_queue SET assignee=%s WHERE id=%s", (assignee, item_id))
         return self.get_hitl_item(item_id)
 
     # ── Admin settings (persisted; survives restarts) ─────────────────────────

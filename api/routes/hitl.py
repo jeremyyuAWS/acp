@@ -223,3 +223,16 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
         except Exception:
             pass
     return updated
+
+
+class HitlAssign(BaseModel):
+    assignee: str | None = None   # email address of the reviewer to assign, or null to clear
+
+
+@router.patch("/hitl/queue/{item_id}/assign")
+def hitl_assign(item_id: str, body: HitlAssign):
+    """Assign (or unassign) a reviewer to a HITL queue item. Persists to the DB so the
+    assignment survives page reloads and is visible to other sessions."""
+    if core.store.get_hitl_item(item_id) is None:
+        raise HTTPException(404, "item not found")
+    return core.store.assign_hitl_item(item_id, body.assignee)
