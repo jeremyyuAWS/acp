@@ -36,9 +36,9 @@ const setValue = (el, v) => {
   set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-describe('the settings panel is access-only, plus self-service My Data', () => {
-  it('shows exactly the Owners, Users and My Data tabs, in that order', async () => {
-    expect(tabTexts(await render())).toEqual(['Owners', 'Users', 'My Data'])
+describe('the settings panel is access-only, plus self-service My Data and My Scope', () => {
+  it('shows exactly the Owners, Users, My Data and My Scope tabs, in that order', async () => {
+    expect(tabTexts(await render())).toEqual(['Owners', 'Users', 'My Data', 'My Scope'])
   })
 
   it('no longer offers any of the removed ADMIN-ONLY tabs', async () => {

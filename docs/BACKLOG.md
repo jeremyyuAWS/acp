@@ -95,8 +95,13 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   `ScanScopeChip.jsx` reads from `run.scan_scope` (frozen criterion→formats map) and `run.scope`
   (file/source boundary), with a "change scope & re-scan" affordance that opens the review modal with
   a pre-populated impact estimate. Mounted in `Overview.jsx:428`. *(Source-verified 2026-08-24.)*
-- [ ] **R7 — Phase 3c: per-user config (owner default + per-user override).** Governance model chosen
-  ("owner sets a default, users can override"); not implemented.
+- [x] **R7 — Phase 3c: per-user config (owner default + per-user override).** Done. Storage
+  (`store.py:set/get/clear_user_setting`, `resolve_setting`), policy engine
+  (`assessment_policy.py:active_scope`, `_widen_union` — widen-only per ADR 0035), scan-time wiring
+  (`scanner.py:2643`), and API (`GET/PUT/DELETE /settings/mine`) were already in place.
+  `MyScanScope.jsx` (the user-facing editor: owner floor locked-on, user adds only) was built but
+  unmounted. Wired it as a **"My Scope" tab** in `Settings.jsx` alongside Owners / Users / My Data.
+  *(Source-verified 2026-08-24.)*
 - [x] **R8 — WCAG capability completion (the 12 not-ready cells).** Done. Source-verified against
   `remediation_capability.py` + `api/formats/*`, split 4/4/4: **~~4 quick table-fixes~~** ✓ done — all
   four cells (`xlsx 1.4.1`, `xlsx 1.4.11`, `xlsx 4.1.2`, `pdf 2.4.3` heuristic `/Tabs=/S`) are
