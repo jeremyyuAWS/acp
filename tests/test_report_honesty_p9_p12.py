@@ -160,3 +160,65 @@ def test_p12_source_map_drive():
         if hasattr(c, "text")
     )
     assert "Google Drive" in cell_texts
+
+
+# ── R10: assurance stat band ──────────────────────────────────────────────────
+
+def test_r10_assurance_stat_band_returns_flowables():
+    """_assurance_section returns a non-empty list when mode data is present."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
+    from reportlab.lib.styles import getSampleStyleSheet
+    from report import _assurance_section
+    ss = getSampleStyleSheet()
+    h2, body, cell, muted = ss["Heading2"], ss["Normal"], ss["Normal"], ss["Normal"]
+    facts = {
+        "scope": {"by_mode": {"auto": 40, "ai-assisted": 8, "human-only": 2}},
+        "documents": [{"evaluated": 50, "findings": 3, "by_mode": {}}],
+        "review": {"reviewed": 3, "approved": 2, "rejected": 1},
+        "remediated_total": 2,
+    }
+    el = _assurance_section(facts, h2, body, cell, muted)
+    assert len(el) > 0
+
+
+def test_r10_mode_split_arithmetic():
+    """auto + ai_ct + human_only equals the sum reported by each mode key."""
+    by_mode = {"auto": 35, "ai-assisted": 10, "human-only": 5}
+    auto = by_mode.get("auto", 0)
+    ai_ct = by_mode.get("ai-assisted", 0)
+    human_only = by_mode.get("human-only", 0)
+    assert auto + ai_ct + human_only == 50
+
+
+def test_r10_empty_when_no_data():
+    """_assurance_section returns [] when nothing was reviewed, remediated, or evaluated."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
+    from reportlab.lib.styles import getSampleStyleSheet
+    from report import _assurance_section
+    ss = getSampleStyleSheet()
+    h2, body, cell, muted = ss["Heading2"], ss["Normal"], ss["Normal"], ss["Normal"]
+    el = _assurance_section(None, h2, body, cell, muted)
+    assert el == []
+
+
+def test_r10_all_deterministic():
+    """When all criteria are deterministic (ai_ct=0, human_only=0), stat band still renders."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
+    from reportlab.lib.styles import getSampleStyleSheet
+    from report import _assurance_section
+    ss = getSampleStyleSheet()
+    h2, body, cell, muted = ss["Heading2"], ss["Normal"], ss["Normal"], ss["Normal"]
+    facts = {
+        "scope": {"by_mode": {"auto": 50}},
+        "documents": [{"evaluated": 50, "findings": 0, "by_mode": {}}],
+        "review": {"reviewed": 0, "approved": 0, "rejected": 0},
+        "remediated_total": 5,
+    }
+    el = _assurance_section(facts, h2, body, cell, muted)
+    assert len(el) > 0

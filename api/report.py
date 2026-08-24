@@ -774,11 +774,12 @@ def _provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, mut
 
 def _assurance_section(facts, h2, body, cell, muted, hitl=None) -> list:
     """Human review & assurance (backlog R9 / R10). Every figure has a real denominator: review
-    outcomes counted from the immutable decision_log; the deterministic-assurance ratio as
-    deterministic ÷ evaluated criteria; the effort figure as fixes-cleared ÷ findings with that
-    basis named. NO "% effort saved" and NO "cleared ÷ attempted" — the attempted denominator is
-    not tracked (only re-scan-cleared fixes are recorded), so that ratio is omitted, not invented
-    (ADR 0016). Omitted entirely when nothing was reviewed, remediated or evaluated.
+    outcomes counted from the immutable decision_log; the mode split as real per-mode counts
+    (deterministic / AI-assisted / human-only); the effort figure as fixes-cleared ÷ findings
+    with that basis named. NO "% effort saved" and NO "cleared ÷ attempted" — the attempted
+    denominator is not tracked (only re-scan-cleared fixes are recorded), so that ratio is
+    omitted, not invented (ADR 0016). Omitted entirely when nothing was reviewed, remediated or
+    evaluated.
 
     hitl: optional hitl_analytics() result — adds avg review time (if real timestamps) and the
     edited-draft count (how many approved reviews included a human correction to the AI text)."""
@@ -787,7 +788,10 @@ def _assurance_section(facts, h2, body, cell, muted, hitl=None) -> list:
     docs = f.get("documents") or []
     evaluated = sum(d.get("evaluated", 0) for d in docs)
     findings = sum(d.get("findings", 0) for d in docs)
-    auto = ((f.get("scope") or {}).get("by_mode") or {}).get("auto", 0)
+    by_mode = ((f.get("scope") or {}).get("by_mode") or {})
+    auto = by_mode.get("auto", 0)
+    ai_ct = by_mode.get("ai-assisted", 0)
+    human_only = by_mode.get("human-only", 0)
     remediated = f.get("remediated_total", 0)
     reviewed = review.get("reviewed", 0)
     if not reviewed and not remediated and not evaluated:
@@ -809,13 +813,23 @@ def _assurance_section(facts, h2, body, cell, muted, hitl=None) -> list:
     ], [])
     el.append(band)
     el.append(Spacer(1, 8))
-    # R10 — deterministic assurance ratio, on a real denominator.
-    if evaluated:
+    # R10 — deterministic / AI-assisted / human-only split as a stat band.
+    mode_total = auto + ai_ct + human_only
+    if mode_total:
+        el.append(_stat_band([
+            Paragraph(f'<font size="18" color="#3B6D11"><b>{auto}</b></font><br/>'
+                      f'<font size="8.5" color="#6c6470">criteria — deterministic engine</font>', body),
+            Paragraph(f'<font size="18"><b>{ai_ct}</b></font><br/>'
+                      f'<font size="8.5" color="#6c6470">criteria — AI-assisted</font>', body),
+            Paragraph(f'<font size="18" color="#9a948f"><b>{human_only}</b></font><br/>'
+                      f'<font size="8.5" color="#6c6470">criteria — human review only</font>', body),
+        ], []))
+        el.append(Spacer(1, 4))
         el.append(Paragraph(
-            f"<b>Assurance.</b> <b>{auto}</b> of <b>{evaluated}</b> evaluated criteria "
-            f"(<b>{round(100 * auto / evaluated)}%</b>) were decided by the deterministic engine; "
-            "the rest used AI-assisted review a person can confirm. Every remediation counted here "
-            "re-cleared the post-fix re-scan.", muted))
+            "<b>Assurance basis.</b> Deterministic criteria are structural or attribute checks "
+            "the engine decides without AI; AI-assisted criteria use model judgment a person can "
+            "confirm; human-review criteria require a person to assess. Every remediation counted "
+            "here re-cleared the post-fix re-scan.", muted))
     # R9 effort — only as the honest ratio, basis named; never a modelled time saving.
     if findings:
         edited_clause = (f" Of the approved reviews, <b>{edited}</b> included human edits to the AI draft."
