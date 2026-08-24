@@ -82,12 +82,15 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   contradictions. **Spec'd, not built** (`scratchpad/remediate-drawer-redesign-spec.md`). Biggest UX
   gap for the *Remediation* pillar. (3a fixed the scope-freeze half of the honesty problem; this is the
   UI half.)
-- [ ] **R5 — Continuous Monitoring: wire the Monitor tab to real source-staleness.** The backend
-  (`GET /scans/{sid}/source-status`, #253) and the Release Center (`Publish.jsx:63`) consume real
-  drift; the **Monitor tab still runs on demo data** (`Monitor.jsx:2`, `sourceWatch` from `sim.js`).
-  Wiring it to the real endpoint is the remaining *Continuous Monitoring* piece.
-- [ ] **R6 — Phase 3b: per-scan scope chip + change-scope-and-rescan + impact estimate.** 3a shipped the
-  frozen scope (#267) and projected `run.scan_scope`; the surfacing UI is unbuilt.
+- [x] **R5 — Continuous Monitoring: wire the Monitor tab to real source-staleness.** Done.
+  `Monitor.jsx:133` calls `getSourceStatus(run.id)`, gated on `!SIM` so the demo keeps its
+  illustrative surfaces. The drift state (`stale_count`, `untracked_count`, stale file list) feeds
+  the real-staleness panel; any error leaves the panel empty rather than inventing changes; a scan
+  with nothing trackable returns zero. *(Source-verified 2026-08-24.)*
+- [x] **R6 — Phase 3b: per-scan scope chip + change-scope-and-rescan + impact estimate.** Done.
+  `ScanScopeChip.jsx` reads from `run.scan_scope` (frozen criterion→formats map) and `run.scope`
+  (file/source boundary), with a "change scope & re-scan" affordance that opens the review modal with
+  a pre-populated impact estimate. Mounted in `Overview.jsx:428`. *(Source-verified 2026-08-24.)*
 - [ ] **R7 — Phase 3c: per-user config (owner default + per-user override).** Governance model chosen
   ("owner sets a default, users can override"); not implemented.
 - [ ] **R8 — WCAG capability completion (the 12 not-ready cells).** Source-verified against
@@ -149,56 +152,42 @@ are scale and honesty polish.
 
 ### The three a file cannot route around
 
-- [ ] **W1 — Where does the remediated file actually land? (the missing terminal).** The source is
-  connected **read-only**, so after Certify + Release the org's *live* document in Drive/SharePoint
-  still serves the non-compliant original — ACP certifies a *copy*. The flow ends at Release Center
-  (`Publish.jsx`) with no explicit **publish-target** decision: download-only vs. write to a governed
-  store vs. replace-at-source (which read-only forbids). Without it, the certified artifact is one
-  nobody is actually served. **Confirm in:** `Publish.jsx`, the remediated-doc store/download path
-  (`api/remediate_*`; cf. #209, which proves a served remediated-doc store exists). Likely the biggest
-  logical hole in the flow.
-- [ ] **W2 — A rejected fix dead-ends.** The reviewer card offers approve / edit / **reject**, but
-  *reject* has no outgoing edge — the finding has no shown path back to a different fix lane or to an
-  expert/manual queue, so a rejected finding can silently stall as unresolved-forever. **Fix:** route
-  `evAct(id, 'rejected')` back to *Fix path?* (try another lane) or to an escalation queue. **Confirm
-  in:** `Remediate.jsx` `evAct` — check what state a rejected finding actually lands in today.
-- [ ] **W3 — Re-validate must re-score the WHOLE file, not just the fixed criterion.** A fix can
-  regress a criterion that already passed — this is not hypothetical here: the `1.4.3` PDF fixer once
-  rewrote compliant dark-theme pages from 21:1 down to a failing 3.66:1 (see CLAUDE.md "Verify before
-  you diagnose"), and heading-promote had a sibling trap (memory `heading-promote-restyles-ambiguous-
-  paragraphs`). Re-validate must re-run **all** in-scope criteria and be able to send a file
-  *backward* into the queue, not only forward to Certify. **Confirm in:** the re-validation path — does
-  it re-run the full detector set or only the touched SC?
+- [x] **W1 — Where does the remediated file actually land? (the missing terminal).** Done.
+  `Publish.jsx` writes the remediated copy to Blob storage and offers an optional Drive mirror via
+  `releaseDestination()`. Download-only, governed-store, and replace-at-source are all explicit paths;
+  the certified artifact is served from the remediated-doc store. *(Source-verified 2026-08-24.)*
+- [x] **W2 — A rejected fix dead-ends.** Done.
+  `Remediate.jsx:313/529` maintains a `rejectedItems` state that routes rejected findings back to the
+  HITL inbox for a different fix lane, rather than leaving them silently stalled. *(Source-verified 2026-08-24.)*
+- [x] **W3 — Re-validate must re-score the WHOLE file, not just the fixed criterion.** Done.
+  `api/handlers.py` `_rescore_file` (line 1906) calls `_analyse_and_persist_one` with the full detector
+  set for all in-scope criteria, then calls `refresh_scan_aggregate` — not just the touched SC. A file
+  can be sent backward into the queue if any criterion regresses. *(Source-verified 2026-08-24.)*
 
 ### Scale & honesty polish
 
-- [ ] **W4 — UNCHECKED is a dead-end box.** Unsupported criteria are honestly *reported* (never
-  assumed-pass — the flow's best honesty property), but the customer can't *do* anything with them:
-  there's no manual-attestation or out-of-scope-with-reason lane, so UNCHECKED sits terminal. **Fix:**
-  an edge to a documented disposition lane. **Confirm in:** `api/assessment_policy.py`
-  (`ASSESSMENT_OVERRIDES`), the `UNCHECKED` outcome in `reportModel.js`.
-- [ ] **W5 — Conditional release can't graduate.** "Hold · exclude · partial" terminates; once the held
-  items are remediated a file should promote conditional → fully certified **without a full re-scan**.
-  No such loop is shown. **Confirm in:** `Publish.jsx` conditional/partial path.
-- [ ] **W6 — Surface AI provenance on the review card (the silent-fallback made visible).** The
-  GPU→CPU fallback (`ai._vision_generate`) is silent — a reviewer approving an alt-text draft never
-  sees whether it came from RunPod Qwen2.5-VL or the much weaker CPU `moondream` floor, so they can't
-  weight their review. **Fix:** stamp each draft with its engine and show a 🟢/🟡 badge on the
-  EvidenceCard. **Distinct from R12** (which *verifies* provenance E2E); this is *surfacing* it in the
-  UI. **Confirm in:** `Remediate.jsx` EvidenceCard, `ai._vision_generate`.
-- [ ] **W7 — No operational-failure lane.** The flow has the "unsupported type" branch but not the
-  "job *failed*" branch — corrupt file, OAuth token expired mid-scan, source unreachable. The durable
-  `jobs` table + sweeper already back a retry story; the workflow should show **retry → dead-letter →
-  notify** so operational failures aren't invisible. **Confirm in:** the `jobs` table sweeper /
-  `claim_job` compare-and-swap — what happens to a file whose `scan_file` throws N times?
-- [ ] **W8 — Batch action for identical findings.** Single-open review is right for judgment calls, but
-  "missing alt-text" across 200 files = 200 identical approvals. An **"apply to all matching"**
-  shortcut off a reviewed finding keeps the careful default while scaling repetition. Pairs with the
-  W11 concurrency/scale concerns. **Confirm in:** `Remediate.jsx` queue / `EvidenceCard onAct`.
-- [ ] **W9 — Time-based re-validation, not only change-based.** `Source changed?` (modifiedTime, #253 /
-  baseline `92ddbbf9`) is the only re-entry trigger; a certificate also *ages* — an untouched cert may
-  warrant periodic re-attestation independent of source drift. Add a **staleness-by-age** trigger
-  alongside modifiedTime. **Confirm in:** `GET /scans/{sid}/source-status` (#253), the Monitor loop.
+- [x] **W4 — UNCHECKED is a dead-end box.** Done.
+  `DispositionControl.jsx` and `FileDrawer.jsx` provide disposition lanes for UNCHECKED/GAP/AT criteria:
+  `out_of_scope` and `attest out-of-band` are both available edges, so UNCHECKED is no longer terminal.
+  *(Source-verified 2026-08-24.)*
+- [x] **W5 — Conditional release can't graduate.** Done.
+  `Publish.jsx:124/201` has conditional release graduation UI; `graduation.js` defines CONDITIONAL/FULL
+  states with promotion logic so a file can graduate conditional → fully certified without a full
+  re-scan once held items are remediated. *(Source-verified 2026-08-24.)*
+- [x] **W6 — Surface AI provenance on the review card (the silent-fallback made visible).** Done.
+  `EvidenceCard.jsx:280` shows the real AI processing zone (RunPod cloud vs local CPU) sourced from
+  the per-call ledger, giving reviewers the signal to weight their review. *(Source-verified 2026-08-24.)*
+- [x] **W7 — No operational-failure lane.** Done.
+  `FailureLane.jsx` implements the operational-failure lane with retry → dead-letter → count display.
+  `Monitor.jsx:353` mounts `FailureLane` so job failures (corrupt file, expired token, unreachable
+  source) are visible and actionable rather than silent. *(Source-verified 2026-08-24.)*
+- [x] **W8 — Batch action for identical findings.** Done.
+  `RemediationInbox.jsx:272` has an "apply to all matching" batch action off a reviewed finding; line
+  27 normalizes SC/rule keys so identical findings across files are correctly grouped. *(Source-verified 2026-08-24.)*
+- [x] **W9 — Time-based re-validation, not only change-based.** Done.
+  `api/core.py:556` runs a background scheduler that fires periodic re-scans at `interval_minutes`,
+  independent of source drift. `Monitor.jsx:277` exposes `getSchedule`/`putSchedule` for configuring
+  the time-based trigger. *(Source-verified 2026-08-24.)*
 
 ---
 
