@@ -157,6 +157,8 @@ jobs:
           # redeploy.sh resolves again and that is fine — resolving a full sha is a no-op.
           ACP_PIN: ${{ steps.pin.outputs.sha }}
           ACP_BLUE_GREEN: ${{ inputs.blue_green && '1' || '0' }}
+          # Ordinal hint for the CalVer fallback (see deploy-staging.yml for full rationale).
+          ACP_BUILD_SEQ: ${{ github.run_number }}
         run: bash deploy/public/redeploy.sh
 
       # Independent of the script's own verification, and deliberately so: the script asserts the

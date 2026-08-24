@@ -146,9 +146,13 @@ SEQ="$(printf '%s\n' "$REV_TIMES" \
        | awk -v cutoff="${DAY_START_UTC:0:19}" 'length($0) >= 19 && substr($0,1,19) >= cutoff' \
        | wc -l | tr -d ' ')"
 BUILD_VERSION="${BUILD_DATE}.$(( SEQ + 1 ))"
-# Fallback: seconds since Pacific midnight — monotonic within the day and independent of Azure,
-# so a throttled revision query never stamps a duplicate ordinal.
-[ -n "$REV_TIMES" ] || BUILD_VERSION="${BUILD_DATE}.${DAY_SECS}"
+# Fallback when the revision query returns nothing (throttled, permissions, or a brand-new app
+# with no revision history yet). Prefer ACP_BUILD_SEQ when the caller sets it — the CI workflows
+# pass GITHUB_RUN_NUMBER, which is a small per-workflow counter that produces the same N ≈ 1-50
+# ordinal format as the normal revision count. Fall back to DAY_SECS (seconds since Pacific
+# midnight) when running locally without that variable, which keeps the fallback monotonic and
+# independent of any external service.
+[ -n "$REV_TIMES" ] || BUILD_VERSION="${BUILD_DATE}.${ACP_BUILD_SEQ:-$DAY_SECS}"
 say "CalVer $BUILD_VERSION  (built $BUILD_TIME)"
 
 # ── 5. bases, rebuilt only when their inputs change ────────────────────────────────────────

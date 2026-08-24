@@ -115,6 +115,12 @@ jobs:
           ACP_RG: ${{ vars.STAGING_RG || 'mdk-accessibility' }}
           ACP_APP: ${{ vars.STAGING_APP || 'acp-app-staging' }}
           ACP_WORKER: ${{ vars.STAGING_WORKER || 'acp-worker-staging' }}
+          # Ordinal hint for the CalVer fallback. redeploy.sh counts Azure Container App
+          # revisions for today to derive the N in YYYY.M.D.N; when that query returns empty
+          # (throttled, new app with no prior revisions, etc.) it falls back to ACP_BUILD_SEQ
+          # rather than seconds-since-midnight, keeping the version format consistent with prod.
+          # GITHUB_RUN_NUMBER is per-workflow, so it starts at 1 and stays small.
+          ACP_BUILD_SEQ: ${{ github.run_number }}
         run: bash deploy/public/redeploy.sh
 
       - name: Confirm staging reports the new build
