@@ -21,6 +21,7 @@ import { scopeChip, scopeSentence, isNarrowScope } from './scanScope.js'
 import ScanScopeChip from './ScanScopeChip.jsx'
 import EstateCoverage from './EstateCoverage.jsx'
 import AssessmentReconciliation from './AssessmentReconciliation.jsx'
+import EstateProgressPanel from './EstateProgressPanel.jsx'
 import { reconcileBuckets } from './estateFunnel.js'
 import { reconciliationInputs } from './reconciliationInputs.js'
 import { assessMetrics, coverageSentence, SEVERITIES, SEVERITY_LABEL } from './assessMetrics.js'
@@ -443,6 +444,22 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           mutually exclusive buckets and prints the addition, so the gap is auditable instead of
           plausible. Self-guarding: it renders nothing at all without an inventory to partition. */}
       <AssessmentReconciliation run={run} files={files} />
+
+      {/* ── ESTATE PROGRESS — funnel, doc-types, and pending work. Rendered from the same inventory
+             the reconciliation panel above uses so the numbers stay consistent. Grows in when there
+             is any estate data (discovered or files). Hidden behind null-return inside the component
+             when neither inventory nor files exist yet. */}
+      <EstateProgressPanel
+        inventory={run.scope?.inventory}
+        analysed={analysed}
+        needFix={needFix}
+        certifiable={run.certifiable}
+        published={publish}
+        errorCount={run.error}
+        files={files}
+        estateFiles={estateFiles}
+        onGo={onGo}
+      />
 
       {/* ── ASSESSMENT — the section that grows in once documents have actually been assessed.
              Below discovery, above the detailed findings charts. Before a run it is a prompt, not an
