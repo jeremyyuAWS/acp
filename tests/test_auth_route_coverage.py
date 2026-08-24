@@ -58,6 +58,8 @@ def test_every_api_route_is_auth_gated_or_intentionally_public():
             continue
         if path.startswith("/scans/") and "/trace/" in path:
             continue  # Langfuse redirect targets — documented public carve-out
+        if path.startswith("/public/"):
+            continue  # R15 verify-this-report — intentionally unauthenticated
         if core.is_public(path):
             uncovered.append(path)
     assert not uncovered, (

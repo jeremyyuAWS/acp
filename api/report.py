@@ -190,6 +190,85 @@ def _content_digest(run: dict, files: list, meta: dict) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
+def _qr_flowable(data: str, pts: int = 72) -> Image:
+    """Render `data` as a QR code and return a reportlab Image flowable.
+
+    Uses segno (pure-Python, no C extension). Falls back to a 1×1 transparent PNG
+    so a missing/broken segno install degrades gracefully rather than failing the
+    whole report export.
+    """
+    import io as _io
+    try:
+        import segno
+        buf = _io.BytesIO()
+        segno.make(data, error="M").save(buf, kind="png", scale=4, border=2)
+        buf.seek(0)
+        return Image(buf, width=pts, height=pts)
+    except Exception:
+        # 1×1 transparent PNG — minimal fallback so the page still builds
+        _px = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+               b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+               b"\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
+               b"\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
+        return Image(_io.BytesIO(_px), width=pts, height=pts)
+
+
+def _verify_section(scan_id: str, digest: str, h2, body, note) -> list:
+    """R15 — 'Verify this report' block appended at the end of the PDF.
+
+    The QR code encodes a URL when ACP_PUBLIC_URL is configured, or a plain
+    `acp://verify/{scan_id}?digest={digest}` URI when it is not (offline / private
+    deploy). The note below the QR explains both uses so an auditor knows what to do
+    with it without reading the docs.
+    """
+    el = []
+    try:
+        import core as _core
+        base = _core.PUBLIC_URL
+    except Exception:
+        base = ""
+
+    if base:
+        verify_url = f"{base}/public/verify/{scan_id}"
+        qr_label = verify_url
+        instruction = (
+            f"Scan the QR code or visit <b>{_esc(verify_url)}</b> to fetch the "
+            "machine-readable scan record and recompute the digest below independently."
+        )
+    else:
+        verify_url = f"acp://verify/{scan_id}?digest={digest}"
+        qr_label = verify_url
+        instruction = (
+            "No public URL is configured for this deployment. The QR code encodes a "
+            f"<b>acp://verify/{_esc(scan_id)}</b> URI — use it with the ACP CLI or "
+            "supply ACP_PUBLIC_URL to generate a live link instead."
+        )
+
+    el.append(Paragraph("Verify this report", h2))
+    qr_img = _qr_flowable(qr_label, pts=80)
+    digest_para = Paragraph(
+        f"Content digest (SHA-256): <b>{digest}</b><br/>"
+        f"Scan ID: <b>{_esc(scan_id)}</b><br/><br/>"
+        + instruction,
+        note)
+    row = Table([[qr_img, digest_para]], colWidths=[1.2 * inch, 5.9 * inch])
+    row.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (0, 0), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    el.append(row)
+    el.append(Spacer(1, 4))
+    el.append(Paragraph(
+        "The digest is a SHA-256 over the canonical scan payload (scan ID, rubric hash, "
+        "conformance target, per-file score/compliance/failing criteria). It is stable "
+        "across re-exports of the same scan: recompute it from the stored scan and compare "
+        "to detect any alteration. This is a tamper-evidence digest, not a digital signature — "
+        "there is no signing key and it provides no non-repudiation.", note))
+    return el
+
+
 def _esc(s) -> str:
     """Escape for reportlab's mini-HTML paragraph markup; bound the length."""
     if s is None or s == "":
@@ -1403,6 +1482,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
         "nothing about either of the last two. "
         "Severity follows the axe-core impact model (user impact × reach × WCAG level). "
         "Results are reproducible from the stamped rubric hash above.", note))
+
+    # ── Verify this report (R15) ─────────────────────────────────────────────
+    el.extend(_verify_section(run["id"], _content_digest(run, files, meta), h2, body, note))
 
     doc.build(el, onFirstPage=_footer, onLaterPages=_footer)
     return buf.getvalue()

@@ -135,6 +135,9 @@ ADMIN_EMAILS = {
 # move-or-trash (disposition approve/execute). Set ACP_OPEN_ACCESS=0 to restore role-based admin
 # (owner + ACP_ADMIN_EMAILS + owner-promoted store admins).
 OPEN_ACCESS = os.environ.get("ACP_OPEN_ACCESS", "1").strip().lower() not in ("0", "false", "no", "off")
+# Public base URL for the verify-this-report QR code (R15). When set, the PDF embeds a QR pointing
+# to {PUBLIC_URL}/public/verify/{scan_id}. When unset the QR encodes a plain scan-id URI instead.
+PUBLIC_URL = os.environ.get("ACP_PUBLIC_URL", "").rstrip("/")
 
 
 def is_owner(email: str | None) -> bool:
@@ -485,6 +488,9 @@ def is_public(path: str) -> bool:
     # target — no auth header — so it must be public; it only 302s to a Langfuse deep
     # link. Matches singular "/trace/", NOT the authed "/traces" JSON endpoint.
     if path.startswith("/scans/") and "/trace/" in path:
+        return True
+    # R15 verify-this-report endpoint: anyone can check a scan's digest without signing in.
+    if path.startswith("/public/"):
         return True
     if _matches_a_protected_route(path):
         return False
