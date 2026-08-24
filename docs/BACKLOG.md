@@ -568,10 +568,12 @@ thing the PRD does not mention.
   and FAIL thresholds asymmetric, and note that each bucket needs its own *n* before it means
   anything.
 
-- [ ] **P4.7 — Reproducibility metadata on every recorded result.** (PRD §26.) Model, revision,
+- [~] **P4.7 — Reproducibility metadata on every recorded result.** (PRD §26.) Model, revision,
   quantisation, runtime, prompt version, fixture version, hardware, temperature, seed.
-  `judge_drafts.py` already records its shuffle seed; nothing else records anything. Cheap now,
-  impossible to backfill.
+  Phase 1 done — PR #693: `proposal()` factory now stores a structured `_model` key alongside
+  the prose `source`; `judge_drafts.py --out` wraps results as `{"metadata": {"seed", "judges",
+  "run_at"}, "results": [...]}`. Remaining: `temperature` + `prompt_version` columns in
+  `ai_calls` (needs schema migration).
 
 - [x] **P4.8 — Reviewer hand-off payload.** Done. When ACP escalates it now hands the reviewer the
   SC, the object, the deterministic evidence, the reason for uncertainty (`why_review`) and the
