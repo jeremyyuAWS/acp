@@ -188,7 +188,7 @@ class OllamaVisionProvider:
             r = httpx.post(
                 f"{self.base_url}/api/generate",
                 json={"model": mdl, "prompt": prompt, "images": [b64],
-                      "stream": False, "options": {"temperature": 0.2, "num_predict": 128}},
+                      "stream": False, "options": {"temperature": 0.2, "num_predict": 200}},
                 headers=_ai._OLLAMA_HEADERS,
                 timeout=timeout,
             )
