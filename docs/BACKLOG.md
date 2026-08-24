@@ -561,12 +561,14 @@ thing the PRD does not mention.
   `formats.office.images`. Compare full-page render / object crop / crop + context / crop +
   deterministic evidence / all of it. Blocked on nothing.
 
-- [ ] **P4.4 — Independent verification: the generator must not approve its own remediation.**
-  (PRD §20.) Cheap, high safety value, and needs no policy change to *measure*. Prefer
-  deterministic verification wherever it is complete — 3.1.2 is fully closable today (set
-  `w:lang`, re-run langdetect on the span, no model prose trusted), 2.4.4 is partial (uniqueness
-  yes, accuracy-to-target no), and 1.1.1 is not verifiable at all, which is the asymmetry that
-  matters: **a wrong alt does not merely fail, it silences the detector.**
+- [x] **P4.4 — Independent verification: the generator must not approve its own remediation.**
+  (PRD §20.) Done for 3.1.2 — the only criterion where the check is complete today. Added
+  `proposals.verify_language_part(segment_text, proposed_lang)` as a separate verifier step
+  (re-runs `detect_langs` independently of the generator); wired at the 3.1.2 enqueue call in
+  `handlers._propose_text_findings` so proposals that pass set `validated=True` on the queue
+  row, and two regression tests cover agreement and rejection. 2.4.4 (uniqueness yes,
+  accuracy-to-target no) and 1.1.1 (not verifiable — a wrong alt silences the detector)
+  remain human-review-only. *(Source-verified 2026-08-24.)*
 
 - [ ] **P4.5 — Extend the adversarial fixtures.** (PRD §13/§14.) Partially built:
   `gen_sc_corpus.py` already carries decorative-that-looks-informative, logo-vs-image-of-text,

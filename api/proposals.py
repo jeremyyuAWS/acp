@@ -408,6 +408,29 @@ def propose_language_parts(text: str) -> list[dict]:
     return out
 
 
+def verify_language_part(segment_text: str, proposed_lang: str) -> bool:
+    """P4.4 independent verifier for a single 3.1.2 proposal.
+
+    Re-runs detect_langs on `segment_text` — separately from the generator — and returns
+    True only when the top result matches `proposed_lang` above the detector's own
+    confidence threshold. A generator bug that mis-assigns a language code fails here
+    before the proposal reaches the review queue.
+
+    Returns False when langdetect is unavailable, the text is empty, or the re-detection
+    disagrees with the proposed code."""
+    if not segment_text or not proposed_lang:
+        return False
+    try:
+        import textchecks as _tc
+        if not _tc._langdetect_available():
+            return False
+        from langdetect import detect_langs
+        res = detect_langs(segment_text)
+        return bool(res and res[0].lang == proposed_lang and res[0].prob >= _tc._MIN_CONF)
+    except Exception:
+        return False
+
+
 def _despace_ocr(seg: str) -> str:
     """Collapse OCR letter-spacing artifacts ("t r i mest r i el") so language detection can
     work on text rendered inside images. When most tokens are 1–2 chars the spaces carry no

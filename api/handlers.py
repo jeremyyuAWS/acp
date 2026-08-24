@@ -305,8 +305,18 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
         return
     if text:
         try:
-            _enqueue_proposals(scan_id, filename, "3.1.2", "Language of Parts",
-                               _prop.propose_language_parts(text))
+            # P4.4 — independent verification gate: re-run detect_langs on each proposed span
+            # before it reaches the queue. 3.1.2 is fully verifiable (langdetect, seed-fixed)
+            # so proposals that pass get validated=True; any that fail the re-check are still
+            # enqueued but stay validated=False. One call to _enqueue_proposals — the store
+            # replaces on conflict, so two calls would discard the first batch.
+            _lang_props = _prop.propose_language_parts(text)
+            if _lang_props:
+                _all_verified = all(
+                    _prop.verify_language_part(p["before"], p["proposed_value"])
+                    for p in _lang_props)
+                _enqueue_proposals(scan_id, filename, "3.1.2", "Language of Parts",
+                                   _lang_props, validated=_all_verified)
         except Exception:
             pass
         try:
