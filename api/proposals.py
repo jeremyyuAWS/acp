@@ -81,7 +81,8 @@ from urllib.parse import unquote, urlparse
 
 
 def proposal(locator, before, proposed_value, rationale, source, thumb=None, kind=None,
-             explain_only=False, sc=None, why_review=None, context=None) -> dict:
+             explain_only=False, sc=None, why_review=None, context=None,
+             model: str | None = None) -> dict:
     """One review card's worth of state.
 
     `why_review` and `context` exist because of what a reviewer was previously NOT told. A card
@@ -123,6 +124,11 @@ def proposal(locator, before, proposed_value, rationale, source, thumb=None, kin
         # Left optional rather than required so the existing callers keep working unchanged; the
         # default lives in the consumer, next to the routing decision it feeds.
         p["sc"] = sc
+    if model:
+        # Structured model name alongside the prose `source`. The prose field is human-readable
+        # and already embedded in many callers; this key is machine-readable and stable enough
+        # to join against ai_calls records or the bench_models output.
+        p["_model"] = model
     return p
 
 

@@ -55,6 +55,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import random
@@ -245,8 +246,19 @@ def main() -> int:
               f"{statistics.mean(s['usefulness'] for s in ss):>9.2f}{len(ss):>5}")
 
     if args.out:
+        # Wrap results with metadata so the shuffle seed, judge models, and run timestamp are
+        # machine-readable alongside the items — not lost in terminal scrollback. The seed is
+        # what makes a shuffle repeatable; without it the order is unrecoverable post-hoc.
+        out_doc = {
+            "metadata": {
+                "seed": args.seed,
+                "judges": judges,
+                "run_at": datetime.datetime.utcnow().isoformat() + "Z",
+            },
+            "results": items,
+        }
         _guard(args.out.parent).joinpath(args.out.name).write_text(
-            json.dumps(items, indent=2) + "\n")
+            json.dumps(out_doc, indent=2) + "\n")
         print(f"\nwrote {args.out}")
     return 0
 

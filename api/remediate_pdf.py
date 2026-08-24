@@ -203,6 +203,7 @@ def _propose_reading_order(pdf, source_path: str, *, ai_enabled: bool, scan_id, 
         rationale="AI read the page layout and proposed a reading order — confirm it matches the intended flow",
         source=f"AI vision model ({res['model']})",
         kind="reading-order",
+        model=res.get("model"),
         # The confirmed order is the re-authoring instruction and the evidence of what the
         # order should be — "page 1" addresses no writable object and apply_pdf_approved
         # routes only pdf:fig:/pdf:field:. Unflagged, confirming this card would count as

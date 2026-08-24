@@ -613,6 +613,7 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
             source=f"AI vision model ({res['model']})",
             thumb=_thumb_b64(img),
             sc="1.1.1",
+            model=res.get("model"),
             # The reason this is a proposal and not an applied fix, stated rather than implied.
             # Every branch above this one auto-applied because it had an anchor — the image's own
             # OCR text, or an independent second reading that agreed. This branch has neither, so
@@ -1399,6 +1400,7 @@ def _draft_docx_assisted(entries: dict, path: Path, proposals: list | None, *,
             locator=locator, before=before, proposed_value=value,
             rationale=f"drafted from the surrounding text by {out.get('model', 'the local model')}",
             source=source, sc=sc,
+            model=out.get("model"),
             # Why a human, stated rather than implied — the same gap the 1.1.1 cards had. These
             # criteria are assessed but never auto-applied: the draft rewrites the AUTHOR'S prose,
             # and only the author knows what the sentence was for. That is a different reason from
