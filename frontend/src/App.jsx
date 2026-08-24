@@ -337,11 +337,13 @@ export default function App() {
         if (!a?.id) return
         await refreshDriveToken()
         await refreshScanDriveToken(a.id)
-      } catch { /* best-effort keep-alive */ }
+        setTokenRefreshError(null)
+      } catch { setTokenRefreshError('Google Drive session may have expired — files added since then may be skipped. Reconnect Drive to continue.') }
     }, 20 * 60 * 1000)
     return () => clearInterval(iv)
   }, [hasDriveToken])
   const [hasSPToken, setHasSPToken] = useState(() => !!sessionStorage.getItem('sp_token'))
+  const [tokenRefreshError, setTokenRefreshError] = useState(null)
 
   // Keep a long-running SharePoint scan's MSAL token fresh. Mirrors the Drive keep-alive above.
   // Best-effort; no-op without MSAL configured or without an active SharePoint session.
@@ -354,7 +356,8 @@ export default function App() {
         const tok = await refreshSPToken()
         setSPToken(tok)
         await refreshScanSPToken(a.id)
-      } catch { /* best-effort keep-alive */ }
+        setTokenRefreshError(null)
+      } catch { setTokenRefreshError('SharePoint session may have expired — files added since then may be skipped. Re-sign in to SharePoint to continue.') }
     }, 20 * 60 * 1000)
     return () => clearInterval(iv)
   }, [hasSPToken])
@@ -1142,6 +1145,20 @@ export default function App() {
           }}>sign out</button>
         </div>
       </header>
+      {tokenRefreshError && (
+        <div role="alert" style={{
+          background: '#fffbeb', borderBottom: '2px solid #f59e0b',
+          padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 10,
+          fontSize: 14, color: '#78350f',
+        }}>
+          <span aria-hidden="true">⚠️</span>
+          <span style={{ flex: 1 }}>{tokenRefreshError}</span>
+          <button onClick={() => setTokenRefreshError(null)} aria-label="Dismiss session warning"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: '#92400e', lineHeight: 1, padding: '0 4px' }}>
+            ✕
+          </button>
+        </div>
+      )}
       {me.scope && <div className="scopebar"><i className="scopedot" />access scope · <b>{me.scope}</b></div>}
       {isStaging && (
         <div role="status" style={{
