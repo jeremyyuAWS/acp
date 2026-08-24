@@ -127,3 +127,58 @@ backward compatibility: treat the rubric as append-only and version any change t
 - **Scan size.** A single scan is capped (`_search_drive` 500, `_search_folder`
   1000 files) and stages every file to the container's ephemeral disk. Thousands
   of files per scan needs higher caps, streaming, and a larger scan container.
+
+## 6. Blue/green deployment
+
+Azure Container Apps supports traffic-splitting via ingress weights, making blue/green a natural
+fit for ACP.
+
+**What fits well:**
+
+- **Traffic splitting** — route 0% to the green revision until healthy, then flip to 100% with
+  `az containerapp ingress traffic set`. The switch is near-instant and requires no DNS change.
+- **Shared Postgres** — state is already separated from the app tier, so a rollback is just a
+  traffic shift; no data is lost or replayed.
+- **Worker queue in Postgres** — in-flight scans are not lost during the switch. Workers on
+  either revision drain the same queue; outstanding items complete on whichever side picked them
+  up.
+
+**Watch out for:**
+
+- **Schema migrations** — if a deploy includes a migration, both revisions must handle the new
+  schema simultaneously. This constrains you to additive-only changes (new columns with defaults,
+  new tables, new indexes) until the blue revision is fully drained. Never rename or drop a column
+  while blue is still receiving traffic.
+- **Redis session tokens** — both revisions must share the same Redis instance so sessions
+  started on blue remain valid on green. If `REDIS_URL` is not configured, tokens are in-process
+  and blue sessions will break the instant blue is drained. Set `REDIS_URL` before enabling
+  blue/green.
+- **WebSocket/SSE scan-progress** — the sticky-session ingress rule pins a user to the revision
+  that started their scan. Drain blue gracefully (set its weight to 0 and wait for in-progress
+  SSE streams to close) rather than killing it immediately; otherwise users watching a scan lose
+  their live-update stream mid-scan.
+
+**Recommended setup:**
+
+```
+# Deploy new revision as green, send it 0% traffic
+az containerapp revision copy --name acp --resource-group <rg> --revision-suffix green
+
+# Smoke-test green (healthz, a test scan) while blue handles 100%
+az containerapp ingress traffic set --name acp --resource-group <rg> \
+  --revision-weight acp--green=0 acp--blue=100
+
+# Cut over
+az containerapp ingress traffic set --name acp --resource-group <rg> \
+  --revision-weight acp--green=100 acp--blue=0
+
+# Keep blue warm for instant rollback (1 replica, no traffic)
+az containerapp revision activate --name acp --resource-group <rg> --revision acp--blue
+```
+
+Set `minReplicas: 1` on the blue revision while it is on standby — this keeps it warm for a
+sub-second rollback without consuming the full auto-scaled capacity. Deactivate it (or set
+`minReplicas: 0`) once green has been stable for your confidence window.
+
+**Backlog:** add a `deploy/blue-green.sh` script that codifies the above steps, runs the
+healthcheck against green before cutting over, and falls back automatically on a non-200 response.
