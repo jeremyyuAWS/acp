@@ -46,6 +46,10 @@ deploy/public/vendor/
 # (ADR 0012); only this full working clone stays ignored.
 digital-accessibility/
 
+# Isolated git worktrees created by Claude Code sessions — each is a full checkout,
+# not source files.
+.claude/worktrees/
+
 # Session worktrees. CLAUDE.md makes `git worktree` under this path the standard way to isolate
 # concurrent work here, so every session that follows the rule leaves a full second checkout in
 # this directory — plus whatever node_modules it installed to run the frontend suite.
