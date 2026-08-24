@@ -231,9 +231,6 @@ REMEDIATION: dict[str, dict[str, str]] = {
     "pptx": {
         "1.1.1": ASSISTED,
         "1.3.1": AUTO,       # multi-row tables get firstRow="1" (_pptx_mark_table_headers) — round-trip proven
-        "1.4.1": HUMAN,      # use of colour — hyperlink underline removed (colour-only link), flagged
-                             # for REVIEW by office_color_only_checks. No write-back restores the
-                             # underline in DrawingML runs, so a person re-styles each link.
         "1.4.2": ASSISTED,   # auto-starting audio — exact play-on-click card, human elects
         "1.3.2": AUTO,       # shapes reordered to visual top-to-bottom reading order
         "1.3.3": ASSISTED,
