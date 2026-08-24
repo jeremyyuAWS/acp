@@ -34,7 +34,10 @@ the report's core honesty guarantee.
 """
 from __future__ import annotations
 import io
+import logging
 from pathlib import Path
+
+_LOG = logging.getLogger(__name__)
 
 from reportlab.graphics.charts.barcharts import HorizontalBarChart
 from reportlab.graphics.charts.piecharts import Pie
@@ -273,11 +276,14 @@ def _esc(s) -> str:
     """Escape for reportlab's mini-HTML paragraph markup; bound the length."""
     if s is None or s == "":
         return "—"
-    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))[:400]
+    escaped = str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    if len(escaped) > 2000:
+        return escaped[:2000] + "…"
+    return escaped
 
 
 def _decision_block(run, files, meta, facts, h2, body, muted) -> list:
-    """What ACP checked, fixed and verified (backlog R2/R3).
+    """What ACP checked, fixed and verified (R2/R3).
 
     Answers, before anything else, the question a reader actually has: what was done to these
     documents, and what is still open? Every figure is COUNTED from stored rows; the digest is
@@ -545,6 +551,11 @@ _MANUAL_VERIFY = {
             "Windows / VoiceOver on macOS)",
             "Confirm the document is Tagged and declares a Title, a Language and a logical reading "
             "order; with a screen reader, confirm headings and alt text are announced."),
+    "HTML": ("Browser DevTools → Accessibility panel, or install the axe DevTools extension "
+             "(Chrome/Edge/Firefox)",
+             "Confirm every image has a non-empty alt attribute, form inputs have associated labels, "
+             "the page has a main landmark, headings form a logical outline with no skipped levels, "
+             "and the axe / DevTools checker reports no critical violations."),
 }
 
 
@@ -565,7 +576,7 @@ def _manual_verification_section(files, h2, body, cell, muted) -> list:
         "each document format in this scan, here is how to confirm the result with a mainstream "
         "tool — the steps are generic to the format, not tied to any one document.", muted))
     el.append(Spacer(1, 6))
-    label = {"DOCX": "Word", "PPTX": "PowerPoint", "XLSX": "Excel", "PDF": "PDF"}
+    label = {"DOCX": "Word", "PPTX": "PowerPoint", "XLSX": "Excel", "PDF": "PDF", "HTML": "HTML"}
     rows = [["Format", "Tool", "What to confirm"]]
     for k in fmts:
         tool, steps = _MANUAL_VERIFY[k]
@@ -990,7 +1001,7 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
         el.append(Spacer(1, 6))
         el.append(Paragraph(
             f"Evidence shown for the first {_EVIDENCE_MAX_FILES} of {len(evidence)} remediated "
-            "documents. The remainder are available via the per-file remediation API.", muted))
+            "documents; the remainder are omitted from this PDF for length.", muted))
     return el
 
 
@@ -1070,7 +1081,10 @@ def _ai_governance_section(run, h2, body, cell, muted) -> list:
     try:
         import core
         r = core.store.ai_cost_rollup(scan_id=run["id"])
+    except ImportError:
+        return []      # no core in test/offline context — expected, not a bug
     except Exception:
+        _LOG.warning("ai_governance_section: rollup failed for scan %s", run.get("id"), exc_info=True)
         return []
     if not r or not r.get("calls"):
         # Nothing to attest AND nothing to hide: an all-deterministic scan needed no model.
@@ -1202,6 +1216,7 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     pct = round(cert / total * 100)
     avg = "—" if run.get("avg_score") is None else run["avg_score"]
     resolved_total = sum(resolved_crit.values())
+    total_eval = sum(d.get("evaluated", 0) for d in ((facts or {}).get("documents") or []))
 
     # ── Executive summary — plain-language verdict ───────────────────────────
     # `total` counts every document in the estate, INCLUDING any nobody scored, so it is not the
@@ -1245,7 +1260,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
         Paragraph(f'<font size="22" color="#3B6D11"><b>{pct}%</b></font><br/>'
                   f'<font size="8.5" color="#6c6470">no blocking findings · {cert} of {total} documents</font>', body),
         Paragraph(f'<font size="22"><b>{avg}</b></font><br/>'
-                  f'<font size="8.5" color="#6c6470">average score / 100</font>', body),
+                  f'<font size="8.5" color="#6c6470">average score / 100'
+                  + (f' · {total_eval} criteria evaluated' if total_eval else '')
+                  + '</font>', body),
         Paragraph(f'<font size="22" color="#854F0B"><b>{counts.get("issues", 0)}</b></font><br/>'
                   f'<font size="8.5" color="#6c6470">documents with open findings</font>', body),
         Paragraph(f'<font size="22" color="#9a948f"><b>{counts.get("unanalysable", 0)}</b></font><br/>'

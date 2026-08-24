@@ -103,6 +103,23 @@ def test_registry_does_not_contradict_the_legacy_scope_tables(reg):
         f"it as a full pass/fail lane. One of the two is wrong — reconcile, don't exempt.")
 
 
+def test_the_three_undeclared_xlsx_pairs_are_now_declared():
+    """The regression this work closed for xlsx (R8 quick-fixes).
+
+    `office_color_only_checks`, `xlsx_nontext_contrast_checks`, and `office_control_review_checks`
+    all shipped and ran on every xlsx file, but none of the three pairs appeared in RULE_FORMATS
+    or REVIEW_FORMATS, so findings surfaced as FAIL while a clean file read NOT_EVALUATED — the
+    scan under-reporting work it had actually done. All three are now registered as PARTIAL /
+    MEDIUM and return REVIEW on a clean scan (confirmed by R10 CI fixtures, PR #673).
+    """
+    for rule in ("1.4.1", "1.4.11", "4.1.2"):
+        reg = rule_registry.get(rule, "xlsx")
+        assert reg is not None, f"{rule} × xlsx lost its registration"
+        assert reg.reason, "a partial technique must say what it does not cover"
+        assert store._rule_outcome(rule, "xlsx", 0, 0) == store.REVIEW
+        assert store._rule_outcome(rule, "xlsx", 1, 0) == "FAIL"
+
+
 def test_the_two_undeclared_pdf_pairs_are_now_declared():
     """The regression this work closed.
 
