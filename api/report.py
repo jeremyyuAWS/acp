@@ -871,6 +871,65 @@ def _assurance_section(facts, h2, body, cell, muted, hitl=None) -> list:
     return el
 
 
+def _limitations_section(files: list, facts: dict | None, run: dict, body, muted) -> list:
+    """P-13 — Material-limitations notice, rendered only when real limitations exist.
+
+    Three classes of limitation, each only when applicable:
+      1. Documents that could not be analysed (error status) — named individually.
+      2. Criteria flagged for human review (review-recommended) — count + names.
+      3. Owner/author metadata absent from this scan.
+
+    Positioned near the executive summary so an auditor skimming the first page sees it.
+    Never renders boilerplate when none of the three apply.
+    """
+    items: list[str] = []
+
+    failed = [f["file"] for f in files if (f.get("status") or "") == "error"]
+    if failed:
+        names = ", ".join(_esc(n) for n in failed[:8])
+        tail = f" and {len(failed) - 8} more" if len(failed) > 8 else ""
+        items.append(
+            f"<b>{len(failed)}</b> document(s) could not be opened or analysed — "
+            f"they carry no findings and are excluded from all counts: {names}{tail}.")
+
+    scope = (facts or {}).get("scope") or {}
+    review_crit = scope.get("review_criteria") or []
+    if review_crit:
+        names_r = ", ".join(
+            f"{_esc(r['sc'])} {_esc(r['name'])}" for r in review_crit[:6])
+        tail_r = f" and {len(review_crit) - 6} more" if len(review_crit) > 6 else ""
+        items.append(
+            f"<b>{len(review_crit)}</b> criterion/criteria were assessed as review-recommended "
+            f"(ACP flagged a risk but could not auto-verify pass or fail — human judgement required): "
+            f"{names_r}{tail_r}.")
+
+    if not run.get("owner_email"):
+        items.append(
+            "Owner / author metadata was not available for this scan. "
+            "File ownership and reviewer attribution may be incomplete.")
+
+    if not items:
+        return []
+
+    el: list = []
+    el.append(Spacer(1, 4))
+    notice_lines = [Paragraph(
+        '<font color="#46303F"><b>Material limitations for this report</b></font>', body)]
+    for item in items:
+        notice_lines.append(Paragraph(f"• {item}", muted))
+    t = Table([[notice_lines]], colWidths=[7.1 * inch])
+    t.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("BOX", (0, 0), (-1, -1), 0.75, PLUM),
+        ("BACKGROUND", (0, 0), (-1, -1), CARD),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    el.append(t)
+    el.append(Spacer(1, 6))
+    return el
+
+
 def _work_by_category_section(evidence: list, h2, body, cell, muted) -> list:
     """What changed, grouped the way a person reads a document — Images, Tables, Reading Order —
     not by WCAG id (backlog: the human-task view). An executive or the ops person who did the
@@ -1395,6 +1454,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
             '<font color="#854F0B">' + " and ".join(_parts) +
             " — this report makes no conformance claim about those files.</font>",
             lead))
+
+    # ── P-13: Material limitations notice ────────────────────────────────────
+    el.extend(_limitations_section(files, facts, run, body, _muted))
 
     # ── Certification summary band ───────────────────────────────────────────
     el.append(Paragraph("Outcome summary", h2))

@@ -507,7 +507,7 @@ per-document certificate renderer alongside it).
 | ~~R2~~ | ~~**Certification-decision block**~~ — **SHIPPED** | `_decision_block` (backlog R2/R3), rendered first ("Certification decision (R2)"). Carries a **real** recomputable SHA-256 content digest (`_content_digest`), never decorative. |
 | ~~R3~~ | ~~**Why-certifiable prose**~~ — **SHIPPED** | The plain-language WHY is the executive verdict rendered under the decision block (`_decision_block` docstring, R2/R3); status labels reframed away from a bare "100%". |
 | ~~R4~~ | ~~**Certification-metadata / chain-of-custody**~~ — **SHIPPED** | Recomputable SHA-256 content digest (`_content_digest`: scan id, rubric hash, target, per-file scores) + the "Scope & methodology" section; "results are reproducible from the stamped rubric hash." |
-| R5 | **AI reasoning inline** — show the fix rationale / OCR-grounding / confidence *basis* (not a number). | **Shipped as data** via the proposal lane (`proposals[].rationale`, `describe_image_structured` grounding, `confidence.js` basis) — rendering into the appendix not separately re-verified in the 2026-08-19 pass. |
+| ~~R5~~ | ~~**AI reasoning inline**~~ — **SHIPPED** | Proposal rationale (`proposals[].rationale`) and OCR grounding (`describe_image_structured`) rendered in the evidence appendix (`_evidence_section`). Verified by `test_proposal_source_rendered_in_evidence_appendix` and `test_proposal_why_review_rendered_as_basis_in_evidence_appendix`. |
 | ~~R6~~ | ~~**Richer file inventory**~~ — **SHIPPED** | "File inventory (R6)" table now carries File · Type · Extent · Status · Score · Findings · **Fixed · Open · Approvals** per document. |
 | ~~R7~~ | ~~**Explain the score**~~ — **SHIPPED** | The scope section states it explicitly — "A score of 100 therefore means: no blocking findings among the criteria ACP evaluated … not a statement that the document conforms to WCAG 2.1 AA." |
 | ~~R8~~ | ~~**POUR breakdown**~~ — **SHIPPED** (#496) | `_pour_section` renders the per-principle pass rate among evaluated criteria; the four principles partition the evaluated set exactly (pinned by test). Deterministic → honest by construction. |
@@ -534,17 +534,17 @@ per-document certificate renderer alongside it).
 | ~~R-B~~ | ~~**Immutable audit-log excerpt**~~ — **SHIPPED** | The evidence appendix renders each fix's sign-off inline from the immutable `decision_log` — "{decision} by {reviewer} · {when} UTC", with the approved value — under "what changed, and on whose authority". |
 | ~~R-C~~ | ~~**Per-fix assurance-level disclosure**~~ — **SHIPPED (PR #665)** | `_evidence_section` now renders a colored tier badge per fix: Deterministic / Deterministic+human / AI+human / AI+re-scan. |
 | ~~R-D~~ | ~~**Reproduce-this-result instructions**~~ — **SHIPPED (#698 / #704)** | `_provenance_section` renders a bordered 3-step table: verify rubric hash at `GET /rubric`, re-run via `POST /scans?source=…`, compare findings. `ACP_PUBLIC_URL` prefixes the URLs; source param taken from `run["source"]`. |
-| R-E | **"Supersedes" lineage** — "this certificate supersedes cert `<id>` from `<date>`" (per-document version chain). | Extends the estate-level velocity section already in `report.py` to a per-document custody chain. |
+| ~~R-E~~ | ~~**"Supersedes" lineage**~~ — **SHIPPED** | `_supersedes_section` in `report.py`: renders "This report supersedes `<id>` from `<date>`" when `run["previous_scan_id"]` is set. Verified by `test_supersedes_renders_only_with_a_previous_scan` and `test_supersedes_includes_scan_id_when_available` in `tests/test_report_provenance.py`. |
 
 Sequencing suggestion: R1 (flagship) + R2/R3/R6 + R-A first (they land the biggest
 trust jump on data that already exists), then R4/R5/R-B/R-C (~~R11/R12 done~~), then the
-honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~R-D~~ /R-E (~~R13/R14/R-C done~~).
+honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~R-D~~ / ~~R-E~~ (~~R13/R14/R-C done~~).
 
 ### Polish / technical debt (surfaced during R15 implementation, 2026-08-24)
 
-**All P-1–P-8 shipped** (verified against `origin/main` 2026-08-24). **P-9–P-12 shipped** (#725).
+**All P-1–P-8 shipped** (verified against `origin/main` 2026-08-24). **P-9–P-12 shipped** (#725). **P-13 shipped** (this PR).
 
-**Sequencing (2026-08-24):** P-1–P-8 → P-9–P-12 (honesty/completeness) → P-13/P-16/P-18/P-20 → R9/R10 w/ P-15 → P-14/P-17 → R-D/R-E → P-19/presentation.
+**Sequencing (2026-08-24):** P-1–P-8 → P-9–P-12 (honesty/completeness) → ~~P-13~~/P-16/P-18/P-20 → R9/R10 w/ P-15 → P-14/P-17 → ~~R-E~~ → P-19/presentation.
 
 | # | Location | Item |
 |---|---|---|
@@ -560,7 +560,7 @@ honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~
 | ~~P-10~~ | `api/report.py` | ~~Stat band denominator `cert / total` includes unassessed files, overstating coverage.~~ **DONE**: denominator changed to `assessed` (total − unassessed); label says "N of M assessed". |
 | ~~P-11~~ | `api/report.py` | ~~No criteria-level outcome breakdown — auditors see file counts but not WCAG criterion outcomes.~~ **DONE**: second stat band row from `facts["scope"]`: passed / with findings / human-review / not-evaluated. |
 | ~~P-12~~ | `api/report.py` | ~~No assessment scope declaration at the top of the report.~~ **DONE**: 3×4 table (source / scan window / file types / method / standard+target / rubric) replaces old "Scope & methodology" card. |
-| P-13 | `api/report.py` | **Add a limitations & exceptions section** generated from actual scan state (not boilerplate): password-protected docs, criteria needing human review, unavailable ownership metadata, unassessed external content, OCR failures. Material limitations near the executive summary. |
+| ~~P-13~~ | `api/report.py` | ~~**Add a limitations & exceptions section**~~ — **DONE**: `_limitations_section()` renders a PLUM-bordered notice only when real limitations exist: unanalysable docs named individually, review-recommended criteria by SC id+name, absent owner/author metadata. Positioned before "Outcome summary". 9 tests in `tests/test_report_limitations_p13.py`. |
 | P-14 | `api/report.py`, `api/store.py` | **Use stable finding identifiers.** Every finding gets a durable ID that survives rendering, export, reassessment, and remediation. Expose it in headings, links, and evidence references. |
 | P-15 | `api/report.py`, `api/store.py` | **Clarify finding status and history.** Seven states: Open · Remediation attempted · Awaiting re-scan · Verified resolved · Accepted exception · False positive · Reopened. Do not label something "fixed" merely because remediation ran. Groundwork for R9/R10. |
 | P-16 | `api/report.py` | **Add report provenance and freshness.** Display: report-generated timestamp + TZ, assessment-completion timestamp, data cutoff, scan ID, report schema/version, application build/commit, rubric name/version/hash. Label as a snapshot if assessment is still running or data has changed. |
