@@ -534,21 +534,17 @@ per-document certificate renderer alongside it).
 | ~~R-B~~ | ~~**Immutable audit-log excerpt**~~ — **SHIPPED** | The evidence appendix renders each fix's sign-off inline from the immutable `decision_log` — "{decision} by {reviewer} · {when} UTC", with the approved value — under "what changed, and on whose authority". |
 | ~~R-C~~ | ~~**Per-fix assurance-level disclosure**~~ — **SHIPPED (PR #665)** | `_evidence_section` now renders a colored tier badge per fix: Deterministic / Deterministic+human / AI+human / AI+re-scan. |
 | ~~R-D~~ | ~~**Reproduce-this-result instructions**~~ — **SHIPPED (#698 / #704)** | `_provenance_section` renders a bordered 3-step table: verify rubric hash at `GET /rubric`, re-run via `POST /scans?source=…`, compare findings. `ACP_PUBLIC_URL` prefixes the URLs; source param taken from `run["source"]`. |
-| R-E | **"Supersedes" lineage** — "this certificate supersedes cert `<id>` from `<date>`" (per-document version chain). | Extends the estate-level velocity section already in `report.py` to a per-document custody chain. |
+| ~~R-E~~ | ~~**"Supersedes" lineage**~~ — **SHIPPED** | `_supersedes_section` in `report.py`: renders "This report supersedes `<id>` from `<date>`" when `run["previous_scan_id"]` is set. Verified by `test_supersedes_renders_only_with_a_previous_scan` and `test_supersedes_includes_scan_id_when_available` in `tests/test_report_provenance.py`. |
 
 Sequencing suggestion: R1 (flagship) + R2/R3/R6 + R-A first (they land the biggest
 trust jump on data that already exists), then R4/R5/R-B/R-C (~~R11/R12 done~~), then the
-honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~R-D~~ /R-E (~~R13/R14/R-C done~~).
+honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~R-D~~ / ~~R-E~~ (~~R13/R14/R-C done~~).
 
 ### Polish / technical debt (surfaced during R15 implementation, 2026-08-24)
 
-**All P-1–P-8 shipped** (verified against `origin/main` 2026-08-24). **P-9–P-12 shipped** (#725).
+**All P-1–P-8 shipped** (verified against `origin/main` 2026-08-24). **P-9–P-12 shipped** (#725). **P-13 shipped** (this PR). **P-14 shipped** (#750). **P-15 shipped** (#748). **P-16 shipped** (#742). **P-18 shipped** (#744).
 
-<<<<<<< 249be216b183abab670ca544dbdc29416862146e
-**Sequencing (2026-08-24):** P-1–P-8 → P-9–P-12 (honesty/completeness) → P-13/P-16/P-18/P-20 → R9/R10 w/ ~~P-15~~ → P-14/P-17 → R-D/R-E → P-19/presentation.
-=======
-**Sequencing (2026-08-24):** P-1–P-8 → P-9–P-12 (honesty/completeness) → ~~P-13~~/~~P-16~~/~~P-18~~/P-20 → R9/R10 w/ P-15 → ~~P-14~~/P-17 → ~~R-E~~ → P-19/presentation.
->>>>>>> 721c1a20663bda2ce1cc65e0497ce6851e1a4d6c
+**Sequencing (2026-08-24):** ~~P-13~~/~~P-16~~/~~P-18~~/P-20 → R9/R10 w/ ~~P-15~~ → ~~P-14~~/P-17 → ~~R-E~~ → P-19/presentation.
 
 | # | Location | Item |
 |---|---|---|
@@ -564,7 +560,7 @@ honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~
 | ~~P-10~~ | `api/report.py` | ~~Stat band denominator `cert / total` includes unassessed files, overstating coverage.~~ **DONE**: denominator changed to `assessed` (total − unassessed); label says "N of M assessed". |
 | ~~P-11~~ | `api/report.py` | ~~No criteria-level outcome breakdown — auditors see file counts but not WCAG criterion outcomes.~~ **DONE**: second stat band row from `facts["scope"]`: passed / with findings / human-review / not-evaluated. |
 | ~~P-12~~ | `api/report.py` | ~~No assessment scope declaration at the top of the report.~~ **DONE**: 3×4 table (source / scan window / file types / method / standard+target / rubric) replaces old "Scope & methodology" card. |
-| ~~P-13~~ | `api/report.py` | ~~**Add a limitations & exceptions section**~~ **DONE** (#739): PLUM-bordered box listing failed docs, review-recommended criteria, and absent owner metadata; absent when no limitations apply. |
+| ~~P-13~~ | `api/report.py` | ~~**Add a limitations & exceptions section**~~ — **DONE**: `_limitations_section()` renders a PLUM-bordered notice only when real limitations exist: unanalysable docs named individually, review-recommended criteria by SC id+name, absent owner/author metadata. Positioned before “Outcome summary”. 9 tests in `tests/test_report_limitations_p13.py`. |
 | ~~P-14~~ | ~~`api/report.py`, `api/store.py`~~ | ~~**Use stable finding identifiers.**~~ — **SHIPPED** | `_finding_id(file, criterion, location)`: SHA-256[:8] hex ID stable across renders, exports and re-assessments; exposed as `FND-{id}` in the evidence appendix heading for every applied and proposed finding. |
 | ~~P-15~~ | `api/report.py` | ~~**Clarify finding status and history.**~~ **DONE**: `_finding_status(issue, file_is_certifiable)` derives one of seven named states; file inventory "Findings" cell shows per-finding breakdown (21 tests in `test_report_finding_status_p15.py`). |
 | P-16 | `api/report.py` | **Add report provenance and freshness.** Display: report-generated timestamp + TZ, assessment-completion timestamp, data cutoff, scan ID, report schema/version, application build/commit, rubric name/version/hash. Label as a snapshot if assessment is still running or data has changed. |
