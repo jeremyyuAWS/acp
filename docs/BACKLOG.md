@@ -423,10 +423,14 @@ third is the correctness fix with the widest blast radius.
   The port/defer/drop decision on `Ontology.jsx` (v1-only; the `ontology.js` data layer survives)
   is still open and now belongs with P2.3, which is blocked on the same missing thing: a
   scan-derived source for classification.
-- [?] **P1.4 — Vision default.** `moondream` scores **0/6 facts and asserts a false year** on a
-  real notice (`docs/local-model-evaluation.md`). `qwen2.5vl:7b` scores 3/6 at 4.4s. Blocked on
-  the 8 GiB Consumption ceiling that forced moondream — ADR 0022 requires the CPU floor stay
-  available, so this is an infrastructure decision, not a config change.
+- [x] **P1.4 — Vision default.** `moondream` scores **0/6 facts and asserts a false year** on a
+  real notice (`docs/local-model-evaluation.md`). `qwen2.5vl:7b` scores 3/6 at 4.4s. Closed
+  2026-08-25: the production quality goal is now met via ADR 0022 / R12 — `providers.py`
+  (`RunPodServerlessVisionProvider`) defaults to `qwen2.5-vl` on RunPod; once the R2/R3
+  credentials are wired, cloud vision calls use the better model automatically. The CPU floor
+  stays `moondream` deliberately: the 8 GiB Consumption ceiling still prevents running
+  `qwen2.5vl:7b` locally, and ADR 0022 requires the CPU fallback remain available. Local-only
+  deployments without RunPod still get moondream — that is the correct floor, not a defect.
 
 ---
 
