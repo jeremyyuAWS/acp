@@ -534,6 +534,13 @@ _SCHEMA = [
       rule_id TEXT, format TEXT, guidance TEXT NOT NULL, status TEXT NOT NULL,
       evidence TEXT, author TEXT, created_at TEXT, updated_at TEXT
     )""",
+    # Atomic enqueue (Stage 1 item 2): client-supplied deduplication key so a retried
+    # submission with the same key returns the original scan without creating a duplicate.
+    # Scoped to owner_email — keys are tenant-local, not global. NULL means "no key provided";
+    # the unique index only covers non-null rows (WHERE idempotency_key IS NOT NULL) so
+    # NULL never collides.
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS idempotency_key TEXT",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_runs_idempotency ON scan_runs(owner_email, idempotency_key) WHERE idempotency_key IS NOT NULL",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -1084,6 +1091,46 @@ class Store:
                 "INSERT INTO scan_runs(id,source,status,owner_email,started_at) "
                 "VALUES(%s,%s,'queued',%s,%s) ON CONFLICT(id) DO NOTHING",
                 (scan_id, source, owner, self._now()))
+
+    def enqueue_scan(self, scan_id: str, source: str, owner: str,
+                     job_type: str, payload: dict, *,
+                     idempotency_key: str | None = None,
+                     priority: int = 100, max_attempts: int = 5,
+                     run_after: str | None = None) -> tuple[str, str]:
+        """Create a scan_runs stub and its initial job in a single atomic transaction.
+
+        Returns (scan_id, job_id). Both rows are committed together; a failure at any point
+        rolls back both, leaving no orphan stubs. If idempotency_key is provided and a scan
+        with that key already exists for the same owner, returns the original (scan_id, job_id)
+        without inserting new rows.
+        """
+        import json as _json
+        now = self._now()
+        job_id = uuid.uuid4().hex[:16]
+        with self._db.cursor() as cur:
+            if idempotency_key is not None:
+                self._db.execute(cur,
+                    "SELECT id FROM scan_runs WHERE owner_email=%s AND idempotency_key=%s",
+                    (owner, idempotency_key))
+                existing = self._db.fetchone(cur)
+                if existing:
+                    existing_scan_id = existing["id"]
+                    self._db.execute(cur,
+                        "SELECT id FROM jobs WHERE scan_id=%s ORDER BY created_at LIMIT 1",
+                        (existing_scan_id,))
+                    existing_job = self._db.fetchone(cur)
+                    return existing_scan_id, (existing_job["id"] if existing_job else job_id)
+            self._db.execute(cur,
+                "INSERT INTO scan_runs(id,source,status,owner_email,started_at,idempotency_key) "
+                "VALUES(%s,%s,'queued',%s,%s,%s) ON CONFLICT(id) DO NOTHING",
+                (scan_id, source, owner, now, idempotency_key))
+            self._db.execute(cur,
+                "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
+                "run_after,scan_id,created_at,updated_at) "
+                "VALUES(%s,%s,%s,'queued',%s,0,%s,%s,%s,%s,%s)",
+                (job_id, job_type, _json.dumps(payload or {}), priority, max_attempts,
+                 run_after or now, scan_id, now, now))
+        return scan_id, job_id
 
     def init_scan_run(self, scan_id: str, source: str, total: int, started_at: str,
                       rubric_name: str, rubric_hash: str, owner: str | None = None,

@@ -81,25 +81,25 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
     # Survives restarts, retries on transient failure, shows up in /jobs + Grafana.
     if queue:
         scan_id = uuid.uuid4().hex[:12]
-        core.register_scan_tokens(scan_id, drive=token, sp=sp_token)  # in-memory only
-        # Pre-create the scan_runs row so GET /scans/{id} returns 200 from the moment this
-        # response lands. Without this, the row only appears when a worker claims the job,
-        # leaving a startup window where the client holds a scan ID that 404s — a contract
-        # violation that produces a 404 flood in the browser console. The worker's
-        # init_scan_run overwrites the stub (DO UPDATE) once it starts discovery.
-        core.store.pre_create_queued_scan(scan_id, source, user)
+        idempotency_key = request.headers.get("idempotency-key") or None
         # fanout=true → decompose into per-file jobs (ADR 0007); else the monolithic
         # 'scan' job (default, proven). Both are durable and resume across replicas.
         jtype = "scan_discover" if fanout else "scan"
-        job_id = core.store.enqueue_job(
-            jtype, {"source": source, "scan_id": scan_id, "folder": folder, "folders": folders,
-                    "exclude_folders": exclude_folders, "ai": ai,
-                    "user": user, "pii": pii, "batch": batch,
-                    "exclude_remediated": exclude_remediated, "incremental": incremental,
-                    # Carry tokens in the payload so the worker container can authenticate
-                    # without sharing the API's in-memory token store (split topology, no Redis).
-                    "drive_token": token, "sp_token": sp_token},
-            scan_id=scan_id)
+        # Atomic enqueue: scan_runs stub + jobs row committed together in one transaction.
+        # GET /scans/{id} is immediately resolvable after this call; a failure rolls back
+        # both rows — no orphan stubs. Same Idempotency-Key from the same owner returns the
+        # original scan without creating a duplicate (client retry safety).
+        scan_id, job_id = core.store.enqueue_scan(
+            scan_id, source, user, jtype,
+            {"source": source, "scan_id": scan_id, "folder": folder, "folders": folders,
+             "exclude_folders": exclude_folders, "ai": ai,
+             "user": user, "pii": pii, "batch": batch,
+             "exclude_remediated": exclude_remediated, "incremental": incremental,
+             # Carry tokens in the payload so the worker container can authenticate
+             # without sharing the API's in-memory token store (split topology, no Redis).
+             "drive_token": token, "sp_token": sp_token},
+            idempotency_key=idempotency_key)
+        core.register_scan_tokens(scan_id, drive=token, sp=sp_token)  # in-memory only
         return {"scan_id": scan_id, "job_id": job_id, "queued": True,
                 "fanout": fanout, "batch": batch, "workers": core.WORKERS,
                 # Split topology (#113): the API runs ACP_WORKERS=0 and a standalone worker
