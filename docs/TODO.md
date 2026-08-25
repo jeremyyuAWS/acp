@@ -70,9 +70,9 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 | `1.4.1` | xlsx | **partial** | medium | colour used in cell fills, charts and images is not examined, and whether colour is the sole cue is left to a  |
 | `1.4.10` | docx | **partial** | high | whether a wide table actually requires horizontal scrolling at 320px is a rendered outcome not recorded in the |
 | `1.4.10` | pptx | **partial** | high | whether the widest table actually requires horizontal scrolling at 320px is a rendered outcome not recorded in |
-| `1.4.11` | docx | **partial** | high | gradient or image fills, theme-colour indirection, and non-shape non-text elements such as focus indicators an |
+| `1.4.11` | docx | **partial** | high | gradient or image fills and non-shape non-text elements such as focus indicators and control borders are not e |
 | `1.4.11` | pdf | **partial** | medium | gradient fills, bitmap images and most icon glyphs are not examined, and whether a low-contrast element convey |
-| `1.4.11` | pptx | **partial** | high | gradient or image fills, theme-colour indirection, and non-shape non-text elements such as focus indicators an |
+| `1.4.11` | pptx | **partial** | high | gradient or image fills and non-shape non-text elements such as focus indicators and control borders are not e |
 | `1.4.11` | xlsx | **partial** | medium | theme-coloured shapes, gradients, images and control affordances are not examined, and whether a shape conveys |
 | `1.4.12` | docx | **partial** | high | whether the fixed spacing clips text when a user applies the WCAG 1.4.12 overrides is a rendered outcome not r |
 | `1.4.12` | pdf | **partial** | high | whether text actually clips when the override is applied is a rendered outcome not recorded in the file, and o |
