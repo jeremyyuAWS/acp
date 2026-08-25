@@ -544,7 +544,11 @@ honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~
 
 **All P-1–P-8 shipped** (verified against `origin/main` 2026-08-24). **P-9–P-12 shipped** (#725).
 
+<<<<<<< 249be216b183abab670ca544dbdc29416862146e
 **Sequencing (2026-08-24):** P-1–P-8 → P-9–P-12 (honesty/completeness) → P-13/P-16/P-18/P-20 → R9/R10 w/ ~~P-15~~ → P-14/P-17 → R-D/R-E → P-19/presentation.
+=======
+**Sequencing (2026-08-24):** P-1–P-8 → P-9–P-12 (honesty/completeness) → ~~P-13~~/~~P-16~~/~~P-18~~/P-20 → R9/R10 w/ P-15 → ~~P-14~~/P-17 → ~~R-E~~ → P-19/presentation.
+>>>>>>> 721c1a20663bda2ce1cc65e0497ce6851e1a4d6c
 
 | # | Location | Item |
 |---|---|---|
@@ -560,12 +564,12 @@ honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~
 | ~~P-10~~ | `api/report.py` | ~~Stat band denominator `cert / total` includes unassessed files, overstating coverage.~~ **DONE**: denominator changed to `assessed` (total − unassessed); label says "N of M assessed". |
 | ~~P-11~~ | `api/report.py` | ~~No criteria-level outcome breakdown — auditors see file counts but not WCAG criterion outcomes.~~ **DONE**: second stat band row from `facts["scope"]`: passed / with findings / human-review / not-evaluated. |
 | ~~P-12~~ | `api/report.py` | ~~No assessment scope declaration at the top of the report.~~ **DONE**: 3×4 table (source / scan window / file types / method / standard+target / rubric) replaces old "Scope & methodology" card. |
-| P-13 | `api/report.py` | **Add a limitations & exceptions section** generated from actual scan state (not boilerplate): password-protected docs, criteria needing human review, unavailable ownership metadata, unassessed external content, OCR failures. Material limitations near the executive summary. |
+| ~~P-13~~ | `api/report.py` | ~~**Add a limitations & exceptions section**~~ **DONE** (#739): PLUM-bordered box listing failed docs, review-recommended criteria, and absent owner metadata; absent when no limitations apply. |
 | ~~P-14~~ | ~~`api/report.py`, `api/store.py`~~ | ~~**Use stable finding identifiers.**~~ — **SHIPPED** | `_finding_id(file, criterion, location)`: SHA-256[:8] hex ID stable across renders, exports and re-assessments; exposed as `FND-{id}` in the evidence appendix heading for every applied and proposed finding. |
 | ~~P-15~~ | `api/report.py` | ~~**Clarify finding status and history.**~~ **DONE**: `_finding_status(issue, file_is_certifiable)` derives one of seven named states; file inventory "Findings" cell shows per-finding breakdown (21 tests in `test_report_finding_status_p15.py`). |
 | P-16 | `api/report.py` | **Add report provenance and freshness.** Display: report-generated timestamp + TZ, assessment-completion timestamp, data cutoff, scan ID, report schema/version, application build/commit, rubric name/version/hash. Label as a snapshot if assessment is still running or data has changed. |
 | P-17 | `api/report.py` | **Improve evidence presentation.** Per finding: file + location, criterion, detector/method, observed value, expected condition, relevant page/element, confidence or manual-review flag, evidence-collection timestamp. Long evidence expands rather than disappearing; redacted values are marked as redacted. |
-| P-18 | `api/report.py` | **Report-level reconciliation checks before rendering.** Validate: outcome counts = criteria evaluated; file totals reconcile across sections; severity totals = detailed findings; remediation totals match finding statuses; every evidence item exists; every rubric hash resolves. Fail loudly or display a report-integrity warning. |
+| ~~P-18~~ | `api/report.py` | ~~**Report-level reconciliation checks before rendering.**~~ **DONE**: `_reconciliation_checks()` validates rubric hash presence, orphan facts documents, catalog size, review arithmetic, and remediated_total; RED-bordered warning box rendered when any check fails (9 tests in `test_report_reconciliation_p18.py`). |
 | P-19 | `api/report.py` | **Print/PDF/AT behaviour.** Tables must repeat headers across pages; rows must not split into unreadable fragments; URLs and finding IDs must be usable in print; charts need text equivalents; colour is never the only status indicator; heading order and table semantics are correct; QR codes have adjacent human-readable URLs; page headers identify the scan and report date. |
 | P-20 | `api/report.py` | **Remove ambiguous assurance language.** Audit and replace: "Compliant", "Passed", "Complete", "Verified", "All issues", "No accessibility issues". Prefer bounded claims: "No automated failures detected among the N criteria evaluated. M criteria were not fully evaluated, including K requiring manual review." |
 

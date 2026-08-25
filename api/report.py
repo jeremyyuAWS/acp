@@ -1333,6 +1333,65 @@ def _ai_governance_section(run, h2, body, cell, muted) -> list:
     return el
 
 
+def _reconciliation_checks(files: list, facts: dict | None, meta: dict) -> list[str]:
+    """P-18: Return a list of human-readable discrepancy strings.
+
+    Checks that the inputs to build_report are internally consistent.  An empty
+    list means everything reconciles; non-empty means the report may be wrong
+    in material ways and a warning box should be rendered.
+    """
+    issues: list[str] = []
+
+    # Rubric hash required for reproducibility claim in the header
+    if not (meta.get("hash") or "").strip():
+        issues.append(
+            "Rubric hash is absent — the report header claims results are reproducible "
+            "from this hash, but no hash was supplied.")
+
+    if facts is not None:
+        scope = facts.get("scope") or {}
+        catalog = scope.get("catalog_size", 0)
+        not_eval_ct = len(scope.get("not_evaluated_criteria") or [])
+        human_only_ct = len(scope.get("human_only_criteria") or [])
+        if catalog and (not_eval_ct + human_only_ct) > catalog:
+            issues.append(
+                f"Criteria counts exceed catalog size: not-evaluated ({not_eval_ct}) + "
+                f"human-only ({human_only_ct}) = {not_eval_ct + human_only_ct} > "
+                f"catalog_size ({catalog}).")
+
+        # facts.documents file names should be a subset of the files list
+        doc_facts = facts.get("documents") or []
+        fact_names = {d.get("file") for d in doc_facts if d.get("file")}
+        file_names = {f.get("file") for f in files if f.get("file")}
+        orphan_facts = fact_names - file_names
+        if orphan_facts:
+            sample = ", ".join(sorted(orphan_facts)[:5])
+            tail = f" and {len(orphan_facts) - 5} more" if len(orphan_facts) > 5 else ""
+            issues.append(
+                f"facts['documents'] references file(s) not present in the file list: "
+                f"{sample}{tail}.")
+
+        # Review counts must be internally consistent
+        review = facts.get("review") or {}
+        reviewed = review.get("reviewed", 0)
+        approved = review.get("approved", 0)
+        rejected = review.get("rejected", 0)
+        skipped = review.get("skipped", 0)
+        if reviewed and (approved + rejected + skipped) > reviewed:
+            issues.append(
+                f"Review counts do not reconcile: approved ({approved}) + rejected ({rejected}) "
+                f"+ skipped ({skipped}) = {approved + rejected + skipped} > reviewed ({reviewed}).")
+
+        # Remediated total cannot exceed the number of documents
+        rem_total = facts.get("remediated_total", 0) or 0
+        if rem_total > len(files):
+            issues.append(
+                f"remediated_total ({rem_total}) exceeds the number of documents "
+                f"in scope ({len(files)}).")
+
+    return issues
+
+
 def _assessment_scope_block(run: dict, meta: dict, facts: dict | None,
                             fmt_str: str, h2, body, cell, muted) -> list:
     """Assessment scope declaration (P-12).
@@ -1459,6 +1518,26 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     # executive verdict below — this card carries the decision, the counts and the digest,
     # and deliberately does not repeat that prose.
     _muted = ParagraphStyle("rmuted", parent=ss["Normal"], textColor=MUTED, fontSize=8, leading=11.5)
+
+    # ── P-18: Report-integrity reconciliation warning ─────────────────────────
+    _recon = _reconciliation_checks(files, facts, meta)
+    if _recon:
+        _recon_lines = [Paragraph(
+            '<font color="#A32D2D"><b>Report integrity — data reconciliation failed</b></font>',
+            body)]
+        for _item in _recon:
+            _recon_lines.append(Paragraph(f"• {_item}", _muted))
+        _recon_t = Table([[_recon_lines]], colWidths=[7.1 * inch])
+        _recon_t.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("BOX", (0, 0), (-1, -1), 1.0, RED),
+            ("BACKGROUND", (0, 0), (-1, -1), CARD),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ]))
+        el.append(_recon_t)
+        el.append(Spacer(1, 6))
+
     el.extend(_decision_block(run, files, meta, facts, h2, body, _muted))
 
     # ── Reconcile the estate: open (blocking) vs certifiable/remediated ──────
