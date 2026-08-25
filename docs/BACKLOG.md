@@ -59,17 +59,15 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   `curl https://<ACP_FQDN>/healthz` (version), `gh run list --workflow deploy.yml` (runs sit
   completed/cancelled). **Fix:** `workflow_dispatch` + approve the `production` environment, or a
   manual `bash deploy/public/redeploy.sh` under `az login`.
-- [~] **R2 — RunPod serverless vision: env is set, but the runtime does NOT select it.** Root cause
-  diagnosed (2026-08-24): the `runpod-api-key` Azure secret is **empty** on both apps, so
-  `RUNPOD_API_KEY` is `""` at runtime → `serverless_vision_provider()` guard `not (eid and key)` is
-  True → returns `None` → silent local CPU fallback. The code is correct; only the secret is missing.
-  **Fix (blocked on R3):** complete R3 first (new key), then run
-  `RUNPOD_ENDPOINT_ID=er7oqd0gq6ulsb RUNPOD_API_KEY=<new-key> bash deploy/public/set_integration_env.sh`.
-  Full steps: `docs/runbooks/runpod-key-rotation.md`.
-- [?] **R3 — Rotate the RunPod API key.** It was pasted in plaintext into an ops chat. Ops only, no
-  code. Runbook: `docs/runbooks/runpod-key-rotation.md`. Steps: RunPod console → API Keys → revoke +
-  reissue → run `set_integration_env.sh` → update `~/.zshrc` → verify via AI-cost zone counter (must
-  show `cloud`, not `local`, on a 1.1.1 draft).
+- [x] **R2 — RunPod serverless vision: env is set, but the runtime does NOT select it.** Root cause
+  diagnosed (2026-08-24): the `runpod-api-key` Azure secret was empty on both apps. **Fixed
+  2026-08-25:** R3 rotation set a valid key; `set_integration_env.sh` applied it to both containers.
+  Code fix in #758 adds `WARNING R2:` log lines so silent CPU fallbacks are immediately visible in
+  future. Verify: 1.1.1 draft scan should show `zone: cloud` in the AI-cost counter.
+- [x] **R3 — Rotate the RunPod API key.** It was pasted in plaintext into an ops chat. **Fixed
+  2026-08-25:** old key revoked in RunPod console, new key issued and applied via
+  `set_integration_env.sh` on both `acp-app` and `acp-worker`. `~/.zshrc` updated locally.
+  Runbook kept at `docs/runbooks/runpod-key-rotation.md` for future rotations.
 
 ### Features (the four demo pillars + capability completion)
 
@@ -581,12 +579,17 @@ thing the PRD does not mention.
   PASS predictions with zero false PASSes to claim ≤1% false-PASS at 95% confidence by the rule
   of three); pooling across criteria or buckets overstates the evidence.
 
-- [~] **P4.7 — Reproducibility metadata on every recorded result.** (PRD §26.) Model, revision,
+- [x] **P4.7 — Reproducibility metadata on every recorded result.** (PRD §26.) Model, revision,
   quantisation, runtime, prompt version, fixture version, hardware, temperature, seed.
   Phase 1 done — PR #693: `proposal()` factory now stores a structured `_model` key alongside
   the prose `source`; `judge_drafts.py --out` wraps results as `{"metadata": {"seed", "judges",
-  "run_at"}, "results": [...]}`. Remaining: `temperature` + `prompt_version` columns in
-  `ai_calls` (needs schema migration).
+  "run_at"}, "results": [...]}`. Phase 2 done: `temperature` and `prompt_version` columns added
+  to `ai_calls` via the inline `_SCHEMA` migration runner (no external migration tool needed).
+  `_trace_ai` now accepts both params; temperature is threaded through at every text call site
+  (`explain`=0.3, `suggest`=0.4, `simplify`=0.3, `digest`=0.4, reading-order vision=0.2).
+  `prompt_version` defaults to None and will be populated when callers add version tags to their
+  prompts. Vision calls through `providers.py` adapters leave temperature=None (temperature lives
+  inside the adapter; threading it back is a separate step if ever needed).
 
 - [x] **P4.8 — Reviewer hand-off payload.** Done. When ACP escalates it now hands the reviewer the
   SC, the object, the deterministic evidence, the reason for uncertainty (`why_review`) and the
