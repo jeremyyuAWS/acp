@@ -10,8 +10,8 @@ from assessment import Confidence, Coverage
 from capabilities import Capability
 from rule_registry import register
 
-from formats.pdf.detectors import (focus_order, label_in_name, link_purpose, name_role_value,
-                                   nontext_contrast, text_spacing, use_of_color)
+from formats.pdf.detectors import (focus_order, input_purpose, label_in_name, link_purpose,
+                                   name_role_value, nontext_contrast, text_spacing, use_of_color)
 
 # ── 4.1.2 Name, Role, Value ───────────────────────────────────────────────────────────
 # PARTIAL, not FULL: sound over AcroForm fields, silent on tagged-structure components.
@@ -131,6 +131,25 @@ register(
     reason=("line pitch is measured from page content streams and compared to the 1.5× font-size "
             "threshold; whether text actually clips when the override is applied is a rendered "
             "outcome not recorded in the file, and only sampled pages are examined"),
+)
+
+# ── 1.3.5 Identify Input Purpose ─────────────────────────────────────────────────────
+# HEURISTIC: terminal AcroForm fields whose /T or /TU matches the WCAG personal-data
+# vocabulary are flagged. Whether a field truly collects user-specific personal data is a
+# human judgement, and PDF AcroForm has no programmatic purpose declaration (no HTML
+# autocomplete equivalent). LOW confidence follows from the vocabulary-match approximation
+# — a clean scan resolves to REVIEW, not PASS.
+register(
+    rule="1.3.5",
+    fmt="pdf",
+    detector=input_purpose.detect,
+    requires={Capability.FORMS},
+    coverage=Coverage.HEURISTIC,
+    confidence=Confidence.LOW,
+    reason=("AcroForm terminal fields whose /T or /TU matches the WCAG personal-data "
+            "vocabulary are flagged; whether a field truly collects user-specific personal "
+            "data is a human judgement, and the format has no programmatic purpose "
+            "declaration (no HTML autocomplete equivalent)"),
 )
 
 # ── 2.5.3 Label in Name ───────────────────────────────────────────────────────────────

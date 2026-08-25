@@ -43,8 +43,7 @@ The distinction it asked for — *"doc-applicable, not-auto-here"* versus
 *"web-only → N-A"* — is exactly what `Coverage.DECLARED` and
 `Coverage.UNSUPPORTED` encode in `api/rule_registry.py`, arrived at from the
 other direction while fixing 4.1.2 on PDF. `1.4.1` and `4.1.2` now carry real
-per-format signal; `1.3.5` and `2.5.3` remain HTML-only and are the genuine
-remainder.
+per-format signal; `1.3.5` now carries heuristic detectors for docx and pdf too; `2.5.3` is the remaining genuine gap.
 
 <!-- BEGIN GENERATED: coverage-status — written by scripts/gen_todo_status.py. Do not
      hand-edit: the next run overwrites it, and `--check` fails CI if it is stale. -->
@@ -57,11 +56,13 @@ Regenerate with `python scripts/gen_todo_status.py`; CI fails if this block is s
 
 This is a behaviour change, not bookkeeping: several detectors compute the AA and AAA thresholds in one pass, so AAA findings were previously scored against AA-target files.
 
-**Capability registry — 30 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
+**Capability registry — 32 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
 
 | Criterion | Format | Coverage | Confidence | Not covered |
 |---|---|---|---|---|
 | `1.1.1` | docx | **partial** | high | charts, SmartArt, grouped shapes and embedded OLE objects are non-text content this walk does not reach, and w |
+| `1.3.5` | docx | **heuristic** | low | whether a control truly collects user-specific personal data is a human judgement, and OOXML has no programmat |
+| `1.3.5` | pdf | **heuristic** | low | whether a field truly collects user-specific personal data is a human judgement, and the format has no program |
 | `1.4.1` | docx | **partial** | high | colour used as the sole carrier of meaning anywhere else — shaded table rows, coloured glyphs, chart series ke |
 | `1.4.1` | pdf | **partial** | high | colour used as the sole carrier of meaning elsewhere — colour-keyed legends, chart series, status indicators — |
 | `1.4.1` | pptx | **partial** | high | colour used as the sole carrier of meaning elsewhere — chart series, shaded table cells, status markers withou |
@@ -97,7 +98,7 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 | Criterion | HTML | DOCX | XLSX | PPTX | PDF |
 |---|---|---|---|---|---|
 | `1.4.1` | pass/fail | partial | partial | partial | partial |
-| `1.3.5` | pass/fail | — | — | — | — |
+| `1.3.5` | pass/fail | heuristic | — | — | heuristic |
 | `2.5.3` | pass/fail | — | — | — | partial |
 | `4.1.2` | pass/fail | partial | partial | partial | partial |
 
@@ -105,7 +106,7 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 
 **Undeclared coverage** — detectors emitting for a (criterion, format) that no scope table admits. `scripts/gen_matrix_coverage.py` reports these; all known instances (`1.4.11` xlsx, `2.4.3` pdf, `4.1.2` pdf) are now declared in the registry.
 
-**Undeclared remediation (1)** — a pair ACP assesses (a detector emits it, a review lane admits it, or the registry declares it) with no entry in `api/remediation_capability.REMEDIATION`. Registration says what the DETECTOR examines and nothing about whether a FIXER writes, so the two go stale separately. `scripts/gen_matrix_coverage.py` reports each as an explicit gap with an unknown (null) remediation ceiling rather than inferring "no remediation" from the assessment axis — the inference that hid a working PDF form-field fixer behind "No Remediation" until `4.1.2` pdf got its lane. Open: `2.5.3` pdf.
+**Undeclared remediation (3)** — a pair ACP assesses (a detector emits it, a review lane admits it, or the registry declares it) with no entry in `api/remediation_capability.REMEDIATION`. Registration says what the DETECTOR examines and nothing about whether a FIXER writes, so the two go stale separately. `scripts/gen_matrix_coverage.py` reports each as an explicit gap with an unknown (null) remediation ceiling rather than inferring "no remediation" from the assessment axis — the inference that hid a working PDF form-field fixer behind "No Remediation" until `4.1.2` pdf got its lane. Open: `1.3.5` docx, `1.3.5` pdf, `2.5.3` pdf.
 
 <!-- END GENERATED: coverage-status -->
 
@@ -546,7 +547,7 @@ honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~
 
 ### Polish / technical debt (surfaced during R15 implementation, 2026-08-24)
 
-**All P-1–P-8 shipped** (verified against `origin/main` 2026-08-24). **P-9–P-12 shipped** (#725). **P-13 shipped** (this PR). **P-14 shipped** (#750). **P-15 shipped** (#748). **P-16 shipped** (#742). **P-17 shipped** (#752). **P-18 shipped** (#744). **P-19 shipped** (this PR). **P-20 shipped** (this PR).
+**All P-1–P-8 shipped** (verified against `origin/main` 2026-08-24). **P-9–P-12 shipped** (#725). **P-13 shipped** (this PR). **P-14 shipped** (#750). **P-15 shipped** (#748). **P-16 shipped** (#742). **P-17 shipped** (#752). **P-18 shipped** (#744). **P-19 shipped** (this PR). **P-20 shipped** (this PR). **P-21 shipped** (#773). **P-22 shipped** (#772). **P-23 shipped** (this PR).
 
 **Sequencing (2026-08-25):** ~~P-13~~/~~P-16~~/~~P-18~~/~~P-20~~ → R9/R10 w/ ~~P-15~~ → ~~P-14~~/~~P-17~~ → ~~R-E~~ → ~~P-19~~/presentation.
 
@@ -572,6 +573,9 @@ honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~
 | ~~P-18~~ | `api/report.py` | ~~**Report-level reconciliation checks before rendering.**~~ **DONE**: `_reconciliation_checks()` validates rubric hash presence, orphan facts documents, catalog size, review arithmetic, and remediated_total; RED-bordered warning box rendered when any check fails (9 tests in `test_report_reconciliation_p18.py`). |
 | ~~P-19~~ | `api/report.py` | ~~**Print/PDF/AT behaviour.**~~ **SHIPPED (this PR)**: `_make_page_callback` factory draws page header (scan ID + report date) and footer (page number) via `onFirstPage`/`onLaterPages`; `topMargin` raised to 0.85 in; `repeatRows=1` on POUR, remediation-outcomes, open-findings-by-criterion, and file-inventory tables; donut+severity block wrapped in `KeepTogether`; `KeepTogether` imported. |
 | ~~P-20~~ | `api/report.py` | ~~**Remove ambiguous assurance language.**~~ **DONE**: POUR section renamed "No-failure rate by WCAG principle"; table columns "Passed"→"No failures", "Pass rate"→"No-failure rate"; file inventory Findings cell "clean"→"no findings". Docstring + prose updated to match. |
+| ~~P-21~~ | `api/formats/pdf/detectors/link_purpose.py` | ~~**2.4.4 Link Purpose PDF detector.**~~ **SHIPPED (#773)**: PDF link-annotation check for bare-URL labels; registered as PARTIAL/HIGH. |
+| ~~P-22~~ | `api/formats/pdf/detectors/focus_order.py` | ~~**2.4.3 Focus Order PDF detector.**~~ **SHIPPED (#772)**: structure-tree OBJR vs field-tree comparison; registered as PARTIAL/MEDIUM. |
+| ~~P-23~~ | `api/formats/pdf/detectors/input_purpose.py`, `api/formats/docx/detectors/input_purpose.py` | ~~**1.3.5 Identify Input Purpose detectors (PDF + DOCX).**~~ **SHIPPED (this PR)**: heuristic vocabulary-match over AcroForm /T//TU (PDF) and w:alias (DOCX); registered HEURISTIC/LOW for both formats; 17 tests in `tests/test_input_purpose_p23.py`. |
 
 ---
 

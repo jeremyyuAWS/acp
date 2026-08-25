@@ -10,7 +10,7 @@ from assessment import Confidence, Coverage
 from capabilities import Capability
 from rule_registry import register
 
-from formats.docx.detectors import (language_parts, link_purpose, name_role_value,
+from formats.docx.detectors import (input_purpose, language_parts, link_purpose, name_role_value,
                                     no_keyboard_trap, non_text_content, nontext_contrast,
                                     reflow, text_spacing, use_of_color)
 
@@ -271,4 +271,25 @@ register(
     reason=("paragraphs using exact (fixed) line spacing are identified from the spacing element "
             "in document XML; whether the fixed spacing clips text when a user applies the WCAG "
             "1.4.12 overrides is a rendered outcome not recorded in the file"),
+)
+
+
+# ── 1.3.5 Identify Input Purpose ─────────────────────────────────────────────────────
+# HEURISTIC: interactive content controls (date, dropdown, comboBox, checkbox) whose
+# w:alias (Title) matches the WCAG personal-data vocabulary are flagged. OOXML has no
+# programmatic autocomplete attribute — there is no HTML-equivalent mechanism — so any
+# personal-data field is a structural gap the format cannot close. LOW confidence follows
+# from the vocabulary-match approximation: organisational forms whose controls happen to be
+# titled "address" or "name" will false-positive. A clean scan resolves to REVIEW, not PASS.
+register(
+    rule="1.3.5",
+    fmt="docx",
+    detector=input_purpose.detect,
+    requires={Capability.FORMS},
+    coverage=Coverage.HEURISTIC,
+    confidence=Confidence.LOW,
+    reason=("interactive content controls whose Title (w:alias) matches the WCAG personal-data "
+            "vocabulary are flagged; whether a control truly collects user-specific personal data "
+            "is a human judgement, and OOXML has no programmatic purpose declaration "
+            "(no autocomplete attribute)"),
 )
