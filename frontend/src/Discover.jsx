@@ -21,7 +21,8 @@ import { loadDiscoveryInventory, mergeLifecycle, inventoryOnlyRows } from './dis
 import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 import DiscoverCompleteSummary from './DiscoverCompleteSummary.jsx'
 import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
-import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation } from './api.js'
+import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation,
+         acknowledgeScan, unacknowledgeScan } from './api.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
@@ -130,7 +131,8 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // "assess anyway" overrides it summarises. Both live here rather than inside DiscoveryResults so
   // the acknowledgement can GATE the Assess button at the foot of this tab — an acknowledgement
   // that does not gate anything is a checkbox, not a control.
-  const [ackRecs, setAckRecs] = useState(false)
+  // Initialize from the persisted run.acknowledged so a page reload restores the prior decision.
+  const [ackRecs, setAckRecs] = useState(() => !!(run?.acknowledged))
   const [assessAnyway, setAssessAnyway] = useState([])
   // The per-file lifecycle columns the recommendation surface is made of. They are NOT on
   // `GET /scans/{id}` (it reads file_records, which has no such columns) — they live on
@@ -155,6 +157,18 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
     if (!scanId) return
     loadDiscoveryInventory(scanId, getScanInventory).then((r) => setInv(r))
   }, [scanId])
+  // Persist the acknowledgement decision to the backend (PRD §EX-10). Optimistic local state
+  // update so the Assess gate responds immediately; the server write is best-effort and
+  // a failure only means a page reload would reset the checkbox (no data is lost).
+  const handleAcknowledge = useCallback(async (checked) => {
+    setAckRecs(checked)
+    if (!scanId) return
+    try {
+      if (checked) await acknowledgeScan(scanId)
+      else await unacknowledgeScan(scanId)
+    } catch { /* non-fatal — local state is already updated */ }
+  }, [scanId])
+
   // Lifecycle rules #8: POST the override, then reload the inventory so the recorded reason
   // reaches this screen the same way every other lifecycle fact does — through the same
   // all-or-nothing paginated read, never patched into local state (a locally-patched row would
@@ -587,7 +601,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                         reasonOf={why ? why.reasonOf : undefined}
                         reasonSampleOf={why ? why.sampleOf : null}
                         reasonFetchLikely={why ? why.fetchLikely : null}
-                        acknowledged={ackRecs} onAcknowledge={setAckRecs}
+                        acknowledged={ackRecs} onAcknowledge={handleAcknowledge}
                         overrides={assessAnyway} onOverridesChange={setAssessAnyway}
                         onOverrideRecommendation={overrideRecommendation}
                         actor={me?.email || me?.name || null} scanId={scanId} />

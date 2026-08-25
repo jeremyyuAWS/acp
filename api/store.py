@@ -580,6 +580,11 @@ _SCHEMA = [
     # Together they drive the finalization trigger and the "N/M folders scanned" UI.
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS total_folders INT",
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS completed_folders INT",
+    # Discovery acknowledgement (PRD §EX-10): the operator reviews lifecycle recommendations
+    # and explicitly acknowledges the snapshot before Assess can consume it.
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS acknowledged BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS acknowledged_at TEXT",
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS acknowledged_by TEXT",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -2165,6 +2170,38 @@ class Store:
             # which is correct — it is not a partial assessment. COALESCE so a run that had already
             # finalized keeps its original stamp rather than being back-dated to the cancel.
             self._stamp_assessed_if_ran(cur, sid)
+        return True
+
+    def acknowledge_scan(self, scan_id: str, actor: str | None, owner: str | None = None) -> bool:
+        """Record that the operator has reviewed lifecycle recommendations and approved this
+        discovery snapshot for handoff to Assess (PRD §EX-10). Idempotent — re-acknowledging
+        overwrites the prior stamp, allowing corrections. Returns False when scan is not found
+        or owner mismatch."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT owner_email FROM scan_runs WHERE id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+            if not row:
+                return False
+            if owner is not None and row.get("owner_email") != owner:
+                return False
+            self._db.execute(cur,
+                "UPDATE scan_runs SET acknowledged=TRUE, acknowledged_at=%s, acknowledged_by=%s "
+                "WHERE id=%s",
+                (self._now(), actor, scan_id))
+        return True
+
+    def unacknowledge_scan(self, scan_id: str, owner: str | None = None) -> bool:
+        """Withdraw a prior acknowledgement (e.g. if lifecycle rules changed after approval)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT owner_email FROM scan_runs WHERE id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+            if not row:
+                return False
+            if owner is not None and row.get("owner_email") != owner:
+                return False
+            self._db.execute(cur,
+                "UPDATE scan_runs SET acknowledged=FALSE, acknowledged_at=NULL, acknowledged_by=NULL "
+                "WHERE id=%s", (scan_id,))
         return True
 
     def cancel_queued_job(self, sid: str) -> bool:
