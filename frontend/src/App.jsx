@@ -19,6 +19,7 @@ import { annotate, loadPublished } from './ontology.js'
 import { RuleBreakdown } from './Transparency.jsx'
 import Logo from './Logo.jsx'
 import ChatWidget from './ChatWidget.jsx'
+import VersionToast from './VersionToast.jsx'
 // Lazy: KnowledgeGraph statically imports all of d3 (~250 kB min) — the only heavy
 // dep not already behind a dynamic import. Loading it on tab entry keeps d3 out of
 // the main chunk entirely.
@@ -1651,6 +1652,7 @@ export default function App() {
           onCancel={() => setPendingScan(null)} />
       )}
       <ConfirmDialog />
+      <VersionToast currentVersion={platformVersion} />
     </div>
     </>
   )
