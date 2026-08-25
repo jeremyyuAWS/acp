@@ -57,7 +57,7 @@ Regenerate with `python scripts/gen_todo_status.py`; CI fails if this block is s
 
 This is a behaviour change, not bookkeeping: several detectors compute the AA and AAA thresholds in one pass, so AAA findings were previously scored against AA-target files.
 
-**Capability registry — 29 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
+**Capability registry — 30 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
 
 | Criterion | Format | Coverage | Confidence | Not covered |
 |---|---|---|---|---|
@@ -83,6 +83,7 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 | `2.4.3` | pptx | **partial** | high | other focus-order conditions (non-placeholder shape sequences, embedded control tab order) are not examined |
 | `2.4.4` | docx | **partial** | high | whether otherwise-descriptive text actually names THIS destination — a link reading 'Annual Report' that point |
 | `2.4.4` | pdf | **partial** | high | generic filler phrases and links whose text does not literally match the URI are not examined |
+| `2.5.3` | pdf | **partial** | high | other field types (text, checkbox, radio) display their labels as separate text objects not linked to the fiel |
 | `3.1.1` | html | **full** | high | whether the declared language is the CORRECT one is a content question 3.1.1 does not ask |
 | `3.1.2` | docx | **partial** | high | a shorter foreign phrase or a single borrowed word is under the length floor langdetect needs to be trusted, a |
 | `3.1.2` | xlsx | **partial** | medium | SpreadsheetML has no per-run language element, so shorter phrases and statistical uncertainty in langdetect's  |
@@ -97,14 +98,14 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 |---|---|---|---|---|---|
 | `1.4.1` | pass/fail | partial | partial | partial | partial |
 | `1.3.5` | pass/fail | — | — | — | — |
-| `2.5.3` | pass/fail | — | — | — | — |
+| `2.5.3` | pass/fail | — | — | — | partial |
 | `4.1.2` | pass/fail | partial | partial | partial | partial |
 
 `partial` / `heuristic` / `full` come from the registry and mean a real detector runs. `review` means a review-lane detector surfaces evidence but never certifies. `—` means no signal of any kind — the genuine remaining gap.
 
 **Undeclared coverage** — detectors emitting for a (criterion, format) that no scope table admits. `scripts/gen_matrix_coverage.py` reports these; all known instances (`1.4.11` xlsx, `2.4.3` pdf, `4.1.2` pdf) are now declared in the registry.
 
-**Undeclared remediation (0)** — a pair ACP assesses (a detector emits it, a review lane admits it, or the registry declares it) with no entry in `api/remediation_capability.REMEDIATION`. Registration says what the DETECTOR examines and nothing about whether a FIXER writes, so the two go stale separately. `scripts/gen_matrix_coverage.py` reports each as an explicit gap with an unknown (null) remediation ceiling rather than inferring "no remediation" from the assessment axis — the inference that hid a working PDF form-field fixer behind "No Remediation" until `4.1.2` pdf got its lane. Open: none — every assessed pair has a declared lane.
+**Undeclared remediation (1)** — a pair ACP assesses (a detector emits it, a review lane admits it, or the registry declares it) with no entry in `api/remediation_capability.REMEDIATION`. Registration says what the DETECTOR examines and nothing about whether a FIXER writes, so the two go stale separately. `scripts/gen_matrix_coverage.py` reports each as an explicit gap with an unknown (null) remediation ceiling rather than inferring "no remediation" from the assessment axis — the inference that hid a working PDF form-field fixer behind "No Remediation" until `4.1.2` pdf got its lane. Open: `2.5.3` pdf.
 
 <!-- END GENERATED: coverage-status -->
 

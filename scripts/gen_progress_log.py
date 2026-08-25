@@ -69,7 +69,7 @@ import sys
 TRACKED_SCS = frozenset({
     "1.1.1", "1.3.1", "1.3.2", "1.3.3", "1.4.1", "1.4.3", "1.4.4", "1.4.5",
     "1.4.10", "1.4.11", "1.4.12", "2.1.1", "2.1.2", "2.4.2", "2.4.3", "2.4.4",
-    "2.4.6", "3.1.1", "3.1.2", "4.1.2",
+    "2.4.6", "2.5.3", "3.1.1", "3.1.2", "4.1.2",
 })
 # html IS a Progress Log format. It is a real ACP engine and commits already declare `(html)`
 # capability changes in their WCAG: trailers (#37 read the HTML engine's 32 rules; #41 filed html
