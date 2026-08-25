@@ -102,6 +102,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   if (!busy && !isDone) return null
 
   const filesFound = progress.files_found || 0
+  const foldersFound = progress.folders_found ?? null
   const doneCount = PHASE_DONE_COUNT[phase] ?? 0
 
   // Source label substitution and KPI.
@@ -144,7 +145,9 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
         kpi = sourceCount === 1 ? '1 source' : `${sourceCount} sources`
       }
       if (s.key === 'listing' && filesFound > 0) {
-        kpi = `${n(filesFound)} files found`
+        kpi = foldersFound !== null
+          ? `${n(filesFound)} files · ${n(foldersFound)} folders`
+          : `${n(filesFound)} files found`
       }
       if (s.key === 'metadata' && metadataCompleteCount !== null && metadataIncompleteCount !== null) {
         kpi = `${n(metadataCompleteCount)} complete · ${n(metadataIncompleteCount)} incomplete`

@@ -2966,7 +2966,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                      exclude_remediated=exclude_remediated, scope_out=scope,
                      scope_files=_scope_for_listing(user), inventory_out=inventory_out)
         n = len(items)
-        progress({"phase": "discovering", "files_found": n, "files_done": 0, "current": None})
+        progress({"phase": "discovering", "files_found": n, "files_done": 0, "current": None,
+                  "folders_found": scope.get("folders_walked")})
 
         for i, it in enumerate(items):
             progress({"phase": "reading", "files_found": n, "files_done": i, "current": it["name"]})

@@ -120,7 +120,7 @@ describe('phase-driven step completion', () => {
     expect(foundAt).toBeLessThan(nextStepStart)
   })
 
-  it('shows "files found" without "so far" on the done Listed step', () => {
+  it('shows "files found" without "so far" on the done Listed step when folders_found is absent', () => {
     const prog = { phase: 'reading', files_found: 148 }
     const html = render(prog, true)
     expect(html).toContain('148 files found')
@@ -130,6 +130,18 @@ describe('phase-driven step completion', () => {
     const foundAt = html.indexOf('148 files found')
     expect(foundAt).toBeGreaterThan(listedIdx)
     expect(foundAt).toBeLessThan(nextStepStart)
+  })
+
+  it('shows "N files · M folders" on the done Listed step when folders_found is present', () => {
+    const prog = { phase: 'reading', files_found: 148, folders_found: 12 }
+    const html = render(prog, true)
+    expect(html).toContain('148 files · 12 folders')
+    expect(html).not.toContain('148 files found')
+    const listedIdx = html.indexOf('Listed folders and files')
+    const nextStepStart = html.indexOf('Reading document metadata')
+    const kpiIdx = html.indexOf('148 files · 12 folders')
+    expect(kpiIdx).toBeGreaterThan(listedIdx)
+    expect(kpiIdx).toBeLessThan(nextStepStart)
   })
 
   it('done steps use past-tense labels', () => {
