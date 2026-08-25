@@ -49,7 +49,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import (HRFlowable, Image, Paragraph,
+from reportlab.platypus import (HRFlowable, Image, KeepTogether, Paragraph,
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 
 import human_categories as _hc
@@ -195,22 +195,41 @@ def _extent(f):
     return "—"
 
 
-def _footer(canvas, doc):
-    # WCAG 2.4.2 Page Titled is two halves, and the report only ever shipped one of them. The
-    # docinfo /Title has always been set (build_report's `title=`), but a viewer with
-    # DisplayDocTitle unset shows the FILENAME in its window/tab regardless — so the title an
-    # assistive technology announces for the certification document was "acp-report-<uuid>.pdf".
-    # This is a catalog write, not graphics state, so it is unaffected by the save/restore pair
-    # below and idempotent across the pages _footer runs on.
-    canvas.setViewerPreference("DisplayDocTitle", "true")
-    canvas.saveState()
-    canvas.setStrokeColor(LINE)
-    canvas.line(0.7 * inch, 0.45 * inch, LETTER[0] - 0.7 * inch, 0.45 * inch)
-    canvas.setFont("Helvetica", 7.5)
-    canvas.setFillColor(MUTED)
-    canvas.drawString(0.7 * inch, 0.31 * inch, "mova.io · Accessibility Compliance Platform · confidential")
-    canvas.drawRightString(LETTER[0] - 0.7 * inch, 0.31 * inch, f"Page {canvas.getPageNumber()}")
-    canvas.restoreState()
+def _make_page_callback(scan_id: str, report_date: str):
+    """P-19: every page carries a header (scan ID + date) and footer (brand + page number).
+
+    The header satisfies two requirements: page headers identify the scan and report date
+    (so a printed page can be matched back to the scan without the cover), and colour is never
+    the only indicator (both header and footer are plain text, no colour-only elements).
+
+    Returns a single function suitable for both onFirstPage and onLaterPages.
+    """
+    def _on_page(canvas, doc):
+        # WCAG 2.4.2 Page Titled — two halves: /Title docinfo (set in SimpleDocTemplate's
+        # `title=` arg) and DisplayDocTitle so a viewer/AT uses the docinfo title instead of
+        # the filename. This is a catalog write, unaffected by the save/restore pair below.
+        canvas.setViewerPreference("DisplayDocTitle", "true")
+        canvas.saveState()
+        w = LETTER[0]
+        # ── Header — scan identity on every page ─────────────────────────────
+        canvas.setStrokeColor(LINE)
+        canvas.line(0.7 * inch, LETTER[1] - 0.47 * inch, w - 0.7 * inch, LETTER[1] - 0.47 * inch)
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(MUTED)
+        canvas.drawString(0.7 * inch, LETTER[1] - 0.63 * inch,
+                          f"Scan {scan_id}  ·  Report generated {report_date} UTC")
+        canvas.drawRightString(w - 0.7 * inch, LETTER[1] - 0.63 * inch,
+                               "Accessibility Assessment Report")
+        # ── Footer — brand + page number ─────────────────────────────────────
+        canvas.setStrokeColor(LINE)
+        canvas.line(0.7 * inch, 0.45 * inch, w - 0.7 * inch, 0.45 * inch)
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(MUTED)
+        canvas.drawString(0.7 * inch, 0.31 * inch,
+                          "mova.io · Accessibility Compliance Platform · confidential")
+        canvas.drawRightString(w - 0.7 * inch, 0.31 * inch, f"Page {canvas.getPageNumber()}")
+        canvas.restoreState()
+    return _on_page
 
 
 def _content_digest(run: dict, files: list, meta: dict) -> str:
@@ -1525,9 +1544,11 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     # `lang` reaches the PDF catalog as /Lang (WCAG 3.1.1) — without it a screen reader guesses
     # the language of the certification document from the user's locale. `title` is already the
     # docinfo /Title (2.4.2); _footer sets the ViewerPreferences half of that criterion.
+    # topMargin raised to 0.85 in (from 0.6 in) to leave room for the P-19 page header that
+    # _make_page_callback draws at LETTER[1] - 0.47 in (rule) and LETTER[1] - 0.63 in (text).
     doc = SimpleDocTemplate(buf, pagesize=LETTER, title=f"mova.io conformance report {run['id']}",
                             lang=REPORT_LANG,
-                            topMargin=0.6 * inch, bottomMargin=0.75 * inch,
+                            topMargin=0.85 * inch, bottomMargin=0.75 * inch,
                             leftMargin=0.7 * inch, rightMargin=0.7 * inch)
     ss = getSampleStyleSheet()
     H = ParagraphStyle("H", parent=ss["Title"], textColor=PLUM, fontSize=20, spaceAfter=1,
@@ -1805,8 +1826,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     charts = Table([[_donut(counts), sev_t]], colWidths=[3.6 * inch, 3.5 * inch])
     charts.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
                                 ("TOPPADDING", (0, 0), (-1, -1), 8)]))
-    el.append(Paragraph("Document status &amp; open-finding severity", h2))
-    el.append(charts)
+    # KeepTogether so the section heading never lands at the bottom of a page separated from
+    # the chart it labels — a purely visual block that is meaningless without its heading.
+    el.append(KeepTogether([Paragraph("Document status &amp; open-finding severity", h2), charts]))
 
     # ── Remediation outcomes — what the platform already cleared ─────────────
     if resolved_total:
@@ -1817,7 +1839,7 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
         rows = [["Criterion", "Level", "Findings cleared"]] + [
             [_crit_name(c), WCAG_META.get(c, ("", "", ""))[1] or "—", n]
             for c, n in sorted(resolved_crit.items(), key=lambda x: -x[1])]
-        rmt = Table(rows, colWidths=[4.2 * inch, 0.9 * inch, 1.4 * inch])
+        rmt = Table(rows, colWidths=[4.2 * inch, 0.9 * inch, 1.4 * inch], repeatRows=1)
         rmt.setStyle(TableStyle([
             ("FONTSIZE", (0, 0), (-1, -1), 8.5), ("TEXTCOLOR", (0, 0), (-1, 0), MUTED),
             ("LINEBELOW", (0, 0), (-1, 0), 0.5, LINE), ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
@@ -1835,7 +1857,8 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
             [_crit_name(c), WCAG_META.get(c, ("", "", ""))[1] or "—",
              Paragraph(WCAG_META.get(c, ("", "", ""))[2] or "", cellm), n, f"{round(n / total * 100)}%"]
             for c, n in sorted(open_fails.items(), key=lambda x: -x[1])]
-        ct = Table(rows, colWidths=[2.05 * inch, 0.5 * inch, 2.85 * inch, 0.5 * inch, 0.8 * inch])
+        ct = Table(rows, colWidths=[2.05 * inch, 0.5 * inch, 2.85 * inch, 0.5 * inch, 0.8 * inch],
+                   repeatRows=1)
         ct.setStyle(TableStyle([
             ("FONTSIZE", (0, 0), (-1, -1), 8.5), ("TEXTCOLOR", (0, 0), (-1, 0), MUTED),
             ("LINEBELOW", (0, 0), (-1, 0), 0.5, LINE), ("ALIGN", (3, 0), (-1, -1), "RIGHT"),
@@ -1995,5 +2018,6 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     # ── Verify this report (R15) ─────────────────────────────────────────────
     el.extend(_verify_section(run["id"], _content_digest(run, files, meta), h2, body, note))
 
-    doc.build(el, onFirstPage=_footer, onLaterPages=_footer)
+    _on_page = _make_page_callback(run.get("id", ""), report_generated_at)
+    doc.build(el, onFirstPage=_on_page, onLaterPages=_on_page)
     return buf.getvalue()
