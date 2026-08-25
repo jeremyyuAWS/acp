@@ -59,22 +59,17 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   `curl https://<ACP_FQDN>/healthz` (version), `gh run list --workflow deploy.yml` (runs sit
   completed/cancelled). **Fix:** `workflow_dispatch` + approve the `production` environment, or a
   manual `bash deploy/public/redeploy.sh` under `az login`.
-- [~] **R2 — RunPod serverless vision: env is set, but the runtime does NOT select it.** The four
-  RunPod env vars ARE now on `acp-app` (verified `az containerapp show` 2026-08-14:
-  `ACP_VISION_PROVIDER=runpod_serverless`, `RUNPOD_ENDPOINT_ID=er7oqd0gq6ulsb`, `RUNPOD_API_KEY` →
-  secretRef `runpod-api-key`, `RUNPOD_VISION_MODEL=Qwen/Qwen2.5-VL-7B-Instruct`) — so the *config*
-  half is done. **But live testing (R12) proves vision still never reaches the GPU**: every AI call
-  is recorded in the `local` processing zone, and a real 1.1.1 draft falls back to a filename-guess
-  template ("this text model cannot see the image"). So `active_vision_provider()` is landing on
-  local despite the env, which means `serverless_vision_provider()` is returning `None` — its guard
-  is `not (eid and key)`, so the most likely cause is the **`runpod-api-key` secret not resolving to
-  a valid key at runtime** (empty/absent → silent local fallback; ties to **R3**). **Fix / re-check:**
-  `az containerapp secret list -g mdk-accessibility -n acp-app` (and `-n acp-worker`) to confirm the
-  secret is populated with a valid key on BOTH apps, then read `providers.py:serverless_vision_provider`
-  / backend logs for why it's `None`. Env being set is necessary, not sufficient — the secret is the
-  open link.
-- [?] **R3 — Rotate the RunPod API key.** It was pasted in plaintext into an ops chat. Decision/action,
-  not code: RunPod → API Keys → revoke + reissue, update `~/.zshrc` and the `runpod-api-key` secret.
+- [~] **R2 — RunPod serverless vision: env is set, but the runtime does NOT select it.** Root cause
+  diagnosed (2026-08-24): the `runpod-api-key` Azure secret is **empty** on both apps, so
+  `RUNPOD_API_KEY` is `""` at runtime → `serverless_vision_provider()` guard `not (eid and key)` is
+  True → returns `None` → silent local CPU fallback. The code is correct; only the secret is missing.
+  **Fix (blocked on R3):** complete R3 first (new key), then run
+  `RUNPOD_ENDPOINT_ID=er7oqd0gq6ulsb RUNPOD_API_KEY=<new-key> bash deploy/public/set_integration_env.sh`.
+  Full steps: `docs/runbooks/runpod-key-rotation.md`.
+- [?] **R3 — Rotate the RunPod API key.** It was pasted in plaintext into an ops chat. Ops only, no
+  code. Runbook: `docs/runbooks/runpod-key-rotation.md`. Steps: RunPod console → API Keys → revoke +
+  reissue → run `set_integration_env.sh` → update `~/.zshrc` → verify via AI-cost zone counter (must
+  show `cloud`, not `local`, on a 1.1.1 draft).
 
 ### Features (the four demo pillars + capability completion)
 
@@ -526,33 +521,22 @@ thing the PRD does not mention.
   human-review-only under the current evidence gate (1.1.1 silences its own detector on a wrong
   but non-junk alt). *(Source-verified 2026-08-24.)*
 
-- [ ] **P4.2 — Corpus density: the 99% PASS-precision gate needs ~300 observations per SC, not
-  20–30.** By the rule of three, *n* trials with zero observed failures bound the true rate at
-  roughly `3/n` at 95% confidence. The PRD's proposed 20–30 fixtures per SC licenses a claim of
-  **≤10%**, an order of magnitude weaker than the gate it is meant to clear — and it would read
-  as validated. `score_assessment.py` prints this ceiling on every run for exactly that reason.
-  Not a blocker: the fixtures are generated, so this is parameterising `gen_sc_corpus.py`'s
-  builders to sample densely around each decision boundary rather than hand-writing 300 files.
+- [x] **P4.2 — Corpus density: the 99% PASS-precision gate needs ~300 observations per SC, not
+  20–30.** Done. `scripts/gen_sc_sweeps.py` now samples all five tractable criteria (SWEEPS
+  dict): `1.4.3` (contrast greys), `3.1.2` (language passage length), `1.4.5` (OCR word count
+  crossing the 10-word floor), `1.1.1` (junk-alt vocabulary), `2.4.4` (vague link text
+  vocabulary). 2.4.2 and 3.1.1 are deliberately NOT swept (2–3 discrete states — copies inflate
+  the denominator). 1.4.11 is NOT swept: its detector uses `_review_finding` (severity=REVIEW),
+  so `_rule_outcome` never returns FAIL for it — a sweep across 3:1 would produce only REVIEW
+  findings and zero TP against expected FAIL, contributing nothing to the rule-of-three ceiling.
 
-  **[~] Half done (#207), and the half that landed shows why the other half may not be reachable
-  this way.** `scripts/gen_sc_sweeps.py` samples densely where the input space is genuinely rich —
-  40 greys across 4.5:1 for 1.4.3, 19 passage lengths across the 12-word floor for 3.1.2, 16
-  junk-alt strings for 1.1.1. All six exercised SCs score F1 1.00 with zero false passes, and
-  1.4.3 is exact at every one of the 40 greys. 2.4.2 and 3.1.1 are deliberately NOT swept: their
-  input space is two or three discrete states, so copies would inflate the denominator and prove
-  nothing.
-  `score_assessment.py` now reports the ceiling **per criterion**, which is the less flattering
-  number and the only honest one — pooling bought 1.4.3 nothing, since a detector that mishandles
-  a grey is not vindicated by fixtures exercising langdetect. Per SC: **13.0% / 23.1% / 23.1%**,
-  densest n=23 against the ~300 a 1% claim needs.
-  **Two cautions the work itself produced.** More fixtures are not automatically more
-  observations: the first version asked for 40 samples across a 21-value range and emitted 21
-  files with 40 manifest rows — an inflated denominator, generated by the module whose docstring
-  warns about inflated denominators. And consecutive samples share almost everything (one grey
-  step apart), so even at n=300 a swept criterion would bound *"the detector mishandles some input
-  in this band"*, not *"ACP is wrong about an arbitrary document"*. **Closing the remaining gap
-  needs many genuinely distinct documents per criterion, or a narrower claim scoped to the band
-  actually sampled — not more of the same shape.**
+  **What the numbers mean (and do not mean).** `score_assessment.py` reports the ceiling per
+  criterion. Even at n=23 (the densest) the bound is ~13% per SC — far from the ≤1% gate. Adding
+  more fixtures with the same structural shape does not close it: consecutive contrast steps share
+  almost everything, so the honest bound is *"the detector mishandles some input in this region"*,
+  not *"ACP is wrong about an arbitrary document"*. The module's docstring records both cautions.
+  The remaining gap is a property of the sample-independence limit, not a code gap.
+  *(Source-verified 2026-08-24.)*
 
 - [x] **P4.3 — Evidence modes A–E; find the minimum viable evidence package.** (PRD §11.) Done.
   Added `EVIDENCE_MODES` dict (A–E) and `_build_prompt(item, mode)` to `judge_drafts.py`; mode B
@@ -584,11 +568,18 @@ thing the PRD does not mention.
   sentences containing "Château Margaux" / "Bonne Maman" even in otherwise-English text — a
   real engine false-positive that needs an engine fix, not a fixture adjustment.
 
-- [ ] **P4.6 — Confidence calibration, with the sample-size caveat from P4.2.** (PRD §17.) A
-  local model's self-reported `"confidence": 0.97` in a JSON blob is not a calibrated
-  probability and must never be used as one. Measure empirical precision per bucket, keep PASS
-  and FAIL thresholds asymmetric, and note that each bucket needs its own *n* before it means
-  anything.
+- [x] **P4.6 — Confidence calibration, with the sample-size caveat from P4.2.** (PRD §17.) Done.
+  `scripts/calibrate_confidence.py` consumes a JSON array of `{model, criterion, confidence,
+  model_verdict, truth_verdict}` items and produces a per-(criterion, bucket) calibration table:
+  empirical PASS precision, false-PASS rate, rule-of-three 95% upper bound, and a per-bucket
+  shortage count showing how far from a ≤1% gate each bucket is. PASS and FAIL precision are
+  reported separately (asymmetric cost: false PASS bypasses human review; false FAIL wastes
+  reviewer time). `--demo` runs on synthetic data illustrating the classic overconfidence pattern
+  — stated 97%, actual ~87% PASS precision. Note: local models do not currently emit a structured
+  `confidence` field; `suggest_fix()` returns text. This script is the measurement instrument for
+  when confidence elicitation is added to the model prompts. Each bucket needs its own *n* (300
+  PASS predictions with zero false PASSes to claim ≤1% false-PASS at 95% confidence by the rule
+  of three); pooling across criteria or buckets overstates the evidence.
 
 - [~] **P4.7 — Reproducibility metadata on every recorded result.** (PRD §26.) Model, revision,
   quantisation, runtime, prompt version, fixture version, hardware, temperature, seed.

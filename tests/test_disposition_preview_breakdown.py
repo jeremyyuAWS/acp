@@ -282,3 +282,43 @@ def test_unable_fields_not_in_result_shape_test():
     # Confirms the key is always present in the response (even when empty).
     r = _run([], "archive", "p1", [_doc()], [_pol("p1", "archive", [])])
     assert "unable_to_evaluate_fields" in r
+
+
+# ── exempted_documents ────────────────────────────────────────────────────────
+
+def test_exempted_documents_key_always_present():
+    r = _run(MATCH_FINANCE, "archive", "p1", [_doc()], [_pol("p1", "archive", MATCH_FINANCE)])
+    assert "exempted_documents" in r
+
+
+def test_exempted_documents_empty_when_none_exempted():
+    r = _run(MATCH_FINANCE, "archive", "p1", [_doc()], [_pol("p1", "archive", MATCH_FINANCE)])
+    assert r["exempted_documents"] == []
+
+
+def test_exempted_documents_contains_matching_held_doc():
+    doc = _doc(doc_id="held1", lifecycle_status="Exempted")
+    r = _run(MATCH_FINANCE, "archive", "p1", [doc], [_pol("p1", "archive", MATCH_FINANCE)])
+    assert r["exempted"] == 1
+    assert len(r["exempted_documents"]) == 1
+    assert r["exempted_documents"][0]["doc_id"] == "held1"
+
+
+def test_exempted_documents_excludes_non_matching_held_doc():
+    # A held doc that does NOT satisfy the rule's conditions is not in exempted_documents.
+    doc = _doc(department="Legal", lifecycle_status="Exempted")
+    r = _run(MATCH_FINANCE, "archive", "p1", [doc], [_pol("p1", "archive", MATCH_FINANCE)])
+    assert r["exempted"] == 0
+    assert r["exempted_documents"] == []
+
+
+def test_exempted_documents_count_matches_exempted():
+    doc1 = _doc(doc_id="h1", lifecycle_status="Exempted")
+    doc2 = _doc(doc_id="h2", lifecycle_status="Exempted")
+    doc3 = _doc(doc_id="d3")   # not held — matched normally
+    r = _run(MATCH_FINANCE, "archive", "p1", [doc1, doc2, doc3],
+             [_pol("p1", "archive", MATCH_FINANCE)])
+    assert r["exempted"] == 2
+    assert len(r["exempted_documents"]) == 2
+    assert {d["doc_id"] for d in r["exempted_documents"]} == {"h1", "h2"}
+    assert r["would_match"] == 1   # only doc3 is in would_match
