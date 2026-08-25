@@ -119,6 +119,11 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   const saveUnchanged = progress.save_unchanged ?? null
   const saveFailed = progress.save_failed ?? null
 
+  // Lifecycle activity stats from schema_version 2+ done payloads.
+  const rulesEnabled = progress.rules_enabled ?? null
+  const filesEvaluated = progress.files_evaluated ?? null
+  const lifecycleMatches = progress.lifecycle_matches ?? null
+
   // Source label substitution and KPI.
   const sourceName = sources && sources.length === 1 ? sources[0].name : null
   const sourceCount = sources ? sources.length : null
@@ -180,10 +185,18 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
       if (s.key === 'classifying' && assessableCount !== null && unsupportedCount !== null) {
         kpi = `${n(assessableCount)} assessable · ${n(unsupportedCount)} unsupported`
       }
-      if (s.key === 'lifecycle' && lifecycleMatchedCount !== null && lifecycleUnchangedCount !== null) {
-        kpi = lifecycleMatchedCount === 0
-          ? '— No enabled rules'
-          : `${n(lifecycleMatchedCount)} matched · ${n(lifecycleUnchangedCount)} unchanged`
+      if (s.key === 'lifecycle') {
+        if (rulesEnabled !== null) {
+          // Use progress payload fields (schema_version 2+) — more accurate than inv-derived counts.
+          kpi = rulesEnabled === 0
+            ? '— No enabled rules'
+            : `${n(rulesEnabled)} rules · ${n(lifecycleMatches)} matched`
+        } else if (lifecycleMatchedCount !== null && lifecycleUnchangedCount !== null) {
+          // Fallback for old backends that don't emit lifecycle stats.
+          kpi = lifecycleMatchedCount === 0
+            ? '— No enabled rules'
+            : `${n(lifecycleMatchedCount)} matched · ${n(lifecycleUnchangedCount)} unchanged`
+        }
       }
       if (s.key === 'saving' && saveNew !== null) {
         const parts = []
@@ -225,7 +238,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   // Completion summary replaces the active checklist once all steps are done.
   if (isDone) {
     const totalFiles = inv?.total ?? filesFound
-    const matched = lifecycleMatchedCount ?? 0
+    const matched = lifecycleMatches ?? lifecycleMatchedCount ?? 0
     return (
       <section className="discover-run-progress" role="region" aria-label="Discovery complete"
                style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>

@@ -197,7 +197,10 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                                      "save_new": save_outcome.get("new"),
                                      "save_updated": save_outcome.get("updated"),
                                      "save_unchanged": save_outcome.get("unchanged"),
-                                     "save_failed": save_outcome.get("failed")})
+                                     "save_failed": save_outcome.get("failed"),
+                                     "rules_enabled": save_outcome.get("rules_enabled"),
+                                     "files_evaluated": save_outcome.get("files_evaluated"),
+                                     "lifecycle_matches": save_outcome.get("lifecycle_matches")})
         except Exception as e:
             core.update_job(job_id, {"phase": "error", "done": True, "error": str(e)})
         finally:

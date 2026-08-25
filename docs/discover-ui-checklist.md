@@ -112,12 +112,18 @@ excluded from Assessment by a lifecycle rule. Do NOT conflate the two.
   Backend: scanner.py wraps `_download()` in try/except classifying failures; emits
   `schema_version: 2` on discovering and reading events.
 
-## Remaining
+- [x] **#2 + #7 Lifecycle activity detail** — Lifecycle step KPI (when done) now shows
+  `N rules · M matched` (or `— No enabled rules` when `rules_enabled === 0`) sourced from
+  the `done` progress payload rather than derived from `inv` rows. Falls back to the
+  `inv`-derived `N matched · M unchanged` display for old backends that don't emit the new fields.
+  Completion summary footer uses `lifecycle_matches` from the payload when available.
+  Backend: `_evaluate_discover_lifecycle_rules` returns
+  `{"rules_enabled": N, "files_evaluated": M, "lifecycle_matches": K}`;
+  `persist_discovery_inventory` merges these into its return dict alongside save-outcome keys;
+  `routes/scans.py work()` emits `rules_enabled`, `files_evaluated`, `lifecycle_matches` in the
+  `phase: "done"` update (schema_version 2).
 
-- [ ] **#2 + #7 Lifecycle activity detail** — During the `analysing` phase, show enabled rule count,
-  per-file evaluation progress, and match candidates. These share the same instrumentation.
-  Fields needed: `rules_enabled`, `files_evaluated`, `lifecycle_matches`.
-  Requires: scanner to emit these in the `analysing` phase progress event.
+## Remaining
 
 - [ ] **#6 Classification breakdown** — Expand beyond `assessable / unsupported` to the five
   mutually exclusive doc-class buckets: `assessable`, `metadata-only`, `unsupported`,

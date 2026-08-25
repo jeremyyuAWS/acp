@@ -680,3 +680,54 @@ describe('saving step KPI (schema_version 2 done payload)', () => {
     expect(kpiIdx - savedIdx).toBeLessThan(400)
   })
 })
+
+describe('lifecycle step KPI from progress payload (schema_version 2)', () => {
+  it('shows "N rules · M matched" in the Applied lifecycle rules step when progress fields are present', () => {
+    const prog = { phase: 'scoring', files_found: 50, rules_enabled: 3, files_evaluated: 50, lifecycle_matches: 12 }
+    const html = render(prog, true)
+    expect(html).toContain('3 rules')
+    expect(html).toContain('12 matched')
+  })
+
+  it('shows "— No enabled rules" when rules_enabled is 0', () => {
+    const prog = { phase: 'scoring', files_found: 50, rules_enabled: 0, files_evaluated: 0, lifecycle_matches: 0 }
+    const html = render(prog, true)
+    expect(html).toContain('No enabled rules')
+  })
+
+  it('progress-payload KPI takes precedence over inv-derived KPI', () => {
+    // inv says 1 matched, progress says 5 — progress wins
+    const prog = { phase: 'scoring', files_found: 10, rules_enabled: 2, files_evaluated: 10, lifecycle_matches: 5 }
+    const inv = { rows: [{ file: 'a.docx', lifecycle_rule_id: 'r1' }], total: 10 }
+    const html = render(prog, true, undefined, undefined, inv)
+    expect(html).toContain('5 matched')
+    expect(html).not.toContain('1 matched')
+  })
+
+  it('falls back to inv-derived KPI when progress fields are absent (old backends)', () => {
+    const prog = { phase: 'scoring', files_found: 4 }
+    const inv = { rows: [
+      { file: 'a.docx', lifecycle_rule_id: 'ret-1' },
+      { file: 'b.docx', lifecycle_rule_id: 'ret-1' },
+      { file: 'c.docx', lifecycle_rule_id: null },
+    ], total: 3 }
+    const html = render(prog, true, undefined, undefined, inv)
+    expect(html).toContain('2 matched')
+  })
+
+  it('lifecycle stats KPI appears near Applied lifecycle rules step', () => {
+    const prog = { phase: 'scoring', files_found: 20, rules_enabled: 4, files_evaluated: 20, lifecycle_matches: 7 }
+    const html = render(prog, true)
+    const lifecycleIdx = html.indexOf('Applied lifecycle rules')
+    const nextStepIdx = html.indexOf('Saving inventory')
+    const kpiIdx = html.indexOf('4 rules')
+    expect(kpiIdx).toBeGreaterThan(lifecycleIdx)
+    expect(kpiIdx).toBeLessThan(nextStepIdx)
+  })
+
+  it('completion summary uses lifecycle_matches from progress when available', () => {
+    const prog = { phase: 'done', files_found: 30, lifecycle_matches: 8 }
+    const html = render(prog, true)
+    expect(html).toContain('8 matched lifecycle rules')
+  })
+})

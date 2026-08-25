@@ -49,7 +49,8 @@ def test_persist_discovery_inventory_captures_outcome():
 
 
 def test_persist_discovery_inventory_returns_outcome():
-    assert "return outcome" in HANDLERS_CODE or "return save_outcome" in HANDLERS_CODE, (
+    assert ("return outcome" in HANDLERS_CODE or "return save_outcome" in HANDLERS_CODE
+            or "return {**outcome" in HANDLERS_CODE), (
         "persist_discovery_inventory must return the outcome dict so callers can forward it")
 
 
