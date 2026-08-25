@@ -175,6 +175,9 @@ function queuedProgress(g, elapsed) {
   const run = g && g.run
   const total = (run && run.files) || 0
   const done = (run && run.files_done) || 0
+  // Pre-created stub: job enqueued but no worker has claimed it yet. Surfaces as
+  // phase:'queued' so the checklist shows the correct waiting state without 404s.
+  if (run && run.status === 'queued') return { phase: 'queued', elapsed }
   if (!total) return { phase: 'discovering', elapsed }        // estate not listed yet
   const phase = done < total ? 'analysing' : 'scoring'
   const pct = Math.round(12 + Math.min(1, done / total) * (95 - 12))

@@ -82,6 +82,12 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
     if queue:
         scan_id = uuid.uuid4().hex[:12]
         core.register_scan_tokens(scan_id, drive=token, sp=sp_token)  # in-memory only
+        # Pre-create the scan_runs row so GET /scans/{id} returns 200 from the moment this
+        # response lands. Without this, the row only appears when a worker claims the job,
+        # leaving a startup window where the client holds a scan ID that 404s — a contract
+        # violation that produces a 404 flood in the browser console. The worker's
+        # init_scan_run overwrites the stub (DO UPDATE) once it starts discovery.
+        core.store.pre_create_queued_scan(scan_id, source, user)
         # fanout=true → decompose into per-file jobs (ADR 0007); else the monolithic
         # 'scan' job (default, proven). Both are durable and resume across replicas.
         jtype = "scan_discover" if fanout else "scan"
