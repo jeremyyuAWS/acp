@@ -123,6 +123,9 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   const rulesEnabled = progress.rules_enabled ?? null
   const filesEvaluated = progress.files_evaluated ?? null
   const lifecycleMatches = progress.lifecycle_matches ?? null
+  const lcArchive = progress.lifecycle_archive ?? null
+  const lcDelete = progress.lifecycle_delete ?? null
+  const lcTagged = progress.lifecycle_tagged ?? null
 
   // Source label substitution and KPI.
   const sourceName = sources && sources.length === 1 ? sources[0].name : null
@@ -277,6 +280,15 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
           <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 12,
                         fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.6 }}>
             <div>{n(totalFiles)} files discovered · {n(matched)} matched lifecycle rules</div>
+            {(lcArchive > 0 || lcDelete > 0 || lcTagged > 0) && (
+              <div>
+                {[
+                  lcArchive > 0 && `${n(lcArchive)} Archive Candidate${lcArchive === 1 ? '' : 's'}`,
+                  lcDelete > 0 && `${n(lcDelete)} Delete Candidate${lcDelete === 1 ? '' : 's'}`,
+                  lcTagged > 0 && `${n(lcTagged)} tagged`,
+                ].filter(Boolean).join(' · ')}
+              </div>
+            )}
             {hasClassStats ? (
               <div>
                 {[
