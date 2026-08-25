@@ -1438,12 +1438,11 @@ export default function App() {
           Discover answers "what do we have"; how far the assessment has got belongs to Assess,
           which owns a better view of it.
 
-          Only the assess-phase clause is narrowed. `busy` is left alone deliberately: it is set
-          by doScan/reconnectScan, so it means a DISCOVER run is in flight, and that progress is
-          exactly what someone on this tab wants to see. */}
+          `busy` means a DISCOVER run is live; the assess panel must not activate during
+          discovery. Only assessPhase==='running' should trigger it. */}
       <LiveAssessmentLive scanId={liveScanId || run?.id}
-                          active={(busy && view !== 'discover') || (assessPhase === 'running'
-                                           && view !== 'assess' && view !== 'discover')}
+                          active={assessPhase === 'running'
+                                  && view !== 'assess' && view !== 'discover'}
                           onStop={() => stopScan(liveScanId || run?.id)} />
 
       <main id="main-content" tabIndex={-1}>
