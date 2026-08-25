@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import WorkerCard from './WorkerCard.jsx'
 
 // The Discover RUNNING screen: a per-step checklist showing what the discovery agent is doing.
 // This replaces the generic scan-progress banner on the Discover tab so the screen stays scoped
@@ -18,6 +19,9 @@ function fmtElapsedSecs(s) {
 function n(count) { return count.toLocaleString() }
 
 const ASSESSABLE_CLASSES = new Set(['slide-deck', 'text-document', 'pdf-document', 'spreadsheet', 'web-page'])
+
+// Phases during which the backend emits `current` (the file being processed).
+const FILE_ACTIVE_PHASES = new Set(['reading', 'analysing', 'scoring'])
 
 // How many steps (from the front of STEPS) are DONE at each backend phase.
 // Steps: 0=connected, 1=listing, 2=metadata, 3=classifying, 4=lifecycle, 5=saving
@@ -396,6 +400,13 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
              style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
           {steps.map(({ key, ...rest }) => <DiscoverStep key={key} {...rest} />)}
         </div>
+
+        {FILE_ACTIVE_PHASES.has(phase) && (filesFound > 0 || progress.current) && (
+          <WorkerCard current={progress.current || null}
+                      filesDone={progress.files_done ?? 0}
+                      filesTotal={filesFound}
+                      elapsed={elapsed} />
+        )}
 
         {/* Announces phase transitions to screen readers without repeating per-tick KPI counts.
             Placed after the step list so step label text in the list is found first by indexOf. */}
