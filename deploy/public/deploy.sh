@@ -387,6 +387,20 @@ else
     echo "   vision default = local CPU Ollama floor"
   fi
 fi
+# Power BI DirectQuery (P3.4) — opt-in. Set ACP_POWERBI_PG_PASS to provision the acp_readonly
+# Postgres role at app startup and expose GET /admin/powerbi-dsn. Stored as a container secret
+# (secretref) so the password is never echoed in env output. Inherited on a bare redeploy.
+if [ -n "${ACP_POWERBI_PG_PASS:-}" ]; then
+  SECRETS+=("powerbi-pg-pass=$ACP_POWERBI_PG_PASS")
+  POWERBI_ENV="ACP_POWERBI_PG_PASS=secretref:powerbi-pg-pass"
+  echo "   power-bi = configured (acp_readonly role provisioned at startup)"
+else
+  EXISTING_PB="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" \
+    --query "properties.template.containers[0].env[?name=='ACP_POWERBI_PG_PASS'].secretRef | [0]" \
+    -o tsv 2>/dev/null || echo "")"
+  POWERBI_ENV="${EXISTING_PB:+ACP_POWERBI_PG_PASS=secretref:$EXISTING_PB}"
+  echo "   power-bi = ${EXISTING_PB:+inherited}${EXISTING_PB:-disabled (ACP_POWERBI_PG_PASS unset)}"
+fi
 # This script only ever deploys the public demo, so the app it produces IS production.
 # Stamp it so core.IS_PROD is true, which refuses the X-E2E-Key / X-Demo-Key bypasses even
 # if someone later sets ACP_ENABLE_TEST_BYPASS on the app. ACP_DEPLOY_ENV is the only name for
@@ -506,14 +520,14 @@ if az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" -o none 2>/dev/null; then
   _retry az containerapp registry set "${AZ[@]}" -g "$RG" -n "$APP" \
     --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
   _retry az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$ACRSERVER/$IMAGE" \
-    --set-env-vars $ADC_ENV $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV -o none
+    --set-env-vars $ADC_ENV $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV $POWERBI_ENV -o none
 else
   az containerapp create "${AZ[@]}" -g "$RG" -n "$APP" --environment "$ENVNAME" \
     --image "$ACRSERVER/$IMAGE" \
     --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
     --target-port 8077 --ingress external \
     --secrets "${SECRETS[@]}" \
-    --env-vars $ADC_ENV $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV \
+    --env-vars $ADC_ENV $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV $POWERBI_ENV \
     --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 1 -o none
 fi
 

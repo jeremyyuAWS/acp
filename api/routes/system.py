@@ -216,6 +216,24 @@ def set_admins(body: dict, request: Request):
     return {"owner": core.OWNER_EMAIL, "env_admins": sorted(core.ADMIN_EMAILS), "admins": saved}
 
 
+@router.get("/admin/powerbi-dsn")
+def get_powerbi_dsn(request: Request):
+    """Power BI DirectQuery connection details (owner-only).
+
+    Returns the Postgres host, port, database, and username for the acp_readonly role
+    so an owner can configure DirectQuery in Power BI Desktop without needing the raw
+    DATABASE_URL. Returns 409 when ACP_POWERBI_PG_PASS is not set (feature not
+    configured) or 503 when running in SQLite mode."""
+    import os
+    _require_owner(request)
+    if not os.environ.get("ACP_POWERBI_PG_PASS"):
+        raise HTTPException(409, "Power BI connector not configured — set ACP_POWERBI_PG_PASS to enable it")
+    result = core.store.get_powerbi_dsn()
+    if not result.get("available"):
+        raise HTTPException(503, result.get("reason", "Power BI not available"))
+    return result
+
+
 @router.put("/workers")
 def set_workers(request: Request, count: int = Query(..., ge=0, le=16)):
     """Admin: live-scale the in-process worker pool (0–16). Persisted + audited.

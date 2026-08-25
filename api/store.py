@@ -534,6 +534,37 @@ _SCHEMA = [
       rule_id TEXT, format TEXT, guidance TEXT NOT NULL, status TEXT NOT NULL,
       evidence TEXT, author TEXT, created_at TEXT, updated_at TEXT
     )""",
+    # P3.4 — Power BI DirectQuery: five read-only projection views exposed to the acp_readonly
+    # role. Named vw_* so they appear as a distinct namespace in Power BI's table picker.
+    # CREATE OR REPLACE VIEW is idempotent: safe on both first boot and every redeploy.
+    # Compatible with SQLite 3.35+ (2021) and PostgreSQL.
+    """CREATE OR REPLACE VIEW vw_scan_summary AS
+      SELECT id AS scan_id, owner_email, source, scope, status,
+             started_at, completed_at, discovered_at,
+             files, certifiable, uncertain, error, avg_score
+      FROM scan_runs""",
+    """CREATE OR REPLACE VIEW vw_file_compliance AS
+      SELECT fr.scan_id, fr.file, fr.status, fr.score, fr.compliant,
+             fr.size_kb, fr.pages, fr.sheets, fr.remediated_at,
+             sr.owner_email, sr.completed_at AS scan_completed_at
+      FROM file_records fr
+      JOIN scan_runs sr ON sr.id = fr.scan_id""",
+    """CREATE OR REPLACE VIEW vw_open_issues AS
+      SELECT ir.scan_id, ir.file, ir.rule_id, ir.wcag, ir.severity,
+             ir.page, ir.location, sr.owner_email
+      FROM issue_records ir
+      JOIN scan_runs sr ON sr.id = ir.scan_id""",
+    """CREATE OR REPLACE VIEW vw_remediation_queue AS
+      SELECT hq.id, hq.scan_id, hq.file, hq.rule_id, hq.rule_name,
+             hq.finding_count, hq.status, hq.created_at, hq.reviewed_at,
+             hq.page, hq.pages, sr.owner_email
+      FROM hitl_queue hq
+      JOIN scan_runs sr ON sr.id = hq.scan_id""",
+    """CREATE OR REPLACE VIEW vw_ai_spend AS
+      SELECT id, ts, scan_id, file, surface,
+             provider, model, zone, ok, reason,
+             latency_ms, cost_usd
+      FROM ai_calls""",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -624,6 +655,12 @@ class _SQLiteAdapter:
                     except sqlite3.OperationalError as e:
                         if "duplicate column" not in str(e).lower():
                             raise
+                elif stmt.strip().upper().startswith("CREATE OR REPLACE VIEW"):
+                    # SQLite does not support CREATE OR REPLACE VIEW — drop then recreate.
+                    tokens = stmt.strip().split()
+                    view_name = tokens[4]  # CREATE OR REPLACE VIEW <name> AS ...
+                    cur.execute(f"DROP VIEW IF EXISTS {view_name}")
+                    cur.execute(stmt.replace("CREATE OR REPLACE VIEW", "CREATE VIEW", 1))
                 else:
                     cur.execute(stmt)
             conn.commit()
@@ -788,6 +825,29 @@ class _PgAdapter:
         finally:
             conn.close()
 
+    def init_powerbi_role(self, password: str) -> None:
+        """Create (or update) the acp_readonly Postgres role and GRANT SELECT on all
+        vw_* views. Called at startup only when ACP_POWERBI_PG_PASS is set. Idempotent."""
+        import psycopg2
+        _POWERBI_VIEWS = (
+            "vw_scan_summary", "vw_file_compliance", "vw_open_issues",
+            "vw_remediation_queue", "vw_ai_spend",
+        )
+        conn = psycopg2.connect(self._url, **self._ssl_kwargs)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'acp_readonly'")
+            if cur.fetchone():
+                cur.execute("ALTER ROLE acp_readonly PASSWORD %s", (password,))
+            else:
+                cur.execute("CREATE ROLE acp_readonly LOGIN PASSWORD %s", (password,))
+            cur.execute("GRANT USAGE ON SCHEMA public TO acp_readonly")
+            for view in _POWERBI_VIEWS:
+                cur.execute(f"GRANT SELECT ON {view} TO acp_readonly")
+            conn.commit()
+        finally:
+            conn.close()
+
     def _getconn(self, timeout: float = 5.0):
         """psycopg2's ThreadedConnectionPool.getconn raises PoolError the moment the pool is
         empty — it never waits. A request arriving during a burst should queue for a moment,
@@ -842,6 +902,9 @@ class Store:
             _PgAdapter(_DATABASE_URL) if _DATABASE_URL else _SQLiteAdapter(str(_SQLITE_PATH))
         )
         self._db.init_schema()
+        _pb_pass = os.environ.get("ACP_POWERBI_PG_PASS", "").strip()
+        if _pb_pass and isinstance(self._db, _PgAdapter):
+            self._db.init_powerbi_role(_pb_pass)
         self._scope_cache: dict = {}
         self._scope_rules_cache: dict = {}
         self._inventory_cache: dict = {}
@@ -1559,6 +1622,27 @@ class Store:
             for t in self._ANALYTICS_TABLES:
                 self._db.execute(cur, f"DELETE FROM {t}")
         return list(self._ANALYTICS_TABLES)
+
+    def get_powerbi_dsn(self) -> dict:
+        """Connection details for Power BI DirectQuery via the acp_readonly role.
+
+        Returns host/port/database so an owner can configure DirectQuery in Power BI
+        Desktop without needing the raw DATABASE_URL. Only available on PostgreSQL;
+        returns available=False in SQLite mode (Power BI requires Postgres)."""
+        if not isinstance(self._db, _PgAdapter):
+            return {"available": False, "reason": "SQLite mode — Power BI requires PostgreSQL"}
+        import urllib.parse as _up
+        parsed = _up.urlparse(self._db._url)
+        return {
+            "available": True,
+            "host": parsed.hostname,
+            "port": parsed.port or 5432,
+            "database": (parsed.path or "").lstrip("/"),
+            "username": "acp_readonly",
+            "ssl_mode": "require",
+            "views": ["vw_scan_summary", "vw_file_compliance", "vw_open_issues",
+                      "vw_remediation_queue", "vw_ai_spend"],
+        }
 
     # Tables in _ANALYTICS_TABLES that key on scan_id, scoped via a scan_runs.owner_email join.
     _RESET_USER_SCAN_TABLES = ["file_records", "issue_records", "scan_rule_traces",
