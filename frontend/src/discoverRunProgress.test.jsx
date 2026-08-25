@@ -815,3 +815,55 @@ describe('lifecycle step KPI from progress payload (schema_version 2)', () => {
     expect(html).toContain('8 matched lifecycle rules')
   })
 })
+
+describe('lifecycle action-type breakdown in completion summary (schema_version 2)', () => {
+  it('shows Archive Candidates, Delete Candidates, and tagged counts when all non-zero', () => {
+    const prog = {
+      phase: 'done', files_found: 148, lifecycle_matches: 21,
+      lifecycle_archive: 12, lifecycle_delete: 1, lifecycle_tagged: 8,
+    }
+    const html = render(prog, true)
+    expect(html).toContain('12 Archive Candidates')
+    expect(html).toContain('1 Delete Candidate')
+    expect(html).toContain('8 tagged')
+  })
+
+  it('uses singular "Archive Candidate" when count is 1', () => {
+    const prog = {
+      phase: 'done', files_found: 10, lifecycle_matches: 1,
+      lifecycle_archive: 1, lifecycle_delete: 0, lifecycle_tagged: 0,
+    }
+    const html = render(prog, true)
+    expect(html).toContain('1 Archive Candidate')
+    expect(html).not.toContain('Archive Candidates')
+  })
+
+  it('omits zero-count action types', () => {
+    const prog = {
+      phase: 'done', files_found: 20, lifecycle_matches: 5,
+      lifecycle_archive: 5, lifecycle_delete: 0, lifecycle_tagged: 0,
+    }
+    const html = render(prog, true)
+    expect(html).toContain('5 Archive Candidate')
+    expect(html).not.toContain('Delete')
+    expect(html).not.toContain('tagged')
+  })
+
+  it('omits the action row entirely when no payload fields present (old backends)', () => {
+    const prog = { phase: 'done', files_found: 30, lifecycle_matches: 8 }
+    const html = render(prog, true)
+    expect(html).not.toContain('Archive')
+    expect(html).not.toContain('Delete Candidate')
+    expect(html).not.toContain('tagged')
+  })
+
+  it('omits the action row when all action counts are zero', () => {
+    const prog = {
+      phase: 'done', files_found: 30, lifecycle_matches: 0,
+      lifecycle_archive: 0, lifecycle_delete: 0, lifecycle_tagged: 0,
+    }
+    const html = render(prog, true)
+    expect(html).not.toContain('Archive')
+    expect(html).not.toContain('tagged')
+  })
+})

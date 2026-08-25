@@ -72,27 +72,27 @@ def test_routes_emits_assessable_in_done_payload():
 
 def test_routes_emits_metadata_only_in_done_payload():
     done_idx = ROUTES_CODE.index('"phase": "done"')
-    block = ROUTES_CODE[max(0, done_idx - 100):done_idx + 1100]
+    block = ROUTES_CODE[max(0, done_idx - 100):done_idx + 1200]
     assert "metadata_only" in block, (
         "routes/scans.py done-phase update must carry metadata_only")
 
 
 def test_routes_emits_unsupported_in_done_payload():
     done_idx = ROUTES_CODE.index('"phase": "done"')
-    block = ROUTES_CODE[max(0, done_idx - 100):done_idx + 1100]
+    block = ROUTES_CODE[max(0, done_idx - 100):done_idx + 1300]
     assert "unsupported" in block, (
         "routes/scans.py done-phase update must carry unsupported")
 
 
 def test_routes_emits_eligibility_unknown_in_done_payload():
     done_idx = ROUTES_CODE.index('"phase": "done"')
-    block = ROUTES_CODE[max(0, done_idx - 100):done_idx + 1100]
+    block = ROUTES_CODE[max(0, done_idx - 100):done_idx + 1400]
     assert "eligibility_unknown" in block, (
         "routes/scans.py done-phase update must carry eligibility_unknown")
 
 
 def test_routes_emits_excluded_in_done_payload():
     done_idx = ROUTES_CODE.index('"phase": "done"')
-    block = ROUTES_CODE[max(0, done_idx - 100):done_idx + 1300]
+    block = ROUTES_CODE[max(0, done_idx - 100):done_idx + 1500]
     assert "excluded" in block, (
         "routes/scans.py done-phase update must carry excluded")

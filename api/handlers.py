@@ -905,9 +905,13 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
     # had the scan owner in scope (as `actor`) and still fetched every tenant's enabled policies.
     policies = [p for p in core.store.list_disposition_policies(owner=actor) if p.get("enabled")]
     if not policies:
-        return {"rules_enabled": 0, "files_evaluated": 0, "lifecycle_matches": 0}
+        return {"rules_enabled": 0, "files_evaluated": 0, "lifecycle_matches": 0,
+                "lifecycle_archive": 0, "lifecycle_delete": 0, "lifecycle_tagged": 0}
     files_evaluated = 0
     lifecycle_matches = 0
+    lc_archive = 0
+    lc_delete = 0
+    lc_tagged_files: set = set()
     for r in core.store.list_inventory(scan_id):
         files_evaluated += 1
         file = r.get("file")
@@ -963,6 +967,7 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
             core.store.create_disposition_audit(
                 uuid.uuid4().hex, doc_id=doc_id, policy_id=p["policy_id"], action="tag",
                 result="applied", detail="tagged: " + ", ".join(tags), owner_email=actor)
+            lc_tagged_files.add(file)
         # ── Candidate status: archive-vs-delete precedence (PRD §6), shared with the conflicts
         # report — see disposition.resolve_candidate's own docstring for the precedence rule.
         chosen, new_status, reason = disposition.resolve_candidate(matched, actor)
@@ -976,8 +981,14 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
             uuid.uuid4().hex, doc_id=doc_id, policy_id=chosen["policy_id"],
             action=chosen.get("action"), result="pending_approval", detail=reason,
             owner_email=actor)
+        if chosen.get("action") == "archive":
+            lc_archive += 1
+        elif chosen.get("action") == "delete":
+            lc_delete += 1
     return {"rules_enabled": len(policies), "files_evaluated": files_evaluated,
-            "lifecycle_matches": lifecycle_matches}
+            "lifecycle_matches": lifecycle_matches,
+            "lifecycle_archive": lc_archive, "lifecycle_delete": lc_delete,
+            "lifecycle_tagged": len(lc_tagged_files)}
 
 
 def _mark_discovered(scan_id: str) -> None:
