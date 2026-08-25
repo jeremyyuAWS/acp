@@ -15,6 +15,7 @@ export const setSPToken = (t) => { spToken = t }
 export const setGoogleToken = (t) => { googleToken = t }
 export const setMsToken = (t) => { msToken = t }
 export const clearAllTokens = () => { googleToken = null; msToken = null; driveToken = null; spToken = null }
+export const getToken = () => googleToken || msToken || null
 // The Authorization bearer is Google's token when present, else the Microsoft one — tagged with
 // X-Auth-Provider so the backend verifies it against the right issuer (Graph, not Google's
 // tokeninfo). Without that tag a Microsoft sign-in has no bearer the backend accepts and every

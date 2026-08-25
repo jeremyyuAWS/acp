@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { resetDemoData, resetMyData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, getAiStatus, getAdmins, setAdmins, getMe } from './api.js'
+import { resetDemoData, resetMyData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, getAiStatus, getAdmins, setAdmins, getMe, getToken } from './api.js'
 import { SIM } from './sim.js'
 
 // What a write is allowed to claim when the API layer marked its own answer `simulated`.
@@ -770,6 +770,36 @@ const SimNotice = () => (
 const INP = { display: 'block', width: '100%', padding: '4px 8px', marginTop: 4, border: '1px solid var(--line)', borderRadius: 6, boxSizing: 'border-box' }
 const L = ({ label, children }) => (<label style={{ fontSize: 12 }} className="muted">{label}{children}</label>)
 
+function CopyToken() {
+  const token = getToken()
+  const [copied, setCopied] = useState(false)
+  if (!token) return null
+  const preview = token.length > 24 ? token.slice(0, 12) + '…' + token.slice(-8) : token
+  const copy = () => {
+    navigator.clipboard.writeText(token).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+  return (
+    <div style={{ maxWidth: 560, marginTop: 24, paddingTop: 20, borderTop: '1px solid var(--line)' }}>
+      <h3 style={{ marginTop: 0 }}>API bearer token <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>· for local testing</span></h3>
+      <p className="muted" style={{ fontSize: 13 }}>
+        Your current session token — pass it as <code>--token</code> to the smoke test script or
+        any direct API call. Expires with your session; re-copy after signing in again.
+      </p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <code style={{ flex: 1, padding: '6px 10px', borderRadius: 7, background: 'var(--surface)', border: '1px solid var(--line)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {preview}
+        </code>
+        <button onClick={copy} style={{ flexShrink: 0, padding: '6px 14px', borderRadius: 7, border: '1px solid var(--line)', background: copied ? '#2F6B43' : 'var(--surface)', color: copied ? '#fff' : 'inherit', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+          {copied ? '✓ Copied' : 'Copy'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function Settings({ onClose, files = [], onDelegationChange }) {
   const [tab, setTab] = useState('users')
   const panelRef = useRef(null)
@@ -798,7 +828,7 @@ export default function Settings({ onClose, files = [], onDelegationChange }) {
         <div className="setbody">
           {tab === 'owners' && <OwnerDelegate files={files} onChanged={onDelegationChange} />}
           {tab === 'users' && <AllowList />}
-          {tab === 'mydata' && <ResetMyData />}
+          {tab === 'mydata' && <><ResetMyData /><CopyToken /></>}
           {tab === 'myscope' && <MyScanScope />}
         </div>
       </div>
