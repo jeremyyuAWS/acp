@@ -5717,7 +5717,7 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO disposition_audit(id,ts,doc_id,policy_id,action,result,detail,"
-                "owner_email) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                "owner_email) VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
                 (audit_id, self._now(), doc_id, policy_id, action, result, detail, owner_email))
 
     def get_disposition_audit(self, audit_id: str, owner: str | None = None) -> dict | None:
