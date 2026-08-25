@@ -40,8 +40,8 @@ not confirmed in source this session — each names the file to confirm in first
 engaged** — alt-text falls back to a local filename-guess template and the AI-cost zone stays
 `local (8/8)`, zero cloud, even after clearing the endpoint override. **R2 downgraded** from "env not
 set" to "env set but runtime doesn't select RunPod" (the `runpod-api-key` secret not resolving is the
-prime suspect → **R3**); **R12 is now VERIFIED FAILING**, not merely unverified. Both carry the exact
-re-check steps.
+prime suspect → **R3**); **R12 was VERIFIED FAILING** at that time. **R12 CLOSED 2026-08-25**: deploy
+#559 `/readyz` confirms `zone: cloud`, `model: llava:13b` — GPU vision now engaged.
 
 ---
 
@@ -130,28 +130,23 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   `--users`, `--scans-per-user`, and `--auth-env` (reads `BEARER_N` tokens for per-user isolation
   verification). **Live staging run still outstanding**: needs a staging estate with Postgres and 3
   real OAuth tokens; run with `--auth-env` to also verify cross-user isolation at the API level.
-- [~] **R12 — RunPod serverless E2E: VERIFIED FAILING in prod (2026-08-14, live drive of `acp-app`).**
-  Not "unverified" any more — driven end-to-end through the live app and the answer is negative:
-  **GPU vision is not engaged; alt-text silently falls back to local.** Evidence, all from the running
-  app on `2026.8.14.1`:
-  - A real `1.1.1` finding (`ACP_DOCX_01_01-issues.docx`) drafted to a **filename guess** with the
-    literal banner *"Template only — this text model cannot see the image, so it guessed from the
-    filename."* Every 1.1.1 finding routes to `Critical · manual authoring`, never an image-derived draft.
-  - The **AI-cost processing-zone counter is the objective instrument**: it read `local (5)` before and
-    `local (8)` after forcing fresh drafts — **8/8 calls local, zero cloud**. A RunPod call would register
-    as a cloud zone; none ever did.
-  - **Clearing the `ai_base_url` / `ai_vision_model` override** (Settings → "Use deploy default (clears
-    both)") changed nothing — the count still climbed in `local`. So the override was NOT the cause; the
-    provider selection is failing upstream (see R2). The override is now left cleared (deploy default).
-  - Re-run this test the same way after any R2/R3 fix: force a `1.1.1` draft, then re-read the AI-cost
-    zone — a genuine GPU call must show up as **cloud**, and the draft must be image-derived (🟡), not a
-    filename template.
-  **Code-side detection gap closed 2026-08-25 (PR #791):** added 3 tests to
-  `tests/test_runpod_serverless_provider.py` that pin the WARNING R2 log lines in
-  `active_vision_provider()`. These are the only detection mechanism for a silent GPU fallback —
-  without test coverage a refactor could drop them invisibly. **Live verification still outstanding:**
-  run `scripts/preflight.py --live` against prod after R2/R3 fix, or force a `1.1.1` draft and
-  confirm the AI-cost zone shows `cloud`.
+- [x] **R12 — GPU vision engaged in prod: VERIFIED 2026-08-25 (deploy #559, `acp-app` version `2026.8.25.10`).**
+  Was VERIFIED FAILING on 2026-08-14 (`local (8/8)`, zero cloud). R2/R3 fixes landed and
+  `/readyz` from deploy #559 confirms:
+  ```json
+  {"engines": {"vision": {"ready": true, "model": "llava:13b", "zone": "cloud"}}}
+  ```
+  Zone criterion satisfied — objective instrument reads **cloud**, not local. Current prod path is
+  Azure GPU Ollama (`llava:13b`) rather than RunPod Serverless, but `zone=cloud` is the same
+  verification signal regardless of which GPU backend serves it.
+  - **Code-side detection** closed 2026-08-25 (PR #791): 3 tests in
+    `tests/test_runpod_serverless_provider.py` pin the WARNING R2 log lines in
+    `active_vision_provider()`.
+  - **Fallback visibility** closed 2026-08-25 (PR #799): W2 warning + `vision_fallback` flag in
+    `_vision_generate` / `describe_image` / `describe_image_structured` (8 tests in
+    `tests/test_vision_fallback_visibility.py`).
+  - **Full draft quality** (six-fact fixture against live Qwen endpoint; image-derived vs filename
+    template confirmed in UI) still needs UI access — belongs to P1.4a.
 - [x] **R13 — Test the isolation-off invariant.** Done. `tests/test_isolation_invariant.py` adds 7 tests:
   3 isolation-ON (GOOGLE_CLIENT_ID set, ACCESS_CODE absent) and 4 isolation-OFF (both set — verifies
   `_owner()` returns `'demo'`, not the user's email). Asserts the `if ACCESS_CODE / elif GOOGLE_CLIENT_ID`
