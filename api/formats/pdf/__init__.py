@@ -10,8 +10,8 @@ from assessment import Confidence, Coverage
 from capabilities import Capability
 from rule_registry import register
 
-from formats.pdf.detectors import (focus_order, label_in_name, link_purpose, name_role_value,
-                                   nontext_contrast, text_spacing, use_of_color)
+from formats.pdf.detectors import (focus_order, input_purpose, label_in_name, link_purpose,
+                                   name_role_value, nontext_contrast, text_spacing, use_of_color)
 
 # ── 4.1.2 Name, Role, Value ───────────────────────────────────────────────────────────
 # PARTIAL, not FULL: sound over AcroForm fields, silent on tagged-structure components.
@@ -51,6 +51,30 @@ register(
             "tree and the structure-tree OBJR references are compared directly — any inversion "
             "is a finding; untagged PDFs without a structure tree fall back to checking that "
             "pages with widgets declare /Tabs = /S"),
+)
+
+# ── 1.3.5 Identify Input Purpose ─────────────────────────────────────────────────────
+# HEURISTIC: PDF AcroForm fields carry /T (partial name) and /TU (tooltip) but no autocomplete-
+# equivalent attribute — the PDF specification defines no mechanism to declare input purpose in
+# the sense WCAG 1.3.5 requires. The detector pattern-matches /T and /TU against the WCAG
+# personal-data vocabulary (name, email, phone, address, birth date, etc.) and flags fields that
+# appear to collect personal user information. Within the matched set the finding is sound
+# (the format genuinely cannot declare purpose), but the vocabulary match is approximate —
+# false positives and false negatives are both possible — so coverage stays HEURISTIC.
+# LOW confidence: the heuristic fires on field-name similarity alone; it cannot rule out that
+# a matched field is organisational (a company address) rather than personal.
+register(
+    rule="1.3.5",
+    fmt="pdf",
+    detector=input_purpose.detect,
+    requires={Capability.FORMS},
+    coverage=Coverage.HEURISTIC,
+    confidence=Confidence.LOW,
+    reason=("AcroForm fields whose /T name or /TU tooltip matches the WCAG personal-data "
+            "vocabulary (name, email, phone, address, etc.) are flagged — PDF provides no "
+            "autocomplete-equivalent mechanism, so those fields cannot declare input purpose "
+            "programmatically; the vocabulary match is approximate and some organisational "
+            "forms will produce false positives"),
 )
 
 # ── 1.4.1 Use of Color ────────────────────────────────────────────────────────────────

@@ -52,7 +52,7 @@ excluded from Assessment by a lifecycle rule. Do NOT conflate the two.
 - [x] **#1 KPIs for completed steps** — Connected shows `1 source` / `N sources`; Listing shows
   `N files · M folders` (or `N files found` when folder count is unavailable); Metadata shows
   `N complete · M incomplete`; Classification shows `N assessable · M unsupported`; Lifecycle
-  shows `N matched · M unchanged`. (Saving step has no KPI yet — see #3.)
+  shows `N matched · M unchanged`. (Saving step KPI added in #3.)
 
 - [x] **#4 Clear units** — Listing KPI now shows `N files · M folders` when the scanner emits
   `folders_found` (folder-scoped Drive scans). Falls back to `N files found` for whole-Drive
@@ -99,14 +99,7 @@ excluded from Assessment by a lifecycle rule. Do NOT conflate the two.
   `routes/scans.py work()` emits `save_new/updated/unchanged/failed` plus `schema_version: 2`
   in the `phase: "done"` update. Frontend degrades gracefully when fields are absent (old backends).
 
-## Remaining
-
-- [ ] **#2 + #7 Lifecycle activity detail** — During the `analysing` phase, show enabled rule count,
-  per-file evaluation progress, and match candidates. These share the same instrumentation.
-  Fields needed: `rules_enabled`, `files_evaluated`, `lifecycle_matches`.
-  Requires: scanner to emit these in the `analysing` phase progress event.
-
-- [ ] **#5 Metadata exceptions** — Surface inaccessible files/folders and metadata-read failures
+- [x] **#5 Metadata exceptions** — Surface inaccessible files/folders and metadata-read failures
   encountered during the `reading` phase. Six distinct categories:
   - `exc_inaccessible_folder` — permission denied on a folder during listing
   - `exc_inaccessible_file` — permission denied on a file during metadata read
@@ -114,7 +107,17 @@ excluded from Assessment by a lifecycle rule. Do NOT conflate the two.
   - `exc_missing_optional` — optional metadata absent (owner, modified date)
   - `exc_missing_required` — metadata required for classification is absent
   - `exc_deleted_during_scan` — item existed at listing time but gone by reading time
-  Requires: scanner to collect cumulative exception counters and emit them in progress payloads.
+  Live note shown during `reading` phase when any counters are non-zero. Exception summary
+  included in completion card. Metadata step KPI shows exception breakdown when step is done.
+  Backend: scanner.py wraps `_download()` in try/except classifying failures; emits
+  `schema_version: 2` on discovering and reading events.
+
+## Remaining
+
+- [ ] **#2 + #7 Lifecycle activity detail** — During the `analysing` phase, show enabled rule count,
+  per-file evaluation progress, and match candidates. These share the same instrumentation.
+  Fields needed: `rules_enabled`, `files_evaluated`, `lifecycle_matches`.
+  Requires: scanner to emit these in the `analysing` phase progress event.
 
 - [ ] **#6 Classification breakdown** — Expand beyond `assessable / unsupported` to the five
   mutually exclusive doc-class buckets: `assessable`, `metadata-only`, `unsupported`,
