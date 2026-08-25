@@ -45,7 +45,7 @@ def _seed(s, sid="s1", f="deck.pptx"):
     return sid, f
 
 
-# ── store.get_remediation_evidence ────────────────────────────────────────────
+# ── store.get_remediation_evidence ──────────────────────────────────────────────
 
 def test_evidence_joins_value_thumbnail_and_signoff_across_rule_id_spellings(isolated_store):
     s = isolated_store
@@ -183,7 +183,7 @@ def test_report_attributes_the_signoff_to_the_authenticated_reviewer(isolated_st
     assert "approved by ada@movate.com" in _pdf_text(build_report(_RUN, _FILES, _META, evidence=ev))
 
 
-# ── Outcome decision / what the report covers (R2 / R3 / R6 / R-A) ────────────
+# ── Outcome decision / what the report covers (R2 / R3 / R6 / R-A) ──────────────
 #
 # The vocabulary here changed with the report's: ACP reports what it detected, changed and
 # re-verified, and does not assert that a document conforms. The INVARIANTS these guards hold
@@ -354,7 +354,7 @@ def test_inventory_never_reads_clear_while_findings_remain(isolated_store):
     facts = s.get_certification_facts(sid)
     assert facts["documents"][0]["remaining"] == 1           # one criterion still failing
     t = _flat(build_report(_RUN, files, _META, facts=facts))
-    assert "open finding(s)" in t                            # main's Findings cell
+    assert "Open" in t                                       # P-15 per-finding status label
     assert "OPEN FINDINGS" in t                              # and the decision reflects it
 
 
@@ -370,7 +370,7 @@ def test_undecodable_thumbnail_never_breaks_the_report():
     assert "Non-text Content" in _pdf_text(pdf)
 
 
-# ── the vocabulary itself (2026-08-09) ────────────────────────────────────────
+# ── the vocabulary itself (2026-08-09) ────────────────────────────────────────────
 #
 # ACP reports what it detected, what it changed and what it re-verified. It does not determine
 # conformance. That was already true of the BEHAVIOUR and already argued at length in the scope
@@ -429,7 +429,7 @@ def test_the_disclaimer_is_stated_not_implied(isolated_store):
     assert "not a conformance determination" in t
 
 
-# ── R5: AI reasoning inline (why_review + source on proposals) ───────────────
+# ── R5: AI reasoning inline (why_review + source on proposals) ───────────────────────
 
 def test_proposal_source_rendered_in_evidence_appendix(isolated_store):
     """R5: the model/method that produced a proposal appears in the PDF next to the
