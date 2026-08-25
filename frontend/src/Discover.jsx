@@ -18,6 +18,7 @@ import { acknowledgementSummary } from './discoveryRecommendations.js'
 import { hasClassificationData, NO_CLASSIFICATION_TITLE, NO_CLASSIFICATION_BODY,
          NO_CLASSIFICATION_WHY } from './classificationData.js'
 import { loadDiscoveryInventory, mergeLifecycle, inventoryOnlyRows } from './discoveryInventory.js'
+import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
 import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation } from './api.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
@@ -96,7 +97,7 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 // tab. Both OPTIONAL: every existing caller and test constructs Discover without them, and the
 // ad-hoc panel simply does not render when `me` is absent rather than throwing.
 export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
-  hasSPToken = false, runAt = null, run = null, scanList = null, rawFiles = null }) {
+  hasSPToken = false, runAt = null, run = null, scanList = null, rawFiles = null, onStop = null }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
   // component is given neither — Discover takes scanId and scope, not the run. The pieces it needs
   // are assembled here rather than threading the whole run object through a new prop; the resolver
@@ -458,6 +459,12 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           funnel belongs, so nothing was lost from the product — only from the tab that answers one
           question. The one figure it contributed that DiscoveryResults lacked, the eligible
           PERCENTAGE, moved onto the headline tile beside the count. */}
+
+      {/* Discovery-specific progress panel — only while a scan is running on this tab.
+          Replaces the shared .scanprog banner (suppressed by App.jsx when view==='discover')
+          so the Discover tab stays scoped to inventory. No assessment workers, WCAG content,
+          or findings appear here. */}
+      <DiscoverRunProgress progress={progress} busy={busy} onStop={onStop} sources={sources} />
 
       <div className="estatebar">
         <div>

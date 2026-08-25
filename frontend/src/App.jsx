@@ -1274,7 +1274,7 @@ export default function App() {
                   onClick={() => setStopped(null)}>Dismiss</button>
         </div>
       )}
-      {busy && progress && (
+      {busy && progress && view !== 'discover' && (
         <div className="scanprog" role="status" aria-live="polite">
           <div className="scanprogline"><span className="spinner" />
             <span style={{ fontWeight: 700, color: '#BF8C00', marginRight: 6 }}>Scan</span>{progressText(progress)}
@@ -1431,7 +1431,7 @@ export default function App() {
           by doScan/reconnectScan, so it means a DISCOVER run is in flight, and that progress is
           exactly what someone on this tab wants to see. */}
       <LiveAssessmentLive scanId={liveScanId || run?.id}
-                          active={busy || (assessPhase === 'running'
+                          active={(busy && view !== 'discover') || (assessPhase === 'running'
                                            && view !== 'assess' && view !== 'discover')}
                           onStop={() => stopScan(liveScanId || run?.id)} />
 
@@ -1456,7 +1456,7 @@ export default function App() {
              it is a secondary action inside Discover now, which is where "get files in front
              of ACP" already lives. Dropping it outright would have removed the only way to try
              a single ad-hoc file without wiring a whole source. */
-          me={me} />}
+          onStop={() => stopScan(liveScanId)} me={me} />}
 
         {view === 'assess' && (run ? (
           <>
