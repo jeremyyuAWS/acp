@@ -88,9 +88,10 @@ register(
 # clean file read NOT_EVALUATED for work that had been done.
 #
 # PARTIAL because the technique reaches shapes with a SOLID outline on a SOLID fill, measured
-# structurally. Gradients, images behind a shape, theme-colour indirection, and every non-shape
-# non-text element a criterion of this breadth covers (focus indicators, icon glyphs, control
-# borders) are outside it.
+# structurally. Both explicit colours (srgbClr) and theme colour references (schemeClr, with
+# optional lumMod/lumOff modifiers) are resolved through word/theme/theme1.xml. Gradient or
+# image fills and every non-shape non-text element a criterion of this breadth covers (focus
+# indicators, icon glyphs, control borders) are outside it.
 #
 # HIGH confidence within that: the ratio is computed from the two resolved colours by the same
 # WCAG formula used for text contrast, not estimated.
@@ -107,9 +108,10 @@ register(
     coverage=Coverage.PARTIAL,
     confidence=Confidence.HIGH,
     reason=("shapes with a solid outline on a solid fill are measured exactly, by the same "
-            "WCAG contrast formula used for text; gradient or image fills, theme-colour "
-            "indirection, and non-shape non-text elements such as focus indicators and control "
-            "borders are not examined"),
+            "WCAG contrast formula used for text; both explicit colours (srgbClr) and theme "
+            "colour references (schemeClr with optional lumMod/lumOff) are resolved through "
+            "the document theme; gradient or image fills and non-shape non-text elements such "
+            "as focus indicators and control borders are not examined"),
 )
 
 
