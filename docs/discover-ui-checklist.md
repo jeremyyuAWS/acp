@@ -3,12 +3,61 @@
 Tracks the 15-item improvement list against `DiscoverRunProgress.jsx`.
 Status updated 2026-08-25. Frontend component: `frontend/src/DiscoverRunProgress.jsx`.
 
+## Progress payload schema
+
+All phase events share a common versioned envelope. `schema_version` lets the frontend
+detect old scanners and degrade gracefully. Counters are cumulative (not per-event deltas) so
+reconnects get the full picture from the latest payload.
+
+```json
+{
+  "schema_version": 2,
+  "phase": "reading",
+  "files_found": 24,
+  "folders_found": 6,
+  "metadata_complete": 22,
+  "metadata_incomplete": 2,
+  "exc_inaccessible_folder": 1,
+  "exc_inaccessible_file": 0,
+  "exc_metadata_failure": 0,
+  "exc_missing_optional": 1,
+  "exc_missing_required": 0,
+  "exc_deleted_during_scan": 0,
+  "rules_enabled": 5,
+  "files_evaluated": 18,
+  "lifecycle_matches": 4,
+  "save_new": null,
+  "save_updated": null,
+  "save_unchanged": null,
+  "save_failed": null
+}
+```
+
+Fields present in earlier schema versions are backwards-compatible; absent fields default to
+`null` and the frontend omits the KPI rather than showing 0.
+
+## Classification reconciliation constraint
+
+The five doc-class buckets must sum to files_found:
+
+```
+assessable + metadata-only + unsupported + eligibility-unknown + excluded-by-policy = files_found
+```
+
+Lifecycle status is a separate dimension — a file can be assessable by type while also being
+excluded from Assessment by a lifecycle rule. Do NOT conflate the two.
+
 ## Done
 
 - [x] **#1 KPIs for completed steps** — Connected shows `1 source` / `N sources`; Listing shows
   `N files · M folders` (or `N files found` when folder count is unavailable); Metadata shows
   `N complete · M incomplete`; Classification shows `N assessable · M unsupported`; Lifecycle
   shows `N matched · M unchanged`. (Saving step has no KPI yet — see #3.)
+
+- [x] **#4 Clear units** — Listing KPI now shows `N files · M folders` when the scanner emits
+  `folders_found` (folder-scoped Drive scans). Falls back to `N files found` for whole-Drive
+  scans (where folder count is not tracked). Backend emits `folders_found: scope.get("folders_walked")`
+  in the `discovering` phase progress event.
 
 - [x] **#8 Skipped-step treatment** — When no lifecycle rules are enabled, the Lifecycle KPI reads
   `— No enabled rules` instead of `0 matched · N unchanged`. PR #782.
@@ -40,29 +89,30 @@ Status updated 2026-08-25. Frontend component: `frontend/src/DiscoverRunProgress
   region announces phase transitions without repeating per-tick KPI counts (which are
   `aria-hidden`).
 
-## Remaining (all blocked on backend data)
+## Remaining
 
-- [ ] **#2 Lifecycle-rule activity detail** — During the `analysing` phase, show the number of
-  enabled rules, per-file evaluation progress, and match candidates (archive / delete / tag).
-  Requires the scanner to emit rule counts and per-file progress in the `progress` payload.
+- [ ] **#2 + #7 Lifecycle activity detail** — During the `analysing` phase, show enabled rule count,
+  per-file evaluation progress, and match candidates. These share the same instrumentation.
+  Fields needed: `rules_enabled`, `files_evaluated`, `lifecycle_matches`.
+  Requires: scanner to emit these in the `analysing` phase progress event.
 
-- [ ] **#3 Saving-inventory result** — After `saving` step completes, show
-  `N new · M updated · K unchanged` (and failed records if any).
-  Requires the scanner to return save-step outcomes in the progress payload.
-
-- [x] **#4 Clear units** — Listing KPI now shows `N files · M folders` when the scanner emits
-  `folders_found` (folder-scoped Drive scans). Falls back to `N files found` for whole-Drive
-  scans (where folder count is not tracked). Backend emits `folders_found: scope.get("folders_walked")`
-  in the `discovering` phase progress event.
+- [ ] **#3 Saving-inventory result** — After the `saving` step completes, show
+  `N new · M updated · K unchanged` (and `P failed` if any).
+  Fields needed: `save_new`, `save_updated`, `save_unchanged`, `save_failed`.
+  Requires: scanner to return save-step outcomes in the progress payload.
 
 - [ ] **#5 Metadata exceptions** — Surface inaccessible files/folders and metadata-read failures
-  encountered during the `reading` phase.
-  Requires the scanner to collect and emit exception counts in the progress payload.
+  encountered during the `reading` phase. Six distinct categories:
+  - `exc_inaccessible_folder` — permission denied on a folder during listing
+  - `exc_inaccessible_file` — permission denied on a file during metadata read
+  - `exc_metadata_failure` — API / network error reading file metadata
+  - `exc_missing_optional` — optional metadata absent (owner, modified date)
+  - `exc_missing_required` — metadata required for classification is absent
+  - `exc_deleted_during_scan` — item existed at listing time but gone by reading time
+  Requires: scanner to collect cumulative exception counters and emit them in progress payloads.
 
-- [ ] **#6 Classification breakdown** — Expand beyond `assessable / unsupported` to show
-  `metadata-only`, `eligibility-unknown`, and `excluded-by-policy` classes.
-  Requires the scanner to emit per-class counts rather than a binary assessable flag.
-
-- [ ] **#7 Current activity detail** — During the `analysing` phase, show a live counter such as
-  `Applying 5 rules · 18 of 24 files evaluated`.
-  Requires the scanner to emit current-rule and evaluated-count fields in the progress payload.
+- [ ] **#6 Classification breakdown** — Expand beyond `assessable / unsupported` to the five
+  mutually exclusive doc-class buckets: `assessable`, `metadata-only`, `unsupported`,
+  `eligibility-unknown`, `excluded-by-policy`. Must sum to `files_found`.
+  Implement AFTER formally defining all five categories in the scanner's classification logic.
+  Requires: scanner to emit per-class counts rather than a binary assessable flag.

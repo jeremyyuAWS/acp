@@ -105,6 +105,14 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   const foldersFound = progress.folders_found ?? null
   const doneCount = PHASE_DONE_COUNT[phase] ?? 0
 
+  // Exception counters from schema_version 2+ progress payloads.
+  const excInaccessible = progress.exc_inaccessible_file ?? null
+  const excMetadataFailure = progress.exc_metadata_failure ?? null
+  const excDeleted = progress.exc_deleted_during_scan ?? null
+  const excMissingOptional = progress.exc_missing_optional ?? null
+  const excMissingRequired = progress.exc_missing_required ?? null
+  const totalExceptions = (excInaccessible ?? 0) + (excMetadataFailure ?? 0) + (excDeleted ?? 0)
+
   // Source label substitution and KPI.
   const sourceName = sources && sources.length === 1 ? sources[0].name : null
   const sourceCount = sources ? sources.length : null
@@ -149,8 +157,19 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
           ? `${n(filesFound)} files · ${n(foldersFound)} folders`
           : `${n(filesFound)} files found`
       }
-      if (s.key === 'metadata' && metadataCompleteCount !== null && metadataIncompleteCount !== null) {
-        kpi = `${n(metadataCompleteCount)} complete · ${n(metadataIncompleteCount)} incomplete`
+      if (s.key === 'metadata') {
+        const parts = []
+        if (metadataCompleteCount !== null && metadataIncompleteCount !== null) {
+          parts.push(`${n(metadataCompleteCount)} complete · ${n(metadataIncompleteCount)} incomplete`)
+        }
+        if (totalExceptions > 0) {
+          const excParts = []
+          if (excInaccessible) excParts.push(`${n(excInaccessible)} inaccessible`)
+          if (excDeleted) excParts.push(`${n(excDeleted)} deleted`)
+          if (excMetadataFailure) excParts.push(`${n(excMetadataFailure)} unreadable`)
+          if (excParts.length) parts.push(excParts.join(' · '))
+        }
+        if (parts.length) kpi = parts.join(' — ')
       }
       if (s.key === 'classifying' && assessableCount !== null && unsupportedCount !== null) {
         kpi = `${n(assessableCount)} assessable · ${n(unsupportedCount)} unsupported`
@@ -172,6 +191,8 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   const showLongRunningHint = elapsed >= 90 && filesFound === 0 && phase === 'discovering'
   // Lifecycle evaluation runs AI classification and can take 30+ s on large inventories.
   const showLifecycleSlowHint = elapsed >= 30 && phase === 'analysing'
+  // Show a note during reading when any files have been skipped due to exceptions.
+  const showReadingExceptions = phase === 'reading' && totalExceptions > 0
 
   const activeStepKey = steps.find((s) => s.status === 'active')?.key ?? null
   const stopHint = onStop && busy && !stopping && activeStepKey
@@ -212,6 +233,15 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
             <div>{n(totalFiles)} files discovered · {n(matched)} matched lifecycle rules</div>
             {assessableCount !== null && (
               <div>{n(assessableCount)} assessable · {n(unsupportedCount)} unsupported</div>
+            )}
+            {totalExceptions > 0 && (
+              <div>
+                {[
+                  excInaccessible && `${n(excInaccessible)} inaccessible`,
+                  excDeleted && `${n(excDeleted)} deleted during scan`,
+                  excMetadataFailure && `${n(excMetadataFailure)} unreadable`,
+                ].filter(Boolean).join(' · ')} — skipped during metadata read.
+              </div>
             )}
             <div>No documents were assessed or changed.</div>
           </div>
@@ -281,6 +311,15 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
         {stopHint && (
           <p className="muted" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5 }}>
             {stopHint}
+          </p>
+        )}
+        {showReadingExceptions && (
+          <p className="muted" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5 }}>
+            {[
+              excInaccessible && `${n(excInaccessible)} file${excInaccessible !== 1 ? 's' : ''} inaccessible`,
+              excDeleted && `${n(excDeleted)} deleted during scan`,
+              excMetadataFailure && `${n(excMetadataFailure)} unreadable`,
+            ].filter(Boolean).join(' · ')} — skipped, others continuing.
           </p>
         )}
       </div>

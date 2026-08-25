@@ -560,3 +560,78 @@ describe('lifecycle stall hint', () => {
     }
   })
 })
+
+describe('metadata exception counters (schema_version 2)', () => {
+  it('shows a live exception note during reading phase when inaccessible files are present', () => {
+    const prog = { phase: 'reading', files_found: 10, exc_inaccessible_file: 2,
+                   exc_metadata_failure: 0, exc_deleted_during_scan: 0 }
+    const html = render(prog, true)
+    expect(html).toContain('2 files inaccessible')
+    expect(html).toContain('skipped, others continuing')
+  })
+
+  it('shows all three exception types in the live note when multiple are present', () => {
+    const prog = { phase: 'reading', files_found: 20, exc_inaccessible_file: 1,
+                   exc_metadata_failure: 2, exc_deleted_during_scan: 3 }
+    const html = render(prog, true)
+    expect(html).toContain('1 file inaccessible')
+    expect(html).toContain('3 deleted during scan')
+    expect(html).toContain('2 unreadable')
+    expect(html).toContain('skipped, others continuing')
+  })
+
+  it('omits the live exception note when all counters are zero', () => {
+    const prog = { phase: 'reading', files_found: 10, exc_inaccessible_file: 0,
+                   exc_metadata_failure: 0, exc_deleted_during_scan: 0 }
+    const html = render(prog, true)
+    expect(html).not.toContain('skipped, others continuing')
+  })
+
+  it('omits the live exception note when exception fields are absent (schema_version 1)', () => {
+    const prog = { phase: 'reading', files_found: 10 }
+    const html = render(prog, true)
+    expect(html).not.toContain('skipped, others continuing')
+  })
+
+  it('exception note only appears during reading phase, not other phases', () => {
+    const phases = ['discovering', 'tagging', 'analysing', 'scoring']
+    for (const phase of phases) {
+      const prog = { phase, files_found: 10, exc_inaccessible_file: 2,
+                     exc_metadata_failure: 0, exc_deleted_during_scan: 0 }
+      const html = render(prog, true)
+      expect(html, `phase ${phase} should not show exception note`).not.toContain('skipped, others continuing')
+    }
+  })
+
+  it('includes exceptions in the metadata step KPI when step is done', () => {
+    // tagging phase: metadata step (index 2) is done; exceptions are shown alongside completeness
+    const inv = { rows: [
+      { file: 'a.docx', owner: 'u', source_modified: '2024', lifecycle_rule_id: null, doc_class: 'text-document' },
+      { file: 'b.pdf',  owner: null, source_modified: null,   lifecycle_rule_id: null, doc_class: 'pdf-document' },
+    ], total: 2 }
+    const prog = { phase: 'tagging', files_found: 3, exc_inaccessible_file: 1,
+                   exc_metadata_failure: 0, exc_deleted_during_scan: 0 }
+    const html = render(prog, true, undefined, undefined, inv)
+    // Completeness KPI
+    expect(html).toContain('1 complete')
+    expect(html).toContain('1 incomplete')
+    // Exception appended
+    expect(html).toContain('1 inaccessible')
+  })
+
+  it('exception summary appears in completion summary when phase is done', () => {
+    const prog = { phase: 'done', files_found: 10, exc_inaccessible_file: 2,
+                   exc_metadata_failure: 0, exc_deleted_during_scan: 1 }
+    const html = render(prog, true)
+    expect(html).toContain('2 inaccessible')
+    expect(html).toContain('1 deleted during scan')
+    expect(html).toContain('skipped during metadata read')
+  })
+
+  it('no exception summary in completion summary when all counters are zero', () => {
+    const prog = { phase: 'done', files_found: 10, exc_inaccessible_file: 0,
+                   exc_metadata_failure: 0, exc_deleted_during_scan: 0 }
+    const html = render(prog, true)
+    expect(html).not.toContain('skipped during metadata read')
+  })
+})
