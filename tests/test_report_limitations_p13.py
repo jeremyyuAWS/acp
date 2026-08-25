@@ -62,7 +62,7 @@ def test_no_limitations_section_when_no_limitations():
     """P-13: the notice is absent when no material limitations apply."""
     from report import build_report
     t = _flat(build_report(_RUN_WITH_OWNER, _FILES_OK, _META, facts=_facts_with_review()))
-    assert "Material limitations" not in t
+    assert "Material Limitations" not in t
 
 
 # ── Unanalysable files ────────────────────────────────────────────────────────
@@ -71,7 +71,7 @@ def test_failed_files_named_in_limitations():
     """P-13: files with error status are named individually in the notice."""
     from report import build_report
     t = _flat(build_report(_RUN_WITH_OWNER, _FILES_ERR, _META, facts=_facts_with_review()))
-    assert "Material limitations" in t
+    assert "Material Limitations" in t
     assert "locked.pdf" in t
     assert "corrupt.docx" in t
 
@@ -92,7 +92,7 @@ def test_review_criteria_named_in_limitations():
               {"sc": "1.4.3", "name": "Contrast (Minimum)"}]
     t = _flat(build_report(_RUN_WITH_OWNER, _FILES_OK, _META,
                            facts=_facts_with_review(review_criteria=review)))
-    assert "Material limitations" in t
+    assert "Material Limitations" in t
     assert "review-recommended" in t
     assert "1.1.1" in t and "Non-text Content" in t
     assert "1.4.3" in t and "Contrast" in t
@@ -111,7 +111,7 @@ def test_missing_owner_noted_in_limitations():
     """P-13: absence of owner_email is flagged as a material limitation."""
     from report import build_report
     t = _flat(build_report(_RUN_NO_OWNER, _FILES_OK, _META, facts=_facts_with_review()))
-    assert "Material limitations" in t
+    assert "Material Limitations" in t
     assert "Owner" in t and "metadata" in t
 
 
@@ -119,7 +119,7 @@ def test_owner_clause_absent_when_owner_present():
     """P-13: owner clause is omitted when owner_email is set."""
     from report import build_report
     t = _flat(build_report(_RUN_WITH_OWNER, _FILES_OK, _META, facts=_facts_with_review()))
-    assert "Material limitations" not in t
+    assert "Material Limitations" not in t
 
 
 # ── Multiple limitations combine ──────────────────────────────────────────────
@@ -143,4 +143,4 @@ def test_limitations_appears_before_outcome_summary():
     review = [{"sc": "1.1.1", "name": "Non-text Content"}]
     t = _flat(build_report(_RUN_WITH_OWNER, _FILES_OK, _META,
                            facts=_facts_with_review(review_criteria=review)))
-    assert t.index("Material limitations") < t.index("Outcome summary")
+    assert t.index("Material Limitations") < t.index("Outcome summary")

@@ -654,14 +654,10 @@ def _manual_verification_section(files, h2, body, cell, muted) -> list:
 
 
 def _limitations_section(facts, unassessed, unanalysable, h2, body, muted, *, run=None, files=None) -> list:
-    """P-13 — Material limitations of this assessment, near the executive summary.
-
-    Three classes of limitation, each only when the scan state warrants it:
-      1. Files that couldn't be analysed (error status) — named individually.
-      2. Review-recommended criteria — count + names surfaced prominently.
-      3. Owner/author metadata absent — noted when owner_email is absent.
-    """
+    """P-13 — Material limitations of this assessment, near the executive summary."""
     scope = (facts or {}).get("scope") or {}
+    human_only = scope.get("human_only_criteria") or []
+    not_evaluated = scope.get("not_evaluated_criteria") or []
     review_criteria = scope.get("review_criteria") or []
 
     def _sc(c: object) -> str:
@@ -670,35 +666,70 @@ def _limitations_section(facts, unassessed, unanalysable, h2, body, muted, *, ru
     def _name(c: object) -> str:
         return c.get("name", "") if isinstance(c, dict) else ""
 
+    def _crit_str(items, limit=8):
+        lst = ", ".join(
+            f"{_sc(c)} ({_name(c)})" if _name(c) else _sc(c)
+            for c in items[:limit]
+        )
+        suffix = f" and {len(items) - limit} more" if len(items) > limit else ""
+        return lst + suffix
+
     parts = []
 
-    # 1. Error files named individually
+    # 1. Unanalysable documents (count param + error-status files)
     error_files = [f for f in (files or []) if (f.get("status") or "") == "error"]
-    if error_files:
-        n = len(error_files)
-        names = ", ".join(f["file"] for f in error_files)
+    n_unable = max(unanalysable, len(error_files))
+    if n_unable > 0:
+        common = "Common causes include password protection, corruption, or an unsupported variant."
+        if error_files:
+            names = ", ".join(f["file"] for f in error_files)
+            parts.append(
+                f"<b>{n_unable} document(s) could not be opened or analysed</b> "
+                f"({names}). {common} This report makes no accessibility assertion "
+                f"about {'this file' if n_unable == 1 else 'these files'}."
+            )
+        else:
+            parts.append(
+                f"<b>{n_unable} document(s) could not be opened or analysed.</b> "
+                f"{common}"
+            )
+
+    # 2. Unassessed documents
+    if unassessed > 0:
         parts.append(
-            f"<b>{n} document(s) could not be opened or analysed</b> "
-            f"({names}). This report makes no accessibility assertion about "
-            f"{'this file' if n == 1 else 'these files'}."
+            f"<b>{unassessed} document(s) were in scope but never assessed.</b> "
+            f"Re-run the scan to include them."
         )
 
-    # 2. Review-recommended criteria
+    # 3. Human-only criteria (require human or AT review)
+    if human_only:
+        n = len(human_only)
+        parts.append(
+            f"<b>{n} {'criterion requires' if n == 1 else 'criteria require'} "
+            f"human or assistive-technology review</b> ({_crit_str(human_only)}). "
+            f"These cannot be resolved automatically and are queued for a qualified reviewer."
+        )
+
+    # 4. Not-evaluated criteria (no automated validator for formats in scope)
+    if not_evaluated:
+        n = len(not_evaluated)
+        parts.append(
+            f"<b>{n} {'criterion has' if n == 1 else 'criteria have'} no automated validator</b> "
+            f"for the document formats in this scan ({_crit_str(not_evaluated)}). "
+            f"No pass/fail verdict can be generated for {'it' if n == 1 else 'them'}."
+        )
+
+    # 5. Review-recommended criteria
     if review_criteria:
         n = len(review_criteria)
-        crit_list = ", ".join(
-            f"{_sc(c)} ({_name(c)})" if _name(c) else _sc(c)
-            for c in review_criteria[:8]
-        )
-        suffix = f" and {n - 8} more" if n > 8 else ""
         parts.append(
             f"<b>{n} {'criterion is' if n == 1 else 'criteria are'} review-recommended</b> "
-            f"and cannot be resolved automatically ({crit_list}{suffix}). "
+            f"and cannot be resolved automatically ({_crit_str(review_criteria)}). "
             f"Findings in these lanes are queued for a qualified reviewer "
             f"and are never auto-cleared."
         )
 
-    # 3. Owner metadata absent
+    # 6. Owner metadata absent
     if run is not None and not run.get("owner_email"):
         parts.append(
             "<b>Owner metadata absent</b> — no owner_email was recorded for this scan. "
@@ -708,7 +739,7 @@ def _limitations_section(facts, unassessed, unanalysable, h2, body, muted, *, ru
     if not parts:
         return []
 
-    el = [Paragraph("Material limitations", h2)]
+    el = [Paragraph("Material Limitations", h2)]
     el.append(Paragraph(
         "The following constraints bound the claims in this report.", muted))
     el.append(Spacer(1, 5))
