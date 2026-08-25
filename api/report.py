@@ -109,6 +109,52 @@ STATUS_LABEL = {"certifiable": "no blocking findings", "issues": "open findings"
 SEV_COLOR = {"CRITICAL": RED, "SERIOUS": AMBER, "MODERATE": BLUE, "MINOR": GREY}
 SEV_ORDER = ["CRITICAL", "SERIOUS", "MODERATE", "MINOR"]
 
+# P-15: per-finding status states and display order (most urgent first)
+FINDING_STATUSES = [
+    "Open", "Reopened", "Remediation attempted", "Awaiting re-scan",
+    "Verified resolved", "Accepted exception", "False positive",
+]
+FINDING_STATUS_COLOR = {
+    "Open": AMBER, "Reopened": RED, "Remediation attempted": PLUM,
+    "Awaiting re-scan": BLUE, "Verified resolved": GREEN,
+    "Accepted exception": MUTED, "False positive": MUTED,
+}
+# Explicit status strings accepted from issue["status"] (lowercase, underscores or spaces)
+_FINDING_STATUS_MAP = {
+    "open": "Open", "reopened": "Reopened",
+    "remediation_attempted": "Remediation attempted", "remediation attempted": "Remediation attempted",
+    "awaiting_rescan": "Awaiting re-scan", "awaiting re-scan": "Awaiting re-scan",
+    "awaiting_re-scan": "Awaiting re-scan",
+    "verified_resolved": "Verified resolved", "verified resolved": "Verified resolved",
+    "accepted_exception": "Accepted exception", "accepted exception": "Accepted exception",
+    "false_positive": "False positive", "false positive": "False positive",
+}
+
+
+def _finding_status(issue: dict, file_is_certifiable: bool) -> str:
+    """P-15: map one issue dict to one of the seven named finding states.
+
+    Explicit issue["status"] wins; otherwise derived from boolean flags and the
+    file-level certifiable flag.  Certifiable means the re-scan confirmed the
+    document no longer fails — any finding present on a certifiable doc was
+    cleared by that re-scan and is "Verified resolved", NOT merely "remediated".
+    """
+    explicit = (issue.get("status") or "").strip().lower().replace("-", "_")
+    mapped = _FINDING_STATUS_MAP.get(explicit) or _FINDING_STATUS_MAP.get(explicit.replace("_", " "))
+    if mapped:
+        return mapped
+    if issue.get("false_positive") or issue.get("fp"):
+        return "False positive"
+    if issue.get("accepted_exception") or issue.get("exception"):
+        return "Accepted exception"
+    if issue.get("reopened"):
+        return "Reopened"
+    if issue.get("awaiting_rescan") or issue.get("rescan_needed"):
+        return "Awaiting re-scan"
+    if issue.get("remediated_at") or issue.get("remediation_attempted"):
+        return "Verified resolved" if file_is_certifiable else "Remediation attempted"
+    return "Verified resolved" if file_is_certifiable else "Open"
+
 
 def _crit_name(c):
     return WCAG_META.get(c, (str(c).replace("SC_", "").replace("_", "."), "", ""))[0]
@@ -1348,16 +1394,12 @@ def _reconciliation_checks(files: list, facts: dict | None, meta: dict) -> list[
 
 
 def _assessment_scope_block(run: dict, meta: dict, facts: dict | None,
-                            fmt_str: str, h2, body, cell, muted,
-                            rendered_at: str = "") -> list:
-    """Assessment scope declaration (P-12) + report provenance (P-16).
+                            fmt_str: str, h2, body, cell, muted) -> list:
+    """Assessment scope declaration (P-12).
 
     A concise block near the top of the report stating exactly what was in scope: source,
     file types, scan window, rubric + conformance target, AI-assisted flag. Placed after
     the decision card so the reader sees the scope before interpreting any percentage.
-
-    P-16 adds two further rows: report-generated timestamp (when this PDF was rendered),
-    scan ID, report schema version, and application build commit.
     """
     scope = (facts or {}).get("scope") or {}
     estate = scope.get("estate") or {}
@@ -1380,9 +1422,6 @@ def _assessment_scope_block(run: dict, meta: dict, facts: dict | None,
     ai_note = ("Deterministic + AI-assisted checks" if ai_flag
                else "Deterministic checks only — no AI operations")
 
-    build_sha = (os.environ.get("ACP_BUILD_SHA") or "").strip()
-    build_str = build_sha[:12] if build_sha else "—"
-
     el = [Paragraph("Assessment scope", h2)]
     rows = [
         [Paragraph("<b>Source</b>", cell), Paragraph(_esc(source_label), cell),
@@ -1392,15 +1431,6 @@ def _assessment_scope_block(run: dict, meta: dict, facts: dict | None,
         [Paragraph("<b>Standard &amp; target</b>", cell),
          Paragraph(_esc((meta.get("target") or "WCAG 2.1 AA") + excl_note), cell),
          Paragraph("<b>Rubric</b>", cell), Paragraph(_esc(rubric_str), cell)],
-        # P-16: report provenance rows
-        [Paragraph("<b>Report generated</b>", cell),
-         Paragraph(_esc(rendered_at or "—"), cell),
-         Paragraph("<b>Scan ID</b>", cell),
-         Paragraph(_esc(str(run.get("id") or "—")), cell)],
-        [Paragraph("<b>Report schema</b>", cell),
-         Paragraph(_esc(f"v{REPORT_SCHEMA_VERSION}"), cell),
-         Paragraph("<b>Build</b>", cell),
-         Paragraph(_esc(build_str), cell)],
     ]
     t = Table(rows, colWidths=[1.3 * inch, 2.25 * inch, 1.3 * inch, 2.25 * inch])
     t.setStyle(TableStyle([
@@ -1418,8 +1448,6 @@ def _assessment_scope_block(run: dict, meta: dict, facts: dict | None,
 
 def build_report(run: dict, files: list, meta: dict, decisions: dict | None = None,
                  evidence: list | None = None, facts: dict | None = None) -> bytes:
-    # P-16: capture render time once so all sections share a consistent timestamp
-    _rendered_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     buf = io.BytesIO()
     # `lang` reaches the PDF catalog as /Lang (WCAG 3.1.1) — without it a screen reader guesses
     # the language of the certification document from the user's locale. `title` is already the
@@ -1485,16 +1513,6 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
         f" · hash <b>{(meta.get('hash') or '—')[:12]}</b>"
         f" · schema v{REPORT_SCHEMA_VERSION}{_commit_str} — "
         "results are reproducible from the rubric hash. Scans run read-only; documents are never retained.", sub))
-
-    # ── P-16: Snapshot notice — if the scan is still in progress ─────────────
-    _DONE_STATUSES = {None, "done", "completed", "certifiable"}
-    if run.get("status") not in _DONE_STATUSES:
-        el.append(Paragraph(
-            '<font color="#854F0B"><b>⚠ Snapshot only — </b></font>'
-            '<font color="#854F0B">this report was generated while the scan was still in progress '
-            f'(status: {_esc(str(run.get("status") or "unknown"))}). '
-            "Findings and scores may change before the scan completes.</font>",
-            lead))
 
     # ── Certification decision (R2) ──────────────────────────────────────────
     # Answers "can I ship this?" before any chart. The plain-language WHY (R3) is the
@@ -1650,8 +1668,7 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     for f in files:
         fmt_counts[_fmt(f)] = fmt_counts.get(_fmt(f), 0) + 1
     fmt_str = " · ".join(f"{n} {k}" for k, n in sorted(fmt_counts.items(), key=lambda x: -x[1])) or "—"
-    el.extend(_assessment_scope_block(run, meta, facts, fmt_str, h2, body, cell, _muted,
-                                      rendered_at=_rendered_at))
+    el.extend(_assessment_scope_block(run, meta, facts, fmt_str, h2, body, cell, _muted))
 
     # ── Compliance velocity — trend vs the caller's previous scan ────────────
     # Best-effort and lazy: rendering must never fail because history is absent,
@@ -1794,10 +1811,15 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     for f in ordered:
         st = _status(f)
         issues = f.get("issues") or []
-        if st == "certifiable" and issues:
-            find = "remediated" if (f.get("remediated_at") or f.get("drive_write_url")) else "non-blocking"
-        elif issues:
-            find = f"{len(issues)} open finding(s)"
+        if issues:
+            # P-15: per-finding status breakdown — never collapse to "remediated" just because
+            # a timestamp exists; "Verified resolved" requires a re-scan to confirm.
+            _cert = (st == "certifiable")
+            _sc: dict[str, int] = {}
+            for _i in issues:
+                _s = _finding_status(_i, _cert)
+                _sc[_s] = _sc.get(_s, 0) + 1
+            find = " · ".join(f"{_sc[s]} {s}" for s in FINDING_STATUSES if s in _sc)
         elif f["status"] == "error":
             find = "could not analyse"
         elif st == NOT_ASSESSED:
