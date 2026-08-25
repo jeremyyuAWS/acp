@@ -1026,11 +1026,21 @@ def _scan_discover(payload: dict, job: dict) -> None:
     # scope_files gates what is READ, not what is scored. This is the PRODUCTION listing path
     # (ADR 0007 fan-out); run_scan's is the local one, and wiring only that would leave a
     # hospital's PDFs being downloaded and OCR'd in the deployment that matters.
+    # Emit live file counts during the listing so the frontend ticks up rather than showing 0
+    # for the full duration. Throttled to one DB write every 2 s — the scanner does the timing
+    # inside _search_drive/_search_folder; this callback just persists whatever count arrived.
+    def _listing_progress(count: int) -> None:
+        try:
+            core.store.set_scan_files(scan_id, count)
+        except Exception:  # noqa: BLE001 — a diagnostic must never fail the scan
+            pass
+
     items = _list(source, svc, folder=effective_folder, sp_token=sp_tok,
                   max_files=FANOUT_MAX_FILES, **({"folders": folders} if folders else {}),
                   **({"exclude_folders": exclude_folders} if exclude_folders else {}),
                   exclude_remediated=bool(payload.get("exclude_remediated", False)),
-                  scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory)
+                  scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory,
+                  progress_cb=_listing_progress)
     # shadow_candidate (a file sharing a logical name with another — possibly ACP's own output
     # shadowing its source) is computed inside _enqueue_analysis from the item list, so the same
     # rule applies whether the fan-out runs now or later at Assess.

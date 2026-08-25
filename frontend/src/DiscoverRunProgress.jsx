@@ -37,15 +37,26 @@ const STEPS = [
 ]
 
 function DiscoverStep({ label, detail, status }) {
+  const isActive = status === 'active'
   return (
-    <div role="listitem" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+    <div role="listitem" aria-current={isActive ? 'step' : undefined}
+         style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
       <span style={{ width: 16, flexShrink: 0, display: 'flex', alignItems: 'center',
-                     justifyContent: 'center' }} aria-hidden="true">
-        {status === 'done' && <span style={{ color: 'var(--green,#1a7f45)', fontSize: 13.5 }}>✓</span>}
-        {status === 'active' && <span className="prep-pulse" />}
-        {status === 'pending' && <span style={{ color: 'var(--muted)', fontSize: 13 }}>○</span>}
+                     justifyContent: 'center' }}>
+        {status === 'done' && (
+          <span role="img" aria-label="Completed"
+                style={{ color: 'var(--green,#1a7f45)', fontSize: 13.5 }}>✓</span>
+        )}
+        {status === 'active' && (
+          <span className="prep-pulse" role="status" aria-label="In progress" />
+        )}
+        {status === 'pending' && (
+          <span role="img" aria-label="Not started"
+                style={{ color: 'var(--muted)', fontSize: 13 }}>○</span>
+        )}
       </span>
       <span style={{ flex: 1, fontSize: 13.5,
+                     fontWeight: isActive ? 600 : undefined,
                      color: status === 'pending' ? 'var(--muted)' : 'var(--ink)' }}>
         {label}
       </span>
@@ -61,6 +72,7 @@ function DiscoverStep({ label, detail, status }) {
 export default function DiscoverRunProgress({ progress, busy, onStop, sources, inv = null }) {
   const [startedAt] = useState(() => Date.now())
   const [elapsed, setElapsed] = useState(0)
+  const [stopping, setStopping] = useState(false)
 
   useEffect(() => {
     if (!busy || !progress) return
@@ -95,17 +107,34 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
     }
   })
 
+  // After 90 s with no files found during listing, the source likely has many folders to walk.
+  const showLongRunningHint = elapsed >= 90 && filesFound === 0 && phase === 'discovering'
+
+  function handleStop() {
+    setStopping(true)
+    onStop?.()
+  }
+
   return (
     <section className="discover-run-progress" role="region" aria-label="Discovery in progress"
              style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
       <div className="assess-run-card" style={{ border: '1px solid var(--line,#e4e8ec)', borderRadius: 12,
                                                 padding: '14px 16px', background: 'var(--panel,#fff)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                       gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
           <div style={{ fontSize: 14.5, fontWeight: 650 }}>Discovering documents</div>
-          <div className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}
-               aria-hidden="true">
-            {fmtElapsedSecs(elapsed)} elapsed
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}
+                  aria-hidden="true">
+              {fmtElapsedSecs(elapsed)} elapsed
+            </span>
+            {onStop && busy && (
+              <button type="button" className="ghost small" onClick={handleStop}
+                      disabled={stopping}
+                      title="Stop discovery — partial inventory will be retained">
+                {stopping ? 'Stopping…' : 'Stop'}
+              </button>
+            )}
           </div>
         </div>
 
@@ -113,20 +142,17 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
              style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
           {steps.map(({ key, ...rest }) => <DiscoverStep key={key} {...rest} />)}
         </div>
+
+        {showLongRunningHint && (
+          <p className="muted" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5 }}>
+            This source contains many folders — discovery is still active.
+          </p>
+        )}
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
-        {onStop && busy && (
-          <button type="button" className="ghost small" onClick={onStop}
-                  title="Stop this scan — inventory collected so far is kept">
-            Stop
-          </button>
-        )}
-        <p className="muted" style={{ fontSize: 12.5, margin: 0, lineHeight: 1.6, flex: '1 1 260px' }}>
-          Stopping keeps the inventory collected so far. No documents are opened, assessed, moved,
-          or changed in the source.
-        </p>
-      </div>
+      <p className="muted" style={{ fontSize: 12.5, margin: 0, lineHeight: 1.6 }}>
+        Partial inventory will be retained. Source files will not be changed.
+      </p>
     </section>
   )
 }
