@@ -318,6 +318,9 @@ _SCHEMA = [
     # New name + drop-old so this migrates once, not a rebuild every boot.
     "DROP INDEX IF EXISTS idx_jobs_claim",
     "CREATE INDEX IF NOT EXISTS idx_jobs_claim2 ON jobs(status, priority, run_after)",
+    # Error class persisted on failure so operators can diagnose dead-lettered jobs by
+    # category (rate_limit / auth / corrupt / transient) without parsing last_error text.
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_class TEXT",
     # Sensitive-data (PII) findings per document (ADR 0006). A detection dimension
     # orthogonal to WCAG. samples holds JSON array of MASKED strings only — never
     # raw PII (the masking is enforced in api/pii.py).
@@ -5196,9 +5199,12 @@ class Store:
                 pass
 
     def fail_job(self, job_id: str, error: str, backoff_seconds: float = 0.0,
-                 force_dead: bool = False) -> str:
+                 force_dead: bool = False, error_class: str | None = None) -> str:
         """Requeue a failed job with backoff, or dead-letter it once attempts are
-        exhausted (or immediately when force_dead). Returns 'queued' or 'dead'."""
+        exhausted (or immediately when force_dead). Returns 'queued' or 'dead'.
+
+        error_class ('rate_limit', 'auth', 'corrupt', 'transient') is persisted on the
+        row for operator diagnostics; pass it from the worker's classify_job_error()."""
         from datetime import datetime, timezone, timedelta
         job = self.get_job(job_id)
         if job is None:
@@ -5211,22 +5217,25 @@ class Store:
             with self._db.cursor() as cur:
                 if scrubbed is not None:
                     self._db.execute(cur,
-                        "UPDATE jobs SET status='dead', last_error=%s, updated_at=%s, payload=%s WHERE id=%s",
-                        (error[:2000], now.isoformat(), scrubbed, job_id))
+                        "UPDATE jobs SET status='dead', last_error=%s, error_class=%s, "
+                        "updated_at=%s, payload=%s WHERE id=%s",
+                        (error[:2000], error_class, now.isoformat(), scrubbed, job_id))
                 else:
                     self._db.execute(cur,
-                        "UPDATE jobs SET status='dead', last_error=%s, updated_at=%s WHERE id=%s",
-                        (error[:2000], now.isoformat(), job_id))
+                        "UPDATE jobs SET status='dead', last_error=%s, error_class=%s, "
+                        "updated_at=%s WHERE id=%s",
+                        (error[:2000], error_class, now.isoformat(), job_id))
             # One greppable stdout line per dead-letter — the platform alert
             # (Log Analytics scheduled query) keys on 'job dead-lettered'.
-            print(f"[acp] job dead-lettered: id={job_id} type={job.get('type')} error={error[:160]}", flush=True)
+            print(f"[acp] job dead-lettered: id={job_id} type={job.get('type')} "
+                  f"class={error_class or 'unclassified'} error={error[:160]}", flush=True)
             return "dead"
         run_after = (now + timedelta(seconds=backoff_seconds)).isoformat()
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "UPDATE jobs SET status='queued', run_after=%s, locked_at=NULL, "
-                "locked_by=NULL, last_error=%s, updated_at=%s WHERE id=%s",
-                (run_after, error[:2000], now.isoformat(), job_id))
+                "locked_by=NULL, last_error=%s, error_class=%s, updated_at=%s WHERE id=%s",
+                (run_after, error[:2000], error_class, now.isoformat(), job_id))
         return "queued"
 
     def reclaim_stuck_jobs(self, lease_seconds: int = 600) -> int:
