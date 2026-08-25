@@ -312,6 +312,36 @@ def scan(sid: str, request: Request):
     return res
 
 
+@router.delete("/scans/{sid}", status_code=200)
+def delete_scan(sid: str, request: Request):
+    """Permanently erase one scan and all data derived from it (HIPAA BAA right-to-erasure).
+
+    Scope: the requesting user may only delete their own scans — the same owner_email gate
+    that guards every other /scans/{sid} endpoint.  Returns 404 for a scan that does not
+    exist OR belongs to a different user (no information leak about other users' scan IDs).
+
+    What is erased:
+      - All database rows keyed on scan_id (findings, file records, rule traces, HITL queue,
+        AI call log, applied fixes, stage timings, PII findings, jobs, …).
+      - The scan_runs row itself.
+      - All blobs under {owner}/{scan_id}/ (remediated files, source copies, render previews).
+
+    What survives:
+      - decision_log — the immutable audit trail. A deletion event IS appended to it here so
+        the audit record of "who deleted what and when" is preserved, not erased.
+    """
+    import blob as blob_mod
+
+    owner = _owner(request)
+    result = core.store.delete_scan(sid, owner)
+    if result is None:
+        raise HTTPException(404, "scan not found")
+    blobs = blob_mod.purge_scan(owner, sid)
+    core.store.log_decision(owner, "delete_scan", scan_id=sid,
+                            detail=f"scan deleted; blobs={blobs}")
+    return {"deleted": True, "scan_id": sid, "blobs_purged": blobs}
+
+
 @router.get("/scans/{sid}/timings")
 def scan_timings(sid: str, request: Request):
     """Per-stage timing rollup for one scan (ADR 0037 Step 0 — measure first): where the scan spent its
