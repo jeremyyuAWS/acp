@@ -52,13 +52,13 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
 
 ### Ops-blocking (nothing else ships until these clear)
 
-- [~] **R1 — Ship the wedged 3a + readiness deploy.** Frozen per-scan scope (#267) and the greyed
-  not-ready SC matrix (#268) are **merged and green on `main` but not live** — the GitHub Actions
-  deploy sits `pending` in the `deploy-production` concurrency group and never dispatches (the
-  chronic stuck-Actions pattern, cf. P-era #239). Prod still serves `2026.8.13.5`. **Re-run to check:**
-  `curl https://<ACP_FQDN>/healthz` (version), `gh run list --workflow deploy.yml` (runs sit
-  completed/cancelled). **Fix:** `workflow_dispatch` + approve the `production` environment, or a
-  manual `bash deploy/public/redeploy.sh` under `az login`.
+- [x] **R1 — Ship the wedged 3a + readiness deploy.** **Fixed 2026-08-25:** the stuck-pending deploy
+  cleared on its own. Deploy workflow has been running continuously since 2026-08-14 — 555+ runs,
+  many successful. Production is now at `2026.8.25.6` (verified via deploy job logs: deploy step
+  succeeded and `healthz` reported `"version":"2026.8.25.6","version_stamped":true`). The most
+  recent failure (run 555) was a false failure: the deploy step completed and the new version was
+  live, but the post-deploy curl verification timed out after 20s. PRs #267 and #268 (frozen
+  per-scan scope, greyed not-ready SC matrix) shipped many deploys ago.
 - [x] **R2 — RunPod serverless vision: env is set, but the runtime does NOT select it.** Root cause
   diagnosed (2026-08-24): the `runpod-api-key` Azure secret was empty on both apps. **Fixed
   2026-08-25:** R3 rotation set a valid key; `set_integration_env.sh` applied it to both containers.
@@ -139,6 +139,12 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   - Re-run this test the same way after any R2/R3 fix: force a `1.1.1` draft, then re-read the AI-cost
     zone — a genuine GPU call must show up as **cloud**, and the draft must be image-derived (🟡), not a
     filename template.
+  **Code-side detection gap closed 2026-08-25 (PR #791):** added 3 tests to
+  `tests/test_runpod_serverless_provider.py` that pin the WARNING R2 log lines in
+  `active_vision_provider()`. These are the only detection mechanism for a silent GPU fallback —
+  without test coverage a refactor could drop them invisibly. **Live verification still outstanding:**
+  run `scripts/preflight.py --live` against prod after R2/R3 fix, or force a `1.1.1` draft and
+  confirm the AI-cost zone shows `cloud`.
 - [x] **R13 — Test the isolation-off invariant.** Done. `tests/test_isolation_invariant.py` adds 7 tests:
   3 isolation-ON (GOOGLE_CLIENT_ID set, ACCESS_CODE absent) and 4 isolation-OFF (both set — verifies
   `_owner()` returns `'demo'`, not the user's email). Asserts the `if ACCESS_CODE / elif GOOGLE_CLIENT_ID`
