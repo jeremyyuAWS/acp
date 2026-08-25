@@ -681,9 +681,10 @@ argued.
 - [ ] **I.1 — Azure agent pool.** Blocked on an admin granting it. All 14 merges on 2026-08-08
   bypassed Azure because 16 jobs were stuck behind the org's single parallel slot. Draft email
   written; agent built and merged (#183).
-- [ ] **I.2 — Fix the production approval gate.** The UI approval silently failed three times
-  today; the API worked instantly every time. Worth understanding before it blocks a release
-  nobody can approve.
+- [x] **I.2 — Fix the production approval gate.** Done. `ReviewCenter.doAct()` swallowed all
+  errors via `.catch(() => {})`, silently collapsing cards on any API failure (most common:
+  401 SESSION_EXPIRED on Google token expiry). Converted to async try/catch with `setActError()`
+  and an inline dismissible error banner. PR #764 merged 2026-08-25.
 - [x] **I.3 — Raise `num_predict` for 32B.** Done. Raised ceilings in `api/ai.py` (120→200, 140→250,
   400→800, 220→400, 200→400) and `api/providers.py` (128→200). Root cause: reasoning models emit a
   thinking pass before answering — the old caps ran out mid-thought, returning empty responses. Since
