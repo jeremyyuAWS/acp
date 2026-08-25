@@ -219,3 +219,32 @@ def purge_all(owner: str | None = None) -> dict:
         except Exception:
             out[cname] = -1  # container missing / listing failed — surface, don't abort the rest
     return out
+
+
+def purge_scan(owner: str, scan_id: str) -> dict:
+    """Delete every blob that belongs to ONE scan (BAA/HIPAA right-to-erasure path).
+
+    Blob paths follow the `{owner}/{scan_id}/{filename}` convention defined in _blob_path,
+    so listing with the prefix `{owner}/{scan_id}/` finds exactly this scan's bytes across
+    all three data containers. Best-effort and never raises; returns {container: deleted_count}
+    with -1 for a container that errored. No-op ({}) when blob storage isn't configured.
+    """
+    svc = _service_client()
+    if svc is None:
+        return {}
+    prefix = f"{owner}/{scan_id}/"
+    out: dict = {}
+    for cname in _DATA_CONTAINERS:
+        try:
+            cc = svc.get_container_client(cname)
+            n = 0
+            for b in cc.list_blobs(name_starts_with=prefix):
+                try:
+                    cc.delete_blob(b.name)
+                    n += 1
+                except Exception:
+                    pass
+            out[cname] = n
+        except Exception:
+            out[cname] = -1
+    return out
