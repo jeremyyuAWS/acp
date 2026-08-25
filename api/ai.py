@@ -277,10 +277,12 @@ def explain_finding(
         # and eval_count (output). Counts only — carried onto the Langfuse generation's usage.
         _trace_ai("explain", prompt, raw, _t0, ok=True,
                   prompt_tokens=_data.get("prompt_eval_count"),
-                  completion_tokens=_data.get("eval_count"), temperature=0.3)
+                  completion_tokens=_data.get("eval_count"), temperature=0.3,
+                  prompt_version="explain-v1")
         return {**_parse(raw), "model": OLLAMA_MODEL, "raw": raw}
     except Exception:
-        _trace_ai("explain", prompt, None, _t0, ok=False, temperature=0.3)
+        _trace_ai("explain", prompt, None, _t0, ok=False, temperature=0.3,
+                  prompt_version="explain-v1")
         return None
 
 
@@ -598,7 +600,8 @@ def _minimal_vision_prompt(style: str = "") -> str:
 
 
 def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = None,
-                     file: str | None = None, model: str | None = None, clean: bool = True) -> str | None:
+                     file: str | None = None, model: str | None = None, clean: bool = True,
+                     prompt_version: str | None = None) -> str | None:
     """One bounded, Langfuse-traced vision call → a cleaned single-line alt string, or None.
     Shared by describe_image and describe_image_structured so there is exactly one HTTP
     path, timeout, and honesty guard (a one-word reply won't clear WCAG 1.1.1 → treated as
@@ -633,7 +636,8 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
                   model=res.get("model") or model or OLLAMA_VISION_MODEL,
                   scan_id=scan_id, file=file,
                   provider=res.get("provider") or getattr(prov, "name", "runpod_serverless"),
-                  zone=res.get("zone") or "cloud", cost_usd=res.get("cost_usd", 0.0))
+                  zone=res.get("zone") or "cloud", cost_usd=res.get("cost_usd", 0.0),
+                  prompt_version=prompt_version)
         fb = _providers.local_vision_provider()
         if getattr(fb, "name", "") == "ollama":
             res = fb.generate(prompt, image_bytes, model=None, timeout=OLLAMA_VISION_TIMEOUT)
@@ -644,7 +648,8 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     _tr = dict(model=mdl, scan_id=scan_id, file=file, provider=res.get("provider", "ollama"),
                zone=res.get("zone"), cost_usd=res.get("cost_usd", 0.0),
                prompt_tokens=res.get("prompt_tokens"),
-               completion_tokens=res.get("completion_tokens"))
+               completion_tokens=res.get("completion_tokens"),
+               prompt_version=prompt_version)
     raw = (res.get("text") or "").strip() if res.get("ok") else ""
     if not res.get("ok") or not raw:
         # The adapter already logged the distinguishing detail and named the mode; carry its
@@ -681,13 +686,14 @@ def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
     if not image_bytes:
         return None
     prompt = _vision_prompt(filename, context, style, guidance)
-    alt = _vision_generate(prompt, image_bytes, scan_id=scan_id, file=file)
+    alt = _vision_generate(prompt, image_bytes, scan_id=scan_id, file=file,
+                           prompt_version="describe-v1")
     if not alt:
         # The model may have replied with nothing at all rather than failed — see
         # _minimal_vision_prompt. One bare retry, which is the difference between a working
         # reviewer re-draft (#131) and a button that silently does nothing on a compact model.
         alt = _vision_generate(_minimal_vision_prompt(style), image_bytes,
-                               scan_id=scan_id, file=file)
+                               scan_id=scan_id, file=file, prompt_version="describe-minimal-v1")
     # Defer to human review rather than surface a non-empty but USELESS draft — a weak vision model
     # (moondream, the CPU default) can return garbage the empty-check above misses. Better no draft,
     # which routes the image to a human, than a nonsense alt in a compliance artifact. See the
@@ -790,7 +796,8 @@ def validate_alt_text(image_bytes: bytes, alt: str, *, filename: str = "", model
         "In one sentence, describe what this image is and what it shows, for someone who cannot see "
         "it. Name the kind of image (e.g. bar chart, flowchart, photo) and its subject."
     )
-    second = _vision_generate(prompt, image_bytes, scan_id=scan_id, file=file, model=vmodel)
+    second = _vision_generate(prompt, image_bytes, scan_id=scan_id, file=file, model=vmodel,
+                              prompt_version="validate-alt-v1")
     if not second:
         return None
     a, b = _content_terms(alt), _content_terms(second)
@@ -908,13 +915,15 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
         prompt = _structured_vision_prompt(filename, ocr_txt, context)
     else:
         prompt = _vision_prompt(filename, context)
-    alt = _vision_generate(prompt, image_bytes, scan_id=scan_id, file=file)
+    pv = "describe-structured-v1" if grounded else "describe-v1"
+    alt = _vision_generate(prompt, image_bytes, scan_id=scan_id, file=file, prompt_version=pv)
     # Compact models (moondream) return empty for the full _vision_prompt due to its negation
     # clause and trailing label — documented at _minimal_vision_prompt. Same retry as
     # describe_image, but only on the ungrounded path: the structured prompt includes OCR text
     # that the minimal prompt would lose, so we only retry when there is nothing to anchor.
     if not alt and not grounded:
-        alt = _vision_generate(_minimal_vision_prompt(), image_bytes, scan_id=scan_id, file=file)
+        alt = _vision_generate(_minimal_vision_prompt(), image_bytes, scan_id=scan_id, file=file,
+                               prompt_version="describe-minimal-v1")
     model_used = OLLAMA_VISION_MODEL
     # Acceptance-gated cloud escalation (ADR 0019 §2/§3c): a local result that did not ground
     # (ungrounded, or the local model returned nothing usable) MAY escalate to the configured cloud
@@ -967,7 +976,8 @@ def _escalate_vision(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
               reason=res.get("reason"),
               # Real token usage from the cloud adapter → the Langfuse generation's `usage` (N1).
               prompt_tokens=res.get("prompt_tokens"),
-              completion_tokens=res.get("completion_tokens"))
+              completion_tokens=res.get("completion_tokens"),
+              prompt_version="describe-escalated-v1")
     if not res.get("ok"):
         return None
     alt = _clean_alt(res.get("text") or "")
@@ -1045,11 +1055,13 @@ def describe_reading_order(page_bytes: bytes, *, filename: str = "",
         order = _strip_order_preamble(order)[:400]
         ok = bool(order) and len(order) >= 12
         _trace_ai("vision", prompt, order, _t0, ok=ok,
-                  model=OLLAMA_VISION_MODEL, scan_id=scan_id, file=file, temperature=0.2)
+                  model=OLLAMA_VISION_MODEL, scan_id=scan_id, file=file, temperature=0.2,
+                  prompt_version="reading-order-v1")
         return {"order": order, "model": OLLAMA_VISION_MODEL} if ok else None
     except Exception:
         _trace_ai("vision", prompt, None, _t0, ok=False,
-                  model=OLLAMA_VISION_MODEL, scan_id=scan_id, file=file, temperature=0.2)
+                  model=OLLAMA_VISION_MODEL, scan_id=scan_id, file=file, temperature=0.2,
+                  prompt_version="reading-order-v1")
         return None
 
 
@@ -1153,7 +1165,8 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
         text = (_data.get("response", "") or "").strip().strip('"').strip()
         _trace_ai("suggest", prompt, text, _t0, ok=bool(text),
                   prompt_tokens=_data.get("prompt_eval_count"),
-                  completion_tokens=_data.get("eval_count"), temperature=0.4)
+                  completion_tokens=_data.get("eval_count"), temperature=0.4,
+                  prompt_version="suggest-v1")
         if not text:
             return None
         kind = _SUGGEST_KIND.get(rule_id, ("fix", ""))[0]
@@ -1211,12 +1224,13 @@ def simplify_text(text: str, *, scan_id: str | None = None, file: str | None = N
         out = re.sub(r"^(plain[- ]language version|rewritten text|here is[^:]*)\s*:\s*", "", out, flags=re.I).strip()
         _trace_ai("simplify", prompt, out, _t0, ok=bool(out), scan_id=scan_id, file=file,
                   prompt_tokens=_data.get("prompt_eval_count"),
-                  completion_tokens=_data.get("eval_count"), temperature=0.3)
+                  completion_tokens=_data.get("eval_count"), temperature=0.3,
+                  prompt_version="simplify-v1")
         # Guard: a rewrite must actually be shorter/simpler and non-trivial, else treat as a miss.
         return out if (out and len(out) >= 20 and out.lower() != src.lower()) else None
     except Exception:
         _trace_ai("simplify", prompt, None, _t0, ok=False, scan_id=scan_id, file=file,
-                  temperature=0.3)
+                  temperature=0.3, prompt_version="simplify-v1")
         return None
 
 
@@ -1292,10 +1306,12 @@ def _ollama_narrative(facts: dict) -> tuple[str, str] | None:
         raw = (_data.get("response", "") or "").strip()
         _trace_ai("digest", _p, raw, _t0, ok=bool(raw and len(raw) > 40),
                   prompt_tokens=_data.get("prompt_eval_count"),
-                  completion_tokens=_data.get("eval_count"), temperature=0.4)
+                  completion_tokens=_data.get("eval_count"), temperature=0.4,
+                  prompt_version="digest-v1")
         return (raw, OLLAMA_MODEL) if raw and len(raw) > 40 else None
     except Exception:
-        _trace_ai("digest", _p, None, _t0, ok=False, temperature=0.4)
+        _trace_ai("digest", _p, None, _t0, ok=False, temperature=0.4,
+                  prompt_version="digest-v1")
         return None
 
 
@@ -1328,7 +1344,8 @@ def looks_like_logotype(image_bytes: bytes, *, scan_id: str | None = None,
               "Answer with exactly one word: yes or no.")
     # clean=False: the default path's honesty guard rejects one-word replies as junk ALT
     # TEXT — correct there, fatal here, where one word is exactly the answer.
-    out = _vision_generate(prompt, image_bytes, clean=False, scan_id=scan_id, file=file)
+    out = _vision_generate(prompt, image_bytes, clean=False, scan_id=scan_id, file=file,
+                           prompt_version="logotype-v1")
     if not out:
         return None
     w = out.strip().lower()
