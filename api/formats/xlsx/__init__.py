@@ -122,3 +122,59 @@ register(
     reason=("embedded ActiveX/OLE controls are flagged for a human to confirm an accessible name "
             "and role; the name and role live in code that no static read can examine"),
 )
+
+
+def _language_parts(path):
+    """3.1.2 for xlsx — foreign passages in workbook text, with no marked-language context.
+
+    SpreadsheetML has no per-run language property (CT_RPrElt carries no lang element,
+    verified against the schema), so language_marked_spans returns {} for xlsx — every
+    detected foreign passage is unmarked by construction, not because the author forgot.
+    Imported lazily so this package stays importable by tooling that reads only the registry.
+    """
+    try:
+        import pii
+        import textchecks
+        from office_structure import language_marked_spans
+        text = pii.extract_text(path)
+        if not text:
+            return []
+        return textchecks.detect_language_parts(text, language_marked_spans(path, ".xlsx"))
+    except Exception:
+        return []
+
+
+# ── 3.1.2 Language of Parts ──────────────────────────────────────────────────────────
+# The same detector and text-extraction path that runs for docx now surfaces for xlsx via
+# the registry. What was missing was the xlsx declaration — so a multilingual workbook
+# resolved to NOT_EVALUATED for work (langdetect on extracted cell text) that had in fact
+# been done. The registration closes the gap: a clean scan reads REVIEW.
+#
+# PARTIAL and the limits are the same as docx 3.1.2: a passage must reach
+# textchecks._MIN_SEG_WORDS (12) words in a language other than the workbook's own before
+# langdetect is trusted to call it; a shorter foreign phrase or a single borrowed word is
+# under the floor and unflagged.
+#
+# HIGH confidence within that floor: the detection is deterministic given langdetect's
+# answer, and whether the detected language is the linguistically correct one is a content
+# question no scan settles — but that is a limit of SCOPE (PARTIAL), not of CERTAINTY.
+#
+# PERMANENT REVIEW — this pair can never certify a pass, even at FULL coverage and even
+# for a clean scan: SpreadsheetML has no per-run language property, so no write-back can
+# ever mark a foreign passage, and a multilingual workbook will always produce findings on
+# re-scan. The remediation lane is 👤 human (explain-only). This is a FORMAT limit, not a
+# detector limit — it is documented here so the matrix note reads as a considered decision
+# rather than a missing entry.
+register(
+    rule="3.1.2",
+    fmt="xlsx",
+    detector=_language_parts,
+    requires={Capability.TEXT},
+    coverage=Coverage.PARTIAL,
+    confidence=Confidence.HIGH,
+    reason=("passages of at least 12 words in a language other than the workbook's own are "
+            "flagged as unmarked foreign text; a shorter phrase is under the length floor "
+            "langdetect needs to be trusted, and is not flagged; SpreadsheetML has no "
+            "per-run language property so no write-back can mark a passage — the remediation "
+            "lane is human-only and this pair cannot certify a pass even on a clean scan"),
+)

@@ -57,20 +57,24 @@ Regenerate with `python scripts/gen_todo_status.py`; CI fails if this block is s
 
 This is a behaviour change, not bookkeeping: several detectors compute the AA and AAA thresholds in one pass, so AAA findings were previously scored against AA-target files.
 
-**Capability registry — 13 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
+**Capability registry — 17 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
 
 | Criterion | Format | Coverage | Confidence | Not covered |
 |---|---|---|---|---|
 | `1.1.1` | docx | **partial** | high | charts, SmartArt, grouped shapes and embedded OLE objects are non-text content this walk does not reach, and w |
 | `1.4.1` | docx | **partial** | high | colour used as the sole carrier of meaning anywhere else — shaded table rows, coloured glyphs, chart series ke |
+| `1.4.1` | pdf | **partial** | medium | colour used as the sole carrier of meaning anywhere else — a red callout, a chart series keyed by hue — is not |
 | `1.4.1` | xlsx | **partial** | medium | colour used in cell fills, charts and images is not examined, and whether colour is the sole cue is left to a  |
 | `1.4.11` | docx | **partial** | high | gradient or image fills, theme-colour indirection, and non-shape non-text elements such as focus indicators an |
+| `1.4.11` | pdf | **partial** | medium | gradient fills, image backgrounds, and non-rect non-text elements such as focus indicators are not examined, a |
 | `1.4.11` | xlsx | **partial** | medium | theme-coloured shapes, gradients, images and control affordances are not examined, and whether a shape conveys |
 | `2.1.2` | docx | **partial** | high | whether focus can actually move away from a control is runtime behaviour that depends on the control's own imp |
 | `2.4.3` | pdf | **heuristic** | medium | actually comparing the widget order to the structure order needs a /StructTreeRoot walk that is not built |
 | `2.4.4` | docx | **partial** | high | whether otherwise-descriptive text actually names THIS destination — a link reading 'Annual Report' that point |
+| `2.4.4` | pdf | **partial** | high | whether otherwise-descriptive link text accurately names its destination is a content judgement not examined,  |
 | `3.1.1` | html | **full** | high | whether the declared language is the CORRECT one is a content question 3.1.1 does not ask |
 | `3.1.2` | docx | **partial** | high | a shorter foreign phrase or a single borrowed word is under the length floor langdetect needs to be trusted, a |
+| `3.1.2` | xlsx | **partial** | high | SpreadsheetML has no per-run language property so no write-back can mark a passage — the remediation lane is h |
 | `4.1.2` | docx | **partial** | high | ActiveX controls, embedded OLE objects and other form content are not examined, which would need reading each  |
 | `4.1.2` | pdf | **partial** | high | components expressed through the tagged-structure tree are not examined, which needs a /StructTreeRoot walker  |
 | `4.1.2` | xlsx | **partial** | medium | the name and role live in code that no static read can examine |
@@ -79,7 +83,7 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 
 | Criterion | HTML | DOCX | XLSX | PPTX | PDF |
 |---|---|---|---|---|---|
-| `1.4.1` | pass/fail | partial | partial | — | review |
+| `1.4.1` | pass/fail | partial | partial | — | partial |
 | `1.3.5` | pass/fail | — | — | — | — |
 | `2.5.3` | pass/fail | — | — | — | — |
 | `4.1.2` | pass/fail | partial | partial | review | partial |
