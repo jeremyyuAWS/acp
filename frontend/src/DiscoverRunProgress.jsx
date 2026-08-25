@@ -113,6 +113,12 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   const excMissingRequired = progress.exc_missing_required ?? null
   const totalExceptions = (excInaccessible ?? 0) + (excMetadataFailure ?? 0) + (excDeleted ?? 0)
 
+  // Save-step outcome counts from schema_version 2+ done payloads.
+  const saveNew = progress.save_new ?? null
+  const saveUpdated = progress.save_updated ?? null
+  const saveUnchanged = progress.save_unchanged ?? null
+  const saveFailed = progress.save_failed ?? null
+
   // Source label substitution and KPI.
   const sourceName = sources && sources.length === 1 ? sources[0].name : null
   const sourceCount = sources ? sources.length : null
@@ -178,6 +184,14 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
         kpi = lifecycleMatchedCount === 0
           ? '— No enabled rules'
           : `${n(lifecycleMatchedCount)} matched · ${n(lifecycleUnchangedCount)} unchanged`
+      }
+      if (s.key === 'saving' && saveNew !== null) {
+        const parts = []
+        if (saveNew > 0) parts.push(`${n(saveNew)} new`)
+        if (saveUpdated > 0) parts.push(`${n(saveUpdated)} updated`)
+        if (saveUnchanged > 0) parts.push(`${n(saveUnchanged)} unchanged`)
+        if (saveFailed > 0) parts.push(`${n(saveFailed)} failed`)
+        if (parts.length) kpi = parts.join(' · ')
       }
     }
     if (status === 'active' && s.key === 'listing' && filesFound > 0) {

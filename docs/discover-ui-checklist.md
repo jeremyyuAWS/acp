@@ -89,17 +89,22 @@ excluded from Assessment by a lifecycle rule. Do NOT conflate the two.
   region announces phase transitions without repeating per-tick KPI counts (which are
   `aria-hidden`).
 
+- [x] **#3 Saving-inventory result** — After the `saving` step completes, the Saved inventory
+  step shows `N new · M updated` (and `P failed` if any). Only non-zero counts are shown.
+  `save_unchanged` is emitted as 0 — the upsert pattern cannot distinguish an update that changed
+  values from one that did not without a per-column comparison; updated + unchanged collapse into
+  `save_updated` at the store layer.
+  Implementation: `store.add_inventory` returns `{new, updated, unchanged, failed}` using a
+  before/after count query; `persist_discovery_inventory` in handlers.py captures and returns it;
+  `routes/scans.py work()` emits `save_new/updated/unchanged/failed` plus `schema_version: 2`
+  in the `phase: "done"` update. Frontend degrades gracefully when fields are absent (old backends).
+
 ## Remaining
 
 - [ ] **#2 + #7 Lifecycle activity detail** — During the `analysing` phase, show enabled rule count,
   per-file evaluation progress, and match candidates. These share the same instrumentation.
   Fields needed: `rules_enabled`, `files_evaluated`, `lifecycle_matches`.
   Requires: scanner to emit these in the `analysing` phase progress event.
-
-- [ ] **#3 Saving-inventory result** — After the `saving` step completes, show
-  `N new · M updated · K unchanged` (and `P failed` if any).
-  Fields needed: `save_new`, `save_updated`, `save_unchanged`, `save_failed`.
-  Requires: scanner to return save-step outcomes in the progress payload.
 
 - [ ] **#5 Metadata exceptions** — Surface inaccessible files/folders and metadata-read failures
   encountered during the `reading` phase. Six distinct categories:

@@ -635,3 +635,48 @@ describe('metadata exception counters (schema_version 2)', () => {
     expect(html).not.toContain('skipped during metadata read')
   })
 })
+
+describe('saving step KPI (schema_version 2 done payload)', () => {
+  it('shows "N new · M updated" in the Saved inventory step when save counts are present', () => {
+    const prog = { phase: 'done', files_found: 50, save_new: 48, save_updated: 2,
+                   save_unchanged: 0, save_failed: 0 }
+    const html = render(prog, true)
+    expect(html).toContain('48 new')
+    expect(html).toContain('2 updated')
+  })
+
+  it('shows only non-zero counts in the saving KPI', () => {
+    const prog = { phase: 'done', files_found: 30, save_new: 30, save_updated: 0,
+                   save_unchanged: 0, save_failed: 0 }
+    const html = render(prog, true)
+    expect(html).toContain('30 new')
+    expect(html).not.toContain('0 updated')
+    expect(html).not.toContain('unchanged')
+  })
+
+  it('includes "failed" in saving KPI when save_failed is non-zero', () => {
+    const prog = { phase: 'done', files_found: 20, save_new: 18, save_updated: 1,
+                   save_unchanged: 0, save_failed: 1 }
+    const html = render(prog, true)
+    expect(html).toContain('1 failed')
+  })
+
+  it('omits saving KPI when save_new is absent (schema_version 1 payload)', () => {
+    const prog = { phase: 'done', files_found: 20 }
+    const html = render(prog, true)
+    expect(html).toContain('Saved inventory')
+    expect(html).not.toContain(' new')
+    expect(html).not.toContain(' updated')
+  })
+
+  it('saving KPI appears near the Saved inventory step', () => {
+    const prog = { phase: 'done', files_found: 100, save_new: 95, save_updated: 5,
+                   save_unchanged: 0, save_failed: 0 }
+    const html = render(prog, true)
+    const savedIdx = html.indexOf('Saved inventory')
+    const kpiIdx = html.indexOf('95 new')
+    expect(savedIdx).toBeGreaterThan(-1)
+    expect(kpiIdx).toBeGreaterThan(-1)
+    expect(kpiIdx - savedIdx).toBeLessThan(400)
+  })
+})

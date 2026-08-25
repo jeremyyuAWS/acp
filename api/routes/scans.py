@@ -189,11 +189,15 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
             # Persist per-file inventory + evaluate archival/deletion rules — same as the fanout path,
             # so a default in-process Discover marks Archive/Delete candidates too (not only fanout).
             from handlers import persist_discovery_inventory
-            persist_discovery_inventory(sid, inv, source, user)
+            save_outcome = persist_discovery_inventory(sid, inv, source, user)
             core.finalize_scan(sid, effective_ai, source)
             done = core.get_job_state(job_id) or {}
-            core.update_job(job_id, {"phase": "done", "done": True, "scan_id": sid,
-                                     "files_done": done.get("files_found", 0)})
+            core.update_job(job_id, {"schema_version": 2, "phase": "done", "done": True,
+                                     "scan_id": sid, "files_done": done.get("files_found", 0),
+                                     "save_new": save_outcome.get("new"),
+                                     "save_updated": save_outcome.get("updated"),
+                                     "save_unchanged": save_outcome.get("unchanged"),
+                                     "save_failed": save_outcome.get("failed")})
         except Exception as e:
             core.update_job(job_id, {"phase": "error", "done": True, "error": str(e)})
         finally:
