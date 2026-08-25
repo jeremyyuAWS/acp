@@ -312,13 +312,16 @@ frontend fallback read the lane table directly, with no applier check in front o
 Assessment is untouched (`Q`) — the detector still fires. Regression:
 `tests/test_pdf_link_purpose_explain_only.py`.
 
-### P1d-1 — the one cell still open
+### P1d-1 — SHIPPED
 
-1. **2.4.6 Headings and Labels · fix · XLSX** — today No Remediation, ceiling AI Generated
-   Fix, his ask Automatically Fixed. `propose_xlsx_labels` exists and the detector gate
-   matches, but it returned `[]` with `ai_enabled` both off and on, because verification ran
-   with no reachable model. **Unverified, not absent** — the next step is to run it against a
-   live Ollama and record what comes back, NOT to write a second implementation.
+1. **2.4.6 Headings and Labels · fix · XLSX** — `propose_xlsx_labels` drafts AI names for
+   default sheet tabs and table columns (verified via mocks; `_mock_ai` pattern in
+   `tests/test_propose_xlsx_labels.py`). The previous gap: proposals were enqueued but never
+   written back — there was no applier, so approved labels sat in the DB and the file stayed
+   uncertified. Closed by `api/apply_xlsx_labels.py` + `store.approved_structure_label_values`
+   + a new lane in `handlers._apply_approved_values` (PR todo). Capability matrix already said
+   ASSISTED; now the write-back makes that claim true. Tests: `tests/test_apply_xlsx_labels.py`
+   (9 tests: sheet rename, table column rename, both combined, XML escaping, corruption guard).
 
 ### P1d-2 — 29 cells at our ceiling: a decision, not engineering
 
