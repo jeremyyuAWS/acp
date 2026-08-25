@@ -469,13 +469,15 @@ third is the correctness fix with the widest blast radius.
 
 ## Phase 3 — the structural ones
 
-- [ ] **P3.1 — Vendor the PDF engine.** `ACP_PDF_ENGINE` is external, so 13 of 61 pairs are
-  unmeasurable locally *and* skipped in CI (`tests/test_scan.py`, `test_remediation_capability.py`).
-  A fifth of the matrix nobody can test. ADR 0012 vendored the Office analysers the same way.
-- [ ] **P3.2 — Accessible generated PDFs.** ACP's own rule `pdf.tagged` (1.3.1) flags untagged
-  PDFs, and neither generator emits a structure tree — jsPDF cannot at all. An accessibility tool
-  shipping non-conformant PDFs is a credibility problem. Architectural: move report generation
-  server-side, or post-process.
+- [x] **P3.1 — Vendor the PDF engine.** Done — ADR 0029 vendored the 41-module analyser
+  tree into `engine/pdf-analyser/` and defaulted `ACP_PDF_ENGINE` to that path (mirrors ADR
+  0012's Office pattern). `PDF_OK` is now True on a fresh clone; CI builds dotnet for Office
+  and inherits the PDF tree from checkout, so all formerly-skipped pairs run. Stale "NOT
+  vendored" comment in `tests/test_scan.py` corrected. *(Source-verified 2026-08-25.)*
+- [x] **P3.2 — Accessible generated PDFs.** Done — `_tag_pdf()` post-processes `build_report()`
+  output with pikepdf to inject `MarkInfo.Marked=true` + `StructTreeRoot`, satisfying
+  `pdf.tagged` (WCAG 1.3.1). The six jsPDF client-side report types are still untagged (jsPDF
+  has no tagging API; server-side migration is a follow-on). PR #767 merged 2026-08-25.
 - [ ] **P3.3 — Healthcare hardening.** Encryption with customer-managed keys; retention and
   deletion paths for a BAA; confirm nothing logs document content.
 - [ ] **P3.4 — Power BI export.** Given the data is in Postgres, a read-only view plus DirectQuery
