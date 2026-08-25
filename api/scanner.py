@@ -2974,6 +2974,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         progress({"schema_version": 2,
                   "phase": "discovering", "files_found": n, "files_done": 0, "current": None,
                   "folders_found": scope.get("folders_walked"),
+                  "folders_visited": scope.get("folders_walked"),
+                  "folder_workers_configured": _DISCOVERY_WORKERS,
                   "exc_missing_optional": exc_missing_optional,
                   "exc_missing_required": exc_missing_required})
 

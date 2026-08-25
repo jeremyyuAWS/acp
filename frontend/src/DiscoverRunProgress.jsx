@@ -27,6 +27,7 @@ const PHASE_DONE_COUNT = {
   reading: 2,
   tagging: 3,
   analysing: 4,
+  lifecycle: 4,
   scoring: 5, finalizing: 5,
   done: 6,
 }
@@ -126,6 +127,9 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   const lcArchive = progress.lifecycle_archive ?? null
   const lcDelete = progress.lifecycle_delete ?? null
   const lcTagged = progress.lifecycle_tagged ?? null
+  // Folder activity fields emitted in the post-BFS "discovering" event.
+  const foldersVisited = progress.folders_visited ?? null
+  const folderWorkersConfigured = progress.folder_workers_configured ?? null
 
   // Source label substitution and KPI.
   const sourceName = sources && sources.length === 1 ? sources[0].name : null
@@ -204,15 +208,21 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
           ].filter(Boolean)
           if (parts.length) kpi = parts.join(' · ')
         } else if (assessableCount !== null && unsupportedCount !== null) {
-          kpi = `${n(assessableCount)} assessable · ${n(unsupportedCount)} unsupported`
+          kpi = `${n(assessableCount)} assessable · ${n(unsupportedCount)} not assessable`
         }
       }
       if (s.key === 'lifecycle') {
         if (rulesEnabled !== null) {
           // Use progress payload fields (schema_version 2+) — more accurate than inv-derived counts.
+          const actionParts = [
+            lcArchive > 0 && `${n(lcArchive)} Archive Candidate${lcArchive === 1 ? '' : 's'}`,
+            lcDelete > 0 && `${n(lcDelete)} Delete Candidate${lcDelete === 1 ? '' : 's'}`,
+            lcTagged > 0 && `${n(lcTagged)} tagged`,
+          ].filter(Boolean)
           kpi = rulesEnabled === 0
             ? '— No enabled rules'
-            : `${n(rulesEnabled)} rules · ${n(lifecycleMatches)} matched`
+            : [`${n(rulesEnabled)} rules · ${n(lifecycleMatches)} matched`,
+               ...actionParts].join(' · ')
         } else if (lifecycleMatchedCount !== null && lifecycleUnchangedCount !== null) {
           // Fallback for old backends that don't emit lifecycle stats.
           kpi = lifecycleMatchedCount === 0
@@ -232,14 +242,25 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
     if (status === 'active' && s.key === 'listing' && filesFound > 0) {
       kpi = `${n(filesFound)} files found so far`
     }
+    if (status === 'active' && s.key === 'lifecycle') {
+      // filesEvaluated live = progress.files_evaluated during "lifecycle" phase ticks
+      const liveEval = progress.files_evaluated ?? null
+      const liveTotal = progress.files_found ?? null
+      const liveRules = progress.rules_enabled ?? null
+      if (liveRules !== null && liveRules === 0) {
+        kpi = '— No enabled rules'
+      } else if (liveEval !== null && liveRules !== null && liveTotal !== null) {
+        kpi = `Applying ${n(liveRules)} lifecycle rule${liveRules === 1 ? '' : 's'} · ${n(liveEval)} of ${n(liveTotal)} files evaluated`
+      }
+    }
 
     return { ...s, label: displayLabel, status, kpi }
   })
 
   // After 90 s with no files found during listing, the source likely has many folders to walk.
   const showLongRunningHint = elapsed >= 90 && filesFound === 0 && phase === 'discovering'
-  // Lifecycle evaluation runs AI classification and can take 30+ s on large inventories.
-  const showLifecycleSlowHint = elapsed >= 30 && phase === 'analysing'
+  // Lifecycle evaluation can take 30+ s on large inventories.
+  const showLifecycleSlowHint = elapsed >= 30 && phase === 'lifecycle'
   // Show a note during reading when any files have been skipped due to exceptions.
   const showReadingExceptions = phase === 'reading' && totalExceptions > 0
 
@@ -277,30 +298,44 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
                style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 14 }}>
             {steps.map(({ key, ...rest }) => <DiscoverStep key={key} {...rest} />)}
           </div>
+          {folderWorkersConfigured !== null && (
+            <details style={{ marginBottom: 10, fontSize: 12.5 }}>
+              <summary style={{ cursor: 'pointer', color: 'var(--muted)',
+                                listStyle: 'none', display: 'flex', alignItems: 'center', gap: 6,
+                                userSelect: 'none' }}>
+                <span style={{ fontSize: 10 }}>▶</span>
+                <span>Technical details</span>
+              </summary>
+              <div style={{ paddingLeft: 16, paddingTop: 6, color: 'var(--muted)', lineHeight: 1.7 }}>
+                <div>Folder traversal concurrency: up to {folderWorkersConfigured}</div>
+              </div>
+            </details>
+          )}
           <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 12,
                         fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.6 }}>
-            <div>{n(totalFiles)} files discovered · {n(matched)} matched lifecycle rules</div>
-            {(lcArchive > 0 || lcDelete > 0 || lcTagged > 0) && (
-              <div>
-                {[
-                  lcArchive > 0 && `${n(lcArchive)} Archive Candidate${lcArchive === 1 ? '' : 's'}`,
-                  lcDelete > 0 && `${n(lcDelete)} Delete Candidate${lcDelete === 1 ? '' : 's'}`,
-                  lcTagged > 0 && `${n(lcTagged)} tagged`,
-                ].filter(Boolean).join(' · ')}
-              </div>
-            )}
+            <div>{[
+              `${n(totalFiles)} files discovered`,
+              matched > 0
+                ? [
+                    `${n(matched)} matched`,
+                    lcArchive > 0 && `${n(lcArchive)} Archive Candidate${lcArchive === 1 ? '' : 's'}`,
+                    lcDelete > 0 && `${n(lcDelete)} Delete Candidate${lcDelete === 1 ? '' : 's'}`,
+                    lcTagged > 0 && `${n(lcTagged)} tagged`,
+                  ].filter(Boolean).join(' · ')
+                : '0 matched lifecycle rules',
+            ].join(' · ')}</div>
             {hasClassStats ? (
               <div>
                 {[
                   clsAssessable > 0 && `${n(clsAssessable)} assessable`,
                   clsMetadataOnly > 0 && `${n(clsMetadataOnly)} metadata-only`,
                   clsUnsupported > 0 && `${n(clsUnsupported)} unsupported`,
-                  clsEligibilityUnknown > 0 && `${n(clsEligibilityUnknown)} eligibility unknown`,
+                  clsEligibilityUnknown > 0 && `${n(clsEligibilityUnknown)} unknown`,
                   clsExcluded > 0 && `${n(clsExcluded)} excluded`,
                 ].filter(Boolean).join(' · ')}
               </div>
             ) : assessableCount !== null ? (
-              <div>{n(assessableCount)} assessable · {n(unsupportedCount)} unsupported</div>
+              <div>{n(assessableCount)} assessable · {n(unsupportedCount)} not assessable</div>
             ) : null}
             {totalExceptions > 0 && (
               <div>

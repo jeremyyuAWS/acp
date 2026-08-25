@@ -304,7 +304,7 @@ describe('completion summary when phase is done', () => {
     const prog = { phase: 'done', files_found: 5 }
     const html = render(prog, true, undefined, undefined, inv)
     expect(html).toContain('5 files discovered')
-    expect(html).toContain('matched lifecycle rules')
+    expect(html).toContain('1 matched')
     expect(html).toContain('No documents were assessed or changed')
   })
 
@@ -361,12 +361,12 @@ describe('classification KPI on the classifying step', () => {
   ]
   const inv = { rows: INV_CLASS, total: INV_CLASS.length }
 
-  it('shows "N assessable · M unsupported" when classifying step is done (analysing phase)', () => {
+  it('shows "N assessable · M not assessable" (aggregate fallback) when classifying step is done', () => {
     // analysing phase: PHASE_DONE_COUNT=4, so steps 0-3 are done; classifying (index 3) is done
     const prog = { phase: 'analysing', files_found: 4 }
     const html = render(prog, true, undefined, undefined, inv)
     expect(html).toContain('2 assessable')
-    expect(html).toContain('2 unsupported')
+    expect(html).toContain('2 not assessable')
   })
 
   it('KPI appears near the Classified document types step', () => {
@@ -399,7 +399,7 @@ describe('classification KPI on the classifying step', () => {
     const prog = { phase: 'analysing', files_found: 6 }
     const html = render(prog, true, undefined, undefined, i2)
     expect(html).toContain('5 assessable')
-    expect(html).toContain('1 unsupported')
+    expect(html).toContain('1 not assessable')
   })
 })
 
@@ -429,7 +429,7 @@ describe('accessibility: KPI spans do not spam screen readers', () => {
 })
 
 describe('reconciliation in completion summary', () => {
-  it('shows assessable/unsupported breakdown when inv is available', () => {
+  it('shows "assessable · not assessable" aggregate fallback when inv is available (old backend)', () => {
     const rows = [
       { file: 'a.docx', doc_class: 'text-document', lifecycle_rule_id: null, owner: null, source_modified: null },
       { file: 'b.pptx', doc_class: 'slide-deck',    lifecycle_rule_id: null, owner: null, source_modified: null },
@@ -438,17 +438,17 @@ describe('reconciliation in completion summary', () => {
     const inv = { rows, total: 3 }
     const prog = { phase: 'done', files_found: 3 }
     const html = render(prog, false, undefined, undefined, inv)
-    // assessable + unsupported must sum to total (3)
+    // assessable + not assessable must sum to total (3)
     expect(html).toContain('3 files discovered')
     expect(html).toContain('2 assessable')
-    expect(html).toContain('1 unsupported')
+    expect(html).toContain('1 not assessable')
   })
 
   it('omits the breakdown row when inv is null', () => {
     const prog = { phase: 'done', files_found: 5 }
     const html = render(prog, false)
     expect(html).not.toContain('assessable')
-    expect(html).not.toContain('unsupported')
+    expect(html).not.toContain('not assessable')
     // But the core summary line must still appear
     expect(html).toContain('files discovered')
     expect(html).toContain('No documents were assessed or changed')
@@ -719,7 +719,7 @@ describe('classification 5-bucket breakdown (schema_version 2)', () => {
     expect(html).not.toContain('0 unsupported')
   })
 
-  it('falls back to inv-derived binary KPI when payload fields are absent (old backends)', () => {
+  it('falls back to inv-derived "not assessable" aggregate when payload fields are absent (old backends)', () => {
     const prog = { phase: 'analysing', files_found: 4 }
     const inv = { rows: [
       { file: 'a.docx', doc_class: 'text-document', lifecycle_rule_id: null, owner: null, source_modified: null },
@@ -729,7 +729,7 @@ describe('classification 5-bucket breakdown (schema_version 2)', () => {
     ], total: 4 }
     const html = render(prog, true, undefined, undefined, inv)
     expect(html).toContain('2 assessable')
-    expect(html).toContain('2 unsupported')
+    expect(html).toContain('2 not assessable')
     expect(html).not.toContain('metadata-only')
   })
 
@@ -744,7 +744,7 @@ describe('classification 5-bucket breakdown (schema_version 2)', () => {
     expect(html).not.toContain('0 excluded')
   })
 
-  it('completion summary falls back to inv-derived for old backends', () => {
+  it('completion summary falls back to inv-derived "not assessable" for old backends', () => {
     const rows = [
       { file: 'a.docx', doc_class: 'text-document', lifecycle_rule_id: null, owner: null, source_modified: null },
       { file: 'b.png',  doc_class: 'image',          lifecycle_rule_id: null, owner: null, source_modified: null },
@@ -753,7 +753,7 @@ describe('classification 5-bucket breakdown (schema_version 2)', () => {
     const prog = { phase: 'done', files_found: 2 }
     const html = render(prog, false, undefined, undefined, inv)
     expect(html).toContain('1 assessable')
-    expect(html).toContain('1 unsupported')
+    expect(html).toContain('1 not assessable')
     expect(html).not.toContain('metadata-only')
   })
 
@@ -812,7 +812,7 @@ describe('lifecycle step KPI from progress payload (schema_version 2)', () => {
   it('completion summary uses lifecycle_matches from progress when available', () => {
     const prog = { phase: 'done', files_found: 30, lifecycle_matches: 8 }
     const html = render(prog, true)
-    expect(html).toContain('8 matched lifecycle rules')
+    expect(html).toContain('8 matched')
   })
 })
 
@@ -865,5 +865,121 @@ describe('lifecycle action-type breakdown in completion summary (schema_version 
     const html = render(prog, true)
     expect(html).not.toContain('Archive')
     expect(html).not.toContain('tagged')
+  })
+})
+
+describe('lifecycle phase: active step KPI (live progress ticks)', () => {
+  it('shows "Applying N lifecycle rules · M of K files evaluated" during lifecycle phase', () => {
+    const prog = {
+      phase: 'lifecycle', files_found: 148, files_evaluated: 96, rules_enabled: 5,
+    }
+    const html = render(prog, true)
+    expect(html).toContain('Applying 5 lifecycle rules')
+    expect(html).toContain('96 of 148 files evaluated')
+  })
+
+  it('uses singular "rule" when rules_enabled is 1', () => {
+    const prog = {
+      phase: 'lifecycle', files_found: 50, files_evaluated: 20, rules_enabled: 1,
+    }
+    const html = render(prog, true)
+    expect(html).toContain('Applying 1 lifecycle rule ·')
+    expect(html).not.toContain('Applying 1 lifecycle rules')
+  })
+
+  it('shows "No enabled rules" during lifecycle phase when rules_enabled is 0', () => {
+    const prog = {
+      phase: 'lifecycle', files_found: 50, files_evaluated: 0, rules_enabled: 0,
+    }
+    const html = render(prog, true)
+    expect(html).toContain('No enabled rules')
+  })
+
+  it('lifecycle step is active and classifying step is done during lifecycle phase', () => {
+    const prog = {
+      phase: 'lifecycle', files_found: 100, files_evaluated: 50, rules_enabled: 3,
+    }
+    const html = render(prog, true)
+    // classifying step (index 3) is done — shows past-tense label with ✓
+    const classifyingIdx = html.indexOf('Classified document types')
+    expect(classifyingIdx).toBeGreaterThan(-1)
+    const checkBefore = html.lastIndexOf('✓', classifyingIdx)
+    expect(checkBefore).toBeGreaterThan(-1)
+    // lifecycle step (index 4) is active — shows pulse dot
+    const lifecycleIdx = html.indexOf('Applying lifecycle rules')
+    expect(lifecycleIdx).toBeGreaterThan(-1)
+    const pulseBefore = html.lastIndexOf('prep-pulse', lifecycleIdx)
+    expect(pulseBefore).toBeGreaterThan(-1)
+  })
+
+  it('KPI appears near the Applying lifecycle rules step', () => {
+    const prog = {
+      phase: 'lifecycle', files_found: 200, files_evaluated: 100, rules_enabled: 4,
+    }
+    const html = render(prog, true)
+    const lifecycleIdx = html.indexOf('Applying lifecycle rules')
+    const savingIdx = html.indexOf('Saving inventory')
+    const kpiIdx = html.indexOf('Applying 4 lifecycle rules')
+    expect(kpiIdx).toBeGreaterThan(lifecycleIdx)
+    expect(kpiIdx).toBeLessThan(savingIdx)
+  })
+})
+
+describe('lifecycle done step KPI includes action-type breakdown', () => {
+  it('shows "N rules · M matched · Archive · Delete · tagged" in lifecycle step when done', () => {
+    const prog = {
+      phase: 'done', files_found: 148,
+      rules_enabled: 5, lifecycle_matches: 21,
+      lifecycle_archive: 12, lifecycle_delete: 1, lifecycle_tagged: 8,
+    }
+    const html = render(prog, true)
+    // step KPI contains rules and matched + action parts
+    expect(html).toContain('5 rules')
+    expect(html).toContain('21 matched')
+    expect(html).toContain('12 Archive Candidates')
+    expect(html).toContain('1 Delete Candidate')
+    expect(html).toContain('8 tagged')
+  })
+
+  it('shows "— No enabled rules" in lifecycle done step when rules_enabled is 0', () => {
+    const prog = {
+      phase: 'done', files_found: 50,
+      rules_enabled: 0, lifecycle_matches: 0,
+      lifecycle_archive: 0, lifecycle_delete: 0, lifecycle_tagged: 0,
+    }
+    const html = render(prog, true)
+    const appliedIdx = html.indexOf('Applied lifecycle rules')
+    expect(appliedIdx).toBeGreaterThan(-1)
+    const noRulesIdx = html.indexOf('No enabled rules', appliedIdx)
+    expect(noRulesIdx).toBeGreaterThan(appliedIdx)
+  })
+})
+
+describe('technical details expandable: folder traversal concurrency', () => {
+  it('shows "Technical details" with concurrency when folder_workers_configured is present (done phase)', () => {
+    const prog = {
+      phase: 'done', files_found: 148, folders_found: 42, folder_workers_configured: 6,
+    }
+    const html = render(prog, true)
+    expect(html).toContain('Technical details')
+    expect(html).toContain('Folder traversal concurrency: up to 6')
+  })
+
+  it('omits technical details when folder_workers_configured is absent', () => {
+    const prog = { phase: 'done', files_found: 100, folders_found: 20 }
+    const html = render(prog, true)
+    expect(html).not.toContain('Technical details')
+    expect(html).not.toContain('Folder traversal concurrency')
+  })
+
+  it('folder concurrency is inside a details (collapsible) element', () => {
+    const prog = {
+      phase: 'done', files_found: 50, folder_workers_configured: 4,
+    }
+    const html = render(prog, true)
+    const detailsIdx = html.indexOf('<details')
+    expect(detailsIdx).toBeGreaterThan(-1)
+    const concurrencyIdx = html.indexOf('Folder traversal concurrency: up to 4')
+    expect(concurrencyIdx).toBeGreaterThan(detailsIdx)
   })
 })

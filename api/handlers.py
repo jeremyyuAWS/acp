@@ -882,7 +882,8 @@ def _count_inventory_classes(scan_id: str) -> dict:
 # (routes/disposition.list_conflicts) so both make the same call from one place.
 
 
-def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | None) -> dict:
+def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | None,
+                                       progress_cb=None) -> dict:
     """Evaluate enabled disposition policies against the freshly persisted inventory and record
     CANDIDATE outcomes (PRD §4.3 / §6, Phase B4). Candidate-first: a matching archive rule flags
     the file 'Archive Candidate' and a delete rule 'Delete Candidate' — the actual Drive
@@ -894,6 +895,9 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
     Keying: tags/status are keyed by (scan_id, file) — the file_tags / scan_inventory grain. The
     audit doc_id is a discover-grain key ("scan:<scan_id>:<file>"), deliberately distinct from the
     approval-time drive:<fileId> key the Tag-action PR (#314) uses, so the two paths never collide.
+
+    progress_cb(files_evaluated, rules_enabled): called every 10 files so the route can emit
+    live lifecycle progress ticks. Optional — omit for callers that don't surface live updates.
 
     Returns {"rules_enabled": N, "files_evaluated": M, "lifecycle_matches": K} so callers can
     surface lifecycle activity stats in the 'done' progress payload.
@@ -914,6 +918,15 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
     lc_tagged_files: set = set()
     for r in core.store.list_inventory(scan_id):
         files_evaluated += 1
+        if progress_cb and files_evaluated % 10 == 0:
+            progress_cb({
+                "files_evaluated": files_evaluated,
+                "rules_enabled": len(policies),
+                "files_matched": lifecycle_matches,
+                "archive_candidates": lc_archive,
+                "delete_candidates": lc_delete,
+                "files_tagged": len(lc_tagged_files),
+            })
         file = r.get("file")
         # An Exempted file (legal hold etc.) is never moved to a candidate status, tagged, or
         # re-audited by a rule run (PRD §6).
@@ -1005,7 +1018,8 @@ def _mark_discovered(scan_id: str) -> None:
         pass
 
 
-def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, actor: str | None) -> dict:
+def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, actor: str | None,
+                                progress_cb=None) -> dict:
     """Persist the per-file discovery inventory and evaluate the lifecycle (archival/deletion) rules
     over it — the shared post-discovery step so a scan marks Archive/Delete candidates regardless of
     which scan path ran it. Historically only the fanout path (_scan_discover) did this inline; the
@@ -1026,7 +1040,8 @@ def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, acto
     from scanner import _dedupe_inventory_files
     _dedupe_inventory_files(inv)
     outcome = core.store.add_inventory(scan_id, inv) if inv else {"new": 0, "updated": 0, "unchanged": 0, "failed": 0}
-    lifecycle_stats = _evaluate_discover_lifecycle_rules(scan_id, source, actor)
+    lifecycle_stats = _evaluate_discover_lifecycle_rules(scan_id, source, actor,
+                                                         progress_cb=progress_cb)
     class_stats = _count_inventory_classes(scan_id)
     # The discovery phase is over: the inventory is persisted and the lifecycle rules have run.
     # Stamp WHEN, because every count taken from this inventory is only true as of this instant
