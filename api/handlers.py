@@ -1300,7 +1300,16 @@ def _scan_discover(payload: dict, job: dict) -> None:
                for it in norm] + inventory
         _dedupe_inventory_files(inv)
         if inv:
-            core.store.add_inventory(scan_id, inv)
+            _inv_outcome = core.store.add_inventory(scan_id, inv)
+            _job_id = job.get("id")
+            if _job_id:
+                core.update_job(_job_id, {
+                    "schema_version": 2,
+                    "save_new": _inv_outcome.get("new"),
+                    "save_updated": _inv_outcome.get("updated"),
+                    "save_unchanged": _inv_outcome.get("unchanged"),
+                    "save_failed": _inv_outcome.get("failed"),
+                })
         # Phase B4 — with the inventory persisted, run enabled disposition rules against it and
         # record candidate lifecycle outcomes (never executing the Drive move/delete here). Runs
         # before the no-assessable-items short-circuit below because a rule may match a

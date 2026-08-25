@@ -2977,7 +2977,9 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                   "folders_visited": scope.get("folders_walked"),
                   "folder_workers_configured": _DISCOVERY_WORKERS,
                   "exc_missing_optional": exc_missing_optional,
-                  "exc_missing_required": exc_missing_required})
+                  "exc_missing_required": exc_missing_required,
+                  "metadata_complete": n - exc_missing_optional,
+                  "metadata_incomplete": exc_missing_optional})
 
         exc_inaccessible_file = 0
         exc_metadata_failure = 0
@@ -2991,7 +2993,9 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                       "exc_metadata_failure": exc_metadata_failure,
                       "exc_deleted_during_scan": exc_deleted_during_scan,
                       "exc_missing_optional": exc_missing_optional,
-                      "exc_missing_required": exc_missing_required})
+                      "exc_missing_required": exc_missing_required,
+                      "metadata_complete": n - exc_missing_optional,
+                      "metadata_incomplete": exc_missing_optional})
             try:
                 _download(it, tmp, svc, sp_token=sp_token)
             except PermissionError:

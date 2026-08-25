@@ -619,6 +619,31 @@ describe('metadata exception counters (schema_version 2)', () => {
     expect(html).toContain('1 inaccessible')
   })
 
+  it('uses metadata_complete/incomplete from progress payload (schema_version 2+) over inv-derived counts', () => {
+    // Progress payload says 80 complete / 20 incomplete; inv rows say something different.
+    // Progress payload must win.
+    const inv = { rows: [
+      { file: 'a.docx', owner: 'u', source_modified: '2024', lifecycle_rule_id: null, doc_class: 'text-document' },
+    ], total: 1 }
+    const prog = { phase: 'tagging', files_found: 100, metadata_complete: 80, metadata_incomplete: 20 }
+    const html = render(prog, true, undefined, undefined, inv)
+    expect(html).toContain('80 complete')
+    expect(html).toContain('20 incomplete')
+    // inv-derived value (1 complete / 0 incomplete) must not appear
+    expect(html).not.toContain('1 complete')
+  })
+
+  it('falls back to inv-derived metadata counts when payload fields are absent', () => {
+    const inv = { rows: [
+      { file: 'a.docx', owner: 'u', source_modified: '2024', lifecycle_rule_id: null, doc_class: 'text-document' },
+      { file: 'b.pdf',  owner: null, source_modified: null,   lifecycle_rule_id: null, doc_class: 'pdf-document' },
+    ], total: 2 }
+    const prog = { phase: 'tagging', files_found: 2 }  // no metadata_complete/incomplete fields
+    const html = render(prog, true, undefined, undefined, inv)
+    expect(html).toContain('1 complete')
+    expect(html).toContain('1 incomplete')
+  })
+
   it('exception summary appears in completion summary when phase is done', () => {
     const prog = { phase: 'done', files_found: 10, exc_inaccessible_file: 2,
                    exc_metadata_failure: 0, exc_deleted_during_scan: 1 }
