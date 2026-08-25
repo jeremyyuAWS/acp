@@ -313,6 +313,9 @@ _SCHEMA = [
     # used to render a hardcoded list of WCAG criteria cycled by a timer, which had nothing
     # to do with the running job. Nullable: a handler that reports nothing shows nothing.
     "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS phase TEXT",
+    # Cooperative cancellation (ADR 0004 step 4): caller sets this; running handler calls
+    # worker.check_cancel() at checkpoints and raises JobCancelledError when set.
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS cancel_requested_at TEXT",
     # Column order matches the claim ORDER BY (priority, run_after) so Postgres reads the
     # top queued job index-only instead of sorting all queued rows every poll (audit P2).
     # New name + drop-old so this migrates once, not a rebuild every boot.
@@ -5067,6 +5070,35 @@ class Store:
                 self._db.execute(cur,
                     "UPDATE jobs SET status='done', updated_at=%s, last_error=NULL WHERE id=%s",
                     (self._now(), job_id))
+
+    def request_job_cancellation(self, job_id: str) -> bool:
+        """Signal a running or queued job to stop at its next checkpoint.
+
+        Sets cancel_requested_at so a handler calling worker.check_cancel() will raise
+        JobCancelledError on its next checkpoint poll. Returns True if the flag was set,
+        False when the job is already terminal (done/dead/cancelled) or missing."""
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE jobs SET cancel_requested_at=%s, updated_at=%s "
+                "WHERE id=%s AND status IN ('queued','running') AND cancel_requested_at IS NULL",
+                (now, now, job_id))
+            return (getattr(cur, "rowcount", 0) or 0) > 0
+
+    def is_job_cancelled(self, job_id: str) -> bool:
+        """True if cancel_requested_at has been set for this job."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT cancel_requested_at FROM jobs WHERE id=%s", (job_id,))
+            row = self._db.fetchone(cur)
+        return bool(row and row.get("cancel_requested_at"))
+
+    def mark_job_cancelled(self, job_id: str) -> None:
+        """Stamp the job as status='cancelled' after cooperative cancellation completes."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE jobs SET status='cancelled', updated_at=%s WHERE id=%s",
+                (self._now(), job_id))
 
     def dead_letter_breakdown(self, owner: str | None = None) -> dict:
         """Diagnostic: dead-lettered jobs grouped by type + the most common errors.
