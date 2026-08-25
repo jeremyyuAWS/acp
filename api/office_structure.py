@@ -424,6 +424,7 @@ _FRAMEPR = re.compile(r"<w:framePr\b")                                       # p
 # xlsx structure labels + hyperlinks (2.4.4 / 2.4.6).
 _XLSX_HL = re.compile(r"<hyperlink\b[^>]*>")
 _HL_DISPLAY = re.compile(r'display="([^"]*)"')
+_HL_REF = re.compile(r'\bref="([^"]+)"')
 _WB_SHEET = re.compile(r'<sheet\b[^>]*\bname="([^"]*)"')
 _TBL_COL = re.compile(r'<tableColumn\b[^>]*\bname="([^"]*)"')
 _DEFAULT_SHEET = re.compile(r"^Sheet\d+$")
@@ -653,6 +654,48 @@ def docx_checks(path: Path) -> list[dict]:
     return findings
 
 
+def _xlsx_shared_strings(ss_xml: str) -> list[str]:
+    """Parse xl/sharedStrings.xml into an ordered list of plain strings.
+    Each <si> may hold one or more <t> elements (rich-text runs); they are concatenated."""
+    result: list[str] = []
+    for si_m in re.finditer(r"<si>(.*?)</si>", ss_xml, re.S):
+        parts = re.findall(r"<t[^>]*>([^<]*)</t>", si_m.group(1))
+        result.append("".join(parts))
+    return result
+
+
+def _xlsx_cell_text_values(sheet_xml: str, shared: list[str]) -> dict[str, str]:
+    """Map {cell-ref → display string} for every string-type cell in the worksheet.
+    Numeric cells are excluded — they cannot be vague link labels.
+
+    Handles t="s" (shared string index), t="str" (formula string result), and
+    t="inlineStr" / <is> (inline rich text). Plain numbers (t="" or t="n") are skipped.
+    """
+    values: dict[str, str] = {}
+    for m in re.finditer(r"<c\b([^>]*)>(.*?)</c>", sheet_xml, re.S):
+        attrs, content = m.group(1), m.group(2)
+        r_m = re.search(r'\br="([^"]+)"', attrs)
+        if not r_m:
+            continue
+        ref = r_m.group(1).split(":")[0]
+        t_m = re.search(r'\bt="([^"]*)"', attrs)
+        t = t_m.group(1) if t_m else ""
+        if t == "s":
+            v_m = re.search(r"<v>([^<]*)</v>", content)
+            if v_m:
+                try:
+                    values[ref] = shared[int(v_m.group(1))]
+                except (ValueError, IndexError):
+                    pass
+        elif t in ("str", "inlineStr"):
+            is_m = re.search(r"<is>\s*<t[^>]*>([^<]*)</t>", content)
+            v_m = re.search(r"<v>([^<]*)</v>", content)
+            val = (is_m.group(1) if is_m else None) or (v_m.group(1) if v_m else None)
+            if val:
+                values[ref] = val
+    return values
+
+
 def xlsx_structure_checks(path: Path) -> list[dict]:
     """2.4.4 Link Purpose (In Context) — cell hyperlinks whose display text is vague or a
     raw URL. 2.4.6 Headings and Labels — uninformative structure labels (multiple default 'SheetN'
@@ -661,17 +704,27 @@ def xlsx_structure_checks(path: Path) -> list[dict]:
     try:
         with zipfile.ZipFile(path) as zf:
             names = zf.namelist()
-            # 2.4.4 — judge only links that carry an explicit display text; a link with no display
-            # attribute takes its label from the cell value (not resolved here), so skipping it
-            # avoids false positives. Same shared judgement as docx/pptx (_vague_link_findings).
+            # 2.4.4 — check links with explicit display AND links whose display comes from the
+            # cell value (no display= attribute). Shared strings are parsed once and reused.
+            ss_xml = _read(zf, "xl/sharedStrings.xml") or "" if "xl/sharedStrings.xml" in names else ""
+            shared = _xlsx_shared_strings(ss_xml) if ss_xml else []
             displays: list[str] = []
             for n in names:
                 if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", n):
                     xml = _read(zf, n) or ""
+                    cell_vals = _xlsx_cell_text_values(xml, shared)
                     for tag in _XLSX_HL.findall(xml):
                         m = _HL_DISPLAY.search(tag)
                         if m:
                             displays.append(m.group(1))
+                        else:
+                            # No display= — label is the cell value; resolve it now.
+                            ref_m = _HL_REF.search(tag)
+                            if ref_m:
+                                ref = ref_m.group(1).split(":")[0]
+                                val = cell_vals.get(ref)
+                                if val:
+                                    displays.append(val)
             findings += _vague_link_findings(displays, "XLSX_LINK_PURPOSE_VAGUE",
                                              "2.4.4 Link Purpose (In Context)")
 
@@ -1571,40 +1624,52 @@ def pdf_headings_labels_check(path: Path) -> list[dict]:
 
 
 def pdf_link_purpose_check(path: Path) -> list[dict]:
-    """2.4.4 Link Purpose (In Context) — a link annotation whose visible text is the raw URL: the
-    URL string of a /Link's /URI action appears verbatim in the page text. A bare URL is not a
-    meaningful link label. Conservative — the URL must literally appear as text, so a link with
-    descriptive text is never flagged."""
+    """2.4.4 Link Purpose (In Context) — two complementary checks via pdfplumber's hyperlinks:
+
+    (a) PDF_LINK_RAW_URL — the link annotation's /URI appears verbatim in the page text.
+        The raw URL is the visible label: a screen-reader user hears a long URL string.
+    (b) PDF_LINK_PURPOSE_VAGUE — text inside the annotation's bounding box matches the
+        same _VAGUE_LINK_TEXT predicate used for docx/pptx/xlsx ("click here", "here", etc.).
+
+    Both are assess-only; no write-back is offered (link text is drawn in glyph operators,
+    not a PDF field value — see tests/test_pdf_link_purpose_explain_only.py).
+    """
     try:
-        import pikepdf
-        uris: list[str] = []
-        with pikepdf.open(str(path)) as pdf:
-            for page in pdf.pages:
-                for annot in (page.get("/Annots") or []):
-                    try:
-                        if str(annot.get("/Subtype")) != "/Link":
-                            continue
-                        action = annot.get("/A")
-                        uri = action.get("/URI") if action is not None else None
-                        if uri:
-                            uris.append(str(uri))
-                    except Exception:
-                        continue
-        if not uris:
-            return []
-        wanted = {u for u in uris if u} | {re.sub(r"^https?://", "", u) for u in uris if u}
         import pdfplumber
-        text = ""
+        raw_url_hit = False
+        vague_examples: list[str] = []
         with pdfplumber.open(str(path)) as pdf:
             for page in pdf.pages[:20]:
-                text += (page.extract_text() or "") + " "
-                if len(text) > 20000:
-                    break
-        if any(u and u in text for u in wanted):
-            return [_finding("PDF_LINK_RAW_URL", "2.4.4 Link Purpose (In Context)", "MODERATE")]
+                page_text = page.extract_text() or ""
+                links = getattr(page, "hyperlinks", []) or []
+                for hl in links:
+                    uri = (hl.get("uri") or "").strip()
+                    # (a) raw URL: the URI string appears verbatim on the page
+                    if uri:
+                        stripped = re.sub(r"^https?://", "", uri)
+                        if uri in page_text or stripped in page_text:
+                            raw_url_hit = True
+                    # (b) vague phrase: crop the annotation bounding box to get link label text
+                    try:
+                        bbox = (hl["x0"], hl["top"], hl["x1"], hl["bottom"])
+                        link_text = (page.crop(bbox).extract_text() or "").strip()
+                        if link_text and _is_vague_link_text(link_text):
+                            vague_examples.append(link_text)
+                    except Exception:
+                        continue
+        findings: list[dict] = []
+        if raw_url_hit:
+            findings.append(_finding("PDF_LINK_RAW_URL", "2.4.4 Link Purpose (In Context)", "MODERATE"))
+        if vague_examples:
+            f = _finding("PDF_LINK_PURPOSE_VAGUE", "2.4.4 Link Purpose (In Context)", "MODERATE")
+            eg = vague_examples[0]
+            f["detail"] = (f"{len(vague_examples)} hyperlink(s) with unclear text "
+                           f"(e.g. “{eg}”) — "
+                           "a screen-reader user cannot tell where the link goes")
+            findings.append(f)
+        return findings
     except Exception:
         return []
-    return []
 
 
 # styles.xml holds several look-alike collections. The real cell formats a cell's
