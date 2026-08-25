@@ -143,13 +143,15 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
     ? inv.total - lifecycleMatchedCount
     : null
 
-  // Metadata completeness: complete = owner and source_modified both present.
-  const metadataCompleteCount = inv?.rows != null
+  // Metadata completeness: prefer progress-payload fields (schema_version 2+) so a live or
+  // deferred scan shows counts before the inventory is fully loaded. Falls back to inv-derived
+  // counts for backends that predate this field.
+  const metadataCompleteCount = progress.metadata_complete ?? (inv?.rows != null
     ? inv.rows.filter((r) => r.owner != null && r.source_modified != null).length
-    : null
-  const metadataIncompleteCount = (metadataCompleteCount !== null && inv?.total != null)
+    : null)
+  const metadataIncompleteCount = progress.metadata_incomplete ?? ((metadataCompleteCount !== null && inv?.total != null)
     ? inv.total - metadataCompleteCount
-    : null
+    : null)
 
   // Classification stats: 5-bucket breakdown from schema_version 2+ done payloads (PRD §6.4).
   const clsAssessable = progress.assessable ?? null
