@@ -73,16 +73,27 @@ def admin_analytics_overview(
 
     total_docs = sum(s.get("files") or 0 for s in scans)
     total_cert = sum(s.get("certifiable") or 0 for s in scans)
+    total_uncertain = sum(s.get("uncertain") or 0 for s in scans)
+    total_error_docs = sum(s.get("error") or 0 for s in scans)
+    scan_exceptions = sum(1 for s in scans if (s.get("error") or 0) > 0)
     scores = [s["avg_score"] for s in scans if s.get("avg_score") is not None]
 
-    # Per-source breakdown: scan count, doc count, certifiable count
+    # Per-source breakdown: scan count, doc count, certifiable count, uncertain, errors
     by_source: dict = {}
     for s in scans:
         src = s.get("source") or "unknown"
-        b = by_source.setdefault(src, {"scans": 0, "docs": 0, "certifiable": 0})
+        b = by_source.setdefault(src, {"scans": 0, "docs": 0, "certifiable": 0, "uncertain": 0, "error_docs": 0})
         b["scans"] += 1
         b["docs"] += s.get("files") or 0
         b["certifiable"] += s.get("certifiable") or 0
+        b["uncertain"] += s.get("uncertain") or 0
+        b["error_docs"] += s.get("error") or 0
+
+    # Pending HITL review items
+    try:
+        review_pending = len(core.store.list_hitl_queue(status="pending"))
+    except Exception:
+        review_pending = None
 
     # Recent scans — newest first, cap at 20 for the dashboard table
     recent = [
@@ -92,6 +103,7 @@ def admin_analytics_overview(
             "source": s.get("source"),
             "files": s.get("files"),
             "certifiable": s.get("certifiable"),
+            "uncertain": s.get("uncertain"),
             "avg_score": s.get("avg_score"),
             "owner_email": s.get("owner_email"),
         }
@@ -104,6 +116,10 @@ def admin_analytics_overview(
         "scans": len(scans),
         "docs": total_docs,
         "certifiable": total_cert,
+        "uncertain": total_uncertain,
+        "error_docs": total_error_docs,
+        "scan_exceptions": scan_exceptions,
+        "review_pending": review_pending,
         "certifiable_rate": round(total_cert / total_docs * 100, 1) if total_docs else None,
         "avg_score": round(sum(scores) / len(scores), 1) if scores else None,
         "by_source": by_source,
