@@ -17,8 +17,10 @@ vision path (describe_image) is the same: unavailable → None, and callers fall
 to a faithful source or human review.
 """
 from __future__ import annotations
+import logging
 import os
 import re
+import threading
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL    = os.environ.get("OLLAMA_MODEL", "llama3.2")
@@ -61,6 +63,12 @@ OLLAMA_COLD_START_TIMEOUT = _envf("OLLAMA_COLD_START_TIMEOUT", 90.0)
 # not cost the cold-start budget on every one of them.
 OLLAMA_PROBE_TTL = _envf("OLLAMA_PROBE_TTL", 300.0)
 _TAGS_CACHE: dict = {"at": 0.0, "tags": None}
+
+# Thread-local side channel: _vision_generate sets .fallback = True when it silently
+# degrades from a cloud provider to the local CPU floor. describe_image and
+# describe_image_structured initialise it to False at the start of each call and
+# propagate it to the returned draft via the "vision_fallback" key.
+_vision_tls = threading.local()
 
 
 def reset_probe_cache() -> None:
@@ -638,6 +646,14 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
                   provider=res.get("provider") or getattr(prov, "name", "runpod_serverless"),
                   zone=res.get("zone") or "cloud", cost_usd=res.get("cost_usd", 0.0),
                   prompt_version=prompt_version)
+        _vision_tls.fallback = True
+        logging.warning(
+            "W2: vision-fallback — cloud provider %r failed (%s); degrading to local CPU floor %r. "
+            "Output quality may be reduced.",
+            getattr(prov, "name", "cloud"),
+            res.get("reason") or _providers.REASON_TRANSPORT,
+            OLLAMA_VISION_MODEL,
+        )
         fb = _providers.local_vision_provider()
         if getattr(fb, "name", "") == "ollama":
             res = fb.generate(prompt, image_bytes, model=None, timeout=OLLAMA_VISION_TIMEOUT)
@@ -685,6 +701,7 @@ def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
     usable. Traced through Langfuse (surface 'vision') — model, latency, prompt size, ok."""
     if not image_bytes:
         return None
+    _vision_tls.fallback = False
     prompt = _vision_prompt(filename, context, style, guidance)
     alt = _vision_generate(prompt, image_bytes, scan_id=scan_id, file=file,
                            prompt_version="describe-v1")
@@ -728,6 +745,8 @@ def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
     if escalation:
         out["escalation"] = escalation["steps"]      # the transparent numbered path
         out["cost_usd"] = escalation["cost_usd"]
+    if getattr(_vision_tls, "fallback", False):
+        out["vision_fallback"] = True
     return out
 
 
@@ -895,6 +914,7 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     text", and transcribing would hand a figure the page's body copy as its alt."""
     if not image_bytes:
         return None
+    _vision_tls.fallback = False
     ocr_txt = ""
     try:
         import ocr as _ocr
@@ -951,6 +971,8 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     if escalation:
         out.update(provider=escalation["provider"], processing_zone=escalation["zone"],
                    cost_usd=escalation["cost_usd"], escalation=escalation["steps"])
+    if getattr(_vision_tls, "fallback", False):
+        out["vision_fallback"] = True
     return out
 
 
