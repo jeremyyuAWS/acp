@@ -1622,6 +1622,41 @@ class Store:
             cleared.append("scan_runs")
         return {"owner": owner_email, "cleared_tables": cleared}
 
+    def delete_scan(self, scan_id: str, owner_email: str) -> dict | None:
+        """Delete ONE scan and every row tied to it — the per-scan erasure path required for
+        a HIPAA Business Associate Agreement.
+
+        Returns None if the scan does not exist or does not belong to owner_email (prevents
+        one user deleting another's scan).  Returns a summary dict on success.
+
+        What is deleted:
+          - All rows in _RESET_USER_SCAN_TABLES keyed on scan_id.
+          - The scan_runs row itself.
+
+        What is deliberately NOT deleted:
+          - decision_log — immutable append-only audit trail; the deletion event is ADDED to
+            it by the caller, not the other way round.
+          - inventory — global path-dedup index with no scan_id link.
+          - Blob storage bytes — call blob.purge_scan(owner, scan_id) separately (the route
+            does this).  Kept separate so a DB-only operation never blocks on a slow storage
+            call and the two failure modes surface independently.
+        """
+        # Verify ownership before touching anything.
+        with self._db.cursor() as cur:
+            self._db.execute(
+                cur,
+                "SELECT id FROM scan_runs WHERE id=%s AND owner_email=%s",
+                (scan_id, owner_email),
+            )
+            if not self._db.fetchall(cur):
+                return None
+
+        with self._db.cursor() as cur:
+            for t in self._RESET_USER_SCAN_TABLES:
+                self._db.execute(cur, f"DELETE FROM {t} WHERE scan_id=%s", (scan_id,))
+            self._db.execute(cur, "DELETE FROM scan_runs WHERE id=%s", (scan_id,))
+        return {"scan_id": scan_id, "owner": owner_email}
+
     def list_scans(self, owner: str | None = None) -> list[dict]:
         # Completed scans only — in-flight (status='running', no completed_at) scans
         # are excluded so they don't appear as bogus entries in the scan picker.

@@ -474,7 +474,7 @@ def trace_hitl_decision(scan_id, file, rule_id, status, *, note=None, approved_v
         s = t.span(name=f"hitl.{status}",
                    input={"rule_id": rule_id},
                    output={"status": status, "note_chars": len(note or ""),
-                           "approved_value": (approved_value or "")[:500]})
+                           "approved_value_chars": len(approved_value or "")})
         s.end()
     except Exception:
         pass

@@ -668,7 +668,7 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     # to look at Ollama for a problem that is in the reply.
     if not ok:
         print(f"[vision] {_tr['provider']} · model={mdl} — reply rejected by the alt-text guard: "
-              f"{alt!r} (needs ≥8 chars and more than one word)", flush=True)
+              f"reply_chars={len(alt or '')} (needs ≥8 chars and more than one word)", flush=True)
     _trace_ai("vision", prompt, alt, _t0, ok=ok,
               reason=_providers.REASON_OK if ok else _providers.REASON_UNUSABLE, **_tr)
     return alt if ok else None

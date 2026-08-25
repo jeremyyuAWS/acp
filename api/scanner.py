@@ -394,10 +394,8 @@ def _debug_dump_account(svc, max_files: int = 60) -> None:
         print(f"[scan] discovery DEBUG: account holds {len(rows)} recent non-trashed item(s) "
               f"(unfiltered, newest first):", flush=True)
         for f in rows:
-            owner = (f.get("owners") or [{}])[0].get("emailAddress", "?")
             mark = "scannable" if f.get("mimeType") in scannable else "SKIPPED (type not scanned)"
-            print(f"[scan] discovery DEBUG:   {f.get('name')!r} · {f.get('mimeType')} · "
-                  f"owner={owner} · {mark}", flush=True)
+            print(f"[scan] discovery DEBUG:   mime={f.get('mimeType')} · {mark}", flush=True)
     except Exception as e:  # noqa: BLE001 — a diagnostic must never fail the scan
         print(f"[scan] discovery DEBUG: unfiltered listing failed: {e}", flush=True)
 
@@ -530,8 +528,7 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
     # only place a file count exists is the UI, and "why 2 files?" can't be answered offline.
     print(f"[scan] discovery (whole-Drive): {raw_seen} raw · {listed} scannable · "
           f"{skipped_acp} skipped as ACP-generated output · {len(result)} kept", flush=True)
-    for it in result:
-        print(f"[scan] discovery:   kept {it['name']!r}", flush=True)
+    print(f"[scan] discovery:   kept {len(result)} file(s)", flush=True)
     return result
 
 
