@@ -541,6 +541,29 @@ _SCHEMA = [
     # NULL never collides.
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS idempotency_key TEXT",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_runs_idempotency ON scan_runs(owner_email, idempotency_key) WHERE idempotency_key IS NOT NULL",
+    # Immutable input snapshot (Stage 1 item 3): everything known at enqueue time that
+    # governs how the scan executes, written atomically with scan_runs + jobs. Workers read
+    # this before processing; a rule or config change after enqueue cannot silently alter
+    # an already-queued scan.
+    # SECURITY: no access tokens, credentials, or secrets stored here. connection_ref
+    # identifies the authorized source connection (e.g. "drive:user@example.com"); the
+    # worker acquires live credentials at execution time from the token store / job payload.
+    # provider_config omits key_secret_ref — snapshot captures endpoint/model, not the
+    # secret reference name.
+    """CREATE TABLE IF NOT EXISTS scan_inputs (
+      scan_id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      folder_ids TEXT,
+      exclude_folder_ids TEXT,
+      scan_options TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      connection_ref TEXT,
+      feature_flags TEXT,
+      provider_config TEXT,
+      lifecycle_rules TEXT,
+      app_version TEXT,
+      captured_at TEXT NOT NULL
+    )""",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -1095,14 +1118,19 @@ class Store:
     def enqueue_scan(self, scan_id: str, source: str, owner: str,
                      job_type: str, payload: dict, *,
                      idempotency_key: str | None = None,
+                     inputs: dict | None = None,
                      priority: int = 100, max_attempts: int = 5,
                      run_after: str | None = None) -> tuple[str, str]:
         """Create a scan_runs stub and its initial job in a single atomic transaction.
 
-        Returns (scan_id, job_id). Both rows are committed together; a failure at any point
-        rolls back both, leaving no orphan stubs. If idempotency_key is provided and a scan
-        with that key already exists for the same owner, returns the original (scan_id, job_id)
-        without inserting new rows.
+        Returns (scan_id, job_id). All rows are committed together; a failure at any point
+        rolls back everything, leaving no orphan stubs. If idempotency_key is provided and a
+        scan with that key already exists for the same owner, returns the original
+        (scan_id, job_id) without inserting new rows.
+
+        `inputs` is the immutable input snapshot (Stage 1 item 3). When provided it is
+        inserted into scan_inputs in the same transaction. SECURITY: inputs must not contain
+        access tokens, credentials, or secrets — callers are responsible for omitting them.
         """
         import json as _json
         now = self._now()
@@ -1130,7 +1158,42 @@ class Store:
                 "VALUES(%s,%s,%s,'queued',%s,0,%s,%s,%s,%s,%s)",
                 (job_id, job_type, _json.dumps(payload or {}), priority, max_attempts,
                  run_after or now, scan_id, now, now))
+            if inputs is not None:
+                self._db.execute(cur,
+                    "INSERT INTO scan_inputs(scan_id,source,folder_ids,exclude_folder_ids,"
+                    "scan_options,actor,connection_ref,feature_flags,provider_config,"
+                    "lifecycle_rules,app_version,captured_at) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id) DO NOTHING",
+                    (scan_id,
+                     inputs.get("source", source),
+                     _json.dumps(inputs.get("folder_ids") or []),
+                     _json.dumps(inputs.get("exclude_folder_ids") or []),
+                     _json.dumps(inputs.get("scan_options") or {}),
+                     inputs.get("actor", owner),
+                     inputs.get("connection_ref"),
+                     _json.dumps(inputs.get("feature_flags") or {}),
+                     _json.dumps(inputs.get("provider_config") or []),
+                     _json.dumps(inputs.get("lifecycle_rules") or []),
+                     inputs.get("app_version"),
+                     now))
         return scan_id, job_id
+
+    def get_scan_inputs(self, scan_id: str) -> dict | None:
+        """Return the immutable input snapshot for a scan, or None if none was captured."""
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM scan_inputs WHERE scan_id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+        if row is None:
+            return None
+        for field in ("folder_ids", "exclude_folder_ids", "scan_options",
+                      "feature_flags", "provider_config", "lifecycle_rules"):
+            if row.get(field) is not None:
+                try:
+                    row[field] = _json.loads(row[field])
+                except (TypeError, ValueError):
+                    pass
+        return row
 
     def init_scan_run(self, scan_id: str, source: str, total: int, started_at: str,
                       rubric_name: str, rubric_hash: str, owner: str | None = None,
