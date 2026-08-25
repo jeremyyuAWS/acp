@@ -191,17 +191,46 @@ describe('Stop button placement', () => {
 
   it('uses the discovery-specific stop message', () => {
     const html = render(PROG, true, () => {})
-    expect(html).toContain('Stopping keeps the inventory collected so far')
-    expect(html).toContain('No documents are opened, assessed, moved, or changed in the source')
+    expect(html).toContain('Partial inventory will be retained')
+    expect(html).toContain('Source files will not be changed')
     expect(html).not.toContain('documents already assessed')
   })
 
-  it('Stop sits beside the stop message, not far away', () => {
+  it('Stop is inside the card header alongside the elapsed timer', () => {
     const html = render(PROG, true, () => {})
     const stopAt = html.indexOf('>Stop<')
-    const msgAt = html.indexOf('Stopping keeps the inventory')
+    const elapsedAt = html.indexOf('elapsed')
+    // Both appear in the same header region — Stop comes shortly after elapsed
     expect(stopAt).toBeGreaterThan(-1)
-    expect(msgAt).toBeGreaterThan(-1)
-    expect(msgAt - stopAt).toBeLessThan(400)
+    expect(elapsedAt).toBeGreaterThan(-1)
+    expect(Math.abs(stopAt - elapsedAt)).toBeLessThan(300)
+  })
+})
+
+describe('active step accessibility and visual treatment', () => {
+  it('gives the active step aria-current="step"', () => {
+    const html = render(PROG, true)
+    expect(html).toContain('aria-current="step"')
+  })
+
+  it('gives each status an accessible aria-label', () => {
+    const html = render(PROG, true)
+    expect(html).toContain('aria-label="Completed"')
+    expect(html).toContain('aria-label="In progress"')
+    expect(html).toContain('aria-label="Not started"')
+  })
+
+  it('active step label has bold font-weight', () => {
+    const html = render(PROG, true)
+    // Listing is active during discovering phase; its label span must carry font-weight:600
+    const listingIdx = html.indexOf('Listing folders and files')
+    const weightIdx = html.lastIndexOf('font-weight:600', listingIdx)
+    expect(weightIdx).toBeGreaterThan(-1)
+    expect(listingIdx - weightIdx).toBeLessThan(200)
+  })
+
+  it('does not show the long-running hint below 90 s', () => {
+    const html = render(PROG, true)
+    expect(html).not.toContain('contains many folders')
   })
 })

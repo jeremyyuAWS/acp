@@ -328,8 +328,13 @@ def _find_remediated_folder_id(svc) -> str | None:
     return folders[0]["id"] if folders else None
 
 
-def _list_drive_page_all(svc, q: str, max_files: int) -> tuple[list[dict], bool]:
-    """One full paginated listing for `q`. Returns (raw files, hit_cap)."""
+def _list_drive_page_all(svc, q: str, max_files: int, on_page=None) -> tuple[list[dict], bool]:
+    """One full paginated listing for `q`. Returns (raw files, hit_cap).
+
+    on_page, when given, is called with each page's raw file list immediately after it arrives —
+    before the next API call. This lets callers filter and emit progress mid-listing rather than
+    waiting for the full (potentially minutes-long) pagination to finish.
+    """
     files: list[dict] = []
     page_token = None
     while len(files) < max_files:
@@ -345,7 +350,10 @@ def _list_drive_page_all(svc, q: str, max_files: int) -> tuple[list[dict], bool]
             includeItemsFromAllDrives=True,
             supportsAllDrives=True,
         ).execute(num_retries=5)             # backoff on 429/5xx instead of failing the file
-        files.extend(resp.get("files", []))
+        page = resp.get("files", [])
+        files.extend(page)
+        if on_page:
+            on_page(page)
         page_token = resp.get("nextPageToken")
         if not page_token:
             break
@@ -396,7 +404,8 @@ def _is_scannable_mime(f: dict) -> bool:
 
 
 def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
-                  scope_out: dict | None = None, inventory_out: list | None = None) -> list[dict]:
+                  scope_out: dict | None = None, inventory_out: list | None = None,
+                  progress_cb=None) -> list[dict]:
     """Whole-Drive discovery — returns all scannable files regardless of folder.
 
     `scope_out`, when given, is filled in with WHAT THIS LISTING COVERED — see `_list`. The
@@ -434,12 +443,11 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
     raw_seen = 0
     hit_cap = False
     extra = 0
-    while True:
-        batch, cap = _list_drive_page_all(svc, q, raw_cap)
-        hit_cap = cap
-        raw_seen = max(raw_seen, len(batch))
-        before = len(by_id)
-        for f in batch:
+    _last_progress_at = [0.0]  # throttle: emit at most once every 2s per settle pass
+
+    def _on_page(page: list[dict]) -> None:
+        """Filter one Drive page into by_id/inv_by_id and emit live progress."""
+        for f in page:
             # OS metadata files (.DS_Store, Thumbs.db, …) are synced by cloud agents but are
             # never user documents. Drop them before the inventory so they do not inflate
             # unsupported-file counts or consume lifecycle-rule evaluation capacity.
@@ -451,6 +459,18 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
             inv_by_id.setdefault(f["id"], f)
             if _is_scannable_mime(f):     # the filter Drive's index was too stale to do
                 by_id.setdefault(f["id"], f)
+        if progress_cb:
+            now = time.monotonic()
+            if now - _last_progress_at[0] >= 2.0:
+                _last_progress_at[0] = now
+                progress_cb(len(by_id))
+
+    while True:
+        before = len(by_id)
+        batch, cap = _list_drive_page_all(svc, q, raw_cap, on_page=_on_page)
+        hit_cap = cap
+        raw_seen = max(raw_seen, len(batch))
+        # by_id and inv_by_id are already populated by _on_page during paging
         added = len(by_id) - before
         # Stop: settle disabled, budget spent, or a follow-up pass found nothing new.
         if settle_secs <= 0 or extra >= settle_passes or (extra > 0 and added == 0):
@@ -513,7 +533,8 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
 
 def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediated: bool = False,
                    scope_out: dict | None = None, inventory_out: list | None = None,
-                   exclude_ids: set | None = None, raw_out: list | None = None) -> list[dict]:
+                   exclude_ids: set | None = None, raw_out: list | None = None,
+                   progress_cb=None) -> list[dict]:
     """BFS over a folder subtree — returns all scannable files in the folder AND
     every nested subfolder. Bounded by max_files (newest folders may be skipped
     once the cap is hit) and a cycle guard, so a huge tree can't run unbounded.
@@ -596,6 +617,8 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
                 else:
                     raw.append(f)
             page_token = resp.get("nextPageToken")
+            if progress_cb:
+                progress_cb(len(raw))
             if not page_token or len(raw) >= max_files:
                 break
     truncated = bool(len(raw) >= max_files and (queue or page_token))
@@ -635,7 +658,7 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
 def _search_folders(svc, folder_ids: list[str], max_files: int = 1000,
                     exclude_remediated: bool = False, scope_out: dict | None = None,
                     inventory_out: list | None = None,
-                    exclude_ids: set | None = None) -> list[dict]:
+                    exclude_ids: set | None = None, progress_cb=None) -> list[dict]:
     """Walk SEVERAL folder subtrees and return their union.
 
     Scoping to one folder was never the real ask — an estate is "HR and Finance", not "HR". This
@@ -678,7 +701,8 @@ def _search_folders(svc, folder_ids: list[str], max_files: int = 1000,
         raw_batch: list = []
         batch = _search_folder(svc, fid, remaining, exclude_remediated=exclude_remediated,
                                scope_out=sub, inventory_out=inventory_out,
-                               exclude_ids=exclude_ids, raw_out=raw_batch)
+                               exclude_ids=exclude_ids, raw_out=raw_batch,
+                               progress_cb=progress_cb)
         for it in batch:
             key = it.get("id") or it.get("path") or it.get("name")
             if key in seen:
@@ -1490,7 +1514,8 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
           scope_out: dict | None = None, scope_files: dict | None = None,
           inventory_out: list | None = None,
           folders: list[str] | None = None,
-          exclude_folders: list[str] | None = None) -> list[dict]:
+          exclude_folders: list[str] | None = None,
+          progress_cb=None) -> list[dict]:
     """List the source. `scope_out`, when given, is filled in with WHAT WAS COVERED.
 
     `inventory_out`, when given, is filled with per-file inventory rows for the NON-scannable
@@ -1627,19 +1652,22 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         # Several chosen folders: walk each subtree and union them, sharing one cap.
         result = _search_folders(svc, roots, max_files or 1000,
                                  exclude_remediated=exclude_remediated, scope_out=scope_out,
-                                 inventory_out=inventory_out, exclude_ids=excl)
+                                 inventory_out=inventory_out, exclude_ids=excl,
+                                 progress_cb=progress_cb)
     elif roots:
         # Specific folder: recursive BFS. Kept as its own branch rather than folded into
         # _search_folders so a single-folder scan produces byte-identical scope to before.
         result = _search_folder(svc, roots[0], max_files or 1000,
                                 exclude_remediated=exclude_remediated, scope_out=scope_out,
-                                inventory_out=inventory_out, exclude_ids=excl)
+                                inventory_out=inventory_out, exclude_ids=excl,
+                                progress_cb=progress_cb)
         if scope_out is not None:
             scope_out["folder_name"] = _folder_name(svc, roots[0])
     elif folder == "root" or folder is None:
         # No specific folder chosen: search the whole Drive
         result = _search_drive(svc, max_files or 500, exclude_remediated=exclude_remediated,
-                               scope_out=scope_out, inventory_out=inventory_out)
+                               scope_out=scope_out, inventory_out=inventory_out,
+                               progress_cb=progress_cb)
     else:
         # ADC/demo mode with a pinned folder. Requests provenance.DRIVE_FIELDS and honours
         # exclude_remediated like the two GIS paths above: this branch asked for a narrower
