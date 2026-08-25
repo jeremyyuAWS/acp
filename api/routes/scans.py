@@ -13,6 +13,7 @@ from pydantic import BaseModel
 import core
 from scanner import run_scan
 from report import build_report
+from report_tagged import build_tagged_report
 
 router = APIRouter()
 
@@ -1172,9 +1173,16 @@ def report_pdf(sid: str, request: Request):
     rb = core.active_rubric()
     meta = {"target": rb.cfg.get("conformance_target"), "version": rb.version,
             "hash": res["run"].get("rubric_hash") or rb.hash}
-    pdf = build_report(res["run"], res["files"], meta, decisions=core.store.get_decisions(sid),
-                       evidence=core.store.get_remediation_evidence(sid),
-                       facts=core.store.get_certification_facts(sid, apply_document_selection=True))
+    decisions = core.store.get_decisions(sid)
+    evidence = core.store.get_remediation_evidence(sid)
+    facts = core.store.get_certification_facts(sid, apply_document_selection=True)
+    try:
+        pdf = build_tagged_report(res["run"], res["files"], meta,
+                                  decisions=decisions, evidence=evidence, facts=facts)
+    except Exception:
+        # Fall back to the reportlab report if Chromium is unavailable.
+        pdf = build_report(res["run"], res["files"], meta,
+                           decisions=decisions, evidence=evidence, facts=facts)
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="acp-report-{sid}.pdf"'})
 
