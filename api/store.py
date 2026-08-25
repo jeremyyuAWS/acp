@@ -313,11 +313,18 @@ _SCHEMA = [
     # used to render a hardcoded list of WCAG criteria cycled by a timer, which had nothing
     # to do with the running job. Nullable: a handler that reports nothing shows nothing.
     "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS phase TEXT",
+    # Cooperative cancellation (ADR 0004 step 4): caller sets this; running handler calls
+    # worker.check_cancel() at checkpoints and raises JobCancelledError when set.
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS cancel_requested_at TEXT",
     # Column order matches the claim ORDER BY (priority, run_after) so Postgres reads the
     # top queued job index-only instead of sorting all queued rows every poll (audit P2).
     # New name + drop-old so this migrates once, not a rebuild every boot.
     "DROP INDEX IF EXISTS idx_jobs_claim",
     "CREATE INDEX IF NOT EXISTS idx_jobs_claim2 ON jobs(status, priority, run_after)",
+    # Inspectable lease expiry: set at claim time to now + ACP_JOB_LEASE_S, refreshed by
+    # touch_job heartbeat. reclaim_stuck_jobs uses this instead of the opaque locked_at
+    # arithmetic so operators can see exactly when a lease will expire.
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lease_expires_at TEXT",
     # Error class persisted on failure so operators can diagnose dead-lettered jobs by
     # category (rate_limit / auth / corrupt / transient) without parsing last_error text.
     "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_class TEXT",
@@ -774,6 +781,8 @@ class _SQLiteAdapter:
         row = cur.fetchone()
         return dict(zip([d[0] for d in cur.description], row)) if row else None
 
+    supports_skip_locked: bool = False
+
 
 def logical_name(name: str) -> str:
     """Strip the ' (N)' disambiguation suffix to recover the logical document name.
@@ -948,6 +957,8 @@ class _PgAdapter:
     def fetchone(self, cur) -> dict | None:
         row = cur.fetchone()
         return dict(row) if row else None
+
+    supports_skip_locked: bool = True
 
 
 # ── Store ────────────────────────────────────────────────────────────────────
@@ -5000,26 +5011,57 @@ class Store:
                 pass
         return row
 
+    @staticmethod
+    def _lease_expiry(lease_seconds: int | None = None) -> str:
+        from datetime import datetime, timezone, timedelta
+        secs = lease_seconds if lease_seconds is not None else int(
+            os.environ.get("ACP_JOB_LEASE_S", "600"))
+        return (datetime.now(timezone.utc) + timedelta(seconds=secs)).isoformat()
+
     def claim_job(self, worker_id: str) -> dict | None:
         """Atomically claim the next eligible job. Returns the claimed job (with
-        attempts already incremented), or None if the queue is empty."""
+        attempts already incremented), or None if the queue is empty.
+
+        Postgres: single-statement UPDATE...WHERE id=(SELECT...FOR UPDATE SKIP LOCKED)
+        RETURNING * — each worker atomically grabs a distinct row with no round-trip race.
+        SQLite: two-step optimistic CAS — SELECT then conditional UPDATE on status='queued'
+        (SQLite serialises writers, so the window between the two is closed in practice)."""
         now = self._now()
-        with self._db.cursor() as cur:
-            self._db.execute(cur,
-                "SELECT id FROM jobs WHERE status='queued' AND run_after<=%s "
-                "ORDER BY priority, run_after LIMIT 1", (now,))
-            row = self._db.fetchone(cur)
+        expires = self._lease_expiry()
+        if self._db.supports_skip_locked:
+            # Postgres path: atomic single-statement claim with SKIP LOCKED.
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "UPDATE jobs SET status='running', locked_at=%s, locked_by=%s, "
+                    "attempts=attempts+1, updated_at=%s, lease_expires_at=%s, phase=NULL "
+                    "WHERE id = ("
+                    "  SELECT id FROM jobs "
+                    "  WHERE status='queued' AND run_after<=%s "
+                    "  ORDER BY priority, run_after "
+                    "  FOR UPDATE SKIP LOCKED LIMIT 1"
+                    ") RETURNING id",
+                    (now, worker_id, now, expires, now))
+                row = self._db.fetchone(cur)
             if not row:
                 return None
-            jid = row["id"]
-            # Conditional update: only one worker can flip status from 'queued'.
-            self._db.execute(cur,
-                "UPDATE jobs SET status='running', locked_at=%s, locked_by=%s, "
-                "attempts=attempts+1, updated_at=%s, phase=NULL "
-                "WHERE id=%s AND status='queued'",
-                (now, worker_id, now, jid))
-            claimed = getattr(cur, "rowcount", 1) == 1
-        return self.get_job(jid) if claimed else None
+            return self.get_job(row["id"])
+        else:
+            # SQLite path: optimistic two-step CAS.
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT id FROM jobs WHERE status='queued' AND run_after<=%s "
+                    "ORDER BY priority, run_after LIMIT 1", (now,))
+                row = self._db.fetchone(cur)
+                if not row:
+                    return None
+                jid = row["id"]
+                self._db.execute(cur,
+                    "UPDATE jobs SET status='running', locked_at=%s, locked_by=%s, "
+                    "attempts=attempts+1, updated_at=%s, lease_expires_at=%s, phase=NULL "
+                    "WHERE id=%s AND status='queued'",
+                    (now, worker_id, now, expires, jid))
+                claimed = getattr(cur, "rowcount", 1) == 1
+            return self.get_job(jid) if claimed else None
 
     def set_job_phase(self, job_id: str, phase: str | None) -> None:
         """Record what this job is doing right now, for the queue panel's per-row line.
@@ -5071,6 +5113,35 @@ class Store:
                     "UPDATE jobs SET status='done', updated_at=%s, last_error=NULL WHERE id=%s",
                     (self._now(), job_id))
 
+    def request_job_cancellation(self, job_id: str) -> bool:
+        """Signal a running or queued job to stop at its next checkpoint.
+
+        Sets cancel_requested_at so a handler calling worker.check_cancel() will raise
+        JobCancelledError on its next checkpoint poll. Returns True if the flag was set,
+        False when the job is already terminal (done/dead/cancelled) or missing."""
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE jobs SET cancel_requested_at=%s, updated_at=%s "
+                "WHERE id=%s AND status IN ('queued','running') AND cancel_requested_at IS NULL",
+                (now, now, job_id))
+            return (getattr(cur, "rowcount", 0) or 0) > 0
+
+    def is_job_cancelled(self, job_id: str) -> bool:
+        """True if cancel_requested_at has been set for this job."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT cancel_requested_at FROM jobs WHERE id=%s", (job_id,))
+            row = self._db.fetchone(cur)
+        return bool(row and row.get("cancel_requested_at"))
+
+    def mark_job_cancelled(self, job_id: str) -> None:
+        """Stamp the job as status='cancelled' after cooperative cancellation completes."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE jobs SET status='cancelled', updated_at=%s WHERE id=%s",
+                (self._now(), job_id))
+
     def dead_letter_breakdown(self, owner: str | None = None) -> dict:
         """Diagnostic: dead-lettered jobs grouped by type + the most common errors.
         owner scopes to the caller's own jobs so error text (which can name a file)
@@ -5116,10 +5187,12 @@ class Store:
         reclaim a slow-but-alive job (e.g. a long PII scan). Called periodically by
         the worker while the handler runs."""
         now = self._now()
+        expires = self._lease_expiry()
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "UPDATE jobs SET locked_at=%s, updated_at=%s WHERE id=%s AND status='running'",
-                (now, now, job_id))
+                "UPDATE jobs SET locked_at=%s, updated_at=%s, lease_expires_at=%s "
+                "WHERE id=%s AND status='running'",
+                (now, now, expires, job_id))
 
     # Job types whose payload names documents that COUNT toward a scan's finalize total.
     # A dead-letter on one of these has to leave a file_records row behind — see
@@ -5239,15 +5312,87 @@ class Store:
         return "queued"
 
     def reclaim_stuck_jobs(self, lease_seconds: int = 600) -> int:
-        """Requeue jobs stuck in 'running' past the lease (worker died mid-job)."""
+        """Requeue jobs stuck in 'running' past their lease (worker died mid-job).
+
+        Uses lease_expires_at < now() when the column is set (all jobs claimed after the
+        migration), falling back to the locked_at+lease_seconds arithmetic for rows that
+        pre-date the column (no lease_expires_at) — so the sweeper is correct across a
+        rolling deploy."""
         from datetime import datetime, timezone, timedelta
+        now = self._now()
         cutoff = (datetime.now(timezone.utc) - timedelta(seconds=lease_seconds)).isoformat()
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "UPDATE jobs SET status='queued', locked_at=NULL, locked_by=NULL, updated_at=%s "
-                "WHERE status='running' AND locked_at<%s",
-                (self._now(), cutoff))
+                "UPDATE jobs SET status='queued', locked_at=NULL, locked_by=NULL, "
+                "lease_expires_at=NULL, updated_at=%s "
+                "WHERE status='running' AND (lease_expires_at<%s OR locked_at<%s)",
+                (now, now, cutoff))
             return getattr(cur, "rowcount", 0) or 0
+
+    def sweep_exhausted_jobs(self) -> int:
+        """Dead-letter queued jobs that have already used all their attempts.
+
+        reclaim_stuck_jobs() requeues a running job without inspecting attempts — so a
+        job reclaimed at max_attempts re-enters the queue and would keep being claimed and
+        failing. This sweep catches those jobs and moves them to 'dead' exactly once, with
+        a sweep-generated error message. Returns the number of jobs dead-lettered."""
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id, type FROM jobs "
+                "WHERE status='queued' AND attempts >= max_attempts",
+                ())
+            rows = self._db.fetchall(cur)
+        count = 0
+        for row in rows:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "UPDATE jobs SET status='dead', last_error=%s, updated_at=%s "
+                    "WHERE id=%s AND status='queued' AND attempts >= max_attempts",
+                    ("max_attempts reached — dead-lettered by reconciliation sweeper",
+                     now, row["id"]))
+                if (getattr(cur, "rowcount", 0) or 0) > 0:
+                    count += 1
+                    print(f"[sweeper] job dead-lettered (exhausted): id={row['id']} "
+                          f"type={row.get('type')}", flush=True)
+        return count
+
+    def sweep_orphaned_scans(self, grace_seconds: int = 600) -> int:
+        """Mark 'running' scan_runs with no outstanding jobs as 'interrupted'.
+
+        A running scan with zero queued/running job rows is stranded — its worker died
+        after the fan-out but before finalize ran, or the jobs were reclaimed and
+        never re-enqueued. Past the grace window (default 10 min, to let discover
+        finish enqueuing before the sweep can touch it) the scan is marked 'interrupted'
+        and rescue_unfinalized_scans() handles re-enqueuing finalize if needed.
+
+        Returns the number of scans marked interrupted."""
+        from datetime import datetime, timezone, timedelta
+        grace_cutoff = (datetime.now(timezone.utc) - timedelta(seconds=grace_seconds)).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id, started_at FROM scan_runs "
+                "WHERE status='running' AND started_at<%s "
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM jobs WHERE scan_id=scan_runs.id "
+                "  AND status IN ('queued','running')"
+                ")",
+                (grace_cutoff,))
+            rows = self._db.fetchall(cur)
+        count = 0
+        now = self._now()
+        for row in rows:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "UPDATE scan_runs SET status='interrupted', completed_at=%s "
+                    "WHERE id=%s AND status='running'",
+                    (now, row["id"]))
+                if (getattr(cur, "rowcount", 0) or 0) > 0:
+                    self._stamp_assessed_if_ran(cur, row["id"])
+                    count += 1
+                    print(f"[sweeper] scan {row['id']}: marked interrupted — running "
+                          f"with no outstanding jobs", flush=True)
+        return count
 
     def job_stats(self, owner: str | None = None) -> dict:
         # owner → only this user's jobs (scoped via their scans), so the queue view
@@ -5726,7 +5871,7 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO disposition_audit(id,ts,doc_id,policy_id,action,result,detail,"
-                "owner_email) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                "owner_email) VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
                 (audit_id, self._now(), doc_id, policy_id, action, result, detail, owner_email))
 
     def get_disposition_audit(self, audit_id: str, owner: str | None = None) -> dict | None:

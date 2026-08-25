@@ -61,6 +61,44 @@ class FatalJobError(Exception):
     """Raise from a handler to dead-letter the job immediately (no retry)."""
 
 
+class JobCancelledError(Exception):
+    """Raised by check_cancel() when the current job has been flagged for cancellation.
+
+    Handlers that want cooperative cancellation call worker.check_cancel() at natural
+    checkpoints (between folder requests, before a write, between document stages). The
+    worker catches this, skips retry logic, and marks the job status='cancelled'."""
+
+
+# Thread-local: the worker installs a callable here before running a handler, and the
+# handler (indirectly, via check_cancel()) reads it without needing a reference to the worker.
+_cancel_local = threading.local()
+
+
+def check_cancel() -> None:
+    """Call from a handler at any natural checkpoint to abort if the job was cancelled.
+
+    Raises JobCancelledError when cancel_requested_at has been set on the job row.
+    No-op when called outside a worker turn (e.g. in tests that don't use the worker).
+
+    Usage::
+
+        from worker import check_cancel
+
+        @handler("scan_file")
+        def _scan(payload, job):
+            for folder in folders:
+                check_cancel()          # between folder requests
+                for doc in folder:
+                    check_cancel()      # between document stages
+                    process(doc)
+                    check_cancel()      # before writes
+                    write_results(doc)
+    """
+    fn = getattr(_cancel_local, "check", None)
+    if fn:
+        fn()
+
+
 # Shown to the person, not to the log. The queue panel renders `last_error` verbatim, so a
 # dead-letter reason has to say what happened and what to do — never quote a library's
 # internals. It replaced: "The credentials do not contain the necessary fields need to refresh
@@ -226,9 +264,22 @@ class JobWorker:
                 except Exception:
                     pass
         threading.Thread(target=_heartbeat, daemon=True, name="job-heartbeat").start()
+        # Install a cancel-check callable so check_cancel() can read it from any frame
+        # in this thread without needing a store reference.
+        def _do_cancel_check():
+            if self.store.is_job_cancelled(job["id"]):
+                raise JobCancelledError(f"job {job['id']} was cancelled")
+        _cancel_local.check = _do_cancel_check
         try:
             fn(job.get("payload", {}), job)
-            self.store.complete_job(job["id"])
+            # Handler finished — honour a cancellation that arrived while it was running
+            # (the handler may not have called check_cancel() at all).
+            if self.store.is_job_cancelled(job["id"]):
+                self.store.mark_job_cancelled(job["id"])
+            else:
+                self.store.complete_job(job["id"])
+        except JobCancelledError:
+            self.store.mark_job_cancelled(job["id"])
         except FatalJobError as e:
             self.store.fail_job(job["id"], f"fatal: {e}", force_dead=True,
                                 error_class=TRANSIENT)
@@ -241,6 +292,7 @@ class JobWorker:
             self.store.fail_job(job["id"], msg, backoff_seconds=backoff,
                                 force_dead=force_dead, error_class=eclass)
         finally:
+            _cancel_local.check = None
             stop_hb.set()
         return True
 
