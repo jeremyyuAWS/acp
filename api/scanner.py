@@ -578,16 +578,21 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
     _skipped_excluded = [0]
     _truncated = [False]
 
-    def _fetch_folder(fid: str) -> tuple[list[dict], list[str]]:
-        """Fetch all pages for one folder. Returns (raw_files, child_folder_ids).
-        Counters are accumulated into the shared lists under _lock."""
+    def _fetch_folder(fid: str) -> tuple[list[dict], list[str], bool]:
+        """Fetch all pages for one folder. Returns (raw_files, child_folder_ids, capped).
+
+        `capped` is True when pagination stopped because the cap was reached (meaning there are
+        more pages we did not fetch) rather than because the server sent the last page naturally.
+        The caller uses this to set the truncated flag even when the raw list fills exactly."""
         local_raw: list[dict] = []
         child_folders: list[str] = []
         local_listed = local_skipped_acp = local_skipped_mirror = local_skipped_excluded = 0
         page_token = None
+        capped = False
         while True:
             with _lock:
                 if len(raw) + len(local_raw) >= max_files:
+                    capped = True
                     break
             resp = svc.files().list(
                 q=f"'{fid}' in parents and trashed=false",
@@ -636,7 +641,7 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
             _skipped_acp[0] += local_skipped_acp
             _skipped_mirror[0] += local_skipped_mirror
             _skipped_excluded[0] += local_skipped_excluded
-        return local_raw, child_folders
+        return local_raw, child_folders, capped
 
     # Parallel BFS: up to _DISCOVERY_WORKERS Drive API calls in flight simultaneously.
     # Each completed folder's children are immediately submitted, so deeper levels start
@@ -647,7 +652,7 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
             done, _ = _cf.wait(list(pending.keys()), return_when=_cf.FIRST_COMPLETED)
             for fut in done:
                 del pending[fut]
-                local_raw, child_folders = fut.result()
+                local_raw, child_folders, capped = fut.result()
                 with _lock:
                     space = max_files - len(raw)
                     if space > 0:
@@ -655,6 +660,8 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
                         if len(local_raw) > space:
                             _truncated[0] = True
                     elif local_raw:
+                        _truncated[0] = True
+                    if capped:
                         _truncated[0] = True
                     if progress_cb:
                         progress_cb(len(raw))
