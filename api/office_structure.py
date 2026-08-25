@@ -819,6 +819,68 @@ _PPTX_SPPR = re.compile(r"<p:spPr\b.*?</p:spPr>", re.S)
 _WPS_SPPR = re.compile(r"<wps:spPr\b.*?</wps:spPr>", re.S)   # docx DrawingML shape props
 _A_LN_BLOCK = re.compile(r"<a:ln\b.*?</a:ln>", re.S)
 _SOLID_SRGB = re.compile(r'<a:solidFill>\s*<a:srgbClr val="([0-9A-Fa-f]{6})"')
+_SCHEME_CLR_BLOCK = re.compile(r'<a:schemeClr val="([^"]+)"(/>|>.*?</a:schemeClr>)', re.S)
+_LUM_MOD_RE = re.compile(r'<a:lumMod val="(\d+)"')
+_LUM_OFF_RE = re.compile(r'<a:lumOff val="(\d+)"')
+
+
+def _parse_ooxml_theme_clrs(theme_xml: str) -> dict[str, str]:
+    """Parse <a:clrScheme> from a pptx/docx theme XML, return {slot_name: HEX6}.
+
+    Uses the same _CLR_SCHEME/_CLR_SLOT/_SRGB_CLR/_SYS_CLR patterns as the xlsx
+    path, but returns a dict keyed by name (dk1/lt1/accent1/etc.) instead of a
+    positional list — pptx/docx shapes reference colours by name via schemeClr,
+    not by the Excel theme="N" index."""
+    scheme_m = _CLR_SCHEME.search(theme_xml)
+    if not scheme_m:
+        return {}
+    result: dict[str, str] = {}
+    for name, body in _CLR_SLOT.findall(scheme_m.group(1)):
+        m = _SRGB_CLR.search(body) or _SYS_CLR.search(body)
+        if m:
+            result[name] = m.group(1).upper()
+    return result
+
+
+def _apply_lum_mod_off(hex6: str, lum_mod: int, lum_off: int) -> str:
+    """Apply DrawingML lumMod/lumOff (thousandths of a percent) to base colour.
+
+    Per ECMA-376 §20.1.2.3:  L_new = L_base * lumMod/100000 + lumOff/100000
+    Applied in HLS space; result L is clamped to [0, 1]."""
+    import colorsys
+    r, g, b = (int(hex6[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    l = l * (lum_mod / 100000.0) + (lum_off / 100000.0)
+    l = max(0.0, min(1.0, l))
+    rr, gg, bb = colorsys.hls_to_rgb(h, l, s)
+    return f"{round(rr * 255):02X}{round(gg * 255):02X}{round(bb * 255):02X}"
+
+
+def _resolve_solidfill(fill_xml: str, theme_clrs: dict[str, str] | None) -> str | None:
+    """Extract a hex colour from a DrawingML solidFill/outline XML fragment.
+
+    Tries explicit srgbClr first; then falls back to schemeClr + lumMod/lumOff
+    resolved through the caller-supplied theme colour dict. Returns None when the
+    colour cannot be resolved (gradient, unrecognised scheme name, no theme XML)."""
+    m = _SOLID_SRGB.search(fill_xml)
+    if m:
+        return m.group(1).upper()
+    if theme_clrs:
+        sc = _SCHEME_CLR_BLOCK.search(fill_xml)
+        if sc:
+            base = theme_clrs.get(sc.group(1))
+            if base:
+                body = sc.group(2)
+                lm_m = _LUM_MOD_RE.search(body)
+                lo_m = _LUM_OFF_RE.search(body)
+                if lm_m or lo_m:
+                    return _apply_lum_mod_off(
+                        base,
+                        int(lm_m.group(1)) if lm_m else 100000,
+                        int(lo_m.group(1)) if lo_m else 0,
+                    )
+                return base
+    return None
 
 
 def _wcag_luminance(hex6: str) -> float:
@@ -2318,6 +2380,8 @@ def pptx_nontext_contrast_checks(path: Path) -> list[dict]:
     worst = None      # (ratio, border_hex, fill_hex)
     try:
         with zipfile.ZipFile(path) as zf:
+            theme_xml = _read(zf, "ppt/theme/theme1.xml") or ""
+            theme_clrs = _parse_ooxml_theme_clrs(theme_xml)
             for slide_name in sorted(n for n in zf.namelist()
                                      if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)):
                 xml = _read(zf, slide_name)
@@ -2331,13 +2395,13 @@ def pptx_nontext_contrast_checks(path: Path) -> list[dict]:
                     ln_m = _A_LN_BLOCK.search(sppr_xml)
                     if not ln_m:
                         continue
-                    border_m = _SOLID_SRGB.search(ln_m.group(0))          # the outline colour
-                    fill_m = _SOLID_SRGB.search(_A_LN_BLOCK.sub("", sppr_xml))  # the fill (border stripped)
-                    if not border_m or not fill_m:
+                    border_hex = _resolve_solidfill(ln_m.group(0), theme_clrs)
+                    fill_hex = _resolve_solidfill(_A_LN_BLOCK.sub("", sppr_xml), theme_clrs)
+                    if not border_hex or not fill_hex:
                         continue
-                    ratio = _contrast_ratio(border_m.group(1), fill_m.group(1))
+                    ratio = _contrast_ratio(border_hex, fill_hex)
                     if ratio < 3.0 and (worst is None or ratio < worst[0]):
-                        worst = (ratio, border_m.group(1), fill_m.group(1))
+                        worst = (ratio, border_hex, fill_hex)
     except Exception:
         return []
     if worst is None:
@@ -2366,18 +2430,20 @@ def docx_nontext_contrast_checks(path: Path) -> list[dict]:
     worst = None      # (ratio, border_hex, fill_hex)
     try:
         with zipfile.ZipFile(path) as zf:
+            theme_xml = _read(zf, "word/theme/theme1.xml") or ""
+            theme_clrs = _parse_ooxml_theme_clrs(theme_xml)
             for xml in _docx_story_xmls(zf):
                 for sppr in _WPS_SPPR.findall(xml):
                     ln_m = _A_LN_BLOCK.search(sppr)
                     if not ln_m:
                         continue
-                    border_m = _SOLID_SRGB.search(ln_m.group(0))              # the outline colour
-                    fill_m = _SOLID_SRGB.search(_A_LN_BLOCK.sub("", sppr))    # the fill (border stripped)
-                    if not border_m or not fill_m:
+                    border_hex = _resolve_solidfill(ln_m.group(0), theme_clrs)
+                    fill_hex = _resolve_solidfill(_A_LN_BLOCK.sub("", sppr), theme_clrs)
+                    if not border_hex or not fill_hex:
                         continue
-                    ratio = _contrast_ratio(border_m.group(1), fill_m.group(1))
+                    ratio = _contrast_ratio(border_hex, fill_hex)
                     if ratio < 3.0 and (worst is None or ratio < worst[0]):
-                        worst = (ratio, border_m.group(1), fill_m.group(1))
+                        worst = (ratio, border_hex, fill_hex)
     except Exception:
         return []
     if worst is None:
