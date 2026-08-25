@@ -79,7 +79,7 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 | `2.1.2` | docx | **partial** | high | whether focus can actually move away from a control is runtime behaviour that depends on the control's own imp |
 | `2.1.2` | pptx | **partial** | high | whether focus can actually move away from a control is runtime behaviour that depends on the control's own imp |
 | `2.1.2` | xlsx | **partial** | medium | whether focus can actually move away from a control is runtime behaviour that depends on the control's own imp |
-| `2.4.3` | pdf | **heuristic** | medium | actually comparing the widget order to the structure order needs a /StructTreeRoot walk that is not built |
+| `2.4.3` | pdf | **partial** | medium | untagged PDFs without a structure tree fall back to checking that pages with widgets declare /Tabs = /S |
 | `2.4.3` | pptx | **partial** | high | other focus-order conditions (non-placeholder shape sequences, embedded control tab order) are not examined |
 | `2.4.4` | docx | **partial** | high | whether otherwise-descriptive text actually names THIS destination — a link reading 'Annual Report' that point |
 | `2.4.4` | pdf | **partial** | high | generic filler phrases and links whose text does not literally match the URI are not examined |
@@ -87,7 +87,7 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 | `3.1.2` | docx | **partial** | high | a shorter foreign phrase or a single borrowed word is under the length floor langdetect needs to be trusted, a |
 | `3.1.2` | xlsx | **partial** | medium | SpreadsheetML has no per-run language element, so shorter phrases and statistical uncertainty in langdetect's  |
 | `4.1.2` | docx | **partial** | high | ActiveX controls, embedded OLE objects and other form content are not examined, which would need reading each  |
-| `4.1.2` | pdf | **partial** | high | components expressed through the tagged-structure tree are not examined, which needs a /StructTreeRoot walker  |
+| `4.1.2` | pdf | **partial** | high | components expressed through the tagged-structure tree are not examined |
 | `4.1.2` | pptx | **partial** | high | a clean result means no such controls were found and the criterion does not arise for this deck |
 | `4.1.2` | xlsx | **partial** | medium | the name and role live in code that no static read can examine |
 

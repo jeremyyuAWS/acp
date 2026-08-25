@@ -26,25 +26,31 @@ register(
     coverage=Coverage.PARTIAL,
     confidence=Confidence.HIGH,
     reason=("interactive AcroForm fields are checked exactly (/TU name, /FT role, /V value); "
-            "components expressed through the tagged-structure tree are not examined, which "
-            "needs a /StructTreeRoot walker this codebase does not have yet"),
+            "components expressed through the tagged-structure tree are not examined"),
 )
 
 # ── 2.4.3 Focus Order ─────────────────────────────────────────────────────────────────
-# HEURISTIC: /Tabs = /S is a proxy for correct tab sequence, not a proof of it — neither
-# necessary (/R and /C are legitimate) nor sufficient (a page can declare /S and still tab
-# nonsensically). MEDIUM confidence reflects a signal that correlates but can be wrong in both
-# directions; contrast 4.1.2 above, which is narrow but exact.
+# PARTIAL (upgraded from HEURISTIC): when both an AcroForm and a /StructTreeRoot are present,
+# widget annotations are collected in both field-tree order (= tab order) and OBJR structure
+# order (= reading order) and compared directly. Any inversion in the matched set is a finding.
+# This is exact within the matched set — not a proxy — hence PARTIAL rather than HEURISTIC.
+# Remaining limitations: /R (row) and /C (column) /Tabs layouts are legitimate for some forms
+# and cannot be distinguished from /S errors statically; non-widget interactive elements and
+# untagged PDFs (no StructTreeRoot) fall back to the legacy /Tabs = /S heuristic check.
+# MEDIUM confidence is kept: the fallback heuristic still runs for untagged documents, so the
+# overall detection is not uniformly sound. The structure-tree comparison path alone would be
+# HIGH, but paired with the fallback the blended estimate is MEDIUM.
 register(
     rule="2.4.3",
     fmt="pdf",
     detector=focus_order.detect,
     requires={Capability.FORMS},
-    coverage=Coverage.HEURISTIC,
+    coverage=Coverage.PARTIAL,
     confidence=Confidence.MEDIUM,
-    reason=("pages with form widgets are checked for /Tabs = /S, a proxy for tab order "
-            "following reading order; actually comparing the widget order to the structure "
-            "order needs a /StructTreeRoot walk that is not built"),
+    reason=("when /StructTreeRoot is present, widget object-number lists from the AcroForm field "
+            "tree and the structure-tree OBJR references are compared directly — any inversion "
+            "is a finding; untagged PDFs without a structure tree fall back to checking that "
+            "pages with widgets declare /Tabs = /S"),
 )
 
 # ── 1.4.1 Use of Color ────────────────────────────────────────────────────────────────
