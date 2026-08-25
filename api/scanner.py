@@ -6,7 +6,7 @@ scan finishes (the "documents never retained" guarantee).
 """
 from __future__ import annotations
 import concurrent.futures as _cf
-import io, json, os, re, shutil, signal, subprocess, sys, tempfile, time, uuid, zipfile
+import io, json, os, re, shutil, signal, subprocess, sys, tempfile, threading, time, uuid, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 import lf as _lf_mod
@@ -16,6 +16,10 @@ import estate_inventory
 # Per-file analysis is CPU/IO bound and independent; run it across a small thread
 # pool. pikepdf/lxml release the GIL and each analyser is built fresh per call.
 _SCAN_WORKERS = min(8, (os.cpu_count() or 2) * 2)
+# Concurrent folder-listing workers for BFS discovery. Drive's user quota is ~10 req/s;
+# at ~300ms/call, 6 workers saturate it without reliably tripping secondary rate limits.
+# Raise ACP_DISCOVERY_WORKERS if your estate has very deep folder hierarchies.
+_DISCOVERY_WORKERS = int(os.environ.get("ACP_DISCOVERY_WORKERS", "6"))
 
 ACP = Path(__file__).resolve().parent.parent
 # Engine + corpus locations default to the local dev layout but are env-overridable
@@ -390,10 +394,8 @@ def _debug_dump_account(svc, max_files: int = 60) -> None:
         print(f"[scan] discovery DEBUG: account holds {len(rows)} recent non-trashed item(s) "
               f"(unfiltered, newest first):", flush=True)
         for f in rows:
-            owner = (f.get("owners") or [{}])[0].get("emailAddress", "?")
             mark = "scannable" if f.get("mimeType") in scannable else "SKIPPED (type not scanned)"
-            print(f"[scan] discovery DEBUG:   {f.get('name')!r} · {f.get('mimeType')} · "
-                  f"owner={owner} · {mark}", flush=True)
+            print(f"[scan] discovery DEBUG:   mime={f.get('mimeType')} · {mark}", flush=True)
     except Exception as e:  # noqa: BLE001 — a diagnostic must never fail the scan
         print(f"[scan] discovery DEBUG: unfiltered listing failed: {e}", flush=True)
 
@@ -526,8 +528,7 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
     # only place a file count exists is the UI, and "why 2 files?" can't be answered offline.
     print(f"[scan] discovery (whole-Drive): {raw_seen} raw · {listed} scannable · "
           f"{skipped_acp} skipped as ACP-generated output · {len(result)} kept", flush=True)
-    for it in result:
-        print(f"[scan] discovery:   kept {it['name']!r}", flush=True)
+    print(f"[scan] discovery:   kept {len(result)} file(s)", flush=True)
     return result
 
 
@@ -563,20 +564,33 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
         import core
         remediated_folder_name = core.store.get_drive_mirror_folder()
     excluded = set(exclude_ids or ())
-    queue = [folder_id]
-    seen_folders: set[str] = set()
+
+    # Shared state — all mutations under `_lock`.
+    _lock = threading.Lock()
+    seen_folders: set[str] = {folder_id}
     raw: list[dict] = []
-    listed = 0            # raw non-folder items Drive returned
-    skipped_acp = 0       # ACP's own output, skipped by provenance
-    skipped_mirror = 0    # subfolders skipped by name (pre-provenance copies live here)
-    skipped_excluded = 0  # subtrees the user explicitly excluded beneath an included parent
-    while queue and len(raw) < max_files:
-        fid = queue.pop(0)
-        if fid in seen_folders:
-            continue
-        seen_folders.add(fid)
+    _listed = [0]
+    _skipped_acp = [0]
+    _skipped_mirror = [0]
+    _skipped_excluded = [0]
+    _truncated = [False]
+
+    def _fetch_folder(fid: str) -> tuple[list[dict], list[str], bool]:
+        """Fetch all pages for one folder. Returns (raw_files, child_folder_ids, capped).
+
+        `capped` is True when pagination stopped because the cap was reached (meaning there are
+        more pages we did not fetch) rather than because the server sent the last page naturally.
+        The caller uses this to set the truncated flag even when the raw list fills exactly."""
+        local_raw: list[dict] = []
+        child_folders: list[str] = []
+        local_listed = local_skipped_acp = local_skipped_mirror = local_skipped_excluded = 0
         page_token = None
+        capped = False
         while True:
+            with _lock:
+                if len(raw) + len(local_raw) >= max_files:
+                    capped = True
+                    break
             resp = svc.files().list(
                 q=f"'{fid}' in parents and trashed=false",
                 fields=f"nextPageToken,files({provenance.DRIVE_FIELDS})",
@@ -598,30 +612,66 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
                     # Folder-name exclusion is RETAINED, not replaced: copies written before
                     # the provenance stamp shipped carry no stamp, and this still skips them.
                     if exclude_remediated and f["name"] == remediated_folder_name:
-                        skipped_mirror += 1
+                        local_skipped_mirror += 1
                         continue
                     # A user-excluded subtree. Pruned here rather than filtered afterwards so its
                     # descendants are never enqueued either — filtering the RESULT would still
                     # walk the subtree, spend the cap on files it then discards, and (worse) let
                     # an excluded branch push wanted files past the cap.
                     if f["id"] in excluded:
-                        skipped_excluded += 1
+                        local_skipped_excluded += 1
                         continue
-                    queue.append(f["id"])
+                    child_folders.append(f["id"])
                     continue
-                listed += 1
+                local_listed += 1
                 if estate_inventory.is_os_metadata(f.get("name", "") or ""):
                     continue  # OS metadata files (.DS_Store, Thumbs.db, …) — not user content
                 if exclude_remediated and provenance.is_acp_generated(f):
-                    skipped_acp += 1  # ACP's own output — never a source document
+                    local_skipped_acp += 1  # ACP's own output — never a source document
                 else:
-                    raw.append(f)
+                    local_raw.append(f)
             page_token = resp.get("nextPageToken")
-            if progress_cb:
-                progress_cb(len(raw))
-            if not page_token or len(raw) >= max_files:
+            if not page_token:
                 break
-    truncated = bool(len(raw) >= max_files and (queue or page_token))
+        with _lock:
+            _listed[0] += local_listed
+            _skipped_acp[0] += local_skipped_acp
+            _skipped_mirror[0] += local_skipped_mirror
+            _skipped_excluded[0] += local_skipped_excluded
+        return local_raw, child_folders, capped
+
+    # Parallel BFS: up to _DISCOVERY_WORKERS Drive API calls in flight simultaneously.
+    # Each completed folder's children are immediately submitted, so deeper levels start
+    # as soon as any ancestor finishes — no level-barrier, no idle time between BFS levels.
+    with _cf.ThreadPoolExecutor(max_workers=_DISCOVERY_WORKERS) as ex:
+        pending: dict[_cf.Future, str] = {ex.submit(_fetch_folder, folder_id): folder_id}
+        while pending:
+            done, _ = _cf.wait(list(pending.keys()), return_when=_cf.FIRST_COMPLETED)
+            for fut in done:
+                del pending[fut]
+                local_raw, child_folders, capped = fut.result()
+                with _lock:
+                    space = max_files - len(raw)
+                    if space > 0:
+                        raw.extend(local_raw[:space])
+                        if len(local_raw) > space:
+                            _truncated[0] = True
+                    elif local_raw:
+                        _truncated[0] = True
+                    if capped:
+                        _truncated[0] = True
+                    if progress_cb:
+                        progress_cb(len(raw))
+                    for child in child_folders:
+                        if child in seen_folders:
+                            continue
+                        seen_folders.add(child)
+                        if len(raw) < max_files:
+                            pending[ex.submit(_fetch_folder, child)] = child
+                        else:
+                            _truncated[0] = True
+
+    truncated = _truncated[0]
     if truncated:
         print(f"[scan] folder listing hit the {max_files}-file cap — not all files were "
               f"scanned; raise ACP_FANOUT_MAX_FILES to cover the full subtree", flush=True)
@@ -644,14 +694,14 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
         # this account's Assess tab empty: the scan was now visible, but had nothing in
         # scope.inventory to find, because this path never wrote it.
         scope_out.update({"kind": "folder", "folder_id": folder_id,
-                          "folders_walked": len(seen_folders), "listed": listed,
-                          "skipped_acp": skipped_acp, "skipped_mirror": skipped_mirror,
-                          "skipped_excluded": skipped_excluded,
+                          "folders_walked": len(seen_folders), "listed": _listed[0],
+                          "skipped_acp": _skipped_acp[0], "skipped_mirror": _skipped_mirror[0],
+                          "skipped_excluded": _skipped_excluded[0],
                           "kept": len(result), "truncated": truncated, "cap": max_files,
                           "inventory": estate_inventory.summarize(raw[:max_files], truncated=truncated)})
     print(f"[scan] discovery (folder subtree): {len(seen_folders)} folder(s) walked · "
-          f"{listed} listed · {skipped_acp} skipped as ACP-generated output · "
-          f"{skipped_mirror} mirror folder(s) skipped · {len(result)} scannable", flush=True)
+          f"{_listed[0]} listed · {_skipped_acp[0]} skipped as ACP-generated output · "
+          f"{_skipped_mirror[0]} mirror folder(s) skipped · {len(result)} scannable", flush=True)
     return result
 
 

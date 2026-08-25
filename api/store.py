@@ -549,6 +549,87 @@ if _LEGACY_OWNER and "@" in _LEGACY_OWNER and all(c.isalnum() or c in ".+-_@" fo
     # disagreeing about the same scan's documents.
     _SCHEMA.append(f"UPDATE documents SET owner_email='{_LEGACY_OWNER}' WHERE owner_email IS NULL")
 
+# ── Power BI read-only views (Postgres only) ────────────────────────────────
+# Three views that expose ACP scan data for Power BI DirectQuery. They are
+# created by _PgAdapter.init_schema() after the main _SCHEMA tables are ready.
+# `CREATE OR REPLACE VIEW` is Postgres-specific; SQLite tests that cover the
+# same logic use `CREATE VIEW IF NOT EXISTS` (see tests/test_powerbi_views.py).
+#
+# Companion role: scripts/create_powerbi_role.sql grants SELECT on these views
+# to the `powerbi_ro` login — no access to underlying tables, no write access.
+_PG_VIEWS = [
+    # Scan-level summary: one row per scan, aggregated findings and certifiability.
+    # Powers the overview page of the Power BI compliance dashboard.
+    """CREATE OR REPLACE VIEW vw_scan_summary AS
+SELECT
+    sr.id            AS scan_id,
+    sr.owner_email,
+    sr.completed_at,
+    sr.source,
+    sr.rubric_name,
+    sr.avg_score,
+    sr.files         AS total_files,
+    sr.certifiable,
+    sr.uncertain,
+    sr.error,
+    COUNT(ir.rule_id) FILTER (WHERE ir.severity = 'CRITICAL')  AS critical_findings,
+    COUNT(ir.rule_id) FILTER (WHERE ir.severity = 'SERIOUS')   AS serious_findings,
+    COUNT(ir.rule_id) FILTER (WHERE ir.severity = 'MODERATE')  AS moderate_findings,
+    COUNT(ir.rule_id) FILTER (WHERE ir.severity = 'MINOR')     AS minor_findings,
+    COUNT(DISTINCT pf.file)                                    AS pii_docs_affected,
+    CASE WHEN COALESCE(sr.files, 0) > 0
+         THEN ROUND(100.0 * sr.certifiable / sr.files)
+         ELSE 0 END                                            AS audit_ready_pct
+FROM scan_runs sr
+LEFT JOIN issue_records ir ON ir.scan_id = sr.id
+LEFT JOIN pii_findings  pf ON pf.scan_id = sr.id
+GROUP BY sr.id, sr.owner_email, sr.completed_at, sr.source, sr.rubric_name,
+         sr.avg_score, sr.files, sr.certifiable, sr.uncertain, sr.error""",
+
+    # Per-finding detail: one row per WCAG issue, enriched with scan/file metadata.
+    # Powers the findings drill-through report and the by-criterion breakdown.
+    """CREATE OR REPLACE VIEW vw_finding_detail AS
+SELECT
+    ir.scan_id,
+    sr.owner_email,
+    sr.completed_at,
+    ir.file,
+    fr.engine,
+    ir.wcag                                   AS wcag_criterion,
+    ir.severity,
+    ir.rule_id,
+    COALESCE(rt.plain_name, ir.rule_id)       AS plain_name,
+    ir.detail,
+    ir.page,
+    ir.location
+FROM issue_records ir
+JOIN  scan_runs       sr ON sr.id      = ir.scan_id
+LEFT JOIN file_records   fr ON fr.scan_id = ir.scan_id AND fr.file = ir.file
+LEFT JOIN scan_rule_traces rt ON rt.scan_id = ir.scan_id
+                              AND rt.file    = ir.file
+                              AND rt.rule_id = ir.rule_id""",
+
+    # Per-rule-per-file outcomes: which rules were evaluated and what happened.
+    # Powers the rule-coverage heatmap (pass / fail / error / not-evaluated).
+    """CREATE OR REPLACE VIEW vw_rule_coverage AS
+SELECT
+    rt.scan_id,
+    sr.owner_email,
+    sr.completed_at,
+    rt.file,
+    fr.engine,
+    rt.rule_id,
+    rt.rule_name,
+    COALESCE(rt.plain_name, rt.rule_id)  AS plain_name,
+    rt.level,
+    rt.fix_mode,
+    rt.outcome,
+    rt.finding_count
+FROM scan_rule_traces rt
+JOIN  scan_runs    sr ON sr.id      = rt.scan_id
+LEFT JOIN file_records fr ON fr.scan_id = rt.scan_id AND fr.file = rt.file""",
+]
+
 _UPSERT_INV = (
     "INSERT INTO inventory(file,first_seen,last_seen,last_status,last_score) "
     "VALUES(%s,%s,%s,%s,%s) "
@@ -783,6 +864,8 @@ class _PgAdapter:
         try:
             cur = conn.cursor()
             for stmt in _SCHEMA:
+                cur.execute(stmt)
+            for stmt in _PG_VIEWS:
                 cur.execute(stmt)
             conn.commit()
         finally:
@@ -1621,6 +1704,41 @@ class Store:
             self._db.execute(cur, "DELETE FROM scan_runs WHERE owner_email=%s", (owner_email,))
             cleared.append("scan_runs")
         return {"owner": owner_email, "cleared_tables": cleared}
+
+    def delete_scan(self, scan_id: str, owner_email: str) -> dict | None:
+        """Delete ONE scan and every row tied to it — the per-scan erasure path required for
+        a HIPAA Business Associate Agreement.
+
+        Returns None if the scan does not exist or does not belong to owner_email (prevents
+        one user deleting another's scan).  Returns a summary dict on success.
+
+        What is deleted:
+          - All rows in _RESET_USER_SCAN_TABLES keyed on scan_id.
+          - The scan_runs row itself.
+
+        What is deliberately NOT deleted:
+          - decision_log — immutable append-only audit trail; the deletion event is ADDED to
+            it by the caller, not the other way round.
+          - inventory — global path-dedup index with no scan_id link.
+          - Blob storage bytes — call blob.purge_scan(owner, scan_id) separately (the route
+            does this).  Kept separate so a DB-only operation never blocks on a slow storage
+            call and the two failure modes surface independently.
+        """
+        # Verify ownership before touching anything.
+        with self._db.cursor() as cur:
+            self._db.execute(
+                cur,
+                "SELECT id FROM scan_runs WHERE id=%s AND owner_email=%s",
+                (scan_id, owner_email),
+            )
+            if not self._db.fetchall(cur):
+                return None
+
+        with self._db.cursor() as cur:
+            for t in self._RESET_USER_SCAN_TABLES:
+                self._db.execute(cur, f"DELETE FROM {t} WHERE scan_id=%s", (scan_id,))
+            self._db.execute(cur, "DELETE FROM scan_runs WHERE id=%s", (scan_id,))
+        return {"scan_id": scan_id, "owner": owner_email}
 
     def list_scans(self, owner: str | None = None) -> list[dict]:
         # Completed scans only — in-flight (status='running', no completed_at) scans

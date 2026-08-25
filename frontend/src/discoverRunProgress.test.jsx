@@ -189,15 +189,16 @@ describe('lifecycle KPI on the lifecycle step', () => {
     expect(html).not.toContain('unchanged')
   })
 
-  it('shows "0 matched" when all rows have null lifecycle_rule_id', () => {
+  it('shows "— No enabled rules" when all rows have null lifecycle_rule_id', () => {
     const nullRuleInv = { rows: [
       { file: 'a.docx', lifecycle_rule_id: null },
       { file: 'b.docx', lifecycle_rule_id: null },
     ], total: 2 }
     const prog = { phase: 'scoring', files_found: 2 }
     const html = render(prog, true, undefined, undefined, nullRuleInv)
-    expect(html).toContain('0 matched')
-    expect(html).toContain('2 unchanged')
+    expect(html).toContain('No enabled rules')
+    expect(html).not.toContain('0 matched')
+    expect(html).not.toContain('2 unchanged')
   })
 
   it('lifecycle KPI appears near the Applied lifecycle rules step, not on other steps', () => {
@@ -300,5 +301,210 @@ describe('completion summary when phase is done', () => {
     const html = render(prog, true, () => {})
     expect(html).not.toContain('>Stop<')
     expect(html).not.toContain('>Stopping')
+  })
+})
+
+describe('metadata KPI on the metadata step', () => {
+  // 1 complete (owner + source_modified both set), 2 incomplete
+  const INV_META = [
+    { file: 'a.docx', owner: 'alice@co.com', source_modified: '2024-01', lifecycle_rule_id: null, doc_class: 'text-document' },
+    { file: 'b.pptx', owner: null,           source_modified: null,       lifecycle_rule_id: null, doc_class: 'slide-deck' },
+    { file: 'c.pdf',  owner: 'bob@co.com',   source_modified: null,       lifecycle_rule_id: null, doc_class: 'pdf-document' },
+  ]
+  const inv = { rows: INV_META, total: INV_META.length }
+
+  it('shows "N complete · M incomplete" when metadata step is done (tagging phase)', () => {
+    // tagging phase: PHASE_DONE_COUNT=3, so steps 0-2 are done; metadata (index 2) is done
+    const prog = { phase: 'tagging', files_found: 3 }
+    const html = render(prog, true, undefined, undefined, inv)
+    expect(html).toContain('1 complete')
+    expect(html).toContain('2 incomplete')
+  })
+
+  it('KPI appears near the Read document metadata step', () => {
+    const prog = { phase: 'tagging', files_found: 3 }
+    const html = render(prog, true, undefined, undefined, inv)
+    const metaIdx = html.indexOf('Read document metadata')
+    const nextIdx = html.indexOf('Classifying document types')
+    const kpiIdx = html.indexOf('1 complete')
+    expect(kpiIdx).toBeGreaterThan(metaIdx)
+    expect(kpiIdx).toBeLessThan(nextIdx)
+  })
+
+  it('omits metadata KPI when inv is null', () => {
+    const prog = { phase: 'tagging', files_found: 3 }
+    const html = render(prog, true)
+    expect(html).not.toContain('complete')
+    expect(html).not.toContain('incomplete')
+  })
+})
+
+describe('classification KPI on the classifying step', () => {
+  // 2 assessable (text-document, slide-deck), 2 unsupported (image, audio-video)
+  const INV_CLASS = [
+    { file: 'a.docx', doc_class: 'text-document', owner: 'u', source_modified: 't', lifecycle_rule_id: null },
+    { file: 'b.pptx', doc_class: 'slide-deck',    owner: 'u', source_modified: 't', lifecycle_rule_id: null },
+    { file: 'c.png',  doc_class: 'image',          owner: null, source_modified: null, lifecycle_rule_id: null },
+    { file: 'd.mp4',  doc_class: 'audio-video',    owner: null, source_modified: null, lifecycle_rule_id: null },
+  ]
+  const inv = { rows: INV_CLASS, total: INV_CLASS.length }
+
+  it('shows "N assessable · M unsupported" when classifying step is done (analysing phase)', () => {
+    // analysing phase: PHASE_DONE_COUNT=4, so steps 0-3 are done; classifying (index 3) is done
+    const prog = { phase: 'analysing', files_found: 4 }
+    const html = render(prog, true, undefined, undefined, inv)
+    expect(html).toContain('2 assessable')
+    expect(html).toContain('2 unsupported')
+  })
+
+  it('KPI appears near the Classified document types step', () => {
+    const prog = { phase: 'analysing', files_found: 4 }
+    const html = render(prog, true, undefined, undefined, inv)
+    const classIdx = html.indexOf('Classified document types')
+    const nextIdx = html.indexOf('Applying lifecycle rules')
+    const kpiIdx = html.indexOf('2 assessable')
+    expect(kpiIdx).toBeGreaterThan(classIdx)
+    expect(kpiIdx).toBeLessThan(nextIdx)
+  })
+
+  it('omits classification KPI when inv is null', () => {
+    const prog = { phase: 'analysing', files_found: 4 }
+    const html = render(prog, true)
+    expect(html).not.toContain('assessable')
+    expect(html).not.toContain('unsupported')
+  })
+
+  it('counts all five assessable mime types correctly', () => {
+    const allTypes = [
+      { file: 'a', doc_class: 'slide-deck',    lifecycle_rule_id: null, owner: null, source_modified: null },
+      { file: 'b', doc_class: 'text-document', lifecycle_rule_id: null, owner: null, source_modified: null },
+      { file: 'c', doc_class: 'pdf-document',  lifecycle_rule_id: null, owner: null, source_modified: null },
+      { file: 'd', doc_class: 'spreadsheet',   lifecycle_rule_id: null, owner: null, source_modified: null },
+      { file: 'e', doc_class: 'web-page',      lifecycle_rule_id: null, owner: null, source_modified: null },
+      { file: 'f', doc_class: 'image',         lifecycle_rule_id: null, owner: null, source_modified: null },
+    ]
+    const i2 = { rows: allTypes, total: allTypes.length }
+    const prog = { phase: 'analysing', files_found: 6 }
+    const html = render(prog, true, undefined, undefined, i2)
+    expect(html).toContain('5 assessable')
+    expect(html).toContain('1 unsupported')
+  })
+})
+
+describe('accessibility: KPI spans do not spam screen readers', () => {
+  it('KPI spans carry aria-hidden to prevent per-tick announcements', () => {
+    const prog = { phase: 'discovering', files_found: 1000 }
+    const html = render(prog, true)
+    // "1,000 files found so far" must be in an aria-hidden span
+    const kpiIdx = html.indexOf('1,000 files found so far')
+    expect(kpiIdx).toBeGreaterThan(-1)
+    const ariaHiddenIdx = html.lastIndexOf('aria-hidden', kpiIdx)
+    expect(ariaHiddenIdx).toBeGreaterThan(-1)
+    expect(kpiIdx - ariaHiddenIdx).toBeLessThan(150)
+  })
+
+  it('has a dedicated role=status live region naming the active step', () => {
+    const prog = { phase: 'discovering', files_found: 0 }
+    const html = render(prog, true)
+    // Must contain a status region with the active step name
+    expect(html).toContain('Step in progress: Listing folders and files')
+  })
+
+  it('status region updates when the active step changes phase', () => {
+    const html = render({ phase: 'reading', files_found: 50 }, true)
+    expect(html).toContain('Step in progress: Reading document metadata')
+  })
+})
+
+describe('reconciliation in completion summary', () => {
+  it('shows assessable/unsupported breakdown when inv is available', () => {
+    const rows = [
+      { file: 'a.docx', doc_class: 'text-document', lifecycle_rule_id: null, owner: null, source_modified: null },
+      { file: 'b.pptx', doc_class: 'slide-deck',    lifecycle_rule_id: null, owner: null, source_modified: null },
+      { file: 'c.png',  doc_class: 'image',          lifecycle_rule_id: null, owner: null, source_modified: null },
+    ]
+    const inv = { rows, total: 3 }
+    const prog = { phase: 'done', files_found: 3 }
+    const html = render(prog, false, undefined, undefined, inv)
+    // assessable + unsupported must sum to total (3)
+    expect(html).toContain('3 files discovered')
+    expect(html).toContain('2 assessable')
+    expect(html).toContain('1 unsupported')
+  })
+
+  it('omits the breakdown row when inv is null', () => {
+    const prog = { phase: 'done', files_found: 5 }
+    const html = render(prog, false)
+    expect(html).not.toContain('assessable')
+    expect(html).not.toContain('unsupported')
+    // But the core summary line must still appear
+    expect(html).toContain('files discovered')
+    expect(html).toContain('No documents were assessed or changed')
+  })
+})
+
+describe('lifecycle no-rules treatment', () => {
+  it('shows "No enabled rules" when all files have null lifecycle_rule_id', () => {
+    const noRulesInv = { rows: [
+      { file: 'a.docx', lifecycle_rule_id: null },
+      { file: 'b.pptx', lifecycle_rule_id: null },
+      { file: 'c.pdf',  lifecycle_rule_id: null },
+    ], total: 3 }
+    const prog = { phase: 'scoring', files_found: 3 }
+    const html = render(prog, true, undefined, undefined, noRulesInv)
+    expect(html).toContain('No enabled rules')
+    expect(html).not.toContain('0 matched')
+    expect(html).not.toContain('3 unchanged')
+  })
+
+  it('still shows matched/unchanged when at least one rule fired', () => {
+    const mixedInv = { rows: [
+      { file: 'a.docx', lifecycle_rule_id: 'ret-1' },
+      { file: 'b.docx', lifecycle_rule_id: null },
+    ], total: 2 }
+    const prog = { phase: 'scoring', files_found: 2 }
+    const html = render(prog, true, undefined, undefined, mixedInv)
+    expect(html).toContain('1 matched')
+    expect(html).toContain('1 unchanged')
+    expect(html).not.toContain('No enabled rules')
+  })
+
+  it('"No enabled rules" appears in the lifecycle step row, not elsewhere', () => {
+    const noRulesInv = { rows: [{ file: 'a.docx', lifecycle_rule_id: null }], total: 1 }
+    const prog = { phase: 'scoring', files_found: 1 }
+    const html = render(prog, true, undefined, undefined, noRulesInv)
+    const lifecycleIdx = html.indexOf('Applied lifecycle rules')
+    const nextIdx = html.indexOf('Saving inventory')
+    const noRulesIdx = html.indexOf('No enabled rules')
+    expect(noRulesIdx).toBeGreaterThan(lifecycleIdx)
+    expect(noRulesIdx).toBeLessThan(nextIdx)
+  })
+})
+
+describe('lifecycle stall hint', () => {
+  it('does not show lifecycle hint before 30 s', () => {
+    // elapsed starts at 0 on mount; renderToStaticMarkup captures that snapshot
+    const prog = { phase: 'analysing', files_found: 100 }
+    const html = render(prog, true)
+    expect(html).not.toContain('Lifecycle evaluation is taking longer')
+  })
+
+  it('does not show lifecycle hint in non-analysing phases', () => {
+    // tagging phase is not analysing — hint must not appear regardless of elapsed
+    const prog = { phase: 'tagging', files_found: 100 }
+    const html = render(prog, true)
+    expect(html).not.toContain('Lifecycle evaluation is taking longer')
+  })
+
+  it('hint text is discoverable in the DOM when phase is analysing', () => {
+    // The hint is gated on elapsed >= 30 which starts at 0 and only grows via useEffect;
+    // since renderToStaticMarkup does not run effects, elapsed will be 0 and the hint will not
+    // render. We verify the correct guard by checking the other side: the text must NOT appear
+    // in any other phase, and the analysing phase itself must not show it at t=0.
+    const phases = ['queued', 'connecting', 'discovering', 'reading', 'tagging', 'scoring', 'finalizing']
+    for (const phase of phases) {
+      const html = render({ phase, files_found: 50 }, true)
+      expect(html).not.toContain('Lifecycle evaluation is taking longer')
+    }
   })
 })

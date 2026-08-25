@@ -17,6 +17,8 @@ function fmtElapsedSecs(s) {
 
 function n(count) { return count.toLocaleString() }
 
+const ASSESSABLE_CLASSES = new Set(['slide-deck', 'text-document', 'pdf-document', 'spreadsheet', 'web-page'])
+
 // How many steps (from the front of STEPS) are DONE at each backend phase.
 // Steps: 0=connected, 1=listing, 2=metadata, 3=classifying, 4=lifecycle, 5=saving
 const PHASE_DONE_COUNT = {
@@ -64,7 +66,8 @@ function DiscoverStep({ label, kpi, status }) {
         {label}
       </span>
       {kpi && (
-        <span className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>
+        <span className="muted" aria-hidden="true"
+              style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>
           {kpi}
         </span>
       )}
@@ -104,6 +107,22 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
     ? inv.total - lifecycleMatchedCount
     : null
 
+  // Metadata completeness: complete = owner and source_modified both present.
+  const metadataCompleteCount = inv?.rows != null
+    ? inv.rows.filter((r) => r.owner != null && r.source_modified != null).length
+    : null
+  const metadataIncompleteCount = (metadataCompleteCount !== null && inv?.total != null)
+    ? inv.total - metadataCompleteCount
+    : null
+
+  // Classification stats: assessable = doc types we can evaluate for WCAG.
+  const assessableCount = inv?.rows != null
+    ? inv.rows.filter((r) => ASSESSABLE_CLASSES.has(r.doc_class)).length
+    : null
+  const unsupportedCount = (assessableCount !== null && inv?.total != null)
+    ? inv.total - assessableCount
+    : null
+
   const steps = STEPS.map((s, i) => {
     const status = i < doneCount ? 'done' : i === doneCount ? 'active' : 'pending'
     const displayLabel = i === 0 && sourceName
@@ -118,8 +137,16 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
       if (s.key === 'listing' && filesFound > 0) {
         kpi = `${n(filesFound)} files found`
       }
+      if (s.key === 'metadata' && metadataCompleteCount !== null && metadataIncompleteCount !== null) {
+        kpi = `${n(metadataCompleteCount)} complete · ${n(metadataIncompleteCount)} incomplete`
+      }
+      if (s.key === 'classifying' && assessableCount !== null && unsupportedCount !== null) {
+        kpi = `${n(assessableCount)} assessable · ${n(unsupportedCount)} unsupported`
+      }
       if (s.key === 'lifecycle' && lifecycleMatchedCount !== null && lifecycleUnchangedCount !== null) {
-        kpi = `${n(lifecycleMatchedCount)} matched · ${n(lifecycleUnchangedCount)} unchanged`
+        kpi = lifecycleMatchedCount === 0
+          ? '— No enabled rules'
+          : `${n(lifecycleMatchedCount)} matched · ${n(lifecycleUnchangedCount)} unchanged`
       }
     }
     if (status === 'active' && s.key === 'listing' && filesFound > 0) {
@@ -131,6 +158,12 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
 
   // After 90 s with no files found during listing, the source likely has many folders to walk.
   const showLongRunningHint = elapsed >= 90 && filesFound === 0 && phase === 'discovering'
+  // Lifecycle evaluation runs AI classification and can take 30+ s on large inventories.
+  const showLifecycleSlowHint = elapsed >= 30 && phase === 'analysing'
+
+  // The step label that is currently active — used in a dedicated live region so phase transitions
+  // are announced once, without the per-tick KPI counts that aria-hidden="true" suppresses above.
+  const activeStepLabel = steps.find((s) => s.status === 'active')?.label ?? null
 
   function handleStop() {
     setStopping(true)
@@ -160,6 +193,9 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
           <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 12,
                         fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.6 }}>
             <div>{n(totalFiles)} files discovered · {n(matched)} matched lifecycle rules</div>
+            {assessableCount !== null && (
+              <div>{n(assessableCount)} assessable · {n(unsupportedCount)} unsupported</div>
+            )}
             <div>No documents were assessed or changed.</div>
           </div>
           {(onReview || onContinue) && (
@@ -209,9 +245,20 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
           {steps.map(({ key, ...rest }) => <DiscoverStep key={key} {...rest} />)}
         </div>
 
+        {/* Announces phase transitions to screen readers without repeating per-tick KPI counts.
+            Placed after the step list so step label text in the list is found first by indexOf. */}
+        <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {activeStepLabel ? `Step in progress: ${activeStepLabel}` : null}
+        </span>
+
         {showLongRunningHint && (
           <p className="muted" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5 }}>
             This source contains many folders — discovery is still active.
+          </p>
+        )}
+        {showLifecycleSlowHint && (
+          <p className="muted" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5 }}>
+            Lifecycle evaluation is taking longer than usual.
           </p>
         )}
       </div>

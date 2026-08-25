@@ -1,7 +1,7 @@
 // The SIM fixtures that let the demo show before→after evidence. They must reproduce the
 // shapes the live backend persists, and must never let the demo claim a fix it can't show.
 import { describe, it, expect } from 'vitest'
-import { simProposalsFor, simRemediationDiffs, SIM_THUMB } from './sim.js'
+import { simProposalsFor, simRemediationDiffs, SIM_THUMB, recommendFor } from './sim.js'
 import { isSafeThumb } from './ProposalThumb.jsx'
 
 describe('simProposalsFor — drafts awaiting approval', () => {
@@ -87,5 +87,65 @@ describe('simRemediationDiffs — fixes already written into the document', () =
     expect(row.before || row.after).toBeTruthy()      // never an empty comparison
     // and does not leak onto another document
     expect(rows.some((r) => r.rule_id === '1.3.1' && r.file === 'contrast.html')).toBe(false)
+  })
+})
+
+// ── recommendFor — auto/assisted/manual routing ───────────────────────────────────────────────
+// Guards the mislabel fix: a PDF with contrast or link-purpose findings must never read as
+// "fully automatic" regardless of which wcag form the findings carry (SC_-prefixed from the
+// SIM corpus vs. the '1.4.3 Contrast (Minimum)' form that real backend scans produce).
+describe('recommendFor — auto vs assisted classification', () => {
+  const pdf = (issues) => ({ type: 'pdf', status: 'analysed', compliant: false, score: 70, issues })
+  const iss = (wcag) => ({ wcag, severity: 'SERIOUS' })
+
+  it('PDF with only mechanical findings (language, title) routes auto', () => {
+    const rec = recommendFor(pdf([iss('SC_3_1_1'), iss('SC_2_4_2')]))
+    expect(rec.mode).toBe('auto')
+    expect(rec.action).toBe('auto')
+  })
+
+  it('PDF with contrast finding (SC_ form) routes assisted, not auto', () => {
+    // Before the fix, scId() was not called, so 'SC_1_4_3' never matched the '1.4.3'
+    // in NEEDS_HUMAN_SC — contrast PDFs were mislabelled "fully automatic".
+    const rec = recommendFor(pdf([iss('SC_3_1_1'), iss('SC_1_4_3')]))
+    expect(rec.mode).not.toBe('auto')
+    expect(['assisted', 'review', 'manual']).toContain(rec.mode)
+  })
+
+  it('PDF with contrast finding (real-backend axe form) routes assisted', () => {
+    // Real scans use '1.4.3 Contrast (Minimum)', not 'SC_1_4_3'.
+    const rec = recommendFor(pdf([iss('1.4.3 Contrast (Minimum)')]))
+    expect(rec.mode).not.toBe('auto')
+  })
+
+  it('PDF with link-purpose finding (SC_ form) routes assisted', () => {
+    const rec = recommendFor(pdf([iss('SC_2_4_4')]))
+    expect(rec.mode).not.toBe('auto')
+  })
+
+  it('PDF with 1.1.1 alt-text outside the PDF auto set routes assisted', () => {
+    // PDF remediator cannot fix alt text (only docx/pptx/xlsx can).
+    const rec = recommendFor(pdf([iss('SC_1_1_1')]))
+    expect(rec.mode).not.toBe('auto')
+  })
+
+  it('HTML file with contrast finding routes auto (no format-based restriction)', () => {
+    const rec = recommendFor({ type: 'html', status: 'analysed', compliant: false, score: 70,
+      issues: [iss('SC_1_4_3')] })
+    // HTML orchestrator covers all non-hard/non-media findings; contrast on HTML
+    // is human-judgement so it hits hardFinding → assisted, not formatBlocksAuto.
+    expect(rec.mode).not.toBe('auto')
+  })
+
+  it('compliant file routes keep regardless of type', () => {
+    const rec = recommendFor({ type: 'pdf', status: 'analysed', compliant: true, score: 100,
+      issues: [] })
+    expect(rec.action).toBe('keep')
+  })
+
+  it('file with no findings routes keep', () => {
+    const rec = recommendFor({ type: 'pdf', status: 'analysed', compliant: false, score: 80,
+      issues: [] })
+    expect(rec.action).toBe('keep')
   })
 })
