@@ -1078,6 +1078,16 @@ export default function App() {
 
 
   return (
+    <>
+    {isStaging && (
+      <div role="status" style={{
+        background: '#B45309', borderBottom: '2px solid #92400E',
+        padding: '6px 16px', fontSize: 12, fontWeight: 700, color: '#fff',
+        letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'center', userSelect: 'none'
+      }}>
+        Staging — not production
+      </div>
+    )}
     <div className={`app${isTimeTravel ? ' replaymode' : ''}`}>
       <a className="skiplink" href="#main-content">Skip to main content</a>
       <header>
@@ -1180,15 +1190,6 @@ export default function App() {
         </div>
       )}
       {me.scope && <div className="scopebar"><i className="scopedot" />access scope · <b>{me.scope}</b></div>}
-      {isStaging && (
-        <div role="status" style={{
-          background: '#B45309', borderBottom: '2px solid #92400E',
-          padding: '6px 16px', fontSize: 12, fontWeight: 700, color: '#fff',
-          letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'center', userSelect: 'none'
-        }}>
-          Staging — not production
-        </div>
-      )}
 
       <nav aria-label="Compliance workflow">
         <div className="tabs" role="tablist" aria-label="Compliance workflow">
@@ -1651,5 +1652,6 @@ export default function App() {
       )}
       <ConfirmDialog />
     </div>
+    </>
   )
 }
