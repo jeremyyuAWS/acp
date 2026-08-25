@@ -119,6 +119,11 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   const saveUnchanged = progress.save_unchanged ?? null
   const saveFailed = progress.save_failed ?? null
 
+  // Lifecycle activity stats from schema_version 2+ done payloads.
+  const rulesEnabled = progress.rules_enabled ?? null
+  const filesEvaluated = progress.files_evaluated ?? null
+  const lifecycleMatches = progress.lifecycle_matches ?? null
+
   // Source label substitution and KPI.
   const sourceName = sources && sources.length === 1 ? sources[0].name : null
   const sourceCount = sources ? sources.length : null
@@ -139,7 +144,15 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
     ? inv.total - metadataCompleteCount
     : null
 
-  // Classification stats: assessable = doc types we can evaluate for WCAG.
+  // Classification stats: 5-bucket breakdown from schema_version 2+ done payloads (PRD §6.4).
+  const clsAssessable = progress.assessable ?? null
+  const clsMetadataOnly = progress.metadata_only ?? null
+  const clsUnsupported = progress.unsupported ?? null
+  const clsEligibilityUnknown = progress.eligibility_unknown ?? null
+  const clsExcluded = progress.excluded ?? null
+  const hasClassStats = clsAssessable !== null
+
+  // Fallback: inv-derived binary assessable / unsupported for old backends.
   const assessableCount = inv?.rows != null
     ? inv.rows.filter((r) => ASSESSABLE_CLASSES.has(r.doc_class)).length
     : null
@@ -177,13 +190,32 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
         }
         if (parts.length) kpi = parts.join(' — ')
       }
-      if (s.key === 'classifying' && assessableCount !== null && unsupportedCount !== null) {
-        kpi = `${n(assessableCount)} assessable · ${n(unsupportedCount)} unsupported`
+      if (s.key === 'classifying') {
+        if (hasClassStats) {
+          const parts = [
+            clsAssessable > 0 && `${n(clsAssessable)} assessable`,
+            clsMetadataOnly > 0 && `${n(clsMetadataOnly)} metadata-only`,
+            clsUnsupported > 0 && `${n(clsUnsupported)} unsupported`,
+            clsEligibilityUnknown > 0 && `${n(clsEligibilityUnknown)} eligibility unknown`,
+            clsExcluded > 0 && `${n(clsExcluded)} excluded`,
+          ].filter(Boolean)
+          if (parts.length) kpi = parts.join(' · ')
+        } else if (assessableCount !== null && unsupportedCount !== null) {
+          kpi = `${n(assessableCount)} assessable · ${n(unsupportedCount)} unsupported`
+        }
       }
-      if (s.key === 'lifecycle' && lifecycleMatchedCount !== null && lifecycleUnchangedCount !== null) {
-        kpi = lifecycleMatchedCount === 0
-          ? '— No enabled rules'
-          : `${n(lifecycleMatchedCount)} matched · ${n(lifecycleUnchangedCount)} unchanged`
+      if (s.key === 'lifecycle') {
+        if (rulesEnabled !== null) {
+          // Use progress payload fields (schema_version 2+) — more accurate than inv-derived counts.
+          kpi = rulesEnabled === 0
+            ? '— No enabled rules'
+            : `${n(rulesEnabled)} rules · ${n(lifecycleMatches)} matched`
+        } else if (lifecycleMatchedCount !== null && lifecycleUnchangedCount !== null) {
+          // Fallback for old backends that don't emit lifecycle stats.
+          kpi = lifecycleMatchedCount === 0
+            ? '— No enabled rules'
+            : `${n(lifecycleMatchedCount)} matched · ${n(lifecycleUnchangedCount)} unchanged`
+        }
       }
       if (s.key === 'saving' && saveNew !== null) {
         const parts = []
@@ -225,7 +257,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   // Completion summary replaces the active checklist once all steps are done.
   if (isDone) {
     const totalFiles = inv?.total ?? filesFound
-    const matched = lifecycleMatchedCount ?? 0
+    const matched = lifecycleMatches ?? lifecycleMatchedCount ?? 0
     return (
       <section className="discover-run-progress" role="region" aria-label="Discovery complete"
                style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
@@ -245,9 +277,19 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
           <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 12,
                         fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.6 }}>
             <div>{n(totalFiles)} files discovered · {n(matched)} matched lifecycle rules</div>
-            {assessableCount !== null && (
+            {hasClassStats ? (
+              <div>
+                {[
+                  clsAssessable > 0 && `${n(clsAssessable)} assessable`,
+                  clsMetadataOnly > 0 && `${n(clsMetadataOnly)} metadata-only`,
+                  clsUnsupported > 0 && `${n(clsUnsupported)} unsupported`,
+                  clsEligibilityUnknown > 0 && `${n(clsEligibilityUnknown)} eligibility unknown`,
+                  clsExcluded > 0 && `${n(clsExcluded)} excluded`,
+                ].filter(Boolean).join(' · ')}
+              </div>
+            ) : assessableCount !== null ? (
               <div>{n(assessableCount)} assessable · {n(unsupportedCount)} unsupported</div>
-            )}
+            ) : null}
             {totalExceptions > 0 && (
               <div>
                 {[

@@ -847,6 +847,33 @@ import tempfile as _tempfile
 from pathlib import Path as _Path
 
 
+# ── Classification bucket constants (PRD §6.4) ───────────────────────────────────
+_ASSESSABLE_DOC_CLASSES = frozenset({'slide-deck', 'text-document', 'pdf-document', 'spreadsheet', 'web-page'})
+_METADATA_ONLY_DOC_CLASSES = frozenset({'image', 'audio-video'})
+
+
+def _count_inventory_classes(scan_id: str) -> dict:
+    """Count the five mutually exclusive classification buckets (PRD §6.4). Buckets sum to the
+    total inventory rows. 'excluded' is a catch-all for doc_class values not in the known sets
+    (currently always 0; reserved for future policy-excluded classes)."""
+    assessable = metadata_only = unsupported = eligibility_unknown = excluded = 0
+    for r in core.store.list_inventory(scan_id):
+        dc = r.get("doc_class") or ""
+        if dc in _ASSESSABLE_DOC_CLASSES:
+            assessable += 1
+        elif dc in _METADATA_ONLY_DOC_CLASSES:
+            metadata_only += 1
+        elif dc in ("unsupported", ""):
+            unsupported += 1
+        elif dc == "unknown":
+            eligibility_unknown += 1
+        else:
+            excluded += 1
+    return {"assessable": assessable, "metadata_only": metadata_only,
+            "unsupported": unsupported, "eligibility_unknown": eligibility_unknown,
+            "excluded": excluded}
+
+
 # ── Lifecycle rule evaluation during Discover (PRD §4.3 / §6, Phase B4) ─────────
 # disposition_policy now has a priority column (Lifecycle Rules build-plan item #6) —
 # list_disposition_policies() sorts by it (NULLs last, then name), so `policies` below is already
@@ -855,7 +882,7 @@ from pathlib import Path as _Path
 # (routes/disposition.list_conflicts) so both make the same call from one place.
 
 
-def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | None) -> None:
+def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | None) -> dict:
     """Evaluate enabled disposition policies against the freshly persisted inventory and record
     CANDIDATE outcomes (PRD §4.3 / §6, Phase B4). Candidate-first: a matching archive rule flags
     the file 'Archive Candidate' and a delete rule 'Delete Candidate' — the actual Drive
@@ -867,6 +894,9 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
     Keying: tags/status are keyed by (scan_id, file) — the file_tags / scan_inventory grain. The
     audit doc_id is a discover-grain key ("scan:<scan_id>:<file>"), deliberately distinct from the
     approval-time drive:<fileId> key the Tag-action PR (#314) uses, so the two paths never collide.
+
+    Returns {"rules_enabled": N, "files_evaluated": M, "lifecycle_matches": K} so callers can
+    surface lifecycle activity stats in the 'done' progress payload.
     """
     import disposition
     import uuid
@@ -875,8 +905,11 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
     # had the scan owner in scope (as `actor`) and still fetched every tenant's enabled policies.
     policies = [p for p in core.store.list_disposition_policies(owner=actor) if p.get("enabled")]
     if not policies:
-        return
+        return {"rules_enabled": 0, "files_evaluated": 0, "lifecycle_matches": 0}
+    files_evaluated = 0
+    lifecycle_matches = 0
     for r in core.store.list_inventory(scan_id):
+        files_evaluated += 1
         file = r.get("file")
         # An Exempted file (legal hold etc.) is never moved to a candidate status, tagged, or
         # re-audited by a rule run (PRD §6).
@@ -910,6 +943,7 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
                 matched.append(p)
         if not matched:
             continue
+        lifecycle_matches += 1
         # ── Tag rules: apply EVERY matching tag policy. Tag + Archive both match → tags AND the
         # Archive candidate status are applied (PRD §6), so tags are never suppressed by a
         # co-matching disposition rule.
@@ -942,6 +976,8 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
             uuid.uuid4().hex, doc_id=doc_id, policy_id=chosen["policy_id"],
             action=chosen.get("action"), result="pending_approval", detail=reason,
             owner_email=actor)
+    return {"rules_enabled": len(policies), "files_evaluated": files_evaluated,
+            "lifecycle_matches": lifecycle_matches}
 
 
 def _mark_discovered(scan_id: str) -> None:
@@ -971,19 +1007,22 @@ def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, acto
     mark_discovery_complete is set-once for the same reason, so a re-run does not re-date the
     snapshot either.
 
-    Returns the save-outcome dict from add_inventory: {"new": N, "updated": M, "unchanged": 0,
-    "failed": P}.  Callers that emit progress payloads should forward these as save_new,
-    save_updated, save_unchanged, save_failed so the frontend can display the saving-step KPI."""
+    Returns a merged dict with save-outcome, lifecycle stats, and classification bucket counts:
+      {"new": N, "updated": M, "unchanged": 0, "failed": P,
+       "rules_enabled": R, "files_evaluated": E, "lifecycle_matches": K,
+       "assessable": A, "metadata_only": B, "unsupported": C, "eligibility_unknown": D, "excluded": X}.
+    Callers that emit progress payloads should forward all keys for the respective step KPIs."""
     from scanner import _dedupe_inventory_files
     _dedupe_inventory_files(inv)
     outcome = core.store.add_inventory(scan_id, inv) if inv else {"new": 0, "updated": 0, "unchanged": 0, "failed": 0}
-    _evaluate_discover_lifecycle_rules(scan_id, source, actor)
+    lifecycle_stats = _evaluate_discover_lifecycle_rules(scan_id, source, actor)
+    class_stats = _count_inventory_classes(scan_id)
     # The discovery phase is over: the inventory is persisted and the lifecycle rules have run.
     # Stamp WHEN, because every count taken from this inventory is only true as of this instant
     # and nothing else on scan_runs records it — completed_at is the end of ASSESS. Stamped after
     # the writes above so it dates an inventory that exists rather than one that was attempted.
     _mark_discovered(scan_id)
-    return outcome
+    return {**outcome, **lifecycle_stats, **class_stats}
 
 
 @handler("scan_discover")
