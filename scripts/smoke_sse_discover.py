@@ -39,10 +39,22 @@ import urllib.error
 
 
 # Fields that must be present in every snapshot frame.
-REQUIRED_FIELDS = {"available", "active", "phase", "status"}
+REQUIRED_FIELDS = {"available", "active", "phase", "state"}
 
-# Snapshot integer fields that must never decrease between frames.
-MONOTONIC_FIELDS = ("discovered", "eligible", "completed", "passed", "review", "failed")
+# Snapshot counter paths (nested) that must never decrease between frames.
+# Each entry is (label, top-level key, nested key).
+MONOTONIC_FIELDS = (
+    ("discovered",  "totals",   "discovered"),
+    ("eligible",    "totals",   "eligible"),
+    ("completed",   "kpis",     "completed"),
+    ("passed",      "outcomes", "passed"),
+    ("review",      "outcomes", "review"),
+    ("failed",      "outcomes", "failed"),
+)
+
+
+def _counter(frame: dict, top: str, key: str):
+    return frame.get(top, {}).get(key)
 
 
 def _headers(token: str | None, drive_token: str | None = None) -> dict:
@@ -165,14 +177,12 @@ def _check(frames: list[dict]) -> list[str]:
         if f.get("available") is False and f.get("active") is True:
             errors.append(f"frame {i}: available=False while active=True (logic error)")
 
-        for field in MONOTONIC_FIELDS:
-            v = f.get(field)
-            p = prev.get(field)
+        for label, top, key in MONOTONIC_FIELDS:
+            v = _counter(f, top, key)
+            p = _counter(prev, top, key)
             if v is not None and p is not None:
                 if isinstance(v, (int, float)) and isinstance(p, (int, float)) and v < p:
-                    errors.append(
-                        f"frame {i}: {field} went backwards ({p} → {v})"
-                    )
+                    errors.append(f"frame {i}: {label} went backwards ({p} → {v})")
         prev = f
 
     last = frames[-1]
@@ -223,21 +233,25 @@ def main() -> None:
     # 4. Print a brief phase progression log.
     phases_seen: list[str] = []
     for f in frames:
-        p = f.get("phase") or f.get("status") or "?"
+        p = f.get("phase") or f.get("state") or "?"
         if not phases_seen or phases_seen[-1] != p:
             phases_seen.append(p)
-            completed = f.get("completed", 0)
-            total = f.get("eligible") or f.get("discovered") or "?"
+            completed = _counter(f, "kpis", "completed") or 0
+            total = (_counter(f, "totals", "eligible")
+                     or _counter(f, "totals", "discovered") or "?")
             print(f"    phase={p:<20} completed={completed}/{total}")
 
     # 5. Print final snapshot summary.
     if frames:
         last = frames[-1]
         print(f"\n  final snapshot:")
-        for k in ("phase", "status", "active", "available", "discovered",
-                  "eligible", "completed", "passed", "review", "failed"):
+        for k in ("phase", "state", "active", "available"):
             if k in last:
                 print(f"    {k}: {last[k]}")
+        for label, top, key in MONOTONIC_FIELDS:
+            v = _counter(last, top, key)
+            if v is not None:
+                print(f"    {label}: {v}")
 
     # 6. Validate.
     print()
