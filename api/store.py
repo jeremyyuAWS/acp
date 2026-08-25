@@ -5284,11 +5284,7 @@ class Store:
             self._db.execute(cur,
                 "UPDATE jobs SET status='queued', locked_at=NULL, locked_by=NULL, "
                 "lease_expires_at=NULL, updated_at=%s "
-                "WHERE status='running' AND ("
-                "  (lease_expires_at IS NOT NULL AND lease_expires_at<%s)"
-                "  OR"
-                "  (lease_expires_at IS NULL AND locked_at<%s)"
-                ")",
+                "WHERE status='running' AND (lease_expires_at<%s OR locked_at<%s)",
                 (now, now, cutoff))
             return getattr(cur, "rowcount", 0) or 0
 
