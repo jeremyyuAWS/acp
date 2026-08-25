@@ -1072,12 +1072,28 @@ class Store:
         return sid
 
     # ── Fan-out scan pipeline (ADR 0007) ──────────────────────────────────────
+    def pre_create_queued_scan(self, scan_id: str, source: str, owner: str) -> None:
+        """Create a minimal scan_runs row before the job is enqueued.
+
+        Ensures GET /scans/{id} returns 200 from the moment the scan ID is issued to the
+        client, closing the API-contract race where the caller holds an ID the server does
+        not yet recognise. The worker's init_scan_run fills in the rubric, file count, real
+        start time, and scope once it claims and begins the job."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO scan_runs(id,source,status,owner_email,started_at) "
+                "VALUES(%s,%s,'queued',%s,%s) ON CONFLICT(id) DO NOTHING",
+                (scan_id, source, owner, self._now()))
+
     def init_scan_run(self, scan_id: str, source: str, total: int, started_at: str,
                       rubric_name: str, rubric_hash: str, owner: str | None = None,
                       status: str = "running", scope: dict | None = None) -> None:
-        """Create the scan_runs row at discover time (counter=0). `status` defaults to 'running'
-        (analysis in flight); the deferred-analysis Discover phase (ADR 0020) passes 'discovered'
-        — inventory listed, awaiting an explicit Assess before any file is opened.
+        """Create or update the scan_runs row at discover time (counter=0). `status` defaults
+        to 'running' (analysis in flight); the deferred-analysis Discover phase (ADR 0020)
+        passes 'discovered' — inventory listed, awaiting an explicit Assess.
+
+        Uses DO UPDATE rather than DO NOTHING so a pre_create_queued_scan stub (status='queued',
+        no rubric/scope) is promoted to a real running row when the worker claims the job.
 
         `scope` is what discovery covered (scanner._list scope_out). Written HERE, at discover,
         not at finalize: the count is on screen from the moment discovery ends, so its boundary
@@ -1087,7 +1103,11 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO scan_runs(id,started_at,source,rubric_name,rubric_hash,files,files_done,status,owner_email,scope) "
-                "VALUES(%s,%s,%s,%s,%s,%s,0,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
+                "VALUES(%s,%s,%s,%s,%s,%s,0,%s,%s,%s) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "  started_at=EXCLUDED.started_at, rubric_name=EXCLUDED.rubric_name, "
+                "  rubric_hash=EXCLUDED.rubric_hash, files=EXCLUDED.files, "
+                "  status=EXCLUDED.status, scope=EXCLUDED.scope",
                 (scan_id, started_at, source, rubric_name, rubric_hash, total, status, owner,
                  _json.dumps(scope) if scope else None))
 
@@ -1968,16 +1988,13 @@ class Store:
         return True
 
     def cancel_queued_job(self, sid: str) -> bool:
-        """Cancel a scan that is still `queued` and has never been claimed by a worker — the gap
-        `cancel_scan` cannot cover, because a queued-unclaimed job has NO `scan_runs` row yet
-        (that row is only created once a worker claims it and starts the discovery handler), and
-        `cancel_scan` requires one. Marks the `jobs` row `status='dead'` directly.
+        """Cancel a scan that is still `queued` and has not yet been claimed by a worker — the
+        gap `cancel_scan` cannot cover, because the worker only advances `scan_runs.status`
+        once it claims the job. Marks the `jobs` row `status='dead'` directly, and stamps the
+        pre-created `scan_runs` row 'cancelled' so GET /scans/{id} reflects the terminal state.
 
-        No owner check: a never-claimed job has no owner_email recorded anywhere yet either (it
-        lives only in `jobs`, which carries no owner column), so there is nothing to check it
-        against. `sid` is an unguessable token already trusted as the sole credential for polling
-        this scan (`GET /scans/jobs/{job_id}` has no owner check today) — this follows the same
-        model, not a new, weaker one.
+        No owner check: `sid` is an unguessable token used as the credential for this operation,
+        consistent with how the non-durable job-poll path authenticates today.
 
         Returns False once a worker HAS claimed it (status moved to 'running' or beyond) — at
         that point `cancel_scan` is the right call, and the route tries both in order."""
@@ -1985,7 +2002,16 @@ class Store:
             self._db.execute(cur,
                 "UPDATE jobs SET status='dead', updated_at=%s WHERE scan_id=%s AND status='queued'",
                 (self._now(), sid))
-            return cur.rowcount > 0
+            cancelled = cur.rowcount > 0
+        if cancelled:
+            # The pre-created scan_runs row (status='queued') now has no job to run it.
+            # Mark it cancelled so callers see a terminal state rather than stale 'queued'.
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "UPDATE scan_runs SET status='cancelled', completed_at=%s "
+                    "WHERE id=%s AND status='queued'",
+                    (self._now(), sid))
+        return cancelled
 
     def _stamp_assessed_if_ran(self, cur, sid: str) -> None:
         """Stamp assessed_at on a non-finalized run that nonetheless assessed ≥1 document, so its
