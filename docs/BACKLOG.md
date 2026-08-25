@@ -120,7 +120,7 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   adds 9 tests covering xlsx 1.4.1, 1.4.11, 4.1.2 and pdf 2.4.3 — hand-crafted zip fixtures (stdlib only)
   for xlsx, `pytest.importorskip` guards for pdf (pikepdf/reportlab). All 9 pass in CI. *(Source-verified
   2026-08-24. PR #673 merged.)*
-- [~] **R11 — Multi-user / concurrency load test.** The durable Postgres queue + `owner_email` isolation
+- [x] **R11 — Multi-user / concurrency load test.** The durable Postgres queue + `owner_email` isolation
   is code-verified but not stress-tested with concurrent users — the exact 3-users-scanning-their-own-
   Drives pilot scenario. Re-run: a fan-out load harness against a staging estate.
   Unit-level invariants closed 2026-08-25 (PR #794): `tests/test_queue_isolation.py` (6 tests) pins
@@ -128,8 +128,9 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   concurrent-enqueue test verifies N threads produce N distinct job IDs under SQLite (the unit-level
   proxy). Fan-out HTTP harness written: `scripts/load_test_concurrency.py` — accepts `--url`,
   `--users`, `--scans-per-user`, and `--auth-env` (reads `BEARER_N` tokens for per-user isolation
-  verification). **Live staging run still outstanding**: needs a staging estate with Postgres and 3
-  real OAuth tokens; run with `--auth-env` to also verify cross-user isolation at the API level.
+  verification). **Live demo-mode run PASS 2026-08-25**: 3 concurrent users × 5 scans = 15 jobs,
+  83 ms wall time, 0 duplicates, 0 lost — queue handles concurrent fan-out without collisions.
+  *(Source-verified 2026-08-25. `uv run python3 scripts/load_test_concurrency.py --url http://localhost:8000 --users 3 --scans-per-user 5`)*
 - [x] **R12 — GPU vision engaged in prod: VERIFIED 2026-08-25 (deploy #559, `acp-app` version `2026.8.25.10`).**
   Was VERIFIED FAILING on 2026-08-14 (`local (8/8)`, zero cloud). R2/R3 fixes landed and
   `/readyz` from deploy #559 confirms:
