@@ -10,8 +10,8 @@ from assessment import Confidence, Coverage
 from capabilities import Capability
 from rule_registry import register
 
-from formats.pdf.detectors import (focus_order, link_purpose, name_role_value, nontext_contrast,
-                                   text_spacing, use_of_color)
+from formats.pdf.detectors import (focus_order, label_in_name, link_purpose, name_role_value,
+                                   nontext_contrast, text_spacing, use_of_color)
 
 # ── 4.1.2 Name, Role, Value ───────────────────────────────────────────────────────────
 # PARTIAL, not FULL: sound over AcroForm fields, silent on tagged-structure components.
@@ -131,4 +131,24 @@ register(
     reason=("line pitch is measured from page content streams and compared to the 1.5× font-size "
             "threshold; whether text actually clips when the override is applied is a rendered "
             "outcome not recorded in the file, and only sampled pages are examined"),
+)
+
+# ── 2.5.3 Label in Name ───────────────────────────────────────────────────────────────
+# PARTIAL (not FULL): push buttons are the only AcroForm field type that carries both its
+# visible text label (/MK /CA caption) and its accessible name (/TU, or /T as fallback) in the
+# same field object. For every other field type (text, checkbox, radio) the visible label is a
+# separate text object drawn on the page and not programmatically linked to the field — so a
+# comparison requires rendering and is outside scope. HIGH confidence within the push-button
+# subset: the caption-in-name check is a direct string comparison, not an estimate.
+register(
+    rule="2.5.3",
+    fmt="pdf",
+    detector=label_in_name.detect,
+    requires={Capability.FORMS},
+    coverage=Coverage.PARTIAL,
+    confidence=Confidence.HIGH,
+    reason=("push buttons are checked for WCAG 2.5.3: the visible caption (/MK /CA) must appear "
+            "inside the accessible name (/TU, or /T when /TU is absent); other field types "
+            "(text, checkbox, radio) display their labels as separate text objects not linked to "
+            "the field object and cannot be compared without rendering"),
 )
