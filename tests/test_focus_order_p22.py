@@ -52,7 +52,7 @@ def _pdf_with_two_fields_correct_order(tmp: Path) -> Path:
         Tabs=pikepdf.Name("/S"),
     )
     page_ref = pdf.make_indirect(page)
-    pdf.pages.append(page_ref)
+    pdf.pages.append(pikepdf.Page(page_ref))
 
     w1 = _make_text_widget(pdf, "Field1", [72, 700, 200, 720])
     w2 = _make_text_widget(pdf, "Field2", [72, 650, 200, 670])
@@ -93,7 +93,7 @@ def _pdf_with_two_fields_wrong_order(tmp: Path) -> Path:
         Tabs=pikepdf.Name("/S"),  # /Tabs = /S is set — old check would miss this
     )
     page_ref = pdf.make_indirect(page)
-    pdf.pages.append(page_ref)
+    pdf.pages.append(pikepdf.Page(page_ref))
 
     w1 = _make_text_widget(pdf, "Field1", [72, 700, 200, 720])
     w2 = _make_text_widget(pdf, "Field2", [72, 650, 200, 670])
@@ -133,7 +133,7 @@ def _pdf_no_struct_tabs_missing(tmp: Path) -> Path:
         # no /Tabs entry
     )
     page_ref = pdf.make_indirect(page)
-    pdf.pages.append(page_ref)
+    pdf.pages.append(pikepdf.Page(page_ref))
 
     w1 = _make_text_widget(pdf, "Field1", [72, 700, 200, 720])
     page_ref["/Annots"] = pikepdf.Array([w1])
@@ -156,7 +156,7 @@ def _pdf_no_struct_tabs_set(tmp: Path) -> Path:
         Tabs=pikepdf.Name("/S"),
     )
     page_ref = pdf.make_indirect(page)
-    pdf.pages.append(page_ref)
+    pdf.pages.append(pikepdf.Page(page_ref))
 
     w1 = _make_text_widget(pdf, "Field1", [72, 700, 200, 720])
     page_ref["/Annots"] = pikepdf.Array([w1])
@@ -173,7 +173,7 @@ def _pdf_no_fields(tmp: Path) -> Path:
     p = tmp / "nofields.pdf"
     pdf = pikepdf.Pdf.new()
     page = pikepdf.Dictionary(Type=pikepdf.Name("/Page"), MediaBox=pikepdf.Array([0, 0, 612, 792]))
-    pdf.pages.append(pdf.make_indirect(page))
+    pdf.pages.append(pikepdf.Page(pdf.make_indirect(page)))
     pdf.save(str(p))
     return p
 
