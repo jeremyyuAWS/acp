@@ -136,22 +136,23 @@ def test_removed_underline_is_recognised_however_it_is_written(frag, expected):
 # ── 1.4.11 · shape outline colour ─────────────────────────────────────────────
 #
 # _SOLID_SRGB requires `<a:solidFill>` then `<a:srgbClr val=`. THEME colours (`<a:schemeClr
-# val="accent1"/>`) are deliberately not matched, and that limit is declared in the registry
-# reason for docx 1.4.11 — this pins the declaration against the code, so the two cannot drift.
+# val="accent1"/>`) are not matched by _SOLID_SRGB directly — they go through _resolve_solidfill,
+# which looks them up in the document's theme XML. The registry reason for docx 1.4.11 must
+# reflect that schemeClr is now resolved — this pins the declaration against the code.
 
 def test_explicit_srgb_outline_is_measured():
     assert osx._SOLID_SRGB.search('<a:solidFill><a:srgbClr val="BBBBBB"/></a:solidFill>')
 
 
-def test_theme_colours_are_not_measured_and_the_registry_says_so():
-    """Not a gap being hidden — a boundary being stated. A theme colour resolves through the
-    document's theme part, which this detector does not read, so it abstains rather than
-    guessing. The registration must keep saying that."""
+def test_scheme_clr_resolved_via_theme_and_registry_says_so():
+    """_SOLID_SRGB alone does not match schemeClr — resolution goes through _resolve_solidfill.
+    The registry reason must declare that theme colour references are resolved through the
+    document theme, not listed as an unexamined gap."""
     import formats.docx  # noqa: F401  — registration runs on import
     import assessment_policy as pol
     assert osx._SOLID_SRGB.search('<a:solidFill><a:schemeClr val="accent1"/></a:solidFill>') is None
     reason = pol._registry_for("1.4.11", "docx").reason
-    assert "theme-colour indirection" in reason
+    assert "schemeClr" in reason
 
 
 # ── the whitespace dimension, across every pattern ────────────────────────────
