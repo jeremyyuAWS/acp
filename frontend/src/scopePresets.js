@@ -75,6 +75,7 @@ export const SCOPE_UNIVERSE = [
   { sc: "1.3.1", name: "Info and Relationships", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
   { sc: "1.3.2", name: "Meaningful Sequence", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
   { sc: "1.3.3", name: "Sensory Characteristics", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
+  { sc: "1.3.5", name: "Identify Input Purpose", level: "AA", formats: ["docx", "pdf"] },
   { sc: "1.4.1", name: "Use of Color", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
   { sc: "1.4.2", name: "Audio Control", level: "A", formats: ["pptx"] },
   { sc: "1.4.3", name: "Contrast (Minimum)", level: "AA", formats: ["docx", "pdf", "pptx", "xlsx"] },
