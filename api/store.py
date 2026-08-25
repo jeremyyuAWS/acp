@@ -5240,6 +5240,71 @@ class Store:
                 (self._now(), cutoff))
             return getattr(cur, "rowcount", 0) or 0
 
+    def sweep_exhausted_jobs(self) -> int:
+        """Dead-letter queued jobs that have already used all their attempts.
+
+        reclaim_stuck_jobs() requeues a running job without inspecting attempts — so a
+        job reclaimed at max_attempts re-enters the queue and would keep being claimed and
+        failing. This sweep catches those jobs and moves them to 'dead' exactly once, with
+        a sweep-generated error message. Returns the number of jobs dead-lettered."""
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id, type FROM jobs "
+                "WHERE status='queued' AND attempts >= max_attempts",
+                ())
+            rows = self._db.fetchall(cur)
+        count = 0
+        for row in rows:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "UPDATE jobs SET status='dead', last_error=%s, updated_at=%s "
+                    "WHERE id=%s AND status='queued' AND attempts >= max_attempts",
+                    ("max_attempts reached — dead-lettered by reconciliation sweeper",
+                     now, row["id"]))
+                if (getattr(cur, "rowcount", 0) or 0) > 0:
+                    count += 1
+                    print(f"[sweeper] job dead-lettered (exhausted): id={row['id']} "
+                          f"type={row.get('type')}", flush=True)
+        return count
+
+    def sweep_orphaned_scans(self, grace_seconds: int = 600) -> int:
+        """Mark 'running' scan_runs with no outstanding jobs as 'interrupted'.
+
+        A running scan with zero queued/running job rows is stranded — its worker died
+        after the fan-out but before finalize ran, or the jobs were reclaimed and
+        never re-enqueued. Past the grace window (default 10 min, to let discover
+        finish enqueuing before the sweep can touch it) the scan is marked 'interrupted'
+        and rescue_unfinalized_scans() handles re-enqueuing finalize if needed.
+
+        Returns the number of scans marked interrupted."""
+        from datetime import datetime, timezone, timedelta
+        grace_cutoff = (datetime.now(timezone.utc) - timedelta(seconds=grace_seconds)).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id, started_at FROM scan_runs "
+                "WHERE status='running' AND started_at<%s "
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM jobs WHERE scan_id=scan_runs.id "
+                "  AND status IN ('queued','running')"
+                ")",
+                (grace_cutoff,))
+            rows = self._db.fetchall(cur)
+        count = 0
+        now = self._now()
+        for row in rows:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "UPDATE scan_runs SET status='interrupted', completed_at=%s "
+                    "WHERE id=%s AND status='running'",
+                    (now, row["id"]))
+                if (getattr(cur, "rowcount", 0) or 0) > 0:
+                    self._stamp_assessed_if_ran(cur, row["id"])
+                    count += 1
+                    print(f"[sweeper] scan {row['id']}: marked interrupted — running "
+                          f"with no outstanding jobs", flush=True)
+        return count
+
     def job_stats(self, owner: str | None = None) -> dict:
         # owner → only this user's jobs (scoped via their scans), so the queue view
         # doesn't leak other tenants' activity. None = global (operator/admin context).
