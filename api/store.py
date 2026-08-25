@@ -268,6 +268,13 @@ _SCHEMA = [
     # column is what tells them apart without shelling into the container. A stable short token
     # only: the response body stays in the log, never in a row a governance view renders.
     "ALTER TABLE ai_calls ADD COLUMN IF NOT EXISTS reason TEXT",
+    # Reproducibility metadata (P4.7): the sampling temperature the model received, and a short
+    # tag identifying the prompt template (e.g. "explain-v2"). Together with model+revision these
+    # let an operator re-run a call with the exact same settings to verify a result or compare
+    # behaviour across prompt iterations. Both nullable — populated per-surface, None for calls
+    # whose temperature/prompt is not yet threaded through (see ai._trace_ai).
+    "ALTER TABLE ai_calls ADD COLUMN IF NOT EXISTS temperature REAL",
+    "ALTER TABLE ai_calls ADD COLUMN IF NOT EXISTS prompt_version TEXT",
     # Admin-controlled platform settings (key/value). e.g. ai_enabled='false'
     # forces deterministic-only mode for the whole platform (overrides per-scan ?ai=).
     """CREATE TABLE IF NOT EXISTS app_settings (
@@ -2558,7 +2565,8 @@ class Store:
     def record_ai_call(self, *, surface: str, provider: str, model: str, zone: str,
                        latency_ms: int, ok: bool, scan_id: str | None = None,
                        file: str | None = None, cost_usd: float = 0.0,
-                       reason: str | None = None) -> None:
+                       reason: str | None = None, temperature: float | None = None,
+                       prompt_version: str | None = None) -> None:
         """Append one AI-call provenance row (ADR 0019): which provider/model ran, WHERE
         (local/cloud zone), how long, at what cost, and — for a call that did not succeed —
         `reason`, WHICH way it failed (providers.REASON_*). Best-effort — a telemetry write
@@ -2568,10 +2576,12 @@ class Store:
         now = datetime.now(timezone.utc).isoformat()
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "INSERT INTO ai_calls(id,ts,scan_id,file,surface,provider,model,zone,latency_ms,ok,cost_usd,reason) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "INSERT INTO ai_calls(id,ts,scan_id,file,surface,provider,model,zone,"
+                "latency_ms,ok,cost_usd,reason,temperature,prompt_version) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (uuid.uuid4().hex, now, scan_id, file, surface, provider, model, zone,
-                 int(latency_ms), 1 if ok else 0, float(cost_usd), reason))
+                 int(latency_ms), 1 if ok else 0, float(cost_usd), reason,
+                 temperature, prompt_version))
 
     def list_ai_calls(self, scan_id: str | None = None, limit: int = 500) -> list[dict]:
         """Provenance rows for governance/cost views — newest first, optionally per scan."""

@@ -206,7 +206,8 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
               model: str | None = None, scan_id: str | None = None, file: str | None = None,
               provider: str = "ollama", zone: str | None = None, cost_usd: float = 0.0,
               reason: str | None = None, prompt_tokens: int | None = None,
-              completion_tokens: int | None = None) -> None:
+              completion_tokens: int | None = None, temperature: float | None = None,
+              prompt_version: str | None = None) -> None:
     """Emit a Langfuse span + persist an ai_calls provenance row for one model call — model,
     latency, prompt size, completion, ok, and (ADR 0019 §1) which provider/zone/cost it ran on.
     model defaults to the text model; vision calls pass the vision model. `provider`/`zone`/`cost_usd`
@@ -237,7 +238,8 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
         import core
         core.store.record_ai_call(surface=surface, provider=provider, model=mdl,
                                   zone=zn, latency_ms=latency_ms, ok=ok, cost_usd=cost_usd,
-                                  scan_id=scan_id, file=file, reason=reason)
+                                  scan_id=scan_id, file=file, reason=reason,
+                                  temperature=temperature, prompt_version=prompt_version)
     except Exception:
         pass
 
@@ -275,10 +277,10 @@ def explain_finding(
         # and eval_count (output). Counts only — carried onto the Langfuse generation's usage.
         _trace_ai("explain", prompt, raw, _t0, ok=True,
                   prompt_tokens=_data.get("prompt_eval_count"),
-                  completion_tokens=_data.get("eval_count"))
+                  completion_tokens=_data.get("eval_count"), temperature=0.3)
         return {**_parse(raw), "model": OLLAMA_MODEL, "raw": raw}
     except Exception:
-        _trace_ai("explain", prompt, None, _t0, ok=False)
+        _trace_ai("explain", prompt, None, _t0, ok=False, temperature=0.3)
         return None
 
 
@@ -1043,11 +1045,11 @@ def describe_reading_order(page_bytes: bytes, *, filename: str = "",
         order = _strip_order_preamble(order)[:400]
         ok = bool(order) and len(order) >= 12
         _trace_ai("vision", prompt, order, _t0, ok=ok,
-                  model=OLLAMA_VISION_MODEL, scan_id=scan_id, file=file)
+                  model=OLLAMA_VISION_MODEL, scan_id=scan_id, file=file, temperature=0.2)
         return {"order": order, "model": OLLAMA_VISION_MODEL} if ok else None
     except Exception:
         _trace_ai("vision", prompt, None, _t0, ok=False,
-                  model=OLLAMA_VISION_MODEL, scan_id=scan_id, file=file)
+                  model=OLLAMA_VISION_MODEL, scan_id=scan_id, file=file, temperature=0.2)
         return None
 
 
@@ -1151,7 +1153,7 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
         text = (_data.get("response", "") or "").strip().strip('"').strip()
         _trace_ai("suggest", prompt, text, _t0, ok=bool(text),
                   prompt_tokens=_data.get("prompt_eval_count"),
-                  completion_tokens=_data.get("eval_count"))
+                  completion_tokens=_data.get("eval_count"), temperature=0.4)
         if not text:
             return None
         kind = _SUGGEST_KIND.get(rule_id, ("fix", ""))[0]
@@ -1209,11 +1211,12 @@ def simplify_text(text: str, *, scan_id: str | None = None, file: str | None = N
         out = re.sub(r"^(plain[- ]language version|rewritten text|here is[^:]*)\s*:\s*", "", out, flags=re.I).strip()
         _trace_ai("simplify", prompt, out, _t0, ok=bool(out), scan_id=scan_id, file=file,
                   prompt_tokens=_data.get("prompt_eval_count"),
-                  completion_tokens=_data.get("eval_count"))
+                  completion_tokens=_data.get("eval_count"), temperature=0.3)
         # Guard: a rewrite must actually be shorter/simpler and non-trivial, else treat as a miss.
         return out if (out and len(out) >= 20 and out.lower() != src.lower()) else None
     except Exception:
-        _trace_ai("simplify", prompt, None, _t0, ok=False, scan_id=scan_id, file=file)
+        _trace_ai("simplify", prompt, None, _t0, ok=False, scan_id=scan_id, file=file,
+                  temperature=0.3)
         return None
 
 
@@ -1289,10 +1292,10 @@ def _ollama_narrative(facts: dict) -> tuple[str, str] | None:
         raw = (_data.get("response", "") or "").strip()
         _trace_ai("digest", _p, raw, _t0, ok=bool(raw and len(raw) > 40),
                   prompt_tokens=_data.get("prompt_eval_count"),
-                  completion_tokens=_data.get("eval_count"))
+                  completion_tokens=_data.get("eval_count"), temperature=0.4)
         return (raw, OLLAMA_MODEL) if raw and len(raw) > 40 else None
     except Exception:
-        _trace_ai("digest", _p, None, _t0, ok=False)
+        _trace_ai("digest", _p, None, _t0, ok=False, temperature=0.4)
         return None
 
 

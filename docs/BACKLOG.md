@@ -579,12 +579,17 @@ thing the PRD does not mention.
   PASS predictions with zero false PASSes to claim ≤1% false-PASS at 95% confidence by the rule
   of three); pooling across criteria or buckets overstates the evidence.
 
-- [~] **P4.7 — Reproducibility metadata on every recorded result.** (PRD §26.) Model, revision,
+- [x] **P4.7 — Reproducibility metadata on every recorded result.** (PRD §26.) Model, revision,
   quantisation, runtime, prompt version, fixture version, hardware, temperature, seed.
   Phase 1 done — PR #693: `proposal()` factory now stores a structured `_model` key alongside
   the prose `source`; `judge_drafts.py --out` wraps results as `{"metadata": {"seed", "judges",
-  "run_at"}, "results": [...]}`. Remaining: `temperature` + `prompt_version` columns in
-  `ai_calls` (needs schema migration).
+  "run_at"}, "results": [...]}`. Phase 2 done: `temperature` and `prompt_version` columns added
+  to `ai_calls` via the inline `_SCHEMA` migration runner (no external migration tool needed).
+  `_trace_ai` now accepts both params; temperature is threaded through at every text call site
+  (`explain`=0.3, `suggest`=0.4, `simplify`=0.3, `digest`=0.4, reading-order vision=0.2).
+  `prompt_version` defaults to None and will be populated when callers add version tags to their
+  prompts. Vision calls through `providers.py` adapters leave temperature=None (temperature lives
+  inside the adapter; threading it back is a separate step if ever needed).
 
 - [x] **P4.8 — Reviewer hand-off payload.** Done. When ACP escalates it now hands the reviewer the
   SC, the object, the deterministic evidence, the reason for uncertainty (`why_review`) and the
