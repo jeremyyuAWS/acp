@@ -123,7 +123,7 @@ class _FakeStore:
         j, self._job = self._job, None
         return j
 
-    def fail_job(self, job_id, error, backoff_seconds=0.0, force_dead=False):
+    def fail_job(self, job_id, error, backoff_seconds=0.0, force_dead=False, error_class=None):
         self.calls.append({"error": error, "force_dead": force_dead,
                            "backoff": backoff_seconds})
         return "dead" if force_dead else "queued"
