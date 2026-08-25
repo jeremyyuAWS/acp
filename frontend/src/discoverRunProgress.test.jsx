@@ -481,6 +481,46 @@ describe('lifecycle no-rules treatment', () => {
   })
 })
 
+describe('stop hint: per-step explanation of what stop does', () => {
+  it('shows listing stop hint when listing is active and onStop is provided', () => {
+    const prog = { phase: 'discovering', files_found: 10 }
+    const html = render(prog, true, () => {})
+    expect(html).toContain('Stops at the next folder')
+  })
+
+  it('shows metadata stop hint during reading phase', () => {
+    const prog = { phase: 'reading', files_found: 10 }
+    const html = render(prog, true, () => {})
+    expect(html).toContain('Metadata already read will be kept')
+  })
+
+  it('shows saving stop hint during scoring phase', () => {
+    const prog = { phase: 'scoring', files_found: 10 }
+    const html = render(prog, true, () => {})
+    expect(html).toContain('inventory save will complete before stopping')
+  })
+
+  it('shows lifecycle stop hint during analysing phase', () => {
+    const prog = { phase: 'analysing', files_found: 10 }
+    const html = render(prog, true, () => {})
+    expect(html).toContain('Rules already applied will be kept')
+  })
+
+  it('shows no stop hint when onStop is not provided', () => {
+    const prog = { phase: 'discovering', files_found: 10 }
+    const html = render(prog, true)
+    expect(html).not.toContain('Stops at the next folder')
+  })
+
+  it('shows no stop hint during connecting phase (no per-step copy defined)', () => {
+    const prog = { phase: 'connecting', files_found: 0 }
+    const html = render(prog, true, () => {})
+    expect(html).not.toContain('Stops at')
+    expect(html).not.toContain('will be kept')
+    expect(html).not.toContain('will complete before stopping')
+  })
+})
+
 describe('lifecycle stall hint', () => {
   it('does not show lifecycle hint before 30 s', () => {
     // elapsed starts at 0 on mount; renderToStaticMarkup captures that snapshot

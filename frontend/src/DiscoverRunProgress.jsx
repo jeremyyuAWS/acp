@@ -41,6 +41,15 @@ const STEPS = [
   { key: 'saving',      label: 'Saving inventory',           labelDone: 'Saved inventory' },
 ]
 
+// Per-step explanation of what stop does while that step is active.
+const STOP_HINTS = {
+  listing:     'Stops at the next folder — files listed so far will be kept.',
+  metadata:    'Metadata already read will be kept; unread files will be skipped.',
+  classifying: 'Classification results so far will be kept.',
+  lifecycle:   'Rules already applied will be kept.',
+  saving:      'The inventory save will complete before stopping.',
+}
+
 function DiscoverStep({ label, kpi, status }) {
   const isActive = status === 'active'
   return (
@@ -161,6 +170,11 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   // Lifecycle evaluation runs AI classification and can take 30+ s on large inventories.
   const showLifecycleSlowHint = elapsed >= 30 && phase === 'analysing'
 
+  const activeStepKey = steps.find((s) => s.status === 'active')?.key ?? null
+  const stopHint = onStop && busy && !stopping && activeStepKey
+    ? (STOP_HINTS[activeStepKey] ?? null)
+    : null
+
   // The step label that is currently active — used in a dedicated live region so phase transitions
   // are announced once, without the per-tick KPI counts that aria-hidden="true" suppresses above.
   const activeStepLabel = steps.find((s) => s.status === 'active')?.label ?? null
@@ -259,6 +273,11 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
         {showLifecycleSlowHint && (
           <p className="muted" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5 }}>
             Lifecycle evaluation is taking longer than usual.
+          </p>
+        )}
+        {stopHint && (
+          <p className="muted" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5 }}>
+            {stopHint}
           </p>
         )}
       </div>
