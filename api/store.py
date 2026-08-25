@@ -318,6 +318,10 @@ _SCHEMA = [
     # New name + drop-old so this migrates once, not a rebuild every boot.
     "DROP INDEX IF EXISTS idx_jobs_claim",
     "CREATE INDEX IF NOT EXISTS idx_jobs_claim2 ON jobs(status, priority, run_after)",
+    # Inspectable lease expiry: set at claim time to now + ACP_JOB_LEASE_S, refreshed by
+    # touch_job heartbeat. reclaim_stuck_jobs uses this instead of the opaque locked_at
+    # arithmetic so operators can see exactly when a lease will expire.
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lease_expires_at TEXT",
     # Sensitive-data (PII) findings per document (ADR 0006). A detection dimension
     # orthogonal to WCAG. samples holds JSON array of MASKED strings only — never
     # raw PII (the masking is enforced in api/pii.py).
@@ -771,6 +775,8 @@ class _SQLiteAdapter:
         row = cur.fetchone()
         return dict(zip([d[0] for d in cur.description], row)) if row else None
 
+    supports_skip_locked: bool = False
+
 
 def logical_name(name: str) -> str:
     """Strip the ' (N)' disambiguation suffix to recover the logical document name.
@@ -945,6 +951,8 @@ class _PgAdapter:
     def fetchone(self, cur) -> dict | None:
         row = cur.fetchone()
         return dict(row) if row else None
+
+    supports_skip_locked: bool = True
 
 
 # ── Store ────────────────────────────────────────────────────────────────────
@@ -4997,26 +5005,57 @@ class Store:
                 pass
         return row
 
+    @staticmethod
+    def _lease_expiry(lease_seconds: int | None = None) -> str:
+        from datetime import datetime, timezone, timedelta
+        secs = lease_seconds if lease_seconds is not None else int(
+            os.environ.get("ACP_JOB_LEASE_S", "600"))
+        return (datetime.now(timezone.utc) + timedelta(seconds=secs)).isoformat()
+
     def claim_job(self, worker_id: str) -> dict | None:
         """Atomically claim the next eligible job. Returns the claimed job (with
-        attempts already incremented), or None if the queue is empty."""
+        attempts already incremented), or None if the queue is empty.
+
+        Postgres: single-statement UPDATE...WHERE id=(SELECT...FOR UPDATE SKIP LOCKED)
+        RETURNING * — each worker atomically grabs a distinct row with no round-trip race.
+        SQLite: two-step optimistic CAS — SELECT then conditional UPDATE on status='queued'
+        (SQLite serialises writers, so the window between the two is closed in practice)."""
         now = self._now()
-        with self._db.cursor() as cur:
-            self._db.execute(cur,
-                "SELECT id FROM jobs WHERE status='queued' AND run_after<=%s "
-                "ORDER BY priority, run_after LIMIT 1", (now,))
-            row = self._db.fetchone(cur)
+        expires = self._lease_expiry()
+        if self._db.supports_skip_locked:
+            # Postgres path: atomic single-statement claim with SKIP LOCKED.
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "UPDATE jobs SET status='running', locked_at=%s, locked_by=%s, "
+                    "attempts=attempts+1, updated_at=%s, lease_expires_at=%s, phase=NULL "
+                    "WHERE id = ("
+                    "  SELECT id FROM jobs "
+                    "  WHERE status='queued' AND run_after<=%s "
+                    "  ORDER BY priority, run_after "
+                    "  FOR UPDATE SKIP LOCKED LIMIT 1"
+                    ") RETURNING id",
+                    (now, worker_id, now, expires, now))
+                row = self._db.fetchone(cur)
             if not row:
                 return None
-            jid = row["id"]
-            # Conditional update: only one worker can flip status from 'queued'.
-            self._db.execute(cur,
-                "UPDATE jobs SET status='running', locked_at=%s, locked_by=%s, "
-                "attempts=attempts+1, updated_at=%s, phase=NULL "
-                "WHERE id=%s AND status='queued'",
-                (now, worker_id, now, jid))
-            claimed = getattr(cur, "rowcount", 1) == 1
-        return self.get_job(jid) if claimed else None
+            return self.get_job(row["id"])
+        else:
+            # SQLite path: optimistic two-step CAS.
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT id FROM jobs WHERE status='queued' AND run_after<=%s "
+                    "ORDER BY priority, run_after LIMIT 1", (now,))
+                row = self._db.fetchone(cur)
+                if not row:
+                    return None
+                jid = row["id"]
+                self._db.execute(cur,
+                    "UPDATE jobs SET status='running', locked_at=%s, locked_by=%s, "
+                    "attempts=attempts+1, updated_at=%s, lease_expires_at=%s, phase=NULL "
+                    "WHERE id=%s AND status='queued'",
+                    (now, worker_id, now, expires, jid))
+                claimed = getattr(cur, "rowcount", 1) == 1
+            return self.get_job(jid) if claimed else None
 
     def set_job_phase(self, job_id: str, phase: str | None) -> None:
         """Record what this job is doing right now, for the queue panel's per-row line.
@@ -5113,10 +5152,12 @@ class Store:
         reclaim a slow-but-alive job (e.g. a long PII scan). Called periodically by
         the worker while the handler runs."""
         now = self._now()
+        expires = self._lease_expiry()
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "UPDATE jobs SET locked_at=%s, updated_at=%s WHERE id=%s AND status='running'",
-                (now, now, job_id))
+                "UPDATE jobs SET locked_at=%s, updated_at=%s, lease_expires_at=%s "
+                "WHERE id=%s AND status='running'",
+                (now, now, expires, job_id))
 
     # Job types whose payload names documents that COUNT toward a scan's finalize total.
     # A dead-letter on one of these has to leave a file_records row behind — see
@@ -5230,14 +5271,25 @@ class Store:
         return "queued"
 
     def reclaim_stuck_jobs(self, lease_seconds: int = 600) -> int:
-        """Requeue jobs stuck in 'running' past the lease (worker died mid-job)."""
+        """Requeue jobs stuck in 'running' past their lease (worker died mid-job).
+
+        Uses lease_expires_at < now() when the column is set (all jobs claimed after the
+        migration), falling back to the locked_at+lease_seconds arithmetic for rows that
+        pre-date the column (no lease_expires_at) — so the sweeper is correct across a
+        rolling deploy."""
         from datetime import datetime, timezone, timedelta
+        now = self._now()
         cutoff = (datetime.now(timezone.utc) - timedelta(seconds=lease_seconds)).isoformat()
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "UPDATE jobs SET status='queued', locked_at=NULL, locked_by=NULL, updated_at=%s "
-                "WHERE status='running' AND locked_at<%s",
-                (self._now(), cutoff))
+                "UPDATE jobs SET status='queued', locked_at=NULL, locked_by=NULL, "
+                "lease_expires_at=NULL, updated_at=%s "
+                "WHERE status='running' AND ("
+                "  (lease_expires_at IS NOT NULL AND lease_expires_at<%s)"
+                "  OR"
+                "  (lease_expires_at IS NULL AND locked_at<%s)"
+                ")",
+                (now, now, cutoff))
             return getattr(cur, "rowcount", 0) or 0
 
     def job_stats(self, owner: str | None = None) -> dict:
