@@ -471,10 +471,10 @@ third is the correctness fix with the widest blast radius.
 - [ ] **P3.1 — Vendor the PDF engine.** `ACP_PDF_ENGINE` is external, so 13 of 61 pairs are
   unmeasurable locally *and* skipped in CI (`tests/test_scan.py`, `test_remediation_capability.py`).
   A fifth of the matrix nobody can test. ADR 0012 vendored the Office analysers the same way.
-- [ ] **P3.2 — Accessible generated PDFs.** ACP's own rule `pdf.tagged` (1.3.1) flags untagged
+- [x] **P3.2 — Accessible generated PDFs.** ACP's own rule `pdf.tagged` (1.3.1) flags untagged
   PDFs, and neither generator emits a structure tree — jsPDF cannot at all. An accessibility tool
   shipping non-conformant PDFs is a credibility problem. Architectural: move report generation
-  server-side, or post-process.
+  server-side, or post-process. *(Closed #768 — Chromium HTML→PDF pipeline; all six PDF rules pass.)*
 - [ ] **P3.3 — Healthcare hardening.** Encryption with customer-managed keys; retention and
   deletion paths for a BAA; confirm nothing logs document content.
 - [ ] **P3.4 — Power BI export.** Given the data is in Postgres, a read-only view plus DirectQuery
