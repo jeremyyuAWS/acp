@@ -6,18 +6,15 @@ property (a screen reader is told the language). So these tests run ACP's OWN ve
 rules over a freshly built report: if the rules tighten, the report is held to the new bar
 without anyone remembering to update this file.
 
-Two of the three findings our engine raised against the report on 2026-08-04 are closed here:
+The renderer is now the Chromium-based `build_tagged_report` (report_tagged.py). The three
+findings the engine raised against the old reportlab output on 2026-08-04 are all closed here:
 
     pdf.document-language   SC_3_1_1  SERIOUS     no catalog /Lang
     pdf.display-doc-title   SC_2_4_2  MODERATE    ViewerPreferences DisplayDocTitle unset
+    pdf.tagged              SC_1_3_1  CRITICAL     no structure tree
 
-The third — `pdf.tagged` (SC_1_3_1, CRITICAL: no structure tree) — is NOT closed, and
-test_untagged_is_still_the_open_finding below pins it as a known, deliberate gap rather than
-letting it read as an oversight. ReportLab 4.5.1 emits no marked content at all (verified: no
-BDC/EMC in the content stream), so there are no MCIDs for a structure tree to reference; and
-auto-tagging an untagged PDF is `ASSISTED` in our own product (remediation_capability.py — a
-heading map a human confirms), so the report cannot honestly claim what we do not sell.
-Delete that test when the renderer can tag.
+The tagged report also passes pdf.missing-alt-text (all charts and the logo have Alt entries
+in the structure tree) and pdf.table-headers (all tables have /TH header cells).
 """
 from __future__ import annotations
 
@@ -31,13 +28,25 @@ sys.path.insert(0, str(ACP / "api"))
 
 from engines import NO_PDF, PDF_ENGINE, PDF_OK  # noqa: E402
 
-pytestmark = pytest.mark.skipif(not PDF_OK, reason=NO_PDF)
+_CHROMIUM = Path(
+    __import__("os").environ.get(
+        "ACP_CHROMIUM",
+        "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
+    )
+)
+_NO_CHROMIUM = f"Chromium not found at {_CHROMIUM}"
+_CHROMIUM_OK = _CHROMIUM.exists()
+
+pytestmark = [
+    pytest.mark.skipif(not PDF_OK, reason=NO_PDF),
+    pytest.mark.skipif(not _CHROMIUM_OK, reason=_NO_CHROMIUM),
+]
 
 
 def _report_bytes() -> bytes:
-    """A report through the real build_report path — not a hand-rolled ReportLab doc, or the
+    """A report through the real build_tagged_report path — not a hand-rolled document, or the
     test would pass while the shipped renderer regressed."""
-    import report
+    import report_tagged
     files = [
         {"file": "a.pdf", "status": "done", "compliant": 1, "score": 90,
          "skipped_rules": 0, "issues": []},
@@ -47,8 +56,9 @@ def _report_bytes() -> bytes:
     ]
     run = {"id": "selfcheck", "completed_at": "2026-08-04T00:00:00", "avg_score": 72,
            "files": 2, "certifiable": 1, "uncertain": 0, "error": 0}
-    return report.build_report(run, files,
-                               {"target": "WCAG 2.1 Level AA", "version": "3", "hash": "abc"})
+    return report_tagged.build_tagged_report(
+        run, files, {"target": "WCAG 2.1 Level AA", "version": "3", "hash": "abc"}
+    )
 
 
 def _rule_findings(tmp_path, rule_cls_name: str) -> list:
@@ -67,6 +77,8 @@ def _rule_findings(tmp_path, rule_cls_name: str) -> list:
         "DisplayTitleRule": "analysers.rules.pdf.display_title",
         "DocumentTitleRule": "analysers.rules.pdf.document_title",
         "TaggedPdfRule": "analysers.rules.pdf.tagged_pdf",
+        "ImageAltTextRule": "analysers.rules.pdf.image_alt_text",
+        "TableHeadersRule": "analysers.rules.pdf.table_headers",
     }[rule_cls_name]
     rule = getattr(importlib.import_module(module), rule_cls_name)()
 
@@ -93,10 +105,22 @@ def test_report_still_carries_its_title(tmp_path):
     assert _rule_findings(tmp_path, "DocumentTitleRule") == []
 
 
-def test_report_now_tagged(tmp_path):
-    """The renderer post-processes with pikepdf to inject MarkInfo + StructTreeRoot.
-    TaggedPdfRule must find no findings. If this fails, _tag_pdf() in report.py regressed.
-
-    Note: pdf.missing-alt-text and pdf.table-headers may now find issues in the report's
-    charts (undescribed vector drawings) — track those as a follow-on to P3.2."""
+def test_report_is_tagged(tmp_path):
+    """WCAG 1.3.1. The report now has a /StructTreeRoot with /MarkInfo Marked=true, so screen
+    readers can navigate it structurally. This test replaces test_untagged_is_still_the_open_finding
+    from the reportlab era — that test was a known-gap pin; this one is a passing bar."""
     assert _rule_findings(tmp_path, "TaggedPdfRule") == []
+
+
+def test_report_images_have_alt_text(tmp_path):
+    """WCAG 1.1.1. The logo and all SVG charts are tagged as /Figure elements with /Alt entries,
+    so a screen reader can describe them. This check was vacuous before tagging (an untagged PDF
+    gives the rule nothing to inspect)."""
+    assert _rule_findings(tmp_path, "ImageAltTextRule") == []
+
+
+def test_report_tables_have_headers(tmp_path):
+    """WCAG 1.3.1 (table header aspect). All tables in the report use <th scope="col"> which
+    Chromium maps to /TH elements, so screen readers can associate data cells with their headers.
+    This check was also vacuous on the untagged reportlab output."""
+    assert _rule_findings(tmp_path, "TableHeadersRule") == []
