@@ -423,14 +423,36 @@ third is the correctness fix with the widest blast radius.
   The port/defer/drop decision on `Ontology.jsx` (v1-only; the `ontology.js` data layer survives)
   is still open and now belongs with P2.3, which is blocked on the same missing thing: a
   scan-derived source for classification.
-- [x] **P1.4 — Vision default.** `moondream` scores **0/6 facts and asserts a false year** on a
-  real notice (`docs/local-model-evaluation.md`). `qwen2.5vl:7b` scores 3/6 at 4.4s. Closed
-  2026-08-25: the production quality goal is now met via ADR 0022 / R12 — `providers.py`
-  (`RunPodServerlessVisionProvider`) defaults to `qwen2.5-vl` on RunPod; once the R2/R3
-  credentials are wired, cloud vision calls use the better model automatically. The CPU floor
-  stays `moondream` deliberately: the 8 GiB Consumption ceiling still prevents running
-  `qwen2.5vl:7b` locally, and ADR 0022 requires the CPU fallback remain available. Local-only
-  deployments without RunPod still get moondream — that is the correct floor, not a defect.
+- [~] **P1.4 — Vision default.** `moondream` scores **0/6 facts and asserts a false year** on a
+  real notice (`docs/local-model-evaluation.md`). `qwen2.5vl:7b` scores 3/6 at 4.4s.
+  Split into three sub-items 2026-08-25 after R12 (RunPod) and the Azure GPU analysis:
+
+  **P1.4a — Production quality: evaluate and choose a validated Qwen endpoint.** The outcome is
+  *"production vision uses a validated Qwen endpoint meeting agreed accuracy, latency, privacy,
+  availability, and cost thresholds."* `RunPodServerlessVisionProvider` defaults to `qwen2.5-vl`
+  and is the current primary path (ADR 0022); not closeable until R2/R3 credentials are wired
+  and an end-to-end acceptance test passes (force a `1.1.1` draft, confirm zone=cloud, image-
+  derived output, six-fact fixture). Azure Container Apps GPU (T4/A100 profiles, scale-to-zero)
+  and Azure Foundry managed Qwen2.5-VL are credible alternatives and should be benchmarked
+  against the same fixture before committing permanently to RunPod. Benchmark criteria: fact
+  accuracy, hallucination rate, cold-start and warm latency, throughput, failure rate, cost/1k
+  images, scale-to-zero behavior, data residency, log retention, failover. Recommended trial
+  order: ACA GPU first (preserves ACA architecture, keeps data/identity in Azure); Foundry if
+  ACA GPU availability or quota is blocking; RunPod as an already-working reference. The provider
+  abstraction must stay vendor-neutral — `providers.py` already duck-types each backend; adding
+  an Azure-hosted Qwen provider follows the same pattern as `RunPodServerlessVisionProvider`.
+
+  **P1.4b — Local fallback quality (lower priority).** CPU floor stays `moondream` (8 GiB
+  Consumption ceiling blocks `qwen2.5vl:7b`). Acceptance criteria are model-independent: a model
+  that fits in 8 GiB and scores ≥ 3/6 on the six-fact fixture. Candidates: smaller Qwen-VL
+  variants, Q4 quantization, compact VLMs, OCR/captioning pipelines. Do not replace moondream
+  solely because another model starts successfully.
+
+  **P1.4c — Fallback visibility.** Silent degradation from 3/6 (cloud) to 0/6 (local) while
+  reporting success is a larger risk than moondream itself. Minimum: a `W2:` warning in
+  `_vision_generate` when falling back to the CPU floor, and a `"vision_fallback": true` flag on
+  the draft object so the UI can surface "Enhanced cloud vision was unavailable; output quality
+  may be reduced." (PR #800 will implement this.)
 
 ---
 
