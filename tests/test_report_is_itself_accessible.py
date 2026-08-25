@@ -93,14 +93,10 @@ def test_report_still_carries_its_title(tmp_path):
     assert _rule_findings(tmp_path, "DocumentTitleRule") == []
 
 
-def test_untagged_is_still_the_open_finding(tmp_path):
-    """The report has NO structure tree, and this test asserts that it does not — so the gap is
-    recorded rather than implied by the absence of a test.
+def test_report_now_tagged(tmp_path):
+    """The renderer post-processes with pikepdf to inject MarkInfo + StructTreeRoot.
+    TaggedPdfRule must find no findings. If this fails, _tag_pdf() in report.py regressed.
 
-    If this starts failing, the renderer learned to tag: that is the good outcome. Delete this
-    test, and add the alt-text/table-header coverage that a structure tree makes checkable
-    (pdf.missing-alt-text and pdf.table-headers pass vacuously today because an untagged PDF
-    gives them nothing to inspect — the report's donut and bar charts are undescribed vector
-    drawings, and tagging is what will surface them)."""
-    findings = _rule_findings(tmp_path, "TaggedPdfRule")
-    assert len(findings) == 1, "expected exactly the known untagged finding"
+    Note: pdf.missing-alt-text and pdf.table-headers may now find issues in the report's
+    charts (undescribed vector drawings) — track those as a follow-on to P3.2."""
+    assert _rule_findings(tmp_path, "TaggedPdfRule") == []
