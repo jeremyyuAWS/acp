@@ -373,7 +373,7 @@ Route legend: **Auto** (deterministic/AI fix) · **HITL** (human review) · **Op
 | 2 | Complete the DB-backed HITL queue | Remediate | HITL | In progress (T) | Assignment, status, notifications — this IS the HITL route. Owned by the concurrent session (~M if scoped fresh). |
 | 3 | 3.1.3 Unusual Words | Assess | HITL | ~~XS~~ DONE | Re-tagged Human / AT · Tier 3 HITL in `wcagCatalog.js` (was aspirational "Automated + Agentic"). No AI check built, by decision. |
 | 4 | ~~1.4.2 pptx audio autoplay~~ | Assess | — | DONE | Detection shipped (`pptx_audio_autoplay_checks`, dispatched, tested) with an `assisted` remediation lane — no longer blocked on a fixture, and no longer HITL-only. See P1 #2. |
-| 5 | Deploy the mislabel fix (`e83d775`) | Release | — | XS · 0.25 d | Frontend rebuild — makes corrected auto-vs-assisted labeling live. |
+| ~~5~~ | ~~Deploy the mislabel fix (`e83d775`)~~ | Release | — | ~~XS · 0.25 d~~ **DONE** | `AUTO_FIX_SC_BY_TYPE` + `scId()` normalisation already in `sim.js` on `origin/main`; Netlify auto-deployed on merge. Regression guard added: 8 `recommendFor` tests in `simRemediation.test.js` pin auto/assisted routing for both SC_-prefixed and axe-form finding IDs across PDF, HTML, and format-boundary cases. |
 | 6 | Drive credential + folder | Ops | Ops | S · 0.5 d | Regenerate the demo SA key with `drive.readonly`, share Deva's folder with the SA email, set `ACP_DRIVE_FOLDER`. Unblocks demo Drive scans (the 403 below) and closes P2 #1. Ops, not eng. |
 | 7 | Measure Ollama 8B latency | Verify | — | XS · 0.25 d | Needs live access; include a cold-start number (scale-to-zero). |
 | 8 | ADO review cadence | — | Decision | 0 d | Standing reviewer vs. bypass-as-needed. |
