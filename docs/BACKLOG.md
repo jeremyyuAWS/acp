@@ -478,8 +478,11 @@ third is the correctness fix with the widest blast radius.
   server-side, or post-process.
 - [ ] **P3.3 — Healthcare hardening.** Encryption with customer-managed keys; retention and
   deletion paths for a BAA; confirm nothing logs document content.
-- [ ] **P3.4 — Power BI export.** Given the data is in Postgres, a read-only view plus DirectQuery
-  is likely cheaper and better than an export feature.
+- [x] **P3.4 — Power BI export.** Three Postgres read-only views (`vw_scan_summary`,
+  `vw_finding_detail`, `vw_rule_coverage`) defined in `store._PG_VIEWS` and created by
+  `_PgAdapter.init_schema()`. Companion `scripts/create_powerbi_role.sql` provisions the
+  `powerbi_ro` login with SELECT-only access to those views. Power BI connects via DirectQuery —
+  no export feature needed, same pattern as the Grafana dashboard. *(PR #TODO merged.)*
 - [x] **P3.5 — `vite@8` / `esbuild` CVEs.** Done. `frontend/package.json` upgraded vite `^5.4.11` →
   `^8.2.2` and `@vitejs/plugin-react` `^4.3.4` → `^5.2.0`. Fixes GHSA-67mh-4wv8-2f99 (moderate esbuild)
   and one high CVE. Dev-only; vitest 4.1.9 compatible with vite 8. *(Source-verified 2026-08-24. PR
