@@ -19,6 +19,7 @@ import { hasClassificationData, NO_CLASSIFICATION_TITLE, NO_CLASSIFICATION_BODY,
          NO_CLASSIFICATION_WHY } from './classificationData.js'
 import { loadDiscoveryInventory, mergeLifecycle, inventoryOnlyRows } from './discoveryInventory.js'
 import DiscoverRunProgress from './DiscoverRunProgress.jsx'
+import DiscoverCompleteSummary from './DiscoverCompleteSummary.jsx'
 import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
 import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation } from './api.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
@@ -464,11 +465,33 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           Replaces the shared .scanprog banner (suppressed by App.jsx when view==='discover')
           so the Discover tab stays scoped to inventory. No assessment workers, WCAG content,
           or findings appear here. */}
-      <DiscoverRunProgress progress={progress} busy={busy} onStop={onStop} sources={sources} />
+      <DiscoverRunProgress progress={progress} busy={busy} onStop={onStop} sources={sources} inv={inv} />
+
+      {/* Completion summary: immutable snapshot of what was found, with the "Continue" CTA.
+          Appears only after discovery finishes — DiscoverRunProgress hides itself at that point. */}
+      {!busy && run?.completed_at && (
+        <DiscoverCompleteSummary
+          discoveredCount={discoveredCount}
+          assessableCount={Math.max(0, discoveredCount - nonAssessable.length - lockedCount)}
+          nonAssessableCount={nonAssessable.length}
+          lockedCount={lockedCount}
+          lifecycleRulesCount={inv?.rows
+            ? new Set(inv.rows.map((r) => r.lifecycle_rule_id).filter(Boolean)).size
+            : null}
+          onAdvance={onAdvance}
+          pendingActions={pendingActions}
+          needsAck={needsAck}
+        />
+      )}
 
       <div className="estatebar">
         <div>
           <b>{discoveredCount} documents</b> discovered across {sources.length} sources · {Object.keys(groups).length} departments
+          {busy && (
+            <span className="muted" style={{ marginLeft: 8, fontSize: 12, fontStyle: 'italic' }}>
+              Counts are provisional until discovery completes
+            </span>
+          )}
           {/* WHAT the count counts. "N documents discovered" alone is what let a one-folder scan
               reporting 1 and a whole-Drive scan reporting 8 look like the same measurement of a
               shrinking estate (see scanScope.js). Rendered for every recorded scope, not only
