@@ -1,3 +1,4 @@
+"""Branded PDF conformance report (reportlab) — the exportable audit evidence.
 
 Renders a scan run as a designed, chart-led report: logo header, outcome
 decision, plain-language verdict, outcome summary band, scope & methodology,
