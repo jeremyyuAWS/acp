@@ -57,15 +57,14 @@ describe('the live-assess card is gated off Discover', () => {
     }
   })
 
-  it('a DISCOVER scan in flight does NOT activate the assess card on Discover', () => {
-    // `busy` means doScan/reconnectScan — a discovery run. `DiscoverRunProgress` now owns that
-    // view and replaces the shared .scanprog banner; `LiveAssessmentLive` must stay dark so the
-    // Discover tab never shows assessment workers, WCAG steps, or a "Preparing assessment" card.
+  it('a DISCOVER scan in flight does NOT activate the assess card on any tab', () => {
+    // `busy` means doScan/reconnectScan — a discovery run. The assess panel must never show
+    // "Preparing assessment" during discovery regardless of which tab is active, because the
+    // assess card has no meaningful data to show during discovery and displayed confusingly.
     const gate = new Function('busy', 'assessPhase', 'view', `return (${activeExpr()})`)
-    expect(gate(true, 'idle', 'discover')).toBe(false)
-    // A discovery scan on OTHER tabs still activates it (those tabs lack DiscoverRunProgress).
-    expect(gate(true, 'idle', 'overview')).toBe(true)
-    expect(gate(true, 'idle', 'remediate')).toBe(true)
+    for (const view of ['discover', 'overview', 'remediate', 'publish', 'monitor', 'integrations']) {
+      expect(gate(true, 'idle', view), `assess card must not show during discovery on ${view}`).toBe(false)
+    }
   })
 
   it('the component itself is kept, per the remove-the-mount-not-the-code rule', () => {
