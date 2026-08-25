@@ -57,11 +57,13 @@ Regenerate with `python scripts/gen_todo_status.py`; CI fails if this block is s
 
 This is a behaviour change, not bookkeeping: several detectors compute the AA and AAA thresholds in one pass, so AAA findings were previously scored against AA-target files.
 
-**Capability registry — 29 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
+**Capability registry — 31 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
 
 | Criterion | Format | Coverage | Confidence | Not covered |
 |---|---|---|---|---|
 | `1.1.1` | docx | **partial** | high | charts, SmartArt, grouped shapes and embedded OLE objects are non-text content this walk does not reach, and w |
+| `1.3.5` | docx | **heuristic** | low | the vocabulary match is approximate |
+| `1.3.5` | pdf | **heuristic** | low | the vocabulary match is approximate and some organisational forms will produce false positives |
 | `1.4.1` | docx | **partial** | high | colour used as the sole carrier of meaning anywhere else — shaded table rows, coloured glyphs, chart series ke |
 | `1.4.1` | pdf | **partial** | high | colour used as the sole carrier of meaning elsewhere — colour-keyed legends, chart series, status indicators — |
 | `1.4.1` | pptx | **partial** | high | colour used as the sole carrier of meaning elsewhere — chart series, shaded table cells, status markers withou |
@@ -96,7 +98,7 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 | Criterion | HTML | DOCX | XLSX | PPTX | PDF |
 |---|---|---|---|---|---|
 | `1.4.1` | pass/fail | partial | partial | partial | partial |
-| `1.3.5` | pass/fail | — | — | — | — |
+| `1.3.5` | pass/fail | heuristic | — | — | heuristic |
 | `2.5.3` | pass/fail | — | — | — | — |
 | `4.1.2` | pass/fail | partial | partial | partial | partial |
 
