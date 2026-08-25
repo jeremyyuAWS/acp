@@ -12,7 +12,7 @@ const render = (progress, busy, onStop, sources, inv) =>
   renderToStaticMarkup(createElement(DiscoverRunProgress, { progress, busy, onStop, sources, inv }))
 
 describe('DiscoverRunProgress renders nothing until a scan is live', () => {
-  it('renders nothing when busy is false', () => {
+  it('renders nothing when busy is false (non-done phase)', () => {
     expect(render(PROG, false)).toBe('')
   })
 
@@ -35,7 +35,7 @@ describe('the discovery step checklist', () => {
     const html = render(PROG, true)
     expect(html).toContain('Connected to source')
     expect(html).toContain('Listing folders and files')
-    expect(html).toContain('8,420 found')
+    expect(html).toContain('8,420 files found so far')
     // Connected must be done (✓), Listing must be active (pulse dot)
     const connectedIdx = html.indexOf('Connected to source')
     const listingIdx = html.indexOf('Listing folders and files')
@@ -108,17 +108,35 @@ describe('phase-driven step completion', () => {
     expect(pulseIdx).toBeLessThan(savingIdx)
   })
 
-  it('shows file count only on the Listing step', () => {
+  it('shows "files found so far" on the active Listing step', () => {
     const prog = { phase: 'discovering', files_found: 42 }
     const html = render(prog, true)
-    expect(html).toContain('42 found')
-    // The count appears in the same listitem as "Listing folders and files" —
-    // there's a closing </div> for the listitem before the next step label.
+    expect(html).toContain('42 files found so far')
+    // The count appears in the same listitem as "Listing folders and files"
     const listingItemStart = html.indexOf('Listing folders and files')
     const nextStepStart = html.indexOf('Reading document metadata')
-    const foundAt = html.indexOf('42 found')
+    const foundAt = html.indexOf('42 files found so far')
     expect(foundAt).toBeGreaterThan(listingItemStart)
     expect(foundAt).toBeLessThan(nextStepStart)
+  })
+
+  it('shows "files found" without "so far" on the done Listed step', () => {
+    const prog = { phase: 'reading', files_found: 148 }
+    const html = render(prog, true)
+    expect(html).toContain('148 files found')
+    expect(html).not.toContain('148 files found so far')
+    const listedIdx = html.indexOf('Listed folders and files')
+    const nextStepStart = html.indexOf('Reading document metadata')
+    const foundAt = html.indexOf('148 files found')
+    expect(foundAt).toBeGreaterThan(listedIdx)
+    expect(foundAt).toBeLessThan(nextStepStart)
+  })
+
+  it('done steps use past-tense labels', () => {
+    const prog = { phase: 'reading', files_found: 0 }
+    const html = render(prog, true)
+    expect(html).toContain('Listed folders and files')
+    expect(html).not.toContain('Listing folders and files')
   })
 })
 
@@ -135,7 +153,8 @@ describe('never shows assessment content', () => {
   })
 })
 
-describe('lifecycle rules count on the lifecycle step', () => {
+describe('lifecycle KPI on the lifecycle step', () => {
+  // 3 files with a rule_id, 1 without — total 4
   const INV_ROWS = [
     { file: 'a.docx', lifecycle_rule_id: 'ret-1' },
     { file: 'b.docx', lifecycle_rule_id: 'ret-1' },
@@ -144,41 +163,51 @@ describe('lifecycle rules count on the lifecycle step', () => {
   ]
   const inv = { rows: INV_ROWS, total: INV_ROWS.length }
 
-  it('shows "2 rules applied" on the lifecycle step when inv has 2 distinct rule ids', () => {
-    const prog = { phase: 'tagging', files_found: 4 }
+  // scoring phase: lifecycle (index 4) is done, saving (index 5) is active
+  it('shows "N matched · M unchanged" when lifecycle step is done', () => {
+    const prog = { phase: 'scoring', files_found: 4 }
     const html = render(prog, true, undefined, undefined, inv)
-    expect(html).toContain('2 rules applied')
+    expect(html).toContain('3 matched')
+    expect(html).toContain('1 unchanged')
   })
 
-  it('shows "1 rule applied" (singular) when only one rule id is present', () => {
-    const singleRuleInv = { rows: [{ file: 'a.docx', lifecycle_rule_id: 'ret-1' }], total: 1 }
-    const prog = { phase: 'tagging', files_found: 1 }
-    const html = render(prog, true, undefined, undefined, singleRuleInv)
-    expect(html).toContain('1 rule applied')
+  it('shows "1 matched" (singular) when only one file matched a rule', () => {
+    const singleMatchInv = { rows: [
+      { file: 'a.docx', lifecycle_rule_id: 'ret-1' },
+      { file: 'b.docx', lifecycle_rule_id: null },
+    ], total: 2 }
+    const prog = { phase: 'scoring', files_found: 2 }
+    const html = render(prog, true, undefined, undefined, singleMatchInv)
+    expect(html).toContain('1 matched')
+    expect(html).toContain('1 unchanged')
   })
 
-  it('omits the rule count detail when inv is null', () => {
-    const prog = { phase: 'tagging', files_found: 5 }
+  it('omits the lifecycle KPI when inv is null', () => {
+    const prog = { phase: 'scoring', files_found: 5 }
     const html = render(prog, true, undefined, undefined, null)
-    expect(html).not.toContain('rules applied')
-    expect(html).not.toContain('rule applied')
+    expect(html).not.toContain('matched')
+    expect(html).not.toContain('unchanged')
   })
 
-  it('ignores rows with null lifecycle_rule_id when counting', () => {
-    const nullRuleInv = { rows: [{ file: 'a.docx', lifecycle_rule_id: null }, { file: 'b.docx', lifecycle_rule_id: null }], total: 2 }
-    const prog = { phase: 'tagging', files_found: 2 }
+  it('shows "0 matched" when all rows have null lifecycle_rule_id', () => {
+    const nullRuleInv = { rows: [
+      { file: 'a.docx', lifecycle_rule_id: null },
+      { file: 'b.docx', lifecycle_rule_id: null },
+    ], total: 2 }
+    const prog = { phase: 'scoring', files_found: 2 }
     const html = render(prog, true, undefined, undefined, nullRuleInv)
-    expect(html).not.toContain('rules applied')
+    expect(html).toContain('0 matched')
+    expect(html).toContain('2 unchanged')
   })
 
-  it('rule count detail appears near the Applying lifecycle rules step, not on other steps', () => {
-    const prog = { phase: 'tagging', files_found: 4 }
+  it('lifecycle KPI appears near the Applied lifecycle rules step, not on other steps', () => {
+    const prog = { phase: 'scoring', files_found: 4 }
     const html = render(prog, true, undefined, undefined, inv)
-    const lifecycleIdx = html.indexOf('Applying lifecycle rules')
+    const lifecycleIdx = html.indexOf('Applied lifecycle rules')
     const nextStepIdx = html.indexOf('Saving inventory')
-    const rulesIdx = html.indexOf('rules applied')
-    expect(rulesIdx).toBeGreaterThan(lifecycleIdx)
-    expect(rulesIdx).toBeLessThan(nextStepIdx)
+    const matchedIdx = html.indexOf('matched')
+    expect(matchedIdx).toBeGreaterThan(lifecycleIdx)
+    expect(matchedIdx).toBeLessThan(nextStepIdx)
   })
 })
 
@@ -232,5 +261,44 @@ describe('active step accessibility and visual treatment', () => {
   it('does not show the long-running hint below 90 s', () => {
     const html = render(PROG, true)
     expect(html).not.toContain('contains many folders')
+  })
+})
+
+describe('completion summary when phase is done', () => {
+  it('shows completion summary instead of checklist when phase is done', () => {
+    const prog = { phase: 'done', files_found: 148 }
+    const html = render(prog, false)
+    expect(html).toContain('Discovery complete')
+    expect(html).not.toContain('Discovering documents')
+  })
+
+  it('renders even when busy is false if phase is done', () => {
+    const prog = { phase: 'done', files_found: 148 }
+    expect(render(prog, false)).not.toBe('')
+  })
+
+  it('shows past-tense step labels in completion summary', () => {
+    const prog = { phase: 'done', files_found: 0 }
+    const html = render(prog, true)
+    expect(html).toContain('Listed folders and files')
+    expect(html).toContain('Read document metadata')
+    expect(html).toContain('Applied lifecycle rules')
+    expect(html).toContain('Saved inventory')
+  })
+
+  it('includes files discovered and lifecycle totals in summary footer', () => {
+    const inv = { rows: [{ file: 'a.pdf', lifecycle_rule_id: 'r1' }], total: 5 }
+    const prog = { phase: 'done', files_found: 5 }
+    const html = render(prog, true, undefined, undefined, inv)
+    expect(html).toContain('5 files discovered')
+    expect(html).toContain('matched lifecycle rules')
+    expect(html).toContain('No documents were assessed or changed')
+  })
+
+  it('does not show Stop button in completion summary', () => {
+    const prog = { phase: 'done', files_found: 10 }
+    const html = render(prog, true, () => {})
+    expect(html).not.toContain('>Stop<')
+    expect(html).not.toContain('>Stopping')
   })
 })

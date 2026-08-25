@@ -15,6 +15,8 @@ function fmtElapsedSecs(s) {
   return r ? `${m}m ${r}s` : `${m}m`
 }
 
+function n(count) { return count.toLocaleString() }
+
 // How many steps (from the front of STEPS) are DONE at each backend phase.
 // Steps: 0=connected, 1=listing, 2=metadata, 3=classifying, 4=lifecycle, 5=saving
 const PHASE_DONE_COUNT = {
@@ -27,16 +29,17 @@ const PHASE_DONE_COUNT = {
   done: 6,
 }
 
+// Each step has a present-progressive label (active/pending) and a past-tense label (done).
 const STEPS = [
-  { key: 'connected', label: 'Connected to source' },
-  { key: 'listing', label: 'Listing folders and files' },
-  { key: 'metadata', label: 'Reading document metadata' },
-  { key: 'classifying', label: 'Classifying document types' },
-  { key: 'lifecycle', label: 'Applying lifecycle rules' },
-  { key: 'saving', label: 'Saving inventory' },
+  { key: 'connected',   label: 'Connected to source',       labelDone: 'Connected to source' },
+  { key: 'listing',     label: 'Listing folders and files',  labelDone: 'Listed folders and files' },
+  { key: 'metadata',    label: 'Reading document metadata',  labelDone: 'Read document metadata' },
+  { key: 'classifying', label: 'Classifying document types', labelDone: 'Classified document types' },
+  { key: 'lifecycle',   label: 'Applying lifecycle rules',   labelDone: 'Applied lifecycle rules' },
+  { key: 'saving',      label: 'Saving inventory',           labelDone: 'Saved inventory' },
 ]
 
-function DiscoverStep({ label, detail, status }) {
+function DiscoverStep({ label, kpi, status }) {
   const isActive = status === 'active'
   return (
     <div role="listitem" aria-current={isActive ? 'step' : undefined}
@@ -60,16 +63,16 @@ function DiscoverStep({ label, detail, status }) {
                      color: status === 'pending' ? 'var(--muted)' : 'var(--ink)' }}>
         {label}
       </span>
-      {detail && (
+      {kpi && (
         <span className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>
-          {detail}
+          {kpi}
         </span>
       )}
     </div>
   )
 }
 
-export default function DiscoverRunProgress({ progress, busy, onStop, sources, inv = null }) {
+export default function DiscoverRunProgress({ progress, busy, onStop, sources, inv = null, onReview, onContinue }) {
   const [startedAt] = useState(() => Date.now())
   const [elapsed, setElapsed] = useState(0)
   const [stopping, setStopping] = useState(false)
@@ -81,30 +84,49 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
     return () => clearInterval(t)
   }, [busy, progress, startedAt])
 
-  if (!busy || !progress) return null
-
+  if (!progress) return null
   const phase = progress.phase || 'queued'
+  const isDone = phase === 'done'
+  if (!busy && !isDone) return null
+
   const filesFound = progress.files_found || 0
   const doneCount = PHASE_DONE_COUNT[phase] ?? 0
 
-  // "Connected to X" uses the source name when exactly one source is connected.
+  // Source label substitution and KPI.
   const sourceName = sources && sources.length === 1 ? sources[0].name : null
+  const sourceCount = sources ? sources.length : null
 
-  // Distinct lifecycle rules applied so far — shown on the lifecycle step once inventory arrives.
-  const lifecycleRulesCount = inv?.rows
-    ? new Set(inv.rows.map((r) => r.lifecycle_rule_id).filter(Boolean)).size
+  // Lifecycle stats from inventory: matched = files with any rule applied, unchanged = the rest.
+  const lifecycleMatchedCount = inv?.rows != null
+    ? inv.rows.filter((r) => r.lifecycle_rule_id != null).length
+    : null
+  const lifecycleUnchangedCount = (lifecycleMatchedCount !== null && inv?.total != null)
+    ? inv.total - lifecycleMatchedCount
     : null
 
   const steps = STEPS.map((s, i) => {
-    let detail = null
-    if (s.key === 'listing' && filesFound > 0) detail = `${filesFound.toLocaleString()} found`
-    if (s.key === 'lifecycle' && lifecycleRulesCount) detail = `${lifecycleRulesCount} rule${lifecycleRulesCount === 1 ? '' : 's'} applied`
-    return {
-      ...s,
-      label: i === 0 && sourceName ? `Connected to ${sourceName}` : s.label,
-      status: i < doneCount ? 'done' : i === doneCount ? 'active' : 'pending',
-      detail,
+    const status = i < doneCount ? 'done' : i === doneCount ? 'active' : 'pending'
+    const displayLabel = i === 0 && sourceName
+      ? `Connected to ${sourceName}`
+      : (status === 'done' ? s.labelDone : s.label)
+
+    let kpi = null
+    if (status === 'done') {
+      if (s.key === 'connected' && sourceCount) {
+        kpi = sourceCount === 1 ? '1 source' : `${sourceCount} sources`
+      }
+      if (s.key === 'listing' && filesFound > 0) {
+        kpi = `${n(filesFound)} files found`
+      }
+      if (s.key === 'lifecycle' && lifecycleMatchedCount !== null && lifecycleUnchangedCount !== null) {
+        kpi = `${n(lifecycleMatchedCount)} matched · ${n(lifecycleUnchangedCount)} unchanged`
+      }
     }
+    if (status === 'active' && s.key === 'listing' && filesFound > 0) {
+      kpi = `${n(filesFound)} files found so far`
+    }
+
+    return { ...s, label: displayLabel, status, kpi }
   })
 
   // After 90 s with no files found during listing, the source likely has many folders to walk.
@@ -113,6 +135,50 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   function handleStop() {
     setStopping(true)
     onStop?.()
+  }
+
+  // Completion summary replaces the active checklist once all steps are done.
+  if (isDone) {
+    const totalFiles = inv?.total ?? filesFound
+    const matched = lifecycleMatchedCount ?? 0
+    return (
+      <section className="discover-run-progress" role="region" aria-label="Discovery complete"
+               style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
+        <div className="assess-run-card" style={{ border: '1px solid var(--line,#e4e8ec)', borderRadius: 12,
+                                                  padding: '14px 16px', background: 'var(--panel,#fff)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+                        gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 14.5, fontWeight: 650 }}>Discovery complete</div>
+            <span className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>
+              {fmtElapsedSecs(elapsed)}
+            </span>
+          </div>
+          <div aria-live="polite" aria-atomic="false" role="list" aria-label="Discovery steps"
+               style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 14 }}>
+            {steps.map(({ key, ...rest }) => <DiscoverStep key={key} {...rest} />)}
+          </div>
+          <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 12,
+                        fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.6 }}>
+            <div>{n(totalFiles)} files discovered · {n(matched)} matched lifecycle rules</div>
+            <div>No documents were assessed or changed.</div>
+          </div>
+          {(onReview || onContinue) && (
+            <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
+              {onReview && (
+                <button type="button" className="ghost small" onClick={onReview}>
+                  Review inventory
+                </button>
+              )}
+              {onContinue && (
+                <button type="button" className="primary small" onClick={onContinue}>
+                  Continue to Assessment →
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </section>
+    )
   }
 
   return (
