@@ -188,8 +188,20 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
             sid = core.store.save_scan(report)
             # Persist per-file inventory + evaluate archival/deletion rules — same as the fanout path,
             # so a default in-process Discover marks Archive/Delete candidates too (not only fanout).
+            # Emit the dedicated "lifecycle" phase so the frontend shows the lifecycle step as active,
+            # then stream per-10-file ticks with cumulative counters so the user sees live progress.
             from handlers import persist_discovery_inventory
-            save_outcome = persist_discovery_inventory(sid, inv, source, user)
+            lifecycle_total = len(inv)
+            core.update_job(job_id, {"phase": "lifecycle",
+                                     "files_found": lifecycle_total,
+                                     "files_evaluated": 0,
+                                     "rules_enabled": 0})
+            def _lc_progress(stats):
+                core.update_job(job_id, {"phase": "lifecycle",
+                                         "files_found": lifecycle_total,
+                                         **stats})
+            save_outcome = persist_discovery_inventory(sid, inv, source, user,
+                                                       progress_cb=_lc_progress)
             core.finalize_scan(sid, effective_ai, source)
             done = core.get_job_state(job_id) or {}
             core.update_job(job_id, {"schema_version": 2, "phase": "done", "done": True,
