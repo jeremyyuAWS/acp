@@ -115,18 +115,14 @@ register(
 )
 
 # ── 2.4.4 Link Purpose (In Context) ──────────────────────────────────────────────────
-# PARTIAL, not FULL: the technique catches one specific failure pattern — a link annotation
-# whose URI appears verbatim in the page text (the bare URL is the link label). Links whose
-# display text is a generic filler phrase ("click here", "more info") or otherwise misleads
-# about the destination are outside scope. Within that subset the check is exact — a literal
-# string match — so HIGH confidence: when a raw URL is found, it is a definite bad label with
-# no human judgement needed to confirm.
-#
-# MECHANISM MIGRATION: the pair moves from `store.RULE_FORMATS` + `_certify` to the coverage
-# gate. A failing document still reports FAIL. A clean scan now reports REVIEW ("we checked
-# what the technique reaches") instead of the overclaiming PASS the legacy path returned —
-# because the technique proves only that no link's URI appeared verbatim as its visible text,
-# not that every link's text is meaningful.
+# PARTIAL, not FULL: two complementary checks run (P-21):
+#   (a) raw-URL label — the annotation's /URI appears verbatim in the page text.
+#   (b) vague-phrase label — text cropped from the annotation bounding box matches the same
+#       _VAGUE_LINK_TEXT predicate used for docx/pptx/xlsx ("click here", "here", etc.).
+# What cannot be checked is whether otherwise-descriptive text actually names the correct
+# destination — "Annual Report" pointing at the wrong year passes both checks. So a clean
+# scan means no raw-URL or generic-phrase label was found, not that every link is meaningful.
+# Both checks are exact (no heuristic), so confidence remains HIGH.
 register(
     rule="2.4.4",
     fmt="pdf",
@@ -134,9 +130,10 @@ register(
     requires={Capability.LINKS},
     coverage=Coverage.PARTIAL,
     confidence=Confidence.HIGH,
-    reason=("link annotations are checked for a URI that appears verbatim in the page text — a "
-            "raw URL used as the link label; generic filler phrases and links whose text does not "
-            "literally match the URI are not examined"),
+    reason=("raw-URL labels (URI appears verbatim in page text) and generic filler phrases "
+            "('click here', 'here', etc. — cropped from the annotation bounding box) are both "
+            "detected; whether otherwise-descriptive text names the correct destination is a "
+            "content judgement not examinable from the file"),
 )
 
 # ── 1.4.12 Text Spacing ───────────────────────────────────────────────────────────────
