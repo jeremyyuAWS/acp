@@ -10,7 +10,7 @@ from assessment import Confidence, Coverage
 from capabilities import Capability
 from rule_registry import register
 
-from formats.docx.detectors import (language_parts, link_purpose, name_role_value,
+from formats.docx.detectors import (input_purpose, language_parts, link_purpose, name_role_value,
                                     no_keyboard_trap, non_text_content, nontext_contrast,
                                     reflow, text_spacing, use_of_color)
 
@@ -271,4 +271,25 @@ register(
     reason=("paragraphs using exact (fixed) line spacing are identified from the spacing element "
             "in document XML; whether the fixed spacing clips text when a user applies the WCAG "
             "1.4.12 overrides is a rendered outcome not recorded in the file"),
+)
+
+# ── 1.3.5 Identify Input Purpose ─────────────────────────────────────────────────────
+# HEURISTIC: OOXML content controls carry w:alias (Title / accessible name) and w:tag
+# (developer identifier) but no autocomplete-equivalent attribute — the Open XML specification
+# defines no mechanism to declare input purpose in the sense WCAG 1.3.5 requires.
+# The detector pattern-matches w:alias against the WCAG personal-data vocabulary and flags
+# controls of interactive types (checkbox, date, dropDownList, comboBox) that appear to collect
+# personal user information. The vocabulary match is approximate, so coverage is HEURISTIC and
+# confidence LOW — organisational forms (company address, billing contact) will false-positive.
+register(
+    rule="1.3.5",
+    fmt="docx",
+    detector=input_purpose.detect,
+    requires={Capability.FORMS},
+    coverage=Coverage.HEURISTIC,
+    confidence=Confidence.LOW,
+    reason=("interactive content controls (checkbox, date, dropdown, combo) whose w:alias title "
+            "matches the WCAG personal-data vocabulary (name, email, phone, address, etc.) are "
+            "flagged — OOXML provides no autocomplete-equivalent mechanism, so those controls "
+            "cannot declare input purpose programmatically; the vocabulary match is approximate"),
 )

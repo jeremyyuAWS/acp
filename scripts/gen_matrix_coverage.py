@@ -69,10 +69,10 @@ CATALOG = ROOT / "config" / "rule-catalog.json"
 # widening the grid.
 FORMATS = ("docx", "xlsx", "pptx", "pdf")
 
-# The 20 SCs the matrix has rows for. Kept in sync with gen_progress_log.TRACKED_SCS by
+# The 22 SCs the matrix has rows for. Kept in sync with gen_progress_log.TRACKED_SCS by
 # _check(); a criterion ACP starts covering does not appear here until the matrix grows a row.
 TRACKED_SCS = (
-    "1.1.1", "1.3.1", "1.3.2", "1.3.3", "1.4.1", "1.4.3", "1.4.4", "1.4.5",
+    "1.1.1", "1.3.1", "1.3.2", "1.3.3", "1.3.5", "1.4.1", "1.4.3", "1.4.4", "1.4.5",
     "1.4.10", "1.4.11", "1.4.12", "2.1.1", "2.1.2", "2.4.2", "2.4.3", "2.4.4",
     "2.4.6", "2.5.3", "3.1.1", "3.1.2", "4.1.2",
 )
