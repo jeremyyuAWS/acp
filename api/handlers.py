@@ -1056,6 +1056,125 @@ def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, acto
     return {**outcome, **lifecycle_stats, **class_stats}
 
 
+# ── ADR 0004 item 6: per-folder checkpoint helpers ───────────────────────────
+# These two functions are module-level (not closures) so tests can monkeypatch them
+# without reimporting. Production code calls the real Drive/SP listing APIs.
+
+def _per_folder_mode() -> bool:
+    """Return True when per-folder fan-out is enabled (ACP_PER_FOLDER_SCAN_JOBS=1)."""
+    return _os.environ.get("ACP_PER_FOLDER_SCAN_JOBS", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _list_top_level_folders(source: str, scope_folder: str | None, toks: dict) -> list:
+    """List the immediate subfolders to fan out over (Drive only; SP falls back to file mode).
+
+    Returns a list of dicts with at least {"folder_id": str, "name": str}.
+    Module-level so tests can monkeypatch this without reimporting.
+
+    SECURITY: toks is acquired at call time by the discover handler — never stored in the
+    job payload. The result contains only folder IDs (not credentials)."""
+    if source != "drive":
+        return []
+    try:
+        from scanner import _drive_service, _list_drive_page_all
+        drive_token = toks.get("drive")
+        if not drive_token:
+            return []
+        svc = _drive_service(drive_token)
+        parent = scope_folder or "root"
+        q = (f"'{parent}' in parents "
+             "and mimeType='application/vnd.google-apps.folder' "
+             "and trashed=false")
+        items, _ = _list_drive_page_all(svc, q, max_files=500)
+        return [{"folder_id": it["id"], "name": it.get("name", "")} for it in items]
+    except Exception:
+        return []
+
+
+def _list_folder_files(source: str, folder_id: str, toks: dict) -> list:
+    """List all analysable files under one folder (recursive BFS via scanner._search_folder).
+
+    Returns the same item shape as scanner._list. Module-level so tests can monkeypatch.
+
+    SECURITY: toks is the result of core.get_scan_tokens() called at execution time by the
+    scan_folder handler — credentials are never stored in the job payload itself."""
+    if source == "drive":
+        try:
+            from scanner import _drive_service, _search_folder
+            drive_token = toks.get("drive")
+            if not drive_token:
+                return []
+            svc = _drive_service(drive_token)
+            return _search_folder(svc, folder_id)
+        except Exception:
+            return []
+    return []
+
+
+def _process_scan_folder_item(scan_id: str, item: dict, *, source: str,
+                               ai: bool, pii: bool, user: str | None,
+                               job: dict | None = None) -> None:
+    """Download + analyse + persist ONE file from a scan_folder job.
+
+    Module-level so tests can monkeypatch. Production delegates to _analyse_and_persist_one,
+    the same function used by scan_file, so both paths share identical analysis logic."""
+    import lf as _lf
+    toks = core.get_scan_tokens(scan_id)
+    svc = _make_svc(source, toks)
+    now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    _analyse_and_persist_one(
+        scan_id, item, source, pii, svc, toks, now, _lf,
+        user=user, rubric_hash=core.active_rubric().hash, incremental=True)
+
+
+@handler("scan_folder")
+def _scan_folder(payload: dict, job: dict) -> None:
+    """Process all documents in one folder — the per-folder checkpoint unit for ADR 0004 item 6.
+
+    Payload: {"scan_id": "...", "folder_id": "...", "source": "drive", "ai": bool, "pii": bool}
+    Credentials are acquired at execution time via core.get_scan_tokens(scan_id) — NEVER stored
+    in the job payload (security constraint: no token snapshot in durable storage).
+
+    check_cancel() is called between every document so the scan can be cooperatively stopped
+    mid-folder. Increments completed_folders on the scan_runs row and triggers scan_finalize
+    once completed_folders reaches total_folders."""
+    from worker import check_cancel
+    scan_id = payload.get("scan_id") or job.get("scan_id")
+    folder_id = payload.get("folder_id")
+    source = payload.get("source", "drive")
+    ai = bool(payload.get("ai", True)) and core.store.get_ai_enabled()
+    pii = bool(payload.get("pii", False))
+    user = payload.get("user")
+
+    if not scan_id:
+        raise FatalJobError("scan_folder job missing scan_id")
+    if not folder_id:
+        raise FatalJobError("scan_folder job missing folder_id")
+
+    # SECURITY: acquire credentials at execution time, not from the durable job payload.
+    # core.get_scan_tokens() looks up the authorized connection by scan_id — the payload
+    # carries only a reference (the scan_id), never the credential itself.
+    toks = core.get_scan_tokens(scan_id)
+
+    _phase(job, f"listing files in folder {folder_id}")
+    items = _list_folder_files(source, folder_id, toks)
+
+    _phase(job, f"processing {len(items)} file(s) in folder {folder_id}")
+    for item in items:
+        check_cancel()
+        _process_scan_folder_item(scan_id, item, source=source, ai=ai, pii=pii,
+                                  user=user, job=job)
+        check_cancel()
+
+    done, total = core.store.increment_completed_folders(scan_id)
+    if total > 0 and done >= total:
+        core.store.enqueue_job(
+            "scan_finalize",
+            {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii},
+            scan_id=scan_id)
+
+
 @handler("scan_discover")
 def _scan_discover(payload: dict, job: dict) -> None:
     """List the source (paginated, no cap), create the scan_runs row, and enqueue one
@@ -1228,6 +1347,26 @@ def _scan_discover(payload: dict, job: dict) -> None:
         core.store.enqueue_job("scan_finalize",
                                {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)
         return
+    # Per-folder fan-out path (ADR 0004 item 6): when ACP_PER_FOLDER_SCAN_JOBS is enabled,
+    # list the immediate subfolders and emit one scan_folder job per folder instead of one
+    # scan_file/scan_batch per file. This enables mid-scan resume at folder granularity and
+    # parallel processing across folders. Falls back to the file-level path when no folders
+    # are found (flat estate, local source, or SP where folder listing is not yet wired).
+    if _per_folder_mode():
+        toks = core.get_scan_tokens(scan_id)
+        folders = _list_top_level_folders(source, effective_folder, toks)
+        if folders:
+            core.store.set_total_folders(scan_id, len(folders))
+            for f in folders:
+                core.store.enqueue_job("scan_folder", {
+                    "scan_id": scan_id,
+                    "folder_id": f["folder_id"],
+                    "source": source,
+                    "ai": ai,
+                    "pii": pii,
+                    "user": user,
+                }, scan_id=scan_id)
+            return
     # Immediate path (default today): fan out the analysis now. ADR 0008 batches large estates.
     _enqueue_analysis(scan_id, source, norm, ai=ai, pii=pii, user=user,
                       incremental=incremental, exclude_remediated=_exclude_rem,

@@ -571,6 +571,12 @@ _SCHEMA = [
       app_version TEXT,
       captured_at TEXT NOT NULL
     )""",
+    # ADR 0004 item 6 — per-folder checkpoint columns. total_folders is set by the
+    # scan_discover job when it fans out to per-folder work; completed_folders is
+    # atomically incremented by each scan_folder job once it finishes its subtree.
+    # Together they drive the finalization trigger and the "N/M folders scanned" UI.
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS total_folders INT",
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS completed_folders INT",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -2060,6 +2066,31 @@ class Store:
                 return None
         return row
 
+    def set_total_folders(self, scan_id: str, count: int) -> None:
+        """Record how many scan_folder jobs were emitted for this scan (ADR 0004 item 6)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE scan_runs SET total_folders=%s, completed_folders=0 WHERE id=%s",
+                (count, scan_id))
+
+    def increment_completed_folders(self, scan_id: str) -> tuple:
+        """Atomically increment completed_folders and return (completed, total) so the caller
+        can trigger finalization when all folders are done (ADR 0004 item 6).
+
+        Uses a single UPDATE + SELECT in one cursor to avoid the completed count being
+        stale by the time it is read. scan_finalize is idempotent (mark_finalized), so if
+        two folder jobs both see done >= total concurrently, the duplicate enqueue is fine."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE scan_runs SET completed_folders=COALESCE(completed_folders,0)+1 "
+                "WHERE id=%s", (scan_id,))
+            self._db.execute(cur,
+                "SELECT completed_folders, total_folders FROM scan_runs WHERE id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+        if not row:
+            return (0, 0)
+        return (row.get("completed_folders") or 0, row.get("total_folders") or 0)
+
     def rescue_unfinalized_scans(self) -> int:
         """Deploy-safety net (found live 2026-07-11): a revision swap can kill the worker
         AFTER the last scan_file persisted its row but BEFORE the count trigger enqueued
@@ -2067,7 +2098,13 @@ class Store:
         such scan (running, zero outstanding jobs, every enqueued file persisted), enqueue
         the finalize job. Safe by construction: scan_finalize is idempotent and
         mark_finalized claims exactly-once, so a duplicate enqueue no-ops. Called from the
-        stuck-job sweeper each tick. Returns how many scans were rescued."""
+        stuck-job sweeper each tick. Returns how many scans were rescued.
+
+        Also rescues per-folder scans (ADR 0004 item 6): if total_folders > 0 and
+        completed_folders >= total_folders with no outstanding jobs, the scan_finalize
+        job was lost and needs re-enqueueing."""
+        rescued = 0
+        # Original file-based rescue path (scan_file/scan_batch fan-out).
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT sr.id, sr.source FROM scan_runs sr WHERE sr.status='running' "
@@ -2080,7 +2117,25 @@ class Store:
             self.enqueue_job("scan_finalize",
                              {"scan_id": r["id"], "source": r.get("source") or "drive"},
                              scan_id=r["id"])
-        return len(rows)
+        rescued += len(rows)
+        # Per-folder rescue path (ADR 0004 item 6): all scan_folder jobs finished but the
+        # finalize job was not enqueued (e.g. worker lost the last scan_folder before it
+        # could enqueue finalize, then was reclaimed — but completed_folders was already
+        # incremented). total_folders > 0 distinguishes per-folder scans from file-based ones.
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT sr.id, sr.source FROM scan_runs sr WHERE sr.status='running' "
+                "AND sr.total_folders > 0 "
+                "AND sr.completed_folders >= sr.total_folders "
+                "AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.scan_id=sr.id "
+                "                AND j.status IN ('queued','running'))")
+            folder_rows = self._db.fetchall(cur)
+        for r in folder_rows:
+            self.enqueue_job("scan_finalize",
+                             {"scan_id": r["id"], "source": r.get("source") or "drive"},
+                             scan_id=r["id"])
+        rescued += len(folder_rows)
+        return rescued
 
     def cancel_scan(self, sid: str, owner: str | None = None) -> bool:
         """Stop an in-flight fan-out scan: kill its outstanding jobs and close the run as
