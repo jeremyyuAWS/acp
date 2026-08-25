@@ -77,6 +77,7 @@ function PreviewPanel({ docs, enabled, fetchedAt, onRefresh, busy, breakdown }) 
   const extra = docs.length - shown.length
   const COLS = ['Name', 'Location', 'Owner', 'Modified', 'Type', 'Size']
   const hasSuppressions = breakdown && (breakdown.superseded > 0 || breakdown.exempted > 0)
+  const hasExempted = breakdown && breakdown.exempted > 0
   const hasUnable = breakdown && breakdown.unable_to_evaluate > 0
   return (
     <div style={{ marginTop: 10, border: line, borderRadius: 9, overflow: 'hidden' }}>
@@ -100,7 +101,7 @@ function PreviewPanel({ docs, enabled, fetchedAt, onRefresh, busy, breakdown }) 
       </div>
       {hasSuppressions && (
         <div style={{ display: 'flex', gap: 14, padding: '5px 12px', flexWrap: 'wrap',
-                      borderBottom: docs.length ? line : 'none',
+                      borderBottom: hasExempted || hasUnable || docs.length ? line : 'none',
                       background: 'color-mix(in srgb, var(--plum) 2%, transparent)' }}>
           <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
             <b style={{ color: 'inherit' }}>{breakdown.effective}</b> will receive the action
@@ -112,9 +113,42 @@ function PreviewPanel({ docs, enabled, fetchedAt, onRefresh, busy, breakdown }) 
           )}
           {breakdown.exempted > 0 && (
             <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-              <b style={{ color: 'inherit' }}>{breakdown.exempted}</b> exempted (held)
+              <b style={{ color: 'inherit' }}>{breakdown.exempted}</b> on legal hold
             </span>
           )}
+        </div>
+      )}
+      {hasExempted && (
+        <div style={{ padding: '5px 12px', borderBottom: hasUnable || docs.length ? line : 'none',
+                      background: 'color-mix(in srgb, var(--plum) 2%, transparent)' }}>
+          <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+            <b style={{ color: 'inherit' }}>{breakdown.exempted}</b>{' '}
+            file{breakdown.exempted === 1 ? '' : 's'} matched but{' '}
+            {breakdown.exempted === 1 ? 'is' : 'are'} on legal hold —
+            {breakdown.exempted_documents && breakdown.exempted_documents.length > 0
+              ? (() => {
+                  const MAX = 3
+                  const shown = breakdown.exempted_documents.slice(0, MAX)
+                  const overflow = breakdown.exempted_documents.length - shown.length
+                  return (
+                    <>{' '}
+                      {shown.map((doc, i) => {
+                        const p = doc.path || doc.doc_id || '—'
+                        const name = p.split('/').filter(Boolean).pop() || p
+                        return (
+                          <span key={doc.doc_id || i}>
+                            {i > 0 && ' · '}
+                            <b style={{ color: 'inherit' }}>{name}</b>
+                          </span>
+                        )
+                      })}
+                      {overflow > 0 && <> + {overflow} more</>}
+                    </>
+                  )
+                })()
+              : <>{' '}they won't be tagged by any rule</>
+            }
+          </span>
         </div>
       )}
       {hasUnable && (
@@ -368,6 +402,7 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
           effective: r.effective,
           superseded: r.superseded ?? 0,
           exempted: r.exempted ?? 0,
+          exempted_documents: r.exempted_documents ?? [],
           unable_to_evaluate: r.unable_to_evaluate ?? 0,
           unable_to_evaluate_fields: r.unable_to_evaluate_fields ?? {},
         } : null)

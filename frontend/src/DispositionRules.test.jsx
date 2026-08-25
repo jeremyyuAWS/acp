@@ -186,7 +186,57 @@ describe('the existing rules list', () => {
     })
     await render(); await expand(); await flush()
     await click(btnByText('Preview matches')); await flush()
-    expect(text()).toContain('exempted')
+    expect(text()).toContain('legal hold')
+  })
+
+  it('shows exempted file names in the exempted note', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0]])
+    previewDispositionPolicy.mockResolvedValue({
+      would_match: 3, documents: Array.from({length:3},(_,i)=>({doc_id:`d${i}`,path:`/p${i}`})),
+      effective: 3, superseded: 0, exempted: 2, unable_to_evaluate: 0,
+      exempted_documents: [
+        { doc_id: 'h1', path: 'Finance/2019/contract.docx' },
+        { doc_id: 'h2', path: 'Finance/2019/nda.pdf' },
+      ],
+    })
+    await render(); await expand(); await flush()
+    await click(btnByText('Preview matches')); await flush()
+    expect(text()).toContain('legal hold')
+    expect(text()).toContain('contract.docx')
+    expect(text()).toContain('nda.pdf')
+  })
+
+  it('shows overflow count when more than 3 files are exempted', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0]])
+    const exemptedDocs = Array.from({length: 5}, (_, i) => ({
+      doc_id: `h${i}`, path: `Finance/hold${i}.docx`,
+    }))
+    previewDispositionPolicy.mockResolvedValue({
+      would_match: 2, documents: [],
+      effective: 2, superseded: 0, exempted: 5, unable_to_evaluate: 0,
+      exempted_documents: exemptedDocs,
+    })
+    await render(); await expand(); await flush()
+    await click(btnByText('Preview matches')); await flush()
+    // Shows the first 3 names and "+ 2 more"
+    expect(text()).toContain('hold0.docx')
+    expect(text()).toContain('hold1.docx')
+    expect(text()).toContain('hold2.docx')
+    expect(text()).toContain('2 more')
+    expect(text()).not.toContain('hold3.docx')
+  })
+
+  it('falls back to generic message when exempted_documents is absent (old server)', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0]])
+    previewDispositionPolicy.mockResolvedValue({
+      would_match: 4, documents: Array.from({length:4},(_,i)=>({doc_id:`d${i}`,path:`/p${i}`})),
+      effective: 3, superseded: 0, exempted: 1, unable_to_evaluate: 0,
+      // no exempted_documents key — old server
+    })
+    await render(); await expand(); await flush()
+    await click(btnByText('Preview matches')); await flush()
+    expect(text()).toContain('legal hold')
+    expect(text()).toContain("won't be tagged")
   })
 
   it("shows unable-to-evaluate note when some files couldn't be assessed", async () => {

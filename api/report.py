@@ -33,6 +33,7 @@ awaiting approval, which are never presented as remediated. That separation is
 the report's core honesty guarantee.
 """
 from __future__ import annotations
+import hashlib
 import io
 import logging
 import os
@@ -283,6 +284,16 @@ def _esc(s) -> str:
     if len(escaped) > 2000:
         return escaped[:2000] + "…"
     return escaped
+
+
+def _finding_id(file: str, criterion: str, location: str = "") -> str:
+    """Deterministic 8-char hex ID stable for the same (file, criterion, location) triple.
+
+    Stable across renders, exports, and re-assessments of the same finding. Does not include
+    scan_id so the same logical finding in different scans of the same document has the same ID.
+    """
+    key = f"{file}|{criterion}|{location or ''}".encode()
+    return hashlib.sha256(key).hexdigest()[:8]
 
 
 def _decision_block(run, files, meta, facts, h2, body, muted) -> list:
@@ -1085,8 +1096,12 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
             else:
                 badge = "<font color='#3B6D11'>&#x25CF; Deterministic</font>"
                 sign_off = "deterministic fixer · auto-applied · no human decision needed"
+            _fid = _finding_id(doc["file"], e.get("criterion", ""),
+                               e.get("location") or e.get("before", "")[:60])
             lines = [
-                Paragraph(f"{badge} &nbsp;<b>{_esc(e['criterion'])}</b> &nbsp;<font color='#3B6D11'>&#x2713; validated on re-scan</font>", cell),
+                Paragraph(f"{badge} &nbsp;<b>{_esc(e['criterion'])}</b>"
+                          f" &nbsp;<font color='#3B6D11'>&#x2713; validated on re-scan</font>"
+                          f" &nbsp;<font color='#6c6470' size='7'>FND-{_fid}</font>", cell),
                 Paragraph(f"<font color='#6c6470'>Before</font> &nbsp;{_esc(e.get('before'))}", cell),
                 Paragraph(f"<font color='#6c6470'>After</font> &nbsp;<b>{_esc(e.get('after'))}</b>", cell),
             ]
@@ -1118,9 +1133,10 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
         for p in doc["proposed"]:
             note = ("validated on re-scan — awaiting approval" if p.get("validated")
                     else "awaiting human approval")
+            _pfid = _finding_id(doc["file"], p.get("criterion", ""))
             lines = [Paragraph(
                 f"<b>{_esc(p['criterion'])}</b> &nbsp;<font color='#854F0B'>proposed — not remediated "
-                f"({note})</font>", cell)]
+                f"({note})</font> &nbsp;<font color='#6c6470' size='7'>FND-{_pfid}</font>", cell)]
             for pr in p["proposals"][:6]:
                 why = f" <font color='#6c6470'>— {_esc(pr.get('rationale'))}</font>" if pr.get("rationale") else ""
                 src = (f" <font color='#6c6470'>({_esc(pr['source'])})</font>"
@@ -1332,12 +1348,16 @@ def _reconciliation_checks(files: list, facts: dict | None, meta: dict) -> list[
 
 
 def _assessment_scope_block(run: dict, meta: dict, facts: dict | None,
-                            fmt_str: str, h2, body, cell, muted) -> list:
-    """Assessment scope declaration (P-12).
+                            fmt_str: str, h2, body, cell, muted,
+                            rendered_at: str = "") -> list:
+    """Assessment scope declaration (P-12) + report provenance (P-16).
 
     A concise block near the top of the report stating exactly what was in scope: source,
     file types, scan window, rubric + conformance target, AI-assisted flag. Placed after
     the decision card so the reader sees the scope before interpreting any percentage.
+
+    P-16 adds two further rows: report-generated timestamp (when this PDF was rendered),
+    scan ID, report schema version, and application build commit.
     """
     scope = (facts or {}).get("scope") or {}
     estate = scope.get("estate") or {}
@@ -1360,6 +1380,9 @@ def _assessment_scope_block(run: dict, meta: dict, facts: dict | None,
     ai_note = ("Deterministic + AI-assisted checks" if ai_flag
                else "Deterministic checks only — no AI operations")
 
+    build_sha = (os.environ.get("ACP_BUILD_SHA") or "").strip()
+    build_str = build_sha[:12] if build_sha else "—"
+
     el = [Paragraph("Assessment scope", h2)]
     rows = [
         [Paragraph("<b>Source</b>", cell), Paragraph(_esc(source_label), cell),
@@ -1369,6 +1392,15 @@ def _assessment_scope_block(run: dict, meta: dict, facts: dict | None,
         [Paragraph("<b>Standard &amp; target</b>", cell),
          Paragraph(_esc((meta.get("target") or "WCAG 2.1 AA") + excl_note), cell),
          Paragraph("<b>Rubric</b>", cell), Paragraph(_esc(rubric_str), cell)],
+        # P-16: report provenance rows
+        [Paragraph("<b>Report generated</b>", cell),
+         Paragraph(_esc(rendered_at or "—"), cell),
+         Paragraph("<b>Scan ID</b>", cell),
+         Paragraph(_esc(str(run.get("id") or "—")), cell)],
+        [Paragraph("<b>Report schema</b>", cell),
+         Paragraph(_esc(f"v{REPORT_SCHEMA_VERSION}"), cell),
+         Paragraph("<b>Build</b>", cell),
+         Paragraph(_esc(build_str), cell)],
     ]
     t = Table(rows, colWidths=[1.3 * inch, 2.25 * inch, 1.3 * inch, 2.25 * inch])
     t.setStyle(TableStyle([
@@ -1386,6 +1418,8 @@ def _assessment_scope_block(run: dict, meta: dict, facts: dict | None,
 
 def build_report(run: dict, files: list, meta: dict, decisions: dict | None = None,
                  evidence: list | None = None, facts: dict | None = None) -> bytes:
+    # P-16: capture render time once so all sections share a consistent timestamp
+    _rendered_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     buf = io.BytesIO()
     # `lang` reaches the PDF catalog as /Lang (WCAG 3.1.1) — without it a screen reader guesses
     # the language of the certification document from the user's locale. `title` is already the
@@ -1451,6 +1485,16 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
         f" · hash <b>{(meta.get('hash') or '—')[:12]}</b>"
         f" · schema v{REPORT_SCHEMA_VERSION}{_commit_str} — "
         "results are reproducible from the rubric hash. Scans run read-only; documents are never retained.", sub))
+
+    # ── P-16: Snapshot notice — if the scan is still in progress ─────────────
+    _DONE_STATUSES = {None, "done", "completed", "certifiable"}
+    if run.get("status") not in _DONE_STATUSES:
+        el.append(Paragraph(
+            '<font color="#854F0B"><b>⚠ Snapshot only — </b></font>'
+            '<font color="#854F0B">this report was generated while the scan was still in progress '
+            f'(status: {_esc(str(run.get("status") or "unknown"))}). '
+            "Findings and scores may change before the scan completes.</font>",
+            lead))
 
     # ── Certification decision (R2) ──────────────────────────────────────────
     # Answers "can I ship this?" before any chart. The plain-language WHY (R3) is the
@@ -1606,7 +1650,8 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     for f in files:
         fmt_counts[_fmt(f)] = fmt_counts.get(_fmt(f), 0) + 1
     fmt_str = " · ".join(f"{n} {k}" for k, n in sorted(fmt_counts.items(), key=lambda x: -x[1])) or "—"
-    el.extend(_assessment_scope_block(run, meta, facts, fmt_str, h2, body, cell, _muted))
+    el.extend(_assessment_scope_block(run, meta, facts, fmt_str, h2, body, cell, _muted,
+                                      rendered_at=_rendered_at))
 
     # ── Compliance velocity — trend vs the caller's previous scan ────────────
     # Best-effort and lazy: rendering must never fail because history is absent,

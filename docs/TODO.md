@@ -542,9 +542,9 @@ honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~
 
 ### Polish / technical debt (surfaced during R15 implementation, 2026-08-24)
 
-**All P-1–P-8 shipped** (verified against `origin/main` 2026-08-24). **P-9–P-12 shipped** (#725).
+**All P-1–P-8 shipped** (verified against `origin/main` 2026-08-24). **P-9–P-12 shipped** (#725). **P-16 shipped** (this PR).
 
-**Sequencing (2026-08-24):** P-1–P-8 → P-9–P-12 (honesty/completeness) → ~~P-13~~/~~P-16~~/~~P-18~~/~~P-20~~ → R9/R10 w/ P-15 → P-14/P-17 → R-D/R-E → P-19/presentation.
+**Sequencing (2026-08-24):** P-1–P-8 → P-9–P-12 (honesty/completeness) → ~~P-13~~/~~P-16~~/~~P-18~~/P-20 → R9/R10 w/ P-15 → ~~P-14~~/P-17 → ~~R-E~~ → P-19/presentation.
 
 | # | Location | Item |
 |---|---|---|
@@ -561,9 +561,9 @@ honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~
 | ~~P-11~~ | `api/report.py` | ~~No criteria-level outcome breakdown — auditors see file counts but not WCAG criterion outcomes.~~ **DONE**: second stat band row from `facts["scope"]`: passed / with findings / human-review / not-evaluated. |
 | ~~P-12~~ | `api/report.py` | ~~No assessment scope declaration at the top of the report.~~ **DONE**: 3×4 table (source / scan window / file types / method / standard+target / rubric) replaces old "Scope & methodology" card. |
 | ~~P-13~~ | `api/report.py` | ~~**Add a limitations & exceptions section**~~ **DONE** (#739): PLUM-bordered box listing failed docs, review-recommended criteria, and absent owner metadata; absent when no limitations apply. |
-| P-14 | `api/report.py`, `api/store.py` | **Use stable finding identifiers.** Every finding gets a durable ID that survives rendering, export, reassessment, and remediation. Expose it in headings, links, and evidence references. |
+| ~~P-14~~ | ~~`api/report.py`, `api/store.py`~~ | ~~**Use stable finding identifiers.**~~ — **SHIPPED** | `_finding_id(file, criterion, location)`: SHA-256[:8] hex ID stable across renders, exports and re-assessments; exposed as `FND-{id}` in the evidence appendix heading for every applied and proposed finding. |
 | P-15 | `api/report.py`, `api/store.py` | **Clarify finding status and history.** Seven states: Open · Remediation attempted · Awaiting re-scan · Verified resolved · Accepted exception · False positive · Reopened. Do not label something "fixed" merely because remediation ran. Groundwork for R9/R10. |
-| ~~P-16~~ | `api/report.py` | ~~**Add report provenance and freshness.**~~ **DONE** (#740): scope table gains Report generated / Scan ID / Report schema / Build rows; snapshot notice when scan still running. |
+| ~~P-16~~ | `api/report.py` | ~~**Add report provenance and freshness.**~~ — **DONE**: two new rows in the assessment scope table: (1) Report generated / Scan ID, (2) Report schema / Build. Render time captured via `datetime.now(UTC)` at top of `build_report`; build from `ACP_BUILD_SHA` env var (shows `—` when absent); schema is `REPORT_SCHEMA_VERSION = "1.0"`. Snapshot notice added near the top when `run["status"]` is not a done state. 8 tests in `tests/test_report_provenance_p16.py`. |
 | P-17 | `api/report.py` | **Improve evidence presentation.** Per finding: file + location, criterion, detector/method, observed value, expected condition, relevant page/element, confidence or manual-review flag, evidence-collection timestamp. Long evidence expands rather than disappearing; redacted values are marked as redacted. |
 | ~~P-18~~ | `api/report.py` | ~~**Report-level reconciliation checks before rendering.**~~ **DONE**: `_reconciliation_checks()` validates rubric hash presence, orphan facts documents, catalog size, review arithmetic, and remediated_total; RED-bordered warning box rendered when any check fails (9 tests in `test_report_reconciliation_p18.py`). |
 | P-19 | `api/report.py` | **Print/PDF/AT behaviour.** Tables must repeat headers across pages; rows must not split into unreadable fragments; URLs and finding IDs must be usable in print; charts need text equivalents; colour is never the only status indicator; heading order and table semantics are correct; QR codes have adjacent human-readable URLs; page headers identify the scan and report date. |
