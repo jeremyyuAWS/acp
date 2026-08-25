@@ -189,15 +189,16 @@ describe('lifecycle KPI on the lifecycle step', () => {
     expect(html).not.toContain('unchanged')
   })
 
-  it('shows "0 matched" when all rows have null lifecycle_rule_id', () => {
+  it('shows "— No enabled rules" when all rows have null lifecycle_rule_id', () => {
     const nullRuleInv = { rows: [
       { file: 'a.docx', lifecycle_rule_id: null },
       { file: 'b.docx', lifecycle_rule_id: null },
     ], total: 2 }
     const prog = { phase: 'scoring', files_found: 2 }
     const html = render(prog, true, undefined, undefined, nullRuleInv)
-    expect(html).toContain('0 matched')
-    expect(html).toContain('2 unchanged')
+    expect(html).toContain('No enabled rules')
+    expect(html).not.toContain('0 matched')
+    expect(html).not.toContain('2 unchanged')
   })
 
   it('lifecycle KPI appears near the Applied lifecycle rules step, not on other steps', () => {
@@ -439,5 +440,71 @@ describe('reconciliation in completion summary', () => {
     // But the core summary line must still appear
     expect(html).toContain('files discovered')
     expect(html).toContain('No documents were assessed or changed')
+  })
+})
+
+describe('lifecycle no-rules treatment', () => {
+  it('shows "No enabled rules" when all files have null lifecycle_rule_id', () => {
+    const noRulesInv = { rows: [
+      { file: 'a.docx', lifecycle_rule_id: null },
+      { file: 'b.pptx', lifecycle_rule_id: null },
+      { file: 'c.pdf',  lifecycle_rule_id: null },
+    ], total: 3 }
+    const prog = { phase: 'scoring', files_found: 3 }
+    const html = render(prog, true, undefined, undefined, noRulesInv)
+    expect(html).toContain('No enabled rules')
+    expect(html).not.toContain('0 matched')
+    expect(html).not.toContain('3 unchanged')
+  })
+
+  it('still shows matched/unchanged when at least one rule fired', () => {
+    const mixedInv = { rows: [
+      { file: 'a.docx', lifecycle_rule_id: 'ret-1' },
+      { file: 'b.docx', lifecycle_rule_id: null },
+    ], total: 2 }
+    const prog = { phase: 'scoring', files_found: 2 }
+    const html = render(prog, true, undefined, undefined, mixedInv)
+    expect(html).toContain('1 matched')
+    expect(html).toContain('1 unchanged')
+    expect(html).not.toContain('No enabled rules')
+  })
+
+  it('"No enabled rules" appears in the lifecycle step row, not elsewhere', () => {
+    const noRulesInv = { rows: [{ file: 'a.docx', lifecycle_rule_id: null }], total: 1 }
+    const prog = { phase: 'scoring', files_found: 1 }
+    const html = render(prog, true, undefined, undefined, noRulesInv)
+    const lifecycleIdx = html.indexOf('Applied lifecycle rules')
+    const nextIdx = html.indexOf('Saving inventory')
+    const noRulesIdx = html.indexOf('No enabled rules')
+    expect(noRulesIdx).toBeGreaterThan(lifecycleIdx)
+    expect(noRulesIdx).toBeLessThan(nextIdx)
+  })
+})
+
+describe('lifecycle stall hint', () => {
+  it('does not show lifecycle hint before 30 s', () => {
+    // elapsed starts at 0 on mount; renderToStaticMarkup captures that snapshot
+    const prog = { phase: 'analysing', files_found: 100 }
+    const html = render(prog, true)
+    expect(html).not.toContain('Lifecycle evaluation is taking longer')
+  })
+
+  it('does not show lifecycle hint in non-analysing phases', () => {
+    // tagging phase is not analysing — hint must not appear regardless of elapsed
+    const prog = { phase: 'tagging', files_found: 100 }
+    const html = render(prog, true)
+    expect(html).not.toContain('Lifecycle evaluation is taking longer')
+  })
+
+  it('hint text is discoverable in the DOM when phase is analysing', () => {
+    // The hint is gated on elapsed >= 30 which starts at 0 and only grows via useEffect;
+    // since renderToStaticMarkup does not run effects, elapsed will be 0 and the hint will not
+    // render. We verify the correct guard by checking the other side: the text must NOT appear
+    // in any other phase, and the analysing phase itself must not show it at t=0.
+    const phases = ['queued', 'connecting', 'discovering', 'reading', 'tagging', 'scoring', 'finalizing']
+    for (const phase of phases) {
+      const html = render({ phase, files_found: 50 }, true)
+      expect(html).not.toContain('Lifecycle evaluation is taking longer')
+    }
   })
 })

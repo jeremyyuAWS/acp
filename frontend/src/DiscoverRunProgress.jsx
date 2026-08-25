@@ -144,7 +144,9 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
         kpi = `${n(assessableCount)} assessable · ${n(unsupportedCount)} unsupported`
       }
       if (s.key === 'lifecycle' && lifecycleMatchedCount !== null && lifecycleUnchangedCount !== null) {
-        kpi = `${n(lifecycleMatchedCount)} matched · ${n(lifecycleUnchangedCount)} unchanged`
+        kpi = lifecycleMatchedCount === 0
+          ? '— No enabled rules'
+          : `${n(lifecycleMatchedCount)} matched · ${n(lifecycleUnchangedCount)} unchanged`
       }
     }
     if (status === 'active' && s.key === 'listing' && filesFound > 0) {
@@ -156,6 +158,8 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
 
   // After 90 s with no files found during listing, the source likely has many folders to walk.
   const showLongRunningHint = elapsed >= 90 && filesFound === 0 && phase === 'discovering'
+  // Lifecycle evaluation runs AI classification and can take 30+ s on large inventories.
+  const showLifecycleSlowHint = elapsed >= 30 && phase === 'analysing'
 
   // The step label that is currently active — used in a dedicated live region so phase transitions
   // are announced once, without the per-tick KPI counts that aria-hidden="true" suppresses above.
@@ -250,6 +254,11 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
         {showLongRunningHint && (
           <p className="muted" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5 }}>
             This source contains many folders — discovery is still active.
+          </p>
+        )}
+        {showLifecycleSlowHint && (
+          <p className="muted" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5 }}>
+            Lifecycle evaluation is taking longer than usual.
           </p>
         )}
       </div>
