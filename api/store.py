@@ -4055,6 +4055,19 @@ class Store:
                 out.update(self._row_approved_values(row))
         return out
 
+    def approved_structure_label_values(self, scan_id: str, file: str) -> dict[str, str]:
+        """{locator: label} awaiting a write into `file`, from approved 2.4.6 xlsx rows.
+
+        Locators are 'sheet:<tab name>' and 'table:<displayName>#col:<colName>', written by
+        apply_xlsx_labels. Scoped to xlsx 2.4.6 because the applier renames workbook.xml
+        sheet tabs and table column headers — a different write target from link text or alt.
+        """
+        out: dict[str, str] = {}
+        for row in self._approved_unapplied_rows(scan_id, file):
+            if str(row.get("rule_id") or "").strip() == "2.4.6":
+                out.update(self._row_approved_values(row))
+        return out
+
     def has_approved_values_to_write(self, scan_id: str, file: str) -> bool:
         """True when `file` holds approved content some applier can write into the document.
 
@@ -4073,7 +4086,8 @@ class Store:
                     or self.approved_link_values(scan_id, file)
                     or self.approved_field_values(scan_id, file)
                     or self.approved_sensory_values(scan_id, file)
-                    or self.approved_language_values(scan_id, file))
+                    or self.approved_language_values(scan_id, file)
+                    or self.approved_structure_label_values(scan_id, file))
 
     def approve_proposal_values(self, item_id: str, values: list[str | None]) -> int:
         """Record the reviewer's final text per instance, positionally.
