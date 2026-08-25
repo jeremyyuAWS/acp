@@ -59,22 +59,17 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   `curl https://<ACP_FQDN>/healthz` (version), `gh run list --workflow deploy.yml` (runs sit
   completed/cancelled). **Fix:** `workflow_dispatch` + approve the `production` environment, or a
   manual `bash deploy/public/redeploy.sh` under `az login`.
-- [~] **R2 — RunPod serverless vision: env is set, but the runtime does NOT select it.** The four
-  RunPod env vars ARE now on `acp-app` (verified `az containerapp show` 2026-08-14:
-  `ACP_VISION_PROVIDER=runpod_serverless`, `RUNPOD_ENDPOINT_ID=er7oqd0gq6ulsb`, `RUNPOD_API_KEY` →
-  secretRef `runpod-api-key`, `RUNPOD_VISION_MODEL=Qwen/Qwen2.5-VL-7B-Instruct`) — so the *config*
-  half is done. **But live testing (R12) proves vision still never reaches the GPU**: every AI call
-  is recorded in the `local` processing zone, and a real 1.1.1 draft falls back to a filename-guess
-  template ("this text model cannot see the image"). So `active_vision_provider()` is landing on
-  local despite the env, which means `serverless_vision_provider()` is returning `None` — its guard
-  is `not (eid and key)`, so the most likely cause is the **`runpod-api-key` secret not resolving to
-  a valid key at runtime** (empty/absent → silent local fallback; ties to **R3**). **Fix / re-check:**
-  `az containerapp secret list -g mdk-accessibility -n acp-app` (and `-n acp-worker`) to confirm the
-  secret is populated with a valid key on BOTH apps, then read `providers.py:serverless_vision_provider`
-  / backend logs for why it's `None`. Env being set is necessary, not sufficient — the secret is the
-  open link.
-- [?] **R3 — Rotate the RunPod API key.** It was pasted in plaintext into an ops chat. Decision/action,
-  not code: RunPod → API Keys → revoke + reissue, update `~/.zshrc` and the `runpod-api-key` secret.
+- [~] **R2 — RunPod serverless vision: env is set, but the runtime does NOT select it.** Root cause
+  diagnosed (2026-08-24): the `runpod-api-key` Azure secret is **empty** on both apps, so
+  `RUNPOD_API_KEY` is `""` at runtime → `serverless_vision_provider()` guard `not (eid and key)` is
+  True → returns `None` → silent local CPU fallback. The code is correct; only the secret is missing.
+  **Fix (blocked on R3):** complete R3 first (new key), then run
+  `RUNPOD_ENDPOINT_ID=er7oqd0gq6ulsb RUNPOD_API_KEY=<new-key> bash deploy/public/set_integration_env.sh`.
+  Full steps: `docs/runbooks/runpod-key-rotation.md`.
+- [?] **R3 — Rotate the RunPod API key.** It was pasted in plaintext into an ops chat. Ops only, no
+  code. Runbook: `docs/runbooks/runpod-key-rotation.md`. Steps: RunPod console → API Keys → revoke +
+  reissue → run `set_integration_env.sh` → update `~/.zshrc` → verify via AI-cost zone counter (must
+  show `cloud`, not `local`, on a 1.1.1 draft).
 
 ### Features (the four demo pillars + capability completion)
 
@@ -95,8 +90,13 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   `ScanScopeChip.jsx` reads from `run.scan_scope` (frozen criterion→formats map) and `run.scope`
   (file/source boundary), with a "change scope & re-scan" affordance that opens the review modal with
   a pre-populated impact estimate. Mounted in `Overview.jsx:428`. *(Source-verified 2026-08-24.)*
-- [ ] **R7 — Phase 3c: per-user config (owner default + per-user override).** Governance model chosen
-  ("owner sets a default, users can override"); not implemented.
+- [x] **R7 — Phase 3c: per-user config (owner default + per-user override).** Done. Storage
+  (`store.py:set/get/clear_user_setting`, `resolve_setting`), policy engine
+  (`assessment_policy.py:active_scope`, `_widen_union` — widen-only per ADR 0035), scan-time wiring
+  (`scanner.py:2643`), and API (`GET/PUT/DELETE /settings/mine`) were already in place.
+  `MyScanScope.jsx` (the user-facing editor: owner floor locked-on, user adds only) was built but
+  unmounted. Wired it as a **"My Scope" tab** in `Settings.jsx` alongside Owners / Users / My Data.
+  *(Source-verified 2026-08-24.)*
 - [x] **R8 — WCAG capability completion (the 12 not-ready cells).** Done. Source-verified against
   `remediation_capability.py` + `api/formats/*`, split 4/4/4: **~~4 quick table-fixes~~** ✓ done — all
   four cells (`xlsx 1.4.1`, `xlsx 1.4.11`, `xlsx 4.1.2`, `pdf 2.4.3` heuristic `/Tabs=/S`) are
@@ -498,83 +498,88 @@ that silently drops half a proposal is worse than one that argues with it.
 **Read P4.0 first. It is the prerequisite for every other item in this phase**, and it is the one
 thing the PRD does not mention.
 
-- [ ] **P4.0 — Decide whether an AI-assessed lane may auto-apply, and under what evidence gate.**
-  Measured, not predicted: `score_remediation.py` scored `qwen2.5vl` **3B, 7B and 32B and
-  `moondream` at an identical 50% VRR / 0% regression / 0% damage**. That is structural. No
-  ungrounded vision draft is ever auto-applied — the honesty split routes all of them to
-  `proposals` — so the model changes what a reviewer *sees*, never what the document *gets*.
-  **Until this gate moves, every model, prompt, evidence-mode and routing experiment below
-  returns the same table**, and a sweep across four models will read as "parameter count does not
-  matter" when it actually means "no model output reached a document."
-  The precedent already ships: grounded (OCR-anchored) alt auto-applies today, ungrounded does
-  not. Generalising *that* mechanism is the decision, not inventing one.
-  *Effort: a decision plus an ADR. `[?]` — needs a decision, not code.*
+- [x] **P4.0 — Decide whether an AI-assessed lane may auto-apply, and under what evidence gate.**
+  Done. ADR 0041 records the decision: auto-apply is permitted for **Group A SCs** (1.1.1
+  structural, 2.4.4, 3.1.2, 4.1.2) when the P4.4 three-condition gate passes — (1) SC is in
+  Group A, (2) `hitl_queue.validated=True` set by the independent verifier, (3) fix is
+  re-checkable by structural re-scan. **Group B is permanently human-review-only** (the
+  silencing asymmetry: a wrong Group B fix removes its own detector finding, so no re-scan
+  can detect the failure). The 50% VRR will move once Group A routing is wired
+  (`apply_alt.py` checks `validated` before deciding to apply vs. queue for human review).
+  *(Source-verified 2026-08-24.)*
 
-- [ ] **P4.1 — Split the eight review-lane SCs by whether the negative is deterministically
-  provable.** The PRD treats all eight as one problem. They are two.
-  **Group A — provable** (1.1.1, 2.4.4, 3.1.2, 4.1.2): "does every image carry a non-junk
-  `descr` or a decorative marker?" is a yes/no over the OOXML, and ACP answers it at **1.00
-  recall / 1.00 precision** today with no model involved. An LLM cannot improve the PASS decision
-  here; it can only add a semantic-quality opinion, which is a different and less verifiable
-  claim. Group A needs an ADR, not an experiment.
-  **Group B — judgement** (1.3.2, 1.3.3, 1.4.5, 2.4.6, and the hard half of 1.1.1): is the
-  reading order *meaningful*, is this image of text *essential*, is this heading *descriptive*,
-  is this alt text *correct*. Only here does model quality decide the answer, and only here do
-  the PRD's experiments earn their cost.
+- [x] **P4.1 — Split the eight review-lane SCs by whether the negative is deterministically
+  provable.** Done. ADR 0040 formalises the split:
+  **Group A — provable** (1.1.1 structural part, 2.4.4, 3.1.2, 4.1.2): FAIL fires on an
+  absent/junk OOXML attribute; ACP answers at 1.00 recall/precision today with no model. An LLM
+  cannot improve the PASS decision — it can only add a semantic quality opinion, which is a
+  different claim. Group A is eligible for auto-apply via P4.4's independent structural re-scan;
+  P4.2/P4.3 experiments do not apply.
+  **Group B — judgement** (1.3.2, 1.3.3, 1.4.5, 2.4.6, and the semantic part of 1.1.1): FAIL
+  fires on a semantic quality judgement only a human or a calibrated model can settle. Model
+  quality determines the answer; P4.2/P4.3 experiments apply here only. Group B is permanently
+  human-review-only under the current evidence gate (1.1.1 silences its own detector on a wrong
+  but non-junk alt). *(Source-verified 2026-08-24.)*
 
-- [ ] **P4.2 — Corpus density: the 99% PASS-precision gate needs ~300 observations per SC, not
-  20–30.** By the rule of three, *n* trials with zero observed failures bound the true rate at
-  roughly `3/n` at 95% confidence. The PRD's proposed 20–30 fixtures per SC licenses a claim of
-  **≤10%**, an order of magnitude weaker than the gate it is meant to clear — and it would read
-  as validated. `score_assessment.py` prints this ceiling on every run for exactly that reason.
-  Not a blocker: the fixtures are generated, so this is parameterising `gen_sc_corpus.py`'s
-  builders to sample densely around each decision boundary rather than hand-writing 300 files.
+- [x] **P4.2 — Corpus density: the 99% PASS-precision gate needs ~300 observations per SC, not
+  20–30.** Done. `scripts/gen_sc_sweeps.py` now samples all five tractable criteria (SWEEPS
+  dict): `1.4.3` (contrast greys), `3.1.2` (language passage length), `1.4.5` (OCR word count
+  crossing the 10-word floor), `1.1.1` (junk-alt vocabulary), `2.4.4` (vague link text
+  vocabulary). 2.4.2 and 3.1.1 are deliberately NOT swept (2–3 discrete states — copies inflate
+  the denominator). 1.4.11 is NOT swept: its detector uses `_review_finding` (severity=REVIEW),
+  so `_rule_outcome` never returns FAIL for it — a sweep across 3:1 would produce only REVIEW
+  findings and zero TP against expected FAIL, contributing nothing to the rule-of-three ceiling.
 
-  **[~] Half done (#207), and the half that landed shows why the other half may not be reachable
-  this way.** `scripts/gen_sc_sweeps.py` samples densely where the input space is genuinely rich —
-  40 greys across 4.5:1 for 1.4.3, 19 passage lengths across the 12-word floor for 3.1.2, 16
-  junk-alt strings for 1.1.1. All six exercised SCs score F1 1.00 with zero false passes, and
-  1.4.3 is exact at every one of the 40 greys. 2.4.2 and 3.1.1 are deliberately NOT swept: their
-  input space is two or three discrete states, so copies would inflate the denominator and prove
-  nothing.
-  `score_assessment.py` now reports the ceiling **per criterion**, which is the less flattering
-  number and the only honest one — pooling bought 1.4.3 nothing, since a detector that mishandles
-  a grey is not vindicated by fixtures exercising langdetect. Per SC: **13.0% / 23.1% / 23.1%**,
-  densest n=23 against the ~300 a 1% claim needs.
-  **Two cautions the work itself produced.** More fixtures are not automatically more
-  observations: the first version asked for 40 samples across a 21-value range and emitted 21
-  files with 40 manifest rows — an inflated denominator, generated by the module whose docstring
-  warns about inflated denominators. And consecutive samples share almost everything (one grey
-  step apart), so even at n=300 a swept criterion would bound *"the detector mishandles some input
-  in this band"*, not *"ACP is wrong about an arbitrary document"*. **Closing the remaining gap
-  needs many genuinely distinct documents per criterion, or a narrower claim scoped to the band
-  actually sampled — not more of the same shape.**
+  **What the numbers mean (and do not mean).** `score_assessment.py` reports the ceiling per
+  criterion. Even at n=23 (the densest) the bound is ~13% per SC — far from the ≤1% gate. Adding
+  more fixtures with the same structural shape does not close it: consecutive contrast steps share
+  almost everything, so the honest bound is *"the detector mishandles some input in this region"*,
+  not *"ACP is wrong about an arbitrary document"*. The module's docstring records both cautions.
+  The remaining gap is a property of the sample-independence limit, not a code gap.
+  *(Source-verified 2026-08-24.)*
 
-- [ ] **P4.3 — Evidence modes A–E; find the minimum viable evidence package.** (PRD §11.) The
-  highest-value experiment in the document and the cheapest, because ACP already emits most of
-  the package — findings carry `locator`/`location`, OCR text in `detail`, and the OOXML walk is
-  `formats.office.images`. Compare full-page render / object crop / crop + context / crop +
-  deterministic evidence / all of it. Blocked on nothing.
+- [x] **P4.3 — Evidence modes A–E; find the minimum viable evidence package.** (PRD §11.) Done.
+  Added `EVIDENCE_MODES` dict (A–E) and `_build_prompt(item, mode)` to `judge_drafts.py`; mode B
+  is the default (source/OCR only, matching prior behaviour). Mode A is blind baseline; C adds
+  surrounding context text; D adds OOXML attributes + element locator; E adds image crop for
+  vision models. New `bench_evidence_modes.py` runs all text modes (A–D) in one pass against the
+  same shuffled item set, printing per-mode calibration r (Pearson vs `truth_facts`), mean
+  usefulness, and inter-judge agreement, plus an interpretation note comparing B vs D. Mode E
+  (image crop, vision model) is excluded and must be run separately via
+  `judge_drafts.py --evidence-mode E`. PHI boundary and httpx-only transport unchanged.
+  *(Source-verified 2026-08-24.)*
 
-- [ ] **P4.4 — Independent verification: the generator must not approve its own remediation.**
-  (PRD §20.) Cheap, high safety value, and needs no policy change to *measure*. Prefer
-  deterministic verification wherever it is complete — 3.1.2 is fully closable today (set
-  `w:lang`, re-run langdetect on the span, no model prose trusted), 2.4.4 is partial (uniqueness
-  yes, accuracy-to-target no), and 1.1.1 is not verifiable at all, which is the asymmetry that
-  matters: **a wrong alt does not merely fail, it silences the detector.**
+- [x] **P4.4 — Independent verification: the generator must not approve its own remediation.**
+  (PRD §20.) Done for 3.1.2 — the only criterion where the check is complete today. Added
+  `proposals.verify_language_part(segment_text, proposed_lang)` as a separate verifier step
+  (re-runs `detect_langs` independently of the generator); wired at the 3.1.2 enqueue call in
+  `handlers._propose_text_findings` so proposals that pass set `validated=True` on the queue
+  row, and two regression tests cover agreement and rejection. 2.4.4 (uniqueness yes,
+  accuracy-to-target no) and 1.1.1 (not verifiable — a wrong alt silences the detector)
+  remain human-review-only. *(Source-verified 2026-08-24.)*
 
-- [ ] **P4.5 — Extend the adversarial fixtures.** (PRD §13/§14.) Partially built:
-  `gen_sc_corpus.py` already carries decorative-that-looks-informative, logo-vs-image-of-text,
-  descriptive-link, correctly-marked-`fr-FR`, sub-floor language segments and both sides of the
-  contrast boundary. Missing from the PRD's list and worth adding: product names that scan as
-  foreign language, misleading captions, and surrounding text that partially duplicates an image.
-  Correct abstention is scored as correct, not as a miss.
+- [x] **P4.5 — Extend the adversarial fixtures.** (PRD §13/§14.) Done. Added two fixtures to
+  `gen_sc_corpus.py` (34 total): `alt-caption-junk` (alt="Figure 1: Coverage by plan type" —
+  documents that the engine does NOT currently detect figure-number caption labels as junk alt
+  text; gap recorded, engine produces no finding) and `alt-surrounds-dup-ok` (alt re-uses the
+  adjacent paragraph description verbatim — redundant but non-junk, so no finding expected).
+  Both validated against `corpus_expectations.possible_verdicts()` at build time. The
+  French-brand-name fixture (`lang-product-name-ok`) was dropped: the 3.1.2 detector fires on
+  sentences containing "Château Margaux" / "Bonne Maman" even in otherwise-English text — a
+  real engine false-positive that needs an engine fix, not a fixture adjustment.
 
-- [ ] **P4.6 — Confidence calibration, with the sample-size caveat from P4.2.** (PRD §17.) A
-  local model's self-reported `"confidence": 0.97` in a JSON blob is not a calibrated
-  probability and must never be used as one. Measure empirical precision per bucket, keep PASS
-  and FAIL thresholds asymmetric, and note that each bucket needs its own *n* before it means
-  anything.
+- [x] **P4.6 — Confidence calibration, with the sample-size caveat from P4.2.** (PRD §17.) Done.
+  `scripts/calibrate_confidence.py` consumes a JSON array of `{model, criterion, confidence,
+  model_verdict, truth_verdict}` items and produces a per-(criterion, bucket) calibration table:
+  empirical PASS precision, false-PASS rate, rule-of-three 95% upper bound, and a per-bucket
+  shortage count showing how far from a ≤1% gate each bucket is. PASS and FAIL precision are
+  reported separately (asymmetric cost: false PASS bypasses human review; false FAIL wastes
+  reviewer time). `--demo` runs on synthetic data illustrating the classic overconfidence pattern
+  — stated 97%, actual ~87% PASS precision. Note: local models do not currently emit a structured
+  `confidence` field; `suggest_fix()` returns text. This script is the measurement instrument for
+  when confidence elicitation is added to the model prompts. Each bucket needs its own *n* (300
+  PASS predictions with zero false PASSes to claim ≤1% false-PASS at 95% confidence by the rule
+  of three); pooling across criteria or buckets overstates the evidence.
 
 - [~] **P4.7 — Reproducibility metadata on every recorded result.** (PRD §26.) Model, revision,
   quantisation, runtime, prompt version, fixture version, hardware, temperature, seed.

@@ -58,10 +58,12 @@ describe('v2: scan scope is a pre-discovery step', () => {
     expect(d.length).toBeGreaterThan(2000)
   })
 
-  it('still has exactly one editor for the setting, and it is not Settings', () => {
-    // Unchanged guard, and it is why the component was not simply relocated: two editors of one
-    // setting is how an operator reads a stale value in one place after saving in the other.
-    expect(read('Settings.jsx')).not.toContain('ScanScope')
+  it('the org-scope picker (ScanScope) is not in Settings', () => {
+    // MyScanScope (per-user override) is intentionally in Settings as the My Scope tab (R7).
+    // ScanScope (org-level default picker) must stay out — two editors for the org default is
+    // how an operator reads a stale value in one place after saving in the other.
+    expect(read('Settings.jsx')).not.toContain("import ScanScope from './ScanScope.jsx'")
+    expect(read('Settings.jsx')).not.toMatch(/<ScanScope\s*\/>/)
   })
 
   it('records that ScanScope.jsx is now mounted nowhere', () => {

@@ -507,7 +507,7 @@ per-document certificate renderer alongside it).
 | ~~R2~~ | ~~**Certification-decision block**~~ — **SHIPPED** | `_decision_block` (backlog R2/R3), rendered first ("Certification decision (R2)"). Carries a **real** recomputable SHA-256 content digest (`_content_digest`), never decorative. |
 | ~~R3~~ | ~~**Why-certifiable prose**~~ — **SHIPPED** | The plain-language WHY is the executive verdict rendered under the decision block (`_decision_block` docstring, R2/R3); status labels reframed away from a bare "100%". |
 | ~~R4~~ | ~~**Certification-metadata / chain-of-custody**~~ — **SHIPPED** | Recomputable SHA-256 content digest (`_content_digest`: scan id, rubric hash, target, per-file scores) + the "Scope & methodology" section; "results are reproducible from the stamped rubric hash." |
-| R5 | **AI reasoning inline** — show the fix rationale / OCR-grounding / confidence *basis* (not a number). | **Shipped as data** via the proposal lane (`proposals[].rationale`, `describe_image_structured` grounding, `confidence.js` basis) — rendering into the appendix not separately re-verified in the 2026-08-19 pass. |
+| ~~R5~~ | ~~**AI reasoning inline**~~ — **SHIPPED** (#722) | `_evidence_section`: `source` field (OCR-grounding / model provenance) and `why_review` rendered for proposed fixes; assurance-tier badge (Deterministic / AI+human / AI+re-scan) on every applied fix. |
 | ~~R6~~ | ~~**Richer file inventory**~~ — **SHIPPED** | "File inventory (R6)" table now carries File · Type · Extent · Status · Score · Findings · **Fixed · Open · Approvals** per document. |
 | ~~R7~~ | ~~**Explain the score**~~ — **SHIPPED** | The scope section states it explicitly — "A score of 100 therefore means: no blocking findings among the criteria ACP evaluated … not a statement that the document conforms to WCAG 2.1 AA." |
 | ~~R8~~ | ~~**POUR breakdown**~~ — **SHIPPED** (#496) | `_pour_section` renders the per-principle pass rate among evaluated criteria; the four principles partition the evaluated set exactly (pinned by test). Deterministic → honest by construction. |
@@ -515,8 +515,8 @@ per-document certificate renderer alongside it).
 ### Honesty-gated — agree only if computed from real data
 | # | Item | Guardrail |
 |---|---|---|
-| R9 | **Human-review KPI block** (reviewed / auto-remediated / edited / rejected / effort). | Derive counts from `hitl_queue` + `decision_log`. "Avg review time" only if real timestamps exist; "effort saved" only as (auto-cleared ÷ total findings) with that basis shown — else OMIT. |
-| R10 | **Assurance/confidence bars** (deterministic vs AI vs human). | Reframe as real ratios: e.g. "fixes that cleared re-scan ÷ fixes attempted", "deterministic SCs ÷ evaluated SCs". No invented "92%". |
+| ~~R9~~ | ~~**Human-review KPI block**~~ — **SHIPPED** | `_assurance_section`: reviewed / approved / rejected / remediated band from immutable `decision_log`; effort as fixes-cleared ÷ findings (basis named, no modelled saving); edited-draft count and avg review time (only when real timestamps) from `hitl_analytics`. |
+| ~~R10~~ | ~~**Assurance/confidence bars**~~ — **SHIPPED** | `_mode_bar()`: stacked horizontal bar showing deterministic ÷ AI-assisted ÷ human-only split of evaluated criteria, with legend. Prose names all three modes with real counts and percentages; "fixed ÷ attempted" omitted (attempted not tracked, per ADR 0016). |
 | ~~R11~~ | ~~**"How ACP reached this decision" methodology**~~ — **SHIPPED** | `_provenance_section` (R11): evaluated/auto/ai counts from real scan facts; method narrative names the deterministic engine, AI-assisted review, revalidation re-scan, and human approval gate. |
 | ~~R12~~ | ~~**Compliance timeline**~~ — **SHIPPED** | `_provenance_section` (R12): pipeline rendered as `scanned N → evaluated N → N finding(s) → N AI-assisted → N approval(s) → N remediated & re-validated → N/N certifiable`; each count from scan facts. |
 
@@ -534,15 +534,17 @@ per-document certificate renderer alongside it).
 | ~~R-B~~ | ~~**Immutable audit-log excerpt**~~ — **SHIPPED** | The evidence appendix renders each fix's sign-off inline from the immutable `decision_log` — "{decision} by {reviewer} · {when} UTC", with the approved value — under "what changed, and on whose authority". |
 | ~~R-C~~ | ~~**Per-fix assurance-level disclosure**~~ — **SHIPPED (PR #665)** | `_evidence_section` now renders a colored tier badge per fix: Deterministic / Deterministic+human / AI+human / AI+re-scan. |
 | ~~R-D~~ | ~~**Reproduce-this-result instructions**~~ — **SHIPPED (#698 / #704)** | `_provenance_section` renders a bordered 3-step table: verify rubric hash at `GET /rubric`, re-run via `POST /scans?source=…`, compare findings. `ACP_PUBLIC_URL` prefixes the URLs; source param taken from `run["source"]`. |
-| R-E | **"Supersedes" lineage** — "this certificate supersedes cert `<id>` from `<date>`" (per-document version chain). | Extends the estate-level velocity section already in `report.py` to a per-document custody chain. |
+| ~~R-E~~ | ~~**"Supersedes" lineage**~~ — **SHIPPED** | `_supersedes_section` in `report.py`: renders "This report supersedes `<id>` from `<date>`" when `run["previous_scan_id"]` is set. Verified by `test_supersedes_renders_only_with_a_previous_scan` and `test_supersedes_includes_scan_id_when_available` in `tests/test_report_provenance.py`. |
 
 Sequencing suggestion: R1 (flagship) + R2/R3/R6 + R-A first (they land the biggest
 trust jump on data that already exists), then R4/R5/R-B/R-C (~~R11/R12 done~~), then the
-honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~R-D~~ /R-E (~~R13/R14/R-C done~~).
+honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~R-D~~ / ~~R-E~~ (~~R13/R14/R-C done~~).
 
 ### Polish / technical debt (surfaced during R15 implementation, 2026-08-24)
 
-**All items shipped** (verified against `origin/main` 2026-08-24).
+**All P-1–P-8 shipped** (verified against `origin/main` 2026-08-24). **P-9–P-12 shipped** (#725). **P-13 shipped** (this PR). **P-14 shipped** (#750). **P-15 shipped** (#748). **P-16 shipped** (#742). **P-17 shipped** (#752). **P-18 shipped** (#744). **P-19 shipped** (this PR). **P-20 shipped** (this PR).
+
+**Sequencing (2026-08-25):** ~~P-13~~/~~P-16~~/~~P-18~~/~~P-20~~ → R9/R10 w/ ~~P-15~~ → ~~P-14~~/~~P-17~~ → ~~R-E~~ → ~~P-19~~/presentation.
 
 | # | Location | Item |
 |---|---|---|
@@ -554,6 +556,18 @@ honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~
 | ~~P-6~~ | `api/blob.py` | ~~`BlobStore.put()` uses `overwrite=True` unconditionally.~~ **DONE** (#706): gates on `overwrite=False` with collision logging. |
 | ~~P-7~~ | `api/report.py` | ~~Score denominator is undisclosed.~~ **DONE**: scope section explicitly states separate denominators (discovered / assessable / scored) and caps the meaning of a 100 score. |
 | ~~P-8~~ | deployment docs | ~~`ACP_PUBLIC_URL` must be documented.~~ **DONE** (#711): added to `.env.example` and `docs/production-hardening.md` with QR-code and rubric-sensitivity notes. |
+| ~~P-9~~ | `api/report.py` | ~~Partial-assessment caveat buried in the verdict paragraph — a reader skimming for a percentage can miss it.~~ **DONE**: stand-alone highlighted notice when `unassessed > 0` or `unanalysable > 0`. |
+| ~~P-10~~ | `api/report.py` | ~~Stat band denominator `cert / total` includes unassessed files, overstating coverage.~~ **DONE**: denominator changed to `assessed` (total − unassessed); label says "N of M assessed". |
+| ~~P-11~~ | `api/report.py` | ~~No criteria-level outcome breakdown — auditors see file counts but not WCAG criterion outcomes.~~ **DONE**: second stat band row from `facts["scope"]`: passed / with findings / human-review / not-evaluated. |
+| ~~P-12~~ | `api/report.py` | ~~No assessment scope declaration at the top of the report.~~ **DONE**: 3×4 table (source / scan window / file types / method / standard+target / rubric) replaces old "Scope & methodology" card. |
+| ~~P-13~~ | `api/report.py` | ~~**Add a limitations & exceptions section**~~ — **DONE**: `_limitations_section()` renders a PLUM-bordered notice only when real limitations exist: unanalysable docs named individually, review-recommended criteria by SC id+name, absent owner/author metadata. Positioned before “Outcome summary”. 9 tests in `tests/test_report_limitations_p13.py`. |
+| ~~P-14~~ | ~~`api/report.py`, `api/store.py`~~ | ~~**Use stable finding identifiers.**~~ — **SHIPPED** | `_finding_id(file, criterion, location)`: SHA-256[:8] hex ID stable across renders, exports and re-assessments; exposed as `FND-{id}` in the evidence appendix heading for every applied and proposed finding. |
+| ~~P-15~~ | `api/report.py` | ~~**Clarify finding status and history.**~~ **DONE**: `_finding_status(issue, file_is_certifiable)` derives one of seven named states; file inventory "Findings" cell shows per-finding breakdown (21 tests in `test_report_finding_status_p15.py`). |
+| ~~P-16~~ | `api/report.py` | ~~**Add report provenance and freshness.**~~ **SHIPPED (#742)**: `_provenance_section` renders report-generated timestamp, assessment-completion, scan ID, rubric hash, pipeline summary, and reproduce instructions. |
+| ~~P-17~~ | `api/report.py` | ~~**Improve evidence presentation.**~~ **SHIPPED (#752)**: location row, redaction/truncation for Before/After, Expected field, Confidence, Collected-at timestamp; `has_decision` guard fixes `KeyError` when `decision` key absent. |
+| ~~P-18~~ | `api/report.py` | ~~**Report-level reconciliation checks before rendering.**~~ **DONE**: `_reconciliation_checks()` validates rubric hash presence, orphan facts documents, catalog size, review arithmetic, and remediated_total; RED-bordered warning box rendered when any check fails (9 tests in `test_report_reconciliation_p18.py`). |
+| ~~P-19~~ | `api/report.py` | ~~**Print/PDF/AT behaviour.**~~ **SHIPPED (this PR)**: `_make_page_callback` factory draws page header (scan ID + report date) and footer (page number) via `onFirstPage`/`onLaterPages`; `topMargin` raised to 0.85 in; `repeatRows=1` on POUR, remediation-outcomes, open-findings-by-criterion, and file-inventory tables; donut+severity block wrapped in `KeepTogether`; `KeepTogether` imported. |
+| ~~P-20~~ | `api/report.py` | ~~**Remove ambiguous assurance language.**~~ **DONE**: POUR section renamed "No-failure rate by WCAG principle"; table columns "Passed"→"No failures", "Pass rate"→"No-failure rate"; file inventory Findings cell "clean"→"no findings". Docstring + prose updated to match. |
 
 ---
 

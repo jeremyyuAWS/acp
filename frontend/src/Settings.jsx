@@ -357,6 +357,7 @@ export function DriveMirror() {
 // imported here: their tabs were removed (this panel is now access-only). Re-import + re-add a tab
 // to surface one again — none of those files were deleted.
 import OwnerDelegate from './OwnerDelegate.jsx'
+import MyScanScope from './MyScanScope.jsx'
 import { useDialog } from './a11y.js'
 
 // Platform settings, behind the header cog — gated to the Platform Admin. Holds
@@ -792,11 +793,13 @@ export default function Settings({ onClose, files = [], onDelegationChange }) {
           <button role="tab" aria-selected={tab === 'owners'} className={tab === 'owners' ? 'fchip on' : 'fchip'} onClick={() => setTab('owners')}>Owners</button>
           <button role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'fchip on' : 'fchip'} onClick={() => setTab('users')}>Users</button>
           <button role="tab" aria-selected={tab === 'mydata'} className={tab === 'mydata' ? 'fchip on' : 'fchip'} onClick={() => setTab('mydata')}>My Data</button>
+          <button role="tab" aria-selected={tab === 'myscope'} className={tab === 'myscope' ? 'fchip on' : 'fchip'} onClick={() => setTab('myscope')}>My Scope</button>
         </div>
         <div className="setbody">
           {tab === 'owners' && <OwnerDelegate files={files} onChanged={onDelegationChange} />}
           {tab === 'users' && <AllowList />}
           {tab === 'mydata' && <ResetMyData />}
+          {tab === 'myscope' && <MyScanScope />}
         </div>
       </div>
     </div>

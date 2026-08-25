@@ -33,8 +33,11 @@ awaiting approval, which are never presented as remediated. That separation is
 the report's core honesty guarantee.
 """
 from __future__ import annotations
+import hashlib
 import io
 import logging
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 _LOG = logging.getLogger(__name__)
@@ -46,7 +49,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import (HRFlowable, Image, Paragraph,
+from reportlab.platypus import (HRFlowable, Image, KeepTogether, Paragraph,
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 
 import human_categories as _hc
@@ -69,6 +72,7 @@ LOGO = Path(__file__).resolve().parent / "assets" / "mova-logo.png"
 # of the documents it reports on. A scan of a Spanish estate still produces an English report,
 # so this is a property of this module's strings and moves only when they are translated.
 REPORT_LANG = "en-US"
+REPORT_SCHEMA_VERSION = "1"
 
 # SC id → (display name, WCAG level, one-line plain-language description). Drives the
 # criteria table and keeps the report self-explanatory for a non-specialist reader.
@@ -104,6 +108,52 @@ STATUS_LABEL = {"certifiable": "no blocking findings", "issues": "open findings"
                 "clean": "no findings", NOT_ASSESSED: "not assessed"}
 SEV_COLOR = {"CRITICAL": RED, "SERIOUS": AMBER, "MODERATE": BLUE, "MINOR": GREY}
 SEV_ORDER = ["CRITICAL", "SERIOUS", "MODERATE", "MINOR"]
+
+# P-15: per-finding status states and display order (most urgent first)
+FINDING_STATUSES = [
+    "Open", "Reopened", "Remediation attempted", "Awaiting re-scan",
+    "Verified resolved", "Accepted exception", "False positive",
+]
+FINDING_STATUS_COLOR = {
+    "Open": AMBER, "Reopened": RED, "Remediation attempted": PLUM,
+    "Awaiting re-scan": BLUE, "Verified resolved": GREEN,
+    "Accepted exception": MUTED, "False positive": MUTED,
+}
+# Explicit status strings accepted from issue["status"] (lowercase, underscores or spaces)
+_FINDING_STATUS_MAP = {
+    "open": "Open", "reopened": "Reopened",
+    "remediation_attempted": "Remediation attempted", "remediation attempted": "Remediation attempted",
+    "awaiting_rescan": "Awaiting re-scan", "awaiting re-scan": "Awaiting re-scan",
+    "awaiting_re-scan": "Awaiting re-scan",
+    "verified_resolved": "Verified resolved", "verified resolved": "Verified resolved",
+    "accepted_exception": "Accepted exception", "accepted exception": "Accepted exception",
+    "false_positive": "False positive", "false positive": "False positive",
+}
+
+
+def _finding_status(issue: dict, file_is_certifiable: bool) -> str:
+    """P-15: map one issue dict to one of the seven named finding states.
+
+    Explicit issue["status"] wins; otherwise derived from boolean flags and the
+    file-level certifiable flag.  Certifiable means the re-scan confirmed the
+    document no longer fails — any finding present on a certifiable doc was
+    cleared by that re-scan and is "Verified resolved", NOT merely "remediated".
+    """
+    explicit = (issue.get("status") or "").strip().lower().replace("-", "_")
+    mapped = _FINDING_STATUS_MAP.get(explicit) or _FINDING_STATUS_MAP.get(explicit.replace("_", " "))
+    if mapped:
+        return mapped
+    if issue.get("false_positive") or issue.get("fp"):
+        return "False positive"
+    if issue.get("accepted_exception") or issue.get("exception"):
+        return "Accepted exception"
+    if issue.get("reopened"):
+        return "Reopened"
+    if issue.get("awaiting_rescan") or issue.get("rescan_needed"):
+        return "Awaiting re-scan"
+    if issue.get("remediated_at") or issue.get("remediation_attempted"):
+        return "Verified resolved" if file_is_certifiable else "Remediation attempted"
+    return "Verified resolved" if file_is_certifiable else "Open"
 
 
 def _crit_name(c):
@@ -145,22 +195,41 @@ def _extent(f):
     return "—"
 
 
-def _footer(canvas, doc):
-    # WCAG 2.4.2 Page Titled is two halves, and the report only ever shipped one of them. The
-    # docinfo /Title has always been set (build_report's `title=`), but a viewer with
-    # DisplayDocTitle unset shows the FILENAME in its window/tab regardless — so the title an
-    # assistive technology announces for the certification document was "acp-report-<uuid>.pdf".
-    # This is a catalog write, not graphics state, so it is unaffected by the save/restore pair
-    # below and idempotent across the pages _footer runs on.
-    canvas.setViewerPreference("DisplayDocTitle", "true")
-    canvas.saveState()
-    canvas.setStrokeColor(LINE)
-    canvas.line(0.7 * inch, 0.45 * inch, LETTER[0] - 0.7 * inch, 0.45 * inch)
-    canvas.setFont("Helvetica", 7.5)
-    canvas.setFillColor(MUTED)
-    canvas.drawString(0.7 * inch, 0.31 * inch, "mova.io · Accessibility Compliance Platform · confidential")
-    canvas.drawRightString(LETTER[0] - 0.7 * inch, 0.31 * inch, f"Page {canvas.getPageNumber()}")
-    canvas.restoreState()
+def _make_page_callback(scan_id: str, report_date: str):
+    """P-19: every page carries a header (scan ID + date) and footer (brand + page number).
+
+    The header satisfies two requirements: page headers identify the scan and report date
+    (so a printed page can be matched back to the scan without the cover), and colour is never
+    the only indicator (both header and footer are plain text, no colour-only elements).
+
+    Returns a single function suitable for both onFirstPage and onLaterPages.
+    """
+    def _on_page(canvas, doc):
+        # WCAG 2.4.2 Page Titled — two halves: /Title docinfo (set in SimpleDocTemplate's
+        # `title=` arg) and DisplayDocTitle so a viewer/AT uses the docinfo title instead of
+        # the filename. This is a catalog write, unaffected by the save/restore pair below.
+        canvas.setViewerPreference("DisplayDocTitle", "true")
+        canvas.saveState()
+        w = LETTER[0]
+        # ── Header — scan identity on every page ─────────────────────────────
+        canvas.setStrokeColor(LINE)
+        canvas.line(0.7 * inch, LETTER[1] - 0.47 * inch, w - 0.7 * inch, LETTER[1] - 0.47 * inch)
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(MUTED)
+        canvas.drawString(0.7 * inch, LETTER[1] - 0.63 * inch,
+                          f"Scan {scan_id}  ·  Report generated {report_date} UTC")
+        canvas.drawRightString(w - 0.7 * inch, LETTER[1] - 0.63 * inch,
+                               "Accessibility Assessment Report")
+        # ── Footer — brand + page number ─────────────────────────────────────
+        canvas.setStrokeColor(LINE)
+        canvas.line(0.7 * inch, 0.45 * inch, w - 0.7 * inch, 0.45 * inch)
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(MUTED)
+        canvas.drawString(0.7 * inch, 0.31 * inch,
+                          "mova.io · Accessibility Compliance Platform · confidential")
+        canvas.drawRightString(w - 0.7 * inch, 0.31 * inch, f"Page {canvas.getPageNumber()}")
+        canvas.restoreState()
+    return _on_page
 
 
 def _content_digest(run: dict, files: list, meta: dict) -> str:
@@ -280,6 +349,16 @@ def _esc(s) -> str:
     if len(escaped) > 2000:
         return escaped[:2000] + "…"
     return escaped
+
+
+def _finding_id(file: str, criterion: str, location: str = "") -> str:
+    """Deterministic 8-char hex ID stable for the same (file, criterion, location) triple.
+
+    Stable across renders, exports, and re-assessments of the same finding. Does not include
+    scan_id so the same logical finding in different scans of the same document has the same ID.
+    """
+    key = f"{file}|{criterion}|{location or ''}".encode()
+    return hashlib.sha256(key).hexdigest()[:8]
 
 
 def _decision_block(run, files, meta, facts, h2, body, muted) -> list:
@@ -494,28 +573,28 @@ def _pour_bars(principles) -> Drawing:
 
 
 def _pour_section(facts, h2, body, cell, muted) -> list:
-    """Pass rate by WCAG principle — POUR (backlog R8).
+    """No-failure rate by WCAG principle — POUR (backlog R8).
 
     WCAG groups its success criteria under four principles (Perceivable / Operable /
     Understandable / Robust), split here by the leading digit of each SC number. Per principle,
     this shows how many of the criteria ACP actually EVALUATED (a validator ran and returned PASS
-    or FAIL) passed. Deterministic and honest by construction: not-evaluated and review-only
-    criteria are excluded, so this is a pass rate among evaluated checks — NOT a conformance
-    percentage. Rendered only when something was evaluated; a principle with nothing evaluated
-    shows "—" rather than a misleading 0%.
+    or FAIL) returned no failures. Deterministic and honest by construction: not-evaluated and
+    review-only criteria are excluded, so this is a no-failure rate among evaluated checks —
+    NOT a conformance percentage. Rendered only when something was evaluated; a principle with
+    nothing evaluated shows "—" rather than a misleading 0%.
     """
     principles = (facts or {}).get("principles") or []
     if sum(p.get("evaluated", 0) for p in principles) == 0:
         return []
-    el = [Paragraph("Pass rate by WCAG principle", h2)]
+    el = [Paragraph("No-failure rate by WCAG principle", h2)]
     el.append(Paragraph(
         "WCAG groups its criteria under four principles — Perceivable, Operable, Understandable, "
         "Robust. Of the criteria ACP <i>evaluated</i> for these documents (a validator ran and "
-        "returned pass or fail), the share that passed, per principle. Not-evaluated and "
-        "review-only criteria are excluded, so this is a pass rate among evaluated checks — "
+        "returned a result), the share with no automated failures detected, per principle. "
+        "Not-evaluated and review-only criteria are excluded — "
         "<b>not</b> a statement of WCAG 2.1 AA conformance.", muted))
     el.append(Spacer(1, 8))
-    rows = [["Principle", "Evaluated", "Passed", "Pass rate"]]
+    rows = [["Principle", "Evaluated", "No failures", "No-failure rate"]]
     for p in principles:
         ev, ps = p.get("evaluated", 0), p.get("passed", 0)
         rate = f"{ps}/{ev} ({round(100 * ps / ev)}%)" if ev else "—"
@@ -541,7 +620,7 @@ def _pour_section(facts, h2, body, cell, muted) -> list:
 _MANUAL_VERIFY = {
     "DOCX": ("Microsoft Word → Review → Check Accessibility",
              "Confirm no errors under Missing Alternative Text, Table Header Row, or Document Title; "
-             "the checker should report no accessibility issues."),
+             "the checker should report no errors under these headings."),
     "PPTX": ("Microsoft PowerPoint → Review → Check Accessibility",
              "Confirm each slide's reading order (Home → Arrange → Selection Pane) and that every "
              "image carries alt text."),
@@ -590,6 +669,103 @@ def _manual_verification_section(files, h2, body, cell, muted) -> list:
         ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
     el.append(t)
     el.append(Spacer(1, 8))
+    return el
+
+
+def _limitations_section(facts, unassessed, unanalysable, h2, body, muted, *, run=None, files=None) -> list:
+    """P-13 — Material limitations of this assessment, near the executive summary."""
+    scope = (facts or {}).get("scope") or {}
+    human_only = scope.get("human_only_criteria") or []
+    not_evaluated = scope.get("not_evaluated_criteria") or []
+    review_criteria = scope.get("review_criteria") or []
+
+    def _sc(c: object) -> str:
+        return c["sc"] if isinstance(c, dict) else str(c)
+
+    def _name(c: object) -> str:
+        return c.get("name", "") if isinstance(c, dict) else ""
+
+    def _crit_str(items, limit=8):
+        lst = ", ".join(
+            f"{_sc(c)} ({_name(c)})" if _name(c) else _sc(c)
+            for c in items[:limit]
+        )
+        suffix = f" and {len(items) - limit} more" if len(items) > limit else ""
+        return lst + suffix
+
+    parts = []
+
+    # 1. Unanalysable documents (count param + error-status files)
+    error_files = [f for f in (files or []) if (f.get("status") or "") == "error"]
+    n_unable = max(unanalysable, len(error_files))
+    if n_unable > 0:
+        common = "Common causes include password protection, corruption, or an unsupported variant."
+        if error_files:
+            names = ", ".join(f["file"] for f in error_files)
+            parts.append(
+                f"<b>{n_unable} document(s) could not be opened or analysed</b> "
+                f"({names}). {common} This report makes no accessibility assertion "
+                f"about {'this file' if n_unable == 1 else 'these files'}."
+            )
+        else:
+            parts.append(
+                f"<b>{n_unable} document(s) could not be opened or analysed.</b> "
+                f"{common}"
+            )
+
+    # 2. Unassessed documents
+    if unassessed > 0:
+        parts.append(
+            f"<b>{unassessed} document(s) were in scope but never assessed.</b> "
+            f"Re-run the scan to include them."
+        )
+
+    # 3. Human-only criteria (require human or AT review)
+    if human_only:
+        n = len(human_only)
+        parts.append(
+            f"<b>{n} {'criterion requires' if n == 1 else 'criteria require'} "
+            f"human or assistive-technology review</b> ({_crit_str(human_only)}). "
+            f"These cannot be resolved automatically and are queued for a qualified reviewer."
+        )
+
+    # 4. Not-evaluated criteria (no automated validator for formats in scope)
+    if not_evaluated:
+        n = len(not_evaluated)
+        parts.append(
+            f"<b>{n} {'criterion has' if n == 1 else 'criteria have'} no automated validator</b> "
+            f"for the document formats in this scan ({_crit_str(not_evaluated)}). "
+            f"No pass/fail verdict can be generated for {'it' if n == 1 else 'them'}."
+        )
+
+    # 5. Review-recommended criteria
+    if review_criteria:
+        n = len(review_criteria)
+        parts.append(
+            f"<b>{n} {'criterion is' if n == 1 else 'criteria are'} review-recommended</b> "
+            f"and cannot be resolved automatically ({_crit_str(review_criteria)}). "
+            f"Findings in these lanes are queued for a qualified reviewer "
+            f"and are never auto-cleared."
+        )
+
+    # 6. Owner metadata absent
+    if run is not None and not run.get("owner_email"):
+        parts.append(
+            "<b>Owner metadata absent</b> — no owner_email was recorded for this scan. "
+            "This report cannot be attributed to a responsible party."
+        )
+
+    if not parts:
+        return []
+
+    el = [Paragraph("Material Limitations", h2)]
+    el.append(Paragraph(
+        "The following constraints bound the claims in this report.", muted))
+    el.append(Spacer(1, 5))
+    for p in parts:
+        el.append(Paragraph("• " + p, muted))
+        el.append(Spacer(1, 3))
+    el.append(Spacer(1, 5))
     return el
 
 
@@ -772,23 +948,59 @@ def _provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, mut
     return el
 
 
-def _assurance_section(facts, h2, body, cell, muted) -> list:
+def _mode_bar(by_mode: dict, total: int) -> Drawing:
+    """Stacked horizontal bar — deterministic | AI-assisted | human-only criteria (R10).
+    Same 440pt width as _pour_bars for visual consistency across the report."""
+    MODES = [
+        ("auto",        GREEN, "Deterministic"),
+        ("ai-assisted", AMBER, "AI-assisted"),
+        ("human-only",  PLUM,  "Human-only"),
+        ("unknown",     GREY,  "Unknown"),
+    ]
+    W = 440
+    d = Drawing(W, 36)
+    x = 0.0
+    leg_x = 0
+    for key, color, label in MODES:
+        n = by_mode.get(key, 0)
+        if not n or not total:
+            continue
+        w = W * n / total
+        d.add(Rect(x, 20, w, 12, fillColor=color, strokeColor=None))
+        pct = round(100 * n / total)
+        d.add(Rect(leg_x, 4, 8, 8, fillColor=color, strokeColor=None))
+        d.add(String(leg_x + 11, 5, f"{label}  {n} ({pct}%)",
+                     fontName="Helvetica", fontSize=7.5, fillColor=MUTED))
+        x += w
+        leg_x += 140
+    return d
+
+
+def _assurance_section(facts, h2, body, cell, muted, hitl=None) -> list:
     """Human review & assurance (backlog R9 / R10). Every figure has a real denominator: review
-    outcomes counted from the immutable decision_log; the deterministic-assurance ratio as
-    deterministic ÷ evaluated criteria; the effort figure as fixes-cleared ÷ findings with that
-    basis named. NO "% effort saved" and NO "cleared ÷ attempted" — the attempted denominator is
-    not tracked (only re-scan-cleared fixes are recorded), so that ratio is omitted, not invented
-    (ADR 0016). Omitted entirely when nothing was reviewed, remediated or evaluated."""
+    outcomes counted from the immutable decision_log; the mode split as real per-mode counts
+    (deterministic / AI-assisted / human-only); the effort figure as fixes-cleared ÷ findings
+    with that basis named. NO "% effort saved" and NO "cleared ÷ attempted" — the attempted
+    denominator is not tracked (only re-scan-cleared fixes are recorded), so that ratio is
+    omitted, not invented (ADR 0016). Omitted entirely when nothing was reviewed, remediated or
+    evaluated.
+
+    hitl: optional hitl_analytics() result — adds avg review time (if real timestamps) and the
+    edited-draft count (how many approved reviews included a human correction to the AI text)."""
     f = facts or {}
     review = f.get("review") or {}
     docs = f.get("documents") or []
     evaluated = sum(d.get("evaluated", 0) for d in docs)
     findings = sum(d.get("findings", 0) for d in docs)
-    auto = ((f.get("scope") or {}).get("by_mode") or {}).get("auto", 0)
+    by_mode = ((f.get("scope") or {}).get("by_mode")) or {}
+    auto = by_mode.get("auto", 0)
     remediated = f.get("remediated_total", 0)
     reviewed = review.get("reviewed", 0)
     if not reviewed and not remediated and not evaluated:
         return []
+    h = hitl or {}
+    edited = (h.get("by_action") or {}).get("edit", 0)
+    avg_ms = h.get("avg_review_ms")
     el = [Paragraph("Human review &amp; assurance", h2)]
     # R9 — the review outcomes, from the immutable log (approved/rejected + what the platform cleared).
     band = _stat_band([
@@ -803,19 +1015,35 @@ def _assurance_section(facts, h2, body, cell, muted) -> list:
     ], [])
     el.append(band)
     el.append(Spacer(1, 8))
-    # R10 — deterministic assurance ratio, on a real denominator.
+    # R10 — stacked bar + prose showing all three decision modes on a real denominator.
     if evaluated:
+        el.append(_mode_bar(by_mode, evaluated))
+        el.append(Spacer(1, 4))
+        ai_n = by_mode.get("ai-assisted", 0)
+        hu_n = by_mode.get("human-only", 0)
+        clauses = [f"<b>{auto}</b> of <b>{evaluated}</b> ({round(100 * auto / evaluated)}%) "
+                   "decided by the deterministic engine"]
+        if ai_n:
+            clauses.append(f"<b>{ai_n}</b> ({round(100 * ai_n / evaluated)}%) used AI-assisted review")
+        if hu_n:
+            clauses.append(f"<b>{hu_n}</b> ({round(100 * hu_n / evaluated)}%) required human-only action")
         el.append(Paragraph(
-            f"<b>Assurance.</b> <b>{auto}</b> of <b>{evaluated}</b> evaluated criteria "
-            f"(<b>{round(100 * auto / evaluated)}%</b>) were decided by the deterministic engine; "
-            "the rest used AI-assisted review a person can confirm. Every remediation counted here "
-            "re-cleared the post-fix re-scan.", muted))
+            "<b>Assurance.</b> Of the evaluated criteria: " + "; ".join(clauses) +
+            ". Every remediation counted here re-cleared the post-fix re-scan.", muted))
     # R9 effort — only as the honest ratio, basis named; never a modelled time saving.
     if findings:
+        edited_clause = (f" Of the approved reviews, <b>{edited}</b> included human edits to the AI draft."
+                         if edited else "")
         el.append(Paragraph(
             f"<b>Effort.</b> <b>{remediated}</b> of <b>{findings}</b> finding(s) were cleared by an "
             f"applied, re-validated fix (<b>{round(100 * remediated / findings)}%</b>) — basis: "
-            "fixes-cleared ÷ findings, not a modelled hours-saved figure.", muted))
+            f"fixes-cleared ÷ findings, not a modelled hours-saved figure.{edited_clause}", muted))
+    # R9 avg review time — only when real timestamps exist (never estimated or defaulted).
+    if avg_ms is not None:
+        avg_s = round(avg_ms / 1000, 1)
+        el.append(Paragraph(
+            f"<b>Avg review time.</b> <b>{avg_s} s</b> per finding — measured from reviewer "
+            "action timestamps recorded at decision time.", muted))
     el.append(Spacer(1, 8))
     return el
 
@@ -949,8 +1177,8 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
             # Tier 3:  AI-generated + re-scan-validated, no human approval recorded.
             has_ai = bool(e.get("value"))
             has_decision = bool(e.get("decision"))
-            decision_str = (f"{e['decision']} by {e.get('reviewer') or 'reviewer'}"
-                            + (f" · {when} UTC" if when else ""))
+            decision_str = (f"{e.get('decision', '')} by {e.get('reviewer') or 'reviewer'}"
+                            + (f" · {when} UTC" if when else "")) if has_decision else ""
             if has_ai and has_decision:
                 badge = "<font color='#3B6D11'>&#x25CF; AI &middot; human-confirmed</font>"
                 sign_off = decision_str
@@ -963,16 +1191,63 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
             else:
                 badge = "<font color='#3B6D11'>&#x25CF; Deterministic</font>"
                 sign_off = "deterministic fixer · auto-applied · no human decision needed"
-            lines = [
-                Paragraph(f"{badge} &nbsp;<b>{_esc(e['criterion'])}</b> &nbsp;<font color='#3B6D11'>&#x2713; validated on re-scan</font>", cell),
-                Paragraph(f"<font color='#6c6470'>Before</font> &nbsp;{_esc(e.get('before'))}", cell),
-                Paragraph(f"<font color='#6c6470'>After</font> &nbsp;<b>{_esc(e.get('after'))}</b>", cell),
-            ]
+            _fid = _finding_id(doc["file"], e.get("criterion", ""),
+                               e.get("location") or e.get("before", "")[:60])
+            lines = [Paragraph(
+                f"{badge} &nbsp;<b>{_esc(e['criterion'])}</b>"
+                f" &nbsp;<font color='#3B6D11'>&#x2713; validated on re-scan</font>"
+                f" &nbsp;<font color='#6c6470' size='7'>FND-{_fid}</font>", cell)]
+            # P-17: location -- page / element / path hint (any subset)
+            loc_parts = []
+            if e.get("location"):
+                loc_parts.append(_esc(e["location"]))
+            if e.get("page") is not None:
+                loc_parts.append(f"page {_esc(e['page'])}")
+            if e.get("element"):
+                loc_parts.append(f"element {_esc(e['element'])}")
+            if loc_parts:
+                lines.append(Paragraph(
+                    f"<font color='#6c6470'>Location</font> &nbsp;{' &middot; '.join(loc_parts)}", cell))
+            # P-17: before -- explicit redaction label; truncation notice
+            before_raw = e.get("before")
+            if before_raw is not None and str(before_raw) == "[REDACTED]":
+                before_display = "<font color='#6c6470'>[redacted]</font>"
+            else:
+                before_display = _esc(before_raw)
+                if before_raw is not None and len(str(before_raw)) > 2000:
+                    before_display += " <font color='#6c6470'>(truncated \u2014 full text via API)</font>"
+            lines.append(Paragraph(f"<font color='#6c6470'>Before</font> &nbsp;{before_display}", cell))
+            # P-17: after -- same treatment
+            after_raw = e.get("after")
+            if after_raw is not None and str(after_raw) == "[REDACTED]":
+                after_display = "<font color='#6c6470'><b>[redacted]</b></font>"
+            else:
+                after_display = f"<b>{_esc(after_raw)}</b>"
+                if after_raw is not None and len(str(after_raw)) > 2000:
+                    after_display += " <font color='#6c6470'>(truncated \u2014 full text via API)</font>"
+            lines.append(Paragraph(f"<font color='#6c6470'>After</font> &nbsp;{after_display}", cell))
+            # P-17: expected condition from the criterion
+            if e.get("expected"):
+                lines.append(Paragraph(
+                    f"<font color='#6c6470'>Expected</font> &nbsp;{_esc(e['expected'])}", cell))
             if e.get("value"):
                 src = f" <font color='#6c6470'>({_esc(e['source'])})</font>" if e.get("source") else ""
-                lines.append(Paragraph(f"<font color='#6c6470'>AI wrote</font> &nbsp;{_esc(e['value'])}{src}", cell))
+                val = e["value"]
+                val_text = _esc(val)
+                if len(str(val)) > 2000:
+                    val_text += " <font color='#6c6470'>(truncated \u2014 full text via API)</font>"
+                lines.append(Paragraph(f"<font color='#6c6470'>AI wrote</font> &nbsp;{val_text}{src}", cell))
             if e.get("note"):
                 lines.append(Paragraph(f"<font color='#6c6470'>Why</font> &nbsp;{_esc(e['note'])}", cell))
+            # P-17: confidence score / label
+            if e.get("confidence") is not None:
+                lines.append(Paragraph(
+                    f"<font color='#6c6470'>Confidence</font> &nbsp;{_esc(e['confidence'])}", cell))
+            # P-17: evidence-collection timestamp
+            if e.get("collected_at"):
+                ct = str(e["collected_at"])[:19].replace("T", " ")
+                lines.append(Paragraph(
+                    f"<font color='#6c6470'>Collected</font> &nbsp;{_esc(ct)} UTC", cell))
             lines.append(Paragraph(f"<font color='#6c6470'>Decision</font> &nbsp;{_esc(sign_off)}", cell))
 
             thumb = _thumb_flowable(e.get("thumb"))
@@ -996,12 +1271,19 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
         for p in doc["proposed"]:
             note = ("validated on re-scan — awaiting approval" if p.get("validated")
                     else "awaiting human approval")
+            _pfid = _finding_id(doc["file"], p.get("criterion", ""))
             lines = [Paragraph(
                 f"<b>{_esc(p['criterion'])}</b> &nbsp;<font color='#854F0B'>proposed — not remediated "
-                f"({note})</font>", cell)]
+                f"({note})</font> &nbsp;<font color='#6c6470' size='7'>FND-{_pfid}</font>", cell)]
             for pr in p["proposals"][:6]:
                 why = f" <font color='#6c6470'>— {_esc(pr.get('rationale'))}</font>" if pr.get("rationale") else ""
-                lines.append(Paragraph(f"<font color='#6c6470'>Proposed</font> &nbsp;{_esc(pr.get('proposed_value'))}{why}", cell))
+                src = (f" <font color='#6c6470'>({_esc(pr['source'])})</font>"
+                       if pr.get("source") else "")
+                lines.append(Paragraph(
+                    f"<font color='#6c6470'>Proposed</font> &nbsp;{_esc(pr.get('proposed_value'))}{why}{src}", cell))
+                if pr.get("why_review"):
+                    lines.append(Paragraph(
+                        f"<font color='#6c6470'>Basis</font> &nbsp;{_esc(pr['why_review'])}", cell))
             t = Table([[lines]], colWidths=[7.1 * inch])
             t.setStyle(TableStyle([
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -1144,15 +1426,129 @@ def _ai_governance_section(run, h2, body, cell, muted) -> list:
     return el
 
 
+def _reconciliation_checks(files: list, facts: dict | None, meta: dict) -> list[str]:
+    """P-18: Return a list of human-readable discrepancy strings.
+
+    Checks that the inputs to build_report are internally consistent.  An empty
+    list means everything reconciles; non-empty means the report may be wrong
+    in material ways and a warning box should be rendered.
+    """
+    issues: list[str] = []
+
+    # Rubric hash required for reproducibility claim in the header
+    if not (meta.get("hash") or "").strip():
+        issues.append(
+            "Rubric hash is absent — the report header claims results are reproducible "
+            "from this hash, but no hash was supplied.")
+
+    if facts is not None:
+        scope = facts.get("scope") or {}
+        catalog = scope.get("catalog_size", 0)
+        not_eval_ct = len(scope.get("not_evaluated_criteria") or [])
+        human_only_ct = len(scope.get("human_only_criteria") or [])
+        if catalog and (not_eval_ct + human_only_ct) > catalog:
+            issues.append(
+                f"Criteria counts exceed catalog size: not-evaluated ({not_eval_ct}) + "
+                f"human-only ({human_only_ct}) = {not_eval_ct + human_only_ct} > "
+                f"catalog_size ({catalog}).")
+
+        # facts.documents file names should be a subset of the files list
+        doc_facts = facts.get("documents") or []
+        fact_names = {d.get("file") for d in doc_facts if d.get("file")}
+        file_names = {f.get("file") for f in files if f.get("file")}
+        orphan_facts = fact_names - file_names
+        if orphan_facts:
+            sample = ", ".join(sorted(orphan_facts)[:5])
+            tail = f" and {len(orphan_facts) - 5} more" if len(orphan_facts) > 5 else ""
+            issues.append(
+                f"facts['documents'] references file(s) not present in the file list: "
+                f"{sample}{tail}.")
+
+        # Review counts must be internally consistent
+        review = facts.get("review") or {}
+        reviewed = review.get("reviewed", 0)
+        approved = review.get("approved", 0)
+        rejected = review.get("rejected", 0)
+        skipped = review.get("skipped", 0)
+        if reviewed and (approved + rejected + skipped) > reviewed:
+            issues.append(
+                f"Review counts do not reconcile: approved ({approved}) + rejected ({rejected}) "
+                f"+ skipped ({skipped}) = {approved + rejected + skipped} > reviewed ({reviewed}).")
+
+        # Remediated total cannot exceed the number of documents
+        rem_total = facts.get("remediated_total", 0) or 0
+        if rem_total > len(files):
+            issues.append(
+                f"remediated_total ({rem_total}) exceeds the number of documents "
+                f"in scope ({len(files)}).")
+
+    return issues
+
+
+def _assessment_scope_block(run: dict, meta: dict, facts: dict | None,
+                            fmt_str: str, h2, body, cell, muted) -> list:
+    """Assessment scope declaration (P-12).
+
+    A concise block near the top of the report stating exactly what was in scope: source,
+    file types, scan window, rubric + conformance target, AI-assisted flag. Placed after
+    the decision card so the reader sees the scope before interpreting any percentage.
+    """
+    scope = (facts or {}).get("scope") or {}
+    estate = scope.get("estate") or {}
+    by_mode = scope.get("by_mode") or {}
+    ai_flag = by_mode.get("ai-assisted", 0) > 0
+
+    source_map = {"drive": "Google Drive", "folder": "Local folder", "upload": "Direct upload"}
+    source_label = source_map.get(run.get("source", ""), run.get("source") or "—")
+
+    started = (run.get("started_at") or "")[:16].replace("T", " ")
+    completed = (run.get("completed_at") or "")[:16].replace("T", " ")
+    window = (f"{started} — {completed} UTC" if started and started != completed
+              else f"{completed} UTC" if completed else "—")
+
+    excluded = estate.get("excluded", 0)
+    excl_note = f" · {excluded} file(s) excluded by policy" if excluded else ""
+
+    rubric_str = (f"v{meta.get('version', '—')} · hash {(meta.get('hash') or '—')[:12]}…"
+                  if meta.get("version") else "—")
+    ai_note = ("Deterministic + AI-assisted checks" if ai_flag
+               else "Deterministic checks only — no AI operations")
+
+    el = [Paragraph("Assessment scope", h2)]
+    rows = [
+        [Paragraph("<b>Source</b>", cell), Paragraph(_esc(source_label), cell),
+         Paragraph("<b>Scan window</b>", cell), Paragraph(_esc(window), cell)],
+        [Paragraph("<b>File types assessed</b>", cell), Paragraph(_esc(fmt_str or "—"), cell),
+         Paragraph("<b>Method</b>", cell), Paragraph(_esc(ai_note), cell)],
+        [Paragraph("<b>Standard &amp; target</b>", cell),
+         Paragraph(_esc((meta.get("target") or "WCAG 2.1 AA") + excl_note), cell),
+         Paragraph("<b>Rubric</b>", cell), Paragraph(_esc(rubric_str), cell)],
+    ]
+    t = Table(rows, colWidths=[1.3 * inch, 2.25 * inch, 1.3 * inch, 2.25 * inch])
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+        ("TEXTCOLOR", (0, 0), (0, -1), MUTED), ("TEXTCOLOR", (2, 0), (2, -1), MUTED),
+        ("BACKGROUND", (0, 0), (-1, -1), ZEBRA), ("BOX", (0, 0), (-1, -1), 0.75, LINE),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, LINE), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    el.append(t)
+    el.append(Spacer(1, 4))
+    return el
+
+
 def build_report(run: dict, files: list, meta: dict, decisions: dict | None = None,
                  evidence: list | None = None, facts: dict | None = None) -> bytes:
     buf = io.BytesIO()
     # `lang` reaches the PDF catalog as /Lang (WCAG 3.1.1) — without it a screen reader guesses
     # the language of the certification document from the user's locale. `title` is already the
     # docinfo /Title (2.4.2); _footer sets the ViewerPreferences half of that criterion.
+    # topMargin raised to 0.85 in (from 0.6 in) to leave room for the P-19 page header that
+    # _make_page_callback draws at LETTER[1] - 0.47 in (rule) and LETTER[1] - 0.63 in (text).
     doc = SimpleDocTemplate(buf, pagesize=LETTER, title=f"mova.io conformance report {run['id']}",
                             lang=REPORT_LANG,
-                            topMargin=0.6 * inch, bottomMargin=0.75 * inch,
+                            topMargin=0.85 * inch, bottomMargin=0.75 * inch,
                             leftMargin=0.7 * inch, rightMargin=0.7 * inch)
     ss = getSampleStyleSheet()
     H = ParagraphStyle("H", parent=ss["Title"], textColor=PLUM, fontSize=20, spaceAfter=1,
@@ -1173,7 +1569,16 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     std = target.strip() if target.strip().upper().startswith("WCAG") else f"WCAG 2.1 {target.strip()}"
 
     # ── Header band: logo + title ────────────────────────────────────────────
-    when = run["completed_at"][:19].replace("T", " ")
+    report_generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    _completed_raw = run.get("completed_at") or ""
+    if _completed_raw:
+        assessment_completed = _completed_raw[:19].replace("T", " ")
+        _snapshot_label = ""
+    else:
+        assessment_completed = "in progress"
+        _snapshot_label = " · SNAPSHOT — scan still running"
+    build_commit = os.environ.get("BUILD_COMMIT", "")
+    _commit_str = f" · build {build_commit[:8]}" if build_commit else ""
     title_block = [
         # NOT "Conformance Report". This document reports what ACP checked, what it changed
         # and what it re-verified; it does not determine conformance, and the title was the
@@ -1183,7 +1588,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
         # (frontend pdfReport.js) is a genuine conformance report about the mova.io product and
         # keeps its name — the distinction is who is asserting what about whom.
         Paragraph("Accessibility Assessment Report", H),
-        Paragraph(f"{std} · generated {when} UTC", sub),
+        Paragraph(
+            f"{std} · Assessment completed {assessment_completed} UTC"
+            f" · Report generated {report_generated_at} UTC{_snapshot_label}", sub),
     ]
     logo = Image(str(LOGO), width=1.32 * inch, height=1.32 * inch * 264 / 800) if LOGO.exists() else Spacer(1, 1)
     head = Table([[logo, title_block]], colWidths=[1.55 * inch, 5.55 * inch])
@@ -1192,15 +1599,40 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
                               ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
     el.append(head)
     el.append(HRFlowable(width="100%", thickness=1.2, color=PLUM, spaceBefore=6, spaceAfter=10))
+    _rubric_name = meta.get("name") or ""
+    _rubric_display = (f"{_rubric_name} v" if _rubric_name else "v") + (meta.get("version") or "—")
     el.append(Paragraph(
-        f"Scan <b>{run['id']}</b> · rubric v{meta.get('version', '—')} · stamped hash <b>{meta.get('hash', '—')}</b> — "
-        "results are reproducible from this hash. Scans run read-only; documents are never retained.", sub))
+        f"Scan <b>{run['id']}</b>"
+        f" · rubric {_esc(_rubric_display)}"
+        f" · hash <b>{(meta.get('hash') or '—')[:12]}</b>"
+        f" · schema v{REPORT_SCHEMA_VERSION}{_commit_str} — "
+        "results are reproducible from the rubric hash. Scans run read-only; documents are never retained.", sub))
 
     # ── Certification decision (R2) ──────────────────────────────────────────
     # Answers "can I ship this?" before any chart. The plain-language WHY (R3) is the
     # executive verdict below — this card carries the decision, the counts and the digest,
     # and deliberately does not repeat that prose.
     _muted = ParagraphStyle("rmuted", parent=ss["Normal"], textColor=MUTED, fontSize=8, leading=11.5)
+
+    # ── P-18: Report-integrity reconciliation warning ─────────────────────────
+    _recon = _reconciliation_checks(files, facts, meta)
+    if _recon:
+        _recon_lines = [Paragraph(
+            '<font color="#A32D2D"><b>Report integrity — data reconciliation failed</b></font>',
+            body)]
+        for _item in _recon:
+            _recon_lines.append(Paragraph(f"• {_item}", _muted))
+        _recon_t = Table([[_recon_lines]], colWidths=[7.1 * inch])
+        _recon_t.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("BOX", (0, 0), (-1, -1), 1.0, RED),
+            ("BACKGROUND", (0, 0), (-1, -1), CARD),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ]))
+        el.append(_recon_t)
+        el.append(Spacer(1, 6))
+
     el.extend(_decision_block(run, files, meta, facts, h2, body, _muted))
 
     # ── Reconcile the estate: open (blocking) vs certifiable/remediated ──────
@@ -1228,7 +1660,10 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
                 open_fails[c] = open_fails.get(c, 0) + 1
     cert = counts.get("certifiable", 0)
     total = len(files) or 1
-    pct = round(cert / total * 100)
+    unassessed = counts.get(NOT_ASSESSED, 0)
+    unanalysable = counts.get("unanalysable", 0)
+    assessed = total - unassessed
+    pct = round(cert / assessed * 100) if assessed else 0
     avg = "—" if run.get("avg_score") is None else run["avg_score"]
     resolved_total = sum(resolved_crit.values())
     total_eval = sum(d.get("evaluated", 0) for d in ((facts or {}).get("documents") or []))
@@ -1240,8 +1675,6 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     # count was 'clean', so the report read "All 2 analysed document(s) meet WCAG 2.1 AA with
     # zero open blocking findings" about two spreadsheets nobody had opened. In a document a
     # customer files as evidence, that sentence is the whole liability.
-    unassessed = counts.get(NOT_ASSESSED, 0)
-    assessed = total - unassessed
     if counts.get("issues") or counts.get("uncertain") or counts.get("unanalysable") or unassessed:
         verdict = (f"<b>{cert} of {assessed}</b> assessed document(s) came back with zero open "
                    f"blocking findings among the {std} criteria ACP checked. "
@@ -1262,18 +1695,37 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
                         f"Run Assess over them before drawing any conclusion about this "
                         f"estate as a whole.")
     else:
-        verdict = (f"All <b>{total}</b> assessed document(s) came back with zero open blocking "
-                   f"findings among the {std} criteria ACP checked.")
+        verdict = (f"No automated failures detected — all <b>{total}</b> assessed document(s) "
+                   f"returned no blocking findings among the <b>{std}</b> criteria ACP evaluated.")
     if remediated_docs:
         verdict += (f" {remediated_docs} document(s) were remediated by the platform, "
                     f"clearing {resolved_total} finding(s).")
     el.append(Paragraph(verdict, lead))
 
+    # ── P-9: Partial-assessment notice ───────────────────────────────────────
+    # Make it impossible to miss that some files were not scored. The verdict above already
+    # mentions this inline, but a reader skimming for a percentage can miss the caveat buried
+    # in a dense paragraph. A stand-alone notice breaks that pattern.
+    if unassessed or unanalysable:
+        _parts = []
+        if unassessed:
+            _parts.append(f"<b>{unassessed}</b> document(s) were listed in scope but never assessed")
+        if unanalysable:
+            _parts.append(f"<b>{unanalysable}</b> document(s) could not be opened or analysed")
+        el.append(Paragraph(
+            '<font color="#854F0B"><b>⚠ Partial assessment — </b></font>'
+            '<font color="#854F0B">' + " and ".join(_parts) +
+            " — this report makes no conformance claim about those files.</font>",
+            lead))
+
+    # ── P-13: Limitations of this assessment ─────────────────────────────────
+    el.extend(_limitations_section(facts, unassessed, unanalysable, h2, body, _muted, run=run, files=files))
+
     # ── Certification summary band ───────────────────────────────────────────
     el.append(Paragraph("Outcome summary", h2))
     el.append(_stat_band([
         Paragraph(f'<font size="22" color="#3B6D11"><b>{pct}%</b></font><br/>'
-                  f'<font size="8.5" color="#6c6470">no blocking findings · {cert} of {total} documents</font>', body),
+                  f'<font size="8.5" color="#6c6470">no blocking findings · {cert} of {assessed} assessed</font>', body),
         Paragraph(f'<font size="22"><b>{avg}</b></font><br/>'
                   f'<font size="8.5" color="#6c6470">average score / 100'
                   + (f' · {total_eval} criteria evaluated' if total_eval else '')
@@ -1284,28 +1736,33 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
                   f'<font size="8.5" color="#6c6470">could not be analysed</font>', body),
     ], []))
 
-    # ── Scope & methodology ──────────────────────────────────────────────────
+    # ── P-11: Criteria outcome breakdown ─────────────────────────────────────
+    # Complements the document-level stat band above: shows how many WCAG criteria were
+    # handled by the deterministic/AI engine vs. deferred to humans vs. skipped entirely.
+    _scope_facts = (facts or {}).get("scope") or {}
+    _catalog_size = _scope_facts.get("catalog_size", 0)
+    _not_eval_ct = len(_scope_facts.get("not_evaluated_criteria") or [])
+    _human_only_ct = len(_scope_facts.get("human_only_criteria") or [])
+    _with_findings = len(set(open_fails) | set(resolved_crit))
+    _passed_auto = max(0, _catalog_size - _not_eval_ct - _human_only_ct - _with_findings)
+    if _catalog_size:
+        el.append(_stat_band([
+            Paragraph(f'<font size="18" color="#3B6D11"><b>{_passed_auto}</b></font><br/>'
+                      f'<font size="8.5" color="#6c6470">criteria — no findings</font>', body),
+            Paragraph(f'<font size="18"><b>{_with_findings}</b></font><br/>'
+                      f'<font size="8.5" color="#6c6470">criteria with findings</font>', body),
+            Paragraph(f'<font size="18" color="#6c6470"><b>{_human_only_ct}</b></font><br/>'
+                      f'<font size="8.5" color="#6c6470">require human review</font>', body),
+            Paragraph(f'<font size="18" color="#9a948f"><b>{_not_eval_ct}</b></font><br/>'
+                      f'<font size="8.5" color="#6c6470">not evaluated for these formats</font>', body),
+        ], []))
+
+    # ── P-12: Assessment scope declaration ───────────────────────────────────
     fmt_counts: dict[str, int] = {}
     for f in files:
         fmt_counts[_fmt(f)] = fmt_counts.get(_fmt(f), 0) + 1
     fmt_str = " · ".join(f"{n} {k}" for k, n in sorted(fmt_counts.items(), key=lambda x: -x[1])) or "—"
-    el.append(Paragraph("Scope &amp; methodology", h2))
-    scope = Table([[
-        Paragraph("<b>Standard</b><br/>"
-                  f'<font color="#6c6470">' + std + ', the ADA / EAA reference standard</font>', cell),
-        Paragraph("<b>Documents in scope</b><br/>"
-                  f'<font color="#6c6470">{total} document(s) — {fmt_str}</font>', cell),
-        Paragraph("<b>Method</b><br/>"
-                  '<font color="#6c6470">Deterministic engine checks + AI-assisted review of '
-                  'semantic criteria; read-only, documents never retained</font>', cell),
-    ]], colWidths=[2.35 * inch] * 3)
-    scope.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), ZEBRA), ("BOX", (0, 0), (-1, -1), 0.75, LINE),
-        ("INNERGRID", (0, 0), (-1, -1), 0.5, LINE), ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-        ("LEFTPADDING", (0, 0), (-1, -1), 10), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-    ]))
-    el.append(scope)
+    el.extend(_assessment_scope_block(run, meta, facts, fmt_str, h2, body, cell, _muted))
 
     # ── Compliance velocity — trend vs the caller's previous scan ────────────
     # Best-effort and lazy: rendering must never fail because history is absent,
@@ -1369,8 +1826,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     charts = Table([[_donut(counts), sev_t]], colWidths=[3.6 * inch, 3.5 * inch])
     charts.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
                                 ("TOPPADDING", (0, 0), (-1, -1), 8)]))
-    el.append(Paragraph("Document status &amp; open-finding severity", h2))
-    el.append(charts)
+    # KeepTogether so the section heading never lands at the bottom of a page separated from
+    # the chart it labels — a purely visual block that is meaningless without its heading.
+    el.append(KeepTogether([Paragraph("Document status &amp; open-finding severity", h2), charts]))
 
     # ── Remediation outcomes — what the platform already cleared ─────────────
     if resolved_total:
@@ -1381,7 +1839,7 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
         rows = [["Criterion", "Level", "Findings cleared"]] + [
             [_crit_name(c), WCAG_META.get(c, ("", "", ""))[1] or "—", n]
             for c, n in sorted(resolved_crit.items(), key=lambda x: -x[1])]
-        rmt = Table(rows, colWidths=[4.2 * inch, 0.9 * inch, 1.4 * inch])
+        rmt = Table(rows, colWidths=[4.2 * inch, 0.9 * inch, 1.4 * inch], repeatRows=1)
         rmt.setStyle(TableStyle([
             ("FONTSIZE", (0, 0), (-1, -1), 8.5), ("TEXTCOLOR", (0, 0), (-1, 0), MUTED),
             ("LINEBELOW", (0, 0), (-1, 0), 0.5, LINE), ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
@@ -1399,7 +1857,8 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
             [_crit_name(c), WCAG_META.get(c, ("", "", ""))[1] or "—",
              Paragraph(WCAG_META.get(c, ("", "", ""))[2] or "", cellm), n, f"{round(n / total * 100)}%"]
             for c, n in sorted(open_fails.items(), key=lambda x: -x[1])]
-        ct = Table(rows, colWidths=[2.05 * inch, 0.5 * inch, 2.85 * inch, 0.5 * inch, 0.8 * inch])
+        ct = Table(rows, colWidths=[2.05 * inch, 0.5 * inch, 2.85 * inch, 0.5 * inch, 0.8 * inch],
+                   repeatRows=1)
         ct.setStyle(TableStyle([
             ("FONTSIZE", (0, 0), (-1, -1), 8.5), ("TEXTCOLOR", (0, 0), (-1, 0), MUTED),
             ("LINEBELOW", (0, 0), (-1, 0), 0.5, LINE), ("ALIGN", (3, 0), (-1, -1), "RIGHT"),
@@ -1448,10 +1907,15 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     for f in ordered:
         st = _status(f)
         issues = f.get("issues") or []
-        if st == "certifiable" and issues:
-            find = "remediated" if (f.get("remediated_at") or f.get("drive_write_url")) else "non-blocking"
-        elif issues:
-            find = f"{len(issues)} open finding(s)"
+        if issues:
+            # P-15: per-finding status breakdown — never collapse to "remediated" just because
+            # a timestamp exists; "Verified resolved" requires a re-scan to confirm.
+            _cert = (st == "certifiable")
+            _sc: dict[str, int] = {}
+            for _i in issues:
+                _s = _finding_status(_i, _cert)
+                _sc[_s] = _sc.get(_s, 0) + 1
+            find = " · ".join(f"{_sc[s]} {s}" for s in FINDING_STATUSES if s in _sc)
         elif f["status"] == "error":
             find = "could not analyse"
         elif st == NOT_ASSESSED:
@@ -1460,7 +1924,7 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
             # never opened has no findings COUNT; that is not the same as having no findings.
             find = "not assessed"
         else:
-            find = "clean"
+            find = "no findings"
         # Counted per document (R6): verifiably-cleared fixes, criteria still failing, and
         # human sign-offs. A separate "validation" column would be redundant — a document is
         # validated exactly when Open is 0, and it can never read clear while findings remain.
@@ -1511,7 +1975,13 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     el.extend(_provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, _muted))
 
     # ── Human review & assurance (R9/R10) ────────────────────────────────────
-    el.extend(_assurance_section(facts, h2, body, cell, _muted))
+    _hitl: dict | None = None
+    try:
+        import core as _core
+        _hitl = _core.store.hitl_analytics(run["id"])
+    except Exception:
+        pass
+    el.extend(_assurance_section(facts, h2, body, cell, _muted, hitl=_hitl))
 
     # ── How to verify this independently (R13) ───────────────────────────────
     el.extend(_manual_verification_section(files, h2, body, cell, _muted))
@@ -1526,10 +1996,10 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     el.append(Spacer(1, 14))
     el.append(Paragraph("What this report is, and is not", h2))
     el.append(Paragraph(
-        f"Based on this scan, <b>{cert} of {total}</b> document(s) came back with no open "
-        f"blocking findings among the {std} criteria ACP checked. This is a record of what was "
-        "detected, what was changed and what was re-verified afterwards — machine-generated audit "
-        "evidence produced by an automated + AI-assisted pipeline. It is not a conformance "
+        f"Based on this scan, <b>{cert} of {assessed}</b> assessed document(s) returned no "
+        f"automated failures among the <b>{std}</b> criteria ACP evaluated. This is a record of "
+        "what was detected, what was changed and what was re-checked afterwards — "
+        "machine-generated audit evidence produced by an automated + AI-assisted pipeline. It is not a conformance "
         "determination: ACP does not assert that a document satisfies WCAG, and this report does "
         "not constitute a legal conformance guarantee or a signed VPAT. A qualified reviewer "
         "should confirm AI-assisted judgements before any external attestation.", body))
@@ -1548,5 +2018,6 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     # ── Verify this report (R15) ─────────────────────────────────────────────
     el.extend(_verify_section(run["id"], _content_digest(run, files, meta), h2, body, note))
 
-    doc.build(el, onFirstPage=_footer, onLaterPages=_footer)
+    _on_page = _make_page_callback(run.get("id", ""), report_generated_at)
+    doc.build(el, onFirstPage=_on_page, onLaterPages=_on_page)
     return buf.getvalue()

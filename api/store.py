@@ -1632,6 +1632,22 @@ class Store:
             # "certifiable / files" per row, so fill them here too rather than showing a gap.
             return [self._fill_run_aggregate(cur, r) for r in rows]
 
+    def list_scans_admin(self) -> list[dict]:
+        """All completed scans across all users, including owner_email — admin analytics only.
+
+        Identical to list_scans(owner=None) but adds owner_email to each row so the analytics
+        dashboard can break down the estate by user. Not exposed through list_scans to keep the
+        per-user isolation contract narrow and explicit: callers that want cross-user data must
+        ask for it by name.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id,completed_at,source,rubric_hash,files,certifiable,uncertain,error,"
+                "avg_score,assessed_at,scope,owner_email "
+                "FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC", ())
+            rows = self._db.fetchall(cur)
+            return [self._fill_run_aggregate(cur, r) for r in rows]
+
     def list_scans_including_discovered(self, owner: str | None = None) -> list[dict]:
         """Every scan, newest-first, INCLUDING an ADR 0020 Discover-only run that has never been
         assessed — the one case `list_scans` exists specifically to hide.
@@ -4191,6 +4207,16 @@ class Store:
             self._db.execute(cur, "UPDATE hitl_queue SET assignee=%s WHERE id=%s", (assignee, item_id))
         return self.get_hitl_item(item_id)
 
+    def claim_hitl_item(self, item_id: str, claimant: str | None) -> dict | None:
+        """Transition a queue item to 'in_review' and record the claimant as assignee.
+        Deliberately does NOT set reviewed_at — in_review is a 'I am working this' signal,
+        not a terminal decision. update_hitl_item handles approved/rejected/skipped."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE hitl_queue SET status='in_review', assignee=COALESCE(%s, assignee) WHERE id=%s",
+                (claimant, item_id))
+        return self.get_hitl_item(item_id)
+
     # ── Admin settings (persisted; survives restarts) ─────────────────────────
     def get_setting(self, key: str, default: str | None = None) -> str | None:
         with self._db.cursor() as cur:
@@ -5311,7 +5337,8 @@ class Store:
         """
         with self._db.cursor() as cur:
             q = ("SELECT si.scan_id, si.file, si.path, si.parent_folder, si.created_at, "
-                 "si.source_modified, si.owner, si.doc_class, si.size_kb, sr.source "
+                 "si.source_modified, si.owner, si.doc_class, si.size_kb, "
+                 "si.lifecycle_status, sr.source "
                  "FROM scan_inventory si JOIN scan_runs sr ON sr.id = si.scan_id "
                  "WHERE sr.status='discovered'")
             params: tuple = ()
@@ -5324,7 +5351,8 @@ class Store:
                  "path": r.get("path"), "parent_folder": r.get("parent_folder"),
                  "created_at": r.get("created_at"), "source_modified": r.get("source_modified"),
                  "owner": r.get("owner"), "doc_class": r.get("doc_class"),
-                 "size_kb": r.get("size_kb")}
+                 "size_kb": r.get("size_kb"),
+                 "lifecycle_status": r.get("lifecycle_status")}
                 for r in rows]
 
     # ── Per-file WCAG scope rules (PRD §4.4 / AC-09 — C4) ───────────────────────

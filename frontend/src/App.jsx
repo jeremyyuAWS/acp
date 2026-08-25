@@ -50,6 +50,7 @@ import { scanPhaseLine, NARRATION_STEPS, activityLine } from './phaseNarration.j
 import { useScanRefetch } from './scanRefetch.js'
 import { pickDefaultScan } from './defaultScan.js'
 import ConfirmDialog from './ConfirmDialog.jsx'
+import { AdminInsights } from './AdminInsights.jsx'
 
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
 const SHOW_A11Y = import.meta.env.DEV || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('a11y'))
@@ -63,6 +64,7 @@ const TABS = [
   ['remediate',     'Remediate',     'fix issues',          3],
   ['publish',       'Release',       'approve & deploy',    4],
   ['monitor',       'Monitor',       'track compliance',    5],
+  ['analytics',     'Estate Insights', 'estate analytics',   0],
   ['graph',         'Knowledge Graph', 'explore findings',   0],
 ]
 
@@ -564,7 +566,7 @@ export default function App() {
   const PRIV_PROFILE = {
     id: 'jeremy-yu', name: 'Jeremy Yu', role: 'Compliance Officer & Admin',
     scope: { label: 'Full estate · all departments', departments: 'all' },
-    allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'settings'],
+    allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'settings', 'analytics'],
   }
   const PRIVILEGED = { 'jeremyyu.movate@gmail.com': PRIV_PROFILE }
 
@@ -634,7 +636,16 @@ export default function App() {
     // authoritative per-user `is_scope_owner` post-auth (the sign-in payload doesn't carry it,
     // and /config is fetched pre-auth so its copy is null). A non-owner → read-only scope in the
     // review modal instead of a silently-dropped edit; fail-open (null) keeps the owner editable.
-    getMe().then((m2) => { if (typeof m2?.is_scope_owner === 'boolean') setScopeOwner(m2.is_scope_owner) }).catch(() => {})
+    getMe().then((m2) => {
+      if (typeof m2?.is_scope_owner === 'boolean') setScopeOwner(m2.is_scope_owner)
+      // Backend-enforced: only grant the analytics tab when /me confirms is_admin, so an admin
+      // who is NOT in PRIV_PROFILE (e.g. Deva) still gets the tab, and a non-admin cannot reach
+      // it by modifying the frontend allow list.
+      if (m2?.is_admin) setMe((m) => {
+        const allow = m.allow || []
+        return allow.includes('analytics') ? m : { ...m, allow: [...allow, 'analytics'] }
+      })
+    }).catch(() => {})
   }
 
   // Called from Integrations when a source OAuth succeeds
@@ -1552,6 +1563,9 @@ export default function App() {
             assessed scan (the graph visualizes WCAG findings), so it shares Monitor's
             gate: assessGate when a scan exists but hasn't been assessed yet. */}
         {view === 'graph' && (run ? (assessed ? <Suspense fallback={<Loading />}><KnowledgeGraph files={files} scanId={run.id} /></Suspense> : assessGate) : placeholder)}
+
+        {/* Admin-only analytics — backend gate (_require_admin) mirrors the allow check */}
+        {view === 'analytics' && me.allow?.includes('analytics') && <AdminInsights me={me} />}
 
         {/* Guided workflow: a "next step" CTA on each workflow tab once a scan exists.
             'discover' is excluded — it owns a sub-step CTA (Inventory → Classify → Actions → Assess). */}

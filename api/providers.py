@@ -18,6 +18,7 @@ handles a key; an admin enters it in the product Settings UI and it is stored as
 """
 from __future__ import annotations
 
+import logging
 import os
 import time
 from typing import Protocol, runtime_checkable
@@ -680,11 +681,19 @@ def active_vision_provider() -> VisionProvider:
     _ai._maybe_refresh_endpoint()              # honour a runtime endpoint switch before selecting
     base_url = _ai.OLLAMA_BASE_URL
     model = _ai.OLLAMA_VISION_MODEL
-    choice = os.environ.get("ACP_VISION_PROVIDER", "").strip().lower()   # deploy default (ADR 0022)
+    env_choice = os.environ.get("ACP_VISION_PROVIDER", "").strip().lower()   # deploy default (ADR 0022)
+    choice = env_choice
     try:
         import core
         setting = (core.store.get_setting("ai_vision_provider") or "").strip().lower()
         if setting:                                    # an explicit admin choice overrides the default
+            if setting != env_choice and env_choice == "runpod_serverless":
+                logging.warning(
+                    "R2: ACP_VISION_PROVIDER=runpod_serverless (env) is overridden by the admin "
+                    "store setting ai_vision_provider=%r — vision will use %r, not RunPod. "
+                    "Clear the store setting to restore GPU vision.",
+                    setting, setting,
+                )
             choice = setting
     except Exception:
         pass
@@ -696,6 +705,21 @@ def active_vision_provider() -> VisionProvider:
         sp = serverless_vision_provider()
         if sp is not None:
             return sp
+        eid = os.environ.get("RUNPOD_ENDPOINT_ID", "")
+        key = os.environ.get("RUNPOD_API_KEY", "")
+        if eid and not key:
+            logging.warning(
+                "R2: ACP_VISION_PROVIDER=runpod_serverless and RUNPOD_ENDPOINT_ID=%r is set "
+                "but RUNPOD_API_KEY is empty — the runpod-api-key Azure secret is missing or "
+                "blank. Run set_integration_env.sh with a valid key; see "
+                "docs/runbooks/runpod-key-rotation.md. Falling back to local Ollama.",
+                eid,
+            )
+        else:
+            logging.warning(
+                "R2: ACP_VISION_PROVIDER=runpod_serverless but RUNPOD_ENDPOINT_ID is not set "
+                "— endpoint unconfigured. Falling back to local Ollama.",
+            )
     # A configured, enabled cloud provider (Azure OpenAI / OpenAI / Anthropic) is selected here; an
     # under-configured or unreachable-config selection falls through to the local floor so a stale
     # selection can never break the keyless local path.
