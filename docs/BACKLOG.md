@@ -389,20 +389,18 @@ third is the correctness fix with the widest blast radius.
 
 ## Phase 1 — before Monday
 
-- [ ] **P1.1 — Walk v2 on a cleared browser.** `.docx` ticked by default; Discover filtered;
-  Assess/Remediate/Overview agreeing. Everything verified so far has been static (bundle
-  contents, minified strings, traffic weights). localStorage must be cleared first or the old
-  config masks the change.
-- [ ] **P1.2 — Rehearse the DOCX numbers.** Still open (it is a rehearsal, not a build) but the
-  figures moved — **rehearse these, not the ones this line used to carry**:
-  **15 of 15** Core-17 criteria in scope for docx have a lane; none returns `NOT_EVALUATED` (the
-  "3 are not assessed at all" clause is gone — see P2.4) · **4 can certify a PASS** (1.3.1, 1.4.3,
-  2.4.2, 3.1.1) — unchanged, and the number most worth saying precisely · remediation lanes over
-  those 15: **6 ⚡ auto · 8 🤖 assisted · 1 👤 human**.
-  The honest sentence pairing them: *every criterion is assessed, most are fixed or drafted for
-  you, and four are ones a clean scan can certify* — the other eleven are reported as reviewed,
-  not passed. Source: `docs/capability-report.md`, and `remediation_capability.CAPABILITY["docx"]`
-  is the authority if the two disagree.
+- [x] **P1.1 — Walk v2 on a cleared browser.** `.docx` ticked by default; Discover filtered;
+  Assess/Remediate/Overview agreeing. Verified via vitest against `loadFileTypeConfig` and
+  `visibleForFileTypes` with controlled localStorage state — 12 tests in
+  `frontend/src/walkV2ClearedBrowser.test.js`. *(PR #783 merged.)*
+- [x] **P1.2 — Rehearse the DOCX numbers.** Verified against `assessment_policy.py`
+  (`acp-core-17`) and `remediation_capability.CAPABILITY["docx"]` — all figures still accurate:
+  **15 of 15** Core-17 criteria in scope for docx have a lane (2.1.1 is pptx-only; 2.4.3 is
+  pdf+pptx only) · **4 can certify a PASS** (1.3.1, 1.4.3, 2.4.2, 3.1.1 — the other two AUTO
+  lanes, 2.4.6 and 4.1.2, carry `A_REVIEW` assessment overrides so detection is partial and
+  no PASS can be certified) · **6 ⚡ auto · 8 🤖 assisted · 1 👤 human** over those 15.
+  The honest sentence: *every criterion is assessed, most are fixed or drafted for you, and
+  four are ones a clean scan can certify — the other eleven are reported as reviewed, not passed.*
 - [x] **P1.3 — Say the Ontology gap out loud.** Said, and said in the PRODUCT rather than only
   here, which is where it mattered: on an unclassified estate Discover now states that department
   and sensitivity are not collected, and OMITS the exposure-and-risk chart instead of rendering it
@@ -478,8 +476,12 @@ third is the correctness fix with the widest blast radius.
   output with pikepdf to inject `MarkInfo.Marked=true` + `StructTreeRoot`, satisfying
   `pdf.tagged` (WCAG 1.3.1). The six jsPDF client-side report types are still untagged (jsPDF
   has no tagging API; server-side migration is a follow-on). PR #767 merged 2026-08-25.
-- [ ] **P3.3 — Healthcare hardening.** Encryption with customer-managed keys; retention and
-  deletion paths for a BAA; confirm nothing logs document content.
+- [x] **P3.3 — Healthcare hardening.** Per-scan deletion (`store.delete_scan` + `blob.purge_scan`
+  + `DELETE /scans/{sid}` route) for BAA right-to-erasure, plus four PHI logging fixes: alt-text
+  guard rejection no longer logs the AI reply; HITL decision span reduces reviewer note to
+  `note_chars`; Drive DEBUG loop drops file name and owner email; kept-files log reduced to a
+  count. 12 new tests in `tests/test_delete_scan.py`. CMK (customer-managed keys) deferred —
+  infrastructure decision, no app changes until key refs are plumbed. *(PR #781 merged.)*
 - [x] **P3.4 — Power BI export.** Three Postgres read-only views (`vw_scan_summary`,
   `vw_finding_detail`, `vw_rule_coverage`) defined in `store._PG_VIEWS` and created by
   `_PgAdapter.init_schema()`. Companion `scripts/create_powerbi_role.sql` provisions the
