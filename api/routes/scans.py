@@ -85,10 +85,46 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
         # fanout=true → decompose into per-file jobs (ADR 0007); else the monolithic
         # 'scan' job (default, proven). Both are durable and resume across replicas.
         jtype = "scan_discover" if fanout else "scan"
-        # Atomic enqueue: scan_runs stub + jobs row committed together in one transaction.
-        # GET /scans/{id} is immediately resolvable after this call; a failure rolls back
-        # both rows — no orphan stubs. Same Idempotency-Key from the same owner returns the
-        # original scan without creating a duplicate (client retry safety).
+        # Atomic enqueue: scan_runs stub + jobs row + immutable input snapshot committed
+        # together in one transaction. GET /scans/{id} is immediately resolvable after this
+        # call; a failure rolls back all rows — no orphan stubs. Same Idempotency-Key from
+        # the same owner returns the original scan without creating a duplicate.
+        #
+        # Input snapshot: captures everything that governs how the scan will execute, so
+        # a rule or config change after enqueue cannot silently alter an in-flight scan.
+        # SECURITY: no tokens or credentials — the job payload carries drive_token/sp_token
+        # for the worker; the snapshot stores only a connection reference.
+        _provider_cfg = [
+            {k: v for k, v in p.items() if k != "key_secret_ref"}
+            for p in core.store.list_ai_provider_configs()
+            if p.get("enabled")
+        ]
+        _lifecycle = [
+            r for r in core.store.list_disposition_policies(owner=user)
+            if r.get("enabled")
+        ]
+        _defer_flag = os.environ.get("ACP_DEFER_ANALYSIS_TO_ASSESS", "1").strip().lower() in (
+            "1", "true", "yes", "on")
+        _connection_ref = f"{source}:{user}" if source != "local" else "local"
+        _scan_inputs = {
+            "source": source,
+            "folder_ids": list(folders or ([folder] if folder else [])),
+            "exclude_folder_ids": list(exclude_folders or []),
+            "scan_options": {
+                "ai": ai, "pii": pii, "batch": batch,
+                "exclude_remediated": exclude_remediated,
+                "incremental": incremental, "fanout": fanout,
+            },
+            "actor": user,
+            "connection_ref": _connection_ref,
+            "feature_flags": {
+                "ai_platform_enabled": core.store.get_ai_enabled(),
+                "defer_analysis_to_assess": _defer_flag,
+            },
+            "provider_config": _provider_cfg,
+            "lifecycle_rules": _lifecycle,
+            "app_version": os.environ.get("ACP_APP_VERSION") or None,
+        }
         scan_id, job_id = core.store.enqueue_scan(
             scan_id, source, user, jtype,
             {"source": source, "scan_id": scan_id, "folder": folder, "folders": folders,
@@ -98,7 +134,8 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
              # Carry tokens in the payload so the worker container can authenticate
              # without sharing the API's in-memory token store (split topology, no Redis).
              "drive_token": token, "sp_token": sp_token},
-            idempotency_key=idempotency_key)
+            idempotency_key=idempotency_key,
+            inputs=_scan_inputs)
         core.register_scan_tokens(scan_id, drive=token, sp=sp_token)  # in-memory only
         return {"scan_id": scan_id, "job_id": job_id, "queued": True,
                 "fanout": fanout, "batch": batch, "workers": core.WORKERS,
