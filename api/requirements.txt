@@ -39,6 +39,7 @@ lxml==6.1.1
 
 # --- branded PDF report export ---
 reportlab==4.5.1
+Jinja2>=3.1,<4          # HTML→PDF report template (report_tagged.py)
 segno>=1.6  # pure-Python QR code generation (R15 verify-this-report)
 
 # --- observability (per-rule Langfuse spans; no-ops when env vars absent) ---
