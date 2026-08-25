@@ -542,9 +542,9 @@ honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~
 
 ### Polish / technical debt (surfaced during R15 implementation, 2026-08-24)
 
-**All P-1–P-8 shipped** (verified against `origin/main` 2026-08-24). **P-9–P-12 shipped** (#725). **P-13 shipped** (this PR). **P-14 shipped** (#750). **P-15 shipped** (#748). **P-16 shipped** (#742). **P-18 shipped** (#744).
+**All P-1–P-8 shipped** (verified against `origin/main` 2026-08-24). **P-9–P-12 shipped** (#725). **P-13 shipped** (this PR). **P-14 shipped** (#750). **P-15 shipped** (#748). **P-16 shipped** (#742). **P-17 shipped** (#752). **P-18 shipped** (#744). **P-20 shipped** (this PR).
 
-**Sequencing (2026-08-24):** ~~P-13~~/~~P-16~~/~~P-18~~/P-20 → R9/R10 w/ ~~P-15~~ → ~~P-14~~/P-17 → ~~R-E~~ → P-19/presentation.
+**Sequencing (2026-08-25):** ~~P-13~~/~~P-16~~/~~P-18~~/~~P-20~~ → R9/R10 w/ ~~P-15~~ → ~~P-14~~/~~P-17~~ → ~~R-E~~ → P-19/presentation.
 
 | # | Location | Item |
 |---|---|---|
@@ -563,11 +563,11 @@ honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~
 | ~~P-13~~ | `api/report.py` | ~~**Add a limitations & exceptions section**~~ — **DONE**: `_limitations_section()` renders a PLUM-bordered notice only when real limitations exist: unanalysable docs named individually, review-recommended criteria by SC id+name, absent owner/author metadata. Positioned before “Outcome summary”. 9 tests in `tests/test_report_limitations_p13.py`. |
 | ~~P-14~~ | ~~`api/report.py`, `api/store.py`~~ | ~~**Use stable finding identifiers.**~~ — **SHIPPED** | `_finding_id(file, criterion, location)`: SHA-256[:8] hex ID stable across renders, exports and re-assessments; exposed as `FND-{id}` in the evidence appendix heading for every applied and proposed finding. |
 | ~~P-15~~ | `api/report.py` | ~~**Clarify finding status and history.**~~ **DONE**: `_finding_status(issue, file_is_certifiable)` derives one of seven named states; file inventory "Findings" cell shows per-finding breakdown (21 tests in `test_report_finding_status_p15.py`). |
-| P-16 | `api/report.py` | **Add report provenance and freshness.** Display: report-generated timestamp + TZ, assessment-completion timestamp, data cutoff, scan ID, report schema/version, application build/commit, rubric name/version/hash. Label as a snapshot if assessment is still running or data has changed. |
-| P-17 | `api/report.py` | **Improve evidence presentation.** Per finding: file + location, criterion, detector/method, observed value, expected condition, relevant page/element, confidence or manual-review flag, evidence-collection timestamp. Long evidence expands rather than disappearing; redacted values are marked as redacted. |
+| ~~P-16~~ | `api/report.py` | ~~**Add report provenance and freshness.**~~ **SHIPPED (#742)**: `_provenance_section` renders report-generated timestamp, assessment-completion, scan ID, rubric hash, pipeline summary, and reproduce instructions. |
+| ~~P-17~~ | `api/report.py` | ~~**Improve evidence presentation.**~~ **SHIPPED (#752)**: location row, redaction/truncation for Before/After, Expected field, Confidence, Collected-at timestamp; `has_decision` guard fixes `KeyError` when `decision` key absent. |
 | ~~P-18~~ | `api/report.py` | ~~**Report-level reconciliation checks before rendering.**~~ **DONE**: `_reconciliation_checks()` validates rubric hash presence, orphan facts documents, catalog size, review arithmetic, and remediated_total; RED-bordered warning box rendered when any check fails (9 tests in `test_report_reconciliation_p18.py`). |
 | P-19 | `api/report.py` | **Print/PDF/AT behaviour.** Tables must repeat headers across pages; rows must not split into unreadable fragments; URLs and finding IDs must be usable in print; charts need text equivalents; colour is never the only status indicator; heading order and table semantics are correct; QR codes have adjacent human-readable URLs; page headers identify the scan and report date. |
-| P-20 | `api/report.py` | **Remove ambiguous assurance language.** Audit and replace: "Compliant", "Passed", "Complete", "Verified", "All issues", "No accessibility issues". Prefer bounded claims: "No automated failures detected among the N criteria evaluated. M criteria were not fully evaluated, including K requiring manual review." |
+| ~~P-20~~ | `api/report.py` | ~~**Remove ambiguous assurance language.**~~ **DONE**: POUR section renamed "No-failure rate by WCAG principle"; table columns "Passed"→"No failures", "Pass rate"→"No-failure rate"; file inventory Findings cell "clean"→"no findings". Docstring + prose updated to match. |
 
 ---
 

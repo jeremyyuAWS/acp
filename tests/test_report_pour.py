@@ -1,4 +1,4 @@
-"""Pass rate by WCAG principle — POUR (backlog R8).
+"""No-failure rate by WCAG principle — POUR (backlog R8).
 
 Two things are load-bearing and each has a test:
 
@@ -6,8 +6,8 @@ Two things are load-bearing and each has a test:
      evaluated criterion lands under exactly one of the four principles (its SC's leading digit),
      and the passed count is the evaluated count minus the failing count. If that identity ever
      breaks, the report's per-principle rate stops agreeing with its own headline evaluated count.
-  2. The report renders it as `passed/evaluated` with the honesty caveat, and renders NOTHING when
-     nothing was evaluated — a pass rate among evaluated checks is not a conformance percentage.
+  2. The report renders it with the honesty caveat, and renders NOTHING when nothing was evaluated
+     — a no-failure rate among evaluated checks is not a conformance percentage.
 """
 import sys
 from pathlib import Path
@@ -83,7 +83,7 @@ def test_report_renders_the_rate_with_its_honesty_caveat():
         {"principle": "Operable", "evaluated": 4, "passed": 4},
         {"principle": "Understandable", "evaluated": 2, "passed": 1},
         {"principle": "Robust", "evaluated": 1, "passed": 1}]))
-    assert "Pass rate by WCAG principle" in t
+    assert "No-failure rate by WCAG principle" in t
     assert "Perceivable" in t
     # the caveat that stops it being read as conformance
     assert "not" in t and "conformance" in t
@@ -97,7 +97,7 @@ def test_a_principle_with_nothing_evaluated_renders_a_dash_not_zero_percent():
         {"principle": "Operable", "evaluated": 0, "passed": 0},
         {"principle": "Understandable", "evaluated": 0, "passed": 0},
         {"principle": "Robust", "evaluated": 0, "passed": 0}]))
-    assert "Pass rate by WCAG principle" in t           # rendered because something WAS evaluated
+    assert "No-failure rate by WCAG principle" in t     # rendered because something WAS evaluated
 
 
 def test_nothing_evaluated_renders_no_section_at_all():

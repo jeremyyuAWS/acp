@@ -554,28 +554,28 @@ def _pour_bars(principles) -> Drawing:
 
 
 def _pour_section(facts, h2, body, cell, muted) -> list:
-    """Pass rate by WCAG principle — POUR (backlog R8).
+    """No-failure rate by WCAG principle — POUR (backlog R8).
 
     WCAG groups its success criteria under four principles (Perceivable / Operable /
     Understandable / Robust), split here by the leading digit of each SC number. Per principle,
     this shows how many of the criteria ACP actually EVALUATED (a validator ran and returned PASS
-    or FAIL) passed. Deterministic and honest by construction: not-evaluated and review-only
-    criteria are excluded, so this is a pass rate among evaluated checks — NOT a conformance
-    percentage. Rendered only when something was evaluated; a principle with nothing evaluated
-    shows "—" rather than a misleading 0%.
+    or FAIL) returned no failures. Deterministic and honest by construction: not-evaluated and
+    review-only criteria are excluded, so this is a no-failure rate among evaluated checks —
+    NOT a conformance percentage. Rendered only when something was evaluated; a principle with
+    nothing evaluated shows "—" rather than a misleading 0%.
     """
     principles = (facts or {}).get("principles") or []
     if sum(p.get("evaluated", 0) for p in principles) == 0:
         return []
-    el = [Paragraph("Pass rate by WCAG principle", h2)]
+    el = [Paragraph("No-failure rate by WCAG principle", h2)]
     el.append(Paragraph(
         "WCAG groups its criteria under four principles — Perceivable, Operable, Understandable, "
         "Robust. Of the criteria ACP <i>evaluated</i> for these documents (a validator ran and "
-        "returned pass or fail), the share that passed, per principle. Not-evaluated and "
-        "review-only criteria are excluded, so this is a pass rate among evaluated checks — "
+        "returned a result), the share with no automated failures detected, per principle. "
+        "Not-evaluated and review-only criteria are excluded — "
         "<b>not</b> a statement of WCAG 2.1 AA conformance.", muted))
     el.append(Spacer(1, 8))
-    rows = [["Principle", "Evaluated", "Passed", "Pass rate"]]
+    rows = [["Principle", "Evaluated", "No failures", "No-failure rate"]]
     for p in principles:
         ev, ps = p.get("evaluated", 0), p.get("passed", 0)
         rate = f"{ps}/{ev} ({round(100 * ps / ev)}%)" if ev else "—"
@@ -1901,7 +1901,7 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
             # never opened has no findings COUNT; that is not the same as having no findings.
             find = "not assessed"
         else:
-            find = "clean"
+            find = "no findings"
         # Counted per document (R6): verifiably-cleared fixes, criteria still failing, and
         # human sign-offs. A separate "validation" column would be redundant — a document is
         # validated exactly when Open is 0, and it can never read clear while findings remain.
