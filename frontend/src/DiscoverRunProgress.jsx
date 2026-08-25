@@ -397,7 +397,10 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
 
         {/* Announces phase transitions to screen readers without repeating per-tick KPI counts.
             Placed after the step list so step label text in the list is found first by indexOf. */}
-        <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        <span role="status" aria-live="polite" aria-atomic="true"
+              style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,
+                       overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap',
+                       border: 0 }}>
           {activeStepLabel ? `Step in progress: ${activeStepLabel}` : null}
         </span>
 
