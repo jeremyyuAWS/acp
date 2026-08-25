@@ -279,6 +279,7 @@ def _preview(match: list[dict], action: str, policy_id: str | None, owner: str) 
     effective = 0
     superseded = 0
     exempted = 0
+    exempted_documents: list[dict] = []
     unable_to_evaluate = 0
     unable_to_evaluate_fields: dict[str, int] = {}
 
@@ -287,6 +288,7 @@ def _preview(match: list[dict], action: str, policy_id: str | None, owner: str) 
         if doc.get("lifecycle_status") == "Exempted":
             if disposition.matches(doc, match):
                 exempted += 1
+                exempted_documents.append(doc)
             continue
 
         eval_result = disposition.evaluate(doc, match)
@@ -343,6 +345,7 @@ def _preview(match: list[dict], action: str, policy_id: str | None, owner: str) 
         "effective": effective,
         "superseded": superseded,
         "exempted": exempted,
+        "exempted_documents": exempted_documents,
         "unable_to_evaluate": unable_to_evaluate,
         "unable_to_evaluate_fields": unable_to_evaluate_fields,
     }
