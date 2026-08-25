@@ -47,6 +47,24 @@ E2E_KEY="${ACP_E2E_KEY:-}"                # set => X-E2E-Key bypass for smoke te
 # grant are one-time infra setup (not this script's job); this just points the app at it.
 BLOB_ACCOUNT="${ACP_BLOB_ACCOUNT:-acpremediatedstore}"
 
+_DEMO_LF_PK="pk-lf-655083d12dacf12febf1f1e8d2293905"
+if [ "${LF_PK}" = "${_DEMO_LF_PK}" ]; then
+  cat >&2 <<'EOF'
+
+  *** WARNING: Langfuse is pointing at the shared demo project ***
+  LANGFUSE_PUBLIC_KEY was not overridden; this deployment will write traces into the
+  acp-compliance demo project where all demo users can view them.
+  If this is intentional (deploying the public demo) you can ignore this message.
+  For a customer or PHI deployment, set your own project credentials before running:
+    export LANGFUSE_HOST=https://your-langfuse-host
+    export LANGFUSE_PUBLIC_KEY=pk-lf-...
+    export LANGFUSE_SECRET_KEY=sk-lf-...
+  Continuing in 5 seconds — Ctrl-C to abort.
+
+EOF
+  sleep 5
+fi
+
 echo "== 0/5 preflight =="
 # $ACP_ENV is ambiguous and must not be honoured. It named the Container Apps environment here,
 # and api/core.py reads the same name to mean the *deployment* environment (IS_PROD).

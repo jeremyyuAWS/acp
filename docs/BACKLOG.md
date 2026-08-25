@@ -265,18 +265,18 @@ third is the correctness fix with the widest blast radius.
   boundary. See [audit-langfuse-phi.md](audit-langfuse-phi.md).
   **Two decisions left, both in P0.10 below.**
 
-- [?] **P0.10 — The two Langfuse decisions P0.2 surfaced, plus one from P0.1.** Not code, and not
-  closeable by anyone but you.
-  * **Filenames in traces.** The only field flowing on every scan, and the largest remaining
-    exposure by volume — in a hospital estate the filename carries the patient
-    (`Smith_John_MRN0114233_intake.docx`). Hashing it, or keeping extension plus a per-scan index,
-    removes the identifier; both make a trace harder for a human to skim. That trade is the
-    decision.
-  * **`deploy.sh` defaults to the shared demo project's Langfuse host and public key.** A
-    deployment that does not override them traces into the project the demo views.
-  * **Should production refuse to boot in Basic-auth mode?** The right fail-closed default for
-    PHI, and it can lock out a running deployment — which is why #209 made it loud rather than
-    fatal.
+- [x] **P0.10 — The two Langfuse decisions P0.2 surfaced, plus one from P0.1.** Resolved
+  2026-08-25 (PR #797).
+  * **Filenames in traces.** Already hashed by default — `lf.py:_doc_label` emits
+    `doc-{6-char HMAC}.{ext}` for every span name and `"document"` field; raw filenames
+    only appear when `ACP_TRACE_FILENAMES=plain` is explicitly set. Decision: leave the opt-in
+    for debugging; safe default is already in place.
+  * **`deploy.sh` defaults to the shared demo project's Langfuse host and public key.** Decision:
+    warn but proceed (Option B). Added a 5-second banner to `deploy.sh` when `LANGFUSE_PUBLIC_KEY`
+    still matches the demo default — tells the operator how to override, does not block the deploy.
+  * **Should production refuse to boot in Basic-auth mode?** Decision: keep as-is (loud, not
+    fatal). `app.py` already prints a multi-line warning; making it a hard exit can lock out a
+    running deployment, which is a worse outcome than the warning.
 
 - [x] **P0.3 — Make the file-type filter reach the scanner.** Done. `scan_scope` now gates what
   is READ, not only what is scored: `assessment_policy.file_in_scope` decides per file and
