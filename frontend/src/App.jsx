@@ -1471,6 +1471,24 @@ export default function App() {
 
         {view === 'assess' && (run ? (
           <>
+            {/* Gate: discovery is still running — show a holding message instead of Assess content.
+                `busy` is only set by doScan/reconnectScan (discovery path), never by AssessRunner,
+                so this is safe to check. `run.completed_at` flips once the backend marks the scan
+                done; while it is null the Assess tab has nothing deterministic to show. */}
+            {busy && !run?.completed_at && (
+              <div style={{ padding: '48px 24px', textAlign: 'center', color: 'var(--muted)' }}>
+                <div style={{ fontSize: 22, marginBottom: 12 }}>🔍</div>
+                <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8, color: 'var(--ink)' }}>
+                  Available after discovery completes
+                </div>
+                <div style={{ fontSize: 13.5, marginBottom: 20, maxWidth: 380, margin: '0 auto 20px' }}>
+                  Discovery is still running. Assess will be ready once all documents have been catalogued.
+                </div>
+                <button className="ghost" onClick={() => setView('discover')}>
+                  Go to Discover →
+                </button>
+              </div>
+            )}
             {/* The assessment scope lives here now (Discover/Assess PRD §4.4): document types +
                 the Core-17 WCAG picker, with a live eligible-file count, written to scan_scope as
                 the single authority for the format axis. Collapsed by default so it does not
@@ -1489,13 +1507,15 @@ export default function App() {
                 run.completed_at printed an ISO timestamp across the top of the screen. fmtStamp
                 also returns null for a missing value, which is exactly the prop's "omit rather
                 than invent" contract — so the `|| null` this used to carry is redundant. */}
-            {assessPhase === 'idle' && !assessed && (
+            {!busy && assessPhase === 'idle' && !assessed && (
               <AssessSetup discoveredAt={fmtStamp(run?.completed_at)} busy={busy}
                            onRun={(decided) => assessStart.current?.(decided)} />
             )}
-            <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy}
-                          controlled onReady={registerAssessStart}
-                          onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase} />
+            {!(busy && !run?.completed_at) && (
+              <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy}
+                            controlled onReady={registerAssessStart}
+                            onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase} />
+            )}
             {/* Gated on assessPhase === 'done', not just `assessed` — `assessed` flips true the
                 instant Assess is clicked (before AssessRunner's own progress animation even
                 starts), so the results below were popping in fully-populated while the bar

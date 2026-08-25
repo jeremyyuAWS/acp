@@ -8,8 +8,8 @@ import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 // Steps derive from the backend phase; no percentage is fabricated.
 
 const PROG = { phase: 'discovering', files_found: 8420 }
-const render = (progress, busy, onStop, sources) =>
-  renderToStaticMarkup(createElement(DiscoverRunProgress, { progress, busy, onStop, sources }))
+const render = (progress, busy, onStop, sources, inv) =>
+  renderToStaticMarkup(createElement(DiscoverRunProgress, { progress, busy, onStop, sources, inv }))
 
 describe('DiscoverRunProgress renders nothing until a scan is live', () => {
   it('renders nothing when busy is false', () => {
@@ -132,6 +132,53 @@ describe('never shows assessment content', () => {
     expect(html).not.toMatch(/unable to assess/i)
     expect(html).not.toMatch(/findings/i)
     expect(html).not.toMatch(/Preparing assessment/i)
+  })
+})
+
+describe('lifecycle rules count on the lifecycle step', () => {
+  const INV_ROWS = [
+    { file: 'a.docx', lifecycle_rule_id: 'ret-1' },
+    { file: 'b.docx', lifecycle_rule_id: 'ret-1' },
+    { file: 'c.docx', lifecycle_rule_id: 'arc-2' },
+    { file: 'd.pdf',  lifecycle_rule_id: null },
+  ]
+  const inv = { rows: INV_ROWS, total: INV_ROWS.length }
+
+  it('shows "2 rules applied" on the lifecycle step when inv has 2 distinct rule ids', () => {
+    const prog = { phase: 'tagging', files_found: 4 }
+    const html = render(prog, true, undefined, undefined, inv)
+    expect(html).toContain('2 rules applied')
+  })
+
+  it('shows "1 rule applied" (singular) when only one rule id is present', () => {
+    const singleRuleInv = { rows: [{ file: 'a.docx', lifecycle_rule_id: 'ret-1' }], total: 1 }
+    const prog = { phase: 'tagging', files_found: 1 }
+    const html = render(prog, true, undefined, undefined, singleRuleInv)
+    expect(html).toContain('1 rule applied')
+  })
+
+  it('omits the rule count detail when inv is null', () => {
+    const prog = { phase: 'tagging', files_found: 5 }
+    const html = render(prog, true, undefined, undefined, null)
+    expect(html).not.toContain('rules applied')
+    expect(html).not.toContain('rule applied')
+  })
+
+  it('ignores rows with null lifecycle_rule_id when counting', () => {
+    const nullRuleInv = { rows: [{ file: 'a.docx', lifecycle_rule_id: null }, { file: 'b.docx', lifecycle_rule_id: null }], total: 2 }
+    const prog = { phase: 'tagging', files_found: 2 }
+    const html = render(prog, true, undefined, undefined, nullRuleInv)
+    expect(html).not.toContain('rules applied')
+  })
+
+  it('rule count detail appears near the Applying lifecycle rules step, not on other steps', () => {
+    const prog = { phase: 'tagging', files_found: 4 }
+    const html = render(prog, true, undefined, undefined, inv)
+    const lifecycleIdx = html.indexOf('Applying lifecycle rules')
+    const nextStepIdx = html.indexOf('Saving inventory')
+    const rulesIdx = html.indexOf('rules applied')
+    expect(rulesIdx).toBeGreaterThan(lifecycleIdx)
+    expect(rulesIdx).toBeLessThan(nextStepIdx)
   })
 })
 

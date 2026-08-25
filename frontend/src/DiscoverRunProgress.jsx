@@ -58,7 +58,7 @@ function DiscoverStep({ label, detail, status }) {
   )
 }
 
-export default function DiscoverRunProgress({ progress, busy, onStop, sources }) {
+export default function DiscoverRunProgress({ progress, busy, onStop, sources, inv = null }) {
   const [startedAt] = useState(() => Date.now())
   const [elapsed, setElapsed] = useState(0)
 
@@ -78,12 +78,22 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources })
   // "Connected to X" uses the source name when exactly one source is connected.
   const sourceName = sources && sources.length === 1 ? sources[0].name : null
 
-  const steps = STEPS.map((s, i) => ({
-    ...s,
-    label: i === 0 && sourceName ? `Connected to ${sourceName}` : s.label,
-    status: i < doneCount ? 'done' : i === doneCount ? 'active' : 'pending',
-    detail: s.key === 'listing' && filesFound > 0 ? `${filesFound.toLocaleString()} found` : null,
-  }))
+  // Distinct lifecycle rules applied so far — shown on the lifecycle step once inventory arrives.
+  const lifecycleRulesCount = inv?.rows
+    ? new Set(inv.rows.map((r) => r.lifecycle_rule_id).filter(Boolean)).size
+    : null
+
+  const steps = STEPS.map((s, i) => {
+    let detail = null
+    if (s.key === 'listing' && filesFound > 0) detail = `${filesFound.toLocaleString()} found`
+    if (s.key === 'lifecycle' && lifecycleRulesCount) detail = `${lifecycleRulesCount} rule${lifecycleRulesCount === 1 ? '' : 's'} applied`
+    return {
+      ...s,
+      label: i === 0 && sourceName ? `Connected to ${sourceName}` : s.label,
+      status: i < doneCount ? 'done' : i === doneCount ? 'active' : 'pending',
+      detail,
+    }
+  })
 
   return (
     <section className="discover-run-progress" role="region" aria-label="Discovery in progress"
