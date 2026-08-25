@@ -33,6 +33,7 @@ awaiting approval, which are never presented as remediated. That separation is
 the report's core honesty guarantee.
 """
 from __future__ import annotations
+import hashlib
 import io
 import logging
 import os
@@ -107,6 +108,52 @@ STATUS_LABEL = {"certifiable": "no blocking findings", "issues": "open findings"
                 "clean": "no findings", NOT_ASSESSED: "not assessed"}
 SEV_COLOR = {"CRITICAL": RED, "SERIOUS": AMBER, "MODERATE": BLUE, "MINOR": GREY}
 SEV_ORDER = ["CRITICAL", "SERIOUS", "MODERATE", "MINOR"]
+
+# P-15: per-finding status states and display order (most urgent first)
+FINDING_STATUSES = [
+    "Open", "Reopened", "Remediation attempted", "Awaiting re-scan",
+    "Verified resolved", "Accepted exception", "False positive",
+]
+FINDING_STATUS_COLOR = {
+    "Open": AMBER, "Reopened": RED, "Remediation attempted": PLUM,
+    "Awaiting re-scan": BLUE, "Verified resolved": GREEN,
+    "Accepted exception": MUTED, "False positive": MUTED,
+}
+# Explicit status strings accepted from issue["status"] (lowercase, underscores or spaces)
+_FINDING_STATUS_MAP = {
+    "open": "Open", "reopened": "Reopened",
+    "remediation_attempted": "Remediation attempted", "remediation attempted": "Remediation attempted",
+    "awaiting_rescan": "Awaiting re-scan", "awaiting re-scan": "Awaiting re-scan",
+    "awaiting_re-scan": "Awaiting re-scan",
+    "verified_resolved": "Verified resolved", "verified resolved": "Verified resolved",
+    "accepted_exception": "Accepted exception", "accepted exception": "Accepted exception",
+    "false_positive": "False positive", "false positive": "False positive",
+}
+
+
+def _finding_status(issue: dict, file_is_certifiable: bool) -> str:
+    """P-15: map one issue dict to one of the seven named finding states.
+
+    Explicit issue["status"] wins; otherwise derived from boolean flags and the
+    file-level certifiable flag.  Certifiable means the re-scan confirmed the
+    document no longer fails — any finding present on a certifiable doc was
+    cleared by that re-scan and is "Verified resolved", NOT merely "remediated".
+    """
+    explicit = (issue.get("status") or "").strip().lower().replace("-", "_")
+    mapped = _FINDING_STATUS_MAP.get(explicit) or _FINDING_STATUS_MAP.get(explicit.replace("_", " "))
+    if mapped:
+        return mapped
+    if issue.get("false_positive") or issue.get("fp"):
+        return "False positive"
+    if issue.get("accepted_exception") or issue.get("exception"):
+        return "Accepted exception"
+    if issue.get("reopened"):
+        return "Reopened"
+    if issue.get("awaiting_rescan") or issue.get("rescan_needed"):
+        return "Awaiting re-scan"
+    if issue.get("remediated_at") or issue.get("remediation_attempted"):
+        return "Verified resolved" if file_is_certifiable else "Remediation attempted"
+    return "Verified resolved" if file_is_certifiable else "Open"
 
 
 def _crit_name(c):
@@ -283,6 +330,16 @@ def _esc(s) -> str:
     if len(escaped) > 2000:
         return escaped[:2000] + "…"
     return escaped
+
+
+def _finding_id(file: str, criterion: str, location: str = "") -> str:
+    """Deterministic 8-char hex ID stable for the same (file, criterion, location) triple.
+
+    Stable across renders, exports, and re-assessments of the same finding. Does not include
+    scan_id so the same logical finding in different scans of the same document has the same ID.
+    """
+    key = f"{file}|{criterion}|{location or ''}".encode()
+    return hashlib.sha256(key).hexdigest()[:8]
 
 
 def _decision_block(run, files, meta, facts, h2, body, muted) -> list:
@@ -596,65 +653,95 @@ def _manual_verification_section(files, h2, body, cell, muted) -> list:
     return el
 
 
-def _limitations_section(facts, unassessed, unanalysable, h2, body, muted) -> list:
-    """P-13 — Material limitations of this assessment, near the executive summary.
-
-    Lists the high-level constraints on what this report asserts: criteria deferred to human
-    review, criteria with no automated validator for these formats, and documents that could
-    not be fully assessed. The detailed criterion lists appear in 'What this report covers'
-    below; this section names the constraints so an auditor reading the executive summary
-    does not have to scroll to find them.
-
-    Password-protection cause, OCR status, and ownership metadata are not yet recorded in
-    the scan record; the unanalysable count absorbs all three without distinguishing them.
-    """
+def _limitations_section(facts, unassessed, unanalysable, h2, body, muted, *, run=None, files=None) -> list:
+    """P-13 — Material limitations of this assessment, near the executive summary."""
     scope = (facts or {}).get("scope") or {}
     human_only = scope.get("human_only_criteria") or []
-    not_eval = scope.get("not_evaluated_criteria") or []
+    not_evaluated = scope.get("not_evaluated_criteria") or []
+    review_criteria = scope.get("review_criteria") or []
 
     def _sc(c: object) -> str:
         return c["sc"] if isinstance(c, dict) else str(c)
 
+    def _name(c: object) -> str:
+        return c.get("name", "") if isinstance(c, dict) else ""
+
+    def _crit_str(items, limit=8):
+        lst = ", ".join(
+            f"{_sc(c)} ({_name(c)})" if _name(c) else _sc(c)
+            for c in items[:limit]
+        )
+        suffix = f" and {len(items) - limit} more" if len(items) > limit else ""
+        return lst + suffix
+
     parts = []
+
+    # 1. Unanalysable documents (count param + error-status files)
+    error_files = [f for f in (files or []) if (f.get("status") or "") == "error"]
+    n_unable = max(unanalysable, len(error_files))
+    if n_unable > 0:
+        common = "Common causes include password protection, corruption, or an unsupported variant."
+        if error_files:
+            names = ", ".join(f["file"] for f in error_files)
+            parts.append(
+                f"<b>{n_unable} document(s) could not be opened or analysed</b> "
+                f"({names}). {common} This report makes no accessibility assertion "
+                f"about {'this file' if n_unable == 1 else 'these files'}."
+            )
+        else:
+            parts.append(
+                f"<b>{n_unable} document(s) could not be opened or analysed.</b> "
+                f"{common}"
+            )
+
+    # 2. Unassessed documents
+    if unassessed > 0:
+        parts.append(
+            f"<b>{unassessed} document(s) were in scope but never assessed.</b> "
+            f"Re-run the scan to include them."
+        )
+
+    # 3. Human-only criteria (require human or AT review)
     if human_only:
         n = len(human_only)
-        sc_list = ", ".join(_sc(c) for c in human_only[:8])
-        suffix = f" and {n - 8} more" if n > 8 else ""
         parts.append(
-            f"<b>{n} success {'criterion requires' if n == 1 else 'criteria require'} "
-            f"human or assistive-technology review</b> and cannot be resolved automatically "
-            f"({sc_list}{suffix}). Findings in these lanes are queued for a qualified reviewer "
-            "and are never auto-cleared."
+            f"<b>{n} {'criterion requires' if n == 1 else 'criteria require'} "
+            f"human or assistive-technology review</b> ({_crit_str(human_only)}). "
+            f"These cannot be resolved automatically and are queued for a qualified reviewer."
         )
-    if not_eval:
-        n = len(not_eval)
+
+    # 4. Not-evaluated criteria (no automated validator for formats in scope)
+    if not_evaluated:
+        n = len(not_evaluated)
         parts.append(
-            f"<b>{n} {'criterion has' if n == 1 else 'criteria have'} no automated validator "
-            f"for the file {'format' if n == 1 else 'formats'} in this scan</b> and "
-            f"{'was' if n == 1 else 'were'} not evaluated. This is not the same as inapplicable — "
-            "some of these criteria do apply to the formats; ACP does not yet check them."
+            f"<b>{n} {'criterion has' if n == 1 else 'criteria have'} no automated validator</b> "
+            f"for the document formats in this scan ({_crit_str(not_evaluated)}). "
+            f"No pass/fail verdict can be generated for {'it' if n == 1 else 'them'}."
         )
-    if unanalysable:
+
+    # 5. Review-recommended criteria
+    if review_criteria:
+        n = len(review_criteria)
         parts.append(
-            f"<b>{unanalysable} document(s) could not be opened or analysed</b>. Common causes "
-            "include password protection, an unsupported format variant, or content that requires "
-            "OCR to read. This report makes no accessibility assertion about "
-            f"{'this file' if unanalysable == 1 else 'these files'}."
+            f"<b>{n} {'criterion is' if n == 1 else 'criteria are'} review-recommended</b> "
+            f"and cannot be resolved automatically ({_crit_str(review_criteria)}). "
+            f"Findings in these lanes are queued for a qualified reviewer "
+            f"and are never auto-cleared."
         )
-    if unassessed:
+
+    # 6. Owner metadata absent
+    if run is not None and not run.get("owner_email"):
         parts.append(
-            f"<b>{unassessed} document(s) were in scope but never assessed</b> — not opened, "
-            f"not scored. This report makes no assertion about "
-            f"{'it' if unassessed == 1 else 'them'}."
+            "<b>Owner metadata absent</b> — no owner_email was recorded for this scan. "
+            "This report cannot be attributed to a responsible party."
         )
 
     if not parts:
         return []
 
-    el = [Paragraph("Limitations of this assessment", h2)]
+    el = [Paragraph("Material Limitations", h2)]
     el.append(Paragraph(
-        "The following constraints bound the claims in this report. Full criterion lists and "
-        "document-level breakdowns appear under 'What this report covers' below.", muted))
+        "The following constraints bound the claims in this report.", muted))
     el.append(Spacer(1, 5))
     for p in parts:
         el.append(Paragraph("• " + p, muted))
@@ -1085,10 +1172,13 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
             else:
                 badge = "<font color='#3B6D11'>&#x25CF; Deterministic</font>"
                 sign_off = "deterministic fixer · auto-applied · no human decision needed"
+            _fid = _finding_id(doc["file"], e.get("criterion", ""),
+                               e.get("location") or e.get("before", "")[:60])
             lines = [Paragraph(
                 f"{badge} &nbsp;<b>{_esc(e['criterion'])}</b>"
-                f" &nbsp;<font color='#3B6D11'>&#x2713; validated on re-scan</font>", cell)]
-            # P-17: location — page / element / path hint (any subset)
+                f" &nbsp;<font color='#3B6D11'>&#x2713; validated on re-scan</font>"
+                f" &nbsp;<font color='#6c6470' size='7'>FND-{_fid}</font>", cell)]
+            # P-17: location -- page / element / path hint (any subset)
             loc_parts = []
             if e.get("location"):
                 loc_parts.append(_esc(e["location"]))
@@ -1099,25 +1189,25 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
             if loc_parts:
                 lines.append(Paragraph(
                     f"<font color='#6c6470'>Location</font> &nbsp;{' &middot; '.join(loc_parts)}", cell))
-            # P-17: before — explicit redaction label; truncation notice
+            # P-17: before -- explicit redaction label; truncation notice
             before_raw = e.get("before")
             if before_raw is not None and str(before_raw) == "[REDACTED]":
                 before_display = "<font color='#6c6470'>[redacted]</font>"
             else:
                 before_display = _esc(before_raw)
                 if before_raw is not None and len(str(before_raw)) > 2000:
-                    before_display += " <font color='#6c6470'>(truncated — full text via API)</font>"
+                    before_display += " <font color='#6c6470'>(truncated \u2014 full text via API)</font>"
             lines.append(Paragraph(f"<font color='#6c6470'>Before</font> &nbsp;{before_display}", cell))
-            # P-17: after — same treatment
+            # P-17: after -- same treatment
             after_raw = e.get("after")
             if after_raw is not None and str(after_raw) == "[REDACTED]":
                 after_display = "<font color='#6c6470'><b>[redacted]</b></font>"
             else:
                 after_display = f"<b>{_esc(after_raw)}</b>"
                 if after_raw is not None and len(str(after_raw)) > 2000:
-                    after_display += " <font color='#6c6470'>(truncated — full text via API)</font>"
+                    after_display += " <font color='#6c6470'>(truncated \u2014 full text via API)</font>"
             lines.append(Paragraph(f"<font color='#6c6470'>After</font> &nbsp;{after_display}", cell))
-            # P-17: expected condition from the criterion (what the standard requires)
+            # P-17: expected condition from the criterion
             if e.get("expected"):
                 lines.append(Paragraph(
                     f"<font color='#6c6470'>Expected</font> &nbsp;{_esc(e['expected'])}", cell))
@@ -1126,7 +1216,7 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
                 val = e["value"]
                 val_text = _esc(val)
                 if len(str(val)) > 2000:
-                    val_text += " <font color='#6c6470'>(truncated — full text via API)</font>"
+                    val_text += " <font color='#6c6470'>(truncated \u2014 full text via API)</font>"
                 lines.append(Paragraph(f"<font color='#6c6470'>AI wrote</font> &nbsp;{val_text}{src}", cell))
             if e.get("note"):
                 lines.append(Paragraph(f"<font color='#6c6470'>Why</font> &nbsp;{_esc(e['note'])}", cell))
@@ -1162,9 +1252,10 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
         for p in doc["proposed"]:
             note = ("validated on re-scan — awaiting approval" if p.get("validated")
                     else "awaiting human approval")
+            _pfid = _finding_id(doc["file"], p.get("criterion", ""))
             lines = [Paragraph(
                 f"<b>{_esc(p['criterion'])}</b> &nbsp;<font color='#854F0B'>proposed — not remediated "
-                f"({note})</font>", cell)]
+                f"({note})</font> &nbsp;<font color='#6c6470' size='7'>FND-{_pfid}</font>", cell)]
             for pr in p["proposals"][:6]:
                 why = f" <font color='#6c6470'>— {_esc(pr.get('rationale'))}</font>" if pr.get("rationale") else ""
                 src = (f" <font color='#6c6470'>({_esc(pr['source'])})</font>"
@@ -1316,6 +1407,65 @@ def _ai_governance_section(run, h2, body, cell, muted) -> list:
     return el
 
 
+def _reconciliation_checks(files: list, facts: dict | None, meta: dict) -> list[str]:
+    """P-18: Return a list of human-readable discrepancy strings.
+
+    Checks that the inputs to build_report are internally consistent.  An empty
+    list means everything reconciles; non-empty means the report may be wrong
+    in material ways and a warning box should be rendered.
+    """
+    issues: list[str] = []
+
+    # Rubric hash required for reproducibility claim in the header
+    if not (meta.get("hash") or "").strip():
+        issues.append(
+            "Rubric hash is absent — the report header claims results are reproducible "
+            "from this hash, but no hash was supplied.")
+
+    if facts is not None:
+        scope = facts.get("scope") or {}
+        catalog = scope.get("catalog_size", 0)
+        not_eval_ct = len(scope.get("not_evaluated_criteria") or [])
+        human_only_ct = len(scope.get("human_only_criteria") or [])
+        if catalog and (not_eval_ct + human_only_ct) > catalog:
+            issues.append(
+                f"Criteria counts exceed catalog size: not-evaluated ({not_eval_ct}) + "
+                f"human-only ({human_only_ct}) = {not_eval_ct + human_only_ct} > "
+                f"catalog_size ({catalog}).")
+
+        # facts.documents file names should be a subset of the files list
+        doc_facts = facts.get("documents") or []
+        fact_names = {d.get("file") for d in doc_facts if d.get("file")}
+        file_names = {f.get("file") for f in files if f.get("file")}
+        orphan_facts = fact_names - file_names
+        if orphan_facts:
+            sample = ", ".join(sorted(orphan_facts)[:5])
+            tail = f" and {len(orphan_facts) - 5} more" if len(orphan_facts) > 5 else ""
+            issues.append(
+                f"facts['documents'] references file(s) not present in the file list: "
+                f"{sample}{tail}.")
+
+        # Review counts must be internally consistent
+        review = facts.get("review") or {}
+        reviewed = review.get("reviewed", 0)
+        approved = review.get("approved", 0)
+        rejected = review.get("rejected", 0)
+        skipped = review.get("skipped", 0)
+        if reviewed and (approved + rejected + skipped) > reviewed:
+            issues.append(
+                f"Review counts do not reconcile: approved ({approved}) + rejected ({rejected}) "
+                f"+ skipped ({skipped}) = {approved + rejected + skipped} > reviewed ({reviewed}).")
+
+        # Remediated total cannot exceed the number of documents
+        rem_total = facts.get("remediated_total", 0) or 0
+        if rem_total > len(files):
+            issues.append(
+                f"remediated_total ({rem_total}) exceeds the number of documents "
+                f"in scope ({len(files)}).")
+
+    return issues
+
+
 def _assessment_scope_block(run: dict, meta: dict, facts: dict | None,
                             fmt_str: str, h2, body, cell, muted) -> list:
     """Assessment scope declaration (P-12).
@@ -1442,6 +1592,26 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     # executive verdict below — this card carries the decision, the counts and the digest,
     # and deliberately does not repeat that prose.
     _muted = ParagraphStyle("rmuted", parent=ss["Normal"], textColor=MUTED, fontSize=8, leading=11.5)
+
+    # ── P-18: Report-integrity reconciliation warning ─────────────────────────
+    _recon = _reconciliation_checks(files, facts, meta)
+    if _recon:
+        _recon_lines = [Paragraph(
+            '<font color="#A32D2D"><b>Report integrity — data reconciliation failed</b></font>',
+            body)]
+        for _item in _recon:
+            _recon_lines.append(Paragraph(f"• {_item}", _muted))
+        _recon_t = Table([[_recon_lines]], colWidths=[7.1 * inch])
+        _recon_t.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("BOX", (0, 0), (-1, -1), 1.0, RED),
+            ("BACKGROUND", (0, 0), (-1, -1), CARD),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ]))
+        el.append(_recon_t)
+        el.append(Spacer(1, 6))
+
     el.extend(_decision_block(run, files, meta, facts, h2, body, _muted))
 
     # ── Reconcile the estate: open (blocking) vs certifiable/remediated ──────
@@ -1528,7 +1698,7 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
             lead))
 
     # ── P-13: Limitations of this assessment ─────────────────────────────────
-    el.extend(_limitations_section(facts, unassessed, unanalysable, h2, body, _muted))
+    el.extend(_limitations_section(facts, unassessed, unanalysable, h2, body, _muted, run=run, files=files))
 
     # ── Certification summary band ───────────────────────────────────────────
     el.append(Paragraph("Outcome summary", h2))
@@ -1714,10 +1884,15 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     for f in ordered:
         st = _status(f)
         issues = f.get("issues") or []
-        if st == "certifiable" and issues:
-            find = "remediated" if (f.get("remediated_at") or f.get("drive_write_url")) else "non-blocking"
-        elif issues:
-            find = f"{len(issues)} open finding(s)"
+        if issues:
+            # P-15: per-finding status breakdown — never collapse to "remediated" just because
+            # a timestamp exists; "Verified resolved" requires a re-scan to confirm.
+            _cert = (st == "certifiable")
+            _sc: dict[str, int] = {}
+            for _i in issues:
+                _s = _finding_status(_i, _cert)
+                _sc[_s] = _sc.get(_s, 0) + 1
+            find = " · ".join(f"{_sc[s]} {s}" for s in FINDING_STATUSES if s in _sc)
         elif f["status"] == "error":
             find = "could not analyse"
         elif st == NOT_ASSESSED:
