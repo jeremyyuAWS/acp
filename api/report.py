@@ -1158,8 +1158,8 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
             # Tier 3:  AI-generated + re-scan-validated, no human approval recorded.
             has_ai = bool(e.get("value"))
             has_decision = bool(e.get("decision"))
-            decision_str = (f"{e['decision']} by {e.get('reviewer') or 'reviewer'}"
-                            + (f" · {when} UTC" if when else ""))
+            decision_str = (f"{e.get('decision', '')} by {e.get('reviewer') or 'reviewer'}"
+                            + (f" · {when} UTC" if when else "")) if has_decision else ""
             if has_ai and has_decision:
                 badge = "<font color='#3B6D11'>&#x25CF; AI &middot; human-confirmed</font>"
                 sign_off = decision_str
@@ -1174,18 +1174,61 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
                 sign_off = "deterministic fixer · auto-applied · no human decision needed"
             _fid = _finding_id(doc["file"], e.get("criterion", ""),
                                e.get("location") or e.get("before", "")[:60])
-            lines = [
-                Paragraph(f"{badge} &nbsp;<b>{_esc(e['criterion'])}</b>"
-                          f" &nbsp;<font color='#3B6D11'>&#x2713; validated on re-scan</font>"
-                          f" &nbsp;<font color='#6c6470' size='7'>FND-{_fid}</font>", cell),
-                Paragraph(f"<font color='#6c6470'>Before</font> &nbsp;{_esc(e.get('before'))}", cell),
-                Paragraph(f"<font color='#6c6470'>After</font> &nbsp;<b>{_esc(e.get('after'))}</b>", cell),
-            ]
+            lines = [Paragraph(
+                f"{badge} &nbsp;<b>{_esc(e['criterion'])}</b>"
+                f" &nbsp;<font color='#3B6D11'>&#x2713; validated on re-scan</font>"
+                f" &nbsp;<font color='#6c6470' size='7'>FND-{_fid}</font>", cell)]
+            # P-17: location -- page / element / path hint (any subset)
+            loc_parts = []
+            if e.get("location"):
+                loc_parts.append(_esc(e["location"]))
+            if e.get("page") is not None:
+                loc_parts.append(f"page {_esc(e['page'])}")
+            if e.get("element"):
+                loc_parts.append(f"element {_esc(e['element'])}")
+            if loc_parts:
+                lines.append(Paragraph(
+                    f"<font color='#6c6470'>Location</font> &nbsp;{' &middot; '.join(loc_parts)}", cell))
+            # P-17: before -- explicit redaction label; truncation notice
+            before_raw = e.get("before")
+            if before_raw is not None and str(before_raw) == "[REDACTED]":
+                before_display = "<font color='#6c6470'>[redacted]</font>"
+            else:
+                before_display = _esc(before_raw)
+                if before_raw is not None and len(str(before_raw)) > 2000:
+                    before_display += " <font color='#6c6470'>(truncated \u2014 full text via API)</font>"
+            lines.append(Paragraph(f"<font color='#6c6470'>Before</font> &nbsp;{before_display}", cell))
+            # P-17: after -- same treatment
+            after_raw = e.get("after")
+            if after_raw is not None and str(after_raw) == "[REDACTED]":
+                after_display = "<font color='#6c6470'><b>[redacted]</b></font>"
+            else:
+                after_display = f"<b>{_esc(after_raw)}</b>"
+                if after_raw is not None and len(str(after_raw)) > 2000:
+                    after_display += " <font color='#6c6470'>(truncated \u2014 full text via API)</font>"
+            lines.append(Paragraph(f"<font color='#6c6470'>After</font> &nbsp;{after_display}", cell))
+            # P-17: expected condition from the criterion
+            if e.get("expected"):
+                lines.append(Paragraph(
+                    f"<font color='#6c6470'>Expected</font> &nbsp;{_esc(e['expected'])}", cell))
             if e.get("value"):
                 src = f" <font color='#6c6470'>({_esc(e['source'])})</font>" if e.get("source") else ""
-                lines.append(Paragraph(f"<font color='#6c6470'>AI wrote</font> &nbsp;{_esc(e['value'])}{src}", cell))
+                val = e["value"]
+                val_text = _esc(val)
+                if len(str(val)) > 2000:
+                    val_text += " <font color='#6c6470'>(truncated \u2014 full text via API)</font>"
+                lines.append(Paragraph(f"<font color='#6c6470'>AI wrote</font> &nbsp;{val_text}{src}", cell))
             if e.get("note"):
                 lines.append(Paragraph(f"<font color='#6c6470'>Why</font> &nbsp;{_esc(e['note'])}", cell))
+            # P-17: confidence score / label
+            if e.get("confidence") is not None:
+                lines.append(Paragraph(
+                    f"<font color='#6c6470'>Confidence</font> &nbsp;{_esc(e['confidence'])}", cell))
+            # P-17: evidence-collection timestamp
+            if e.get("collected_at"):
+                ct = str(e["collected_at"])[:19].replace("T", " ")
+                lines.append(Paragraph(
+                    f"<font color='#6c6470'>Collected</font> &nbsp;{_esc(ct)} UTC", cell))
             lines.append(Paragraph(f"<font color='#6c6470'>Decision</font> &nbsp;{_esc(sign_off)}", cell))
 
             thumb = _thumb_flowable(e.get("thumb"))
