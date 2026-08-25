@@ -22,6 +22,9 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
   const [expanded, setExpanded] = useState(null)
   const [busy, setBusy] = useState(null)        // itemId currently acting
   const [sortMode, setSortMode] = useState('critical')   // 'critical' = triage | 'quick' = clear easy work first
+  // A decision the server refused. A silent failure here means the reviewer thinks they signed
+  // something off that was never recorded — so we must always surface it.
+  const [actError, setActError] = useState(null)
 
   const pending = useMemo(() => items.filter((i) => i.status === 'pending'), [items])
   const resolvedToday = items.filter((i) => i.status !== 'pending' && isToday(i.reviewed_at))
@@ -72,8 +75,9 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
 
   // Bulk path only. A single item is decided inside its EvidenceCard, which carries the
   // reviewer's note, the (possibly edited) value, and the review telemetry.
-  const doAct = (it, status) => {
+  const doAct = async (it, status) => {
     setBusy(it.id)
+    setActError(null)
     // An item carrying an AI proposal takes a value even if its SC isn't in VALUE_FIX, and
     // the proposed value is what a bulk approve accepts (there is no per-item edit here).
     const takesValue = VALUE_FIX.has(scOf(it.rule_id)) || !!(it.proposals && it.proposals.length)
@@ -81,9 +85,15 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
     // Bulk/keyboard rejections carry reason 'unspecified' — recorded honestly as "no reason
     // asked", never dropped, so the feedback rollup separates them from chip-picked reasons.
     const opts = status === 'rejected' ? { rejectReason: 'unspecified' } : {}
-    Promise.resolve(onAct(it.id, status, null, status === 'approved' ? val : null, opts))
-      .catch(() => {})   // act() already reverts optimistic state on failure; avoid an unhandled rejection
-      .finally(() => { setBusy(null); setExpanded(null) })
+    try {
+      await onAct(it.id, status, null, status === 'approved' ? val : null, opts)
+    } catch (e) {
+      // HitlBell rolls back the optimistic state and rethrows. An unrecorded approval must
+      // never look like a recorded one — surface the failure so the reviewer can retry.
+      setActError(`Not saved: ${e?.message || e}. Nothing was recorded — try again.`)
+    } finally {
+      setBusy(null); setExpanded(null)
+    }
   }
 
   // Keyboard-driven review — power reviewers never touch the mouse. Typing in a note /
@@ -109,7 +119,11 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
   // A "judgement" item has no value to type (no VALUE_FIX rule and no AI proposal) — only
   // those are safe to bulk-approve; a proposal must be reviewed individually.
   const isJudgement = (it) => !VALUE_FIX.has(scOf(it.rule_id)) && !(it.proposals && it.proposals.length)
-  const approveGroup = (grp) => grp.items.forEach((it) => { if (isJudgement(it)) onAct(it.id, 'approved') })
+  const approveGroup = (grp) => grp.items.forEach((it) => {
+    if (isJudgement(it)) onAct(it.id, 'approved').catch((e) => {
+      setActError(`Not saved: ${e?.message || e}. Nothing was recorded — try again.`)
+    })
+  })
   // Bulk "Confirm all" for the deterministic-confirmation tier (PRD HITL 2.0 bulk approval):
   // those items are ACP-applied rule-based fixes already re-validated, so a rubber-stamp of
   // the whole tier is the intended one-click — never offered for the proposal or authoring
@@ -163,6 +177,12 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
 
         <div className="rc-body">
           {error && <div className="rc-empty">The review queue is unavailable right now. <button className="ghost small" onClick={onRefresh}>Retry</button></div>}
+          {actError && (
+            <div role="alert" style={{ background: '#FEE2E2', border: '1px solid #F87171', borderRadius: 8, padding: '10px 14px', marginBottom: 10, color: '#991B1B', fontSize: 14 }}>
+              ⚠ {actError}{' '}
+              <button className="ghost small" onClick={() => setActError(null)} style={{ marginLeft: 8 }}>Dismiss</button>
+            </div>
+          )}
           {!error && pending.length === 0 && <div className="rc-empty">All caught up — nothing awaiting review. ✓</div>}
 
           {sections.map((sec) => (

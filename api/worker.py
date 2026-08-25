@@ -61,6 +61,44 @@ class FatalJobError(Exception):
     """Raise from a handler to dead-letter the job immediately (no retry)."""
 
 
+class JobCancelledError(Exception):
+    """Raised by check_cancel() when the current job has been flagged for cancellation.
+
+    Handlers that want cooperative cancellation call worker.check_cancel() at natural
+    checkpoints (between folder requests, before a write, between document stages). The
+    worker catches this, skips retry logic, and marks the job status='cancelled'."""
+
+
+# Thread-local: the worker installs a callable here before running a handler, and the
+# handler (indirectly, via check_cancel()) reads it without needing a reference to the worker.
+_cancel_local = threading.local()
+
+
+def check_cancel() -> None:
+    """Call from a handler at any natural checkpoint to abort if the job was cancelled.
+
+    Raises JobCancelledError when cancel_requested_at has been set on the job row.
+    No-op when called outside a worker turn (e.g. in tests that don't use the worker).
+
+    Usage::
+
+        from worker import check_cancel
+
+        @handler("scan_file")
+        def _scan(payload, job):
+            for folder in folders:
+                check_cancel()          # between folder requests
+                for doc in folder:
+                    check_cancel()      # between document stages
+                    process(doc)
+                    check_cancel()      # before writes
+                    write_results(doc)
+    """
+    fn = getattr(_cancel_local, "check", None)
+    if fn:
+        fn()
+
+
 # Shown to the person, not to the log. The queue panel renders `last_error` verbatim, so a
 # dead-letter reason has to say what happened and what to do — never quote a library's
 # internals. It replaced: "The credentials do not contain the necessary fields need to refresh
@@ -101,6 +139,76 @@ def drive_session_expired(exc: BaseException) -> str | None:
     except ImportError:
         pass
     return None
+
+
+# ── Typed error classification ────────────────────────────────────────────────
+# Four classes; each maps to a different retry policy in job_retry_policy().
+# Default is always "transient" — misclassifying a transient as terminal loses work.
+
+RATE_LIMIT = "rate_limit"   # 429 / quota exhausted — exponential backoff with long base
+AUTH       = "auth"         # 401 / expired token — dead-letter immediately, no retries
+CORRUPT    = "corrupt"      # malformed/parse error — 1 retry, then dead
+TRANSIENT  = "transient"    # everything else — standard exponential backoff
+
+# Patterns matched case-insensitively against str(exc) to classify without importing
+# every third-party library.  Listed most-specific first so the first match wins.
+_RATE_LIMIT_PHRASES = (
+    "429", "too many requests", "rate limit", "quota exceeded", "quota_exceeded",
+    "resource exhausted", "rateLimitExceeded",
+)
+_AUTH_PHRASES = (
+    "401", "unauthorized", "unauthenticated", "token expired", "invalid_grant",
+    "credentials", "session expired",
+)
+_CORRUPT_PHRASES = (
+    "corrupt", "malformed", "invalid format", "unexpected end of file",
+    "bad zip file", "badzipfile", "truncated", "decompression failed",
+    "cannot identify image", "xml.etree", "lxml", "openpyxl",
+    "struct.error", "zlib.error",
+)
+
+
+def classify_job_error(exc: BaseException) -> str:
+    """Map an exception to one of RATE_LIMIT / AUTH / CORRUPT / TRANSIENT.
+
+    The Drive-token path is checked first via drive_session_expired() because it uses
+    google-auth's actual exception types rather than string matching, which is more
+    reliable than inferring AUTH from the message text."""
+    if drive_session_expired(exc) is not None:
+        return AUTH
+    msg = str(exc).lower()
+    exc_type = type(exc).__name__.lower()
+    combined = f"{exc_type} {msg}"
+    for phrase in _RATE_LIMIT_PHRASES:
+        if phrase.lower() in combined:
+            return RATE_LIMIT
+    for phrase in _AUTH_PHRASES:
+        if phrase.lower() in combined:
+            return AUTH
+    for phrase in _CORRUPT_PHRASES:
+        if phrase.lower() in combined:
+            return CORRUPT
+    return TRANSIENT
+
+
+def job_retry_policy(error_class: str, attempts: int) -> tuple[bool, float]:
+    """Return (force_dead, backoff_seconds) for a given error class and attempt count.
+
+    force_dead=True skips the remaining-attempts check in fail_job and dead-letters now.
+    The caller still passes these to fail_job; fail_job dead-letters on its own when
+    attempts >= max_attempts regardless of what is returned here."""
+    if error_class == AUTH:
+        # Auth tokens can't come back; retrying sends the same dead credential.
+        return True, 0.0
+    if error_class == CORRUPT:
+        # One retry in case the file was mid-write; dead-letter after that.
+        return attempts >= 2, 0.0
+    if error_class == RATE_LIMIT:
+        # Long exponential backoff: 60s base, cap at 600s, full jitter.
+        raw = min(600.0, 60.0 * (2 ** max(0, attempts - 1)))
+        return False, random.uniform(0, raw)
+    # TRANSIENT: standard backoff.
+    return False, _backoff_seconds(attempts)
 
 
 def handler(job_type: str):
@@ -156,22 +264,35 @@ class JobWorker:
                 except Exception:
                     pass
         threading.Thread(target=_heartbeat, daemon=True, name="job-heartbeat").start()
+        # Install a cancel-check callable so check_cancel() can read it from any frame
+        # in this thread without needing a store reference.
+        def _do_cancel_check():
+            if self.store.is_job_cancelled(job["id"]):
+                raise JobCancelledError(f"job {job['id']} was cancelled")
+        _cancel_local.check = _do_cancel_check
         try:
             fn(job.get("payload", {}), job)
-            self.store.complete_job(job["id"])
+            # Handler finished — honour a cancellation that arrived while it was running
+            # (the handler may not have called check_cancel() at all).
+            if self.store.is_job_cancelled(job["id"]):
+                self.store.mark_job_cancelled(job["id"])
+            else:
+                self.store.complete_job(job["id"])
+        except JobCancelledError:
+            self.store.mark_job_cancelled(job["id"])
         except FatalJobError as e:
-            self.store.fail_job(job["id"], f"fatal: {e}", force_dead=True)
+            self.store.fail_job(job["id"], f"fatal: {e}", force_dead=True,
+                                error_class=TRANSIENT)
         except Exception as e:
-            # An expired Drive token is terminal: the same dead credential is re-sent on every
-            # retry, so the only thing backoff buys is four more failures and a confusing
-            # dead-letter. Dead-letter it once, in words the reviewer can act on.
-            expired = drive_session_expired(e)
-            if expired:
-                self.store.fail_job(job["id"], expired, force_dead=True)
-            else:  # retryable
-                self.store.fail_job(job["id"], str(e),
-                                    backoff_seconds=_backoff_seconds(job["attempts"]))
+            eclass = classify_job_error(e)
+            # Use the human-readable Drive message for auth failures so the queue panel
+            # shows something actionable rather than a google-auth traceback.
+            msg = drive_session_expired(e) or str(e)
+            force_dead, backoff = job_retry_policy(eclass, job["attempts"])
+            self.store.fail_job(job["id"], msg, backoff_seconds=backoff,
+                                force_dead=force_dead, error_class=eclass)
         finally:
+            _cancel_local.check = None
             stop_hb.set()
         return True
 

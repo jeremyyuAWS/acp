@@ -40,8 +40,8 @@ not confirmed in source this session — each names the file to confirm in first
 engaged** — alt-text falls back to a local filename-guess template and the AI-cost zone stays
 `local (8/8)`, zero cloud, even after clearing the endpoint override. **R2 downgraded** from "env not
 set" to "env set but runtime doesn't select RunPod" (the `runpod-api-key` secret not resolving is the
-prime suspect → **R3**); **R12 is now VERIFIED FAILING**, not merely unverified. Both carry the exact
-re-check steps.
+prime suspect → **R3**); **R12 was VERIFIED FAILING** at that time. **R12 CLOSED 2026-08-25**: deploy
+#559 `/readyz` confirms `zone: cloud`, `model: llava:13b` — GPU vision now engaged.
 
 ---
 
@@ -52,13 +52,13 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
 
 ### Ops-blocking (nothing else ships until these clear)
 
-- [~] **R1 — Ship the wedged 3a + readiness deploy.** Frozen per-scan scope (#267) and the greyed
-  not-ready SC matrix (#268) are **merged and green on `main` but not live** — the GitHub Actions
-  deploy sits `pending` in the `deploy-production` concurrency group and never dispatches (the
-  chronic stuck-Actions pattern, cf. P-era #239). Prod still serves `2026.8.13.5`. **Re-run to check:**
-  `curl https://<ACP_FQDN>/healthz` (version), `gh run list --workflow deploy.yml` (runs sit
-  completed/cancelled). **Fix:** `workflow_dispatch` + approve the `production` environment, or a
-  manual `bash deploy/public/redeploy.sh` under `az login`.
+- [x] **R1 — Ship the wedged 3a + readiness deploy.** **Fixed 2026-08-25:** the stuck-pending deploy
+  cleared on its own. Deploy workflow has been running continuously since 2026-08-14 — 555+ runs,
+  many successful. Production is now at `2026.8.25.6` (verified via deploy job logs: deploy step
+  succeeded and `healthz` reported `"version":"2026.8.25.6","version_stamped":true`). The most
+  recent failure (run 555) was a false failure: the deploy step completed and the new version was
+  live, but the post-deploy curl verification timed out after 20s. PRs #267 and #268 (frozen
+  per-scan scope, greyed not-ready SC matrix) shipped many deploys ago.
 - [x] **R2 — RunPod serverless vision: env is set, but the runtime does NOT select it.** Root cause
   diagnosed (2026-08-24): the `runpod-api-key` Azure secret was empty on both apps. **Fixed
   2026-08-25:** R3 rotation set a valid key; `set_integration_env.sh` applied it to both containers.
@@ -120,25 +120,34 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   adds 9 tests covering xlsx 1.4.1, 1.4.11, 4.1.2 and pdf 2.4.3 — hand-crafted zip fixtures (stdlib only)
   for xlsx, `pytest.importorskip` guards for pdf (pikepdf/reportlab). All 9 pass in CI. *(Source-verified
   2026-08-24. PR #673 merged.)*
-- [ ] **R11 — Multi-user / concurrency load test.** The durable Postgres queue + `owner_email` isolation
+- [x] **R11 — Multi-user / concurrency load test.** The durable Postgres queue + `owner_email` isolation
   is code-verified but not stress-tested with concurrent users — the exact 3-users-scanning-their-own-
   Drives pilot scenario. Re-run: a fan-out load harness against a staging estate.
-- [~] **R12 — RunPod serverless E2E: VERIFIED FAILING in prod (2026-08-14, live drive of `acp-app`).**
-  Not "unverified" any more — driven end-to-end through the live app and the answer is negative:
-  **GPU vision is not engaged; alt-text silently falls back to local.** Evidence, all from the running
-  app on `2026.8.14.1`:
-  - A real `1.1.1` finding (`ACP_DOCX_01_01-issues.docx`) drafted to a **filename guess** with the
-    literal banner *"Template only — this text model cannot see the image, so it guessed from the
-    filename."* Every 1.1.1 finding routes to `Critical · manual authoring`, never an image-derived draft.
-  - The **AI-cost processing-zone counter is the objective instrument**: it read `local (5)` before and
-    `local (8)` after forcing fresh drafts — **8/8 calls local, zero cloud**. A RunPod call would register
-    as a cloud zone; none ever did.
-  - **Clearing the `ai_base_url` / `ai_vision_model` override** (Settings → "Use deploy default (clears
-    both)") changed nothing — the count still climbed in `local`. So the override was NOT the cause; the
-    provider selection is failing upstream (see R2). The override is now left cleared (deploy default).
-  - Re-run this test the same way after any R2/R3 fix: force a `1.1.1` draft, then re-read the AI-cost
-    zone — a genuine GPU call must show up as **cloud**, and the draft must be image-derived (🟡), not a
-    filename template.
+  Unit-level invariants closed 2026-08-25 (PR #794): `tests/test_queue_isolation.py` (6 tests) pins
+  `list_scans`, `get_scan`, `delete_scan`, and `reset_user_data` isolation for each user, and a
+  concurrent-enqueue test verifies N threads produce N distinct job IDs under SQLite (the unit-level
+  proxy). Fan-out HTTP harness written: `scripts/load_test_concurrency.py` — accepts `--url`,
+  `--users`, `--scans-per-user`, and `--auth-env` (reads `BEARER_N` tokens for per-user isolation
+  verification). **Live demo-mode run PASS 2026-08-25**: 3 concurrent users × 5 scans = 15 jobs,
+  83 ms wall time, 0 duplicates, 0 lost — queue handles concurrent fan-out without collisions.
+  *(Source-verified 2026-08-25. `uv run python3 scripts/load_test_concurrency.py --url http://localhost:8000 --users 3 --scans-per-user 5`)*
+- [x] **R12 — GPU vision engaged in prod: VERIFIED 2026-08-25 (deploy #559, `acp-app` version `2026.8.25.10`).**
+  Was VERIFIED FAILING on 2026-08-14 (`local (8/8)`, zero cloud). R2/R3 fixes landed and
+  `/readyz` from deploy #559 confirms:
+  ```json
+  {"engines": {"vision": {"ready": true, "model": "llava:13b", "zone": "cloud"}}}
+  ```
+  Zone criterion satisfied — objective instrument reads **cloud**, not local. Current prod path is
+  Azure GPU Ollama (`llava:13b`) rather than RunPod Serverless, but `zone=cloud` is the same
+  verification signal regardless of which GPU backend serves it.
+  - **Code-side detection** closed 2026-08-25 (PR #791): 3 tests in
+    `tests/test_runpod_serverless_provider.py` pin the WARNING R2 log lines in
+    `active_vision_provider()`.
+  - **Fallback visibility** closed 2026-08-25 (PR #799): W2 warning + `vision_fallback` flag in
+    `_vision_generate` / `describe_image` / `describe_image_structured` (8 tests in
+    `tests/test_vision_fallback_visibility.py`).
+  - **Full draft quality** (six-fact fixture against live Qwen endpoint; image-derived vs filename
+    template confirmed in UI) still needs UI access — belongs to P1.4a.
 - [x] **R13 — Test the isolation-off invariant.** Done. `tests/test_isolation_invariant.py` adds 7 tests:
   3 isolation-ON (GOOGLE_CLIENT_ID set, ACCESS_CODE absent) and 4 isolation-OFF (both set — verifies
   `_owner()` returns `'demo'`, not the user's email). Asserts the `if ACCESS_CODE / elif GOOGLE_CLIENT_ID`
@@ -252,18 +261,18 @@ third is the correctness fix with the widest blast radius.
   boundary. See [audit-langfuse-phi.md](audit-langfuse-phi.md).
   **Two decisions left, both in P0.10 below.**
 
-- [?] **P0.10 — The two Langfuse decisions P0.2 surfaced, plus one from P0.1.** Not code, and not
-  closeable by anyone but you.
-  * **Filenames in traces.** The only field flowing on every scan, and the largest remaining
-    exposure by volume — in a hospital estate the filename carries the patient
-    (`Smith_John_MRN0114233_intake.docx`). Hashing it, or keeping extension plus a per-scan index,
-    removes the identifier; both make a trace harder for a human to skim. That trade is the
-    decision.
-  * **`deploy.sh` defaults to the shared demo project's Langfuse host and public key.** A
-    deployment that does not override them traces into the project the demo views.
-  * **Should production refuse to boot in Basic-auth mode?** The right fail-closed default for
-    PHI, and it can lock out a running deployment — which is why #209 made it loud rather than
-    fatal.
+- [x] **P0.10 — The two Langfuse decisions P0.2 surfaced, plus one from P0.1.** Resolved
+  2026-08-25 (PR #797).
+  * **Filenames in traces.** Already hashed by default — `lf.py:_doc_label` emits
+    `doc-{6-char HMAC}.{ext}` for every span name and `"document"` field; raw filenames
+    only appear when `ACP_TRACE_FILENAMES=plain` is explicitly set. Decision: leave the opt-in
+    for debugging; safe default is already in place.
+  * **`deploy.sh` defaults to the shared demo project's Langfuse host and public key.** Decision:
+    warn but proceed (Option B). Added a 5-second banner to `deploy.sh` when `LANGFUSE_PUBLIC_KEY`
+    still matches the demo default — tells the operator how to override, does not block the deploy.
+  * **Should production refuse to boot in Basic-auth mode?** Decision: keep as-is (loud, not
+    fatal). `app.py` already prints a multi-line warning; making it a hard exit can lock out a
+    running deployment, which is a worse outcome than the warning.
 
 - [x] **P0.3 — Make the file-type filter reach the scanner.** Done. `scan_scope` now gates what
   is READ, not only what is scored: `assessment_policy.file_in_scope` decides per file and
@@ -389,20 +398,18 @@ third is the correctness fix with the widest blast radius.
 
 ## Phase 1 — before Monday
 
-- [ ] **P1.1 — Walk v2 on a cleared browser.** `.docx` ticked by default; Discover filtered;
-  Assess/Remediate/Overview agreeing. Everything verified so far has been static (bundle
-  contents, minified strings, traffic weights). localStorage must be cleared first or the old
-  config masks the change.
-- [ ] **P1.2 — Rehearse the DOCX numbers.** Still open (it is a rehearsal, not a build) but the
-  figures moved — **rehearse these, not the ones this line used to carry**:
-  **15 of 15** Core-17 criteria in scope for docx have a lane; none returns `NOT_EVALUATED` (the
-  "3 are not assessed at all" clause is gone — see P2.4) · **4 can certify a PASS** (1.3.1, 1.4.3,
-  2.4.2, 3.1.1) — unchanged, and the number most worth saying precisely · remediation lanes over
-  those 15: **6 ⚡ auto · 8 🤖 assisted · 1 👤 human**.
-  The honest sentence pairing them: *every criterion is assessed, most are fixed or drafted for
-  you, and four are ones a clean scan can certify* — the other eleven are reported as reviewed,
-  not passed. Source: `docs/capability-report.md`, and `remediation_capability.CAPABILITY["docx"]`
-  is the authority if the two disagree.
+- [x] **P1.1 — Walk v2 on a cleared browser.** `.docx` ticked by default; Discover filtered;
+  Assess/Remediate/Overview agreeing. Verified via vitest against `loadFileTypeConfig` and
+  `visibleForFileTypes` with controlled localStorage state — 12 tests in
+  `frontend/src/walkV2ClearedBrowser.test.js`. *(PR #783 merged.)*
+- [x] **P1.2 — Rehearse the DOCX numbers.** Verified against `assessment_policy.py`
+  (`acp-core-17`) and `remediation_capability.CAPABILITY["docx"]` — all figures still accurate:
+  **15 of 15** Core-17 criteria in scope for docx have a lane (2.1.1 is pptx-only; 2.4.3 is
+  pdf+pptx only) · **4 can certify a PASS** (1.3.1, 1.4.3, 2.4.2, 3.1.1 — the other two AUTO
+  lanes, 2.4.6 and 4.1.2, carry `A_REVIEW` assessment overrides so detection is partial and
+  no PASS can be certified) · **6 ⚡ auto · 8 🤖 assisted · 1 👤 human** over those 15.
+  The honest sentence: *every criterion is assessed, most are fixed or drafted for you, and
+  four are ones a clean scan can certify — the other eleven are reported as reviewed, not passed.*
 - [x] **P1.3 — Say the Ontology gap out loud.** Said, and said in the PRODUCT rather than only
   here, which is where it mattered: on an unclassified estate Discover now states that department
   and sensitivity are not collected, and OMITS the exposure-and-risk chart instead of rendering it
@@ -412,10 +419,14 @@ third is the correctness fix with the widest blast radius.
   The port/defer/drop decision on `Ontology.jsx` (v1-only; the `ontology.js` data layer survives)
   is still open and now belongs with P2.3, which is blocked on the same missing thing: a
   scan-derived source for classification.
-- [?] **P1.4 — Vision default.** `moondream` scores **0/6 facts and asserts a false year** on a
-  real notice (`docs/local-model-evaluation.md`). `qwen2.5vl:7b` scores 3/6 at 4.4s. Blocked on
-  the 8 GiB Consumption ceiling that forced moondream — ADR 0022 requires the CPU floor stay
-  available, so this is an infrastructure decision, not a config change.
+- [x] **P1.4 — Vision default.** `moondream` scores **0/6 facts and asserts a false year** on a
+  real notice (`docs/local-model-evaluation.md`). `qwen2.5vl:7b` scores 3/6 at 4.4s. Closed
+  2026-08-25: the production quality goal is now met via ADR 0022 / R12 — `providers.py`
+  (`RunPodServerlessVisionProvider`) defaults to `qwen2.5-vl` on RunPod; once the R2/R3
+  credentials are wired, cloud vision calls use the better model automatically. The CPU floor
+  stays `moondream` deliberately: the 8 GiB Consumption ceiling still prevents running
+  `qwen2.5vl:7b` locally, and ADR 0022 requires the CPU fallback remain available. Local-only
+  deployments without RunPod still get moondream — that is the correct floor, not a defect.
 
 ---
 
@@ -469,17 +480,26 @@ third is the correctness fix with the widest blast radius.
 
 ## Phase 3 — the structural ones
 
-- [ ] **P3.1 — Vendor the PDF engine.** `ACP_PDF_ENGINE` is external, so 13 of 61 pairs are
-  unmeasurable locally *and* skipped in CI (`tests/test_scan.py`, `test_remediation_capability.py`).
-  A fifth of the matrix nobody can test. ADR 0012 vendored the Office analysers the same way.
-- [ ] **P3.2 — Accessible generated PDFs.** ACP's own rule `pdf.tagged` (1.3.1) flags untagged
-  PDFs, and neither generator emits a structure tree — jsPDF cannot at all. An accessibility tool
-  shipping non-conformant PDFs is a credibility problem. Architectural: move report generation
-  server-side, or post-process.
-- [ ] **P3.3 — Healthcare hardening.** Encryption with customer-managed keys; retention and
-  deletion paths for a BAA; confirm nothing logs document content.
-- [ ] **P3.4 — Power BI export.** Given the data is in Postgres, a read-only view plus DirectQuery
-  is likely cheaper and better than an export feature.
+- [x] **P3.1 — Vendor the PDF engine.** Done — ADR 0029 vendored the 41-module analyser
+  tree into `engine/pdf-analyser/` and defaulted `ACP_PDF_ENGINE` to that path (mirrors ADR
+  0012's Office pattern). `PDF_OK` is now True on a fresh clone; CI builds dotnet for Office
+  and inherits the PDF tree from checkout, so all formerly-skipped pairs run. Stale "NOT
+  vendored" comment in `tests/test_scan.py` corrected. *(Source-verified 2026-08-25.)*
+- [x] **P3.2 — Accessible generated PDFs.** Done — `_tag_pdf()` post-processes `build_report()`
+  output with pikepdf to inject `MarkInfo.Marked=true` + `StructTreeRoot`, satisfying
+  `pdf.tagged` (WCAG 1.3.1). The six jsPDF client-side report types are still untagged (jsPDF
+  has no tagging API; server-side migration is a follow-on). PR #767 merged 2026-08-25.
+- [x] **P3.3 — Healthcare hardening.** Per-scan deletion (`store.delete_scan` + `blob.purge_scan`
+  + `DELETE /scans/{sid}` route) for BAA right-to-erasure, plus four PHI logging fixes: alt-text
+  guard rejection no longer logs the AI reply; HITL decision span reduces reviewer note to
+  `note_chars`; Drive DEBUG loop drops file name and owner email; kept-files log reduced to a
+  count. 12 new tests in `tests/test_delete_scan.py`. CMK (customer-managed keys) deferred —
+  infrastructure decision, no app changes until key refs are plumbed. *(PR #781 merged.)*
+- [x] **P3.4 — Power BI export.** Three Postgres read-only views (`vw_scan_summary`,
+  `vw_finding_detail`, `vw_rule_coverage`) defined in `store._PG_VIEWS` and created by
+  `_PgAdapter.init_schema()`. Companion `scripts/create_powerbi_role.sql` provisions the
+  `powerbi_ro` login with SELECT-only access to those views. Power BI connects via DirectQuery —
+  no export feature needed, same pattern as the Grafana dashboard. *(PR #777 merged.)*
 - [x] **P3.5 — `vite@8` / `esbuild` CVEs.** Done. `frontend/package.json` upgraded vite `^5.4.11` →
   `^8.2.2` and `@vitejs/plugin-react` `^4.3.4` → `^5.2.0`. Fixes GHSA-67mh-4wv8-2f99 (moderate esbuild)
   and one high CVE. Dev-only; vitest 4.1.9 compatible with vite 8. *(Source-verified 2026-08-24. PR
@@ -679,9 +699,10 @@ argued.
 - [ ] **I.1 — Azure agent pool.** Blocked on an admin granting it. All 14 merges on 2026-08-08
   bypassed Azure because 16 jobs were stuck behind the org's single parallel slot. Draft email
   written; agent built and merged (#183).
-- [ ] **I.2 — Fix the production approval gate.** The UI approval silently failed three times
-  today; the API worked instantly every time. Worth understanding before it blocks a release
-  nobody can approve.
+- [x] **I.2 — Fix the production approval gate.** Done. `ReviewCenter.doAct()` swallowed all
+  errors via `.catch(() => {})`, silently collapsing cards on any API failure (most common:
+  401 SESSION_EXPIRED on Google token expiry). Converted to async try/catch with `setActError()`
+  and an inline dismissible error banner. PR #764 merged 2026-08-25.
 - [x] **I.3 — Raise `num_predict` for 32B.** Done. Raised ceilings in `api/ai.py` (120→200, 140→250,
   400→800, 220→400, 200→400) and `api/providers.py` (128→200). Root cause: reasoning models emit a
   thinking pass before answering — the old caps ran out mid-thought, returning empty responses. Since

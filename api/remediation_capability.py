@@ -124,6 +124,8 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "1.3.1": AUTO,       # pseudo-heading promotion, table header rows, single H1
         "1.3.2": ASSISTED,   # floating-text reading order → per-box "move it inline here" proposal (propose_reading_order)
         "1.3.3": ASSISTED,   # sensory rewrite (local text model)
+        "1.3.5": HUMAN,      # input purpose — heuristic vocabulary match; Word has no autocomplete
+                             # equivalent; fix is for a person to relabel the field with its purpose
         # Colour used as the sole carrier of meaning, and a shape outline too faint against its
         # own fill. Both detect today; both are HUMAN, not assisted, and that distinction is the
         # point: an assisted lane emits a PREFILLED value a reviewer confirms, and neither of
@@ -273,6 +275,8 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "1.3.1": ASSISTED,   # tag structure — deterministic heading-map proposal, human confirms
         "1.3.2": ASSISTED,   # reading order — vision proposal for an untagged/scanned PDF
         "1.3.3": ASSISTED,
+        "1.3.5": HUMAN,      # input purpose — heuristic vocabulary match on AcroForm field names;
+                             # PDF has no autocomplete attribute; fix is a human relabelling the field
         "1.4.1": HUMAN,      # colour-only link — no PDF write-back adds a non-colour cue; a human re-styles
         "1.4.3": AUTO,       # text fill colours recoloured in content streams vs the resolved
                              # background (text-scoped; abstains where it can't resolve one)
@@ -294,6 +298,7 @@ REMEDIATION: dict[str, dict[str, str]] = {
                              # and there is no PDF link write-back, so an approval could never
                              # be honoured. Assessed and routed to a human, never proposed.
         "2.4.6": ASSISTED,   # tagged PDF, no headings — heading map derived from the font hierarchy, human confirms
+        "2.5.3": HUMAN,      # label in name — push button /MK /CA not in /TU or /T; no write-back built yet
         "3.1.1": AUTO,       # catalog /Lang
         "3.1.2": ASSISTED,
         "3.1.5": ASSISTED,

@@ -113,7 +113,7 @@ def test_persist_discovery_inventory_stamps_the_run(st, monkeypatch):
     import handlers
     monkeypatch.setattr(core, "store", st)
     monkeypatch.setattr(handlers, "_evaluate_discover_lifecycle_rules",
-                        lambda *a, **k: None)
+                        lambda *a, **k: {"rules_enabled": 0, "files_evaluated": 0, "lifecycle_matches": 0})
     st.init_scan_run("s2", "drive", 1, "2026-08-19T09:00:00+00:00", "acp", "h",
                      owner="dana@x.com")
     handlers.persist_discovery_inventory(
@@ -136,7 +136,8 @@ def test_a_failed_stamp_never_costs_the_inventory(st, monkeypatch):
             return getattr(st, name)
 
     monkeypatch.setattr(core, "store", Boom())
-    monkeypatch.setattr(handlers, "_evaluate_discover_lifecycle_rules", lambda *a, **k: None)
+    monkeypatch.setattr(handlers, "_evaluate_discover_lifecycle_rules",
+                        lambda *a, **k: {"rules_enabled": 0, "files_evaluated": 0, "lifecycle_matches": 0})
     st.init_scan_run("s3", "drive", 1, "2026-08-19T09:00:00+00:00", "acp", "h",
                      owner="dana@x.com")
     handlers.persist_discovery_inventory(

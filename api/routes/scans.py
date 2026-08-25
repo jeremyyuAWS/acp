@@ -13,6 +13,7 @@ from pydantic import BaseModel
 import core
 from scanner import run_scan
 from report import build_report
+from report_tagged import build_tagged_report
 
 router = APIRouter()
 
@@ -80,19 +81,62 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
     # Survives restarts, retries on transient failure, shows up in /jobs + Grafana.
     if queue:
         scan_id = uuid.uuid4().hex[:12]
-        core.register_scan_tokens(scan_id, drive=token, sp=sp_token)  # in-memory only
+        idempotency_key = request.headers.get("idempotency-key") or None
         # fanout=true → decompose into per-file jobs (ADR 0007); else the monolithic
         # 'scan' job (default, proven). Both are durable and resume across replicas.
         jtype = "scan_discover" if fanout else "scan"
-        job_id = core.store.enqueue_job(
-            jtype, {"source": source, "scan_id": scan_id, "folder": folder, "folders": folders,
-                    "exclude_folders": exclude_folders, "ai": ai,
-                    "user": user, "pii": pii, "batch": batch,
-                    "exclude_remediated": exclude_remediated, "incremental": incremental,
-                    # Carry tokens in the payload so the worker container can authenticate
-                    # without sharing the API's in-memory token store (split topology, no Redis).
-                    "drive_token": token, "sp_token": sp_token},
-            scan_id=scan_id)
+        # Atomic enqueue: scan_runs stub + jobs row + immutable input snapshot committed
+        # together in one transaction. GET /scans/{id} is immediately resolvable after this
+        # call; a failure rolls back all rows — no orphan stubs. Same Idempotency-Key from
+        # the same owner returns the original scan without creating a duplicate.
+        #
+        # Input snapshot: captures everything that governs how the scan will execute, so
+        # a rule or config change after enqueue cannot silently alter an in-flight scan.
+        # SECURITY: no tokens or credentials — the job payload carries drive_token/sp_token
+        # for the worker; the snapshot stores only a connection reference.
+        _provider_cfg = [
+            {k: v for k, v in p.items() if k != "key_secret_ref"}
+            for p in core.store.list_ai_provider_configs()
+            if p.get("enabled")
+        ]
+        _lifecycle = [
+            r for r in core.store.list_disposition_policies(owner=user)
+            if r.get("enabled")
+        ]
+        _defer_flag = os.environ.get("ACP_DEFER_ANALYSIS_TO_ASSESS", "1").strip().lower() in (
+            "1", "true", "yes", "on")
+        _connection_ref = f"{source}:{user}" if source != "local" else "local"
+        _scan_inputs = {
+            "source": source,
+            "folder_ids": list(folders or ([folder] if folder else [])),
+            "exclude_folder_ids": list(exclude_folders or []),
+            "scan_options": {
+                "ai": ai, "pii": pii, "batch": batch,
+                "exclude_remediated": exclude_remediated,
+                "incremental": incremental, "fanout": fanout,
+            },
+            "actor": user,
+            "connection_ref": _connection_ref,
+            "feature_flags": {
+                "ai_platform_enabled": core.store.get_ai_enabled(),
+                "defer_analysis_to_assess": _defer_flag,
+            },
+            "provider_config": _provider_cfg,
+            "lifecycle_rules": _lifecycle,
+            "app_version": os.environ.get("ACP_APP_VERSION") or None,
+        }
+        scan_id, job_id = core.store.enqueue_scan(
+            scan_id, source, user, jtype,
+            {"source": source, "scan_id": scan_id, "folder": folder, "folders": folders,
+             "exclude_folders": exclude_folders, "ai": ai,
+             "user": user, "pii": pii, "batch": batch,
+             "exclude_remediated": exclude_remediated, "incremental": incremental,
+             # Carry tokens in the payload so the worker container can authenticate
+             # without sharing the API's in-memory token store (split topology, no Redis).
+             "drive_token": token, "sp_token": sp_token},
+            idempotency_key=idempotency_key,
+            inputs=_scan_inputs)
+        core.register_scan_tokens(scan_id, drive=token, sp=sp_token)  # in-memory only
         return {"scan_id": scan_id, "job_id": job_id, "queued": True,
                 "fanout": fanout, "batch": batch, "workers": core.WORKERS,
                 # Split topology (#113): the API runs ACP_WORKERS=0 and a standalone worker
@@ -187,12 +231,39 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
             sid = core.store.save_scan(report)
             # Persist per-file inventory + evaluate archival/deletion rules — same as the fanout path,
             # so a default in-process Discover marks Archive/Delete candidates too (not only fanout).
+            # Emit the dedicated "lifecycle" phase so the frontend shows the lifecycle step as active,
+            # then stream per-10-file ticks with cumulative counters so the user sees live progress.
             from handlers import persist_discovery_inventory
-            persist_discovery_inventory(sid, inv, source, user)
+            lifecycle_total = len(inv)
+            core.update_job(job_id, {"phase": "lifecycle",
+                                     "files_found": lifecycle_total,
+                                     "files_evaluated": 0,
+                                     "rules_enabled": 0})
+            def _lc_progress(stats):
+                core.update_job(job_id, {"phase": "lifecycle",
+                                         "files_found": lifecycle_total,
+                                         **stats})
+            save_outcome = persist_discovery_inventory(sid, inv, source, user,
+                                                       progress_cb=_lc_progress)
             core.finalize_scan(sid, effective_ai, source)
             done = core.get_job_state(job_id) or {}
-            core.update_job(job_id, {"phase": "done", "done": True, "scan_id": sid,
-                                     "files_done": done.get("files_found", 0)})
+            core.update_job(job_id, {"schema_version": 2, "phase": "done", "done": True,
+                                     "scan_id": sid, "files_done": done.get("files_found", 0),
+                                     "save_new": save_outcome.get("new"),
+                                     "save_updated": save_outcome.get("updated"),
+                                     "save_unchanged": save_outcome.get("unchanged"),
+                                     "save_failed": save_outcome.get("failed"),
+                                     "rules_enabled": save_outcome.get("rules_enabled"),
+                                     "files_evaluated": save_outcome.get("files_evaluated"),
+                                     "lifecycle_matches": save_outcome.get("lifecycle_matches"),
+                                     "lifecycle_archive": save_outcome.get("lifecycle_archive"),
+                                     "lifecycle_delete": save_outcome.get("lifecycle_delete"),
+                                     "lifecycle_tagged": save_outcome.get("lifecycle_tagged"),
+                                     "assessable": save_outcome.get("assessable"),
+                                     "metadata_only": save_outcome.get("metadata_only"),
+                                     "unsupported": save_outcome.get("unsupported"),
+                                     "eligibility_unknown": save_outcome.get("eligibility_unknown"),
+                                     "excluded": save_outcome.get("excluded")})
         except Exception as e:
             core.update_job(job_id, {"phase": "error", "done": True, "error": str(e)})
         finally:
@@ -280,6 +351,25 @@ def cancel_scan(sid: str, request: Request):
     raise HTTPException(409, "scan not found, not yours, or not running")
 
 
+@router.put("/scans/{sid}/acknowledge")
+def acknowledge_scan(sid: str, request: Request):
+    """Record that the operator has reviewed lifecycle recommendations and approved this
+    discovery snapshot for handoff to Assess (PRD §EX-10). Idempotent — re-acknowledging
+    an already-acknowledged scan overwrites the prior stamp."""
+    actor = _owner(request)
+    if core.store.acknowledge_scan(sid, actor=actor, owner=actor):
+        return {"scan_id": sid, "acknowledged": True, "actor": actor}
+    raise HTTPException(404, "scan not found or not yours")
+
+
+@router.delete("/scans/{sid}/acknowledge")
+def unacknowledge_scan(sid: str, request: Request):
+    """Withdraw a prior acknowledgement (e.g. if lifecycle rules were changed after approval)."""
+    if core.store.unacknowledge_scan(sid, owner=_owner(request)):
+        return {"scan_id": sid, "acknowledged": False}
+    raise HTTPException(404, "scan not found or not yours")
+
+
 @router.get("/scans/jobs/{job_id}")
 def scan_job(job_id: str):
     # core.get_job_state, not core.JOBS: the poll must be answerable by whichever replica the
@@ -309,6 +399,36 @@ def scan(sid: str, request: Request):
     if res is None:
         raise HTTPException(404, "scan not found")
     return res
+
+
+@router.delete("/scans/{sid}", status_code=200)
+def delete_scan(sid: str, request: Request):
+    """Permanently erase one scan and all data derived from it (HIPAA BAA right-to-erasure).
+
+    Scope: the requesting user may only delete their own scans — the same owner_email gate
+    that guards every other /scans/{sid} endpoint.  Returns 404 for a scan that does not
+    exist OR belongs to a different user (no information leak about other users' scan IDs).
+
+    What is erased:
+      - All database rows keyed on scan_id (findings, file records, rule traces, HITL queue,
+        AI call log, applied fixes, stage timings, PII findings, jobs, …).
+      - The scan_runs row itself.
+      - All blobs under {owner}/{scan_id}/ (remediated files, source copies, render previews).
+
+    What survives:
+      - decision_log — the immutable audit trail. A deletion event IS appended to it here so
+        the audit record of "who deleted what and when" is preserved, not erased.
+    """
+    import blob as blob_mod
+
+    owner = _owner(request)
+    result = core.store.delete_scan(sid, owner)
+    if result is None:
+        raise HTTPException(404, "scan not found")
+    blobs = blob_mod.purge_scan(owner, sid)
+    core.store.log_decision(owner, "delete_scan", scan_id=sid,
+                            detail=f"scan deleted; blobs={blobs}")
+    return {"deleted": True, "scan_id": sid, "blobs_purged": blobs}
 
 
 @router.get("/scans/{sid}/timings")
@@ -1172,9 +1292,16 @@ def report_pdf(sid: str, request: Request):
     rb = core.active_rubric()
     meta = {"target": rb.cfg.get("conformance_target"), "version": rb.version,
             "hash": res["run"].get("rubric_hash") or rb.hash}
-    pdf = build_report(res["run"], res["files"], meta, decisions=core.store.get_decisions(sid),
-                       evidence=core.store.get_remediation_evidence(sid),
-                       facts=core.store.get_certification_facts(sid, apply_document_selection=True))
+    decisions = core.store.get_decisions(sid)
+    evidence = core.store.get_remediation_evidence(sid)
+    facts = core.store.get_certification_facts(sid, apply_document_selection=True)
+    try:
+        pdf = build_tagged_report(res["run"], res["files"], meta,
+                                  decisions=decisions, evidence=evidence, facts=facts)
+    except Exception:
+        # Fall back to the reportlab report if Chromium is unavailable.
+        pdf = build_report(res["run"], res["files"], meta,
+                           decisions=decisions, evidence=evidence, facts=facts)
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="acp-report-{sid}.pdf"'})
 

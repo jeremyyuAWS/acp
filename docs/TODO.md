@@ -57,20 +57,22 @@ Regenerate with `python scripts/gen_todo_status.py`; CI fails if this block is s
 
 This is a behaviour change, not bookkeeping: several detectors compute the AA and AAA thresholds in one pass, so AAA findings were previously scored against AA-target files.
 
-**Capability registry — 29 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
+**Capability registry — 32 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
 
 | Criterion | Format | Coverage | Confidence | Not covered |
 |---|---|---|---|---|
 | `1.1.1` | docx | **partial** | high | charts, SmartArt, grouped shapes and embedded OLE objects are non-text content this walk does not reach, and w |
+| `1.3.5` | docx | **heuristic** | low | the vocabulary match is approximate |
+| `1.3.5` | pdf | **heuristic** | low | the vocabulary match is approximate and some organisational forms will produce false positives |
 | `1.4.1` | docx | **partial** | high | colour used as the sole carrier of meaning anywhere else — shaded table rows, coloured glyphs, chart series ke |
 | `1.4.1` | pdf | **partial** | high | colour used as the sole carrier of meaning elsewhere — colour-keyed legends, chart series, status indicators — |
 | `1.4.1` | pptx | **partial** | high | colour used as the sole carrier of meaning elsewhere — chart series, shaded table cells, status markers withou |
 | `1.4.1` | xlsx | **partial** | medium | colour used in cell fills, charts and images is not examined, and whether colour is the sole cue is left to a  |
 | `1.4.10` | docx | **partial** | high | whether a wide table actually requires horizontal scrolling at 320px is a rendered outcome not recorded in the |
 | `1.4.10` | pptx | **partial** | high | whether the widest table actually requires horizontal scrolling at 320px is a rendered outcome not recorded in |
-| `1.4.11` | docx | **partial** | high | gradient or image fills, theme-colour indirection, and non-shape non-text elements such as focus indicators an |
+| `1.4.11` | docx | **partial** | high | gradient or image fills and non-shape non-text elements such as focus indicators and control borders are not e |
 | `1.4.11` | pdf | **partial** | medium | gradient fills, bitmap images and most icon glyphs are not examined, and whether a low-contrast element convey |
-| `1.4.11` | pptx | **partial** | high | gradient or image fills, theme-colour indirection, and non-shape non-text elements such as focus indicators an |
+| `1.4.11` | pptx | **partial** | high | gradient or image fills and non-shape non-text elements such as focus indicators and control borders are not e |
 | `1.4.11` | xlsx | **partial** | medium | theme-coloured shapes, gradients, images and control affordances are not examined, and whether a shape conveys |
 | `1.4.12` | docx | **partial** | high | whether the fixed spacing clips text when a user applies the WCAG 1.4.12 overrides is a rendered outcome not r |
 | `1.4.12` | pdf | **partial** | high | whether text actually clips when the override is applied is a rendered outcome not recorded in the file, and o |
@@ -79,15 +81,16 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 | `2.1.2` | docx | **partial** | high | whether focus can actually move away from a control is runtime behaviour that depends on the control's own imp |
 | `2.1.2` | pptx | **partial** | high | whether focus can actually move away from a control is runtime behaviour that depends on the control's own imp |
 | `2.1.2` | xlsx | **partial** | medium | whether focus can actually move away from a control is runtime behaviour that depends on the control's own imp |
-| `2.4.3` | pdf | **heuristic** | medium | actually comparing the widget order to the structure order needs a /StructTreeRoot walk that is not built |
+| `2.4.3` | pdf | **partial** | medium | untagged PDFs without a structure tree fall back to checking that pages with widgets declare /Tabs = /S |
 | `2.4.3` | pptx | **partial** | high | other focus-order conditions (non-placeholder shape sequences, embedded control tab order) are not examined |
 | `2.4.4` | docx | **partial** | high | whether otherwise-descriptive text actually names THIS destination — a link reading 'Annual Report' that point |
-| `2.4.4` | pdf | **partial** | high | generic filler phrases and links whose text does not literally match the URI are not examined |
+| `2.4.4` | pdf | **partial** | high | whether otherwise-descriptive text names the correct destination is a content judgement not examinable from th |
+| `2.5.3` | pdf | **partial** | high | other field types (text, checkbox, radio) display their labels as separate text objects not linked to the fiel |
 | `3.1.1` | html | **full** | high | whether the declared language is the CORRECT one is a content question 3.1.1 does not ask |
 | `3.1.2` | docx | **partial** | high | a shorter foreign phrase or a single borrowed word is under the length floor langdetect needs to be trusted, a |
 | `3.1.2` | xlsx | **partial** | medium | SpreadsheetML has no per-run language element, so shorter phrases and statistical uncertainty in langdetect's  |
 | `4.1.2` | docx | **partial** | high | ActiveX controls, embedded OLE objects and other form content are not examined, which would need reading each  |
-| `4.1.2` | pdf | **partial** | high | components expressed through the tagged-structure tree are not examined, which needs a /StructTreeRoot walker  |
+| `4.1.2` | pdf | **partial** | high | components expressed through the tagged-structure tree are not examined |
 | `4.1.2` | pptx | **partial** | high | a clean result means no such controls were found and the criterion does not arise for this deck |
 | `4.1.2` | xlsx | **partial** | medium | the name and role live in code that no static read can examine |
 
@@ -96,8 +99,8 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 | Criterion | HTML | DOCX | XLSX | PPTX | PDF |
 |---|---|---|---|---|---|
 | `1.4.1` | pass/fail | partial | partial | partial | partial |
-| `1.3.5` | pass/fail | — | — | — | — |
-| `2.5.3` | pass/fail | — | — | — | — |
+| `1.3.5` | pass/fail | heuristic | — | — | heuristic |
+| `2.5.3` | pass/fail | — | — | — | partial |
 | `4.1.2` | pass/fail | partial | partial | partial | partial |
 
 `partial` / `heuristic` / `full` come from the registry and mean a real detector runs. `review` means a review-lane detector surfaces evidence but never certifies. `—` means no signal of any kind — the genuine remaining gap.
@@ -311,13 +314,16 @@ frontend fallback read the lane table directly, with no applier check in front o
 Assessment is untouched (`Q`) — the detector still fires. Regression:
 `tests/test_pdf_link_purpose_explain_only.py`.
 
-### P1d-1 — the one cell still open
+### P1d-1 — SHIPPED
 
-1. **2.4.6 Headings and Labels · fix · XLSX** — today No Remediation, ceiling AI Generated
-   Fix, his ask Automatically Fixed. `propose_xlsx_labels` exists and the detector gate
-   matches, but it returned `[]` with `ai_enabled` both off and on, because verification ran
-   with no reachable model. **Unverified, not absent** — the next step is to run it against a
-   live Ollama and record what comes back, NOT to write a second implementation.
+1. **2.4.6 Headings and Labels · fix · XLSX** — `propose_xlsx_labels` drafts AI names for
+   default sheet tabs and table columns (verified via mocks; `_mock_ai` pattern in
+   `tests/test_propose_xlsx_labels.py`). The previous gap: proposals were enqueued but never
+   written back — there was no applier, so approved labels sat in the DB and the file stayed
+   uncertified. Closed by `api/apply_xlsx_labels.py` + `store.approved_structure_label_values`
+   + a new lane in `handlers._apply_approved_values` (PR todo). Capability matrix already said
+   ASSISTED; now the write-back makes that claim true. Tests: `tests/test_apply_xlsx_labels.py`
+   (9 tests: sheet rename, table column rename, both combined, XML escaping, corruption guard).
 
 ### P1d-2 — 29 cells at our ceiling: a decision, not engineering
 
@@ -372,7 +378,7 @@ Route legend: **Auto** (deterministic/AI fix) · **HITL** (human review) · **Op
 | 2 | Complete the DB-backed HITL queue | Remediate | HITL | In progress (T) | Assignment, status, notifications — this IS the HITL route. Owned by the concurrent session (~M if scoped fresh). |
 | 3 | 3.1.3 Unusual Words | Assess | HITL | ~~XS~~ DONE | Re-tagged Human / AT · Tier 3 HITL in `wcagCatalog.js` (was aspirational "Automated + Agentic"). No AI check built, by decision. |
 | 4 | ~~1.4.2 pptx audio autoplay~~ | Assess | — | DONE | Detection shipped (`pptx_audio_autoplay_checks`, dispatched, tested) with an `assisted` remediation lane — no longer blocked on a fixture, and no longer HITL-only. See P1 #2. |
-| 5 | Deploy the mislabel fix (`e83d775`) | Release | — | XS · 0.25 d | Frontend rebuild — makes corrected auto-vs-assisted labeling live. |
+| ~~5~~ | ~~Deploy the mislabel fix (`e83d775`)~~ | Release | — | ~~XS · 0.25 d~~ **DONE** | `AUTO_FIX_SC_BY_TYPE` + `scId()` normalisation already in `sim.js` on `origin/main`; Netlify auto-deployed on merge. Regression guard added: 8 `recommendFor` tests in `simRemediation.test.js` pin auto/assisted routing for both SC_-prefixed and axe-form finding IDs across PDF, HTML, and format-boundary cases. |
 | 6 | Drive credential + folder | Ops | Ops | S · 0.5 d | Regenerate the demo SA key with `drive.readonly`, share Deva's folder with the SA email, set `ACP_DRIVE_FOLDER`. Unblocks demo Drive scans (the 403 below) and closes P2 #1. Ops, not eng. |
 | 7 | Measure Ollama 8B latency | Verify | — | XS · 0.25 d | Needs live access; include a cold-start number (scale-to-zero). |
 | 8 | ADO review cadence | — | Decision | 0 d | Standing reviewer vs. bypass-as-needed. |
@@ -560,7 +566,7 @@ honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then ~~R15~~/ ~~
 | ~~P-10~~ | `api/report.py` | ~~Stat band denominator `cert / total` includes unassessed files, overstating coverage.~~ **DONE**: denominator changed to `assessed` (total − unassessed); label says "N of M assessed". |
 | ~~P-11~~ | `api/report.py` | ~~No criteria-level outcome breakdown — auditors see file counts but not WCAG criterion outcomes.~~ **DONE**: second stat band row from `facts["scope"]`: passed / with findings / human-review / not-evaluated. |
 | ~~P-12~~ | `api/report.py` | ~~No assessment scope declaration at the top of the report.~~ **DONE**: 3×4 table (source / scan window / file types / method / standard+target / rubric) replaces old "Scope & methodology" card. |
-| ~~P-13~~ | `api/report.py` | ~~**Add a limitations & exceptions section**~~ — **DONE**: `_limitations_section()` renders a PLUM-bordered notice only when real limitations exist: unanalysable docs named individually, review-recommended criteria by SC id+name, absent owner/author metadata. Positioned before “Outcome summary”. 9 tests in `tests/test_report_limitations_p13.py`. |
+| ~~P-13~~ | `api/report.py` | ~~**Add a limitations & exceptions section**~~ — **DONE**: `_limitations_section()` renders a PLUM-bordered notice only when real limitations exist: unanalysable docs named individually, review-recommended criteria by SC id+name, absent owner/author metadata. Positioned before "Outcome summary". 9 tests in `tests/test_report_limitations_p13.py`. |
 | ~~P-14~~ | ~~`api/report.py`, `api/store.py`~~ | ~~**Use stable finding identifiers.**~~ — **SHIPPED** | `_finding_id(file, criterion, location)`: SHA-256[:8] hex ID stable across renders, exports and re-assessments; exposed as `FND-{id}` in the evidence appendix heading for every applied and proposed finding. |
 | ~~P-15~~ | `api/report.py` | ~~**Clarify finding status and history.**~~ **DONE**: `_finding_status(issue, file_is_certifiable)` derives one of seven named states; file inventory "Findings" cell shows per-finding breakdown (21 tests in `test_report_finding_status_p15.py`). |
 | ~~P-16~~ | `api/report.py` | ~~**Add report provenance and freshness.**~~ **SHIPPED (#742)**: `_provenance_section` renders report-generated timestamp, assessment-completion, scan ID, rubric hash, pipeline summary, and reproduce instructions. |

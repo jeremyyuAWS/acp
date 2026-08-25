@@ -65,7 +65,7 @@ const TABS = [
   ['remediate',     'Remediate',     'fix issues',          3],
   ['publish',       'Release',       'approve & deploy',    4],
   ['monitor',       'Monitor',       'track compliance',    5],
-  ['analytics',     'Estate Insights', 'estate analytics',   0],
+  ['analytics',     'Scan Analytics', 'compare scans',      0],
   ['graph',         'Knowledge Graph', 'explore findings',   0],
 ]
 
@@ -176,6 +176,9 @@ function queuedProgress(g, elapsed) {
   const run = g && g.run
   const total = (run && run.files) || 0
   const done = (run && run.files_done) || 0
+  // Pre-created stub: job enqueued but no worker has claimed it yet. Surfaces as
+  // phase:'queued' so the checklist shows the correct waiting state without 404s.
+  if (run && run.status === 'queued') return { phase: 'queued', elapsed }
   if (!total) return { phase: 'discovering', elapsed }        // estate not listed yet
   const phase = done < total ? 'analysing' : 'scoring'
   const pct = Math.round(12 + Math.min(1, done / total) * (95 - 12))
@@ -1076,6 +1079,16 @@ export default function App() {
 
 
   return (
+    <>
+    {isStaging && (
+      <div role="status" style={{
+        background: '#B45309', borderBottom: '2px solid #92400E',
+        padding: '6px 16px', fontSize: 12, fontWeight: 700, color: '#fff',
+        letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'center', userSelect: 'none'
+      }}>
+        Staging — not production
+      </div>
+    )}
     <div className={`app${isTimeTravel ? ' replaymode' : ''}`}>
       <a className="skiplink" href="#main-content">Skip to main content</a>
       <header>
@@ -1178,15 +1191,6 @@ export default function App() {
         </div>
       )}
       {me.scope && <div className="scopebar"><i className="scopedot" />access scope · <b>{me.scope}</b></div>}
-      {isStaging && (
-        <div role="status" style={{
-          background: '#B45309', borderBottom: '2px solid #92400E',
-          padding: '6px 16px', fontSize: 12, fontWeight: 700, color: '#fff',
-          letterSpacing: '0.08em', textTransform: 'uppercase', textAlign: 'center', userSelect: 'none'
-        }}>
-          Staging — not production
-        </div>
-      )}
 
       <nav aria-label="Compliance workflow">
         <div className="tabs" role="tablist" aria-label="Compliance workflow">
@@ -1439,12 +1443,11 @@ export default function App() {
           Discover answers "what do we have"; how far the assessment has got belongs to Assess,
           which owns a better view of it.
 
-          Only the assess-phase clause is narrowed. `busy` is left alone deliberately: it is set
-          by doScan/reconnectScan, so it means a DISCOVER run is in flight, and that progress is
-          exactly what someone on this tab wants to see. */}
+          `busy` means a DISCOVER run is live; the assess panel must not activate during
+          discovery. Only assessPhase==='running' should trigger it. */}
       <LiveAssessmentLive scanId={liveScanId || run?.id}
-                          active={(busy && view !== 'discover') || (assessPhase === 'running'
-                                           && view !== 'assess' && view !== 'discover')}
+                          active={assessPhase === 'running'
+                                  && view !== 'assess' && view !== 'discover'}
                           onStop={() => stopScan(liveScanId || run?.id)} />
 
       <main id="main-content" tabIndex={-1}>
@@ -1651,5 +1654,6 @@ export default function App() {
       <ConfirmDialog />
       <VersionToast currentVersion={platformVersion} />
     </div>
+    </>
   )
 }

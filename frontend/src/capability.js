@@ -23,6 +23,7 @@ export const CAPABILITY_FALLBACK = {
     "1.3.1": "auto",
     "1.3.2": "assisted",
     "1.3.3": "assisted",
+    "1.3.5": "human",
     "1.4.1": "assisted",
     "1.4.3": "auto",
     "1.4.5": "assisted",
@@ -95,6 +96,7 @@ export const CAPABILITY_FALLBACK = {
     "1.3.1": "assisted",
     "1.3.2": "assisted",
     "1.3.3": "assisted",
+    "1.3.5": "human",
     "1.4.1": "human",
     "1.4.3": "auto",
     "1.4.5": "assisted",
@@ -107,6 +109,7 @@ export const CAPABILITY_FALLBACK = {
     "2.4.3": "auto",
     "2.4.4": "human",
     "2.4.6": "assisted",
+    "2.5.3": "human",
     "3.1.1": "auto",
     "3.1.2": "assisted",
     "3.1.5": "assisted",
@@ -164,7 +167,7 @@ export const CAPABILITY_FALLBACK = {
 // json.loads, and anything else makes the drift guard fail to read rather than fail to match.
 export const ASSESSMENT_FALLBACK = {
   "docx": {
-    "1.1.1": "review", "1.3.1": "auto", "1.3.2": "review", "1.3.3": "review", "1.4.1": "review",
+    "1.1.1": "review", "1.3.1": "auto", "1.3.2": "review", "1.3.3": "review", "1.3.5": "review", "1.4.1": "review",
     "1.4.3": "auto", "1.4.5": "review", "1.4.8": "auto", "1.4.9": "review", "1.4.10": "review",
     "1.4.11": "review", "1.4.12": "review",
     "2.1.2": "review", "2.4.2": "auto", "2.4.4": "review",
@@ -186,11 +189,11 @@ export const ASSESSMENT_FALLBACK = {
     "3.1.1": "auto", "3.1.2": "review", "3.1.5": "review", "4.1.2": "review"
   },
   "pdf": {
-    "1.1.1": "review", "1.3.1": "review", "1.3.2": "review", "1.3.3": "review", "1.4.1": "review",
+    "1.1.1": "review", "1.3.1": "review", "1.3.2": "review", "1.3.3": "review", "1.3.5": "review", "1.4.1": "review",
     "1.4.3": "auto",
     "1.4.5": "review", "1.4.6": "auto", "1.4.9": "review", "1.4.11": "review", "1.4.12": "review",
     "2.4.1": "auto", "2.4.2": "auto",
-    "2.4.3": "review", "2.4.4": "review", "2.4.6": "review", "3.1.1": "auto", "3.1.2": "review",
+    "2.4.3": "review", "2.4.4": "review", "2.4.6": "review", "2.5.3": "review", "3.1.1": "auto", "3.1.2": "review",
     "3.1.5": "review", "4.1.2": "review"
   },
   "html": {

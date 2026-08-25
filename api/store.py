@@ -313,11 +313,21 @@ _SCHEMA = [
     # used to render a hardcoded list of WCAG criteria cycled by a timer, which had nothing
     # to do with the running job. Nullable: a handler that reports nothing shows nothing.
     "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS phase TEXT",
+    # Cooperative cancellation (ADR 0004 step 4): caller sets this; running handler calls
+    # worker.check_cancel() at checkpoints and raises JobCancelledError when set.
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS cancel_requested_at TEXT",
     # Column order matches the claim ORDER BY (priority, run_after) so Postgres reads the
     # top queued job index-only instead of sorting all queued rows every poll (audit P2).
     # New name + drop-old so this migrates once, not a rebuild every boot.
     "DROP INDEX IF EXISTS idx_jobs_claim",
     "CREATE INDEX IF NOT EXISTS idx_jobs_claim2 ON jobs(status, priority, run_after)",
+    # Inspectable lease expiry: set at claim time to now + ACP_JOB_LEASE_S, refreshed by
+    # touch_job heartbeat. reclaim_stuck_jobs uses this instead of the opaque locked_at
+    # arithmetic so operators can see exactly when a lease will expire.
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lease_expires_at TEXT",
+    # Error class persisted on failure so operators can diagnose dead-lettered jobs by
+    # category (rate_limit / auth / corrupt / transient) without parsing last_error text.
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_class TEXT",
     # Sensitive-data (PII) findings per document (ADR 0006). A detection dimension
     # orthogonal to WCAG. samples holds JSON array of MASKED strings only — never
     # raw PII (the masking is enforced in api/pii.py).
@@ -534,6 +544,47 @@ _SCHEMA = [
       rule_id TEXT, format TEXT, guidance TEXT NOT NULL, status TEXT NOT NULL,
       evidence TEXT, author TEXT, created_at TEXT, updated_at TEXT
     )""",
+    # Atomic enqueue (Stage 1 item 2): client-supplied deduplication key so a retried
+    # submission with the same key returns the original scan without creating a duplicate.
+    # Scoped to owner_email — keys are tenant-local, not global. NULL means "no key provided";
+    # the unique index only covers non-null rows (WHERE idempotency_key IS NOT NULL) so
+    # NULL never collides.
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS idempotency_key TEXT",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_runs_idempotency ON scan_runs(owner_email, idempotency_key) WHERE idempotency_key IS NOT NULL",
+    # Immutable input snapshot (Stage 1 item 3): everything known at enqueue time that
+    # governs how the scan executes, written atomically with scan_runs + jobs. Workers read
+    # this before processing; a rule or config change after enqueue cannot silently alter
+    # an already-queued scan.
+    # SECURITY: no access tokens, credentials, or secrets stored here. connection_ref
+    # identifies the authorized source connection (e.g. "drive:user@example.com"); the
+    # worker acquires live credentials at execution time from the token store / job payload.
+    # provider_config omits key_secret_ref — snapshot captures endpoint/model, not the
+    # secret reference name.
+    """CREATE TABLE IF NOT EXISTS scan_inputs (
+      scan_id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      folder_ids TEXT,
+      exclude_folder_ids TEXT,
+      scan_options TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      connection_ref TEXT,
+      feature_flags TEXT,
+      provider_config TEXT,
+      lifecycle_rules TEXT,
+      app_version TEXT,
+      captured_at TEXT NOT NULL
+    )""",
+    # ADR 0004 item 6 — per-folder checkpoint columns. total_folders is set by the
+    # scan_discover job when it fans out to per-folder work; completed_folders is
+    # atomically incremented by each scan_folder job once it finishes its subtree.
+    # Together they drive the finalization trigger and the "N/M folders scanned" UI.
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS total_folders INT",
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS completed_folders INT",
+    # Discovery acknowledgement (PRD §EX-10): the operator reviews lifecycle recommendations
+    # and explicitly acknowledges the snapshot before Assess can consume it.
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS acknowledged BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS acknowledged_at TEXT",
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS acknowledged_by TEXT",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -548,6 +599,87 @@ if _LEGACY_OWNER and "@" in _LEGACY_OWNER and all(c.isalnum() or c in ".+-_@" fo
     # history should not have to decide it twice, and two switches is how the two tables end up
     # disagreeing about the same scan's documents.
     _SCHEMA.append(f"UPDATE documents SET owner_email='{_LEGACY_OWNER}' WHERE owner_email IS NULL")
+
+# ── Power BI read-only views (Postgres only) ────────────────────────────────
+# Three views that expose ACP scan data for Power BI DirectQuery. They are
+# created by _PgAdapter.init_schema() after the main _SCHEMA tables are ready.
+# `CREATE OR REPLACE VIEW` is Postgres-specific; SQLite tests that cover the
+# same logic use `CREATE VIEW IF NOT EXISTS` (see tests/test_powerbi_views.py).
+#
+# Companion role: scripts/create_powerbi_role.sql grants SELECT on these views
+# to the `powerbi_ro` login — no access to underlying tables, no write access.
+_PG_VIEWS = [
+    # Scan-level summary: one row per scan, aggregated findings and certifiability.
+    # Powers the overview page of the Power BI compliance dashboard.
+    """CREATE OR REPLACE VIEW vw_scan_summary AS
+SELECT
+    sr.id            AS scan_id,
+    sr.owner_email,
+    sr.completed_at,
+    sr.source,
+    sr.rubric_name,
+    sr.avg_score,
+    sr.files         AS total_files,
+    sr.certifiable,
+    sr.uncertain,
+    sr.error,
+    COUNT(ir.rule_id) FILTER (WHERE ir.severity = 'CRITICAL')  AS critical_findings,
+    COUNT(ir.rule_id) FILTER (WHERE ir.severity = 'SERIOUS')   AS serious_findings,
+    COUNT(ir.rule_id) FILTER (WHERE ir.severity = 'MODERATE')  AS moderate_findings,
+    COUNT(ir.rule_id) FILTER (WHERE ir.severity = 'MINOR')     AS minor_findings,
+    COUNT(DISTINCT pf.file)                                    AS pii_docs_affected,
+    CASE WHEN COALESCE(sr.files, 0) > 0
+         THEN ROUND(100.0 * sr.certifiable / sr.files)
+         ELSE 0 END                                            AS audit_ready_pct
+FROM scan_runs sr
+LEFT JOIN issue_records ir ON ir.scan_id = sr.id
+LEFT JOIN pii_findings  pf ON pf.scan_id = sr.id
+GROUP BY sr.id, sr.owner_email, sr.completed_at, sr.source, sr.rubric_name,
+         sr.avg_score, sr.files, sr.certifiable, sr.uncertain, sr.error""",
+
+    # Per-finding detail: one row per WCAG issue, enriched with scan/file metadata.
+    # Powers the findings drill-through report and the by-criterion breakdown.
+    """CREATE OR REPLACE VIEW vw_finding_detail AS
+SELECT
+    ir.scan_id,
+    sr.owner_email,
+    sr.completed_at,
+    ir.file,
+    fr.engine,
+    ir.wcag                                   AS wcag_criterion,
+    ir.severity,
+    ir.rule_id,
+    COALESCE(rt.plain_name, ir.rule_id)       AS plain_name,
+    ir.detail,
+    ir.page,
+    ir.location
+FROM issue_records ir
+JOIN  scan_runs       sr ON sr.id      = ir.scan_id
+LEFT JOIN file_records   fr ON fr.scan_id = ir.scan_id AND fr.file = ir.file
+LEFT JOIN scan_rule_traces rt ON rt.scan_id = ir.scan_id
+                              AND rt.file    = ir.file
+                              AND rt.rule_id = ir.rule_id""",
+
+    # Per-rule-per-file outcomes: which rules were evaluated and what happened.
+    # Powers the rule-coverage heatmap (pass / fail / error / not-evaluated).
+    """CREATE OR REPLACE VIEW vw_rule_coverage AS
+SELECT
+    rt.scan_id,
+    sr.owner_email,
+    sr.completed_at,
+    rt.file,
+    fr.engine,
+    rt.rule_id,
+    rt.rule_name,
+    COALESCE(rt.plain_name, rt.rule_id)  AS plain_name,
+    rt.level,
+    rt.fix_mode,
+    rt.outcome,
+    rt.finding_count
+FROM scan_rule_traces rt
+JOIN  scan_runs    sr ON sr.id      = rt.scan_id
+LEFT JOIN file_records fr ON fr.scan_id = rt.scan_id AND fr.file = rt.file""",
+]
 
 _UPSERT_INV = (
     "INSERT INTO inventory(file,first_seen,last_seen,last_status,last_score) "
@@ -659,6 +791,8 @@ class _SQLiteAdapter:
             return None
         row = cur.fetchone()
         return dict(zip([d[0] for d in cur.description], row)) if row else None
+
+    supports_skip_locked: bool = False
 
 
 def logical_name(name: str) -> str:
@@ -784,6 +918,8 @@ class _PgAdapter:
             cur = conn.cursor()
             for stmt in _SCHEMA:
                 cur.execute(stmt)
+            for stmt in _PG_VIEWS:
+                cur.execute(stmt)
             conn.commit()
         finally:
             conn.close()
@@ -832,6 +968,8 @@ class _PgAdapter:
     def fetchone(self, cur) -> dict | None:
         row = cur.fetchone()
         return dict(row) if row else None
+
+    supports_skip_locked: bool = True
 
 
 # ── Store ────────────────────────────────────────────────────────────────────
@@ -989,12 +1127,108 @@ class Store:
         return sid
 
     # ── Fan-out scan pipeline (ADR 0007) ──────────────────────────────────────
+    def pre_create_queued_scan(self, scan_id: str, source: str, owner: str) -> None:
+        """Create a minimal scan_runs row before the job is enqueued.
+
+        Ensures GET /scans/{id} returns 200 from the moment the scan ID is issued to the
+        client, closing the API-contract race where the caller holds an ID the server does
+        not yet recognise. The worker's init_scan_run fills in the rubric, file count, real
+        start time, and scope once it claims and begins the job."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO scan_runs(id,source,status,owner_email,started_at) "
+                "VALUES(%s,%s,'queued',%s,%s) ON CONFLICT(id) DO NOTHING",
+                (scan_id, source, owner, self._now()))
+
+    def enqueue_scan(self, scan_id: str, source: str, owner: str,
+                     job_type: str, payload: dict, *,
+                     idempotency_key: str | None = None,
+                     inputs: dict | None = None,
+                     priority: int = 100, max_attempts: int = 5,
+                     run_after: str | None = None) -> tuple[str, str]:
+        """Create a scan_runs stub and its initial job in a single atomic transaction.
+
+        Returns (scan_id, job_id). All rows are committed together; a failure at any point
+        rolls back everything, leaving no orphan stubs. If idempotency_key is provided and a
+        scan with that key already exists for the same owner, returns the original
+        (scan_id, job_id) without inserting new rows.
+
+        `inputs` is the immutable input snapshot (Stage 1 item 3). When provided it is
+        inserted into scan_inputs in the same transaction. SECURITY: inputs must not contain
+        access tokens, credentials, or secrets — callers are responsible for omitting them.
+        """
+        import json as _json
+        now = self._now()
+        job_id = uuid.uuid4().hex[:16]
+        with self._db.cursor() as cur:
+            if idempotency_key is not None:
+                self._db.execute(cur,
+                    "SELECT id FROM scan_runs WHERE owner_email=%s AND idempotency_key=%s",
+                    (owner, idempotency_key))
+                existing = self._db.fetchone(cur)
+                if existing:
+                    existing_scan_id = existing["id"]
+                    self._db.execute(cur,
+                        "SELECT id FROM jobs WHERE scan_id=%s ORDER BY created_at LIMIT 1",
+                        (existing_scan_id,))
+                    existing_job = self._db.fetchone(cur)
+                    return existing_scan_id, (existing_job["id"] if existing_job else job_id)
+            self._db.execute(cur,
+                "INSERT INTO scan_runs(id,source,status,owner_email,started_at,idempotency_key) "
+                "VALUES(%s,%s,'queued',%s,%s,%s) ON CONFLICT(id) DO NOTHING",
+                (scan_id, source, owner, now, idempotency_key))
+            self._db.execute(cur,
+                "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
+                "run_after,scan_id,created_at,updated_at) "
+                "VALUES(%s,%s,%s,'queued',%s,0,%s,%s,%s,%s,%s)",
+                (job_id, job_type, _json.dumps(payload or {}), priority, max_attempts,
+                 run_after or now, scan_id, now, now))
+            if inputs is not None:
+                self._db.execute(cur,
+                    "INSERT INTO scan_inputs(scan_id,source,folder_ids,exclude_folder_ids,"
+                    "scan_options,actor,connection_ref,feature_flags,provider_config,"
+                    "lifecycle_rules,app_version,captured_at) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id) DO NOTHING",
+                    (scan_id,
+                     inputs.get("source", source),
+                     _json.dumps(inputs.get("folder_ids") or []),
+                     _json.dumps(inputs.get("exclude_folder_ids") or []),
+                     _json.dumps(inputs.get("scan_options") or {}),
+                     inputs.get("actor", owner),
+                     inputs.get("connection_ref"),
+                     _json.dumps(inputs.get("feature_flags") or {}),
+                     _json.dumps(inputs.get("provider_config") or []),
+                     _json.dumps(inputs.get("lifecycle_rules") or []),
+                     inputs.get("app_version"),
+                     now))
+        return scan_id, job_id
+
+    def get_scan_inputs(self, scan_id: str) -> dict | None:
+        """Return the immutable input snapshot for a scan, or None if none was captured."""
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM scan_inputs WHERE scan_id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+        if row is None:
+            return None
+        for field in ("folder_ids", "exclude_folder_ids", "scan_options",
+                      "feature_flags", "provider_config", "lifecycle_rules"):
+            if row.get(field) is not None:
+                try:
+                    row[field] = _json.loads(row[field])
+                except (TypeError, ValueError):
+                    pass
+        return row
+
     def init_scan_run(self, scan_id: str, source: str, total: int, started_at: str,
                       rubric_name: str, rubric_hash: str, owner: str | None = None,
                       status: str = "running", scope: dict | None = None) -> None:
-        """Create the scan_runs row at discover time (counter=0). `status` defaults to 'running'
-        (analysis in flight); the deferred-analysis Discover phase (ADR 0020) passes 'discovered'
-        — inventory listed, awaiting an explicit Assess before any file is opened.
+        """Create or update the scan_runs row at discover time (counter=0). `status` defaults
+        to 'running' (analysis in flight); the deferred-analysis Discover phase (ADR 0020)
+        passes 'discovered' — inventory listed, awaiting an explicit Assess.
+
+        Uses DO UPDATE rather than DO NOTHING so a pre_create_queued_scan stub (status='queued',
+        no rubric/scope) is promoted to a real running row when the worker claims the job.
 
         `scope` is what discovery covered (scanner._list scope_out). Written HERE, at discover,
         not at finalize: the count is on screen from the moment discovery ends, so its boundary
@@ -1004,7 +1238,11 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO scan_runs(id,started_at,source,rubric_name,rubric_hash,files,files_done,status,owner_email,scope) "
-                "VALUES(%s,%s,%s,%s,%s,%s,0,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
+                "VALUES(%s,%s,%s,%s,%s,%s,0,%s,%s,%s) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "  started_at=EXCLUDED.started_at, rubric_name=EXCLUDED.rubric_name, "
+                "  rubric_hash=EXCLUDED.rubric_hash, files=EXCLUDED.files, "
+                "  status=EXCLUDED.status, scope=EXCLUDED.scope",
                 (scan_id, started_at, source, rubric_name, rubric_hash, total, status, owner,
                  _json.dumps(scope) if scope else None))
 
@@ -1036,35 +1274,54 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur, "UPDATE scan_runs SET files=%s WHERE id=%s", (files, scan_id))
 
-    def add_inventory(self, scan_id: str, items: list[dict]) -> None:
+    def add_inventory(self, scan_id: str, items: list[dict]) -> dict:
         """Persist the Discover-phase inventory (ADR 0020 / lifecycle PRD) — source metadata
         only, no file opened. Idempotent per (scan_id, file) so a re-listed discover doesn't
         duplicate. `lifecycle_status` is deliberately NOT written here: it defaults to 'Active'
         on first insert (column DEFAULT) and is owned by the rule evaluator / manual actions, so
-        a re-list must not reset a status already assigned this run."""
+        a re-list must not reset a status already assigned this run.
+
+        Returns {"new": N, "updated": M, "unchanged": 0, "failed": P}.  "new" is the count of
+        rows that did not exist before this call; "updated" is the count of rows that already
+        existed (ON CONFLICT DO UPDATE ran); "unchanged" is always 0 because the upsert pattern
+        cannot distinguish an update that changed values from one that did not without a
+        per-column comparison; "failed" counts items where the INSERT raised an exception."""
         if not items:
-            return
+            return {"new": 0, "updated": 0, "unchanged": 0, "failed": 0}
         now = self._now()
+        failed = 0
         with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS cnt FROM scan_inventory WHERE scan_id=%s", (scan_id,))
+            before = (self._db.fetchone(cur) or {}).get("cnt", 0)
             for it in items:
-                self._db.execute(cur,
-                    "INSERT INTO scan_inventory(scan_id,file,drive_file_id,mime,size_kb,doc_class,"
-                    "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
-                    "content_type) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
-                    "drive_file_id=EXCLUDED.drive_file_id, mime=EXCLUDED.mime, size_kb=EXCLUDED.size_kb, "
-                    "doc_class=EXCLUDED.doc_class, checksum=EXCLUDED.checksum, path=EXCLUDED.path, "
-                    "created_at=EXCLUDED.created_at, source_modified=EXCLUDED.source_modified, "
-                    "owner=EXCLUDED.owner, parent_folder=EXCLUDED.parent_folder, drive_id=EXCLUDED.drive_id, "
-                    # COALESCE, not overwrite: a re-list that got no content type this time (a
-                    # transient enrichment failure) must not blank out one recorded on a PRIOR
-                    # list of the same file — that would be a real answer thrown away for a gap.
-                    "content_type=COALESCE(EXCLUDED.content_type, scan_inventory.content_type)",
-                    (scan_id, it.get("file"), it.get("drive_file_id"), it.get("mime"),
-                     it.get("size_kb"), it.get("doc_class"), it.get("checksum"), it.get("path"),
-                     it.get("created_at"), it.get("source_modified"), it.get("owner"),
-                     it.get("parent_folder"), it.get("discovered_at") or now, it.get("drive_id"),
-                     it.get("content_type")))
+                try:
+                    self._db.execute(cur,
+                        "INSERT INTO scan_inventory(scan_id,file,drive_file_id,mime,size_kb,doc_class,"
+                        "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
+                        "content_type) "
+                        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
+                        "drive_file_id=EXCLUDED.drive_file_id, mime=EXCLUDED.mime, size_kb=EXCLUDED.size_kb, "
+                        "doc_class=EXCLUDED.doc_class, checksum=EXCLUDED.checksum, path=EXCLUDED.path, "
+                        "created_at=EXCLUDED.created_at, source_modified=EXCLUDED.source_modified, "
+                        "owner=EXCLUDED.owner, parent_folder=EXCLUDED.parent_folder, drive_id=EXCLUDED.drive_id, "
+                        # COALESCE, not overwrite: a re-list that got no content type this time (a
+                        # transient enrichment failure) must not blank out one recorded on a PRIOR
+                        # list of the same file — that would be a real answer thrown away for a gap.
+                        "content_type=COALESCE(EXCLUDED.content_type, scan_inventory.content_type)",
+                        (scan_id, it.get("file"), it.get("drive_file_id"), it.get("mime"),
+                         it.get("size_kb"), it.get("doc_class"), it.get("checksum"), it.get("path"),
+                         it.get("created_at"), it.get("source_modified"), it.get("owner"),
+                         it.get("parent_folder"), it.get("discovered_at") or now, it.get("drive_id"),
+                         it.get("content_type")))
+                except Exception:
+                    failed += 1
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS cnt FROM scan_inventory WHERE scan_id=%s", (scan_id,))
+            after = (self._db.fetchone(cur) or {}).get("cnt", 0)
+        new_count = max(0, after - before)
+        updated_count = max(0, len(items) - failed - new_count)
+        return {"new": new_count, "updated": updated_count, "unchanged": 0, "failed": failed}
 
     def mark_discovery_complete(self, scan_id: str, at: str | None = None) -> str | None:
         """Stamp WHEN this run's discovery finished — the instant its inventory describes.
@@ -1550,7 +1807,8 @@ class Store:
                          "scan_decisions", "pii_findings", "hitl_queue", "hitl_events",
                          "disposition_audit", "decision_log", "inventory", "jobs", "documents",
                          "org_memory", "remediation_state", "remediation_diff", "applied_fixes",
-                         "ai_calls", "finding_comments"]
+                         "ai_calls", "finding_comments",
+                         "scan_inputs"]  # Stage 1 item 3: per-scan enqueue snapshots are customer data
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
@@ -1621,6 +1879,41 @@ class Store:
             self._db.execute(cur, "DELETE FROM scan_runs WHERE owner_email=%s", (owner_email,))
             cleared.append("scan_runs")
         return {"owner": owner_email, "cleared_tables": cleared}
+
+    def delete_scan(self, scan_id: str, owner_email: str) -> dict | None:
+        """Delete ONE scan and every row tied to it — the per-scan erasure path required for
+        a HIPAA Business Associate Agreement.
+
+        Returns None if the scan does not exist or does not belong to owner_email (prevents
+        one user deleting another's scan).  Returns a summary dict on success.
+
+        What is deleted:
+          - All rows in _RESET_USER_SCAN_TABLES keyed on scan_id.
+          - The scan_runs row itself.
+
+        What is deliberately NOT deleted:
+          - decision_log — immutable append-only audit trail; the deletion event is ADDED to
+            it by the caller, not the other way round.
+          - inventory — global path-dedup index with no scan_id link.
+          - Blob storage bytes — call blob.purge_scan(owner, scan_id) separately (the route
+            does this).  Kept separate so a DB-only operation never blocks on a slow storage
+            call and the two failure modes surface independently.
+        """
+        # Verify ownership before touching anything.
+        with self._db.cursor() as cur:
+            self._db.execute(
+                cur,
+                "SELECT id FROM scan_runs WHERE id=%s AND owner_email=%s",
+                (scan_id, owner_email),
+            )
+            if not self._db.fetchall(cur):
+                return None
+
+        with self._db.cursor() as cur:
+            for t in self._RESET_USER_SCAN_TABLES:
+                self._db.execute(cur, f"DELETE FROM {t} WHERE scan_id=%s", (scan_id,))
+            self._db.execute(cur, "DELETE FROM scan_runs WHERE id=%s", (scan_id,))
+        return {"scan_id": scan_id, "owner": owner_email}
 
     def list_scans(self, owner: str | None = None) -> list[dict]:
         # Completed scans only — in-flight (status='running', no completed_at) scans
@@ -1781,6 +2074,31 @@ class Store:
                 return None
         return row
 
+    def set_total_folders(self, scan_id: str, count: int) -> None:
+        """Record how many scan_folder jobs were emitted for this scan (ADR 0004 item 6)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE scan_runs SET total_folders=%s, completed_folders=0 WHERE id=%s",
+                (count, scan_id))
+
+    def increment_completed_folders(self, scan_id: str) -> tuple:
+        """Atomically increment completed_folders and return (completed, total) so the caller
+        can trigger finalization when all folders are done (ADR 0004 item 6).
+
+        Uses a single UPDATE + SELECT in one cursor to avoid the completed count being
+        stale by the time it is read. scan_finalize is idempotent (mark_finalized), so if
+        two folder jobs both see done >= total concurrently, the duplicate enqueue is fine."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE scan_runs SET completed_folders=COALESCE(completed_folders,0)+1 "
+                "WHERE id=%s", (scan_id,))
+            self._db.execute(cur,
+                "SELECT completed_folders, total_folders FROM scan_runs WHERE id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+        if not row:
+            return (0, 0)
+        return (row.get("completed_folders") or 0, row.get("total_folders") or 0)
+
     def rescue_unfinalized_scans(self) -> int:
         """Deploy-safety net (found live 2026-07-11): a revision swap can kill the worker
         AFTER the last scan_file persisted its row but BEFORE the count trigger enqueued
@@ -1788,7 +2106,13 @@ class Store:
         such scan (running, zero outstanding jobs, every enqueued file persisted), enqueue
         the finalize job. Safe by construction: scan_finalize is idempotent and
         mark_finalized claims exactly-once, so a duplicate enqueue no-ops. Called from the
-        stuck-job sweeper each tick. Returns how many scans were rescued."""
+        stuck-job sweeper each tick. Returns how many scans were rescued.
+
+        Also rescues per-folder scans (ADR 0004 item 6): if total_folders > 0 and
+        completed_folders >= total_folders with no outstanding jobs, the scan_finalize
+        job was lost and needs re-enqueueing."""
+        rescued = 0
+        # Original file-based rescue path (scan_file/scan_batch fan-out).
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT sr.id, sr.source FROM scan_runs sr WHERE sr.status='running' "
@@ -1801,7 +2125,25 @@ class Store:
             self.enqueue_job("scan_finalize",
                              {"scan_id": r["id"], "source": r.get("source") or "drive"},
                              scan_id=r["id"])
-        return len(rows)
+        rescued += len(rows)
+        # Per-folder rescue path (ADR 0004 item 6): all scan_folder jobs finished but the
+        # finalize job was not enqueued (e.g. worker lost the last scan_folder before it
+        # could enqueue finalize, then was reclaimed — but completed_folders was already
+        # incremented). total_folders > 0 distinguishes per-folder scans from file-based ones.
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT sr.id, sr.source FROM scan_runs sr WHERE sr.status='running' "
+                "AND sr.total_folders > 0 "
+                "AND sr.completed_folders >= sr.total_folders "
+                "AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.scan_id=sr.id "
+                "                AND j.status IN ('queued','running'))")
+            folder_rows = self._db.fetchall(cur)
+        for r in folder_rows:
+            self.enqueue_job("scan_finalize",
+                             {"scan_id": r["id"], "source": r.get("source") or "drive"},
+                             scan_id=r["id"])
+        rescued += len(folder_rows)
+        return rescued
 
     def cancel_scan(self, sid: str, owner: str | None = None) -> bool:
         """Stop an in-flight fan-out scan: kill its outstanding jobs and close the run as
@@ -1830,17 +2172,46 @@ class Store:
             self._stamp_assessed_if_ran(cur, sid)
         return True
 
-    def cancel_queued_job(self, sid: str) -> bool:
-        """Cancel a scan that is still `queued` and has never been claimed by a worker — the gap
-        `cancel_scan` cannot cover, because a queued-unclaimed job has NO `scan_runs` row yet
-        (that row is only created once a worker claims it and starts the discovery handler), and
-        `cancel_scan` requires one. Marks the `jobs` row `status='dead'` directly.
+    def acknowledge_scan(self, scan_id: str, actor: str | None, owner: str | None = None) -> bool:
+        """Record that the operator has reviewed lifecycle recommendations and approved this
+        discovery snapshot for handoff to Assess (PRD §EX-10). Idempotent — re-acknowledging
+        overwrites the prior stamp, allowing corrections. Returns False when scan is not found
+        or owner mismatch."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT owner_email FROM scan_runs WHERE id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+            if not row:
+                return False
+            if owner is not None and row.get("owner_email") != owner:
+                return False
+            self._db.execute(cur,
+                "UPDATE scan_runs SET acknowledged=TRUE, acknowledged_at=%s, acknowledged_by=%s "
+                "WHERE id=%s",
+                (self._now(), actor, scan_id))
+        return True
 
-        No owner check: a never-claimed job has no owner_email recorded anywhere yet either (it
-        lives only in `jobs`, which carries no owner column), so there is nothing to check it
-        against. `sid` is an unguessable token already trusted as the sole credential for polling
-        this scan (`GET /scans/jobs/{job_id}` has no owner check today) — this follows the same
-        model, not a new, weaker one.
+    def unacknowledge_scan(self, scan_id: str, owner: str | None = None) -> bool:
+        """Withdraw a prior acknowledgement (e.g. if lifecycle rules changed after approval)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT owner_email FROM scan_runs WHERE id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+            if not row:
+                return False
+            if owner is not None and row.get("owner_email") != owner:
+                return False
+            self._db.execute(cur,
+                "UPDATE scan_runs SET acknowledged=FALSE, acknowledged_at=NULL, acknowledged_by=NULL "
+                "WHERE id=%s", (scan_id,))
+        return True
+
+    def cancel_queued_job(self, sid: str) -> bool:
+        """Cancel a scan that is still `queued` and has not yet been claimed by a worker — the
+        gap `cancel_scan` cannot cover, because the worker only advances `scan_runs.status`
+        once it claims the job. Marks the `jobs` row `status='dead'` directly, and stamps the
+        pre-created `scan_runs` row 'cancelled' so GET /scans/{id} reflects the terminal state.
+
+        No owner check: `sid` is an unguessable token used as the credential for this operation,
+        consistent with how the non-durable job-poll path authenticates today.
 
         Returns False once a worker HAS claimed it (status moved to 'running' or beyond) — at
         that point `cancel_scan` is the right call, and the route tries both in order."""
@@ -1848,7 +2219,16 @@ class Store:
             self._db.execute(cur,
                 "UPDATE jobs SET status='dead', updated_at=%s WHERE scan_id=%s AND status='queued'",
                 (self._now(), sid))
-            return cur.rowcount > 0
+            cancelled = cur.rowcount > 0
+        if cancelled:
+            # The pre-created scan_runs row (status='queued') now has no job to run it.
+            # Mark it cancelled so callers see a terminal state rather than stale 'queued'.
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "UPDATE scan_runs SET status='cancelled', completed_at=%s "
+                    "WHERE id=%s AND status='queued'",
+                    (self._now(), sid))
+        return cancelled
 
     def _stamp_assessed_if_ran(self, cur, sid: str) -> None:
         """Stamp assessed_at on a non-finalized run that nonetheless assessed ≥1 document, so its
@@ -3937,6 +4317,19 @@ class Store:
                 out.update(self._row_approved_values(row))
         return out
 
+    def approved_structure_label_values(self, scan_id: str, file: str) -> dict[str, str]:
+        """{locator: label} awaiting a write into `file`, from approved 2.4.6 xlsx rows.
+
+        Locators are 'sheet:<tab name>' and 'table:<displayName>#col:<colName>', written by
+        apply_xlsx_labels. Scoped to xlsx 2.4.6 because the applier renames workbook.xml
+        sheet tabs and table column headers — a different write target from link text or alt.
+        """
+        out: dict[str, str] = {}
+        for row in self._approved_unapplied_rows(scan_id, file):
+            if str(row.get("rule_id") or "").strip() == "2.4.6":
+                out.update(self._row_approved_values(row))
+        return out
+
     def has_approved_values_to_write(self, scan_id: str, file: str) -> bool:
         """True when `file` holds approved content some applier can write into the document.
 
@@ -3955,7 +4348,8 @@ class Store:
                     or self.approved_link_values(scan_id, file)
                     or self.approved_field_values(scan_id, file)
                     or self.approved_sensory_values(scan_id, file)
-                    or self.approved_language_values(scan_id, file))
+                    or self.approved_language_values(scan_id, file)
+                    or self.approved_structure_label_values(scan_id, file))
 
     def approve_proposal_values(self, item_id: str, values: list[str | None]) -> int:
         """Record the reviewer's final text per instance, positionally.
@@ -4709,26 +5103,57 @@ class Store:
                 pass
         return row
 
+    @staticmethod
+    def _lease_expiry(lease_seconds: int | None = None) -> str:
+        from datetime import datetime, timezone, timedelta
+        secs = lease_seconds if lease_seconds is not None else int(
+            os.environ.get("ACP_JOB_LEASE_S", "600"))
+        return (datetime.now(timezone.utc) + timedelta(seconds=secs)).isoformat()
+
     def claim_job(self, worker_id: str) -> dict | None:
         """Atomically claim the next eligible job. Returns the claimed job (with
-        attempts already incremented), or None if the queue is empty."""
+        attempts already incremented), or None if the queue is empty.
+
+        Postgres: single-statement UPDATE...WHERE id=(SELECT...FOR UPDATE SKIP LOCKED)
+        RETURNING * — each worker atomically grabs a distinct row with no round-trip race.
+        SQLite: two-step optimistic CAS — SELECT then conditional UPDATE on status='queued'
+        (SQLite serialises writers, so the window between the two is closed in practice)."""
         now = self._now()
-        with self._db.cursor() as cur:
-            self._db.execute(cur,
-                "SELECT id FROM jobs WHERE status='queued' AND run_after<=%s "
-                "ORDER BY priority, run_after LIMIT 1", (now,))
-            row = self._db.fetchone(cur)
+        expires = self._lease_expiry()
+        if self._db.supports_skip_locked:
+            # Postgres path: atomic single-statement claim with SKIP LOCKED.
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "UPDATE jobs SET status='running', locked_at=%s, locked_by=%s, "
+                    "attempts=attempts+1, updated_at=%s, lease_expires_at=%s, phase=NULL "
+                    "WHERE id = ("
+                    "  SELECT id FROM jobs "
+                    "  WHERE status='queued' AND run_after<=%s "
+                    "  ORDER BY priority, run_after "
+                    "  FOR UPDATE SKIP LOCKED LIMIT 1"
+                    ") RETURNING id",
+                    (now, worker_id, now, expires, now))
+                row = self._db.fetchone(cur)
             if not row:
                 return None
-            jid = row["id"]
-            # Conditional update: only one worker can flip status from 'queued'.
-            self._db.execute(cur,
-                "UPDATE jobs SET status='running', locked_at=%s, locked_by=%s, "
-                "attempts=attempts+1, updated_at=%s, phase=NULL "
-                "WHERE id=%s AND status='queued'",
-                (now, worker_id, now, jid))
-            claimed = getattr(cur, "rowcount", 1) == 1
-        return self.get_job(jid) if claimed else None
+            return self.get_job(row["id"])
+        else:
+            # SQLite path: optimistic two-step CAS.
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT id FROM jobs WHERE status='queued' AND run_after<=%s "
+                    "ORDER BY priority, run_after LIMIT 1", (now,))
+                row = self._db.fetchone(cur)
+                if not row:
+                    return None
+                jid = row["id"]
+                self._db.execute(cur,
+                    "UPDATE jobs SET status='running', locked_at=%s, locked_by=%s, "
+                    "attempts=attempts+1, updated_at=%s, lease_expires_at=%s, phase=NULL "
+                    "WHERE id=%s AND status='queued'",
+                    (now, worker_id, now, expires, jid))
+                claimed = getattr(cur, "rowcount", 1) == 1
+            return self.get_job(jid) if claimed else None
 
     def set_job_phase(self, job_id: str, phase: str | None) -> None:
         """Record what this job is doing right now, for the queue panel's per-row line.
@@ -4780,6 +5205,35 @@ class Store:
                     "UPDATE jobs SET status='done', updated_at=%s, last_error=NULL WHERE id=%s",
                     (self._now(), job_id))
 
+    def request_job_cancellation(self, job_id: str) -> bool:
+        """Signal a running or queued job to stop at its next checkpoint.
+
+        Sets cancel_requested_at so a handler calling worker.check_cancel() will raise
+        JobCancelledError on its next checkpoint poll. Returns True if the flag was set,
+        False when the job is already terminal (done/dead/cancelled) or missing."""
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE jobs SET cancel_requested_at=%s, updated_at=%s "
+                "WHERE id=%s AND status IN ('queued','running') AND cancel_requested_at IS NULL",
+                (now, now, job_id))
+            return (getattr(cur, "rowcount", 0) or 0) > 0
+
+    def is_job_cancelled(self, job_id: str) -> bool:
+        """True if cancel_requested_at has been set for this job."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT cancel_requested_at FROM jobs WHERE id=%s", (job_id,))
+            row = self._db.fetchone(cur)
+        return bool(row and row.get("cancel_requested_at"))
+
+    def mark_job_cancelled(self, job_id: str) -> None:
+        """Stamp the job as status='cancelled' after cooperative cancellation completes."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE jobs SET status='cancelled', updated_at=%s WHERE id=%s",
+                (self._now(), job_id))
+
     def dead_letter_breakdown(self, owner: str | None = None) -> dict:
         """Diagnostic: dead-lettered jobs grouped by type + the most common errors.
         owner scopes to the caller's own jobs so error text (which can name a file)
@@ -4825,10 +5279,12 @@ class Store:
         reclaim a slow-but-alive job (e.g. a long PII scan). Called periodically by
         the worker while the handler runs."""
         now = self._now()
+        expires = self._lease_expiry()
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "UPDATE jobs SET locked_at=%s, updated_at=%s WHERE id=%s AND status='running'",
-                (now, now, job_id))
+                "UPDATE jobs SET locked_at=%s, updated_at=%s, lease_expires_at=%s "
+                "WHERE id=%s AND status='running'",
+                (now, now, expires, job_id))
 
     # Job types whose payload names documents that COUNT toward a scan's finalize total.
     # A dead-letter on one of these has to leave a file_records row behind — see
@@ -4908,9 +5364,12 @@ class Store:
                 pass
 
     def fail_job(self, job_id: str, error: str, backoff_seconds: float = 0.0,
-                 force_dead: bool = False) -> str:
+                 force_dead: bool = False, error_class: str | None = None) -> str:
         """Requeue a failed job with backoff, or dead-letter it once attempts are
-        exhausted (or immediately when force_dead). Returns 'queued' or 'dead'."""
+        exhausted (or immediately when force_dead). Returns 'queued' or 'dead'.
+
+        error_class ('rate_limit', 'auth', 'corrupt', 'transient') is persisted on the
+        row for operator diagnostics; pass it from the worker's classify_job_error()."""
         from datetime import datetime, timezone, timedelta
         job = self.get_job(job_id)
         if job is None:
@@ -4923,34 +5382,109 @@ class Store:
             with self._db.cursor() as cur:
                 if scrubbed is not None:
                     self._db.execute(cur,
-                        "UPDATE jobs SET status='dead', last_error=%s, updated_at=%s, payload=%s WHERE id=%s",
-                        (error[:2000], now.isoformat(), scrubbed, job_id))
+                        "UPDATE jobs SET status='dead', last_error=%s, error_class=%s, "
+                        "updated_at=%s, payload=%s WHERE id=%s",
+                        (error[:2000], error_class, now.isoformat(), scrubbed, job_id))
                 else:
                     self._db.execute(cur,
-                        "UPDATE jobs SET status='dead', last_error=%s, updated_at=%s WHERE id=%s",
-                        (error[:2000], now.isoformat(), job_id))
+                        "UPDATE jobs SET status='dead', last_error=%s, error_class=%s, "
+                        "updated_at=%s WHERE id=%s",
+                        (error[:2000], error_class, now.isoformat(), job_id))
             # One greppable stdout line per dead-letter — the platform alert
             # (Log Analytics scheduled query) keys on 'job dead-lettered'.
-            print(f"[acp] job dead-lettered: id={job_id} type={job.get('type')} error={error[:160]}", flush=True)
+            print(f"[acp] job dead-lettered: id={job_id} type={job.get('type')} "
+                  f"class={error_class or 'unclassified'} error={error[:160]}", flush=True)
             return "dead"
         run_after = (now + timedelta(seconds=backoff_seconds)).isoformat()
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "UPDATE jobs SET status='queued', run_after=%s, locked_at=NULL, "
-                "locked_by=NULL, last_error=%s, updated_at=%s WHERE id=%s",
-                (run_after, error[:2000], now.isoformat(), job_id))
+                "locked_by=NULL, last_error=%s, error_class=%s, updated_at=%s WHERE id=%s",
+                (run_after, error[:2000], error_class, now.isoformat(), job_id))
         return "queued"
 
     def reclaim_stuck_jobs(self, lease_seconds: int = 600) -> int:
-        """Requeue jobs stuck in 'running' past the lease (worker died mid-job)."""
+        """Requeue jobs stuck in 'running' past their lease (worker died mid-job).
+
+        Uses lease_expires_at < now() when the column is set (all jobs claimed after the
+        migration), falling back to the locked_at+lease_seconds arithmetic for rows that
+        pre-date the column (no lease_expires_at) — so the sweeper is correct across a
+        rolling deploy."""
         from datetime import datetime, timezone, timedelta
+        now = self._now()
         cutoff = (datetime.now(timezone.utc) - timedelta(seconds=lease_seconds)).isoformat()
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "UPDATE jobs SET status='queued', locked_at=NULL, locked_by=NULL, updated_at=%s "
-                "WHERE status='running' AND locked_at<%s",
-                (self._now(), cutoff))
+                "UPDATE jobs SET status='queued', locked_at=NULL, locked_by=NULL, "
+                "lease_expires_at=NULL, updated_at=%s "
+                "WHERE status='running' AND (lease_expires_at<%s OR locked_at<%s)",
+                (now, now, cutoff))
             return getattr(cur, "rowcount", 0) or 0
+
+    def sweep_exhausted_jobs(self) -> int:
+        """Dead-letter queued jobs that have already used all their attempts.
+
+        reclaim_stuck_jobs() requeues a running job without inspecting attempts — so a
+        job reclaimed at max_attempts re-enters the queue and would keep being claimed and
+        failing. This sweep catches those jobs and moves them to 'dead' exactly once, with
+        a sweep-generated error message. Returns the number of jobs dead-lettered."""
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id, type FROM jobs "
+                "WHERE status='queued' AND attempts >= max_attempts",
+                ())
+            rows = self._db.fetchall(cur)
+        count = 0
+        for row in rows:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "UPDATE jobs SET status='dead', last_error=%s, updated_at=%s "
+                    "WHERE id=%s AND status='queued' AND attempts >= max_attempts",
+                    ("max_attempts reached — dead-lettered by reconciliation sweeper",
+                     now, row["id"]))
+                if (getattr(cur, "rowcount", 0) or 0) > 0:
+                    count += 1
+                    print(f"[sweeper] job dead-lettered (exhausted): id={row['id']} "
+                          f"type={row.get('type')}", flush=True)
+        return count
+
+    def sweep_orphaned_scans(self, grace_seconds: int = 600) -> int:
+        """Mark 'running' scan_runs with no outstanding jobs as 'interrupted'.
+
+        A running scan with zero queued/running job rows is stranded — its worker died
+        after the fan-out but before finalize ran, or the jobs were reclaimed and
+        never re-enqueued. Past the grace window (default 10 min, to let discover
+        finish enqueuing before the sweep can touch it) the scan is marked 'interrupted'
+        and rescue_unfinalized_scans() handles re-enqueuing finalize if needed.
+
+        Returns the number of scans marked interrupted."""
+        from datetime import datetime, timezone, timedelta
+        grace_cutoff = (datetime.now(timezone.utc) - timedelta(seconds=grace_seconds)).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id, started_at FROM scan_runs "
+                "WHERE status='running' AND started_at<%s "
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM jobs WHERE scan_id=scan_runs.id "
+                "  AND status IN ('queued','running')"
+                ")",
+                (grace_cutoff,))
+            rows = self._db.fetchall(cur)
+        count = 0
+        now = self._now()
+        for row in rows:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "UPDATE scan_runs SET status='interrupted', completed_at=%s "
+                    "WHERE id=%s AND status='running'",
+                    (now, row["id"]))
+                if (getattr(cur, "rowcount", 0) or 0) > 0:
+                    self._stamp_assessed_if_ran(cur, row["id"])
+                    count += 1
+                    print(f"[sweeper] scan {row['id']}: marked interrupted — running "
+                          f"with no outstanding jobs", flush=True)
+        return count
 
     def job_stats(self, owner: str | None = None) -> dict:
         # owner → only this user's jobs (scoped via their scans), so the queue view
@@ -5429,7 +5963,7 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO disposition_audit(id,ts,doc_id,policy_id,action,result,detail,"
-                "owner_email) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                "owner_email) VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
                 (audit_id, self._now(), doc_id, policy_id, action, result, detail, owner_email))
 
     def get_disposition_audit(self, audit_id: str, owner: str | None = None) -> dict | None:

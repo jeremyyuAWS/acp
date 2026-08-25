@@ -847,6 +847,33 @@ import tempfile as _tempfile
 from pathlib import Path as _Path
 
 
+# ── Classification bucket constants (PRD §6.4) ───────────────────────────────────
+_ASSESSABLE_DOC_CLASSES = frozenset({'slide-deck', 'text-document', 'pdf-document', 'spreadsheet', 'web-page'})
+_METADATA_ONLY_DOC_CLASSES = frozenset({'image', 'audio-video'})
+
+
+def _count_inventory_classes(scan_id: str) -> dict:
+    """Count the five mutually exclusive classification buckets (PRD §6.4). Buckets sum to the
+    total inventory rows. 'excluded' is a catch-all for doc_class values not in the known sets
+    (currently always 0; reserved for future policy-excluded classes)."""
+    assessable = metadata_only = unsupported = eligibility_unknown = excluded = 0
+    for r in core.store.list_inventory(scan_id):
+        dc = r.get("doc_class") or ""
+        if dc in _ASSESSABLE_DOC_CLASSES:
+            assessable += 1
+        elif dc in _METADATA_ONLY_DOC_CLASSES:
+            metadata_only += 1
+        elif dc in ("unsupported", ""):
+            unsupported += 1
+        elif dc == "unknown":
+            eligibility_unknown += 1
+        else:
+            excluded += 1
+    return {"assessable": assessable, "metadata_only": metadata_only,
+            "unsupported": unsupported, "eligibility_unknown": eligibility_unknown,
+            "excluded": excluded}
+
+
 # ── Lifecycle rule evaluation during Discover (PRD §4.3 / §6, Phase B4) ─────────
 # disposition_policy now has a priority column (Lifecycle Rules build-plan item #6) —
 # list_disposition_policies() sorts by it (NULLs last, then name), so `policies` below is already
@@ -855,7 +882,8 @@ from pathlib import Path as _Path
 # (routes/disposition.list_conflicts) so both make the same call from one place.
 
 
-def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | None) -> None:
+def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | None,
+                                       progress_cb=None) -> dict:
     """Evaluate enabled disposition policies against the freshly persisted inventory and record
     CANDIDATE outcomes (PRD §4.3 / §6, Phase B4). Candidate-first: a matching archive rule flags
     the file 'Archive Candidate' and a delete rule 'Delete Candidate' — the actual Drive
@@ -867,16 +895,38 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
     Keying: tags/status are keyed by (scan_id, file) — the file_tags / scan_inventory grain. The
     audit doc_id is a discover-grain key ("scan:<scan_id>:<file>"), deliberately distinct from the
     approval-time drive:<fileId> key the Tag-action PR (#314) uses, so the two paths never collide.
+
+    progress_cb(files_evaluated, rules_enabled): called every 10 files so the route can emit
+    live lifecycle progress ticks. Optional — omit for callers that don't surface live updates.
+
+    Returns {"rules_enabled": N, "files_evaluated": M, "lifecycle_matches": K} so callers can
+    surface lifecycle activity stats in the 'done' progress payload.
     """
     import disposition
-    import uuid
+    import hashlib
     # owner=actor is the fix for the reported "rules created by the demo account can appear in
     # your workflow" defect: this was the one caller of list_disposition_policies() that already
     # had the scan owner in scope (as `actor`) and still fetched every tenant's enabled policies.
     policies = [p for p in core.store.list_disposition_policies(owner=actor) if p.get("enabled")]
     if not policies:
-        return
+        return {"rules_enabled": 0, "files_evaluated": 0, "lifecycle_matches": 0,
+                "lifecycle_archive": 0, "lifecycle_delete": 0, "lifecycle_tagged": 0}
+    files_evaluated = 0
+    lifecycle_matches = 0
+    lc_archive = 0
+    lc_delete = 0
+    lc_tagged_files: set = set()
     for r in core.store.list_inventory(scan_id):
+        files_evaluated += 1
+        if progress_cb and files_evaluated % 10 == 0:
+            progress_cb({
+                "files_evaluated": files_evaluated,
+                "rules_enabled": len(policies),
+                "files_matched": lifecycle_matches,
+                "archive_candidates": lc_archive,
+                "delete_candidates": lc_delete,
+                "files_tagged": len(lc_tagged_files),
+            })
         file = r.get("file")
         # An Exempted file (legal hold etc.) is never moved to a candidate status, tagged, or
         # re-audited by a rule run (PRD §6).
@@ -910,6 +960,7 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
                 matched.append(p)
         if not matched:
             continue
+        lifecycle_matches += 1
         # ── Tag rules: apply EVERY matching tag policy. Tag + Archive both match → tags AND the
         # Archive candidate status are applied (PRD §6), so tags are never suppressed by a
         # co-matching disposition rule.
@@ -926,9 +977,12 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
             if not tags:
                 continue
             core.store.add_file_tags(scan_id, file, tags, kind="system", rule_id=p["policy_id"])
+            _audit_id = hashlib.sha256(
+                f"discover:{scan_id}:{file}:{p['policy_id']}:tag".encode()).hexdigest()[:24]
             core.store.create_disposition_audit(
-                uuid.uuid4().hex, doc_id=doc_id, policy_id=p["policy_id"], action="tag",
+                _audit_id, doc_id=doc_id, policy_id=p["policy_id"], action="tag",
                 result="applied", detail="tagged: " + ", ".join(tags), owner_email=actor)
+            lc_tagged_files.add(file)
         # ── Candidate status: archive-vs-delete precedence (PRD §6), shared with the conflicts
         # report — see disposition.resolve_candidate's own docstring for the precedence rule.
         chosen, new_status, reason = disposition.resolve_candidate(matched, actor)
@@ -938,10 +992,21 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
             continue  # this rule already flagged + audited this file on an earlier Discover
         core.store.set_lifecycle_status(scan_id, file, new_status,
                                         rule_id=chosen["policy_id"], reason=reason)
+        _audit_id = hashlib.sha256(
+            f"discover:{scan_id}:{file}:{chosen['policy_id']}:{chosen.get('action', '')}".encode()
+        ).hexdigest()[:24]
         core.store.create_disposition_audit(
-            uuid.uuid4().hex, doc_id=doc_id, policy_id=chosen["policy_id"],
+            _audit_id, doc_id=doc_id, policy_id=chosen["policy_id"],
             action=chosen.get("action"), result="pending_approval", detail=reason,
             owner_email=actor)
+        if chosen.get("action") == "archive":
+            lc_archive += 1
+        elif chosen.get("action") == "delete":
+            lc_delete += 1
+    return {"rules_enabled": len(policies), "files_evaluated": files_evaluated,
+            "lifecycle_matches": lifecycle_matches,
+            "lifecycle_archive": lc_archive, "lifecycle_delete": lc_delete,
+            "lifecycle_tagged": len(lc_tagged_files)}
 
 
 def _mark_discovered(scan_id: str) -> None:
@@ -958,7 +1023,8 @@ def _mark_discovered(scan_id: str) -> None:
         pass
 
 
-def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, actor: str | None) -> None:
+def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, actor: str | None,
+                                progress_cb=None) -> dict:
     """Persist the per-file discovery inventory and evaluate the lifecycle (archival/deletion) rules
     over it — the shared post-discovery step so a scan marks Archive/Delete candidates regardless of
     which scan path ran it. Historically only the fanout path (_scan_discover) did this inline; the
@@ -969,17 +1035,144 @@ def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, acto
     Idempotent: add_inventory de-dupes on (scan_id, file) and the rule evaluation is candidate-first
     and guarded (doc_has_disposition), so a re-run adds nothing. Never executes a Drive move/delete.
     mark_discovery_complete is set-once for the same reason, so a re-run does not re-date the
-    snapshot either."""
+    snapshot either.
+
+    Returns a merged dict with save-outcome, lifecycle stats, and classification bucket counts:
+      {"new": N, "updated": M, "unchanged": 0, "failed": P,
+       "rules_enabled": R, "files_evaluated": E, "lifecycle_matches": K,
+       "assessable": A, "metadata_only": B, "unsupported": C, "eligibility_unknown": D, "excluded": X}.
+    Callers that emit progress payloads should forward all keys for the respective step KPIs."""
     from scanner import _dedupe_inventory_files
     _dedupe_inventory_files(inv)
-    if inv:
-        core.store.add_inventory(scan_id, inv)
-    _evaluate_discover_lifecycle_rules(scan_id, source, actor)
+    outcome = core.store.add_inventory(scan_id, inv) if inv else {"new": 0, "updated": 0, "unchanged": 0, "failed": 0}
+    lifecycle_stats = _evaluate_discover_lifecycle_rules(scan_id, source, actor,
+                                                         progress_cb=progress_cb)
+    class_stats = _count_inventory_classes(scan_id)
     # The discovery phase is over: the inventory is persisted and the lifecycle rules have run.
     # Stamp WHEN, because every count taken from this inventory is only true as of this instant
     # and nothing else on scan_runs records it — completed_at is the end of ASSESS. Stamped after
     # the writes above so it dates an inventory that exists rather than one that was attempted.
     _mark_discovered(scan_id)
+    return {**outcome, **lifecycle_stats, **class_stats}
+
+
+# ── ADR 0004 item 6: per-folder checkpoint helpers ───────────────────────────
+# These two functions are module-level (not closures) so tests can monkeypatch them
+# without reimporting. Production code calls the real Drive/SP listing APIs.
+
+def _per_folder_mode() -> bool:
+    """Return True when per-folder fan-out is enabled (ACP_PER_FOLDER_SCAN_JOBS=1)."""
+    return _os.environ.get("ACP_PER_FOLDER_SCAN_JOBS", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _list_top_level_folders(source: str, scope_folder: str | None, toks: dict) -> list:
+    """List the immediate subfolders to fan out over (Drive only; SP falls back to file mode).
+
+    Returns a list of dicts with at least {"folder_id": str, "name": str}.
+    Module-level so tests can monkeypatch this without reimporting.
+
+    SECURITY: toks is acquired at call time by the discover handler — never stored in the
+    job payload. The result contains only folder IDs (not credentials)."""
+    if source != "drive":
+        return []
+    try:
+        from scanner import _drive_service, _list_drive_page_all
+        drive_token = toks.get("drive")
+        if not drive_token:
+            return []
+        svc = _drive_service(drive_token)
+        parent = scope_folder or "root"
+        q = (f"'{parent}' in parents "
+             "and mimeType='application/vnd.google-apps.folder' "
+             "and trashed=false")
+        items, _ = _list_drive_page_all(svc, q, max_files=500)
+        return [{"folder_id": it["id"], "name": it.get("name", "")} for it in items]
+    except Exception:
+        return []
+
+
+def _list_folder_files(source: str, folder_id: str, toks: dict) -> list:
+    """List all analysable files under one folder (recursive BFS via scanner._search_folder).
+
+    Returns the same item shape as scanner._list. Module-level so tests can monkeypatch.
+
+    SECURITY: toks is the result of core.get_scan_tokens() called at execution time by the
+    scan_folder handler — credentials are never stored in the job payload itself."""
+    if source == "drive":
+        try:
+            from scanner import _drive_service, _search_folder
+            drive_token = toks.get("drive")
+            if not drive_token:
+                return []
+            svc = _drive_service(drive_token)
+            return _search_folder(svc, folder_id)
+        except Exception:
+            return []
+    return []
+
+
+def _process_scan_folder_item(scan_id: str, item: dict, *, source: str,
+                               ai: bool, pii: bool, user: str | None,
+                               job: dict | None = None) -> None:
+    """Download + analyse + persist ONE file from a scan_folder job.
+
+    Module-level so tests can monkeypatch. Production delegates to _analyse_and_persist_one,
+    the same function used by scan_file, so both paths share identical analysis logic."""
+    import lf as _lf
+    toks = core.get_scan_tokens(scan_id)
+    svc = _make_svc(source, toks)
+    now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    _analyse_and_persist_one(
+        scan_id, item, source, pii, svc, toks, now, _lf,
+        user=user, rubric_hash=core.active_rubric().hash, incremental=True)
+
+
+@handler("scan_folder")
+def _scan_folder(payload: dict, job: dict) -> None:
+    """Process all documents in one folder — the per-folder checkpoint unit for ADR 0004 item 6.
+
+    Payload: {"scan_id": "...", "folder_id": "...", "source": "drive", "ai": bool, "pii": bool}
+    Credentials are acquired at execution time via core.get_scan_tokens(scan_id) — NEVER stored
+    in the job payload (security constraint: no token snapshot in durable storage).
+
+    check_cancel() is called between every document so the scan can be cooperatively stopped
+    mid-folder. Increments completed_folders on the scan_runs row and triggers scan_finalize
+    once completed_folders reaches total_folders."""
+    from worker import check_cancel
+    scan_id = payload.get("scan_id") or job.get("scan_id")
+    folder_id = payload.get("folder_id")
+    source = payload.get("source", "drive")
+    ai = bool(payload.get("ai", True)) and core.store.get_ai_enabled()
+    pii = bool(payload.get("pii", False))
+    user = payload.get("user")
+
+    if not scan_id:
+        raise FatalJobError("scan_folder job missing scan_id")
+    if not folder_id:
+        raise FatalJobError("scan_folder job missing folder_id")
+
+    # SECURITY: acquire credentials at execution time, not from the durable job payload.
+    # core.get_scan_tokens() looks up the authorized connection by scan_id — the payload
+    # carries only a reference (the scan_id), never the credential itself.
+    toks = core.get_scan_tokens(scan_id)
+
+    _phase(job, f"listing files in folder {folder_id}")
+    items = _list_folder_files(source, folder_id, toks)
+
+    _phase(job, f"processing {len(items)} file(s) in folder {folder_id}")
+    for item in items:
+        check_cancel()
+        _process_scan_folder_item(scan_id, item, source=source, ai=ai, pii=pii,
+                                  user=user, job=job)
+        check_cancel()
+
+    done, total = core.store.increment_completed_folders(scan_id)
+    if total > 0 and done >= total:
+        core.store.enqueue_job(
+            "scan_finalize",
+            {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii},
+            scan_id=scan_id)
 
 
 @handler("scan_discover")
@@ -1026,11 +1219,21 @@ def _scan_discover(payload: dict, job: dict) -> None:
     # scope_files gates what is READ, not what is scored. This is the PRODUCTION listing path
     # (ADR 0007 fan-out); run_scan's is the local one, and wiring only that would leave a
     # hospital's PDFs being downloaded and OCR'd in the deployment that matters.
+    # Emit live file counts during the listing so the frontend ticks up rather than showing 0
+    # for the full duration. Throttled to one DB write every 2 s — the scanner does the timing
+    # inside _search_drive/_search_folder; this callback just persists whatever count arrived.
+    def _listing_progress(count: int) -> None:
+        try:
+            core.store.set_scan_files(scan_id, count)
+        except Exception:  # noqa: BLE001 — a diagnostic must never fail the scan
+            pass
+
     items = _list(source, svc, folder=effective_folder, sp_token=sp_tok,
                   max_files=FANOUT_MAX_FILES, **({"folders": folders} if folders else {}),
                   **({"exclude_folders": exclude_folders} if exclude_folders else {}),
                   exclude_remediated=bool(payload.get("exclude_remediated", False)),
-                  scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory)
+                  scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory,
+                  progress_cb=_listing_progress)
     # shadow_candidate (a file sharing a logical name with another — possibly ACP's own output
     # shadowing its source) is computed inside _enqueue_analysis from the item list, so the same
     # rule applies whether the fan-out runs now or later at Assess.
@@ -1097,7 +1300,16 @@ def _scan_discover(payload: dict, job: dict) -> None:
                for it in norm] + inventory
         _dedupe_inventory_files(inv)
         if inv:
-            core.store.add_inventory(scan_id, inv)
+            _inv_outcome = core.store.add_inventory(scan_id, inv)
+            _job_id = job.get("id")
+            if _job_id:
+                core.update_job(_job_id, {
+                    "schema_version": 2,
+                    "save_new": _inv_outcome.get("new"),
+                    "save_updated": _inv_outcome.get("updated"),
+                    "save_unchanged": _inv_outcome.get("unchanged"),
+                    "save_failed": _inv_outcome.get("failed"),
+                })
         # Phase B4 — with the inventory persisted, run enabled disposition rules against it and
         # record candidate lifecycle outcomes (never executing the Drive move/delete here). Runs
         # before the no-assessable-items short-circuit below because a rule may match a
@@ -1144,6 +1356,26 @@ def _scan_discover(payload: dict, job: dict) -> None:
         core.store.enqueue_job("scan_finalize",
                                {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)
         return
+    # Per-folder fan-out path (ADR 0004 item 6): when ACP_PER_FOLDER_SCAN_JOBS is enabled,
+    # list the immediate subfolders and emit one scan_folder job per folder instead of one
+    # scan_file/scan_batch per file. This enables mid-scan resume at folder granularity and
+    # parallel processing across folders. Falls back to the file-level path when no folders
+    # are found (flat estate, local source, or SP where folder listing is not yet wired).
+    if _per_folder_mode():
+        toks = core.get_scan_tokens(scan_id)
+        folders = _list_top_level_folders(source, effective_folder, toks)
+        if folders:
+            core.store.set_total_folders(scan_id, len(folders))
+            for f in folders:
+                core.store.enqueue_job("scan_folder", {
+                    "scan_id": scan_id,
+                    "folder_id": f["folder_id"],
+                    "source": source,
+                    "ai": ai,
+                    "pii": pii,
+                    "user": user,
+                }, scan_id=scan_id)
+            return
     # Immediate path (default today): fan out the analysis now. ADR 0008 batches large estates.
     _enqueue_analysis(scan_id, source, norm, ai=ai, pii=pii, user=user,
                       incremental=incremental, exclude_remediated=_exclude_rem,
@@ -2022,6 +2254,8 @@ _OFFICE_LINK_EXTS = tuple(_LINK_SCS_BY_EXT)
 # approval it accepted. xlsx is therefore absent from _LANGUAGE_EXTS on purpose.
 _SENSORY_EXTS = ("docx", "pptx", "xlsx")
 _LANGUAGE_EXTS = ("docx", "pptx")
+# 2.4.6 structure labels: sheet tab and table column renames (xlsx only).
+_STRUCTURE_LABEL_EXTS = ("xlsx",)
 
 # The lanes that exist only for PDF: figure alt (`pdf:fig:…` → /Alt) and form-field accessible
 # names (`pdf:field:…` → /TU), both written by remediate_pdf.apply_pdf_approved.
@@ -2146,8 +2380,10 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
                       if ext in _SENSORY_EXTS else {})
     language_values = (core.store.approved_language_values(scan_id, filename)
                        if ext in _LANGUAGE_EXTS else {})
+    structure_label_values = (core.store.approved_structure_label_values(scan_id, filename)
+                              if ext in _STRUCTURE_LABEL_EXTS else {})
     if not (alt_values or deco_locators or link_values or field_values
-            or sensory_values or language_values):
+            or sensory_values or language_values or structure_label_values):
         return                                   # nothing approved awaiting a write
 
     import blob as _blob
@@ -2231,8 +2467,18 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             values=language_values, scs_to_clear={"3.1.2"}, write_fn=language_write_fn,
             diff_rule_id="3.1.2", credit_rule_ids=("3.1.2",), noun="language mark", job=job)
 
+    structure_label_uploaded = False
+    if structure_label_values:
+        from apply_xlsx_labels import apply_xlsx_labels
+        working, structure_label_uploaded = _apply_one_value_kind(
+            scan_id=scan_id, filename=filename, working=working,
+            values=structure_label_values, scs_to_clear={"2.4.6"},
+            write_fn=apply_xlsx_labels,
+            diff_rule_id="2.4.6", credit_rule_ids=("2.4.6",),
+            noun="structure label", job=job)
+
     if not (alt_uploaded or link_uploaded or field_uploaded
-            or sensory_uploaded or language_uploaded):
+            or sensory_uploaded or language_uploaded or structure_label_uploaded):
         return
 
     _phase(job, "storing the corrected copy")

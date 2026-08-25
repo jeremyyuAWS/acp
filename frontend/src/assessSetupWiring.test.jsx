@@ -274,9 +274,9 @@ describe('App composes the Assess tab the way the board specifies', () => {
     // change it does not describe. What it cares about is that the card is mounted with the
     // run?.id fallback and activates on assessPhase, not only on `busy`.
     expect(s).toMatch(/<LiveAssessmentLive scanId=\{liveScanId \|\| run\?\.id\}/)
-    // Both `busy` and `assessPhase === 'running'` must drive the active expression — the exact
-    // structure evolves (Discover exclusion was added here), but neither clause may disappear.
-    expect(s).toMatch(/active=\{.*busy/)
+    // Only `assessPhase === 'running'` drives the active expression — `busy` was removed because
+    // it signals a DISCOVERY run, not an assessment run, and its presence caused the assess panel
+    // to activate (showing "Preparing assessment") on all non-Discover tabs during discovery.
     expect(s).toMatch(/assessPhase === 'running'/)
     expect(s).toMatch(/view !== 'assess'/)
   })

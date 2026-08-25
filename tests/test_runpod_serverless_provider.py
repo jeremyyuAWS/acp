@@ -120,6 +120,58 @@ def test_gpu_miss_is_recorded_not_silent(monkeypatch):
     assert cloud[0]["reason"] == "transport_error"
 
 
+# ── WARNING R2 log lines (PR #758, R12) ──────────────────────────────────────────────────────
+# These warnings are the DETECTION mechanism for the silent GPU-fallback failure R12 recorded in
+# production on 2026-08-14 (8/8 vision calls went local, no error, no trace). The lines must be
+# emitted whenever runpod_serverless is selected but can't actually run — otherwise the only symptom
+# is slow inference that reads as "the GPU is a bit slow today."
+
+def test_r2_warns_when_key_missing_with_endpoint_set(monkeypatch, caplog):
+    import ai, logging
+    monkeypatch.setenv("ACP_VISION_PROVIDER", "runpod_serverless")
+    monkeypatch.setenv("RUNPOD_ENDPOINT_ID", "EP-prod-abc123")
+    monkeypatch.delenv("RUNPOD_API_KEY", raising=False)
+    monkeypatch.setattr(ai, "_maybe_refresh_endpoint", lambda: None)
+    monkeypatch.setattr(ai, "OLLAMA_BASE_URL", "http://localhost:11434")
+    monkeypatch.setattr(ai, "OLLAMA_VISION_MODEL", "moondream")
+    with caplog.at_level(logging.WARNING):
+        p = providers.active_vision_provider()
+    assert p.name == "ollama"                                   # fell back, not GPU
+    assert "R2:" in caplog.text and "RUNPOD_API_KEY is empty" in caplog.text
+
+
+def test_r2_warns_when_endpoint_id_not_configured(monkeypatch, caplog):
+    import ai, logging
+    monkeypatch.setenv("ACP_VISION_PROVIDER", "runpod_serverless")
+    monkeypatch.delenv("RUNPOD_ENDPOINT_ID", raising=False)
+    monkeypatch.delenv("RUNPOD_API_KEY", raising=False)
+    monkeypatch.setattr(ai, "_maybe_refresh_endpoint", lambda: None)
+    monkeypatch.setattr(ai, "OLLAMA_BASE_URL", "http://localhost:11434")
+    monkeypatch.setattr(ai, "OLLAMA_VISION_MODEL", "moondream")
+    with caplog.at_level(logging.WARNING):
+        p = providers.active_vision_provider()
+    assert p.name == "ollama"
+    assert "R2:" in caplog.text and "RUNPOD_ENDPOINT_ID is not set" in caplog.text
+
+
+def test_r2_warns_when_admin_store_overrides_runpod_env(monkeypatch, caplog):
+    import ai, logging, sys, types
+    monkeypatch.setenv("ACP_VISION_PROVIDER", "runpod_serverless")
+    monkeypatch.setenv("RUNPOD_ENDPOINT_ID", "EP")
+    monkeypatch.setenv("RUNPOD_API_KEY", "K")
+    monkeypatch.setattr(ai, "_maybe_refresh_endpoint", lambda: None)
+    monkeypatch.setattr(ai, "OLLAMA_BASE_URL", "http://localhost:11434")
+    monkeypatch.setattr(ai, "OLLAMA_VISION_MODEL", "moondream")
+    fake_core = types.ModuleType("core")
+    fake_core.store = types.SimpleNamespace(
+        get_setting=lambda k: "ollama" if k == "ai_vision_provider" else None,
+    )
+    monkeypatch.setitem(sys.modules, "core", fake_core)
+    with caplog.at_level(logging.WARNING):
+        providers.active_vision_provider()
+    assert "R2:" in caplog.text and "overridden by the admin" in caplog.text
+
+
 def test_runpod_gets_the_longer_cold_start_timeout(monkeypatch):
     """The serverless GPU call must use RUNPOD_VISION_TIMEOUT, not the shorter Ollama budget: a
     scale-to-zero VL-7B cold boot exceeds 120s and would otherwise time out into a silent fallback."""
