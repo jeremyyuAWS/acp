@@ -72,12 +72,45 @@ def _post_scan(base_url: str, source: str, token: str | None,
         sys.exit(1)
 
     scan_id = body.get("scan_id")
+
+    # Default (non-queue) path returns job_id immediately; scan_id appears once discovered.
     if not scan_id:
-        print(f"FAIL: no scan_id in response: {body}", file=sys.stderr)
-        sys.exit(1)
+        job_id = body.get("job_id")
+        if not job_id:
+            print(f"FAIL: no scan_id or job_id in response: {body}", file=sys.stderr)
+            sys.exit(1)
+        print(f"  scan enqueued  job_id={job_id}  polling for scan_id …")
+        scan_id = _poll_job(base_url, job_id, token)
 
     print(f"  scan started  scan_id={scan_id}  source={source}")
     return scan_id
+
+
+def _poll_job(base_url: str, job_id: str, token: str | None,
+              timeout: float = 60.0) -> str:
+    url = f"{base_url.rstrip('/')}/scans/jobs/{job_id}"
+    req = urllib.request.Request(url, headers=_headers(token))
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                job = json.loads(r.read())
+        except Exception as e:
+            print(f"  WARN: polling job failed: {e}", file=sys.stderr)
+            time.sleep(2)
+            continue
+        if job.get("done"):
+            scan_id = job.get("scan_id")
+            if not scan_id:
+                print(f"FAIL: job done but no scan_id: {job}", file=sys.stderr)
+                sys.exit(1)
+            return scan_id
+        if job.get("error"):
+            print(f"FAIL: scan job errored: {job.get('error')}", file=sys.stderr)
+            sys.exit(1)
+        time.sleep(1)
+    print(f"FAIL: timed out waiting for job {job_id} to produce a scan_id", file=sys.stderr)
+    sys.exit(1)
 
 
 def _stream_events(base_url: str, scan_id: str, token: str | None,
