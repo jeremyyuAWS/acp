@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 // The Discover RUNNING screen: a per-step checklist showing what the discovery agent is doing.
 // This replaces the generic scan-progress banner on the Discover tab so the screen stays scoped
@@ -58,20 +58,33 @@ function DiscoverStep({ label, detail, status }) {
   )
 }
 
-export default function DiscoverRunProgress({ progress, busy, onStop, sources, inv = null }) {
+export default function DiscoverRunProgress({ progress, busy, onStop, sources, inv = null, onReview = null }) {
   const [startedAt] = useState(() => Date.now())
   const [elapsed, setElapsed] = useState(0)
+  const [stalledSecs, setStalledSecs] = useState(0)
+  const lastTickRef = useRef(Date.now())
+
+  // Reset stall counter whenever a new progress payload arrives.
+  useEffect(() => {
+    lastTickRef.current = Date.now()
+    setStalledSecs(0)
+  }, [progress])
 
   useEffect(() => {
     if (!busy || !progress) return
     setElapsed(Math.round((Date.now() - startedAt) / 1000))
-    const t = setInterval(() => setElapsed(Math.round((Date.now() - startedAt) / 1000)), 1000)
+    const t = setInterval(() => {
+      setElapsed(Math.round((Date.now() - startedAt) / 1000))
+      setStalledSecs(Math.round((Date.now() - lastTickRef.current) / 1000))
+    }, 1000)
     return () => clearInterval(t)
   }, [busy, progress, startedAt])
 
-  if (!busy || !progress) return null
+  if (!progress) return null
 
   const phase = progress.phase || 'queued'
+  const isDone = phase === 'done'
+  const isStopped = !busy && !isDone
   const filesFound = progress.files_found || 0
   const doneCount = PHASE_DONE_COUNT[phase] ?? 0
 
@@ -95,6 +108,95 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
     }
   })
 
+  // No progress ticks for 90 s — connection may be lost.
+  const showStalledWarning = busy && !isDone && stalledSecs >= 90
+  // After 90 s with no files found during listing, the source likely has many folders to walk.
+  const showLongRunningHint = !showStalledWarning && elapsed >= 90 && filesFound === 0 && phase === 'discovering'
+  // Lifecycle evaluation can take 30+ s on large inventories.
+  const showLifecycleSlowHint = !showStalledWarning && elapsed >= 30 && phase === 'lifecycle'
+
+  // Stopped / failed card — scan ended before completion (user stop, auth failure, network drop).
+  // The active step is demoted to pending so no pulse dot appears on a stopped scan.
+  if (isStopped) {
+    const errorMsg = progress.error ?? null
+    const totalFiles = inv?.total ?? (filesFound > 0 ? filesFound : 0)
+    const stoppedSteps = steps.map((s) => ({ ...s, status: s.status === 'active' ? 'pending' : s.status }))
+    return (
+      <section className="discover-run-progress" role="region" aria-label="Discovery stopped"
+               style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
+        <div className="assess-run-card" style={{ border: '1px solid var(--line,#e4e8ec)', borderRadius: 12,
+                                                  padding: '14px 16px', background: 'var(--panel,#fff)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+                        gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 14.5, fontWeight: 650 }}>
+              {errorMsg ? 'Discovery could not complete' : 'Discovery stopped'}
+            </div>
+            <span className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>
+              {fmtElapsedSecs(elapsed)}
+            </span>
+          </div>
+          <div role="list" aria-label="Discovery steps"
+               style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 14 }}>
+            {stoppedSteps.map(({ key, ...rest }) => <DiscoverStep key={key} {...rest} />)}
+          </div>
+          <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 12,
+                        fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.6 }}>
+            {errorMsg && (
+              <div style={{ color: 'var(--red,#c0392b)', marginBottom: 4 }}>{errorMsg}</div>
+            )}
+            {totalFiles > 0 && (
+              <div>{totalFiles.toLocaleString()} file{totalFiles !== 1 ? 's' : ''} catalogued.</div>
+            )}
+            <div>Partial inventory retained. No documents were assessed or changed.</div>
+          </div>
+          {onReview && totalFiles > 0 && (
+            <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+              <button type="button" className="ghost small" onClick={onReview}>
+                Review partial inventory
+              </button>
+            </div>
+          )}
+        </div>
+      </section>
+    )
+  }
+
+  // Completion summary replaces the active checklist once all steps are done.
+  if (isDone) {
+    const totalFiles = inv?.total ?? filesFound
+    return (
+      <section className="discover-run-progress" role="region" aria-label="Discovery complete"
+               style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
+        <div className="assess-run-card" style={{ border: '1px solid var(--line,#e4e8ec)', borderRadius: 12,
+                                                  padding: '14px 16px', background: 'var(--panel,#fff)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+                        gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 14.5, fontWeight: 650 }}>Discovery complete</div>
+            <span className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>
+              {fmtElapsedSecs(elapsed)}
+            </span>
+          </div>
+          <div aria-live="polite" aria-atomic="false" role="list" aria-label="Discovery steps"
+               style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 14 }}>
+            {steps.map(({ key, ...rest }) => <DiscoverStep key={key} {...rest} />)}
+          </div>
+          <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 12,
+                        fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.6 }}>
+            {totalFiles > 0
+              ? <div>{totalFiles.toLocaleString()} files discovered. No documents were assessed or changed.</div>
+              : <div>No documents were assessed or changed.</div>
+            }
+          </div>
+          {onReview && (
+            <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+              <button type="button" className="ghost small" onClick={onReview}>Review inventory</button>
+            </div>
+          )}
+        </div>
+      </section>
+    )
+  }
+
   return (
     <section className="discover-run-progress" role="region" aria-label="Discovery in progress"
              style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
@@ -113,6 +215,23 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
              style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
           {steps.map(({ key, ...rest }) => <DiscoverStep key={key} {...rest} />)}
         </div>
+
+        {showStalledWarning && (
+          <p role="alert" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5,
+                                   color: 'var(--red,#c0392b)' }}>
+            Discovery appears stalled — no progress for {stalledSecs}s. The source may be unreachable.
+          </p>
+        )}
+        {showLongRunningHint && (
+          <p className="muted" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5 }}>
+            This source contains many folders — discovery is still active.
+          </p>
+        )}
+        {showLifecycleSlowHint && (
+          <p className="muted" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5 }}>
+            Lifecycle evaluation is taking longer than usual.
+          </p>
+        )}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>

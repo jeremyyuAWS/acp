@@ -12,8 +12,11 @@ const render = (progress, busy, onStop, sources, inv) =>
   renderToStaticMarkup(createElement(DiscoverRunProgress, { progress, busy, onStop, sources, inv }))
 
 describe('DiscoverRunProgress renders nothing until a scan is live', () => {
-  it('renders nothing when busy is false', () => {
-    expect(render(PROG, false)).toBe('')
+  it('renders a stopped card (not nothing) when busy is false and scan did not complete', () => {
+    // Pre-fix this returned ''. Now it shows the stopped summary — the card should NOT vanish.
+    const html = render(PROG, false)
+    expect(html).toContain('Discovery stopped')
+    expect(html).not.toBe('')
   })
 
   it('renders nothing when progress is null', () => {
@@ -203,5 +206,102 @@ describe('Stop button placement', () => {
     expect(stopAt).toBeGreaterThan(-1)
     expect(msgAt).toBeGreaterThan(-1)
     expect(msgAt - stopAt).toBeLessThan(400)
+  })
+})
+
+// ── §9 failure states: stopped / failed card ─────────────────────────────────
+
+describe('stopped card (§9): scan ended before completion', () => {
+  it('renders "Discovery stopped" when busy is false and scan is not done', () => {
+    const prog = { phase: 'discovering', files_found: 42 }
+    const html = render(prog, false)
+    expect(html).toContain('Discovery stopped')
+    expect(html).not.toBe('')
+  })
+
+  it('renders nothing when both busy and progress are absent (pre-scan)', () => {
+    expect(render(null, false)).toBe('')
+  })
+
+  it('shows elapsed time in stopped card', () => {
+    const prog = { phase: 'reading', files_found: 100 }
+    const html = render(prog, false)
+    // elapsed renders as "0s" immediately in SSR (no timer has fired)
+    expect(html).toContain('0s')
+  })
+
+  it('shows file count when inv has rows', () => {
+    const prog = { phase: 'reading', files_found: 0 }
+    const inv = { total: 88, rows: [] }
+    const html = render(prog, false, undefined, undefined, inv)
+    expect(html).toContain('88 files catalogued')
+  })
+
+  it('falls back to files_found for the catalogued count when inv is absent', () => {
+    const prog = { phase: 'discovering', files_found: 53 }
+    const html = render(prog, false)
+    expect(html).toContain('53 files catalogued')
+  })
+
+  it('shows "Discovery could not complete" when progress.error is set', () => {
+    const prog = { phase: 'connecting', files_found: 0, error: 'Authorization expired — re-connect the source.' }
+    const html = render(prog, false)
+    expect(html).toContain('Discovery could not complete')
+    expect(html).toContain('Authorization expired')
+  })
+
+  it('shows the error message in a separate element', () => {
+    const prog = { phase: 'connecting', files_found: 0, error: 'Source unreachable.' }
+    const html = render(prog, false)
+    expect(html).toContain('Source unreachable.')
+  })
+
+  it('shows "Review partial inventory" button when inv has rows and onReview is provided', () => {
+    const prog = { phase: 'reading', files_found: 0 }
+    const inv = { total: 12, rows: [] }
+    const html = render(prog, false, undefined, undefined, inv)
+    // onReview not passed — button absent
+    expect(html).not.toContain('Review partial inventory')
+    // Pass onReview
+    const html2 = renderToStaticMarkup(createElement(DiscoverRunProgress, {
+      progress: prog, busy: false, onReview: () => {}, inv,
+    }))
+    expect(html2).toContain('Review partial inventory')
+  })
+
+  it('omits Review button when inv has no rows', () => {
+    const prog = { phase: 'discovering', files_found: 0 }
+    const html = renderToStaticMarkup(createElement(DiscoverRunProgress, {
+      progress: prog, busy: false, onReview: () => {},
+    }))
+    expect(html).not.toContain('Review partial inventory')
+  })
+
+  it('no pulse dot appears in the stopped card (active step demoted to pending)', () => {
+    const prog = { phase: 'reading', files_found: 100 }
+    const html = render(prog, false)
+    expect(html).not.toContain('prep-pulse')
+  })
+
+  it('shows steps completed up to the stop point as done (✓)', () => {
+    // phase=reading → doneCount=2 → Connected and Listing are done
+    const prog = { phase: 'reading', files_found: 80, folders_found: 5 }
+    const html = render(prog, false)
+    const connectedIdx = html.indexOf('Connected to source')
+    const checkBefore = html.lastIndexOf('✓', connectedIdx)
+    expect(checkBefore).toBeGreaterThan(-1)
+  })
+
+  it('includes "Partial inventory retained" footer', () => {
+    const prog = { phase: 'discovering', files_found: 0 }
+    const html = render(prog, false)
+    expect(html).toContain('Partial inventory retained')
+  })
+
+  it('still renders completion summary when phase is done and busy is false', () => {
+    const prog = { phase: 'done', files_found: 100 }
+    const html = render(prog, false)
+    expect(html).toContain('Discovery complete')
+    expect(html).not.toContain('Discovery stopped')
   })
 })
