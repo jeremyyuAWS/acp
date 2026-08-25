@@ -31,11 +31,12 @@ sys.path.insert(0, str(ACP / "scripts"))
 # engine/office-analysers/ and the CLI builds standalone from a fresh clone, so CI builds
 # this itself (azure-pipelines.yml) -- it is no longer a dev-machine-only artifact.
 #
-# PDF: the worker-python analyser tree, which is NOT vendored and is loaded at runtime
-# from ACP_PDF_ENGINE (scanner.WP). Without it scanner._analyse_pdf raises
-# ModuleNotFoundError('analysers') -- its imports sit outside the try, so a missing PDF
-# engine is a hard error, not a degraded scan -- and the corpus contains PDFs. So the
-# Office half being available is not sufficient to run this module.
+# PDF: vendored in-repo at engine/pdf-analyser/ since ADR 0029 (mirrors how ADR 0012
+# vendored the Office analysers). Loaded at runtime from ACP_PDF_ENGINE (scanner.WP),
+# which defaults to the vendored path so a fresh clone can assess PDFs without any extra
+# setup. scanner._analyse_pdf imports `analysers` outside its try/except, so a missing
+# tree is still a hard error rather than a degraded scan — but that path only fires when
+# the vendored directory is absent or an ACP_PDF_ENGINE override points somewhere empty.
 from engines import NO_OFFICE, NO_PDF, OFFICE_OK, PDF_OK  # noqa: E402
 
 pytestmark = pytest.mark.skipif(

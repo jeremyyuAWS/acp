@@ -469,13 +469,15 @@ third is the correctness fix with the widest blast radius.
 
 ## Phase 3 — the structural ones
 
-- [ ] **P3.1 — Vendor the PDF engine.** `ACP_PDF_ENGINE` is external, so 13 of 61 pairs are
-  unmeasurable locally *and* skipped in CI (`tests/test_scan.py`, `test_remediation_capability.py`).
-  A fifth of the matrix nobody can test. ADR 0012 vendored the Office analysers the same way.
-- [ ] **P3.2 — Accessible generated PDFs.** ACP's own rule `pdf.tagged` (1.3.1) flags untagged
-  PDFs, and neither generator emits a structure tree — jsPDF cannot at all. An accessibility tool
-  shipping non-conformant PDFs is a credibility problem. Architectural: move report generation
-  server-side, or post-process.
+- [x] **P3.1 — Vendor the PDF engine.** Done — ADR 0029 vendored the 41-module analyser
+  tree into `engine/pdf-analyser/` and defaulted `ACP_PDF_ENGINE` to that path (mirrors ADR
+  0012's Office pattern). `PDF_OK` is now True on a fresh clone; CI builds dotnet for Office
+  and inherits the PDF tree from checkout, so all formerly-skipped pairs run. Stale "NOT
+  vendored" comment in `tests/test_scan.py` corrected. *(Source-verified 2026-08-25.)*
+- [x] **P3.2 — Accessible generated PDFs.** Done — `_tag_pdf()` post-processes `build_report()`
+  output with pikepdf to inject `MarkInfo.Marked=true` + `StructTreeRoot`, satisfying
+  `pdf.tagged` (WCAG 1.3.1). The six jsPDF client-side report types are still untagged (jsPDF
+  has no tagging API; server-side migration is a follow-on). PR #767 merged 2026-08-25.
 - [ ] **P3.3 — Healthcare hardening.** Encryption with customer-managed keys; retention and
   deletion paths for a BAA; confirm nothing logs document content.
 - [ ] **P3.4 — Power BI export.** Given the data is in Postgres, a read-only view plus DirectQuery
@@ -679,9 +681,10 @@ argued.
 - [ ] **I.1 — Azure agent pool.** Blocked on an admin granting it. All 14 merges on 2026-08-08
   bypassed Azure because 16 jobs were stuck behind the org's single parallel slot. Draft email
   written; agent built and merged (#183).
-- [ ] **I.2 — Fix the production approval gate.** The UI approval silently failed three times
-  today; the API worked instantly every time. Worth understanding before it blocks a release
-  nobody can approve.
+- [x] **I.2 — Fix the production approval gate.** Done. `ReviewCenter.doAct()` swallowed all
+  errors via `.catch(() => {})`, silently collapsing cards on any API failure (most common:
+  401 SESSION_EXPIRED on Google token expiry). Converted to async try/catch with `setActError()`
+  and an inline dismissible error banner. PR #764 merged 2026-08-25.
 - [x] **I.3 — Raise `num_predict` for 32B.** Done. Raised ceilings in `api/ai.py` (120→200, 140→250,
   400→800, 220→400, 200→400) and `api/providers.py` (128→200). Root cause: reasoning models emit a
   thinking pass before answering — the old caps ran out mid-thought, returning empty responses. Since
