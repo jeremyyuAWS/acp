@@ -6,9 +6,9 @@ Status updated 2026-08-25. Frontend component: `frontend/src/DiscoverRunProgress
 ## Done
 
 - [x] **#1 KPIs for completed steps** — Connected shows `1 source` / `N sources`; Listing shows
-  `N files found`; Metadata shows `N complete · M incomplete`; Classification shows
-  `N assessable · M unsupported`; Lifecycle shows `N matched · M unchanged`.
-  (Saving step has no KPI yet — see #3.)
+  `N files · M folders` (or `N files found` when folder count is unavailable); Metadata shows
+  `N complete · M incomplete`; Classification shows `N assessable · M unsupported`; Lifecycle
+  shows `N matched · M unchanged`. (Saving step has no KPI yet — see #3.)
 
 - [x] **#8 Skipped-step treatment** — When no lifecycle rules are enabled, the Lifecycle KPI reads
   `— No enabled rules` instead of `0 matched · N unchanged`. PR #782.
@@ -50,8 +50,10 @@ Status updated 2026-08-25. Frontend component: `frontend/src/DiscoverRunProgress
   `N new · M updated · K unchanged` (and failed records if any).
   Requires the scanner to return save-step outcomes in the progress payload.
 
-- [ ] **#4 Clear units** — Change `N files found` to `N files · M folders` so users see
-  both counts separately. Requires the scanner to track folder count independently of file count.
+- [x] **#4 Clear units** — Listing KPI now shows `N files · M folders` when the scanner emits
+  `folders_found` (folder-scoped Drive scans). Falls back to `N files found` for whole-Drive
+  scans (where folder count is not tracked). Backend emits `folders_found: scope.get("folders_walked")`
+  in the `discovering` phase progress event.
 
 - [ ] **#5 Metadata exceptions** — Surface inaccessible files/folders and metadata-read failures
   encountered during the `reading` phase.
