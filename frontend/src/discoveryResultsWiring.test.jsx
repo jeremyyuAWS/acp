@@ -41,7 +41,7 @@ describe('source — Discover is the caller, and it passes the real discovery da
     // screen cannot tell a floor from a total.
     expect(discover).toMatch(/inventory=\{scope\?\.inventory \|\| null\}/)
     expect(discover).toMatch(/scopeLine=\{scopeLine\}/)
-    expect(discover).toMatch(/acknowledged=\{ackRecs\} onAcknowledge=\{setAckRecs\}/)
+    expect(discover).toMatch(/acknowledged=\{ackRecs\} onAcknowledge=\{handleAcknowledge\}/)
     expect(discover).toMatch(/overrides=\{assessAnyway\} onOverridesChange=\{setAssessAnyway\}/)
     // Lifecycle rules #8 — a real handler, not a stub: wired to the same reload path every other
     // scan_inventory mutation would need, so the recorded override actually reaches this screen.

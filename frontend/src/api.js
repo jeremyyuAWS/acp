@@ -300,6 +300,20 @@ export const overrideLifecycleRecommendation = (scanId, file, reason) => {
     body: JSON.stringify({ reason: r }),
   }).then(j)
 }
+// Discovery acknowledgement (PRD §EX-10): persist the operator's approval of the snapshot.
+export const acknowledgeScan = (scanId) => {
+  if (SIM) return sim({ scan_id: scanId, acknowledged: true })
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/acknowledge`, {
+    method: 'PUT', headers: headers(),
+  }).then(j)
+}
+export const unacknowledgeScan = (scanId) => {
+  if (SIM) return sim({ scan_id: scanId, acknowledged: false })
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/acknowledge`, {
+    method: 'DELETE', headers: headers(),
+  }).then(j)
+}
+
 // Regression diff vs a prior scan (ADR 0009) — which docs got worse/better + criteria that broke.
 export const getScanDiff = (scanId, vs = null) => {
   if (SIM) return sim({

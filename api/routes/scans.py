@@ -351,6 +351,25 @@ def cancel_scan(sid: str, request: Request):
     raise HTTPException(409, "scan not found, not yours, or not running")
 
 
+@router.put("/scans/{sid}/acknowledge")
+def acknowledge_scan(sid: str, request: Request):
+    """Record that the operator has reviewed lifecycle recommendations and approved this
+    discovery snapshot for handoff to Assess (PRD §EX-10). Idempotent — re-acknowledging
+    an already-acknowledged scan overwrites the prior stamp."""
+    actor = _owner(request)
+    if core.store.acknowledge_scan(sid, actor=actor, owner=actor):
+        return {"scan_id": sid, "acknowledged": True, "actor": actor}
+    raise HTTPException(404, "scan not found or not yours")
+
+
+@router.delete("/scans/{sid}/acknowledge")
+def unacknowledge_scan(sid: str, request: Request):
+    """Withdraw a prior acknowledgement (e.g. if lifecycle rules were changed after approval)."""
+    if core.store.unacknowledge_scan(sid, owner=_owner(request)):
+        return {"scan_id": sid, "acknowledged": False}
+    raise HTTPException(404, "scan not found or not yours")
+
+
 @router.get("/scans/jobs/{job_id}")
 def scan_job(job_id: str):
     # core.get_job_state, not core.JOBS: the poll must be answerable by whichever replica the
