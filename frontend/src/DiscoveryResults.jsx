@@ -5,6 +5,7 @@ import {
   recommendationReconciliation, recommendationRows, typeReconciliation, unreadableReasons,
 } from './discoveryRecommendations.js'
 import { contentTypeBreakdown } from './contentTypeBreakdown.js'
+import { ageBucketDistribution, sizeBucketDistribution, folderDistribution } from './discoveryDistributions.js'
 import LifecycleOverrideControl from './LifecycleOverrideControl.jsx'
 
 // The Discovery results screen (approved design board `DiscoverResults.dc.html`).
@@ -150,6 +151,11 @@ export default function DiscoveryResults({
     ? unread.buckets.filter((b) => b.recorded && reasonFetchLikely(b.reason))
     : []
   const fetchFiles = fetchBuckets.reduce((n, b) => n + b.count, 0)
+  const invRows = inventory?.rows ?? null
+  const ageDist = ageBucketDistribution(invRows)
+  const sizeDist = sizeBucketDistribution(invRows)
+  const folderDist = folderDistribution(invRows)
+
   const recRows = recommendationRows(files, policies)
   const recRec = recommendationReconciliation(files)
   const ack = acknowledgementSummary(files, overrides)
@@ -304,6 +310,79 @@ export default function DiscoveryResults({
               one. Not every file will carry one — that is the source's answer, not a gap in the
               scan.
             </p>
+          </div>
+        )}
+
+        {ageDist && (
+          <div className="panel" style={{ flex: '1 1 340px' }}>
+            <h2>BY AGE <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>· last modified</span></h2>
+            {ageDist.buckets.map((b) => (
+              <div className="critrow" key={b.key} style={{ gridTemplateColumns: '140px 1fr 56px' }}>
+                <span className="critlabel" style={{ fontSize: 13 }}>{b.label}</span>
+                <span className="track">
+                  <i style={{ width: `${(b.count / Math.max(1, ...ageDist.buckets.map((x) => x.count))) * 100}%`,
+                              background: BAR_COLOR.assessable }} />
+                </span>
+                <span style={{ textAlign: 'right', fontSize: 13 }}>{b.count.toLocaleString()}</span>
+              </div>
+            ))}
+            <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 56px', gap: 12,
+                          marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--line)',
+                          fontSize: 13, fontWeight: 600 }} role="status">
+              <span>{ageDist.balanced ? 'Total' : '⚠ Total'}</span>
+              <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>{ageDist.population}</span>
+              <span style={{ textAlign: 'right' }}>{ageDist.sum.toLocaleString()}</span>
+            </div>
+          </div>
+        )}
+
+        {sizeDist && (
+          <div className="panel" style={{ flex: '1 1 340px' }}>
+            <h2>BY SIZE</h2>
+            {sizeDist.buckets.map((b) => (
+              <div className="critrow" key={b.key} style={{ gridTemplateColumns: '140px 1fr 56px' }}>
+                <span className="critlabel" style={{ fontSize: 13 }}>{b.label}</span>
+                <span className="track">
+                  <i style={{ width: `${(b.count / Math.max(1, ...sizeDist.buckets.map((x) => x.count))) * 100}%`,
+                              background: BAR_COLOR.other }} />
+                </span>
+                <span style={{ textAlign: 'right', fontSize: 13 }}>{b.count.toLocaleString()}</span>
+              </div>
+            ))}
+            <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 56px', gap: 12,
+                          marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--line)',
+                          fontSize: 13, fontWeight: 600 }} role="status">
+              <span>{sizeDist.balanced ? 'Total' : '⚠ Total'}</span>
+              <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>{sizeDist.population}</span>
+              <span style={{ textAlign: 'right' }}>{sizeDist.sum.toLocaleString()}</span>
+            </div>
+          </div>
+        )}
+
+        {folderDist && (
+          <div className="panel" style={{ flex: '1 1 380px' }}>
+            <h2>BY FOLDER</h2>
+            {folderDist.buckets.map((b) => (
+              <div className="critrow" key={b.key} style={{ gridTemplateColumns: '1fr 1fr 56px' }}>
+                <span className="critlabel" title={b.label}
+                      style={{ fontSize: 12, fontFamily: 'monospace', overflow: 'hidden',
+                               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {b.label}
+                </span>
+                <span className="track">
+                  <i style={{ width: `${(b.count / Math.max(1, ...folderDist.buckets.map((x) => x.count))) * 100}%`,
+                              background: BAR_COLOR.assessable }} />
+                </span>
+                <span style={{ textAlign: 'right', fontSize: 13 }}>{b.count.toLocaleString()}</span>
+              </div>
+            ))}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 56px', gap: 12,
+                          marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--line)',
+                          fontSize: 13, fontWeight: 600 }} role="status">
+              <span>{folderDist.balanced ? 'Total' : '⚠ Total'}</span>
+              <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>{folderDist.population}</span>
+              <span style={{ textAlign: 'right' }}>{folderDist.sum.toLocaleString()}</span>
+            </div>
           </div>
         )}
 
