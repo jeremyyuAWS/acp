@@ -2966,12 +2966,66 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                      exclude_remediated=exclude_remediated, scope_out=scope,
                      scope_files=_scope_for_listing(user), inventory_out=inventory_out)
         n = len(items)
-        progress({"phase": "discovering", "files_found": n, "files_done": 0, "current": None})
+        # Metadata completeness: derivable from the listing itself before any download.
+        exc_missing_optional = sum(
+            1 for it in items if it.get("owner") is None or it.get("source_modified") is None)
+        exc_missing_required = sum(
+            1 for it in items if not it.get("name") or it.get("mime") is None and "path" not in it)
+        progress({"schema_version": 2,
+                  "phase": "discovering", "files_found": n, "files_done": 0, "current": None,
+                  "folders_found": scope.get("folders_walked"),
+                  "exc_missing_optional": exc_missing_optional,
+                  "exc_missing_required": exc_missing_required})
+
+        exc_inaccessible_file = 0
+        exc_metadata_failure = 0
+        exc_deleted_during_scan = 0
+        skipped: set[str] = set()
 
         for i, it in enumerate(items):
-            progress({"phase": "reading", "files_found": n, "files_done": i, "current": it["name"]})
-            _download(it, tmp, svc, sp_token=sp_token)
+            progress({"schema_version": 2,
+                      "phase": "reading", "files_found": n, "files_done": i, "current": it["name"],
+                      "exc_inaccessible_file": exc_inaccessible_file,
+                      "exc_metadata_failure": exc_metadata_failure,
+                      "exc_deleted_during_scan": exc_deleted_during_scan,
+                      "exc_missing_optional": exc_missing_optional,
+                      "exc_missing_required": exc_missing_required})
+            try:
+                _download(it, tmp, svc, sp_token=sp_token)
+            except PermissionError:
+                exc_inaccessible_file += 1
+                skipped.add(it["name"])
+                continue
+            except Exception as _dl_exc:
+                # Detect 404 (item deleted between listing and download) vs generic failures.
+                _status = None
+                try:
+                    import httpx as _httpx
+                    if isinstance(_dl_exc, _httpx.HTTPStatusError):
+                        _status = _dl_exc.response.status_code
+                except Exception:
+                    pass
+                if _status is None:
+                    try:
+                        from googleapiclient.errors import HttpError as _HttpError
+                        if isinstance(_dl_exc, _HttpError) and getattr(_dl_exc, "resp", None):
+                            _status = int(_dl_exc.resp.status)
+                    except Exception:
+                        pass
+                if _status == 404:
+                    exc_deleted_during_scan += 1
+                elif _status in (401, 403):
+                    exc_inaccessible_file += 1
+                else:
+                    exc_metadata_failure += 1
+                skipped.add(it["name"])
+                continue
             cache_source_bytes(tmp, it["name"], scan_id, user)   # ADR 0020 §1 — best-effort
+
+        # Remove skipped files from the items list so downstream phases don't try to analyse them.
+        if skipped:
+            items = [it for it in items if it["name"] not in skipped]
+            n = len(items)
 
         office = _analyse_office(tmp)
 

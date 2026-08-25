@@ -1119,35 +1119,54 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur, "UPDATE scan_runs SET files=%s WHERE id=%s", (files, scan_id))
 
-    def add_inventory(self, scan_id: str, items: list[dict]) -> None:
+    def add_inventory(self, scan_id: str, items: list[dict]) -> dict:
         """Persist the Discover-phase inventory (ADR 0020 / lifecycle PRD) — source metadata
         only, no file opened. Idempotent per (scan_id, file) so a re-listed discover doesn't
         duplicate. `lifecycle_status` is deliberately NOT written here: it defaults to 'Active'
         on first insert (column DEFAULT) and is owned by the rule evaluator / manual actions, so
-        a re-list must not reset a status already assigned this run."""
+        a re-list must not reset a status already assigned this run.
+
+        Returns {"new": N, "updated": M, "unchanged": 0, "failed": P}.  "new" is the count of
+        rows that did not exist before this call; "updated" is the count of rows that already
+        existed (ON CONFLICT DO UPDATE ran); "unchanged" is always 0 because the upsert pattern
+        cannot distinguish an update that changed values from one that did not without a
+        per-column comparison; "failed" counts items where the INSERT raised an exception."""
         if not items:
-            return
+            return {"new": 0, "updated": 0, "unchanged": 0, "failed": 0}
         now = self._now()
+        failed = 0
         with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS cnt FROM scan_inventory WHERE scan_id=%s", (scan_id,))
+            before = (self._db.fetchone(cur) or {}).get("cnt", 0)
             for it in items:
-                self._db.execute(cur,
-                    "INSERT INTO scan_inventory(scan_id,file,drive_file_id,mime,size_kb,doc_class,"
-                    "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
-                    "content_type) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
-                    "drive_file_id=EXCLUDED.drive_file_id, mime=EXCLUDED.mime, size_kb=EXCLUDED.size_kb, "
-                    "doc_class=EXCLUDED.doc_class, checksum=EXCLUDED.checksum, path=EXCLUDED.path, "
-                    "created_at=EXCLUDED.created_at, source_modified=EXCLUDED.source_modified, "
-                    "owner=EXCLUDED.owner, parent_folder=EXCLUDED.parent_folder, drive_id=EXCLUDED.drive_id, "
-                    # COALESCE, not overwrite: a re-list that got no content type this time (a
-                    # transient enrichment failure) must not blank out one recorded on a PRIOR
-                    # list of the same file — that would be a real answer thrown away for a gap.
-                    "content_type=COALESCE(EXCLUDED.content_type, scan_inventory.content_type)",
-                    (scan_id, it.get("file"), it.get("drive_file_id"), it.get("mime"),
-                     it.get("size_kb"), it.get("doc_class"), it.get("checksum"), it.get("path"),
-                     it.get("created_at"), it.get("source_modified"), it.get("owner"),
-                     it.get("parent_folder"), it.get("discovered_at") or now, it.get("drive_id"),
-                     it.get("content_type")))
+                try:
+                    self._db.execute(cur,
+                        "INSERT INTO scan_inventory(scan_id,file,drive_file_id,mime,size_kb,doc_class,"
+                        "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
+                        "content_type) "
+                        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
+                        "drive_file_id=EXCLUDED.drive_file_id, mime=EXCLUDED.mime, size_kb=EXCLUDED.size_kb, "
+                        "doc_class=EXCLUDED.doc_class, checksum=EXCLUDED.checksum, path=EXCLUDED.path, "
+                        "created_at=EXCLUDED.created_at, source_modified=EXCLUDED.source_modified, "
+                        "owner=EXCLUDED.owner, parent_folder=EXCLUDED.parent_folder, drive_id=EXCLUDED.drive_id, "
+                        # COALESCE, not overwrite: a re-list that got no content type this time (a
+                        # transient enrichment failure) must not blank out one recorded on a PRIOR
+                        # list of the same file — that would be a real answer thrown away for a gap.
+                        "content_type=COALESCE(EXCLUDED.content_type, scan_inventory.content_type)",
+                        (scan_id, it.get("file"), it.get("drive_file_id"), it.get("mime"),
+                         it.get("size_kb"), it.get("doc_class"), it.get("checksum"), it.get("path"),
+                         it.get("created_at"), it.get("source_modified"), it.get("owner"),
+                         it.get("parent_folder"), it.get("discovered_at") or now, it.get("drive_id"),
+                         it.get("content_type")))
+                except Exception:
+                    failed += 1
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS cnt FROM scan_inventory WHERE scan_id=%s", (scan_id,))
+            after = (self._db.fetchone(cur) or {}).get("cnt", 0)
+        new_count = max(0, after - before)
+        updated_count = max(0, len(items) - failed - new_count)
+        return {"new": new_count, "updated": updated_count, "unchanged": 0, "failed": failed}
 
     def mark_discovery_complete(self, scan_id: str, at: str | None = None) -> str | None:
         """Stamp WHEN this run's discovery finished — the instant its inventory describes.

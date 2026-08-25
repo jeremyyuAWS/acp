@@ -958,7 +958,7 @@ def _mark_discovered(scan_id: str) -> None:
         pass
 
 
-def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, actor: str | None) -> None:
+def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, actor: str | None) -> dict:
     """Persist the per-file discovery inventory and evaluate the lifecycle (archival/deletion) rules
     over it — the shared post-discovery step so a scan marks Archive/Delete candidates regardless of
     which scan path ran it. Historically only the fanout path (_scan_discover) did this inline; the
@@ -969,17 +969,21 @@ def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, acto
     Idempotent: add_inventory de-dupes on (scan_id, file) and the rule evaluation is candidate-first
     and guarded (doc_has_disposition), so a re-run adds nothing. Never executes a Drive move/delete.
     mark_discovery_complete is set-once for the same reason, so a re-run does not re-date the
-    snapshot either."""
+    snapshot either.
+
+    Returns the save-outcome dict from add_inventory: {"new": N, "updated": M, "unchanged": 0,
+    "failed": P}.  Callers that emit progress payloads should forward these as save_new,
+    save_updated, save_unchanged, save_failed so the frontend can display the saving-step KPI."""
     from scanner import _dedupe_inventory_files
     _dedupe_inventory_files(inv)
-    if inv:
-        core.store.add_inventory(scan_id, inv)
+    outcome = core.store.add_inventory(scan_id, inv) if inv else {"new": 0, "updated": 0, "unchanged": 0, "failed": 0}
     _evaluate_discover_lifecycle_rules(scan_id, source, actor)
     # The discovery phase is over: the inventory is persisted and the lifecycle rules have run.
     # Stamp WHEN, because every count taken from this inventory is only true as of this instant
     # and nothing else on scan_runs records it — completed_at is the end of ASSESS. Stamped after
     # the writes above so it dates an inventory that exists rather than one that was attempted.
     _mark_discovered(scan_id)
+    return outcome
 
 
 @handler("scan_discover")

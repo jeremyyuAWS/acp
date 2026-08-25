@@ -120,7 +120,7 @@ describe('phase-driven step completion', () => {
     expect(foundAt).toBeLessThan(nextStepStart)
   })
 
-  it('shows "files found" without "so far" on the done Listed step', () => {
+  it('shows "files found" without "so far" on the done Listed step when folders_found is absent', () => {
     const prog = { phase: 'reading', files_found: 148 }
     const html = render(prog, true)
     expect(html).toContain('148 files found')
@@ -130,6 +130,18 @@ describe('phase-driven step completion', () => {
     const foundAt = html.indexOf('148 files found')
     expect(foundAt).toBeGreaterThan(listedIdx)
     expect(foundAt).toBeLessThan(nextStepStart)
+  })
+
+  it('shows "N files · M folders" on the done Listed step when folders_found is present', () => {
+    const prog = { phase: 'reading', files_found: 148, folders_found: 12 }
+    const html = render(prog, true)
+    expect(html).toContain('148 files · 12 folders')
+    expect(html).not.toContain('148 files found')
+    const listedIdx = html.indexOf('Listed folders and files')
+    const nextStepStart = html.indexOf('Reading document metadata')
+    const kpiIdx = html.indexOf('148 files · 12 folders')
+    expect(kpiIdx).toBeGreaterThan(listedIdx)
+    expect(kpiIdx).toBeLessThan(nextStepStart)
   })
 
   it('done steps use past-tense labels', () => {
@@ -546,5 +558,125 @@ describe('lifecycle stall hint', () => {
       const html = render({ phase, files_found: 50 }, true)
       expect(html).not.toContain('Lifecycle evaluation is taking longer')
     }
+  })
+})
+
+describe('metadata exception counters (schema_version 2)', () => {
+  it('shows a live exception note during reading phase when inaccessible files are present', () => {
+    const prog = { phase: 'reading', files_found: 10, exc_inaccessible_file: 2,
+                   exc_metadata_failure: 0, exc_deleted_during_scan: 0 }
+    const html = render(prog, true)
+    expect(html).toContain('2 files inaccessible')
+    expect(html).toContain('skipped, others continuing')
+  })
+
+  it('shows all three exception types in the live note when multiple are present', () => {
+    const prog = { phase: 'reading', files_found: 20, exc_inaccessible_file: 1,
+                   exc_metadata_failure: 2, exc_deleted_during_scan: 3 }
+    const html = render(prog, true)
+    expect(html).toContain('1 file inaccessible')
+    expect(html).toContain('3 deleted during scan')
+    expect(html).toContain('2 unreadable')
+    expect(html).toContain('skipped, others continuing')
+  })
+
+  it('omits the live exception note when all counters are zero', () => {
+    const prog = { phase: 'reading', files_found: 10, exc_inaccessible_file: 0,
+                   exc_metadata_failure: 0, exc_deleted_during_scan: 0 }
+    const html = render(prog, true)
+    expect(html).not.toContain('skipped, others continuing')
+  })
+
+  it('omits the live exception note when exception fields are absent (schema_version 1)', () => {
+    const prog = { phase: 'reading', files_found: 10 }
+    const html = render(prog, true)
+    expect(html).not.toContain('skipped, others continuing')
+  })
+
+  it('exception note only appears during reading phase, not other phases', () => {
+    const phases = ['discovering', 'tagging', 'analysing', 'scoring']
+    for (const phase of phases) {
+      const prog = { phase, files_found: 10, exc_inaccessible_file: 2,
+                     exc_metadata_failure: 0, exc_deleted_during_scan: 0 }
+      const html = render(prog, true)
+      expect(html, `phase ${phase} should not show exception note`).not.toContain('skipped, others continuing')
+    }
+  })
+
+  it('includes exceptions in the metadata step KPI when step is done', () => {
+    // tagging phase: metadata step (index 2) is done; exceptions are shown alongside completeness
+    const inv = { rows: [
+      { file: 'a.docx', owner: 'u', source_modified: '2024', lifecycle_rule_id: null, doc_class: 'text-document' },
+      { file: 'b.pdf',  owner: null, source_modified: null,   lifecycle_rule_id: null, doc_class: 'pdf-document' },
+    ], total: 2 }
+    const prog = { phase: 'tagging', files_found: 3, exc_inaccessible_file: 1,
+                   exc_metadata_failure: 0, exc_deleted_during_scan: 0 }
+    const html = render(prog, true, undefined, undefined, inv)
+    // Completeness KPI
+    expect(html).toContain('1 complete')
+    expect(html).toContain('1 incomplete')
+    // Exception appended
+    expect(html).toContain('1 inaccessible')
+  })
+
+  it('exception summary appears in completion summary when phase is done', () => {
+    const prog = { phase: 'done', files_found: 10, exc_inaccessible_file: 2,
+                   exc_metadata_failure: 0, exc_deleted_during_scan: 1 }
+    const html = render(prog, true)
+    expect(html).toContain('2 inaccessible')
+    expect(html).toContain('1 deleted during scan')
+    expect(html).toContain('skipped during metadata read')
+  })
+
+  it('no exception summary in completion summary when all counters are zero', () => {
+    const prog = { phase: 'done', files_found: 10, exc_inaccessible_file: 0,
+                   exc_metadata_failure: 0, exc_deleted_during_scan: 0 }
+    const html = render(prog, true)
+    expect(html).not.toContain('skipped during metadata read')
+  })
+})
+
+describe('saving step KPI (schema_version 2 done payload)', () => {
+  it('shows "N new · M updated" in the Saved inventory step when save counts are present', () => {
+    const prog = { phase: 'done', files_found: 50, save_new: 48, save_updated: 2,
+                   save_unchanged: 0, save_failed: 0 }
+    const html = render(prog, true)
+    expect(html).toContain('48 new')
+    expect(html).toContain('2 updated')
+  })
+
+  it('shows only non-zero counts in the saving KPI', () => {
+    const prog = { phase: 'done', files_found: 30, save_new: 30, save_updated: 0,
+                   save_unchanged: 0, save_failed: 0 }
+    const html = render(prog, true)
+    expect(html).toContain('30 new')
+    expect(html).not.toContain('0 updated')
+    expect(html).not.toContain('unchanged')
+  })
+
+  it('includes "failed" in saving KPI when save_failed is non-zero', () => {
+    const prog = { phase: 'done', files_found: 20, save_new: 18, save_updated: 1,
+                   save_unchanged: 0, save_failed: 1 }
+    const html = render(prog, true)
+    expect(html).toContain('1 failed')
+  })
+
+  it('omits saving KPI when save_new is absent (schema_version 1 payload)', () => {
+    const prog = { phase: 'done', files_found: 20 }
+    const html = render(prog, true)
+    expect(html).toContain('Saved inventory')
+    expect(html).not.toContain(' new')
+    expect(html).not.toContain(' updated')
+  })
+
+  it('saving KPI appears near the Saved inventory step', () => {
+    const prog = { phase: 'done', files_found: 100, save_new: 95, save_updated: 5,
+                   save_unchanged: 0, save_failed: 0 }
+    const html = render(prog, true)
+    const savedIdx = html.indexOf('Saved inventory')
+    const kpiIdx = html.indexOf('95 new')
+    expect(savedIdx).toBeGreaterThan(-1)
+    expect(kpiIdx).toBeGreaterThan(-1)
+    expect(kpiIdx - savedIdx).toBeLessThan(400)
   })
 })
