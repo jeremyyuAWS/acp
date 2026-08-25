@@ -57,19 +57,22 @@ def _counter(frame: dict, top: str, key: str):
     return frame.get(top, {}).get(key)
 
 
-def _headers(token: str | None, drive_token: str | None = None) -> dict:
+def _headers(token: str | None, drive_token: str | None = None,
+             e2e_key: str | None = None) -> dict:
     h = {"Content-Type": "application/json", "Accept": "application/json"}
     if token:
         h["Authorization"] = f"Bearer {token}"
     if drive_token:
         h["x-drive-token"] = drive_token
+    if e2e_key:
+        h["x-e2e-key"] = e2e_key
     return h
 
 
 def _post_scan(base_url: str, source: str, token: str | None,
-               drive_token: str | None) -> str:
+               drive_token: str | None, e2e_key: str | None = None) -> str:
     url = f"{base_url.rstrip('/')}/scans?source={source}&ai=false&incremental=false"
-    req = urllib.request.Request(url, data=b"", headers=_headers(token, drive_token),
+    req = urllib.request.Request(url, data=b"", headers=_headers(token, drive_token, e2e_key),
                                  method="POST")
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
@@ -92,16 +95,16 @@ def _post_scan(base_url: str, source: str, token: str | None,
             print(f"FAIL: no scan_id or job_id in response: {body}", file=sys.stderr)
             sys.exit(1)
         print(f"  scan enqueued  job_id={job_id}  polling for scan_id …")
-        scan_id = _poll_job(base_url, job_id, token)
+        scan_id = _poll_job(base_url, job_id, token, e2e_key=e2e_key)
 
     print(f"  scan started  scan_id={scan_id}  source={source}")
     return scan_id
 
 
 def _poll_job(base_url: str, job_id: str, token: str | None,
-              timeout: float = 60.0) -> str:
+              timeout: float = 60.0, e2e_key: str | None = None) -> str:
     url = f"{base_url.rstrip('/')}/scans/jobs/{job_id}"
-    req = urllib.request.Request(url, headers=_headers(token))
+    req = urllib.request.Request(url, headers=_headers(token, e2e_key=e2e_key))
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -117,6 +120,7 @@ def _poll_job(base_url: str, job_id: str, token: str | None,
                 print(f"FAIL: job done but no scan_id: {job}", file=sys.stderr)
                 sys.exit(1)
             return scan_id
+
         if job.get("error"):
             print(f"FAIL: scan job errored: {job.get('error')}", file=sys.stderr)
             sys.exit(1)
@@ -126,9 +130,9 @@ def _poll_job(base_url: str, job_id: str, token: str | None,
 
 
 def _stream_events(base_url: str, scan_id: str, token: str | None,
-                   timeout: float) -> list[dict]:
+                   timeout: float, e2e_key: str | None = None) -> list[dict]:
     url = f"{base_url.rstrip('/')}/scans/{scan_id}/events"
-    req = urllib.request.Request(url, headers={**_headers(token), "Accept": "text/event-stream"})
+    req = urllib.request.Request(url, headers={**_headers(token, e2e_key=e2e_key), "Accept": "text/event-stream"})
 
     frames: list[dict] = []
     deadline = time.monotonic() + timeout
@@ -205,6 +209,8 @@ def main() -> None:
                     help="Scan source (default: local; use drive/sharepoint with --drive-token)")
     ap.add_argument("--drive-token", default=None, dest="drive_token",
                     help="GIS access token for x-drive-token header (required for --source=drive)")
+    ap.add_argument("--e2e-key", default=None, dest="e2e_key",
+                    help="ACP_E2E_KEY value — bypasses Google auth for CI/smoke tests on staging")
     ap.add_argument("--timeout", type=float, default=120,
                     help="Seconds to wait for the SSE stream to complete (default: 120)")
     args = ap.parse_args()
@@ -212,12 +218,15 @@ def main() -> None:
     if args.source == "drive" and not args.drive_token:
         print("FAIL: --source=drive requires --drive-token", file=sys.stderr)
         sys.exit(1)
+    if not args.token and not args.e2e_key:
+        print("WARN: no --token or --e2e-key — will succeed only if the API is in demo/ACCESS_CODE mode",
+              file=sys.stderr)
 
     print(f"\nSSE smoke test  url={args.url}  source={args.source}")
     print("-" * 60)
 
     # 1. Start the scan.
-    scan_id = _post_scan(args.url, args.source, args.token, args.drive_token)
+    scan_id = _post_scan(args.url, args.source, args.token, args.drive_token, args.e2e_key)
 
     # 2. Give the scan a moment to register before streaming.
     time.sleep(1)
@@ -225,7 +234,7 @@ def main() -> None:
     # 3. Stream SSE events until terminal or timeout.
     print(f"  connecting to  /scans/{scan_id}/events  (timeout={args.timeout}s)")
     t0 = time.monotonic()
-    frames = _stream_events(args.url, scan_id, args.token, timeout=args.timeout)
+    frames = _stream_events(args.url, scan_id, args.token, timeout=args.timeout, e2e_key=args.e2e_key)
     elapsed = time.monotonic() - t0
 
     print(f"  received {len(frames)} frame(s) in {elapsed:.1f}s")

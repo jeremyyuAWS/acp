@@ -1,0 +1,35 @@
+name: smoke-staging
+
+on:
+  # Run automatically after every successful staging deploy.
+  workflow_run:
+    workflows: [deploy-staging]
+    types: [completed]
+  # Also triggerable manually — useful for a quick check without deploying.
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    # Only run when the triggering deploy succeeded, and only if the E2E key is configured.
+    # If neither secret is set, the job is skipped rather than failing with a confusing 401.
+    if: >-
+      (github.event_name == 'workflow_dispatch' ||
+       github.event.workflow_run.conclusion == 'success')
+      && vars.STAGING_FQDN != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run SSE smoke test against staging
+        env:
+          STAGING_FQDN: ${{ vars.STAGING_FQDN }}
+          ACP_E2E_KEY: ${{ secrets.ACP_E2E_KEY }}
+        run: |
+          python3 scripts/smoke_sse_discover.py \
+            --url "https://$STAGING_FQDN" \
+            --e2e-key "$ACP_E2E_KEY" \
+            --timeout 180
