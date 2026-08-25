@@ -847,6 +847,33 @@ import tempfile as _tempfile
 from pathlib import Path as _Path
 
 
+# ── Classification bucket constants (PRD §6.4) ───────────────────────────────────
+_ASSESSABLE_DOC_CLASSES = frozenset({'slide-deck', 'text-document', 'pdf-document', 'spreadsheet', 'web-page'})
+_METADATA_ONLY_DOC_CLASSES = frozenset({'image', 'audio-video'})
+
+
+def _count_inventory_classes(scan_id: str) -> dict:
+    """Count the five mutually exclusive classification buckets (PRD §6.4). Buckets sum to the
+    total inventory rows. 'excluded' is a catch-all for doc_class values not in the known sets
+    (currently always 0; reserved for future policy-excluded classes)."""
+    assessable = metadata_only = unsupported = eligibility_unknown = excluded = 0
+    for r in core.store.list_inventory(scan_id):
+        dc = r.get("doc_class") or ""
+        if dc in _ASSESSABLE_DOC_CLASSES:
+            assessable += 1
+        elif dc in _METADATA_ONLY_DOC_CLASSES:
+            metadata_only += 1
+        elif dc in ("unsupported", ""):
+            unsupported += 1
+        elif dc == "unknown":
+            eligibility_unknown += 1
+        else:
+            excluded += 1
+    return {"assessable": assessable, "metadata_only": metadata_only,
+            "unsupported": unsupported, "eligibility_unknown": eligibility_unknown,
+            "excluded": excluded}
+
+
 # ── Lifecycle rule evaluation during Discover (PRD §4.3 / §6, Phase B4) ─────────
 # disposition_policy now has a priority column (Lifecycle Rules build-plan item #6) —
 # list_disposition_policies() sorts by it (NULLs last, then name), so `policies` below is already
@@ -980,21 +1007,22 @@ def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, acto
     mark_discovery_complete is set-once for the same reason, so a re-run does not re-date the
     snapshot either.
 
-    Returns a merged dict with save-outcome and lifecycle stats:
+    Returns a merged dict with save-outcome, lifecycle stats, and classification bucket counts:
       {"new": N, "updated": M, "unchanged": 0, "failed": P,
-       "rules_enabled": R, "files_evaluated": E, "lifecycle_matches": K}.
-    Callers that emit progress payloads should forward save_new/updated/unchanged/failed for the
-    saving-step KPI and rules_enabled/files_evaluated/lifecycle_matches for the lifecycle-step KPI."""
+       "rules_enabled": R, "files_evaluated": E, "lifecycle_matches": K,
+       "assessable": A, "metadata_only": B, "unsupported": C, "eligibility_unknown": D, "excluded": X}.
+    Callers that emit progress payloads should forward all keys for the respective step KPIs."""
     from scanner import _dedupe_inventory_files
     _dedupe_inventory_files(inv)
     outcome = core.store.add_inventory(scan_id, inv) if inv else {"new": 0, "updated": 0, "unchanged": 0, "failed": 0}
     lifecycle_stats = _evaluate_discover_lifecycle_rules(scan_id, source, actor)
+    class_stats = _count_inventory_classes(scan_id)
     # The discovery phase is over: the inventory is persisted and the lifecycle rules have run.
     # Stamp WHEN, because every count taken from this inventory is only true as of this instant
     # and nothing else on scan_runs records it — completed_at is the end of ASSESS. Stamped after
     # the writes above so it dates an inventory that exists rather than one that was attempted.
     _mark_discovered(scan_id)
-    return {**outcome, **lifecycle_stats}
+    return {**outcome, **lifecycle_stats, **class_stats}
 
 
 @handler("scan_discover")

@@ -681,6 +681,90 @@ describe('saving step KPI (schema_version 2 done payload)', () => {
   })
 })
 
+describe('classification 5-bucket breakdown (schema_version 2)', () => {
+  it('shows 5-bucket KPI in classifying step when payload fields are present', () => {
+    // analysing phase: classifying step (index 3) is done
+    const prog = { phase: 'analysing', files_found: 10,
+                   assessable: 6, metadata_only: 2, unsupported: 1, eligibility_unknown: 1, excluded: 0 }
+    const html = render(prog, true)
+    expect(html).toContain('6 assessable')
+    expect(html).toContain('2 metadata-only')
+    expect(html).toContain('1 unsupported')
+    expect(html).toContain('1 eligibility unknown')
+    expect(html).not.toContain('0 excluded')
+  })
+
+  it('payload class stats take precedence over inv-derived in classifying step', () => {
+    // inv says 2 assessable/2 unsupported; payload says 5/4/1 — payload wins
+    const prog = { phase: 'analysing', files_found: 10,
+                   assessable: 5, metadata_only: 4, unsupported: 1, eligibility_unknown: 0, excluded: 0 }
+    const inv = { rows: [
+      { file: 'a.docx', doc_class: 'text-document', lifecycle_rule_id: null, owner: null, source_modified: null },
+      { file: 'b.pptx', doc_class: 'slide-deck',    lifecycle_rule_id: null, owner: null, source_modified: null },
+      { file: 'c.png',  doc_class: 'image',          lifecycle_rule_id: null, owner: null, source_modified: null },
+      { file: 'd.mp4',  doc_class: 'audio-video',    lifecycle_rule_id: null, owner: null, source_modified: null },
+    ], total: 4 }
+    const html = render(prog, true, undefined, undefined, inv)
+    expect(html).toContain('5 assessable')
+    expect(html).toContain('4 metadata-only')
+    expect(html).not.toContain('2 assessable')
+  })
+
+  it('shows only non-zero buckets in the classifying KPI', () => {
+    const prog = { phase: 'analysing', files_found: 8,
+                   assessable: 8, metadata_only: 0, unsupported: 0, eligibility_unknown: 0, excluded: 0 }
+    const html = render(prog, true)
+    expect(html).toContain('8 assessable')
+    expect(html).not.toContain('0 metadata')
+    expect(html).not.toContain('0 unsupported')
+  })
+
+  it('falls back to inv-derived binary KPI when payload fields are absent (old backends)', () => {
+    const prog = { phase: 'analysing', files_found: 4 }
+    const inv = { rows: [
+      { file: 'a.docx', doc_class: 'text-document', lifecycle_rule_id: null, owner: null, source_modified: null },
+      { file: 'b.pptx', doc_class: 'slide-deck',    lifecycle_rule_id: null, owner: null, source_modified: null },
+      { file: 'c.png',  doc_class: 'image',          lifecycle_rule_id: null, owner: null, source_modified: null },
+      { file: 'd.mp4',  doc_class: 'audio-video',    lifecycle_rule_id: null, owner: null, source_modified: null },
+    ], total: 4 }
+    const html = render(prog, true, undefined, undefined, inv)
+    expect(html).toContain('2 assessable')
+    expect(html).toContain('2 unsupported')
+    expect(html).not.toContain('metadata-only')
+  })
+
+  it('5-bucket breakdown in completion summary when payload fields present', () => {
+    const prog = { phase: 'done', files_found: 10,
+                   assessable: 5, metadata_only: 3, unsupported: 2, eligibility_unknown: 0, excluded: 0 }
+    const html = render(prog, false)
+    expect(html).toContain('5 assessable')
+    expect(html).toContain('3 metadata-only')
+    expect(html).toContain('2 unsupported')
+    expect(html).not.toContain('0 eligibility')
+    expect(html).not.toContain('0 excluded')
+  })
+
+  it('completion summary falls back to inv-derived for old backends', () => {
+    const rows = [
+      { file: 'a.docx', doc_class: 'text-document', lifecycle_rule_id: null, owner: null, source_modified: null },
+      { file: 'b.png',  doc_class: 'image',          lifecycle_rule_id: null, owner: null, source_modified: null },
+    ]
+    const inv = { rows, total: 2 }
+    const prog = { phase: 'done', files_found: 2 }
+    const html = render(prog, false, undefined, undefined, inv)
+    expect(html).toContain('1 assessable')
+    expect(html).toContain('1 unsupported')
+    expect(html).not.toContain('metadata-only')
+  })
+
+  it('completion summary omits classification row when no payload fields and no inv', () => {
+    const prog = { phase: 'done', files_found: 5 }
+    const html = render(prog, false)
+    expect(html).not.toContain('assessable')
+    expect(html).not.toContain('unsupported')
+  })
+})
+
 describe('lifecycle step KPI from progress payload (schema_version 2)', () => {
   it('shows "N rules · M matched" in the Applied lifecycle rules step when progress fields are present', () => {
     const prog = { phase: 'scoring', files_found: 50, rules_enabled: 3, files_evaluated: 50, lifecycle_matches: 12 }

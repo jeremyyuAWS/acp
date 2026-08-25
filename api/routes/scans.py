@@ -200,7 +200,12 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                                      "save_failed": save_outcome.get("failed"),
                                      "rules_enabled": save_outcome.get("rules_enabled"),
                                      "files_evaluated": save_outcome.get("files_evaluated"),
-                                     "lifecycle_matches": save_outcome.get("lifecycle_matches")})
+                                     "lifecycle_matches": save_outcome.get("lifecycle_matches"),
+                                     "assessable": save_outcome.get("assessable"),
+                                     "metadata_only": save_outcome.get("metadata_only"),
+                                     "unsupported": save_outcome.get("unsupported"),
+                                     "eligibility_unknown": save_outcome.get("eligibility_unknown"),
+                                     "excluded": save_outcome.get("excluded")})
         except Exception as e:
             core.update_job(job_id, {"phase": "error", "done": True, "error": str(e)})
         finally:

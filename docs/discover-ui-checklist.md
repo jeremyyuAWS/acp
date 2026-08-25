@@ -123,10 +123,16 @@ excluded from Assessment by a lifecycle rule. Do NOT conflate the two.
   `routes/scans.py work()` emits `rules_enabled`, `files_evaluated`, `lifecycle_matches` in the
   `phase: "done"` update (schema_version 2).
 
+- [x] **#6 Classification breakdown** — Classifying step KPI now shows 5 non-zero buckets from
+  the `done` progress payload (`assessable`, `metadata-only`, `unsupported`, `eligibility-unknown`,
+  `excluded`). Completion summary shows the same 5-bucket row. Falls back to inv-derived
+  `N assessable · M unsupported` for old backends that don't emit the new fields.
+  Backend: `_count_inventory_classes(scan_id)` iterates `scan_inventory` and counts using the
+  `_ASSESSABLE_DOC_CLASSES` / `_METADATA_ONLY_DOC_CLASSES` frozensets; `persist_discovery_inventory`
+  merges these into its return dict; `routes/scans.py work()` emits all 5 fields in the
+  `phase: "done"` update (schema_version 2). Field names align with PRD §7: `assessable`,
+  `metadata_only`, `unsupported`, `eligibility_unknown`, `excluded`.
+
 ## Remaining
 
-- [ ] **#6 Classification breakdown** — Expand beyond `assessable / unsupported` to the five
-  mutually exclusive doc-class buckets: `assessable`, `metadata-only`, `unsupported`,
-  `eligibility-unknown`, `excluded-by-policy`. Must sum to `files_found`.
-  Implement AFTER formally defining all five categories in the scanner's classification logic.
-  Requires: scanner to emit per-class counts rather than a binary assessable flag.
+_All 15 items complete._
