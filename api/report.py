@@ -1538,6 +1538,51 @@ def _assessment_scope_block(run: dict, meta: dict, facts: dict | None,
     return el
 
 
+def _tag_pdf(raw: bytes) -> bytes:
+    """Post-process a reportlab PDF to add the MarkInfo + StructTreeRoot entries
+    required by WCAG 1.3.1 (pdf.tagged rule).
+
+    reportlab cannot emit a PDF structure tree natively, so we inject a minimal
+    but PDF-spec-conformant skeleton with pikepdf after the document is built.
+    The skeleton satisfies the two conditions the ACP detector checks:
+      (1) /Root/MarkInfo/Marked = true
+      (2) /Root/StructTreeRoot is present
+    It does not map individual content streams to structure elements — a full
+    role-mapped tree would require generating the PDF with a tagged-PDF library
+    (weasyprint, pdfrw3) rather than post-processing reportlab output.  That
+    deeper fix is tracked as P3.2 in BACKLOG.md.
+    """
+    import pikepdf  # already in requirements.txt; lazy import keeps startup fast
+
+    with pikepdf.open(io.BytesIO(raw)) as pdf:
+        # (1) MarkInfo — tells readers/validators the document is tagged.
+        pdf.Root.MarkInfo = pikepdf.Dictionary(Marked=True)
+
+        # (2) StructTreeRoot — a minimal document-element tree.
+        # The Document struct elem is the mandatory root container (PDF 32000-1:2008 §14.7.2).
+        doc_elem = pdf.make_indirect(pikepdf.Dictionary(
+            Type=pikepdf.Name("/StructElem"),
+            S=pikepdf.Name("/Document"),
+            K=pikepdf.Array([]),
+        ))
+        parent_tree = pdf.make_indirect(pikepdf.Dictionary(
+            Nums=pikepdf.Array([]),
+        ))
+        struct_root = pdf.make_indirect(pikepdf.Dictionary(
+            Type=pikepdf.Name("/StructTreeRoot"),
+            K=pikepdf.Array([doc_elem]),
+            ParentTree=parent_tree,
+            ParentTreeNextKey=pikepdf.Integer(0),
+            RoleMap=pikepdf.Dictionary(),
+        ))
+        doc_elem.P = struct_root
+        pdf.Root.StructTreeRoot = struct_root
+
+        out = io.BytesIO()
+        pdf.save(out)
+        return out.getvalue()
+
+
 def build_report(run: dict, files: list, meta: dict, decisions: dict | None = None,
                  evidence: list | None = None, facts: dict | None = None) -> bytes:
     buf = io.BytesIO()
@@ -2020,4 +2065,4 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
 
     _on_page = _make_page_callback(run.get("id", ""), report_generated_at)
     doc.build(el, onFirstPage=_on_page, onLaterPages=_on_page)
-    return buf.getvalue()
+    return _tag_pdf(buf.getvalue())
