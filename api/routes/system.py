@@ -306,6 +306,15 @@ def readyz():
     # scan-start guard in routes/scans.py makes exactly the same call.
     can_run_scans = bool(local_pool) or workers["alive"]
 
+    # Capacity state mirrors discovery preflight — "starting" means the queue is durable and
+    # scans can be submitted; "unavailable" means the worker tier was never started at all.
+    if can_run_scans:
+        capacity_state = "ready"
+    elif workers["ever_seen"]:
+        capacity_state = "starting"
+    else:
+        capacity_state = "unavailable"
+
     degraded: list[str] = []
     if not can_run_scans:
         degraded.append("no_workers" if workers["ever_seen"] else "worker_tier_never_started")
@@ -346,6 +355,7 @@ def readyz():
 
     return {
         "ready": not degraded,
+        "capacity_state": capacity_state,
         "degraded": degraded,
         "workers": {**workers, "local_pool": local_pool, "can_run_scans": can_run_scans},
         "engines": {"pdf": pdf, "vision": vision},
