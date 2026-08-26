@@ -1225,6 +1225,9 @@ def _scan_discover(payload: dict, job: dict) -> None:
     def _listing_progress(count: int) -> None:
         try:
             core.store.set_scan_files(scan_id, count)
+            _jid = job.get("id")
+            if _jid:
+                core.update_job(_jid, {"files_found": count})
         except Exception:  # noqa: BLE001 — a diagnostic must never fail the scan
             pass
 

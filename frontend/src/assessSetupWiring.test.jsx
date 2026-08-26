@@ -229,26 +229,14 @@ describe('App composes the Assess tab the way the board specifies', () => {
   })
 
   it('board 3 · Stop moves into the running card, but only while THAT card is the one showing', () => {
-    // The shared scan-progress banner's own Stop button is suppressed specifically when
-    // view === 'assess' && assessPhase === 'running' — every other case (Discover scanning, or
-    // viewing a different tab while a scan runs in the background) must keep it, since nothing
-    // else offers a Stop control there. Getting this guard backwards would silently remove Stop
-    // from Discover, which is the one regression this whole relocation was held back over earlier.
+    // The cross-tab DiscoverRunProgress card owns Stop via its onStop prop when a scan runs
+    // and view !== 'discover'. The liveScanId gate prevents a no-op: no id → no Stop rendered.
+    // Stop is never missing from a cross-tab scan view as long as onStop is wired here.
     const s = app()
-    expect(s).toMatch(/!\(view === 'assess' && assessPhase === 'running'\) && \([\s\S]{0,320}?Stop scan/)
-    // liveScanId || run?.id (2026-08-22): LiveAssessmentLive now also activates during an
-    // assess-only run (assessPhase === 'running'), where liveScanId is null — see the reload/
-    // resilience comment above this mount in App.jsx. Same stop mechanism either way.
-    //
-    // Both Stops now go through `stopScan`, not a bare `cancelScan` call: the request alone could
-    // not end a QUEUED scan's poll loop (no scan_runs row ever appears for one, so the poll has
-    // nothing to see), and its failures used to be swallowed. Asserting the shared helper is the
-    // point — two call sites that each rolled their own is what let one of them drift.
-    // Window widened from 150: the `active` gate gained a clause and an explanatory comment when
-    // Discover was excluded, which pushed onStop past the old bound. The assertion is about the
-    // two Stops sharing one helper, not about how many characters sit between them.
+    expect(s).toMatch(/onStop=\{liveScanId \? \(\) => stopScan\(liveScanId\) : undefined\}/)
+    // LiveAssessmentLive goes through stopScan too, not a bare cancelScan call. Both Stops
+    // use the same helper — the regression that let them drift apart was two call sites.
     expect(s).toMatch(/<LiveAssessmentLive[\s\S]{0,400}?onStop=\{\(\) => stopScan\(liveScanId \|\| run\?\.id\)/)
-    expect(s).toMatch(/onClick=\{\(\) => stopScan\(liveScanId\)\}>■ Stop scan/)
     // and neither may go back to swallowing the outcome
     expect(s).not.toMatch(/cancelScan\([^)]*\)\.catch\(\(\) => \{\}\)/)
   })

@@ -112,6 +112,10 @@ const sim = (value, ms = 220) => new Promise((res) => setTimeout(() => res(value
 let _aiProv = null
 export const aiProvenance = () => _aiProv
 export const getConfig = () => (SIM ? sim({ google_client_id: null, auth: 'demo', sim: true, ai: { provider: 'ollama', model: 'llama3.1', vision_model: 'llava:13b', zone: 'local', host: 'localhost' }, langfuse_trace_base: 'https://acp-langfuse.demo/project/acp-compliance/traces' }) : fetch(`${BASE}/config`).then(j)).then((c) => { _aiProv = c.ai || _aiProv; return c })
+// Lightweight backend reachability probe. /healthz is always public (no auth header needed).
+// Returns true when the backend responds with HTTP 2xx, false on network error or non-2xx.
+// SIM mode always reports healthy — there is no real server to probe.
+export const checkHealth = () => (SIM ? Promise.resolve(true) : fetch(`${BASE}/healthz`, { method: 'HEAD' }).then((r) => r.ok, () => false))
 // Langfuse deep-link base (from /config) → "📊 View trace" chips. traceUrl(null) when unset.
 let lfTraceBase = null
 export const setLangfuseBase = (b) => { lfTraceBase = b || null }

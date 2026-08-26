@@ -230,14 +230,11 @@ describe('App.jsx renders the phase, not a stopwatch', () => {
 
   it('passes progress.phase into the narration everywhere', () => {
     expect(app).not.toMatch(/discoverLine/)
-    const calls = app.match(/scanPhaseLine\([^)]*\)/g) || []
-    // This used to assert >= 3 "top bar + Discover + Monitor". Only the top bar ever rendered a
-    // line: App.jsx computed a `scanStatus` prop for Discover and Monitor and both components
-    // dropped it on the floor — accepted in the parameter list, never referenced in the body. The
-    // count was pinning dead code, which is why the assertion passed while the panel the customer
-    // was actually reading went unscoped. The dead props are gone; assert what renders.
-    expect(calls.length).toBeGreaterThanOrEqual(1)
-    for (const c of calls) expect(c, c).toMatch(/progress\.phase/)
+    // Phase narration for the cross-tab scan view moved into DiscoverRunProgress, which reads
+    // progress.phase internally via its STEPS/PHASE_DONE_COUNT logic. App.jsx forwards the
+    // entire progress object so the component can derive its own step display — no scanPhaseLine
+    // call needed in App.jsx. Assert the forward is present.
+    expect(app).toMatch(/<DiscoverRunProgress[\s\S]{0,200}?progress=\{progress\}/)
   })
 
   it('scopes the narration to the step the panel is rendered in', () => {
