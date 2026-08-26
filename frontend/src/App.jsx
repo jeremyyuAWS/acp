@@ -803,20 +803,49 @@ export default function App() {
   // "reconnected" to on a later reload.
   const ACTIVE_JOB_KEY = 'active_job_id'
 
-  const pollScanJob = async (job_id) => {
+  const _pollScanJobPolling = async (job_id) => {
+    let job
+    do {
+      await new Promise((r) => setTimeout(r, 350))
+      job = await getJob(job_id)
+      setProgress(job)
+    } while (!job.done)
+    if (job.error) throw new Error(job.error)
+    return getScan(job.scan_id)
+  }
+
+  const pollScanJob = (job_id) => {
     sessionStorage.setItem(ACTIVE_JOB_KEY, job_id)
-    try {
-      let job
-      do {
-        await new Promise((r) => setTimeout(r, 350))
-        job = await getJob(job_id)
-        setProgress(job)
-      } while (!job.done)
-      if (job.error) throw new Error(job.error)
-      return await getScan(job.scan_id)
-    } finally {
-      sessionStorage.removeItem(ACTIVE_JOB_KEY)
-    }
+    const run = typeof EventSource !== 'undefined'
+      ? new Promise((resolve, reject) => {
+          const es = new EventSource(`/scans/jobs/${job_id}/stream`)
+          let settled = false
+          const finish = (job) => {
+            if (settled) return
+            settled = true; es.close()
+            if (job?.error) reject(new Error(job.error))
+            else getScan(job?.scan_id).then(resolve, reject)
+          }
+          es.onmessage = (e) => {
+            try {
+              const job = JSON.parse(e.data)
+              setProgress(job)
+              if (job.done) finish(job)
+            } catch { /* ignore malformed frame */ }
+          }
+          es.addEventListener('error', (e) => {
+            if (settled) return
+            settled = true; es.close()
+            if (e.data != null) {
+              try { reject(new Error(JSON.parse(e.data).error || 'scan error')) }
+              catch { reject(new Error('scan error')) }
+            } else {
+              _pollScanJobPolling(job_id).then(resolve, reject)
+            }
+          })
+        })
+      : _pollScanJobPolling(job_id)
+    return run.finally(() => sessionStorage.removeItem(ACTIVE_JOB_KEY))
   }
 
   // Reconnect to an in-flight DEFAULT-path scan after a page reload — the mirror of reconnectScan
@@ -923,52 +952,66 @@ export default function App() {
         if (!SIM && !workers && !worker_tier_alive) throw new Error('no workers available — the worker service looks down; check Monitor')
         setLiveScanId(scan_id)
         const t0 = Date.now()
+        // SSE for real-time discovery progress; the getScan loop still drives the exit decision.
+        let sseJob = null
+        const sseEs = typeof EventSource !== ‘undefined’
+          ? new EventSource(`/scans/${scan_id}/discover/stream`) : null
+        if (sseEs) {
+          sseEs.onmessage = (e) => {
+            try {
+              sseJob = JSON.parse(e.data)
+              setProgress(queuedProgress(null, Math.round((Date.now() - t0) / 1000), sseJob))
+            } catch { /* ignore malformed frame */ }
+          }
+          sseEs.addEventListener(‘error’, () => sseEs.close())
+        }
         let misses = 0
         let foundOnce = false
-        for (let i = 0; i < 600 && !fresh; i++) {        // up to ~10 min for large estates
-          await new Promise((r) => setTimeout(r, 1000))
-          // Fan-out scans create the row early with status 'running' and bump files_done as each
-          // per-file job lands, so we can show the REAL count ("Analysing documents · 3/5") off
-          // the scan row itself — no fabricated phase, no timer-driven bar.
-          const elapsed = Math.round((Date.now() - t0) / 1000)
-          let g = null
-          try { g = await getScan(scan_id); misses = 0; foundOnce = true } catch { g = null; misses++ }
-          // Best-effort, read-only, and never allowed to affect the poll's exit decision below —
-          // scanPollDecision reads `g`/`scan`, not this. A miss here (job TTL'd out of Redis,
-          // transient error) just means this tick renders with the coarser scan_runs-derived
-          // phase instead of the live one; it must never be mistaken for the scan itself failing.
-          let job = null
-          if (job_id) { try { job = await getJob(job_id) } catch { job = null } }
-          // The exit ladder lives in scanPollDecision.js — pure, ordered, and tested. It was four
-          // inline branches with no test reachable from anywhere, which is how the fifth (the user
-          // pressing Stop) stayed missing: a QUEUED scan that is cancelled has no scan_runs row and
-          // never will, so the poll sees exactly what it saw before the cancel — nothing.
-          const decision = scanPollDecision({
-            cancelled: scanCancelledRef.current, scan: g, foundOnce, misses,
-          })
-          // A deploy mid-scan drops this tab's identity; the owner-scoped lookup then 404s
-          // FOREVER (found live 2026-07-11: silent console spam, banner wedged on
-          // "Connecting…"). Persistent misses → say what happened instead of spinning.
-          if (decision.action === 'session-lost') {
-            window.dispatchEvent(new CustomEvent('acp:session-expired', { detail: { reason:
-              'The app was updated and this tab’s session ended. Sign in again — your scan kept running server-side and will be here when you return.' } }))
-            return
+        try {
+          for (let i = 0; i < 600 && !fresh; i++) {        // up to ~10 min for large estates
+            await new Promise((r) => setTimeout(r, 1000))
+            // Fan-out scans create the row early with status ‘running’ and bump files_done as each
+            // per-file job lands, so we can show the REAL count ("Analysing documents · 3/5") off
+            // the scan row itself — no fabricated phase, no timer-driven bar.
+            const elapsed = Math.round((Date.now() - t0) / 1000)
+            let g = null
+            try { g = await getScan(scan_id); misses = 0; foundOnce = true } catch { g = null; misses++ }
+            // SSE delivers live job progress; fall back to fetching job_id only if SSE never connected.
+            // A miss here must never affect the exit decision — scanPollDecision reads `g`/`scan`, not this.
+            const job = sseJob ?? (job_id ? await getJob(job_id).catch(() => null) : null)
+            // The exit ladder lives in scanPollDecision.js — pure, ordered, and tested. It was four
+            // inline branches with no test reachable from anywhere, which is how the fifth (the user
+            // pressing Stop) stayed missing: a QUEUED scan that is cancelled has no scan_runs row and
+            // never will, so the poll sees exactly what it saw before the cancel — nothing.
+            const decision = scanPollDecision({
+              cancelled: scanCancelledRef.current, scan: g, foundOnce, misses,
+            })
+            // A deploy mid-scan drops this tab’s identity; the owner-scoped lookup then 404s
+            // FOREVER (found live 2026-07-11: silent console spam, banner wedged on
+            // "Connecting…"). Persistent misses → say what happened instead of spinning.
+            if (decision.action === ‘session-lost’) {
+              window.dispatchEvent(new CustomEvent(‘acp:session-expired’, { detail: { reason:
+                ‘The app was updated and this tab’s session ended. Sign in again — your scan kept running server-side and will be here when you return.’ } }))
+              return
+            }
+            // Stopped by the person watching it. A clean return, NOT a throw: the catch below
+            // prefixes "scan failed:", and a scan the user deliberately stopped did not fail.
+            if (decision.action === ‘stopped’) {
+              setStopped(‘Scan stopped. Documents already analysed were kept.’)
+              return
+            }
+            // Never once claimed after ~45s of trying: say that plainly instead of either the wrong
+            // session-expiry message above or spinning silently for the full 10-minute cap.
+            if (decision.action === ‘never-started’) {
+              throw new Error(‘this scan never started — the queue may be stuck. Try again, or check Monitor.’)
+            }
+            setProgress(g ? queuedProgress(g, elapsed, job) : { phase: foundOnce ? ‘connecting’ : ‘queued’, elapsed })
+            if (decision.action === ‘settled’) fresh = decision.scan
           }
-          // Stopped by the person watching it. A clean return, NOT a throw: the catch below
-          // prefixes "scan failed:", and a scan the user deliberately stopped did not fail.
-          if (decision.action === 'stopped') {
-            setStopped('Scan stopped. Documents already analysed were kept.')
-            return
-          }
-          // Never once claimed after ~45s of trying: say that plainly instead of either the wrong
-          // session-expiry message above or spinning silently for the full 10-minute cap.
-          if (decision.action === 'never-started') {
-            throw new Error('this scan never started — the queue may be stuck. Try again, or check Monitor.')
-          }
-          setProgress(g ? queuedProgress(g, elapsed, job) : { phase: foundOnce ? 'connecting' : 'queued', elapsed })
-          if (decision.action === 'settled') fresh = decision.scan
+        } finally {
+          sseEs?.close()
         }
-        if (!fresh) throw new Error('scan still processing — watch it finish in the Monitor queue')
+        if (!fresh) throw new Error(‘scan still processing — watch it finish in the Monitor queue’)
       } else {
         const { job_id } = await startScan(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded)
         fresh = await pollScanJob(job_id)
@@ -1002,47 +1045,62 @@ export default function App() {
   // Reconnect to an in-flight scan after a page reload — the durable fan-out keeps
   // running server-side, so we just resume polling until it finishes.
   const reconnectScan = async (scan_id, job_id = null) => {
-    setBusy(true); setProgress({ phase: 'connecting', elapsed: 0 }); setLiveScanId(scan_id)
+    setBusy(true); setProgress({ phase: ‘connecting’, elapsed: 0 }); setLiveScanId(scan_id)
     const t0 = Date.now()
     let fresh
     try {
+      let sseJob = null
+      const sseEs = typeof EventSource !== ‘undefined’
+        ? new EventSource(`/scans/${scan_id}/discover/stream`) : null
+      if (sseEs) {
+        sseEs.onmessage = (e) => {
+          try {
+            sseJob = JSON.parse(e.data)
+            setProgress(queuedProgress(null, Math.round((Date.now() - t0) / 1000), sseJob))
+          } catch { /* ignore malformed frame */ }
+        }
+        sseEs.addEventListener(‘error’, () => sseEs.close())
+      }
       let misses = 0
-      for (let i = 0; i < 600 && !fresh; i++) {
-        await new Promise((r) => setTimeout(r, 1500))
-        const elapsed = Math.round((Date.now() - t0) / 1000)
-        let g = null
-        try { g = await getScan(scan_id); misses = 0 } catch { g = null; misses++ }
-        // Same best-effort live-progress fetch doScan uses — see its comment above. A miss here
-        // never affects this loop's exit decision, only which phase this tick renders with.
-        let job = null
-        if (job_id) { try { job = await getJob(job_id) } catch { job = null } }
-        // A reconnected scan HAS a scan_runs row, so a server-side cancel already settles this
-        // loop through the status check below — this is not the queued-scan gap. It is here so
-        // Stop ends the poll on the same tick on both paths instead of after another round-trip,
-        // and so a cancel the server refused still stops this tab polling. The miss thresholds
-        // here are deliberately left alone: reconnect has no foundOnce notion (it only ever runs
-        // for a scan that already existed), so scanPollDecision's gating would not fit.
-        if (scanCancelledRef.current) {
-          setStopped('Scan stopped. Documents already analysed were kept.')
-          return
+      try {
+        for (let i = 0; i < 600 && !fresh; i++) {
+          await new Promise((r) => setTimeout(r, 1500))
+          const elapsed = Math.round((Date.now() - t0) / 1000)
+          let g = null
+          try { g = await getScan(scan_id); misses = 0 } catch { g = null; misses++ }
+          // SSE delivers live job progress; fall back to fetching job_id only if SSE never connected.
+          // A miss here never affects this loop’s exit decision, only which phase this tick renders with.
+          const job = sseJob ?? (job_id ? await getJob(job_id).catch(() => null) : null)
+          // A reconnected scan HAS a scan_runs row, so a server-side cancel already settles this
+          // loop through the status check below — this is not the queued-scan gap. It is here so
+          // Stop ends the poll on the same tick on both paths instead of after another round-trip,
+          // and so a cancel the server refused still stops this tab polling. The miss thresholds
+          // here are deliberately left alone: reconnect has no foundOnce notion (it only ever runs
+          // for a scan that already existed), so scanPollDecision’s gating would not fit.
+          if (scanCancelledRef.current) {
+            setStopped(‘Scan stopped. Documents already analysed were kept.’)
+            return
+          }
+          // Same deploy-dropped-identity guard as doScan: persistent owner-scoped 404s mean
+          // this tab can no longer see its scan — say so instead of spinning forever.
+          if (misses >= 8) {
+            window.dispatchEvent(new CustomEvent(‘acp:session-expired’, { detail: { reason:
+              ‘The app was updated and this tab’s session ended. Sign in again — your scan kept running server-side and will be here when you return.’ } }))
+            return
+          }
+          setProgress(g ? queuedProgress(g, elapsed, job) : { phase: ‘connecting’, elapsed })
+          if (g && g.run && g.run.status !== ‘running’) fresh = g
         }
-        // Same deploy-dropped-identity guard as doScan: persistent owner-scoped 404s mean
-        // this tab can no longer see its scan — say so instead of spinning forever.
-        if (misses >= 8) {
-          window.dispatchEvent(new CustomEvent('acp:session-expired', { detail: { reason:
-            'The app was updated and this tab’s session ended. Sign in again — your scan kept running server-side and will be here when you return.' } }))
-          return
-        }
-        setProgress(g ? queuedProgress(g, elapsed, job) : { phase: 'connecting', elapsed })
-        if (g && g.run && g.run.status !== 'running') fresh = g
+      } finally {
+        sseEs?.close()
       }
       // Same reset as doScan. Usually a no-op — a reconnect follows a page reload, where React
       // state started empty anyway — but this runs from a startup effect that can land while a
       // different scan is already on screen, and a fourth path that resets a different subset is
       // exactly how the three before it drifted apart.
-      // See reconnectJob's identical line: a fresh successful scan supersedes any stale
+      // See reconnectJob’s identical line: a fresh successful scan supersedes any stale
       // "scan not available" banner left over from an earlier failed reconnect attempt.
-      if (fresh) { setScan(fresh); setScanUnavailable(null); resetScanScopedState(); setScanList(await listScans()); setView('overview') }
+      if (fresh) { setScan(fresh); setScanUnavailable(null); resetScanScopedState(); setScanList(await listScans()); setView(‘overview’) }
     } catch { /* best-effort reconnect */ }
     finally { setBusy(false); setProgress(null); setLiveScanId(null) }
   }
