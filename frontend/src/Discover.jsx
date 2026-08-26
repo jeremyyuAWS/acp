@@ -498,13 +498,24 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       {!busy && run?.discovered_at && (
         <DiscoverCompleteSummary
           discoveredCount={discoveredCount}
-          assessableCount={Math.max(0, discoveredCount - nonAssessable.length - lockedCount)}
-          nonAssessableCount={nonAssessable.length}
+          assessableCount={scope?.inventory?.by_status?.assessable
+            ?? Math.max(0, discoveredCount - nonAssessable.length - lockedCount)}
+          metadataOnlyCount={scope?.inventory?.by_status?.metadata_only ?? 0}
+          unsupportedCount={scope?.inventory?.by_status?.unsupported ?? 0}
+          eligibilityUnknownCount={scope?.inventory?.by_status?.eligibility_unknown ?? 0}
           lockedCount={lockedCount}
+          excludedCount={scope?.inventory?.by_status?.excluded ?? 0}
           lifecycleRulesCount={inv?.rows
             ? new Set(inv.rows.map((r) => r.lifecycle_rule_id).filter(Boolean)).size
             : null}
+          inventoryDelta={scope?.inventory_delta ?? null}
+          startedAt={run?.started_at ?? null}
+          discoveredAt={run?.discovered_at ?? null}
           onAdvance={onAdvance}
+          onReviewInventory={() => {
+            const el = document.getElementById('discover-inventory-table')
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }}
           pendingActions={pendingActions}
           needsAck={needsAck}
         />
@@ -632,6 +643,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       <DiscoveryCompleteness run={run} scanList={scanList}
                              onRelist={() => onScan && onScan(run?.source === 'sharepoint' ? 'sharepoint' : 'drive')} />
 
+      <div id="discover-inventory-table">
       <DiscoveryResults files={estateFiles} inventory={scope?.inventory || null} invRows={inv?.rows ?? null} scopeLine={scopeLine} runAt={runAt}
                         reasonOf={why ? why.reasonOf : undefined}
                         reasonSampleOf={why ? why.sampleOf : null}
@@ -656,6 +668,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           per-file read already threaded into DiscoveryResults above as `invRows`. */}
       <DiscoverInventoryExport scanId={scanId} run={runForExport}
                                inventory={scope?.inventory || null} rows={inv?.rows ?? null} />
+      </div>
 
       {files.length === 0 ? (
         <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Sources.</p>
