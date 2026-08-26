@@ -181,3 +181,39 @@ def test_deferred_path_second_run_shows_updated_count(isolated_store, monkeypatc
     state2 = core.JOBS.get(job_id_2, {})
     assert state2.get("save_new") == 0, f"expected 0 new on re-run, got {state2}"
     assert state2.get("save_updated") == 1, f"expected 1 updated on re-run, got {state2}"
+
+
+# ── deferred path done-phase emission (§6.7) ──────────────────────────────────
+
+def test_deferred_path_emits_done_phase_with_lifecycle_fields(isolated_store, monkeypatch):
+    """_scan_discover must emit phase='done' with lifecycle_* fields so the DiscoverRunProgress
+    completion summary (which reads lifecycle_archive / lifecycle_delete / lifecycle_tagged)
+    is shown for the deferred path before the UI detects status='discovered' and navigates away.
+    """
+    import core
+    import handlers
+    import scanner
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setenv("ACP_DEFER_ANALYSIS_TO_ASSESS", "1")
+
+    _DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    items = [
+        {"name": "a.docx", "id": "d1", "mime": _DOCX},
+        {"name": "b.pdf", "id": "d2", "mime": "application/pdf"},
+    ]
+    monkeypatch.setattr(scanner, "_list", lambda *a, **k: items)
+
+    job_id = "j-done-phase"
+    core.JOBS[job_id] = {"phase": "queued"}
+
+    handlers._scan_discover(
+        {"scan_id": "sd-done", "source": "local", "user": None},
+        {"scan_id": "sd-done", "id": job_id},
+    )
+
+    state = core.JOBS.get(job_id, {})
+    assert state.get("phase") == "done", \
+        f"expected phase='done' after _scan_discover, got phase={state.get('phase')!r}; state={state}"
+    # Completion summary fields must be present (can be 0 when no lifecycle rules are configured).
+    for field in ("lifecycle_matches", "lifecycle_archive", "lifecycle_delete", "lifecycle_tagged"):
+        assert field in state, f"{field} missing from done-phase job state: {state}"

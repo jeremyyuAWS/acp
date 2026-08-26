@@ -1381,6 +1381,22 @@ def _scan_discover(payload: dict, job: dict) -> None:
                                        "files_tagged": _lc_stats.get("lifecycle_tagged", 0)})
             except Exception:
                 pass
+        # Transition the job progress to "done" so DiscoverRunProgress shows the completion
+        # summary (with lifecycle breakdown) before the frontend detects scan status="discovered"
+        # and navigates away. Uses the lifecycle_* naming the completion summary reads.
+        if _jid:
+            try:
+                core.update_job(_jid, {
+                    "schema_version": 2,
+                    "phase": "done",
+                    "rules_enabled": _lc_stats.get("rules_enabled", 0),
+                    "lifecycle_matches": _lc_stats.get("lifecycle_matches", 0),
+                    "lifecycle_archive": _lc_stats.get("lifecycle_archive", 0),
+                    "lifecycle_delete": _lc_stats.get("lifecycle_delete", 0),
+                    "lifecycle_tagged": _lc_stats.get("lifecycle_tagged", 0),
+                })
+            except Exception:
+                pass
         # THIS is where an ADR 0020 run's discovery ends — the estate is listed, the inventory is
         # persisted, the lifecycle rules have run, and nothing further happens until somebody
         # triggers Assess. The run stays at status='discovered' with completed_at NULL, possibly
