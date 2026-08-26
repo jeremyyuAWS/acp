@@ -235,6 +235,14 @@ def _drive_service(drive_token: str | None = None):
         creds = Credentials(token=drive_token, scopes=SCOPES)
     else:
         import google.auth
+        # ADC is correct only for scheduled sweeps. An interactive scan that reaches this path
+        # has lost its token — it will scan the ADC service-account identity, find nothing, and
+        # complete silently with 0 files. Log it so the failure is visible in worker output.
+        print(
+            "WARNING: _drive_service called with no user token — using ADC. "
+            "If this is an interactive scan (not a scheduled sweep), the token was lost.",
+            flush=True,
+        )
         creds, _ = google.auth.default(scopes=SCOPES)
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 

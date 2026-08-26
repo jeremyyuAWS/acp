@@ -104,26 +104,28 @@ def test_in_memory_token_is_used_as_fallback_when_payload_has_none(monkeypatch):
     assert seen.get("tok") == "memory-tok"
 
 
-def test_no_token_falls_back_to_adc(monkeypatch):
-    """When neither payload nor in-memory store has a token, _scan_discover passes None to
-    _drive_service, which falls back to ADC. This is the root cause of the 0-result bug:
-    ADC resolves to a service-account with no user files. The test documents the fallback
-    so the gap is visible rather than silently returning empty results."""
+def test_no_token_raises_before_calling_drive_service(monkeypatch):
+    """When neither payload nor in-memory store has a token, _scan_discover must raise a
+    RuntimeError immediately — before calling _drive_service — rather than silently falling
+    back to ADC (service-account Drive, no user files, 0 results).
+
+    The old behavior passed None → _drive_service → ADC → 0 files with no error anywhere.
+    The fix guards explicitly: no token → RuntimeError so the caller sees a real failure."""
     import scanner
     handlers = _minimal_stubs(monkeypatch)
 
-    seen = {}
+    drive_called = {}
 
     def _fake_drive_service(tok):
-        seen["tok"] = tok
+        drive_called["tok"] = tok
         raise _StopAfterTokenCheck()
 
     monkeypatch.setattr(scanner, "_drive_service", _fake_drive_service)
 
-    with pytest.raises(_StopAfterTokenCheck):
+    with pytest.raises(RuntimeError, match="Drive token missing"):
         handlers._scan_discover(_payload(), {})  # no token anywhere
 
-    assert seen.get("tok") is None, (
-        "with no token _scan_discover passes None → ADC fallback → service-account Drive → "
-        "0 files. Callers must ensure drive_token is in the payload (see PR #716)."
+    assert not drive_called, (
+        "_scan_discover must raise before reaching _drive_service when no token is present; "
+        "calling it with None would silently use ADC (service-account) and return 0 files."
     )

@@ -164,11 +164,12 @@ def test_local_source_is_ready_when_workers_are_alive(gated_client, monkeypatch)
 
 
 def test_blocked_when_no_worker_capacity_at_all(gated_client, monkeypatch):
+    # WORKERS=0 and no heartbeat ever stored → capacity_state="unavailable" → blocked
     monkeypatch.setattr(core, "WORKERS", 0, raising=False)
     r = gated_client("owner@example.com").post("/discovery/preflight?source=local")
     body = r.json()
     assert body["verdict"] == "blocked"
-    assert "no_workers" in body["blocked_reasons"] or "worker_tier_never_started" in body["blocked_reasons"]
+    assert "worker_tier_never_started" in body["blocked_reasons"]
 
 
 def test_degraded_when_queue_is_backlogged(gated_client, monkeypatch, isolated_store):

@@ -285,6 +285,9 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const isStaging = window.location.hostname.includes('staging')
   const [err, setErr] = useState(null)
+  // Capacity state from the last preflight check — drives the notice near the scan action.
+  // null = no check run yet (first visit); cleared when a new scan starts successfully.
+  const [preflightCapacityState, setPreflightCapacityState] = useState(null)
   // A scan the user stopped on purpose. Deliberately NOT `err`: "scan failed: …" over someone's own
   // Stop press is a wrong account of what happened, and the red treatment sends them looking for a
   // fault that does not exist.
@@ -925,7 +928,7 @@ export default function App() {
 
   const doScan = async (source, folder = null, runScope = null) => {
     if (busy) return                              // a scan/assessment is already running — don't launch another
-    setBusy(true); setErr(null); setProgress({ phase: 'queued' })
+    setBusy(true); setErr(null); setPreflightCapacityState(null); setProgress({ phase: 'queued' })
     // A stop belongs to the run that was stopped. Clearing both here is what stops the previous
     // run's notice hanging over this one, and stops a stale flag ending this scan the moment it
     // starts.
@@ -982,8 +985,9 @@ export default function App() {
         if (!SIM) {
           let pre = null
           try { pre = await checkDiscoveryPreflight(apiSource, folder, picked) } catch { pre = null }
-          const { blocked, reason, degradedReasons } = preflightVerdict(pre)
+          const { blocked, reason, capacityState, degradedReasons } = preflightVerdict(pre)
           if (blocked) throw new Error(`can't start this scan — ${reason}`)
+          if (capacityState && capacityState !== 'ready') setPreflightCapacityState(capacityState)
           if (degradedReasons.length) setPreflightDegraded(degradedReasons)
         }
         // Durable path: enqueue a scan job, then poll until the scan is persisted.
@@ -1096,7 +1100,9 @@ export default function App() {
       if (prevAvg != null && newAvg != null && newAvg !== prevAvg) { setDelta(newAvg - prevAvg); setDeltaKey((k) => k + 1) }
       // Guide the user into the workflow: land on Discover (step 1) after a scan.
       setView(me?.allow && !me.allow.includes('discover') ? 'overview' : 'discover')
-    } catch (e) { setErr(`scan failed: ${e?.message ?? e}`) } finally {
+    } catch (e) {
+      setErr(`scan failed: ${e?.message ?? e}`)
+    } finally {
       // Always close, whatever the loop's own state — the server's generator loop otherwise
       // keeps polling Redis every 250ms for a client that has already stopped listening.
       streamHandle?.close()
@@ -1572,7 +1578,7 @@ export default function App() {
           scanId={run?.id}
           onOpenAssess={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} rawFiles={scan?.files ?? []} busy={busy} onScan={requestScan} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} delegations={delegations} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} preflightDegraded={preflightDegraded} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} scope={run?.scope || null} run={run} scanList={scanList} runAt={inventorySnapshot({ run, inventory: run?.scope?.inventory || null })} decisions={decisions} setDecisions={setDecisions}
+        {view === 'discover' && <Discover sources={sources} files={files} rawFiles={scan?.files ?? []} busy={busy} onScan={requestScan} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} delegations={delegations} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} preflightDegraded={preflightDegraded} preflightCapacityState={preflightCapacityState} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} scope={run?.scope || null} run={run} scanList={scanList} runAt={inventorySnapshot({ run, inventory: run?.scope?.inventory || null })} decisions={decisions} setDecisions={setDecisions}
           /* Upload lost its top-level tab in the v2 simplification, but not its capability:
              it is a secondary action inside Discover now, which is where "get files in front
              of ACP" already lives. Dropping it outright would have removed the only way to try

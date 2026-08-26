@@ -16,8 +16,11 @@ const render = (props) =>
 const BASE = {
   discoveredCount: 200,
   assessableCount: 170,
-  nonAssessableCount: 20,
+  metadataOnlyCount: 10,
+  unsupportedCount: 10,
+  eligibilityUnknownCount: 0,
   lockedCount: 5,
+  excludedCount: 0,
   lifecycleRulesCount: 3,
   onAdvance: null,
   pendingActions: 0,
@@ -32,13 +35,19 @@ describe('DiscoverCompleteSummary renders completion state', () => {
   it('shows assessable count with its label', () => {
     const html = render(BASE)
     expect(html).toContain('170')
-    expect(html).toContain('eligible for assessment')
+    expect(html).toContain('assessable')
   })
 
-  it('shows non-assessable count and label', () => {
+  it('shows metadata-only count and label when > 0', () => {
     const html = render(BASE)
-    expect(html).toContain('20')
-    expect(html).toContain('non-assessable')
+    expect(html).toContain('10')
+    expect(html).toContain('metadata-only')
+  })
+
+  it('shows unsupported count and label when > 0', () => {
+    const html = render({ ...BASE, unsupportedCount: 8 })
+    expect(html).toContain('8')
+    expect(html).toContain('unsupported')
   })
 
   it('shows locked count and label', () => {
@@ -49,12 +58,17 @@ describe('DiscoverCompleteSummary renders completion state', () => {
 
   it('shows lifecycle rules count', () => {
     const html = render(BASE)
-    expect(html).toContain('3 lifecycle rules applied')
+    expect(html).toContain('3 lifecycle rules matched')
   })
 
-  it('omits non-assessable row when count is 0', () => {
-    const html = render({ ...BASE, nonAssessableCount: 0 })
-    expect(html).not.toContain('non-assessable')
+  it('omits metadata-only row when count is 0', () => {
+    const html = render({ ...BASE, metadataOnlyCount: 0 })
+    expect(html).not.toContain('metadata-only')
+  })
+
+  it('omits unsupported row when count is 0', () => {
+    const html = render({ ...BASE, unsupportedCount: 0 })
+    expect(html).not.toContain('unsupported')
   })
 
   it('omits locked row when count is 0', () => {
@@ -64,17 +78,50 @@ describe('DiscoverCompleteSummary renders completion state', () => {
 
   it('omits lifecycle rules when count is 0', () => {
     const html = render({ ...BASE, lifecycleRulesCount: 0 })
-    expect(html).not.toContain('lifecycle rules applied')
+    expect(html).not.toContain('lifecycle rules')
   })
 
   it('omits lifecycle rules when count is null', () => {
     const html = render({ ...BASE, lifecycleRulesCount: null })
-    expect(html).not.toContain('lifecycle rules applied')
+    expect(html).not.toContain('lifecycle rules')
   })
 
   it('shows "Continue to Assessment" CTA', () => {
     const html = render(BASE)
     expect(html).toContain('Continue to Assessment')
+  })
+
+  it('shows elapsed time when startedAt and discoveredAt are provided', () => {
+    const html = render({
+      ...BASE,
+      startedAt: '2026-08-26T10:00:00Z',
+      discoveredAt: '2026-08-26T10:03:18Z',
+    })
+    expect(html).toContain('3m 18s')
+  })
+
+  it('omits elapsed time when timestamps are absent', () => {
+    const html = render(BASE)
+    expect(html).not.toMatch(/\d+m \d+s/)
+  })
+
+  it('shows inventory delta when provided', () => {
+    const html = render({
+      ...BASE,
+      inventoryDelta: { new: 224, updated: 61, unchanged: 963 },
+    })
+    expect(html).toContain('Inventory')
+    expect(html).toContain('224')
+    expect(html).toContain('new')
+    expect(html).toContain('61')
+    expect(html).toContain('updated')
+    expect(html).toContain('963')
+    expect(html).toContain('unchanged')
+  })
+
+  it('omits inventory delta section when not provided', () => {
+    const html = render(BASE)
+    expect(html).not.toContain('Inventory:')
   })
 })
 
@@ -100,7 +147,7 @@ describe('CTA gating', () => {
 describe('singular lifecycle rule label', () => {
   it('uses singular "lifecycle rule" when count is 1', () => {
     const html = render({ ...BASE, lifecycleRulesCount: 1 })
-    expect(html).toContain('1 lifecycle rule applied')
+    expect(html).toContain('1 lifecycle rule matched')
     expect(html).not.toContain('1 lifecycle rules')
   })
 })

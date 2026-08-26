@@ -50,6 +50,7 @@ def discovery_preflight(request: Request, source: str, folder: str | None = None
     roots = list(folders) if folders else ([folder] if folder else None)
 
     reasons: list[str] = []
+    degraded_reasons: list[str] = []
     src: dict = {"ready": True}
     if source == "drive":
         from .drive import describe_drive_readiness
@@ -63,24 +64,38 @@ def discovery_preflight(request: Request, source: str, folder: str | None = None
 
     workers = core.store.worker_tier_status()
     local_pool = int(getattr(core, "WORKERS", 0) or 0)
-    can_run_scans = bool(local_pool) or workers["alive"]
-    if not can_run_scans:
-        reasons.append("no_workers" if workers["ever_seen"] else "worker_tier_never_started")
+
+    # Capacity state — distinguishes "starting" (ever seen, not alive right now, allow queuing)
+    # from "unavailable" (never started, infrastructure issue, block). "starting" is allowed
+    # through because the durable queue will hold the scan until a worker is ready.
+    if bool(local_pool) or workers["alive"]:
+        capacity_state = "ready"
+    elif workers["ever_seen"]:
+        # Workers have heartbeated before but are not responding now. The scan can be durably
+        # queued — it will start automatically when a worker comes up. Show a notice, don't block.
+        capacity_state = "starting"
+        degraded_reasons.append("no_workers")
+    else:
+        # No worker has ever heartbeated — the worker tier was never started. Block until it is.
+        capacity_state = "unavailable"
+        reasons.append("worker_tier_never_started")
 
     queue_stats = core.store.job_stats(owner=None)
     queued = int(queue_stats.get("queued") or 0)
     queue_backlogged = queued >= MAX_QUEUE_BACKLOG
-    degraded_reasons: list[str] = []
     if queue_backlogged:
         degraded_reasons.append(f"queue has {queued} jobs waiting — this scan will queue behind them")
+        if capacity_state == "ready":
+            capacity_state = "busy"
 
     blocked = bool(reasons)
     verdict = "blocked" if blocked else ("degraded" if degraded_reasons else "ready")
     return {
         "verdict": verdict,
+        "capacity_state": capacity_state,
         "blocked_reasons": reasons,
         "degraded_reasons": degraded_reasons,
         "source": src,
-        "workers": {**workers, "local_pool": local_pool, "can_run_scans": can_run_scans},
+        "workers": {**workers, "local_pool": local_pool},
         "queue": {"queued": queued, "backlogged": queue_backlogged, "threshold": MAX_QUEUE_BACKLOG},
     }

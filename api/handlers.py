@@ -1230,6 +1230,12 @@ def _scan_discover(payload: dict, job: dict) -> None:
     drive_token = payload.get("drive_token") or toks.get("drive")
     sp_tok = payload.get("sp_token") or toks.get("sp")
     rb = Rubric.load_active(ACP / "config")
+    if source not in ("local", "sharepoint") and not drive_token:
+        raise RuntimeError(
+            f"scan_id={scan_id!r}: Drive token missing from job payload and SCAN_TOKENS store. "
+            "The session token was not forwarded, expired, or this worker replica has no Redis "
+            "access to the shared token. Re-authenticate and start a new scan."
+        )
     svc = None if source in ("local", "sharepoint") else _drive_service(drive_token)
     effective_folder = folder if folder else (None if folders else ("root" if drive_token else None))
     scope: dict = {}
@@ -1388,6 +1394,19 @@ def _scan_discover(payload: dict, job: dict) -> None:
                     # window and the outcome counts below.
                     core.update_job(_job_id, {"phase": "saving"})
                 _inv_outcome = core.store.add_inventory(scan_id, inv)
+                # Persist the new/updated/unchanged delta so the completion card can show it
+                # even after the job is gone. merge_scan_scope is a read-modify-write on the
+                # scope JSON column, so all other scope keys (inventory, scan_scope, …) survive.
+                try:
+                    core.store.merge_scan_scope(scan_id, {
+                        "inventory_delta": {
+                            "new": _inv_outcome.get("new", 0),
+                            "updated": _inv_outcome.get("updated", 0),
+                            "unchanged": _inv_outcome.get("unchanged", 0),
+                        }
+                    })
+                except Exception:
+                    pass
                 if _job_id:
                     core.update_job(_job_id, {
                         "schema_version": 2,
@@ -2047,8 +2066,16 @@ def _make_svc(source, toks):
     from scanner import _drive_service
     if source in ("local", "sharepoint"):
         return None
+    drive_token = toks.get("drive")
+    if not drive_token:
+        # A missing token means the user's session token was never forwarded or has expired.
+        # Silently falling back to ADC here produced 0-file scans that looked successful.
+        raise RuntimeError(
+            "Drive auth token missing from SCAN_TOKENS — token expired or not forwarded "
+            "to this worker replica. Re-authenticate and start a new scan."
+        )
     try:
-        return _drive_service(toks.get("drive"))
+        return _drive_service(drive_token)
     except Exception:
         return None
 

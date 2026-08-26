@@ -98,7 +98,7 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 // `me` arrived with Upload, which folded in here when v2 dropped its top-level
 // tab. Both OPTIONAL: every existing caller and test constructs Discover without them, and the
 // ad-hoc panel simply does not render when `me` is absent rather than throwing.
-export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, preflightDegraded = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
+export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, preflightDegraded = null, preflightCapacityState = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
   hasSPToken = false, runAt = null, run = null, scanList = null, rawFiles = null, onStop = null }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
   // component is given neither — Discover takes scanId and scope, not the run. The pieces it needs
@@ -498,13 +498,24 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       {!busy && run?.discovered_at && (
         <DiscoverCompleteSummary
           discoveredCount={discoveredCount}
-          assessableCount={Math.max(0, discoveredCount - nonAssessable.length - lockedCount)}
-          nonAssessableCount={nonAssessable.length}
+          assessableCount={scope?.inventory?.by_status?.assessable
+            ?? Math.max(0, discoveredCount - nonAssessable.length - lockedCount)}
+          metadataOnlyCount={scope?.inventory?.by_status?.metadata_only ?? 0}
+          unsupportedCount={scope?.inventory?.by_status?.unsupported ?? 0}
+          eligibilityUnknownCount={scope?.inventory?.by_status?.eligibility_unknown ?? 0}
           lockedCount={lockedCount}
+          excludedCount={scope?.inventory?.by_status?.excluded ?? 0}
           lifecycleRulesCount={inv?.rows
             ? new Set(inv.rows.map((r) => r.lifecycle_rule_id).filter(Boolean)).size
             : null}
+          inventoryDelta={scope?.inventory_delta ?? null}
+          startedAt={run?.started_at ?? null}
+          discoveredAt={run?.discovered_at ?? null}
           onAdvance={onAdvance}
+          onReviewInventory={() => {
+            const el = document.getElementById('discover-inventory-table')
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }}
           pendingActions={pendingActions}
           needsAck={needsAck}
         />
@@ -522,16 +533,51 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         </div>
       )}
 
-      {/* Non-blocking: a scan can still be started while this shows. It exists so a worker outage
-          reads as a warning BEFORE the click rather than a silent stall after it (see the useEffect
-          above). readiness.ready === false is the only case rendered — a degraded-but-still-ready
-          server (e.g. the unrelated SMB-source gap) says nothing worth surfacing here. */}
-      {!busy && readiness && readiness.ready === false && (
-        <div className="readywarn" role="status" style={{ marginBottom: 12 }}>
-          ⚠ Scan infrastructure looks degraded ({(readiness.degraded || []).join(', ') || 'workers unavailable'}).
-          A scan started now may not progress. You can still try — if it stalls, this is likely why.
-        </div>
-      )}
+      {/* Capacity state notice — shown before/after a scan, not during (busy). Shows the most
+          specific signal available: preflightCapacityState is set right after a user clicks a
+          scan button; readiness is the background ambient probe. Prefer preflight when set. */}
+      {!busy && (() => {
+        const cs = preflightCapacityState
+          || (readiness?.capacity_state !== 'ready' ? readiness?.capacity_state : null)
+          // Legacy: older /readyz responses without capacity_state
+          || (readiness?.ready === false ? 'starting' : null)
+        if (!cs || cs === 'ready' || cs === 'unknown') return null
+
+        const configs = {
+          starting: {
+            style: { background: 'var(--blue-bg,#eef4ff)', border: '1px solid var(--blue,#3b82f6)', color: 'var(--blue-ink,#1e40af)' },
+            icon: '◌',
+            title: 'Preparing Discovery capacity',
+            body: 'A worker is starting. You can scan now — your Discovery will be queued and start automatically.',
+          },
+          busy: {
+            style: { background: 'var(--blue-bg,#eef4ff)', border: '1px solid var(--blue,#3b82f6)', color: 'var(--blue-ink,#1e40af)' },
+            icon: '⏳',
+            title: 'Discovery capacity is currently busy',
+            body: 'Your scan will be queued and start automatically when a worker is free.',
+          },
+          degraded: {
+            style: { background: 'var(--amber-bg,#fffbeb)', border: '1px solid var(--amber,#d97706)', color: 'var(--amber-ink,#92400e)' },
+            icon: '⚠',
+            title: 'Discovery capacity is limited',
+            body: 'A scan started now may not progress immediately. You can still try.',
+          },
+          unavailable: {
+            style: { background: 'var(--red-bg,#fef2f2)', border: '1px solid var(--red,#ef4444)', color: 'var(--red-ink,#991b1b)' },
+            icon: '✕',
+            title: 'Discovery is temporarily unavailable',
+            body: 'ACP could not start a compatible worker. Try again, or contact an administrator if this continues.',
+          },
+        }
+        const cfg = configs[cs] || configs.degraded
+        return (
+          <div className="readywarn" role="status" style={{ marginBottom: 12, padding: '10px 14px',
+                                                            borderRadius: 8, ...cfg.style }}>
+            <span style={{ fontWeight: 600 }}>{cfg.icon} {cfg.title}</span>
+            <span style={{ marginLeft: 8 }}>{cfg.body}</span>
+          </div>
+        )
+      })()}
 
       <div className="estatebar">
         <div>
@@ -632,6 +678,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       <DiscoveryCompleteness run={run} scanList={scanList}
                              onRelist={() => onScan && onScan(run?.source === 'sharepoint' ? 'sharepoint' : 'drive')} />
 
+      <div id="discover-inventory-table">
       <DiscoveryResults files={estateFiles} inventory={scope?.inventory || null} invRows={inv?.rows ?? null} scopeLine={scopeLine} runAt={runAt}
                         reasonOf={why ? why.reasonOf : undefined}
                         reasonSampleOf={why ? why.sampleOf : null}
@@ -656,6 +703,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           per-file read already threaded into DiscoveryResults above as `invRows`. */}
       <DiscoverInventoryExport scanId={scanId} run={runForExport}
                                inventory={scope?.inventory || null} rows={inv?.rows ?? null} />
+      </div>
 
       {files.length === 0 ? (
         <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Sources.</p>
