@@ -151,3 +151,76 @@ describe('singular lifecycle rule label', () => {
     expect(html).not.toContain('1 lifecycle rules')
   })
 })
+
+describe('lifecycle action breakdown', () => {
+  it('shows archive candidates when provided and > 0', () => {
+    const html = render({ ...BASE, archiveCandidates: 12 })
+    expect(html).toContain('12')
+    expect(html).toContain('Archive Candidate')
+  })
+
+  it('shows delete candidates when provided and > 0', () => {
+    const html = render({ ...BASE, deleteCandidates: 1 })
+    expect(html).toContain('1 Delete Candidate')
+  })
+
+  it('uses plural Delete Candidates when count > 1', () => {
+    const html = render({ ...BASE, deleteCandidates: 5 })
+    expect(html).toContain('5 Delete Candidates')
+  })
+
+  it('shows tagged count when provided and > 0', () => {
+    const html = render({ ...BASE, tagged: 8 })
+    expect(html).toContain('8 tagged')
+  })
+
+  it('omits action breakdown items when counts are 0 or null', () => {
+    const html = render({ ...BASE, archiveCandidates: 0, deleteCandidates: null, tagged: 0 })
+    expect(html).not.toContain('Archive Candidate')
+    expect(html).not.toContain('Delete Candidate')
+    expect(html).not.toContain('tagged')
+  })
+})
+
+describe('exception summary', () => {
+  it('shows inaccessible count when > 0', () => {
+    const html = render({ ...BASE, excInaccessible: 3 })
+    expect(html).toContain('3 inaccessible')
+    expect(html).toContain('skipped')
+  })
+
+  it('shows unreadable count when > 0', () => {
+    const html = render({ ...BASE, excMetadataFailure: 2 })
+    expect(html).toContain('2 unreadable')
+  })
+
+  it('shows deleted-during-scan count when > 0', () => {
+    const html = render({ ...BASE, excDeleted: 1 })
+    expect(html).toContain('1 deleted during scan')
+  })
+
+  it('omits exception summary when all exception counts are absent or zero', () => {
+    const html = render({ ...BASE, excInaccessible: 0, excMetadataFailure: null, excDeleted: null })
+    expect(html).not.toContain('inaccessible')
+    expect(html).not.toContain('unreadable')
+    expect(html).not.toContain('deleted during scan')
+  })
+})
+
+describe('folder count in discovered total', () => {
+  it('shows folder count when folderCount > 0', () => {
+    const html = render({ ...BASE, folderCount: 12 })
+    expect(html).toContain('12 folders')
+  })
+
+  it('uses singular folder when count is 1', () => {
+    const html = render({ ...BASE, folderCount: 1 })
+    expect(html).toContain('1 folder')
+    expect(html).not.toContain('1 folders')
+  })
+
+  it('omits folder count when not provided', () => {
+    const html = render(BASE)
+    expect(html).not.toContain('folders')
+  })
+})

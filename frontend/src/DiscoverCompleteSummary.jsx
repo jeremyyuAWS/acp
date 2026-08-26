@@ -37,6 +37,12 @@ export default function DiscoverCompleteSummary({
   excludedCount,
   folderCount,
   lifecycleRulesCount,
+  archiveCandidates,
+  deleteCandidates,
+  tagged,
+  excInaccessible,
+  excMetadataFailure,
+  excDeleted,
   inventoryDelta,
   startedAt,
   discoveredAt,
@@ -98,10 +104,32 @@ export default function DiscoverCompleteSummary({
               )}
             </div>
 
-            {/* Lifecycle rules */}
+            {/* Lifecycle rules — action breakdown when backend provided the counts */}
             {lifecycleRulesCount != null && lifecycleRulesCount > 0 && (
-              <div className="muted" style={{ fontSize: 12.5, paddingLeft: 44 }}>
-                {lifecycleRulesCount.toLocaleString()} lifecycle rule{lifecycleRulesCount === 1 ? '' : 's'} matched
+              <div style={{ fontSize: 12.5, color: 'var(--muted)', paddingLeft: 44 }}>
+                <span>
+                  {lifecycleRulesCount.toLocaleString()} lifecycle rule{lifecycleRulesCount === 1 ? '' : 's'} matched
+                </span>
+                {archiveCandidates > 0 && (
+                  <span> · {archiveCandidates.toLocaleString()} Archive Candidate{archiveCandidates === 1 ? '' : 's'}</span>
+                )}
+                {deleteCandidates > 0 && (
+                  <span> · {deleteCandidates.toLocaleString()} Delete Candidate{deleteCandidates === 1 ? '' : 's'}</span>
+                )}
+                {tagged > 0 && (
+                  <span> · {tagged.toLocaleString()} tagged</span>
+                )}
+              </div>
+            )}
+
+            {/* Exception summary — files skipped during the metadata read */}
+            {((excInaccessible ?? 0) + (excMetadataFailure ?? 0) + (excDeleted ?? 0)) > 0 && (
+              <div style={{ fontSize: 12.5, color: 'var(--muted)', paddingLeft: 44, marginTop: 2 }}>
+                {[
+                  (excInaccessible ?? 0) > 0 && `${excInaccessible.toLocaleString()} inaccessible`,
+                  (excMetadataFailure ?? 0) > 0 && `${excMetadataFailure.toLocaleString()} unreadable`,
+                  (excDeleted ?? 0) > 0 && `${excDeleted.toLocaleString()} deleted during scan`,
+                ].filter(Boolean).join(' · ')} — skipped
               </div>
             )}
 
