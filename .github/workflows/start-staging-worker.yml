@@ -19,6 +19,8 @@ permissions:
 jobs:
   start-worker:
     runs-on: ubuntu-latest
+    environment:
+      name: staging
     steps:
       - name: Azure login (OIDC)
         uses: azure/login@v2
