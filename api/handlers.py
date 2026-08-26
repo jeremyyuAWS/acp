@@ -1286,12 +1286,32 @@ def _scan_discover(payload: dict, job: dict) -> None:
             except Exception:  # noqa: BLE001 — a diagnostic must never fail the scan
                 pass
 
-        items = _list(source, svc, folder=effective_folder, sp_token=sp_tok,
-                      max_files=FANOUT_MAX_FILES, **({"folders": folders} if folders else {}),
-                      **({"exclude_folders": exclude_folders} if exclude_folders else {}),
-                      exclude_remediated=bool(payload.get("exclude_remediated", False)),
-                      scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory,
-                      progress_cb=_listing_progress)
+        # init_scan_run (above) already created the scan_runs row — status='running', scope=NULL —
+        # before this listing runs, so GET /scans/{id} has something to return the instant the job
+        # is claimed. If listing itself raises (expired Drive token, a transient API error, the
+        # worker being killed), that row is exactly what's left behind: status stuck at 'running',
+        # scope still NULL, files still 0. Nothing downstream — the frontend's discoveredCount
+        # fallback, the "inventory could not be read" export copy, "discovery completion time not
+        # recorded" — treats that as a failure; each reads it as a normal, if empty, scan. Flip the
+        # row to 'failed' with the reason on the decision log before re-raising, so the run is
+        # visibly broken rather than silently empty, and so a retry that lands on the SAME job
+        # (worker.py's own retry/backoff) still sees `init_scan_run` reset status to 'running' on
+        # its next attempt — this is a between-attempts marker, not a terminal one.
+        try:
+            items = _list(source, svc, folder=effective_folder, sp_token=sp_tok,
+                          max_files=FANOUT_MAX_FILES, **({"folders": folders} if folders else {}),
+                          **({"exclude_folders": exclude_folders} if exclude_folders else {}),
+                          exclude_remediated=bool(payload.get("exclude_remediated", False)),
+                          scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory,
+                          progress_cb=_listing_progress)
+        except Exception as e:
+            try:
+                core.store.set_scan_status(scan_id, "failed")
+                core.store.log_decision("system", "scan.discover_failed", scan_id=scan_id,
+                                        detail=f"listing {source} failed: {e}")
+            except Exception:
+                pass
+            raise
     # shadow_candidate (a file sharing a logical name with another — possibly ACP's own output
     # shadowing its source) is computed inside _enqueue_analysis from the item list, so the same
     # rule applies whether the fan-out runs now or later at Assess.

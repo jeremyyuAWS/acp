@@ -498,6 +498,18 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         />
       )}
 
+      {/* A listing failure (expired token, a transient API error, the worker dying mid-list)
+          leaves scan_runs at status='failed' — set by handlers._scan_discover before it re-raises.
+          Without this, the tab below reads exactly like a clean, empty scan: 0 documents, no
+          scope line, "inventory could not be read" with no reason given. This is the one place
+          that says outright that discovery did not finish, rather than that it found nothing. */}
+      {run?.status === 'failed' && (
+        <div className="err" role="alert" style={{ marginBottom: 12 }}>
+          Discovery did not finish — the last attempt to list this source failed. The counts below
+          are incomplete or stale. Re-run discovery to get a current inventory.
+        </div>
+      )}
+
       <div className="estatebar">
         <div>
           <b>{discoveredCount} documents</b> discovered across {sources.length} sources · {Object.keys(groups).length} departments
