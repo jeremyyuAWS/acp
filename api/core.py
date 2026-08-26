@@ -890,6 +890,45 @@ _JOB_LAST_REDIS_WRITE: dict[str, float] = {}   # monotonic timestamps, never per
 # scan_id is already in the initial state) and on update_job (when it first appears).
 _SCAN_JOB_MAP: dict[str, str] = {}             # in-memory fallback; Redis is canonical
 
+# Durable recovery checkpoint (Redis live-state spec, 2026-08-26): Redis is the fast, frequent
+# live source, but it is EPHEMERAL — gone if unreachable, a key TTLs out, or a replica with no
+# Redis falls to a JOBS dict no other replica can see. Without a fallback, a caller reading a
+# scan's progress with Redis down gets nothing to show at all, not even "last known state, N
+# seconds ago". This accumulates the SAME patches update_job already receives (no extra reads —
+# scan_id only arrives in the initial set_job call on the durable-queue path, or later via
+# update_job on the thread path, so it is cached here rather than re-derived) and flushes to
+# Postgres sparsely: on every phase/done transition, and otherwise at most once per
+# _CHECKPOINT_INTERVAL_S. That cadence is deliberate — this must stay far below the write volume
+# that caused 2026-08-26's Postgres connection exhaustion; it is a recovery aid, not a live feed.
+_JOB_SCAN_ID: dict[str, str] = {}              # job_id -> scan_id, for routing checkpoint writes
+_JOB_CHECKPOINT_STATE: dict[str, dict] = {}    # job_id -> accumulated patch state
+_JOB_LAST_CHECKPOINT: dict[str, float] = {}    # job_id -> monotonic time of last Postgres write
+_CHECKPOINT_INTERVAL_S = float(os.environ.get("ACP_CHECKPOINT_INTERVAL_S", "20") or "20")
+
+
+def _maybe_checkpoint(job_id: str, patch: dict) -> None:
+    """Best-effort durable checkpoint — see the module comment above _JOB_SCAN_ID. Never raises:
+    a diagnostic write must never fail the job it is describing, and this runs on the same
+    worker thread doing the real work."""
+    import time as _t
+    if patch.get("scan_id"):
+        _JOB_SCAN_ID[job_id] = patch["scan_id"]
+    scan_id = _JOB_SCAN_ID.get(job_id)
+    if not scan_id:
+        return
+    acc = _JOB_CHECKPOINT_STATE.setdefault(job_id, {})
+    acc.update(patch)
+    phase_changed = "phase" in patch or "done" in patch or "error" in patch
+    now = _t.monotonic()
+    last = _JOB_LAST_CHECKPOINT.get(job_id, 0.0)
+    if not (phase_changed or now - last >= _CHECKPOINT_INTERVAL_S):
+        return
+    _JOB_LAST_CHECKPOINT[job_id] = now
+    try:
+        get_store().checkpoint_scan_progress(scan_id, dict(acc), patch["updated_at"])
+    except Exception:
+        pass
+
 
 def _write_scan_job_mapping(scan_id: str, job_id: str) -> None:
     r = _get_redis()
@@ -967,6 +1006,7 @@ def set_job(job_id: str, state: dict) -> None:
     race. seq is initialised to 0; every update_job call increments it, giving the SSE stream a
     cheap change signal without a full diff."""
     state = {**state, "updated_at": _job_now_iso(), "seq": 0}
+    _maybe_checkpoint(job_id, state)   # independent of Redis/in-memory below — see its own comment
     r = _get_redis()
     if r is not None:
         try:
@@ -1005,6 +1045,7 @@ def update_job(job_id: str, patch: dict) -> None:
     The in-memory JOBS dict (same-replica poll fallback) is always updated regardless."""
     import time as _t
     patch = {**patch, "updated_at": _job_now_iso()}
+    _maybe_checkpoint(job_id, patch)   # independent of Redis/in-memory below — see its own comment
     r = _get_redis()
     if r is not None:
         now = _t.monotonic()

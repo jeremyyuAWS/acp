@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } fro
 import HitlBell from './HitlBell.jsx'
 import { assessmentLine, outcomeChips } from './assessmentProgress.js'
 import { queuedProgress } from './queuedProgress.js'
+import { nextFallbackInterval } from './fallbackPollBackoff.js'
 import { scanPollDecision } from './scanPollDecision.js'
 import LiveAssessmentLive from './LiveAssessmentLive.jsx'
 import ProcessingDetails from './ProcessingDetails.jsx'
@@ -948,6 +949,11 @@ export default function App() {
         const t0 = Date.now()
         let misses = 0
         let foundOnce = false
+        // Adaptive backoff for the fallback getJob() poll ONLY — see fallbackPollBackoff.js.
+        // The loop's own 1000ms tick (settlement detection via scanPollDecision) is untouched.
+        let fallbackInterval = 1
+        let fallbackTicksLeft = 0
+        let lastFallbackJob = null
         for (let i = 0; i < 600 && !fresh; i++) {        // up to ~10 min for large estates
           await new Promise((r) => setTimeout(r, 1000))
           // Fan-out scans create the row early with status 'running' and bump files_done as each
@@ -965,7 +971,16 @@ export default function App() {
           // for the scan itself failing.
           let job = liveJobStateRef.current
           if (!job && sseFailedRef.current && job_id) {
-            try { job = await getJob(job_id) } catch { job = null }
+            if (fallbackTicksLeft > 0) {
+              fallbackTicksLeft--
+              job = lastFallbackJob
+            } else {
+              try { job = await getJob(job_id) } catch { job = null }
+              const changed = JSON.stringify(job) !== JSON.stringify(lastFallbackJob)
+              fallbackInterval = nextFallbackInterval(changed, fallbackInterval)
+              fallbackTicksLeft = fallbackInterval - 1
+              lastFallbackJob = job
+            }
           }
           // The exit ladder lives in scanPollDecision.js — pure, ordered, and tested. It was four
           // inline branches with no test reachable from anywhere, which is how the fifth (the user
@@ -1048,6 +1063,11 @@ export default function App() {
     })
     const t0 = Date.now()
     let fresh
+    // Same adaptive backoff as doScan — see fallbackPollBackoff.js. Only the fallback
+    // getJob() call backs off; this loop's own 1500ms tick is untouched.
+    let fallbackInterval = 1
+    let fallbackTicksLeft = 0
+    let lastFallbackJob = null
     try {
       let misses = 0
       for (let i = 0; i < 600 && !fresh; i++) {
@@ -1060,7 +1080,16 @@ export default function App() {
         // decision, only which phase this tick renders with.
         let job = liveJobStateRef.current
         if (!job && sseFailedRef.current && job_id) {
-          try { job = await getJob(job_id) } catch { job = null }
+          if (fallbackTicksLeft > 0) {
+            fallbackTicksLeft--
+            job = lastFallbackJob
+          } else {
+            try { job = await getJob(job_id) } catch { job = null }
+            const changed = JSON.stringify(job) !== JSON.stringify(lastFallbackJob)
+            fallbackInterval = nextFallbackInterval(changed, fallbackInterval)
+            fallbackTicksLeft = fallbackInterval - 1
+            lastFallbackJob = job
+          }
         }
         // A reconnected scan HAS a scan_runs row, so a server-side cancel already settles this
         // loop through the status check below — this is not the queued-scan gap. It is here so
