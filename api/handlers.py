@@ -911,6 +911,17 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
     if not policies:
         return {"rules_enabled": 0, "files_evaluated": 0, "lifecycle_matches": 0,
                 "lifecycle_archive": 0, "lifecycle_delete": 0, "lifecycle_tagged": 0}
+
+    # Pre-load existing dispositions for this scan in one query — replaces N per-file
+    # doc_has_disposition() SELECTs with a set lookup (idempotency guard AC-13, bulk path).
+    seen = core.store.get_scan_dispositions(scan_id)
+
+    # Accumulate writes across the loop; flush as bulk operations at the end instead of
+    # issuing N individual INSERT/UPDATE calls (the dominant latency at scale).
+    tag_rows: list = []    # (scan_id, file, tag, kind, rule_id)
+    audit_rows: list = []  # (audit_id, doc_id, policy_id, action, result, detail, owner_email)
+    status_rows: list = [] # (scan_id, file, status, rule_id, reason)
+
     files_evaluated = 0
     lifecycle_matches = 0
     lc_archive = 0
@@ -967,7 +978,8 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
         for p in matched:
             if p.get("action") != "tag":
                 continue
-            if core.store.doc_has_disposition(doc_id, p["policy_id"]):
+            key = (doc_id, p["policy_id"])
+            if key in seen:
                 continue  # already tagged + audited on an earlier Discover — idempotent
             try:
                 cfg = _json.loads(p.get("action_config") or "{}")
@@ -976,33 +988,40 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
             tags = disposition.tag_list(cfg)
             if not tags:
                 continue
-            core.store.add_file_tags(scan_id, file, tags, kind="system", rule_id=p["policy_id"])
+            for tag in tags:
+                if tag:
+                    tag_rows.append((scan_id, file, tag, "system", p["policy_id"]))
             _audit_id = hashlib.sha256(
                 f"discover:{scan_id}:{file}:{p['policy_id']}:tag".encode()).hexdigest()[:24]
-            core.store.create_disposition_audit(
-                _audit_id, doc_id=doc_id, policy_id=p["policy_id"], action="tag",
-                result="applied", detail="tagged: " + ", ".join(tags), owner_email=actor)
+            audit_rows.append((_audit_id, doc_id, p["policy_id"], "tag",
+                               "applied", "tagged: " + ", ".join(tags), actor))
             lc_tagged_files.add(file)
+            seen.add(key)  # idempotent within this run
         # ── Candidate status: archive-vs-delete precedence (PRD §6), shared with the conflicts
         # report — see disposition.resolve_candidate's own docstring for the precedence rule.
         chosen, new_status, reason = disposition.resolve_candidate(matched, actor)
         if chosen is None:
             continue
-        if core.store.doc_has_disposition(doc_id, chosen["policy_id"]):
+        key = (doc_id, chosen["policy_id"])
+        if key in seen:
             continue  # this rule already flagged + audited this file on an earlier Discover
-        core.store.set_lifecycle_status(scan_id, file, new_status,
-                                        rule_id=chosen["policy_id"], reason=reason)
+        status_rows.append((scan_id, file, new_status, chosen["policy_id"], reason))
         _audit_id = hashlib.sha256(
             f"discover:{scan_id}:{file}:{chosen['policy_id']}:{chosen.get('action', '')}".encode()
         ).hexdigest()[:24]
-        core.store.create_disposition_audit(
-            _audit_id, doc_id=doc_id, policy_id=chosen["policy_id"],
-            action=chosen.get("action"), result="pending_approval", detail=reason,
-            owner_email=actor)
+        audit_rows.append((_audit_id, doc_id, chosen["policy_id"],
+                           chosen.get("action"), "pending_approval", reason, actor))
         if chosen.get("action") == "archive":
             lc_archive += 1
         elif chosen.get("action") == "delete":
             lc_delete += 1
+        seen.add(key)  # idempotent within this run
+
+    # Flush accumulated writes in bulk — one executemany each instead of N individual calls.
+    core.store.bulk_add_file_tags(tag_rows)
+    core.store.bulk_set_lifecycle_status(status_rows)
+    core.store.bulk_create_disposition_audit(audit_rows)
+
     return {"rules_enabled": len(policies), "files_evaluated": files_evaluated,
             "lifecycle_matches": lifecycle_matches,
             "lifecycle_archive": lc_archive, "lifecycle_delete": lc_delete,
