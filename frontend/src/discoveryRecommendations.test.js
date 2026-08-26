@@ -134,6 +134,37 @@ describe('a missing lifecycle answer is absent, never zero', () => {
     expect(estateSummary(null)).toBeNull()
   })
 
+  // Found live 2026-08-26: a fresh Discover-only scan (ADR 0020 defers analysis to Assess) has
+  // zero assessed rows by construction, every time — not a real "0 files discovered". The page
+  // header correctly showed "6,922 documents discovered" while this screen's own headline stat
+  // read "0 files discovered", for a scan that had never been assessed.
+  it('falls back to estateListed when files is empty and the whole-estate total is known', () => {
+    const s = estateSummary([], { discovered: 6922 })
+    expect(s.discovered).toBe(6922)
+    expect(s.estateListed).toBe(6922)
+  })
+
+  it('does not fall back when files has real (even partial) rows — a genuinely scoped view stays scoped', () => {
+    const s = estateSummary([F('a.docx')], { discovered: 6922 })
+    expect(s.discovered).toBe(1)
+    expect(s.estateListed).toBe(6922)
+  })
+
+  it('stays 0 when files is empty and there is no inventory total to fall back to', () => {
+    const s = estateSummary([], null)
+    expect(s.discovered).toBe(0)
+    expect(s.estateListed).toBeNull()
+  })
+
+  it('archive/delete/hasLifecycle stay absent (not falsely zeroed) in the empty-files fallback case', () => {
+    // hasLifecycleData([]) is false — the lifecycle columns cannot have reached an empty row set,
+    // so archive/delete must still read null, not 0, even though `discovered` now reads 6922.
+    const s = estateSummary([], { discovered: 6922 })
+    expect(s.archive).toBeNull()
+    expect(s.delete).toBeNull()
+    expect(s.hasLifecycle).toBe(false)
+  })
+
   it('omits the recommendation table and reconciliation without the column', () => {
     expect(recommendationRows([F('a.docx')])).toBeNull()
     expect(recommendationReconciliation([F('a.docx')])).toBeNull()

@@ -344,6 +344,15 @@ export function recommendationReconciliation(files, population = 'files discover
  * below it counts over, so the numbers add up to each other. `estateListed` is the separate,
  * whole-estate listing total from the scan's stored inventory summary; it is carried so the
  * caller can SAY when the two differ instead of letting a filtered view read as the estate.
+ *
+ * EXCEPT when `files` is empty and `estateListed` is known: `files` is the scan's ASSESSED rows
+ * (ADR 0020 defers analysis to Assess), so a fresh Discover-only scan has zero of them by
+ * construction — every time, not as a real "0 found". Found live 2026-08-26 from a user
+ * screenshot: "6,922 documents discovered" as the page header, "0 files discovered" as this
+ * screen's own headline stat, for a scan that had never been assessed. `discovered` falls back to
+ * `estateListed` ONLY in that specific empty case — a scan that assessed SOME but not all of a
+ * larger estate (a real scoped/filtered view, files.length > 0) is untouched, and the "two totals
+ * that can legitimately differ" note below still fires for that case exactly as before.
  */
 export function estateSummary(files, inventory = null) {
   if (!Array.isArray(files)) return null
@@ -352,7 +361,7 @@ export function estateSummary(files, inventory = null) {
   const listed = inventory && Number.isFinite(Number(inventory.discovered))
     ? Number(inventory.discovered) : null
   return {
-    discovered: files.length,
+    discovered: files.length || listed || 0,
     // Absent, not zero, until the lifecycle columns reach this screen.
     archive: lifecycle ? count('archive') : null,
     delete: lifecycle ? count('delete') : null,

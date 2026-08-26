@@ -137,6 +137,28 @@ describe('the estate summary and its reconciliations add up on screen', () => {
     expect(text()).toContain('This discovery listed 12,408 files in the estate')
   })
 
+  // Found live 2026-08-26: a fresh Discover-only scan (ADR 0020 defers analysis to Assess) has
+  // zero assessed rows by construction — the page header correctly said "6,922 documents
+  // discovered" while this screen's own headline read "0 files discovered" for a scan that had
+  // never been assessed. `files: []` here is that exact state, not a `files: null` early-return.
+  it('shows the real estate total, not 0, when nothing has been assessed yet', async () => {
+    await render({ files: [], inventory: { discovered: 6922 } })
+    expect(text()).toContain('6,922')
+    expect(text()).toContain('files discovered')
+    expect(text()).not.toContain('0 files discovered')
+  })
+
+  it('does not show the "two totals differ" note in that same case — there is nothing to explain', async () => {
+    await render({ files: [], inventory: { discovered: 6922 } })
+    expect(text()).not.toContain('This discovery listed')
+  })
+
+  it('still shows the note for a genuinely scoped view (some, not all, rows assessed)', async () => {
+    await render({ files: ESTATE, inventory: { discovered: 12408 } })
+    expect(text()).toContain('This discovery listed 12,408 files in the estate')
+    expect(text()).toContain('6')
+  })
+
   it('warns that a truncated listing is a floor, not a total', async () => {
     await render({ files: ESTATE, inventory: { discovered: 6, truncated: true } })
     expect(text()).toContain('hit its cap')
