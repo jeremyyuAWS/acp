@@ -231,6 +231,50 @@ def test_deferred_path_emits_done_phase_with_lifecycle_fields(isolated_store, mo
         assert field in state, f"{field} missing from done-phase job state: {state}"
 
 
+def test_deferred_path_emits_saving_phase_before_add_inventory(isolated_store, monkeypatch):
+    """_scan_discover must set phase='saving' BEFORE the inventory is persisted, so
+    DiscoverRunProgress.jsx's "Saving inventory" step shows as active for that window instead
+    of silently vanishing into 'discovering' — found live 2026-08-26 alongside the missing
+    folder count: the save always ran here, before lifecycle rules, but never got a live phase
+    of its own."""
+    import core
+    import handlers
+    import scanner
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setenv("ACP_DEFER_ANALYSIS_TO_ASSESS", "1")
+
+    _DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    items = [{"name": "a.docx", "id": "d1", "mime": _DOCX}]
+    monkeypatch.setattr(scanner, "_list", lambda *a, **k: items)
+
+    job_id = "j-saving-phase"
+    core.JOBS[job_id] = {"phase": "queued"}
+
+    seen_phase_at_save = []
+    real_add_inventory = isolated_store.add_inventory
+
+    def _spy_add_inventory(scan_id, inv):
+        # Snapshot right when the save happens — before _scan_discover moves on to lifecycle,
+        # which would otherwise overwrite 'phase' and hide the bug this test exists to catch.
+        seen_phase_at_save.append(core.JOBS.get(job_id, {}).get("phase"))
+        return real_add_inventory(scan_id, inv)
+
+    monkeypatch.setattr(isolated_store, "add_inventory", _spy_add_inventory)
+
+    handlers._scan_discover(
+        {"scan_id": "sd-saving-phase", "source": "local", "user": None},
+        {"scan_id": "sd-saving-phase", "id": job_id},
+    )
+
+    assert seen_phase_at_save == ["saving"], \
+        f"expected phase='saving' at the moment add_inventory ran, got {seen_phase_at_save}"
+    # And the phase must move on afterwards — lifecycle rules evaluate against what was just
+    # persisted, so 'saving' must not be the terminal phase.
+    final_state = core.JOBS.get(job_id, {})
+    assert final_state.get("phase") == "done", \
+        f"expected the scan to still reach phase='done', got {final_state}"
+
+
 # ── lifecycle per-file resilience (§6.8) ──────────────────────────────────────
 
 def test_lifecycle_eval_survives_one_bad_file(isolated_store, monkeypatch):

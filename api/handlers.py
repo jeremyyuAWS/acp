@@ -1376,8 +1376,18 @@ def _scan_discover(payload: dict, job: dict) -> None:
                    for it in norm] + inventory
             _dedupe_inventory_files(inv)
             if inv:
-                _inv_outcome = core.store.add_inventory(scan_id, inv)
                 _job_id = job.get("id")
+                if _job_id:
+                    # Emit "saving" before the call so the frontend's checklist step goes
+                    # active for this window instead of silently vanishing into "listing" —
+                    # found live 2026-08-26: the save always ran here, before lifecycle rules,
+                    # but the UI listed "Saving inventory" AFTER "Applying lifecycle rules" and
+                    # never gave it a live phase at all, so it just flipped to done at the same
+                    # instant as everything else. No per-item ticks (add_inventory is one bulk
+                    # write, not a loop this callback can hook into) — just a real start/end
+                    # window and the outcome counts below.
+                    core.update_job(_job_id, {"phase": "saving"})
+                _inv_outcome = core.store.add_inventory(scan_id, inv)
                 if _job_id:
                     core.update_job(_job_id, {
                         "schema_version": 2,

@@ -68,6 +68,21 @@ describe('the discovery step checklist', () => {
     expect(html).toContain('Saving inventory')
   })
 
+  it('orders the steps Connected, Listing, Saving, Lifecycle — matching real backend execution', () => {
+    // Saving genuinely happens BEFORE lifecycle rules run (add_inventory persists the listed
+    // rows, then lifecycle rules evaluate against what was just persisted) — the checklist must
+    // read in that order, not the reverse.
+    const html = render(PROG, true)
+    const connectedIdx = html.indexOf('Connected to source')
+    const listingIdx = html.indexOf('Listing and classifying documents')
+    const savingIdx = html.indexOf('Saving inventory')
+    const lifecycleIdx = html.indexOf('Applying lifecycle rules')
+    expect(connectedIdx).toBeGreaterThan(-1)
+    expect(listingIdx).toBeGreaterThan(connectedIdx)
+    expect(savingIdx).toBeGreaterThan(listingIdx)
+    expect(lifecycleIdx).toBeGreaterThan(savingIdx)
+  })
+
   it('substitutes the single source name into the Connected label', () => {
     const sources = [{ name: 'Google Drive' }]
     const html = render(PROG, true, undefined, sources)
@@ -110,13 +125,33 @@ describe('phase-driven step completion', () => {
     }
   })
 
-  it('shows Saving as active during scoring phase', () => {
-    const prog = { phase: 'scoring', files_found: 1000 }
+  it('shows Saving as active during the saving phase', () => {
+    // 'saving' sits between listing and lifecycle now — the real backend order (add_inventory
+    // persists the listed rows BEFORE lifecycle rules evaluate against them).
+    const prog = { phase: 'saving', files_found: 1000 }
     const html = render(prog, true)
     const savingIdx = html.indexOf('Saving inventory')
     const pulseIdx = html.lastIndexOf('prep-pulse', savingIdx)
     expect(pulseIdx).toBeGreaterThan(-1)
     expect(pulseIdx).toBeLessThan(savingIdx)
+    // Lifecycle has not started yet — still shows its pending (not done, not active) label.
+    expect(html).toContain('Applying lifecycle rules')
+    expect(html).not.toContain('Applied lifecycle rules')
+  })
+
+  it('shows every step done, none active, once per-file work is past lifecycle (scoring/finalizing)', () => {
+    // Legacy aliases for "further along than active per-file work" — meaningful when saving was
+    // the LAST step (there was a real "past lifecycle, still saving" state to point at). With
+    // lifecycle now last, the honest reading is "essentially finished, formal completion
+    // pending": every step done, nothing pulsing — never the `phase === 'done'` completion card,
+    // which is an exact string check independent of this table.
+    for (const phase of ['scoring', 'finalizing']) {
+      const html = render({ phase, files_found: 1000 }, true)
+      expect(html, `phase ${phase}`).toContain('Applied lifecycle rules')
+      expect(html, `phase ${phase}`).toContain('Saved inventory')
+      expect(html, `phase ${phase}`).not.toContain('prep-pulse')
+      expect(html, `phase ${phase}`).not.toContain('Discovery complete')
+    }
   })
 
   it('shows "files found so far" on the active Listing step', () => {
@@ -229,10 +264,12 @@ describe('lifecycle KPI on the lifecycle step', () => {
     const prog = { phase: 'scoring', files_found: 4 }
     const html = render(prog, true, undefined, undefined, inv)
     const lifecycleIdx = html.indexOf('Applied lifecycle rules')
-    const nextStepIdx = html.indexOf('Saving inventory')
+    // Lifecycle is the LAST checklist step now, so there is no following step to bound
+    // against — bound by the footer text that closes the steps list instead.
+    const footerIdx = html.indexOf('Partial inventory will be retained')
     const matchedIdx = html.indexOf('matched')
     expect(matchedIdx).toBeGreaterThan(lifecycleIdx)
-    expect(matchedIdx).toBeLessThan(nextStepIdx)
+    expect(matchedIdx).toBeLessThan(footerIdx)
   })
 })
 
@@ -479,10 +516,10 @@ describe('lifecycle no-rules treatment', () => {
     const prog = { phase: 'scoring', files_found: 1 }
     const html = render(prog, true, undefined, undefined, noRulesInv)
     const lifecycleIdx = html.indexOf('Applied lifecycle rules')
-    const nextIdx = html.indexOf('Saving inventory')
+    const footerIdx = html.indexOf('Partial inventory will be retained')
     const noRulesIdx = html.indexOf('No enabled rules')
     expect(noRulesIdx).toBeGreaterThan(lifecycleIdx)
-    expect(noRulesIdx).toBeLessThan(nextIdx)
+    expect(noRulesIdx).toBeLessThan(footerIdx)
   })
 })
 
@@ -501,10 +538,21 @@ describe('stop hint: per-step explanation of what stop does', () => {
     }
   })
 
-  it('shows saving stop hint during scoring phase', () => {
-    const prog = { phase: 'scoring', files_found: 10 }
+  it('shows saving stop hint during the saving phase', () => {
+    const prog = { phase: 'saving', files_found: 10 }
     const html = render(prog, true, () => {})
     expect(html).toContain('inventory save will complete before stopping')
+  })
+
+  it('shows no stop hint during scoring/finalizing — nothing is active to stop', () => {
+    // Every step reads as done at this point (see PHASE_DONE_COUNT's comment) — there is no
+    // active step for a hint to describe.
+    for (const phase of ['scoring', 'finalizing']) {
+      const html = render({ phase, files_found: 10 }, true, () => {})
+      expect(html, `phase ${phase}`).not.toContain('Stops at the next folder')
+      expect(html, `phase ${phase}`).not.toContain('Rules already applied will be kept')
+      expect(html, `phase ${phase}`).not.toContain('inventory save will complete before stopping')
+    }
   })
 
   it('shows lifecycle stop hint during analysing phase', () => {
@@ -658,6 +706,27 @@ describe('saving step KPI (schema_version 2 done payload)', () => {
     expect(kpiIdx).toBeGreaterThan(-1)
     expect(kpiIdx - savedIdx).toBeLessThan(400)
   })
+
+  it('shows "Saving N files…" while the saving step is active — no per-item live count exists', () => {
+    // add_inventory is one bulk write, not a loop this callback can hook into (see
+    // api/handlers.py) — the honest live signal is a bounded "this is happening now" window,
+    // not a fabricated running tally.
+    const prog = { phase: 'saving', files_found: 1000 }
+    const html = render(prog, true)
+    expect(html).toContain('Saving 1,000 files…')
+  })
+
+  it('the saved-inventory outcome KPI is still visible once lifecycle becomes active', () => {
+    // The save happens before lifecycle rules run and its outcome counts are set once, in the
+    // same live job state lifecycle's own ticks patch — they must not be clobbered by the
+    // later 'lifecycle' phase patch, which never re-sends them.
+    const prog = { phase: 'lifecycle', files_found: 100, files_evaluated: 10, rules_enabled: 2,
+                   save_new: 95, save_updated: 5, save_unchanged: 0, save_failed: 0 }
+    const html = render(prog, true)
+    expect(html).toContain('Saved inventory')
+    expect(html).toContain('95 new')
+    expect(html).toContain('5 updated')
+  })
 })
 
 describe('classification 5-bucket breakdown (schema_version 2, completion summary)', () => {
@@ -734,10 +803,10 @@ describe('lifecycle step KPI from progress payload (schema_version 2)', () => {
     const prog = { phase: 'scoring', files_found: 20, rules_enabled: 4, files_evaluated: 20, lifecycle_matches: 7 }
     const html = render(prog, true)
     const lifecycleIdx = html.indexOf('Applied lifecycle rules')
-    const nextStepIdx = html.indexOf('Saving inventory')
+    const footerIdx = html.indexOf('Partial inventory will be retained')
     const kpiIdx = html.indexOf('4 rules')
     expect(kpiIdx).toBeGreaterThan(lifecycleIdx)
-    expect(kpiIdx).toBeLessThan(nextStepIdx)
+    expect(kpiIdx).toBeLessThan(footerIdx)
   })
 
   it('completion summary uses lifecycle_matches from progress when available', () => {
@@ -849,10 +918,12 @@ describe('lifecycle phase: active step KPI (live progress ticks)', () => {
     }
     const html = render(prog, true)
     const lifecycleIdx = html.indexOf('Applying lifecycle rules')
-    const savingIdx = html.indexOf('Saving inventory')
+    // Lifecycle is the LAST checklist step now — bound by the closing footer, not a following
+    // step (saving comes BEFORE lifecycle and is already done by this point).
+    const footerIdx = html.indexOf('Partial inventory will be retained')
     const kpiIdx = html.indexOf('Applying 4 lifecycle rules')
     expect(kpiIdx).toBeGreaterThan(lifecycleIdx)
-    expect(kpiIdx).toBeLessThan(savingIdx)
+    expect(kpiIdx).toBeLessThan(footerIdx)
   })
 })
 
