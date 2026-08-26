@@ -596,6 +596,15 @@ export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/sca
 export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null, exclude = null) => (SIM
   ? sim({ scan_id: 'sim-scan', job_id: 'sim-job', queued: true, workers: 4 })
   : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}${excludeQ(exclude)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}&queue=true&fanout=true`, { method: 'POST', headers: headers() }).then(j))
+// Read-only check on the SPECIFIC source + folders about to be scanned — run right before
+// doScan actually starts one, so a bad credential, a deleted folder, or a dead worker tier is
+// caught before a scan row exists rather than surfacing as "0 documents" after the fact.
+// Deliberately best-effort at the call site (see doScan): a failed preflight call itself must
+// never block a scan the way a 'blocked' verdict correctly does — that would make preflight
+// itself a new way to get stuck.
+export const checkDiscoveryPreflight = (source = 'local', folder = null, folders = null) => (SIM
+  ? sim({ verdict: 'ready', blocked_reasons: [], degraded_reasons: [] })
+  : fetch(`${BASE}/discovery/preflight?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}`, { method: 'POST', headers: headers() }).then(j))
 // Stop an in-flight durable scan: kills its outstanding jobs server-side and closes the run
 // as 'cancelled' (files already analysed keep their records). Owner-scoped — 409 otherwise.
 export const cancelScan = (scanId) => (SIM

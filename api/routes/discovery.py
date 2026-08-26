@@ -1,0 +1,86 @@
+"""POST /discovery/preflight — a read-only check on the SPECIFIC source + scope a user has
+selected, run at the moment they are about to click "Start Scan", before any scan row exists.
+
+WHY THIS IS SEPARATE FROM /readyz. /readyz (routes/system.py) answers "can this deployment do
+work at all right now" — worker tier alive, PDF/vision engines, SMB config. It has no scan_id and
+no idea which folder was picked, so it cannot answer the question that actually determines whether
+THIS scan will return anything: is the credential still valid, do the selected roots still exist,
+can the account actually list them, and is the queue in a state to accept the work. A deployment
+can be perfectly /readyz and still return "0 documents" because the folder the user picked was
+deleted, or their Drive token expired between page load and click.
+
+DELIBERATELY READ-ONLY. No scan row, no job, no full enumeration — one bounded existence check per
+selected root (never a folder listing, never the BFS walk scanner.py runs for real), plus the same
+cheap worker/queue checks /readyz already does. Matches the durable start path's own single-flight
+semantics: this never creates state, so calling it twice in a row is free.
+"""
+from __future__ import annotations
+import os
+
+from fastapi import APIRouter, Request
+
+import core
+
+router = APIRouter()
+
+# How many QUEUED (not yet claimed) jobs the durable queue can carry before a fresh scan should be
+# flagged as "will sit waiting" rather than silently enqueued behind an unbounded backlog. No such
+# threshold existed anywhere in the codebase before this (checked: no MAX_QUEUE/backlog constant).
+# Expressed as an env var, same pattern as ACP_CHECKPOINT_INTERVAL_S, so an operator can tune it
+# per-deployment without a code change; the default is generous — this is a "something is
+# seriously backed up" signal, not a routine throttle.
+MAX_QUEUE_BACKLOG = int(os.environ.get("ACP_MAX_QUEUE_BACKLOG", "50") or "50")
+
+
+@router.post("/discovery/preflight")
+def discovery_preflight(request: Request, source: str, folder: str | None = None,
+                        folders: list[str] | None = None):
+    """Ready / degraded / blocked verdict for starting a Discover scan of this source + scope.
+
+    - blocked: the scan would fail immediately or return nothing — bad credential, an unreachable
+      selected root, or no worker capacity to ever claim the job.
+    - degraded: the scan would likely work but not promptly — the durable queue has a backlog.
+    - ready: nothing found wrong.
+
+    source/folder/folders mirror start_scan's own params exactly (routes/scans.py) so the caller
+    sends the same request it is about to make to POST /scans, plus the same X-Drive-Token /
+    X-Sp-Token headers. `local` has no credential or roots to check — its readiness is entirely
+    the worker/queue checks below.
+    """
+    roots = list(folders) if folders else ([folder] if folder else None)
+
+    reasons: list[str] = []
+    src: dict = {"ready": True}
+    if source == "drive":
+        from .drive import describe_drive_readiness
+        src = describe_drive_readiness(request, roots)
+    elif source == "sharepoint":
+        from .sharepoint import describe_sharepoint_readiness
+        src = describe_sharepoint_readiness(request, roots)
+    # 'local' (the bundled demo corpus) has no external credential or roots to validate.
+    if not src.get("ready"):
+        reasons.append(src.get("reason") or "source is not ready")
+
+    workers = core.store.worker_tier_status()
+    local_pool = int(getattr(core, "WORKERS", 0) or 0)
+    can_run_scans = bool(local_pool) or workers["alive"]
+    if not can_run_scans:
+        reasons.append("no_workers" if workers["ever_seen"] else "worker_tier_never_started")
+
+    queue_stats = core.store.job_stats(owner=None)
+    queued = int(queue_stats.get("queued") or 0)
+    queue_backlogged = queued >= MAX_QUEUE_BACKLOG
+    degraded_reasons: list[str] = []
+    if queue_backlogged:
+        degraded_reasons.append(f"queue has {queued} jobs waiting — this scan will queue behind them")
+
+    blocked = bool(reasons)
+    verdict = "blocked" if blocked else ("degraded" if degraded_reasons else "ready")
+    return {
+        "verdict": verdict,
+        "blocked_reasons": reasons,
+        "degraded_reasons": degraded_reasons,
+        "source": src,
+        "workers": {**workers, "local_pool": local_pool, "can_run_scans": can_run_scans},
+        "queue": {"queued": queued, "backlogged": queue_backlogged, "threshold": MAX_QUEUE_BACKLOG},
+    }

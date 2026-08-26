@@ -3,6 +3,7 @@ import HitlBell from './HitlBell.jsx'
 import { assessmentLine, outcomeChips } from './assessmentProgress.js'
 import { queuedProgress } from './queuedProgress.js'
 import { nextFallbackInterval } from './fallbackPollBackoff.js'
+import { preflightVerdict } from './discoveryPreflightGate.js'
 import { scanPollDecision } from './scanPollDecision.js'
 import LiveAssessmentLive from './LiveAssessmentLive.jsx'
 import ProcessingDetails from './ProcessingDetails.jsx'
@@ -11,7 +12,7 @@ import { armNotifyOnComplete, notifyScanComplete, notificationsSupported, notify
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, checkHealth, openDiscoverStream } from './api'
+import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -926,6 +927,20 @@ export default function App() {
     try {
       let fresh
       if (queuedScan) {
+        // Read-only check on the SPECIFIC source + folders about to be scanned — catches a bad
+        // credential, a deleted folder, or a dead worker tier before a scan row exists, instead
+        // of the scan silently returning "0 documents" after the fact. Only a 'blocked' verdict
+        // stops the start; 'degraded' (e.g. a queue backlog) is allowed through — the readyz
+        // banner already covers ambient warnings, this only stops what would actually fail.
+        // Best-effort: a failed preflight CALL (network hiccup, endpoint down) must never itself
+        // block starting a scan — startScanQueued's own worker_tier_alive check below still
+        // catches the one failure mode that actually matters if this check couldn't run at all.
+        if (!SIM) {
+          let pre = null
+          try { pre = await checkDiscoveryPreflight(apiSource, folder, picked) } catch { pre = null }
+          const { blocked, reason } = preflightVerdict(pre)
+          if (blocked) throw new Error(`can't start this scan — ${reason}`)
+        }
         // Durable path: enqueue a scan job, then poll until the scan is persisted.
         const { scan_id, job_id, workers, worker_tier_alive } = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded)
         // Split topology (#113): the API's local pool is 0 by design — the standalone worker
