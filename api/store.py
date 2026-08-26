@@ -1428,6 +1428,22 @@ class Store:
                 "lifecycle_reason=%s, exclusion_reason=%s WHERE scan_id=%s AND file=%s",
                 (status, rule_id, reason, exclusion_reason, scan_id, file))
 
+    def bulk_set_lifecycle_status(self, rows: list) -> None:
+        """Bulk-update lifecycle status for rows accumulated by the lifecycle rule evaluator.
+        rows: list of (scan_id, file, status, rule_id, reason). Unknown statuses raise."""
+        if not rows:
+            return
+        for _, _, status, _, _ in rows:
+            if status not in self.LIFECYCLE_STATUSES:
+                raise ValueError(f"unknown lifecycle status {status!r} "
+                                 f"(allowed: {list(self.LIFECYCLE_STATUSES)})")
+        with self._db.cursor() as cur:
+            self._db.executemany(cur,
+                "UPDATE scan_inventory SET lifecycle_status=%s, lifecycle_rule_id=%s, "
+                "lifecycle_reason=%s, exclusion_reason=%s WHERE scan_id=%s AND file=%s",
+                [(status, rule_id, reason, None, scan_id, file)
+                 for scan_id, file, status, rule_id, reason in rows])
+
     def get_lifecycle_status(self, scan_id: str, file: str) -> dict | None:
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -1490,6 +1506,20 @@ class Store:
                     "VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file,tag) DO UPDATE SET "
                     "kind=EXCLUDED.kind, rule_id=EXCLUDED.rule_id",
                     (scan_id, file, tag, kind, rule_id, now))
+
+    def bulk_add_file_tags(self, rows: list) -> None:
+        """Bulk-insert file tags accumulated by the lifecycle rule evaluator.
+        rows: list of (scan_id, file, tag, kind, rule_id). Idempotent — ON CONFLICT upserts."""
+        if not rows:
+            return
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.executemany(cur,
+                "INSERT INTO file_tags(scan_id,file,tag,kind,rule_id,created_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file,tag) DO UPDATE SET "
+                "kind=EXCLUDED.kind, rule_id=EXCLUDED.rule_id",
+                [(scan_id, file, tag, kind, rule_id, now)
+                 for scan_id, file, tag, kind, rule_id in rows])
 
     def list_file_tags(self, scan_id: str, file: str) -> list[dict]:
         with self._db.cursor() as cur:
@@ -5966,6 +5996,19 @@ class Store:
                 "owner_email) VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
                 (audit_id, self._now(), doc_id, policy_id, action, result, detail, owner_email))
 
+    def bulk_create_disposition_audit(self, rows: list) -> None:
+        """Bulk-insert disposition audit rows accumulated by the lifecycle rule evaluator.
+        rows: list of (audit_id, doc_id, policy_id, action, result, detail, owner_email)."""
+        if not rows:
+            return
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.executemany(cur,
+                "INSERT INTO disposition_audit(id,ts,doc_id,policy_id,action,result,detail,"
+                "owner_email) VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
+                [(audit_id, now, doc_id, policy_id, action, result, detail, owner_email)
+                 for audit_id, doc_id, policy_id, action, result, detail, owner_email in rows])
+
     def get_disposition_audit(self, audit_id: str, owner: str | None = None) -> dict | None:
         with self._db.cursor() as cur:
             if owner:
@@ -6017,6 +6060,18 @@ class Store:
                 "AND result IN ('pending_approval','applied','approved') LIMIT 1",
                 (doc_id, policy_id))
             return self._db.fetchone(cur) is not None
+
+    def get_scan_dispositions(self, scan_id: str) -> set:
+        """Return the set of (doc_id, policy_id) pairs that already have a live outcome
+        for this scan. One query replaces N per-file doc_has_disposition() calls in the
+        lifecycle rule evaluator (idempotency guard AC-13, bulk pre-load path)."""
+        prefix = f"scan:{scan_id}:"
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT doc_id, policy_id FROM disposition_audit "
+                "WHERE doc_id LIKE %s AND result IN ('pending_approval','applied','approved')",
+                (prefix + "%",))
+            return {(r["doc_id"], r["policy_id"]) for r in self._db.fetchall(cur)}
 
     # ── Phased remediation campaigns (ADR 0003, Phase 4) ────────────────────────
     def create_campaign(self, campaign_id: str, *, name: str, status: str, scope: str) -> None:
