@@ -80,6 +80,18 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
     # ── Durable async path: enqueue a scan job for the worker pool (ADR 0004). ──
     # Survives restarts, retries on transient failure, shows up in /jobs + Grafana.
     if queue:
+        # Single-flight per owner: nothing stopped a second "Re-scan all sources" click from
+        # starting a new durable scan while an old one for the same user was still running.
+        # Both then discover concurrently — wasted Drive API calls, wasted DB connections, and
+        # confusing overlapping results (observed live 2026-08-26: a tiny folder-scoped listing
+        # and a 15k-item whole-Drive listing logging almost simultaneously for one account).
+        # "Re-scan" means "start fresh, superseding whatever's running" — there is no UI for
+        # intentionally running two scans in parallel — so cancel the old one first, reusing the
+        # exact path the Stop button already calls. Scoped like active_scan()/reconnect: one
+        # user has one meaningful "current scan" regardless of source.
+        _prior_active = core.store.active_scan(owner=user)
+        if _prior_active and _prior_active.get("id"):
+            core.store.cancel_scan(_prior_active["id"], owner=user)
         scan_id = uuid.uuid4().hex[:12]
         idempotency_key = request.headers.get("idempotency-key") or None
         # fanout=true → decompose into per-file jobs (ADR 0007); else the monolithic
