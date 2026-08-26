@@ -285,6 +285,9 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const isStaging = window.location.hostname.includes('staging')
   const [err, setErr] = useState(null)
+  // Transient "no workers yet" state — shown in green, not red, because it usually resolves on its
+  // own as the worker tier cold-starts. Falls back to a real error after 30s if it never clears.
+  const [spinningUp, setSpinningUp] = useState(false)
   // A scan the user stopped on purpose. Deliberately NOT `err`: "scan failed: …" over someone's own
   // Stop press is a wrong account of what happened, and the red treatment sends them looking for a
   // fault that does not exist.
@@ -925,7 +928,7 @@ export default function App() {
 
   const doScan = async (source, folder = null, runScope = null) => {
     if (busy) return                              // a scan/assessment is already running — don't launch another
-    setBusy(true); setErr(null); setProgress({ phase: 'queued' })
+    setBusy(true); setErr(null); setSpinningUp(false); setProgress({ phase: 'queued' })
     // A stop belongs to the run that was stopped. Clearing both here is what stops the previous
     // run's notice hanging over this one, and stops a stale flag ending this scan the moment it
     // starts.
@@ -1096,7 +1099,20 @@ export default function App() {
       if (prevAvg != null && newAvg != null && newAvg !== prevAvg) { setDelta(newAvg - prevAvg); setDeltaKey((k) => k + 1) }
       // Guide the user into the workflow: land on Discover (step 1) after a scan.
       setView(me?.allow && !me.allow.includes('discover') ? 'overview' : 'discover')
-    } catch (e) { setErr(`scan failed: ${e?.message ?? e}`) } finally {
+    } catch (e) {
+      const msg = e?.message ?? String(e)
+      if (msg.includes('no_workers')) {
+        setSpinningUp(true)
+        setTimeout(() => {
+          setSpinningUp((still) => {
+            if (still) setErr('Workers are still unavailable — the worker service may be down. Check Monitor.')
+            return false
+          })
+        }, 30_000)
+      } else {
+        setErr(`scan failed: ${msg}`)
+      }
+    } finally {
       // Always close, whatever the loop's own state — the server's generator loop otherwise
       // keeps polling Redis every 250ms for a client that has already stopped listening.
       streamHandle?.close()
@@ -1496,6 +1512,17 @@ export default function App() {
       )}
 
       {err && <div className="err" role="alert">{err}</div>}
+      {spinningUp && !err && (
+        <div className="panel" role="status" style={{ marginBottom: 12, display: 'flex', alignItems: 'center',
+                                                      gap: 10, background: 'var(--green-bg,#edfbf0)',
+                                                      border: '1px solid var(--green,#1a7f45)',
+                                                      color: 'var(--green,#1a7f45)', padding: '10px 16px',
+                                                      borderRadius: 8 }}>
+          <span className="spinner" style={{ borderTopColor: 'var(--green,#1a7f45)' }} />
+          <span style={{ fontSize: 13.5, fontWeight: 500 }}>Spinning up a worker to enable scan — this usually takes a few seconds.</span>
+          <button className="ghost small" style={{ marginLeft: 'auto' }} onClick={() => setSpinningUp(false)}>Dismiss</button>
+        </div>
+      )}
       {/* A deliberate stop is not a fault, so it is reported as status rather than as an alert —
           role="status" and the muted panel treatment, not role="alert" and the red one. */}
       {stopped && (
