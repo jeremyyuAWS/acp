@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } from 'react'
 import HitlBell from './HitlBell.jsx'
-import { assessmentLine, outcomesFromRun, outcomeChips } from './assessmentProgress.js'
+import { assessmentLine, outcomeChips } from './assessmentProgress.js'
+import { queuedProgress } from './queuedProgress.js'
 import { scanPollDecision } from './scanPollDecision.js'
 import LiveAssessmentLive from './LiveAssessmentLive.jsx'
 import ProcessingDetails from './ProcessingDetails.jsx'
@@ -173,24 +174,6 @@ function progressPct(p) {
 // the finalize pass (per-document score + estate aggregate) runs. `current` is deliberately left
 // unset: the fan-out analyses files in parallel across workers, so no single "file N is in flight
 // right now" is knowable — the truthful signal is the count, not a made-up filename.
-function queuedProgress(g, elapsed) {
-  const run = g && g.run
-  const total = (run && run.files) || 0
-  const done = (run && run.files_done) || 0
-  // Pre-created stub: job enqueued but no worker has claimed it yet. Surfaces as
-  // phase:'queued' so the checklist shows the correct waiting state without 404s.
-  if (run && run.status === 'queued') return { phase: 'queued', elapsed }
-  if (!total) return { phase: 'discovering', elapsed }        // estate not listed yet
-  const phase = done < total ? 'analysing' : 'scoring'
-  const pct = Math.round(12 + Math.min(1, done / total) * (95 - 12))
-  // Outcome tally, streamed live off the run summary (certifiable/uncertain/error, derived from
-  // file_records as each file lands) — so the progress chips show real state, not just a counter.
-  // `files` carries the per-file results get_scan streams, for the expandable Processing details table.
-  return { phase, files_found: total, files_done: done, current: null, elapsed, pct,
-           outcomes: outcomesFromRun(run), files: (g && g.files) || [],
-           inventory: (run && run.scope && run.scope.inventory) || null }
-}
-
 // Shown on results views (Overview / Dashboard / Monitor) until the user runs Assess —
 // scores, trends and dashboards only appear after an explicit assessment.
 function AssessGate({ onGo }) {
@@ -542,7 +525,7 @@ export default function App() {
         // and an active scan_runs row are never both real at once — no double-reconnect risk.
         const pendingJobId = sessionStorage.getItem(ACTIVE_JOB_KEY)
         if (pendingJobId) { reconnectJob(pendingJobId) } else {
-          try { const a = await getActiveScan(); if (a && a.id) reconnectScan(a.id) } catch { /* ignore */ }
+          try { const a = await getActiveScan(); if (a && a.id) reconnectScan(a.id, a.job_id) } catch { /* ignore */ }
         }
       })
       .catch(() => {})
@@ -934,7 +917,7 @@ export default function App() {
       let fresh
       if (queuedScan) {
         // Durable path: enqueue a scan job, then poll until the scan is persisted.
-        const { scan_id, workers, worker_tier_alive } = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded)
+        const { scan_id, job_id, workers, worker_tier_alive } = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded)
         // Split topology (#113): the API's local pool is 0 by design — the standalone worker
         // container's heartbeat is what proves the queue is manned.
         if (!SIM && !workers && !worker_tier_alive) throw new Error('no workers available — the worker service looks down; check Monitor')
@@ -950,6 +933,12 @@ export default function App() {
           const elapsed = Math.round((Date.now() - t0) / 1000)
           let g = null
           try { g = await getScan(scan_id); misses = 0; foundOnce = true } catch { g = null; misses++ }
+          // Best-effort, read-only, and never allowed to affect the poll's exit decision below —
+          // scanPollDecision reads `g`/`scan`, not this. A miss here (job TTL'd out of Redis,
+          // transient error) just means this tick renders with the coarser scan_runs-derived
+          // phase instead of the live one; it must never be mistaken for the scan itself failing.
+          let job = null
+          if (job_id) { try { job = await getJob(job_id) } catch { job = null } }
           // The exit ladder lives in scanPollDecision.js — pure, ordered, and tested. It was four
           // inline branches with no test reachable from anywhere, which is how the fifth (the user
           // pressing Stop) stayed missing: a QUEUED scan that is cancelled has no scan_runs row and
@@ -976,7 +965,7 @@ export default function App() {
           if (decision.action === 'never-started') {
             throw new Error('this scan never started — the queue may be stuck. Try again, or check Monitor.')
           }
-          setProgress(g ? queuedProgress(g, elapsed) : { phase: foundOnce ? 'connecting' : 'queued', elapsed })
+          setProgress(g ? queuedProgress(g, elapsed, job) : { phase: foundOnce ? 'connecting' : 'queued', elapsed })
           if (decision.action === 'settled') fresh = decision.scan
         }
         if (!fresh) throw new Error('scan still processing — watch it finish in the Monitor queue')
@@ -1012,7 +1001,7 @@ export default function App() {
 
   // Reconnect to an in-flight scan after a page reload — the durable fan-out keeps
   // running server-side, so we just resume polling until it finishes.
-  const reconnectScan = async (scan_id) => {
+  const reconnectScan = async (scan_id, job_id = null) => {
     setBusy(true); setProgress({ phase: 'connecting', elapsed: 0 }); setLiveScanId(scan_id)
     const t0 = Date.now()
     let fresh
@@ -1023,6 +1012,10 @@ export default function App() {
         const elapsed = Math.round((Date.now() - t0) / 1000)
         let g = null
         try { g = await getScan(scan_id); misses = 0 } catch { g = null; misses++ }
+        // Same best-effort live-progress fetch doScan uses — see its comment above. A miss here
+        // never affects this loop's exit decision, only which phase this tick renders with.
+        let job = null
+        if (job_id) { try { job = await getJob(job_id) } catch { job = null } }
         // A reconnected scan HAS a scan_runs row, so a server-side cancel already settles this
         // loop through the status check below — this is not the queued-scan gap. It is here so
         // Stop ends the poll on the same tick on both paths instead of after another round-trip,
@@ -1040,7 +1033,7 @@ export default function App() {
             'The app was updated and this tab’s session ended. Sign in again — your scan kept running server-side and will be here when you return.' } }))
           return
         }
-        setProgress(g ? queuedProgress(g, elapsed) : { phase: 'connecting', elapsed })
+        setProgress(g ? queuedProgress(g, elapsed, job) : { phase: 'connecting', elapsed })
         if (g && g.run && g.run.status !== 'running') fresh = g
       }
       // Same reset as doScan. Usually a no-op — a reconnect follows a page reload, where React

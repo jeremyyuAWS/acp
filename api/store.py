@@ -2077,10 +2077,20 @@ class Store:
             row = self._db.fetchone(cur)
             if not row:
                 return None
+            # job_id piggybacks on the same outstanding-jobs lookup (one round trip, not two) so
+            # a page-reload reconnect can poll GET /scans/jobs/{id} for the live phase/progress
+            # ticks (files_evaluated, rules_enabled, ...) the same way a fresh scan start already
+            # does — without it, reconnect fell back to the coarser scan_runs-derived phase, which
+            # cannot distinguish listing/metadata/classifying/lifecycle from each other.
             self._db.execute(cur,
-                "SELECT COUNT(*) AS n FROM jobs WHERE scan_id=%s AND status IN ('queued','running')",
-                (row["id"],))
-            outstanding = (self._db.fetchone(cur) or {}).get("n", 0)
+                "SELECT COUNT(*) AS n, "
+                "(SELECT id FROM jobs WHERE scan_id=%s AND status IN ('queued','running') "
+                " ORDER BY created_at DESC LIMIT 1) AS job_id "
+                "FROM jobs WHERE scan_id=%s AND status IN ('queued','running')",
+                (row["id"], row["id"]))
+            job_row = self._db.fetchone(cur) or {}
+            outstanding = job_row.get("n", 0)
+            row["job_id"] = job_row.get("job_id")
         if outstanding == 0:
             from datetime import datetime, timezone
             try:

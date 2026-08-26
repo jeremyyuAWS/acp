@@ -68,6 +68,7 @@ button:disabled { opacity: 0.55; cursor: default; }
 button.ghost { background: #fff; color: var(--plum); border: 1px solid var(--line); }
 .muted { color: var(--muted); font-size: 13px; }
 .err { background: #E2EDFB; color: #1F5FA8; border-radius: 8px; padding: 10px 14px; margin: 12px 0; font-size: 14px; }
+.readywarn { background: #FAEEDA; color: #854F0B; border-radius: 8px; padding: 10px 14px; margin: 12px 0; font-size: 14px; }
 
 .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin: 22px 0; }
 .metric { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }

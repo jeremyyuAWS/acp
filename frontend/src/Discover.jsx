@@ -22,7 +22,7 @@ import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 import DiscoverCompleteSummary from './DiscoverCompleteSummary.jsx'
 import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
 import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation,
-         acknowledgeScan, unacknowledgeScan } from './api.js'
+         acknowledgeScan, unacknowledgeScan, checkReadiness } from './api.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
@@ -142,6 +142,18 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // and the read failed. None of them is evidence that no file was tagged, so all three leave the
   // file rows un-merged and the whole recommendation surface ABSENT. A failed read that fell back
   // to "0 tagged for archive review" would be indistinguishable from a clean estate.
+  // Scan-infra readiness — checked once on mount and again whenever a scan just finished, so the
+  // warning reflects current state before the NEXT "Re-scan all sources" click. Never blocks the
+  // button; a worker outage on 2026-08-26 left a queued job silently unclaimed with no signal
+  // until the run "finished" showing 0 documents ~45s later. This surfaces that BEFORE the click
+  // instead of after. `null` means "not checked yet or the probe itself failed" — render nothing,
+  // since an inconclusive read is not evidence of a problem.
+  const [readiness, setReadiness] = useState(null)
+  useEffect(() => {
+    let live = true
+    checkReadiness().then((r) => { if (live) setReadiness(r) })
+    return () => { live = false }
+  }, [busy])
   const [inv, setInv] = useState(null)
   useEffect(() => {
     let live = true
@@ -507,6 +519,17 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         <div className="err" role="alert" style={{ marginBottom: 12 }}>
           Discovery did not finish — the last attempt to list this source failed. The counts below
           are incomplete or stale. Re-run discovery to get a current inventory.
+        </div>
+      )}
+
+      {/* Non-blocking: a scan can still be started while this shows. It exists so a worker outage
+          reads as a warning BEFORE the click rather than a silent stall after it (see the useEffect
+          above). readiness.ready === false is the only case rendered — a degraded-but-still-ready
+          server (e.g. the unrelated SMB-source gap) says nothing worth surfacing here. */}
+      {!busy && readiness && readiness.ready === false && (
+        <div className="readywarn" role="status" style={{ marginBottom: 12 }}>
+          ⚠ Scan infrastructure looks degraded ({(readiness.degraded || []).join(', ') || 'workers unavailable'}).
+          A scan started now may not progress. You can still try — if it stalls, this is likely why.
         </div>
       )}
 
