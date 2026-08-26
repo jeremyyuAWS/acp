@@ -33,6 +33,20 @@ def test_classify_from_metadata_by_ext_and_mime():
     assert classify.classify_from_metadata("a.html")["doc_class"] == "web-page"
     # mime wins when the name has no useful extension
     assert classify.classify_from_metadata("Untitled", _PPTX_MIME)["doc_class"] == "slide-deck"
+    # image extensions and MIME types
+    assert classify.classify_from_metadata("photo.png")["doc_class"] == "image"
+    assert classify.classify_from_metadata("photo.jpg")["doc_class"] == "image"
+    assert classify.classify_from_metadata("logo.svg")["doc_class"] == "image"
+    assert classify.classify_from_metadata("Untitled", "image/png")["doc_class"] == "image"
+    assert classify.classify_from_metadata("Untitled", "image/jpeg")["doc_class"] == "image"
+    assert classify.classify_from_metadata("Untitled", "image/webp")["doc_class"] == "image"
+    img = classify.classify_from_metadata("photo.png")
+    assert img["has_images"] is True
+    # audio/video extensions and MIME types
+    assert classify.classify_from_metadata("clip.mp4")["doc_class"] == "audio-video"
+    assert classify.classify_from_metadata("song.mp3")["doc_class"] == "audio-video"
+    assert classify.classify_from_metadata("Untitled", "video/mp4")["doc_class"] == "audio-video"
+    assert classify.classify_from_metadata("Untitled", "audio/mpeg")["doc_class"] == "audio-video"
     # counts are deferred to Assess (need the bytes) — null here, never fabricated
     m = classify.classify_from_metadata("a.pptx")
     assert m["pages"] is None and m["images"] is None and m["is_scanned"] is False

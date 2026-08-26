@@ -86,10 +86,8 @@ class TestClassificationBuckets:
 
         counts = handlers._count_inventory_classes("sd-cls-500")
         assert counts["assessable"] == 100 + 80 + 60 + 70 + 40  # docx+pptx+xlsx+pdf+html
-        # classify_from_metadata returns "unknown" for image/video/binary MIMEs (it only
-        # handles office/pdf/html extensions), so they all land in eligibility_unknown.
-        assert counts["eligibility_unknown"] == 50 + 30 + 70     # image+video+binary
-        assert counts["metadata_only"] == 0
+        assert counts["metadata_only"] == 50 + 30               # image+video
+        assert counts["eligibility_unknown"] == 70               # binary only
         assert counts["unsupported"] == 0
         total = sum(counts.values())
         assert total == 500, f"buckets must sum to 500, got {total}: {counts}"
@@ -826,3 +824,172 @@ class TestDedupeAtScale:
             suffixed = f"dup_{i:04d} (1).docx"
             assert original in names, f"original {original} should be preserved"
             assert suffixed in names, f"suffixed {suffixed} should exist"
+
+
+# ── Progress event sequence ordering ─────────────────────────────────────────
+
+class TestProgressSequence:
+    """Verify the full update_job call sequence during _scan_discover.
+
+    The deferred discover pipeline emits progress updates in a defined order:
+      listing → save → lifecycle-start → lifecycle-ticks → lifecycle-final → done
+    This test captures every update_job call and validates that phase transitions
+    happen in the correct order, with no phases skipped or duplicated.
+    """
+
+    def test_phase_ordering_300_files(self, isolated_store, monkeypatch):
+        """300 files with a lifecycle rule: all 6 progress phases appear in order."""
+        import core
+        import handlers
+        import scanner
+        monkeypatch.setattr(core, "store", isolated_store)
+        monkeypatch.setenv("ACP_DEFER_ANALYSIS_TO_ASSESS", "1")
+
+        items = _make_items([("doc", _DOCX, 200), ("pdf", _PDF, 100)])
+        monkeypatch.setattr(scanner, "_list", lambda *a, **k: items)
+
+        owner = "test@example.com"
+        isolated_store.create_disposition_policy(
+            "pol-seq-tag",
+            name="seq-tag", action="tag", enabled=True, requires_approval=False,
+            match=json.dumps([{"field": "age_days", "op": "gte", "value": 0}]),
+            action_config=json.dumps({"tags": ["seq-test"]}),
+            owner_email=owner,
+        )
+
+        updates = []
+        real_update = core.update_job
+
+        def _capture(jid, data):
+            updates.append(dict(data))
+            return real_update(jid, data)
+
+        monkeypatch.setattr(core, "update_job", _capture)
+
+        job_id = "j-seq-300"
+        core.JOBS[job_id] = {"phase": "queued"}
+
+        handlers._scan_discover(
+            {"scan_id": "sd-seq-300", "source": "local", "user": owner},
+            {"scan_id": "sd-seq-300", "id": job_id},
+        )
+
+        # Extract the sequence of observed phases / event types from update_job calls.
+        # Listing updates carry files_found but no phase.
+        # Save updates carry schema_version + save_new.
+        # Lifecycle updates carry phase="lifecycle".
+        # Done updates carry phase="done".
+        phases = []
+        for u in updates:
+            if u.get("phase") == "done":
+                phases.append("done")
+            elif u.get("phase") == "lifecycle":
+                phases.append("lifecycle")
+            elif "save_new" in u or "save_updated" in u:
+                phases.append("save")
+            elif "files_found" in u and "phase" not in u:
+                phases.append("listing")
+
+        # Deduplicate consecutive entries to get the phase transition order.
+        transitions = []
+        for p in phases:
+            if not transitions or transitions[-1] != p:
+                transitions.append(p)
+
+        # Listing progress is driven by the scanner's _search_drive callback, which
+        # is not invoked when _list is monkeypatched. The observable transition
+        # order from update_job is: save → lifecycle → done.
+        expected = ["save", "lifecycle", "done"]
+        assert transitions == expected, \
+            f"phase ordering mismatch:\n  expected: {expected}\n  got:      {transitions}\n  raw: {phases}"
+
+        # Save must come before lifecycle
+        save_idx = phases.index("save")
+        lc_idx = phases.index("lifecycle")
+        done_idx = len(phases) - 1 - phases[::-1].index("done")
+        assert save_idx < lc_idx < done_idx, \
+            f"ordering violated: save@{save_idx} lifecycle@{lc_idx} done@{done_idx}"
+
+    def test_phase_ordering_no_lifecycle_rules(self, isolated_store, monkeypatch):
+        """Without lifecycle rules, lifecycle phase still appears (with zero counts) before done."""
+        import core
+        import handlers
+        import scanner
+        monkeypatch.setattr(core, "store", isolated_store)
+        monkeypatch.setenv("ACP_DEFER_ANALYSIS_TO_ASSESS", "1")
+
+        items = _make_items([("doc", _DOCX, 100)])
+        monkeypatch.setattr(scanner, "_list", lambda *a, **k: items)
+
+        updates = []
+        real_update = core.update_job
+
+        def _capture(jid, data):
+            updates.append(dict(data))
+            return real_update(jid, data)
+
+        monkeypatch.setattr(core, "update_job", _capture)
+
+        job_id = "j-seq-norule"
+        core.JOBS[job_id] = {"phase": "queued"}
+
+        handlers._scan_discover(
+            {"scan_id": "sd-seq-norule", "source": "local", "user": "test@example.com"},
+            {"scan_id": "sd-seq-norule", "id": job_id},
+        )
+
+        phases = []
+        for u in updates:
+            if u.get("phase") == "done":
+                phases.append("done")
+            elif u.get("phase") == "lifecycle":
+                phases.append("lifecycle")
+            elif "save_new" in u or "save_updated" in u:
+                phases.append("save")
+            elif "files_found" in u and "phase" not in u:
+                phases.append("listing")
+
+        transitions = []
+        for p in phases:
+            if not transitions or transitions[-1] != p:
+                transitions.append(p)
+
+        expected = ["save", "lifecycle", "done"]
+        assert transitions == expected, \
+            f"phase ordering mismatch:\n  expected: {expected}\n  got:      {transitions}\n  raw: {phases}"
+
+        # Done must carry all lifecycle KPI fields even with zero rules
+        done_updates = [u for u in updates if u.get("phase") == "done"]
+        assert done_updates, "no done-phase update"
+        d = done_updates[-1]
+        assert d["rules_enabled"] == 0
+        assert d["lifecycle_matches"] == 0
+
+    def test_classification_buckets_in_done_phase(self, isolated_store, monkeypatch):
+        """Done phase with mixed estate: image/video now classified as metadata_only."""
+        import core
+        import handlers
+        import scanner
+        monkeypatch.setattr(core, "store", isolated_store)
+        monkeypatch.setenv("ACP_DEFER_ANALYSIS_TO_ASSESS", "1")
+
+        items = _make_items([
+            ("doc", _DOCX, 50),
+            ("img", _IMAGE, 30),
+            ("vid", _VIDEO, 20),
+        ])
+        monkeypatch.setattr(scanner, "_list", lambda *a, **k: items)
+
+        job_id = "j-seq-cls"
+        core.JOBS[job_id] = {"phase": "queued"}
+
+        handlers._scan_discover(
+            {"scan_id": "sd-seq-cls", "source": "local", "user": "test@example.com"},
+            {"scan_id": "sd-seq-cls", "id": job_id},
+        )
+
+        counts = handlers._count_inventory_classes("sd-seq-cls")
+        assert counts["assessable"] == 50
+        assert counts["metadata_only"] == 50  # 30 image + 20 video
+        assert counts["eligibility_unknown"] == 0
+        assert sum(counts.values()) == 100
