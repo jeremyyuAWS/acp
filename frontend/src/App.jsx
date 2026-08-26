@@ -9,7 +9,7 @@ import { armNotifyOnComplete, notifyScanComplete, notificationsSupported, notify
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED } from './api'
+import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, checkHealth } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -39,6 +39,7 @@ import { documentRows } from './assessMetrics.js'
 import RunDetails from './RunDetails.jsx'
 import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
+import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 // Dashboard import removed — component retired from Assess tab (kept on disk)
 import { CAPABILITY_FALLBACK, ASSESSMENT_FALLBACK, fmtOf } from './capability.js'
 import Remediate from './Remediate.jsx'
@@ -431,10 +432,23 @@ export default function App() {
   // Universal scan gate: `{ source, folder }` while the app-level review modal is open. Declared
   // with the other hooks (above the `!me` early return) so the hook order never changes.
   const [pendingScan, setPendingScan] = useState(null)
+  // null = unknown (first probe not yet returned); true = down; false = reachable.
+  const [backendDown, setBackendDown] = useState(null)
 
   useEffect(() => {
     const t = setInterval(() => setTick((n) => n + 1), 60_000)
     return () => clearInterval(t)
+  }, [])
+
+  // Backend health banner: probe /healthz every 30 s. On failure, show a persistent red banner.
+  // On recovery the banner disappears automatically. Skips the first render's worth of delay so
+  // a flaky-on-startup environment surfaces immediately.
+  useEffect(() => {
+    let cancelled = false
+    const probe = () => checkHealth().then((ok) => { if (!cancelled) setBackendDown(!ok) })
+    probe()
+    const t = setInterval(probe, 30_000)
+    return () => { cancelled = true; clearInterval(t) }
   }, [])
 
   // Pull the authoritative CalVer once (works pre-auth — /config is public) so the build
@@ -1176,6 +1190,22 @@ export default function App() {
           }}>sign out</button>
         </div>
       </header>
+      {backendDown && (
+        <div role="alert" aria-label="Backend unavailable" style={{
+          background: '#fef2f2', borderBottom: '2px solid #ef4444',
+          padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 10,
+          fontSize: 14, color: '#7f1d1d',
+        }}>
+          <span aria-hidden="true">🔴</span>
+          <span style={{ flex: 1 }}>
+            The compliance server is unreachable. Scans and data loads are paused.
+            Retrying automatically — <button onClick={() => checkHealth().then((ok) => setBackendDown(!ok))}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, font: 'inherit', color: 'inherit', textDecoration: 'underline' }}>
+              check now
+            </button>
+          </span>
+        </div>
+      )}
       {tokenRefreshError && (
         <div role="alert" style={{
           background: '#fffbeb', borderBottom: '2px solid #f59e0b',
@@ -1291,126 +1321,16 @@ export default function App() {
         </div>
       )}
       {busy && progress && view !== 'discover' && (
-        <div className="scanprog" role="status" aria-live="polite">
-          <div className="scanprogline"><span className="spinner" />
-            <span style={{ fontWeight: 700, color: '#BF8C00', marginRight: 6 }}>Scan</span>{progressText(progress)}
-            {progress.files_found ? <span className="scancount"> · {progress.files_found.toLocaleString()} files</span> : null}
-            {progress.blocked ? <span className="lockwarn"> · 🔒 {progress.blocked} password-protected / couldn’t open</span> : null}
-            {/* Stop (found live 2026-07-11: there was no way out of a wedged scan). Cancelling
-                kills the outstanding jobs server-side; the poll loop then sees the run leave
-                'running' and exits normally. Files already analysed are kept. */}
-            {liveScanId && (
-              <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8 }}>
-                {/* Continue working — notify me when complete (slice 3c). This banner is non-modal and
-                    the scan runs server-side, so a user can already work elsewhere; arming this pings
-                    them with the outcome when it finishes, so they need not watch the spinner. */}
-                {notificationsSupported() && notifyPermission() !== 'denied' && (
-                  <button className="ghost small" disabled={notifyArmed}
-                          title={notifyArmed ? 'You’ll be notified when this scan finishes'
-                                             : 'Keep working — get a notification when this scan finishes'}
-                          onClick={async () => {
-                            const ok = await armNotifyOnComplete()
-                            if (ok) { notifyArmedRef.current = true; setNotifyArmed(true) }
-                          }}>
-                    {notifyArmed ? '🔔 Will notify you' : '🔔 Notify me when done'}
-                  </button>
-                )}
-                {/* Board 3: while the Assess running card is the one on screen, IT owns Stop
-                    (board-exact placement, inline with the explanation of what stopping does).
-                    Every other case — Discover scanning, or viewing a different tab while a scan
-                    runs in the background — keeps this banner's Stop as the only one available. */}
-                {!(view === 'assess' && assessPhase === 'running') && (
-                  <button className="ghost small"
-                          title="Stop this scan — files already analysed are kept"
-                          onClick={() => stopScan(liveScanId)}>■ Stop scan</button>
-                )}
-              </span>
-            )}
-          </div>
-          <div className="track"><i style={{ width: `${progressPct(progress)}%`, background: '#BF8C00', transition: 'width .3s' }} /></div>
-          {/* Outcome chips — what is actually EMERGING from the run (passed / need-review / failed /
-              still-processing), streamed off the run summary as files land. Shown only once analysis
-              has produced a real result (outcomeChips returns [] otherwise), so they never read
-              "0 · 0 · 0" during the read phase or a metadata-only discovery. */}
-          {outcomeChips(progress.outcomes).length > 0 && (
-            <div className="scanoutcomes" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
-              {outcomeChips(progress.outcomes).map((c) => (
-                <span key={c.key} style={{ fontSize: 12, fontWeight: 500, padding: '2px 9px', borderRadius: 999,
-                                           fontVariantNumeric: 'tabular-nums', ...OCHIP_STYLE[c.kind] }}>
-                  <b>{c.count.toLocaleString()}</b> {c.label}
-                </span>
-              ))}
-            </div>
-          )}
-          {/* Live insights: findings spotted so far, format breakdown, failed-by-format.
-              All derived from progress.files (the per-file results streamed as they land) —
-              no extra API calls. Hidden until files actually start landing (chips already gate on this). */}
-          {progress.files && progress.files.length > 0 && (() => {
-            const withFindings = findingsSoFar(progress.files)
-            const fmts = formatBreakdown(progress.files)
-            const failFmts = failedByFormat(progress.files)
-            return (
-              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 16px',
-                            marginTop: 8, fontSize: 12, color: '#54636F' }}>
-                {fmts.length > 0 && (
-                  <span>
-                    {fmts.map(({ fmt, count }, i) => (
-                      <span key={fmt}>{i > 0 ? <span style={{ opacity: .4, margin: '0 4px' }}>·</span> : null}
-                        <b style={{ color: '#3C4858' }}>{fmt}</b> {count}
-                      </span>
-                    ))}
-                    <span style={{ opacity: .5, marginLeft: 6 }}>landed by format</span>
-                  </span>
-                )}
-                {withFindings > 0 && (
-                  <span style={{ color: '#9A6011' }}>
-                    ⚠ {withFindings} file{withFindings === 1 ? '' : 's'} with findings so far
-                  </span>
-                )}
-                {failFmts.length > 0 && (progress.outcomes?.failed || 0) > 0 && (
-                  <span style={{ color: '#A5314A' }}>
-                    {(progress.outcomes.failed).toLocaleString()} failed:{' '}
-                    {failFmts.map(({ fmt, count }, i) => (
-                      <span key={fmt}>{i > 0 ? ', ' : ''}{fmt} {count}</span>
-                    ))}
-                  </span>
-                )}
-              </div>
-            )
-          })()}
-          {/* Why 250 selected → fewer assessed: the eligibility breakdown, so fewer-assessed is
-              explained, not glossed over. Same three-denominator inventory EstateCoverage uses. */}
-          <ScopeFunnel inventory={progress.inventory} blocked={progress.blocked} />
-          <ProcessingDetails files={progress.files} processing={progress.outcomes?.processing || 0} defaultOpen />
-          {/* Narrate the phase the scanner reports, or say nothing. The old line came from a
-              timer, so it could never be absent — and it was wrong whenever the timer and the
-              phase disagreed. Silence beats a plausible sentence.
-
-              This panel sits ABOVE <main>, so it renders inside whichever step the user is
-              looking at — which is how `analysing`'s line ("Extracting text, images and document
-              structure…") came to sit under the Discover tab, whose own subtitle is
-              "inventory · classify". Pass the step so the narration is scoped to the screen it
-              is actually on: on a step that does not own the phase, phaseNarration.js says that
-              the work is running and where its output lands, instead of describing work that
-              step is not doing. On a non-step view (Overview, Integrations) there is no step to
-              scope to, so the line narrates the job — which is what it is. */}
-          {scanPhaseLine(progress.phase, { deepScan, step: narrationStep }) && (
-            <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
-              {scanPhaseLine(progress.phase, { deepScan, step: narrationStep })}
-            </div>
-          )}
-          {/* Under the narration, not instead of it. The line above says what the PHASE is doing
-              and is identical for the whole time a long document sits in `analysing`; this one
-              names the document and the criterion, which is the question someone watching a
-              spinner is actually asking. Rendered only when the backend reported one — see
-              activityLine, which returns null rather than inventing a plausible sentence. */}
-          {activityLine(progress) && (
-            <div className="muted" data-testid="scan-activity"
-                 style={{ marginTop: 4, fontSize: 12, opacity: 0.85,
-                          fontVariantNumeric: 'tabular-nums' }}>
-              {activityLine(progress)}
-            </div>
-          )}
+        <div style={{ margin: '0 16px 8px' }}>
+          <DiscoverRunProgress
+            progress={progress}
+            busy={busy}
+            sources={sources}
+            inv={inventorySnapshot({ run, inventory: run?.scope?.inventory ?? null })}
+            onStop={liveScanId ? () => stopScan(liveScanId) : undefined}
+            onReview={() => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+            onContinue={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+          />
         </div>
       )}
 

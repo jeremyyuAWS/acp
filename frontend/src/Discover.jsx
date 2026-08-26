@@ -105,7 +105,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // are assembled here rather than threading the whole run object through a new prop; the resolver
   // falls back to the newest per-file inventory stamp when both are absent, which is the case for
   // every run listed before scan_runs.discovered_at existed.
-  const runForExport = { id: scanId, discovered_at: null, completed_at: null }
+  const runForExport = { id: scanId, discovered_at: run?.discovered_at ?? null, completed_at: run?.completed_at ?? null }
   const [sel, setSel] = useState(null)
   const [estOnlyFile, setEstOnlyFile] = useState(null)
   const [showPicker, setShowPicker] = useState(false)   // Drive folder picker modal (Choose folder to scan)
