@@ -56,28 +56,34 @@ const FILE_ACTIVE_PHASES = new Set(['reading', 'analysing', 'scoring'])
 // `phase === 'done'` completion card (isDone is a separate, exact string check on `phase`, not
 // on this table) — an honest "essentially finished, formal completion pending" reading rather
 // than leaving lifecycle stuck showing active after its own per-file work is actually done.
+// Steps: 0=connected, 1=inventory (listing+classifying+saving), 2=lifecycle, 3=finalizing
+//
+// Saving is merged into the inventory step because add_inventory() writes batches throughout
+// the BFS walk — it is not a distinct sequential phase. Showing it as a separate step implied
+// a sequence that does not exist. 'saving' phase now maps to 1 (inventory still active), not 2.
+// 'analysing'/'lifecycle' both mean "per-file lifecycle rule evaluation", so they map to 2 (inventory
+// done, lifecycle active). 'scoring'/'finalizing' map to 3 (lifecycle done, finalization active).
 const PHASE_DONE_COUNT = {
   queued: 0, connecting: 0,
-  discovering: 1, reading: 1, tagging: 1,
-  saving: 2,
-  analysing: 3, lifecycle: 3,
-  scoring: 4, finalizing: 4,
+  discovering: 1, reading: 1, tagging: 1, saving: 1,
+  analysing: 2, lifecycle: 2,
+  scoring: 3, finalizing: 3,
   done: 4,
 }
 
-// Each step has a present-progressive label (active/pending) and a past-tense label (done).
+// Each step has a present-tense label (active/pending) and a past-tense label (done).
 const STEPS = [
-  { key: 'connected', label: 'Connected to source',              labelDone: 'Connected to source' },
-  { key: 'listing',   label: 'Listing and classifying documents', labelDone: 'Listed and classified documents' },
-  { key: 'saving',    label: 'Saving inventory',                  labelDone: 'Saved inventory' },
-  { key: 'lifecycle', label: 'Applying lifecycle rules',          labelDone: 'Applied lifecycle rules' },
+  { key: 'connected',  label: 'Connect to source',        labelDone: 'Connected to source' },
+  { key: 'inventory',  label: 'Build document inventory',  labelDone: 'Built document inventory' },
+  { key: 'lifecycle',  label: 'Apply lifecycle rules',     labelDone: 'Applied lifecycle rules' },
+  { key: 'finalizing', label: 'Finalize Discovery',        labelDone: 'Finalized Discovery' },
 ]
 
 // Per-step explanation of what stop does while that step is active.
 const STOP_HINTS = {
-  listing:   'Stops at the next folder — files listed and classified so far will be kept.',
-  lifecycle: 'Rules already applied will be kept.',
-  saving:    'The inventory save will complete before stopping.',
+  inventory:  'Stops at the next folder — files found and classified so far will be kept.',
+  lifecycle:  'Rules already applied will be kept.',
+  finalizing: 'The final inventory write will complete before stopping.',
 }
 
 function DiscoverStep({ label, kpi, status }) {
@@ -168,6 +174,8 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   const lcArchive = progress.lifecycle_archive ?? null
   const lcDelete = progress.lifecycle_delete ?? null
   const lcTagged = progress.lifecycle_tagged ?? null
+  const lcUnevaluable = progress.unevaluable ?? null
+  const evalRate = progress.rate_per_second ?? null
   // Folder activity fields emitted in the post-BFS "discovering" event.
   const foldersVisited = progress.folders_visited ?? null
   const folderWorkersConfigured = progress.folder_workers_configured ?? null
@@ -211,76 +219,40 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
       if (s.key === 'connected' && sourceCount) {
         kpi = sourceCount === 1 ? '1 source' : `${sourceCount} sources`
       }
-      if (s.key === 'listing' && filesFound > 0) {
-        // Metadata completeness and classification breakdown used to render as separate KPIs on
-        // their own now-removed step rows — the full breakdown still appears in the completion
-        // summary below (classification buckets, metadata exceptions), so nothing is lost; this
-        // row stays a single glanceable count rather than cramming three stat clusters onto it.
+      if (s.key === 'inventory' && filesFound > 0) {
         kpi = foldersFound !== null
           ? `${n(filesFound)} files · ${n(foldersFound)} folders`
           : `${n(filesFound)} files found`
       }
       if (s.key === 'lifecycle') {
         if (rulesEnabled !== null) {
-          // Use progress payload fields (schema_version 2+) — more accurate than inv-derived counts.
-          const actionParts = [
-            lcArchive > 0 && `${n(lcArchive)} Archive Candidate${lcArchive === 1 ? '' : 's'}`,
-            lcDelete > 0 && `${n(lcDelete)} Delete Candidate${lcDelete === 1 ? '' : 's'}`,
-            lcTagged > 0 && `${n(lcTagged)} tagged`,
-          ].filter(Boolean)
           kpi = rulesEnabled === 0
             ? '— No enabled rules'
-            : [`${n(rulesEnabled)} rules · ${n(lifecycleMatches)} matched`,
-               ...actionParts].join(' · ')
-        } else if (lifecycleMatchedCount !== null && lifecycleUnchangedCount !== null) {
-          // Fallback for old backends that don't emit lifecycle stats.
-          kpi = lifecycleMatchedCount === 0
-            ? '— No enabled rules'
-            : `${n(lifecycleMatchedCount)} matched · ${n(lifecycleUnchangedCount)} unchanged`
+            : `${n(lifecycleMatches ?? 0)} matched`
+        } else if (lifecycleMatchedCount !== null) {
+          kpi = lifecycleMatchedCount === 0 ? '— No enabled rules' : `${n(lifecycleMatchedCount)} matched`
         }
       }
-      if (s.key === 'saving' && saveNew !== null) {
-        const parts = []
-        if (saveNew > 0) parts.push(`${n(saveNew)} new`)
-        if (saveUpdated > 0) parts.push(`${n(saveUpdated)} updated`)
-        if (saveUnchanged > 0) parts.push(`${n(saveUnchanged)} unchanged`)
-        if (saveFailed > 0) parts.push(`${n(saveFailed)} failed`)
-        if (parts.length) kpi = parts.join(' · ')
+      if (s.key === 'finalizing' && saveNew !== null) {
+        const total = (saveNew ?? 0) + (saveUpdated ?? 0) + (saveUnchanged ?? 0)
+        if (total > 0) kpi = `${n(total)} records saved`
       }
     }
-    if (status === 'active' && s.key === 'listing' && filesFound > 0) {
-      kpi = `${n(filesFound)} files found so far`
-    }
-    if (status === 'active' && s.key === 'saving' && filesFound > 0) {
-      // add_inventory is one bulk write, not a loop — there is no live sub-count to tick here,
-      // only a real "this is happening now" window bounded by the phase itself.
-      kpi = `Saving ${n(filesFound)} files…`
+    if (status === 'active' && s.key === 'inventory' && filesFound > 0) {
+      kpi = foldersFound !== null
+        ? `${n(filesFound)} files · ${n(foldersFound)} folders`
+        : `${n(filesFound)} files found`
     }
     if (status === 'active' && s.key === 'lifecycle') {
       const liveEval = progress.files_evaluated ?? null
       const liveTotal = progress.files_found ?? null
       const liveRules = progress.rules_enabled ?? null
-      const liveMatched = progress.files_matched ?? 0
-      const liveArchive = progress.archive_candidates ?? 0
-      const liveDelete = progress.delete_candidates ?? 0
-      const liveTagged = progress.files_tagged ?? 0
       if (liveRules !== null && liveRules === 0) {
         kpi = '— No enabled rules'
       } else if (liveEval !== null && liveTotal !== null) {
-        const rulesLabel = liveRules !== null
-          ? `${n(liveRules)} lifecycle rule${liveRules === 1 ? '' : 's'}`
-          : 'lifecycle rules'
-        let detail = liveEval === 0 && liveTotal > 0
-          ? `Starting evaluation of ${n(liveTotal)} files…`
-          : `${n(liveEval)} of ${n(liveTotal)} files evaluated`
-        if (liveMatched > 0) {
-          const sub = []
-          if (liveArchive > 0) sub.push(`${n(liveArchive)} archive`)
-          if (liveDelete > 0) sub.push(`${n(liveDelete)} delete`)
-          if (liveTagged > 0) sub.push(`${n(liveTagged)} tagged`)
-          detail += ` · ${n(liveMatched)} matched${sub.length ? ` (${sub.join(', ')})` : ''}`
-        }
-        kpi = `Applying ${rulesLabel} · ${detail}`
+        kpi = `${n(liveEval)} of ${n(liveTotal)} evaluated`
+      } else if (liveRules !== null) {
+        kpi = `${n(liveRules)} rule${liveRules === 1 ? '' : 's'}`
       }
     }
 
@@ -359,94 +331,8 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
     )
   }
 
-  // Completion summary replaces the active checklist once all steps are done.
-  if (isDone) {
-    const totalFiles = inv?.total ?? filesFound
-    const matched = lifecycleMatches ?? lifecycleMatchedCount ?? 0
-    return (
-      <section className="discover-run-progress" role="region" aria-label="Discovery complete"
-               style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
-        <div className="assess-run-card" style={{ border: '1px solid var(--line,#e4e8ec)', borderRadius: 12,
-                                                  padding: '14px 16px', background: 'var(--panel,#fff)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
-                        gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-            <div style={{ fontSize: 14.5, fontWeight: 650 }}>Discovery complete</div>
-            <span className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>
-              {fmtElapsedSecs(elapsed)}
-            </span>
-          </div>
-          <div aria-live="polite" aria-atomic="false" role="list" aria-label="Discovery steps"
-               style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 14 }}>
-            {steps.map(({ key, ...rest }) => <DiscoverStep key={key} {...rest} />)}
-          </div>
-          {folderWorkersConfigured !== null && (
-            <details style={{ marginBottom: 10, fontSize: 12.5 }}>
-              <summary style={{ cursor: 'pointer', color: 'var(--muted)',
-                                listStyle: 'none', display: 'flex', alignItems: 'center', gap: 6,
-                                userSelect: 'none' }}>
-                <span style={{ fontSize: 10 }}>▶</span>
-                <span>Technical details</span>
-              </summary>
-              <div style={{ paddingLeft: 16, paddingTop: 6, color: 'var(--muted)', lineHeight: 1.7 }}>
-                <div>Folder traversal concurrency: up to {folderWorkersConfigured}</div>
-              </div>
-            </details>
-          )}
-          <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 12,
-                        fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.6 }}>
-            <div>{[
-              `${n(totalFiles)} files discovered`,
-              matched > 0
-                ? [
-                    `${n(matched)} matched`,
-                    lcArchive > 0 && `${n(lcArchive)} Archive Candidate${lcArchive === 1 ? '' : 's'}`,
-                    lcDelete > 0 && `${n(lcDelete)} Delete Candidate${lcDelete === 1 ? '' : 's'}`,
-                    lcTagged > 0 && `${n(lcTagged)} tagged`,
-                  ].filter(Boolean).join(' · ')
-                : '0 matched lifecycle rules',
-            ].join(' · ')}</div>
-            {hasClassStats ? (
-              <div>
-                {[
-                  clsAssessable > 0 && `${n(clsAssessable)} assessable`,
-                  clsMetadataOnly > 0 && `${n(clsMetadataOnly)} metadata-only`,
-                  clsUnsupported > 0 && `${n(clsUnsupported)} unsupported`,
-                  clsEligibilityUnknown > 0 && `${n(clsEligibilityUnknown)} unknown`,
-                  clsExcluded > 0 && `${n(clsExcluded)} excluded`,
-                ].filter(Boolean).join(' · ')}
-              </div>
-            ) : assessableCount !== null ? (
-              <div>{n(assessableCount)} assessable · {n(unsupportedCount)} not assessable</div>
-            ) : null}
-            {totalExceptions > 0 && (
-              <div>
-                {[
-                  excInaccessible && `${n(excInaccessible)} inaccessible`,
-                  excDeleted && `${n(excDeleted)} deleted during scan`,
-                  excMetadataFailure && `${n(excMetadataFailure)} unreadable`,
-                ].filter(Boolean).join(' · ')} — skipped during metadata read.
-              </div>
-            )}
-            <div>No documents were assessed or changed.</div>
-          </div>
-          {(onReview || onContinue) && (
-            <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
-              {onReview && (
-                <button type="button" className="ghost small" onClick={onReview}>
-                  Review inventory
-                </button>
-              )}
-              {onContinue && (
-                <button type="button" className="primary small" onClick={onContinue}>
-                  Continue to Assessment →
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      </section>
-    )
-  }
+  // DiscoverCompleteSummary takes over once the scan is fully done and not running.
+  if (isDone && !busy) return null
 
   return (
     <section className="discover-run-progress" role="region" aria-label="Discovery in progress"
@@ -475,6 +361,87 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
              style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
           {steps.map(({ key, ...rest }) => <DiscoverStep key={key} {...rest} />)}
         </div>
+
+        {/* Inventory sub-step expansion — visible only while Building document inventory is active.
+            Shows the concurrent sub-operations (listing, classifying, saving) without implying
+            they are sequential top-level steps. Each sub-row is conditional on having data. */}
+        {phase === 'discovering' && (
+          <div style={{ marginTop: 8, paddingLeft: 26, display: 'flex', flexDirection: 'column',
+                        gap: 5, fontSize: 12.5, color: 'var(--muted)' }}>
+            {(foldersFound !== null || (progress.folder_requests_active ?? null) !== null) && (
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Listing folders</span>
+                <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {foldersFound !== null ? `${n(foldersFound)} visited` : null}
+                  {(progress.folder_requests_active ?? 0) > 0
+                    ? ` · ${n(progress.folder_requests_active)} active` : null}
+                </span>
+              </div>
+            )}
+            {filesFound > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Reading metadata</span>
+                <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {(progress.metadata_complete ?? null) !== null
+                    ? `${n(progress.metadata_complete)} complete`
+                    : `${n(filesFound)} found`}
+                  {(progress.metadata_incomplete ?? 0) > 0
+                    ? ` · ${n(progress.metadata_incomplete)} incomplete` : null}
+                </span>
+              </div>
+            )}
+            {clsAssessable !== null && (
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Classifying documents</span>
+                <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {n(clsAssessable)} assessable
+                  {(clsUnsupported ?? 0) + (clsMetadataOnly ?? 0) > 0
+                    ? ` · ${n((clsUnsupported ?? 0) + (clsMetadataOnly ?? 0))} other` : null}
+                </span>
+              </div>
+            )}
+            {saveNew !== null && (
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Saving inventory</span>
+                <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {n((saveNew ?? 0) + (saveUpdated ?? 0))} saved
+                  {(saveFailed ?? 0) > 0 ? ` · ${n(saveFailed)} failed` : null}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Lifecycle progress bar and detail — visible while Apply lifecycle rules is active.
+            Uses a determinate <progress> bar because files_found is fixed once inventory is done.
+            One bar only; no overall percentage is fabricated. */}
+        {phase === 'lifecycle' && filesEvaluated !== null && filesFound > 0 && (
+          <div style={{ marginTop: 10, paddingLeft: 26 }}>
+            <progress value={filesEvaluated} max={filesFound}
+                      aria-label={`Lifecycle evaluation: ${n(filesEvaluated)} of ${n(filesFound)} files`}
+                      aria-valuetext={`${n(filesEvaluated)} of ${n(filesFound)} files evaluated`}
+                      style={{ width: '100%', height: 5, display: 'block', marginBottom: 6 }} />
+            <div style={{ fontSize: 12.5, color: 'var(--muted)', display: 'flex',
+                          flexDirection: 'column', gap: 4 }}>
+              {lifecycleMatches !== null && lifecycleMatches > 0 && (
+                <div>
+                  {[
+                    `${n(lifecycleMatches)} matched`,
+                    lcArchive > 0 && `${n(lcArchive)} Archive Candidate${lcArchive === 1 ? '' : 's'}`,
+                    lcDelete > 0 && `${n(lcDelete)} Delete Candidate${lcDelete === 1 ? '' : 's'}`,
+                    lcTagged > 0 && `${n(lcTagged)} tagged`,
+                  ].filter(Boolean).join(' · ')}
+                </div>
+              )}
+              {(lcUnevaluable ?? 0) > 0 && (
+                <div>{n(lcUnevaluable)} could not be evaluated</div>
+              )}
+              {evalRate !== null && evalRate > 0 && (
+                <div style={{ color: 'var(--muted)' }}>{n(evalRate)} files/sec</div>
+              )}
+            </div>
+          </div>
+        )}
 
         {FILE_ACTIVE_PHASES.has(phase) && (filesFound > 0 || progress.current) && (
           <WorkerCard current={progress.current || null}

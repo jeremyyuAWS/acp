@@ -58,7 +58,7 @@ describe('DiscoverCompleteSummary renders completion state', () => {
 
   it('shows lifecycle rules count', () => {
     const html = render(BASE)
-    expect(html).toContain('3 lifecycle rules matched')
+    expect(html).toContain('Applied 3 lifecycle rules')
   })
 
   it('omits metadata-only row when count is 0', () => {
@@ -76,14 +76,14 @@ describe('DiscoverCompleteSummary renders completion state', () => {
     expect(html).not.toContain('could not be opened')
   })
 
-  it('omits lifecycle rules when count is 0', () => {
+  it('shows "No lifecycle rules enabled" when count is 0', () => {
     const html = render({ ...BASE, lifecycleRulesCount: 0 })
-    expect(html).not.toContain('lifecycle rules')
+    expect(html).toContain('No lifecycle rules enabled')
   })
 
-  it('omits lifecycle rules when count is null', () => {
+  it('shows "No lifecycle rules enabled" when count is null', () => {
     const html = render({ ...BASE, lifecycleRulesCount: null })
-    expect(html).not.toContain('lifecycle rules')
+    expect(html).toContain('No lifecycle rules enabled')
   })
 
   it('shows "Continue to Assessment" CTA', () => {
@@ -110,11 +110,11 @@ describe('DiscoverCompleteSummary renders completion state', () => {
       ...BASE,
       inventoryDelta: { new: 224, updated: 61, unchanged: 963 },
     })
-    expect(html).toContain('Inventory')
+    expect(html).toContain('Changes since previous Discovery')
     expect(html).toContain('224')
-    expect(html).toContain('new')
+    expect(html).toContain('added')
     expect(html).toContain('61')
-    expect(html).toContain('updated')
+    expect(html).toContain('changed')
     expect(html).toContain('963')
     expect(html).toContain('unchanged')
   })
@@ -147,7 +147,80 @@ describe('CTA gating', () => {
 describe('singular lifecycle rule label', () => {
   it('uses singular "lifecycle rule" when count is 1', () => {
     const html = render({ ...BASE, lifecycleRulesCount: 1 })
-    expect(html).toContain('1 lifecycle rule matched')
+    expect(html).toContain('Applied 1 lifecycle rule')
     expect(html).not.toContain('1 lifecycle rules')
+  })
+})
+
+describe('lifecycle action breakdown', () => {
+  it('shows archive candidates when provided and > 0', () => {
+    const html = render({ ...BASE, archiveCandidates: 12 })
+    expect(html).toContain('12')
+    expect(html).toContain('Archive Candidate')
+  })
+
+  it('shows delete candidates when provided and > 0', () => {
+    const html = render({ ...BASE, deleteCandidates: 1 })
+    expect(html).toContain('1 Delete Candidate')
+  })
+
+  it('uses plural Delete Candidates when count > 1', () => {
+    const html = render({ ...BASE, deleteCandidates: 5 })
+    expect(html).toContain('5 Delete Candidates')
+  })
+
+  it('shows tagged count when provided and > 0', () => {
+    const html = render({ ...BASE, tagged: 8 })
+    expect(html).toContain('8 tagged')
+  })
+
+  it('omits action breakdown items when counts are 0 or null', () => {
+    const html = render({ ...BASE, archiveCandidates: 0, deleteCandidates: null, tagged: 0 })
+    expect(html).not.toContain('Archive Candidate')
+    expect(html).not.toContain('Delete Candidate')
+    expect(html).not.toContain('tagged')
+  })
+})
+
+describe('exception summary', () => {
+  it('shows inaccessible count when > 0', () => {
+    const html = render({ ...BASE, excInaccessible: 3 })
+    expect(html).toContain('3 inaccessible')
+    expect(html).toContain('skipped')
+  })
+
+  it('shows unreadable count when > 0', () => {
+    const html = render({ ...BASE, excMetadataFailure: 2 })
+    expect(html).toContain('2 unreadable')
+  })
+
+  it('shows deleted-during-scan count when > 0', () => {
+    const html = render({ ...BASE, excDeleted: 1 })
+    expect(html).toContain('1 deleted during scan')
+  })
+
+  it('omits exception summary when all exception counts are absent or zero', () => {
+    const html = render({ ...BASE, excInaccessible: 0, excMetadataFailure: null, excDeleted: null })
+    expect(html).not.toContain('inaccessible')
+    expect(html).not.toContain('unreadable')
+    expect(html).not.toContain('deleted during scan')
+  })
+})
+
+describe('folder count in discovered total', () => {
+  it('shows folder count when folderCount > 0', () => {
+    const html = render({ ...BASE, folderCount: 12 })
+    expect(html).toContain('12 folders')
+  })
+
+  it('uses singular folder when count is 1', () => {
+    const html = render({ ...BASE, folderCount: 1 })
+    expect(html).toContain('1 folder')
+    expect(html).not.toContain('1 folders')
+  })
+
+  it('omits folder count when not provided', () => {
+    const html = render(BASE)
+    expect(html).not.toContain('folders')
   })
 })
