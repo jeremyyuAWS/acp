@@ -106,6 +106,11 @@ def classify_from_metadata(name: str, mime: str | None = None) -> dict:
         base["doc_class"] = "text-document"
     elif ext in (".html", ".htm") or "html" in m:
         base["doc_class"] = "web-page"
+    elif ext in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".svg", ".ico") or m.startswith("image/"):
+        base["doc_class"] = "image"
+        base["has_images"] = True
+    elif ext in (".mp4", ".mov", ".avi", ".mkv", ".wmv", ".webm", ".mp3", ".wav", ".ogg", ".flac", ".m4a") or m.startswith("video/") or m.startswith("audio/"):
+        base["doc_class"] = "audio-video"
     return base
 
 

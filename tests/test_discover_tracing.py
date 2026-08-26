@@ -248,9 +248,9 @@ def test_a_discover_only_run_now_produces_a_trace(isolated_store, monkeypatch):
     assert out["file_spans_emitted"] == 2
     spans = [s for t in fake.traces for s in t.spans]
     # classify_from_metadata's own vocabulary, taken from the classifier rather than assumed:
-    # a .docx is a 'text-document', a .mp4 is 'unknown'. The point is that the span carries the
-    # classification LISTING produced, with no file opened.
-    assert {s.kw["output"]["doc_class"] for s in spans} == {"text-document", "unknown"}
+    # a .docx is a 'text-document', a .mp4 is 'audio-video'. The point is that the span carries
+    # the classification LISTING produced, with no file opened.
+    assert {s.kw["output"]["doc_class"] for s in spans} == {"text-document", "audio-video"}
 
 
 def test_discovery_still_completes_when_tracing_is_dead(isolated_store, monkeypatch):
