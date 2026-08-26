@@ -380,6 +380,55 @@ def scan_job(job_id: str):
     return j
 
 
+@router.get("/scans/jobs/{job_id}/stream")
+async def stream_job_state(job_id: str):
+    """SSE stream for live job progress. Yields an event whenever the job's seq counter
+    advances (i.e. any field changed), then a final event when done/error. Polls Redis
+    every 250 ms — fine-grained enough given the 500 ms coalesce window in core.update_job.
+
+    Falls back gracefully when Redis is absent: get_job_state reads the in-memory JOBS dict
+    in that case and the stream still works (same-replica only, but correctness is preserved).
+
+    Frontend usage: new EventSource('/scans/jobs/{id}/stream') with .onmessage = e => setProgress(JSON.parse(e.data)).
+    Keep the existing GET /scans/jobs/{id} polling as a fallback for browsers/proxies that
+    strip SSE connections."""
+    import asyncio
+    import json as _j
+
+    async def _generate():
+        last_seq = -1
+        not_found_streak = 0
+        while True:
+            state = await asyncio.to_thread(core.get_job_state, job_id)
+            if state is None:
+                not_found_streak += 1
+                if not_found_streak >= 4:   # ~1s of misses before giving up
+                    yield "event: error\ndata: {\"error\": \"job not found\"}\n\n"
+                    return
+                await asyncio.sleep(0.25)
+                continue
+            not_found_streak = 0
+            seq = int(state.get("seq") or 0)
+            if seq != last_seq:
+                last_seq = seq
+                yield f"data: {_j.dumps(state)}\n\n"
+            if state.get("done"):
+                # One final event so the client can close the EventSource cleanly.
+                yield "event: done\ndata: {\"done\": true}\n\n"
+                return
+            await asyncio.sleep(0.25)
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",       # disable nginx/ACA buffering
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @router.get("/scans")
 def scans(request: Request):
     return core.store.list_scans(owner=_owner(request))

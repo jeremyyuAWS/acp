@@ -26,22 +26,68 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
 
+class _FakePipeline:
+    """Queues commands and executes them atomically (in this fake, sequentially)."""
+
+    def __init__(self, redis):
+        self._r = redis
+        self._cmds = []
+
+    def delete(self, k):                   self._cmds.append(('del', k)); return self
+    def hset(self, k, mapping=None):       self._cmds.append(('hset', k, mapping)); return self
+    def hincrby(self, k, f, n):            self._cmds.append(('hincrby', k, f, n)); return self
+    def expire(self, k, s):                return self  # TTL not modelled
+
+    def execute(self):
+        for cmd in self._cmds:
+            if cmd[0] == 'del':      self._r.delete(cmd[1])
+            elif cmd[0] == 'hset':   self._r.hset(cmd[1], mapping=cmd[2])
+            elif cmd[0] == 'hincrby': self._r.hincrby(cmd[1], cmd[2], cmd[3])
+        return [None] * len(self._cmds)
+
+
 class FakeRedis:
-    """Shared backing store — the thing two replicas have in common and a dict does not."""
+    """Shared backing store — the thing two replicas have in common and a dict does not.
+    Stores hashes as {key: {field: json_str}} to mirror the HSET-based core.set_job/update_job."""
 
     def __init__(self):
-        self.kv: dict[str, str] = {}
+        self.kv: dict[str, dict[str, str]] = {}   # key → {field: json_encoded_value}
         self.sets = 0
 
-    def set(self, k, v, ex=None):
-        self.kv[k] = v
+    # ── Hash operations (current interface) ──────────────────────────────────
+
+    def hset(self, k, mapping=None):
+        if k not in self.kv:
+            self.kv[k] = {}
+        if mapping:
+            self.kv[k].update(mapping)
         self.sets += 1
 
-    def get(self, k):
-        return self.kv.get(k)
+    def hgetall(self, k):
+        return self.kv.get(k, {})
+
+    def hincrby(self, k, field, amount):
+        import json as _j
+        if k not in self.kv:
+            self.kv[k] = {}
+        cur = int(self.kv[k].get(field, "0"))
+        self.kv[k][field] = str(cur + amount)
+        return cur + amount
+
+    def expire(self, k, seconds): pass
 
     def delete(self, k):
         self.kv.pop(k, None)
+
+    def pipeline(self):
+        return _FakePipeline(self)
+
+    # ── String operations (backward-compat fallback path in get_job_state) ───
+
+    def get(self, k):
+        return None   # no string keys in this fake; hash path above takes precedence
+
+    def set(self, k, v, ex=None): pass   # no-op (old interface, not called by new core.py)
 
 
 @pytest.fixture()
@@ -111,9 +157,17 @@ def test_a_broken_redis_degrades_to_memory_instead_of_failing_the_scan(monkeypat
     memory is strictly better than raising into the progress callback."""
     import core
 
+    class _BrokenPipeline:
+        def delete(self, *a): return self
+        def hset(self, *a, **k): return self
+        def hincrby(self, *a): return self
+        def expire(self, *a): return self
+        def execute(self): raise RuntimeError("connection reset")
+
     class Broken:
-        def set(self, *a, **k): raise RuntimeError("connection reset")
-        def get(self, *a, **k): raise RuntimeError("connection reset")
+        def pipeline(self): return _BrokenPipeline()
+        def hgetall(self, *a): raise RuntimeError("connection reset")
+        def get(self, *a): raise RuntimeError("connection reset")
 
     monkeypatch.setattr(core, "_get_redis", lambda: Broken())
     monkeypatch.setattr(core, "JOBS", {})
@@ -165,10 +219,9 @@ def test_an_unfinished_job_with_no_recent_liveness_signal_reads_as_failed(two_re
     core.set_job("j8", {"phase": "queued", "done": False, "scan_id": None, "files_found": 0})
     # Simulate the replica having died: back-date updated_at past the threshold, as if the last
     # write (the initial set_job) happened long ago and nothing has touched it since.
+    # Hash storage: each field is json-encoded; patch the field directly.
     import json as _j
-    stored = _j.loads(fake.kv["job:j8"])
-    stored["updated_at"] = _age_iso(200)
-    fake.kv["job:j8"] = _j.dumps(stored)
+    fake.kv["job:j8"]["updated_at"] = _j.dumps(_age_iso(200))
 
     got = core.get_job_state("j8")
     assert got["done"] is True and got["phase"] == "error"
@@ -194,12 +247,11 @@ def test_staleness_is_computed_at_read_time_and_never_persisted(two_replicas, mo
     monkeypatch.setattr(core, "_JOB_STALE_SECONDS", 90)
     core.set_job("j10", {"phase": "queued", "done": False})
     import json as _j
-    stored = _j.loads(fake.kv["job:j10"])
-    stored["updated_at"] = _age_iso(200)
-    fake.kv["job:j10"] = _j.dumps(stored)
+    fake.kv["job:j10"]["updated_at"] = _j.dumps(_age_iso(200))
 
     core.get_job_state("j10")
-    still_raw = _j.loads(fake.kv["job:j10"])
+    # Still stored as a hash; decode each field to verify no mutation.
+    still_raw = {k: _j.loads(v) for k, v in fake.kv["job:j10"].items()}
     assert still_raw["phase"] == "queued" and still_raw.get("done") is False, (
         "get_job_state must not mutate the stored record — staleness is a read-time judgment"
     )
@@ -210,9 +262,7 @@ def test_a_completed_job_is_never_reported_stale_regardless_of_age(two_replicas,
     monkeypatch.setattr(core, "_JOB_STALE_SECONDS", 90)
     core.set_job("j11", {"phase": "done", "done": True, "scan_id": "s-old"})
     import json as _j
-    stored = _j.loads(fake.kv["job:j11"])
-    stored["updated_at"] = _age_iso(999999)
-    fake.kv["job:j11"] = _j.dumps(stored)
+    fake.kv["job:j11"]["updated_at"] = _j.dumps(_age_iso(999999))
 
     got = core.get_job_state("j11")
     assert got["done"] is True and got["phase"] == "done" and got["scan_id"] == "s-old"
