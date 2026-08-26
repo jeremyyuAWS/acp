@@ -916,6 +916,19 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
     # doc_has_disposition() SELECTs with a set lookup (idempotency guard AC-13, bulk path).
     seen = core.store.get_scan_dispositions(scan_id)
 
+    # Pre-parse match conditions and action configs once per policy instead of once per
+    # (file × policy). For M policies and N files this cuts JSON decodes from N×M to M.
+    # _match=None marks a policy whose match JSON is unparseable — skip it in the loop.
+    for p in policies:
+        try:
+            p["_match"] = _json.loads(p.get("match") or "[]")
+        except Exception:
+            p["_match"] = None
+        try:
+            p["_action_config"] = _json.loads(p.get("action_config") or "{}")
+        except Exception:
+            p["_action_config"] = {}
+
     # Accumulate writes across the loop; flush as bulk operations at the end instead of
     # issuing N individual INSERT/UPDATE calls (the dominant latency at scale).
     tag_rows: list = []    # (scan_id, file, tag, kind, rule_id)
@@ -963,11 +976,9 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
         }
         matched = []
         for p in policies:
-            try:
-                match = _json.loads(p.get("match") or "[]")
-            except Exception:
+            if p["_match"] is None:
                 continue
-            if disposition.matches(doc, match):
+            if disposition.matches(doc, p["_match"]):
                 matched.append(p)
         if not matched:
             continue
@@ -981,11 +992,7 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
             key = (doc_id, p["policy_id"])
             if key in seen:
                 continue  # already tagged + audited on an earlier Discover — idempotent
-            try:
-                cfg = _json.loads(p.get("action_config") or "{}")
-            except Exception:
-                cfg = {}
-            tags = disposition.tag_list(cfg)
+            tags = disposition.tag_list(p["_action_config"])
             if not tags:
                 continue
             for tag in tags:
