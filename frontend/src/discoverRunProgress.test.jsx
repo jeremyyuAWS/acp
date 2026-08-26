@@ -1177,3 +1177,40 @@ describe('stopped card (§9): scan ended before completion', () => {
     expect(html).not.toContain('Discovery stopped')
   })
 })
+
+// discovery/preflight returned 'degraded' when this run started — allowed through rather than
+// blocked, but worth saying why for the run's duration (see discoveryPreflightGate.js).
+describe('the preflightDegraded note', () => {
+  const renderWith = (progress, preflightDegraded) => renderToStaticMarkup(
+    createElement(DiscoverRunProgress, { progress, busy: true, preflightDegraded }))
+
+  it('shows the degraded reason(s) while the run is active', () => {
+    const html = renderWith(PROG, ['queue has 60 jobs waiting — this scan will queue behind them'])
+    expect(html).toContain('Started with a note:')
+    expect(html).toContain('queue has 60 jobs waiting')
+  })
+
+  it('joins multiple reasons', () => {
+    const html = renderWith(PROG, ['reason one', 'reason two'])
+    expect(html).toContain('reason one · reason two')
+  })
+
+  it('renders nothing extra when preflightDegraded is null (the ready/blocked case)', () => {
+    const html = renderWith(PROG, null)
+    expect(html).not.toContain('Started with a note')
+  })
+
+  it('renders nothing extra when preflightDegraded is an empty array', () => {
+    const html = renderWith(PROG, [])
+    expect(html).not.toContain('Started with a note')
+  })
+
+  it('does not show a degraded note on the stopped card — the note belongs to an active run', () => {
+    const html = renderWith(PROG, ['queue backlog'])
+    // Same component, busy=false path (stopped/failed card) — sanity-check the note is specific
+    // to the active-run branch, not global to every render of this component.
+    const stoppedHtml = renderToStaticMarkup(createElement(DiscoverRunProgress,
+      { progress: PROG, busy: false, preflightDegraded: ['queue backlog'] }))
+    expect(stoppedHtml).not.toContain('Started with a note')
+  })
+})

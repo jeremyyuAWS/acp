@@ -89,7 +89,7 @@ function DiscoverStep({ label, kpi, status }) {
   )
 }
 
-export default function DiscoverRunProgress({ progress, busy, onStop, sources, inv = null, onReview, onContinue }) {
+export default function DiscoverRunProgress({ progress, busy, onStop, sources, inv = null, onReview, onContinue, preflightDegraded = null }) {
   const [startedAt] = useState(() => Date.now())
   const [elapsed, setElapsed] = useState(0)
   const [stopping, setStopping] = useState(false)
@@ -492,6 +492,16 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
                        border: 0 }}>
           {activeStepLabel ? `Step in progress: ${activeStepLabel}` : null}
         </span>
+
+        {/* discovery/preflight returned 'degraded' when this scan started (e.g. the durable
+            queue was backed up) — allowed through rather than blocked, but worth saying why,
+            for as long as this run lasts. Informational, not role="alert": the scan is
+            proceeding, this is not a fault. */}
+        {preflightDegraded && preflightDegraded.length > 0 && (
+          <p className="muted" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5 }}>
+            Started with a note: {preflightDegraded.join(' · ')}
+          </p>
+        )}
 
         {showStalledWarning && (
           <p role="alert" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5,

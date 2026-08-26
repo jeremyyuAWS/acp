@@ -158,9 +158,22 @@ export function parseSSEFrames(buffer) {
 // reads the same authenticated stream manually via fetch() + a ReadableStream reader instead.
 //
 // onMessage fires with the parsed job-state object (same shape getJob() returns) on every
-// `data:` frame; onDone/onError fire at most once each, whichever way the stream ends — the
-// server's own terminal `event: done`/`event: error` frame, the connection closing, or a fetch
-// failure. Returns {close()}; ALWAYS call it once the caller is done (scan settled, cancelled, or
+// `data:` frame; onDone/onError fire at most once each, whichever way the stream ends.
+//
+// onError means the CONNECTION failed — a non-ok response, a fetch exception, the reader
+// erroring mid-read. onDone means the stream ended cleanly, WHETHER OR NOT it had good news:
+// the server's own `event: done` frame (final job state already delivered via onMessage) and its
+// `event: error` frame (routes/scans.py's only use of it: "no active job for this scan" — Redis
+// genuinely has nothing, which happens routinely once a job finishes and its state ages out, not
+// only on a real fault) both count as onDone. Found live 2026-08-26: treating the server's
+// `event: error` as a transport failure flipped the caller's sseFailedRef on every scan that
+// finished cleanly, degrading the last tick or two to polling getJob(job_id) with a job_id that
+// had already gone stale (the job row aged out, or a retry replaced it) — reproducing a handful
+// of the exact 404s the scan-ID-anchored stream (#843) was built to eliminate. The backend never
+// emits `event: error` for any other reason: a real fault (bad scan_id, wrong owner) is rejected
+// as an HTTP error status before the stream ever starts, never as a mid-stream frame.
+//
+// Returns {close()}; ALWAYS call it once the caller is done (scan settled, cancelled, or
 // unmounting) — closing aborts the fetch, which is what stops the server's generator loop, so an
 // unclosed stream leaks both the browser connection and the backend coroutine polling Redis
 // every 250ms for it.
@@ -182,8 +195,7 @@ export function openDiscoverStream(scanId, { onMessage, onDone, onError } = {}) 
         const { frames, rest } = parseSSEFrames(buffer)
         buffer = rest
         for (const f of frames) {
-          if (f.event === 'done') { onDone?.(); return }
-          if (f.event === 'error') { onError?.(); return }
+          if (f.event === 'done' || f.event === 'error') { onDone?.(); return }
           try { onMessage?.(JSON.parse(f.data)) } catch { /* malformed frame — skip, keep reading */ }
         }
       }

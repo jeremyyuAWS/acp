@@ -20,8 +20,25 @@ describe('preflightVerdict', () => {
     expect(r.reason).toBe(null)
   })
 
-  it('does not block on a ready verdict', () => {
-    expect(preflightVerdict({ verdict: 'ready' }).blocked).toBe(false)
+  it('carries the degraded reasons through so the run can show why it started degraded', () => {
+    const r = preflightVerdict({ verdict: 'degraded', degraded_reasons: ['queue has 60 jobs waiting'] })
+    expect(r.degradedReasons).toEqual(['queue has 60 jobs waiting'])
+  })
+
+  it('does not block on a ready verdict, and carries no degraded reasons', () => {
+    const r = preflightVerdict({ verdict: 'ready' })
+    expect(r.blocked).toBe(false)
+    expect(r.degradedReasons).toEqual([])
+  })
+
+  it('a blocked verdict carries no degraded reasons — the run never starts, so nothing to show', () => {
+    const r = preflightVerdict({ verdict: 'blocked', blocked_reasons: ['no_workers'] })
+    expect(r.degradedReasons).toEqual([])
+  })
+
+  it('fails open (never blocks) on an unrecognized future verdict value', () => {
+    const r = preflightVerdict({ verdict: 'some-new-verdict', degraded_reasons: ['x'] })
+    expect(r.blocked).toBe(false)
   })
 
   it('does not block when the preflight call itself failed (null response)', () => {
@@ -30,5 +47,6 @@ describe('preflightVerdict', () => {
     // fallback if this check could not run at all.
     expect(preflightVerdict(null).blocked).toBe(false)
     expect(preflightVerdict(undefined).blocked).toBe(false)
+    expect(preflightVerdict(null).degradedReasons).toEqual([])
   })
 })
