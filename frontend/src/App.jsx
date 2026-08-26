@@ -819,20 +819,57 @@ export default function App() {
   // "reconnected" to on a later reload.
   const ACTIVE_JOB_KEY = 'active_job_id'
 
-  const pollScanJob = async (job_id) => {
+  const _pollScanJobPolling = async (job_id) => {
+    let job
+    do {
+      await new Promise((r) => setTimeout(r, 350))
+      job = await getJob(job_id)
+      setProgress(job)
+    } while (!job.done)
+    if (job.error) throw new Error(job.error)
+    return getScan(job.scan_id)
+  }
+
+  const pollScanJob = (job_id) => {
     sessionStorage.setItem(ACTIVE_JOB_KEY, job_id)
-    try {
-      let job
-      do {
-        await new Promise((r) => setTimeout(r, 350))
-        job = await getJob(job_id)
-        setProgress(job)
-      } while (!job.done)
-      if (job.error) throw new Error(job.error)
-      return await getScan(job.scan_id)
-    } finally {
-      sessionStorage.removeItem(ACTIVE_JOB_KEY)
-    }
+    const run =
+      typeof EventSource !== 'undefined'
+        ? new Promise((resolve, reject) => {
+            const es = new EventSource(`/scans/jobs/${job_id}/stream`)
+            let settled = false
+            const finish = (job) => {
+              if (settled) return
+              settled = true
+              es.close()
+              if (job?.error) reject(new Error(job.error))
+              else getScan(job?.scan_id).then(resolve, reject)
+            }
+            es.onmessage = (e) => {
+              try {
+                const job = JSON.parse(e.data)
+                setProgress(job)
+                if (job.done) finish(job)
+              } catch {
+                /* ignore malformed frame */
+              }
+            }
+            es.addEventListener('error', (e) => {
+              if (settled) return
+              settled = true
+              es.close()
+              if (e.data != null) {
+                try {
+                  reject(new Error(JSON.parse(e.data).error || 'scan error'))
+                } catch {
+                  reject(new Error('scan error'))
+                }
+              } else {
+                _pollScanJobPolling(job_id).then(resolve, reject)
+              }
+            })
+          })
+        : _pollScanJobPolling(job_id)
+    return run.finally(() => sessionStorage.removeItem(ACTIVE_JOB_KEY))
   }
 
   // Reconnect to an in-flight DEFAULT-path scan after a page reload — the mirror of reconnectScan
