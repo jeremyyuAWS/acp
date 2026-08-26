@@ -77,6 +77,17 @@ describe('a completed read fills the recommendation surface', () => {
     expect(h.calls[0]).toMatchObject({ scanId: 'scan-1', offset: 0 })
   })
 
+  it('feeds the completed read into the export panel too, not just the recommendation surface', async () => {
+    // DiscoverInventoryExport was wired with `inventory={scope.inventory}` alone — the SUMMARY
+    // object (by_format/by_status/samples), which has no `.rows` array — so its own
+    // `rows || inventory.rows` fallback always landed on `null` and it read "The inventory could
+    // not be read" on every run, including a completed read like this one. Regression guard: a
+    // successful read must reach BOTH consumers of `inv`, not just DiscoveryResults.
+    await render({ run: { id: 'scan-1', discovered_at: '2026-08-26T14:00:00Z' } })
+    expect(text()).not.toContain('The inventory could not be read')
+    expect(text()).toContain('Inventory taken')
+  })
+
   it('shows the tag, the rule that produced it and the recorded reason', async () => {
     await render()
     expect(text()).toContain('tagged for archive review')

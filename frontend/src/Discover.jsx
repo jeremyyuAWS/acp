@@ -623,9 +623,16 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           instant, and a CSV outlives the screen that explained it.
 
           It self-guards: no inventory to export renders nothing, and it says "not recorded"
-          rather than inventing a date for a run the backend never stamped. */}
+          rather than inventing a date for a run the backend never stamped.
+
+          `rows`, not `inventory` — DiscoverInventoryExport reads `rows || inventory.rows`, and
+          `scope.inventory` is the SUMMARY (by_format/by_status/samples), which has no `.rows`
+          array at all. Passed as `inventory` alone, `list` was `null` unconditionally, so this
+          panel read "The inventory could not be read" on every run, healthy or not — including
+          the runs the "0 documents" fix (#835) now correctly counts. `inv` is the same paginated
+          per-file read already threaded into DiscoveryResults above as `invRows`. */}
       <DiscoverInventoryExport scanId={scanId} run={runForExport}
-                               inventory={scope?.inventory || null} />
+                               inventory={scope?.inventory || null} rows={inv?.rows ?? null} />
 
       {files.length === 0 ? (
         <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Sources.</p>
