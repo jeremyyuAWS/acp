@@ -1343,7 +1343,25 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # record candidate lifecycle outcomes (never executing the Drive move/delete here). Runs
         # before the no-assessable-items short-circuit below because a rule may match a
         # non-scannable estate row (old media to archive, a /tmp file to flag for deletion).
-        _evaluate_discover_lifecycle_rules(scan_id, source, user)
+        # Emit "lifecycle" phase before the call so the frontend step goes active immediately,
+        # then pass a progress_cb so per-10-file ticks update the live KPI in real time.
+        _jid = job.get("id")
+        _lifecycle_total = len(inv)
+        if _jid:
+            core.update_job(_jid, {"phase": "lifecycle",
+                                   "files_found": _lifecycle_total,
+                                   "files_evaluated": 0,
+                                   "rules_enabled": 0,
+                                   "files_matched": 0,
+                                   "archive_candidates": 0,
+                                   "delete_candidates": 0,
+                                   "files_tagged": 0})
+        def _lc_progress(stats):
+            if _jid:
+                core.update_job(_jid, {"phase": "lifecycle",
+                                       "files_found": _lifecycle_total,
+                                       **stats})
+        _evaluate_discover_lifecycle_rules(scan_id, source, user, progress_cb=_lc_progress)
         # THIS is where an ADR 0020 run's discovery ends — the estate is listed, the inventory is
         # persisted, the lifecycle rules have run, and nothing further happens until somebody
         # triggers Assess. The run stays at status='discovered' with completed_at NULL, possibly

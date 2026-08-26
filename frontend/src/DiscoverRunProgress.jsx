@@ -261,14 +261,28 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
       kpi = `${n(filesFound)} files found so far`
     }
     if (status === 'active' && s.key === 'lifecycle') {
-      // filesEvaluated live = progress.files_evaluated during "lifecycle" phase ticks
       const liveEval = progress.files_evaluated ?? null
       const liveTotal = progress.files_found ?? null
       const liveRules = progress.rules_enabled ?? null
+      const liveMatched = progress.files_matched ?? 0
+      const liveArchive = progress.archive_candidates ?? 0
+      const liveDelete = progress.delete_candidates ?? 0
+      const liveTagged = progress.files_tagged ?? 0
       if (liveRules !== null && liveRules === 0) {
         kpi = '— No enabled rules'
-      } else if (liveEval !== null && liveRules !== null && liveTotal !== null) {
-        kpi = `Applying ${n(liveRules)} lifecycle rule${liveRules === 1 ? '' : 's'} · ${n(liveEval)} of ${n(liveTotal)} files evaluated`
+      } else if (liveEval !== null && liveTotal !== null) {
+        const rulesLabel = liveRules !== null
+          ? `${n(liveRules)} lifecycle rule${liveRules === 1 ? '' : 's'}`
+          : 'lifecycle rules'
+        let detail = `${n(liveEval)} of ${n(liveTotal)} files evaluated`
+        if (liveMatched > 0) {
+          const sub = []
+          if (liveArchive > 0) sub.push(`${n(liveArchive)} archive`)
+          if (liveDelete > 0) sub.push(`${n(liveDelete)} delete`)
+          if (liveTagged > 0) sub.push(`${n(liveTagged)} tagged`)
+          detail += ` · ${n(liveMatched)} matched${sub.length ? ` (${sub.join(', ')})` : ''}`
+        }
+        kpi = `Applying ${rulesLabel} · ${detail}`
       }
     }
 

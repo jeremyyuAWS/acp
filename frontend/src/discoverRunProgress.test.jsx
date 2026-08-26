@@ -227,6 +227,74 @@ describe('lifecycle KPI on the lifecycle step', () => {
   })
 })
 
+describe('lifecycle KPI live updates during active phase', () => {
+  it('shows eval progress when lifecycle phase is active', () => {
+    const prog = {
+      phase: 'lifecycle', files_found: 500,
+      files_evaluated: 120, rules_enabled: 3,
+      files_matched: 0, archive_candidates: 0, delete_candidates: 0, files_tagged: 0,
+    }
+    const html = render(prog, true)
+    expect(html).toContain('Applying 3 lifecycle rules')
+    expect(html).toContain('120 of 500 files evaluated')
+  })
+
+  it('shows matched breakdown with archive, delete, tagged counts', () => {
+    const prog = {
+      phase: 'lifecycle', files_found: 500,
+      files_evaluated: 300, rules_enabled: 4,
+      files_matched: 50, archive_candidates: 20, delete_candidates: 10, files_tagged: 20,
+    }
+    const html = render(prog, true)
+    expect(html).toContain('50 matched')
+    expect(html).toContain('20 archive')
+    expect(html).toContain('10 delete')
+    expect(html).toContain('20 tagged')
+  })
+
+  it('omits breakdown when no files matched yet', () => {
+    const prog = {
+      phase: 'lifecycle', files_found: 200,
+      files_evaluated: 50, rules_enabled: 2,
+      files_matched: 0, archive_candidates: 0, delete_candidates: 0, files_tagged: 0,
+    }
+    const html = render(prog, true)
+    expect(html).toContain('50 of 200 files evaluated')
+    expect(html).not.toContain('matched')
+  })
+
+  it('shows "1 rule" singular when only one rule is enabled', () => {
+    const prog = {
+      phase: 'lifecycle', files_found: 100,
+      files_evaluated: 10, rules_enabled: 1,
+      files_matched: 0, archive_candidates: 0, delete_candidates: 0, files_tagged: 0,
+    }
+    const html = render(prog, true)
+    expect(html).toContain('1 lifecycle rule')
+    expect(html).not.toContain('1 lifecycle rules')
+  })
+
+  it('shows eval progress even before first tick (rules_enabled unknown)', () => {
+    const prog = {
+      phase: 'lifecycle', files_found: 200,
+      files_evaluated: 0,
+      files_matched: 0, archive_candidates: 0, delete_candidates: 0, files_tagged: 0,
+    }
+    const html = render(prog, true)
+    expect(html).toContain('0 of 200 files evaluated')
+  })
+
+  it('shows "No enabled rules" when rules_enabled is 0', () => {
+    const prog = {
+      phase: 'lifecycle', files_found: 100,
+      files_evaluated: 0, rules_enabled: 0,
+      files_matched: 0, archive_candidates: 0, delete_candidates: 0, files_tagged: 0,
+    }
+    const html = render(prog, true)
+    expect(html).toContain('No enabled rules')
+  })
+})
+
 describe('Stop button placement', () => {
   it('shows Stop only when both busy and an onStop handler are provided', () => {
     expect(render(PROG, true, () => {})).toContain('>Stop<')
