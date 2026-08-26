@@ -506,12 +506,18 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           lockedCount={lockedCount}
           excludedCount={scope?.inventory?.by_status?.excluded ?? 0}
           folderCount={progress?.folders_found ?? null}
-          lifecycleRulesCount={inv?.rows
-            ? new Set(inv.rows.map((r) => r.lifecycle_rule_id).filter(Boolean)).size
-            : null}
+          sources={sources}
+          lifecycleRulesCount={progress?.rules_enabled
+            ?? (inv?.rows
+              ? new Set(inv.rows.map((r) => r.lifecycle_rule_id).filter(Boolean)).size
+              : null)}
+          lifecycleFilesMatched={progress?.lifecycle_matches ?? null}
           archiveCandidates={progress?.lifecycle_archive ?? null}
           deleteCandidates={progress?.lifecycle_delete ?? null}
           tagged={progress?.lifecycle_tagged ?? null}
+          saveNew={progress?.save_new ?? null}
+          saveUpdated={progress?.save_updated ?? null}
+          saveUnchanged={progress?.save_unchanged ?? null}
           excInaccessible={progress?.exc_inaccessible_file ?? null}
           excMetadataFailure={progress?.exc_metadata_failure ?? null}
           excDeleted={progress?.exc_deleted_during_scan ?? null}
