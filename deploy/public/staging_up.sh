@@ -108,6 +108,17 @@ DEPLOY_ENV=(
 env -u DATABASE_URL -u REDIS_URL -u LANGFUSE_SECRET_KEY -u LANGFUSE_PUBLIC_KEY -u ACP_ACCESS_CODE \
   "${DEPLOY_ENV[@]}" bash deploy/public/deploy.sh
 
+# deploy.sh stamps ACP_DEPLOY_ENV=production on every app it creates. That makes IS_PROD true,
+# which blocks TEST_BYPASS_ENABLED even when ACP_ENABLE_TEST_BYPASS=true is later set. Staging
+# must not be IS_PROD — override it immediately after deploy.sh so subsequent redeploy.sh runs
+# (which preserve all env vars) carry "staging" for the life of this environment.
+say "overriding ACP_DEPLOY_ENV=staging (deploy.sh stamps 'production'; staging must not be IS_PROD)"
+for _app in "$APP_NAME" "$WORKER_NAME"; do
+  az containerapp update ${ACP_SUBSCRIPTION:+--subscription "$ACP_SUBSCRIPTION"} \
+    -g "${ACP_RG:-mdk-accessibility}" -n "$_app" \
+    --set-env-vars "ACP_DEPLOY_ENV=staging" -o none
+done
+
 # ── tell the operator the one manual step left: flip the workflow on ─────────────────────────
 FQDN="$(az containerapp show ${ACP_SUBSCRIPTION:+--subscription "$ACP_SUBSCRIPTION"} \
           -g "${ACP_RG:-mdk-accessibility}" -n "$APP_NAME" \
