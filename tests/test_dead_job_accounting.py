@@ -133,6 +133,47 @@ def test_a_late_real_result_replaces_the_error_row_rather_than_double_counting(s
     assert store.get_scan(sid)["run"].get("error") == 0
 
 
+def test_a_dead_scan_discover_job_marks_the_scan_failed(store):
+    # scan_discover IS the scan — unlike a per-file job, its death means the whole run failed.
+    # Without this the run sits at status='running' forever: no retry can help (attempts
+    # exhausted), and nothing else ever flips it.
+    sid = _scan(store, files=2)
+    jid = store.enqueue_job("scan_discover", {"scan_id": sid, "source": "drive"}, scan_id=sid)
+    store.claim_job("w1")
+    store.fail_job(jid, "source unreachable", force_dead=True)
+    assert store.get_scan(sid)["run"]["status"] == "failed"
+
+
+def test_a_dead_scan_job_marks_the_scan_failed_too(store):
+    # The non-fanout monolithic path uses job type 'scan', not 'scan_discover' — same rule.
+    sid = _scan(store, files=2)
+    jid = store.enqueue_job("scan", {"scan_id": sid, "source": "drive"}, scan_id=sid)
+    store.claim_job("w1")
+    store.fail_job(jid, "boom", force_dead=True)
+    assert store.get_scan(sid)["run"]["status"] == "failed"
+
+
+def test_a_dead_scan_discover_job_never_overwrites_an_already_terminal_scan(store):
+    # Guarded to non-terminal statuses — a scan the user already cancelled, or that a LATER
+    # retry actually completed, must never be clobbered back to 'failed' by a stale dead-letter.
+    sid = _scan(store, files=2)
+    jid = store.enqueue_job("scan_discover", {"scan_id": sid, "source": "drive"}, scan_id=sid)
+    store.claim_job("w1")
+    store.set_scan_status(sid, "discovered")
+    store.fail_job(jid, "source unreachable", force_dead=True)
+    assert store.get_scan(sid)["run"]["status"] == "discovered"
+
+
+def test_a_dead_PER_FILE_job_does_not_touch_scan_status(store):
+    # A single remediate_file/scan_file job dying is normal, partial-completion territory — it
+    # must never take down the whole run's status.
+    sid = _scan(store, files=1)
+    jid = store.enqueue_job("scan_file", {"scan_id": sid, "file": "a.docx"}, scan_id=sid)
+    store.claim_job("w1")
+    store.fail_job(jid, "boom", force_dead=True)
+    assert store.get_scan(sid)["run"]["status"] == "running"
+
+
 def test_a_dead_job_with_no_scan_id_is_ignored_rather_than_raising(store):
     # The queue must never be broken by this bookkeeping.
     jid = store.enqueue_job("scan_file", {"file": "orphan.docx"})
