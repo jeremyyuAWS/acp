@@ -480,7 +480,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       {analysed < n && (
         <p className="muted" style={{ margin: '2px 0 10px' }}>
           Scope: <b>{analysed.toLocaleString()}</b> of {n.toLocaleString()} documents have been analysed
-          {run.status === 'cancelled' || run.status === 'interrupted' ? ` — this scan was ${run.status} before it finished` : ' — the rest were discovered but not yet assessed'}.
+          {run.status === 'cancelled' || run.status === 'interrupted' || run.status === 'superseded' ? ` — this scan was ${run.status === 'superseded' ? 'superseded by a newer scan' : run.status} before it finished` : ' — the rest were discovered but not yet assessed'}.
           Findings, certifiable and audit-ready describe the analysed documents only.
         </p>
       )}

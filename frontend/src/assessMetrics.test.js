@@ -291,6 +291,12 @@ describe('screen state, in precedence order', () => {
     expect(st({ runStatus: 'interrupted', findings: 0 })).toBe('partial')
   })
 
+  it('reads a superseded run (killed by the single-flight guard) as partial too', () => {
+    // Same reasoning as cancelled/interrupted: a run the guard auto-killed to make way for a
+    // newer scan did not reach the end of its scope either — see supersede_scan in api/store.py.
+    expect(st({ runStatus: 'superseded', findings: 9 })).toBe('partial')
+  })
+
   it('reads an errored run as failed even where a record survived', () => {
     expect(st({ runStatus: 'error', assessed: 1, findings: 5 })).toBe('failed')
   })
