@@ -299,12 +299,24 @@ class JobWorker:
     def run_forever(self, stop=lambda: False) -> None:
         """Poll-claim-process loop. `stop()` lets a caller request shutdown."""
         self._running = True
+        consecutive_errors = 0
         while self._running and not stop():
             try:
                 did = self.run_once()
+                consecutive_errors = 0
             except Exception as e:  # never let the loop die on an unexpected error
-                print(f"[worker {self.worker_id}] loop error: {e}", flush=True)
-                did = False
+                # A failure here happens BEFORE run_once's own try block (e.g. claim_job
+                # couldn't get a DB connection at all) — every other worker thread in this
+                # pool is about to hit the same wall. Retrying at poll_interval (0.5s
+                # default) turns one exhausted Postgres into N*2 reconnect attempts per
+                # second, prolonging the very outage this is reacting to. Back off like a
+                # real retry policy instead of hammering at the normal poll cadence.
+                consecutive_errors += 1
+                backoff = _backoff_seconds(consecutive_errors, base=2.0, cap=30.0)
+                print(f"[worker {self.worker_id}] loop error ({consecutive_errors} in a "
+                      f"row): {e} — backing off {backoff:.1f}s", flush=True)
+                time.sleep(backoff)
+                continue
             if not did:
                 time.sleep(self.poll_interval)
 
