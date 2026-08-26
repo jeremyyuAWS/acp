@@ -24,7 +24,7 @@ const ASSESSABLE_CLASSES = new Set(['slide-deck', 'text-document', 'pdf-document
 const FILE_ACTIVE_PHASES = new Set(['reading', 'analysing', 'scoring'])
 
 // How many steps (from the front of STEPS) are DONE at each backend phase.
-// Steps: 0=connected, 1=listing, 2=lifecycle, 3=saving
+// Steps: 0=connected, 1=listing, 2=saving, 3=lifecycle
 //
 // Listing, metadata reading and classification used to be three separate steps here, each with
 // its own KPI — but checked directly against the backend (api/handlers.py, scanner.py's _list):
@@ -37,14 +37,31 @@ const FILE_ACTIVE_PHASES = new Set(['reading', 'analysing', 'scoring'])
 // user report of "no updates, then it suddenly jumps to lifecycle rules." One step that ticks a
 // real live file count for its real duration is the honest version of the same information.
 //
+// 'saving' sits BETWEEN listing and lifecycle, not after lifecycle — that is the real backend
+// order (api/handlers.py: add_inventory() persists the listed rows, THEN lifecycle rules
+// evaluate against what was just persisted). The step used to be listed last with no live phase
+// at all, so it silently flipped done at the same instant as everything else — found live
+// 2026-08-26 alongside the missing folder count.
+//
 // 'reading'/'tagging'/'analysing'/'scoring'/'finalizing' are kept as tolerant aliases below (not
 // removed) in case an older backend, a different scan path, or queuedProgress.js's own inferred
 // fallback still emits one — never a reason to render fewer done steps than actually happened.
+// 'analysing' means "per-file work is underway", which today is always lifecycle rule
+// evaluation (the only per-file loop left post-ADR-0020), so it maps to lifecycle's slot (3),
+// not saving's (2) — saving is one bulk write with no per-file signal of its own. 'scoring' and
+// 'finalizing' meant "further along than that — wrapping up" back when saving was the LAST step
+// (see the comment above STEPS): with lifecycle now last, there is no non-terminal slot between
+// "lifecycle active" and true completion, so they map past it, to 4 — every step (including
+// lifecycle) shows done, nothing pulses, but this is still the in-progress checklist, not the
+// `phase === 'done'` completion card (isDone is a separate, exact string check on `phase`, not
+// on this table) — an honest "essentially finished, formal completion pending" reading rather
+// than leaving lifecycle stuck showing active after its own per-file work is actually done.
 const PHASE_DONE_COUNT = {
   queued: 0, connecting: 0,
   discovering: 1, reading: 1, tagging: 1,
-  analysing: 2, lifecycle: 2,
-  scoring: 3, finalizing: 3,
+  saving: 2,
+  analysing: 3, lifecycle: 3,
+  scoring: 4, finalizing: 4,
   done: 4,
 }
 
@@ -52,8 +69,8 @@ const PHASE_DONE_COUNT = {
 const STEPS = [
   { key: 'connected', label: 'Connected to source',              labelDone: 'Connected to source' },
   { key: 'listing',   label: 'Listing and classifying documents', labelDone: 'Listed and classified documents' },
-  { key: 'lifecycle', label: 'Applying lifecycle rules',          labelDone: 'Applied lifecycle rules' },
   { key: 'saving',    label: 'Saving inventory',                  labelDone: 'Saved inventory' },
+  { key: 'lifecycle', label: 'Applying lifecycle rules',          labelDone: 'Applied lifecycle rules' },
 ]
 
 // Per-step explanation of what stop does while that step is active.
@@ -233,6 +250,11 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
     }
     if (status === 'active' && s.key === 'listing' && filesFound > 0) {
       kpi = `${n(filesFound)} files found so far`
+    }
+    if (status === 'active' && s.key === 'saving' && filesFound > 0) {
+      // add_inventory is one bulk write, not a loop — there is no live sub-count to tick here,
+      // only a real "this is happening now" window bounded by the phase itself.
+      kpi = `Saving ${n(filesFound)} files…`
     }
     if (status === 'active' && s.key === 'lifecycle') {
       const liveEval = progress.files_evaluated ?? null
