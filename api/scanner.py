@@ -573,6 +573,7 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
     _skipped_acp = [0]
     _skipped_mirror = [0]
     _skipped_excluded = [0]
+    _skipped_errors = [0]
     _truncated = [False]
 
     def _fetch_folder(fid: str) -> tuple[list[dict], list[str], bool]:
@@ -648,8 +649,14 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
         while pending:
             done, _ = _cf.wait(list(pending.keys()), return_when=_cf.FIRST_COMPLETED)
             for fut in done:
-                del pending[fut]
-                local_raw, child_folders, capped = fut.result()
+                fid = pending.pop(fut)
+                try:
+                    local_raw, child_folders, capped = fut.result()
+                except Exception:  # noqa: BLE001 — one inaccessible folder must not abort the BFS
+                    print(f"[scan] folder {fid}: listing failed, skipping subtree", flush=True)
+                    with _lock:
+                        _skipped_errors[0] += 1
+                    continue
                 with _lock:
                     space = max_files - len(raw)
                     if space > 0:
@@ -697,11 +704,14 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
                           "folders_walked": len(seen_folders), "listed": _listed[0],
                           "skipped_acp": _skipped_acp[0], "skipped_mirror": _skipped_mirror[0],
                           "skipped_excluded": _skipped_excluded[0],
+                          "skipped_errors": _skipped_errors[0],
                           "kept": len(result), "truncated": truncated, "cap": max_files,
                           "inventory": estate_inventory.summarize(raw[:max_files], truncated=truncated)})
+    _err_msg = f" · {_skipped_errors[0]} folder(s) inaccessible" if _skipped_errors[0] else ""
     print(f"[scan] discovery (folder subtree): {len(seen_folders)} folder(s) walked · "
           f"{_listed[0]} listed · {_skipped_acp[0]} skipped as ACP-generated output · "
-          f"{_skipped_mirror[0]} mirror folder(s) skipped · {len(result)} scannable", flush=True)
+          f"{_skipped_mirror[0]} mirror folder(s) skipped · {len(result)} scannable{_err_msg}",
+          flush=True)
     return result
 
 

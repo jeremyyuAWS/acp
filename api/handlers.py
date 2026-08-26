@@ -940,6 +940,7 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
     lc_archive = 0
     lc_delete = 0
     lc_tagged_files: set = set()
+    lc_errors = 0
     for r in core.store.list_inventory(scan_id):
         files_evaluated += 1
         if progress_cb and files_evaluated % tick_every == 0:
@@ -956,73 +957,76 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
         # re-audited by a rule run (PRD §6).
         if r.get("lifecycle_status") == "Exempted":
             continue
-        doc_id = f"scan:{scan_id}:{file}"
-        doc = {
-            "doc_id": doc_id,
-            "source": source,
-            "path": r.get("path"),
-            "parent_folder": r.get("parent_folder"),
-            "created_at": r.get("created_at"),
-            # matches() maps source_modified -> modified_at so "modified before <date>" works.
-            "source_modified": r.get("source_modified"),
-            "owner": r.get("owner"),
-            # doc_class/size_kb (Lifecycle Rules build-plan item #3, "file type"/"larger than")
-            # were added to disposition.FIELDS and the condition builder in #610, but never wired
-            # in here — a file-type or larger-than rule validated and saved fine, then silently
-            # matched nothing at Discover time forever, because `values.get("doc_class")` (and
-            # `size_kb`) read a key this dict never set. Both are already on the inventory row.
-            "doc_class": r.get("doc_class"),
-            "size_kb": r.get("size_kb"),
-        }
-        matched = []
-        for p in policies:
-            if p["_match"] is None:
+        try:
+            doc_id = f"scan:{scan_id}:{file}"
+            doc = {
+                "doc_id": doc_id,
+                "source": source,
+                "path": r.get("path"),
+                "parent_folder": r.get("parent_folder"),
+                "created_at": r.get("created_at"),
+                # matches() maps source_modified -> modified_at so "modified before <date>" works.
+                "source_modified": r.get("source_modified"),
+                "owner": r.get("owner"),
+                # doc_class/size_kb (Lifecycle Rules build-plan item #3, "file type"/"larger than")
+                # were added to disposition.FIELDS and the condition builder in #610, but never wired
+                # in here — a file-type or larger-than rule validated and saved fine, then silently
+                # matched nothing at Discover time forever, because `values.get("doc_class")` (and
+                # `size_kb`) read a key this dict never set. Both are already on the inventory row.
+                "doc_class": r.get("doc_class"),
+                "size_kb": r.get("size_kb"),
+            }
+            matched = []
+            for p in policies:
+                if p["_match"] is None:
+                    continue
+                if disposition.matches(doc, p["_match"]):
+                    matched.append(p)
+            if not matched:
                 continue
-            if disposition.matches(doc, p["_match"]):
-                matched.append(p)
-        if not matched:
-            continue
-        lifecycle_matches += 1
-        # ── Tag rules: apply EVERY matching tag policy. Tag + Archive both match → tags AND the
-        # Archive candidate status are applied (PRD §6), so tags are never suppressed by a
-        # co-matching disposition rule.
-        for p in matched:
-            if p.get("action") != "tag":
+            lifecycle_matches += 1
+            # ── Tag rules: apply EVERY matching tag policy. Tag + Archive both match → tags AND the
+            # Archive candidate status are applied (PRD §6), so tags are never suppressed by a
+            # co-matching disposition rule.
+            for p in matched:
+                if p.get("action") != "tag":
+                    continue
+                key = (doc_id, p["policy_id"])
+                if key in seen:
+                    continue  # already tagged + audited on an earlier Discover — idempotent
+                tags = disposition.tag_list(p["_action_config"])
+                if not tags:
+                    continue
+                for tag in tags:
+                    if tag:
+                        tag_rows.append((scan_id, file, tag, "system", p["policy_id"]))
+                _audit_id = hashlib.sha256(
+                    f"discover:{scan_id}:{file}:{p['policy_id']}:tag".encode()).hexdigest()[:24]
+                audit_rows.append((_audit_id, doc_id, p["policy_id"], "tag",
+                                   "applied", "tagged: " + ", ".join(tags), actor))
+                lc_tagged_files.add(file)
+                seen.add(key)  # idempotent within this run
+            # ── Candidate status: archive-vs-delete precedence (PRD §6), shared with the conflicts
+            # report — see disposition.resolve_candidate's own docstring for the precedence rule.
+            chosen, new_status, reason = disposition.resolve_candidate(matched, actor)
+            if chosen is None:
                 continue
-            key = (doc_id, p["policy_id"])
+            key = (doc_id, chosen["policy_id"])
             if key in seen:
-                continue  # already tagged + audited on an earlier Discover — idempotent
-            tags = disposition.tag_list(p["_action_config"])
-            if not tags:
-                continue
-            for tag in tags:
-                if tag:
-                    tag_rows.append((scan_id, file, tag, "system", p["policy_id"]))
+                continue  # this rule already flagged + audited this file on an earlier Discover
+            status_rows.append((scan_id, file, new_status, chosen["policy_id"], reason))
             _audit_id = hashlib.sha256(
-                f"discover:{scan_id}:{file}:{p['policy_id']}:tag".encode()).hexdigest()[:24]
-            audit_rows.append((_audit_id, doc_id, p["policy_id"], "tag",
-                               "applied", "tagged: " + ", ".join(tags), actor))
-            lc_tagged_files.add(file)
+                f"discover:{scan_id}:{file}:{chosen['policy_id']}:{chosen.get('action', '')}".encode()
+            ).hexdigest()[:24]
+            audit_rows.append((_audit_id, doc_id, chosen["policy_id"],
+                               chosen.get("action"), "pending_approval", reason, actor))
+            if chosen.get("action") == "archive":
+                lc_archive += 1
+            elif chosen.get("action") == "delete":
+                lc_delete += 1
             seen.add(key)  # idempotent within this run
-        # ── Candidate status: archive-vs-delete precedence (PRD §6), shared with the conflicts
-        # report — see disposition.resolve_candidate's own docstring for the precedence rule.
-        chosen, new_status, reason = disposition.resolve_candidate(matched, actor)
-        if chosen is None:
-            continue
-        key = (doc_id, chosen["policy_id"])
-        if key in seen:
-            continue  # this rule already flagged + audited this file on an earlier Discover
-        status_rows.append((scan_id, file, new_status, chosen["policy_id"], reason))
-        _audit_id = hashlib.sha256(
-            f"discover:{scan_id}:{file}:{chosen['policy_id']}:{chosen.get('action', '')}".encode()
-        ).hexdigest()[:24]
-        audit_rows.append((_audit_id, doc_id, chosen["policy_id"],
-                           chosen.get("action"), "pending_approval", reason, actor))
-        if chosen.get("action") == "archive":
-            lc_archive += 1
-        elif chosen.get("action") == "delete":
-            lc_delete += 1
-        seen.add(key)  # idempotent within this run
+        except Exception:  # noqa: BLE001 — one bad row must not discard the whole pass
+            lc_errors += 1
 
     # Flush accumulated writes in bulk — one executemany each instead of N individual calls.
     core.store.bulk_add_file_tags(tag_rows)
@@ -1032,7 +1036,8 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
     return {"rules_enabled": len(policies), "files_evaluated": files_evaluated,
             "lifecycle_matches": lifecycle_matches,
             "lifecycle_archive": lc_archive, "lifecycle_delete": lc_delete,
-            "lifecycle_tagged": len(lc_tagged_files)}
+            "lifecycle_tagged": len(lc_tagged_files),
+            "lifecycle_errors": lc_errors}
 
 
 def _mark_discovered(scan_id: str) -> None:
