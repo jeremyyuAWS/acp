@@ -112,7 +112,8 @@ const Reconciliation = ({ id, heading, note, rec, renderLabel }) => (
 )
 
 export default function DiscoveryResults({
-  files = null, inventory = null, scopeLine = null, runAt = null, policies = null, reasonOf = undefined,
+  files = null, inventory = null, invRows = null, scopeLine = null, runAt = null, policies = null,
+  reasonOf = undefined,
   reasonSampleOf = null, reasonFetchLikely = null,
   acknowledged = false, onAcknowledge = null,
   overrides: overridesProp, onOverridesChange,
@@ -151,7 +152,6 @@ export default function DiscoveryResults({
     ? unread.buckets.filter((b) => b.recorded && reasonFetchLikely(b.reason))
     : []
   const fetchFiles = fetchBuckets.reduce((n, b) => n + b.count, 0)
-  const invRows = inventory?.rows ?? null
   const ageDist = ageBucketDistribution(invRows)
   const sizeDist = sizeBucketDistribution(invRows)
   const folderDist = folderDistribution(invRows)

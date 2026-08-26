@@ -479,11 +479,11 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           Replaces the shared .scanprog banner (suppressed by App.jsx when view==='discover')
           so the Discover tab stays scoped to inventory. No assessment workers, WCAG content,
           or findings appear here. */}
-      <DiscoverRunProgress progress={progress} busy={busy} onStop={onStop} sources={sources} inv={inv} />
+      <DiscoverRunProgress progress={progress} busy={busy} onStop={onStop} onContinue={onAdvance} sources={sources} inv={inv} />
 
       {/* Completion summary: immutable snapshot of what was found, with the "Continue" CTA.
           Appears only after discovery finishes — DiscoverRunProgress hides itself at that point. */}
-      {!busy && run?.completed_at && (
+      {!busy && run?.discovered_at && (
         <DiscoverCompleteSummary
           discoveredCount={discoveredCount}
           assessableCount={Math.max(0, discoveredCount - nonAssessable.length - lockedCount)}
@@ -597,7 +597,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       <DiscoveryCompleteness run={run} scanList={scanList}
                              onRelist={() => onScan && onScan(run?.source === 'sharepoint' ? 'sharepoint' : 'drive')} />
 
-      <DiscoveryResults files={estateFiles} inventory={scope?.inventory || null} scopeLine={scopeLine} runAt={runAt}
+      <DiscoveryResults files={estateFiles} inventory={scope?.inventory || null} invRows={inv?.rows ?? null} scopeLine={scopeLine} runAt={runAt}
                         reasonOf={why ? why.reasonOf : undefined}
                         reasonSampleOf={why ? why.sampleOf : null}
                         reasonFetchLikely={why ? why.fetchLikely : null}
