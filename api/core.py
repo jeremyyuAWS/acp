@@ -885,6 +885,34 @@ _JOB_TTL = 3600                            # a scan poll outlives the scan; noth
 _JOB_COALESCE_SECONDS = float(os.environ.get("ACP_JOB_COALESCE_SECONDS", "0.5") or "0.5")
 _JOB_LAST_REDIS_WRITE: dict[str, float] = {}   # monotonic timestamps, never persisted
 
+# scan_id → job_id mapping so scan-based SSE streams can locate the current job without
+# the caller having to thread job_id through every API surface.  Written on set_job (when
+# scan_id is already in the initial state) and on update_job (when it first appears).
+_SCAN_JOB_MAP: dict[str, str] = {}             # in-memory fallback; Redis is canonical
+
+
+def _write_scan_job_mapping(scan_id: str, job_id: str) -> None:
+    r = _get_redis()
+    if r is not None:
+        try:
+            r.set(f"scan_to_job:{scan_id}", job_id, ex=_JOB_TTL)
+            return
+        except Exception:
+            pass
+    _SCAN_JOB_MAP[scan_id] = job_id
+
+
+def get_job_id_for_scan(scan_id: str) -> str | None:
+    """Return the current job_id for a scan (set on the durable queue path when the worker
+    claims it, or on the thread path once the scan_id is assigned in update_job)."""
+    r = _get_redis()
+    if r is not None:
+        try:
+            return r.get(f"scan_to_job:{scan_id}")
+        except Exception:
+            pass
+    return _SCAN_JOB_MAP.get(scan_id)
+
 # A job stuck on a replica that died (redeploy, crash, OOM) leaves NO trace: the thread that
 # would have called update_job() on error or completion is simply gone, so the job sits at
 # whatever phase it was last written to, forever, with no error and no timeout. Live incident
@@ -950,6 +978,8 @@ def set_job(job_id: str, state: dict) -> None:
             pipe.expire(f"job:{job_id}", _JOB_TTL)
             pipe.execute()
             _JOB_LAST_REDIS_WRITE[job_id] = 0.0   # reset coalesce clock
+            if state.get("scan_id"):
+                _write_scan_job_mapping(state["scan_id"], job_id)
             return
         except Exception:
             pass                           # fall through to in-memory
@@ -958,6 +988,8 @@ def set_job(job_id: str, state: dict) -> None:
         _log.warning("REDIS_URL not set — job %s state stored in-memory only; "
                      "progress will NOT be visible across replicas", job_id)
     JOBS[job_id] = state
+    if state.get("scan_id"):
+        _write_scan_job_mapping(state["scan_id"], job_id)
 
 
 def update_job(job_id: str, patch: dict) -> None:
@@ -988,9 +1020,14 @@ def update_job(job_id: str, patch: dict) -> None:
                 pipe.expire(f"job:{job_id}", _JOB_TTL)
                 pipe.execute()
                 _JOB_LAST_REDIS_WRITE[job_id] = now
+                if patch.get("scan_id"):
+                    _write_scan_job_mapping(patch["scan_id"], job_id)
                 return
             except Exception:
                 pass
+    # scan_id mapping must be written even when the coalesce window suppressed the main write.
+    if patch.get("scan_id"):
+        _write_scan_job_mapping(patch["scan_id"], job_id)
     # In-memory fallback — either Redis unavailable or coalesce window suppressed the write.
     # Also updates JOBS in the coalesce case so same-replica reads stay current.
     if job_id in JOBS:

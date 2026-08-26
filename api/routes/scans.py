@@ -429,6 +429,61 @@ async def stream_job_state(job_id: str):
     )
 
 
+@router.get("/scans/{scan_id}/discover/stream")
+async def stream_discover_state(scan_id: str, request: Request):
+    """SSE stream for Discovery scan progress, anchored to scan_id.
+
+    Preferred over /scans/jobs/{job_id}/stream: scan_id is stable across retries — if a job
+    fails and the worker retries, the same scan_id gets a new job_id, but this stream
+    re-resolves the mapping on every poll and continues seamlessly.
+
+    Writes to the scan_id→job_id mapping come from core.set_job / update_job whenever a
+    scan_id field appears in the state (durable queue path: at job-claim time; thread path:
+    when the discover completes and update_job is called with the assigned scan_id).
+
+    Frontend: new EventSource('/scans/{id}/discover/stream') — fall back to polling
+    GET /scans/jobs/{id} when the stream is unavailable."""
+    import asyncio
+    import json as _j
+
+    async def _generate():
+        last_seq = -1
+        job_id: str | None = None
+        not_found_streak = 0
+        while True:
+            # Re-resolve on each iteration: the job_id can change on retry.
+            job_id = await asyncio.to_thread(core.get_job_id_for_scan, scan_id)
+            state = None
+            if job_id:
+                state = await asyncio.to_thread(core.get_job_state, job_id)
+            if state is None:
+                not_found_streak += 1
+                if not_found_streak >= 4:
+                    yield "event: error\ndata: {\"error\": \"no active job for this scan\"}\n\n"
+                    return
+                await asyncio.sleep(0.25)
+                continue
+            not_found_streak = 0
+            seq = int(state.get("seq") or 0)
+            if seq != last_seq:
+                last_seq = seq
+                yield f"data: {_j.dumps(state)}\n\n"
+            if state.get("done"):
+                yield "event: done\ndata: {\"done\": true}\n\n"
+                return
+            await asyncio.sleep(0.25)
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @router.get("/scans")
 def scans(request: Request):
     return core.store.list_scans(owner=_owner(request))

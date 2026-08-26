@@ -48,10 +48,12 @@ class _FakePipeline:
 
 class FakeRedis:
     """Shared backing store — the thing two replicas have in common and a dict does not.
-    Stores hashes as {key: {field: json_str}} to mirror the HSET-based core.set_job/update_job."""
+    Stores hashes as {key: {field: json_str}} to mirror the HSET-based core.set_job/update_job.
+    Also stores plain string keys (scan_to_job:, scantok:) used by the mapping helpers."""
 
     def __init__(self):
         self.kv: dict[str, dict[str, str]] = {}   # key → {field: json_encoded_value}
+        self.string_kv: dict[str, str] = {}        # key → plain string value
         self.sets = 0
 
     # ── Hash operations (current interface) ──────────────────────────────────
@@ -78,16 +80,18 @@ class FakeRedis:
 
     def delete(self, k):
         self.kv.pop(k, None)
+        self.string_kv.pop(k, None)
 
     def pipeline(self):
         return _FakePipeline(self)
 
-    # ── String operations (backward-compat fallback path in get_job_state) ───
+    # ── String operations (scan_to_job: mapping and backward-compat fallback) ─
 
     def get(self, k):
-        return None   # no string keys in this fake; hash path above takes precedence
+        return self.string_kv.get(k)
 
-    def set(self, k, v, ex=None): pass   # no-op (old interface, not called by new core.py)
+    def set(self, k, v, ex=None):
+        self.string_kv[k] = v
 
 
 @pytest.fixture()
@@ -276,3 +280,45 @@ def test_an_existing_error_message_is_not_overwritten_by_the_generic_one(two_rep
     core.set_job("j12", {"phase": "error", "done": True, "error": "PermissionError: token expired"})
     got = core.get_job_state("j12")
     assert got["error"] == "PermissionError: token expired"
+
+
+# ── scan_id → job_id mapping (for scan-based SSE endpoint) ───────────────────────────────────
+
+def test_scan_id_mapping_written_when_set_job_includes_scan_id(two_replicas):
+    """When set_job is called with a scan_id (durable queue path: the worker knows the scan_id
+    from the start), get_job_id_for_scan must resolve immediately."""
+    core, _ = two_replicas
+    core.set_job("j-map1", {"phase": "claimed", "done": False, "scan_id": "s-xyz"})
+    assert core.get_job_id_for_scan("s-xyz") == "j-map1"
+
+
+def test_scan_id_mapping_written_when_update_job_introduces_scan_id(two_replicas):
+    """Thread path: set_job is called with scan_id=None; the scan_id is only known after the
+    discover completes and update_job is called. The mapping must be written at that point."""
+    core, _ = two_replicas
+    core.set_job("j-map2", {"phase": "queued", "done": False, "scan_id": None})
+    assert core.get_job_id_for_scan("s-thread") is None
+    core.update_job("j-map2", {"phase": "done", "done": True, "scan_id": "s-thread"})
+    assert core.get_job_id_for_scan("s-thread") == "j-map2"
+
+
+def test_scan_id_mapping_survives_coalesce_suppression(two_replicas, monkeypatch):
+    """Even when the coalesce window suppresses the main job-state Redis write, the
+    scan_to_job mapping must still be written — otherwise the scan-based SSE stream
+    can never find the job."""
+    import time as _t
+    core, _ = two_replicas
+    core.set_job("j-map3", {"phase": "queued", "done": False, "scan_id": None})
+    # Force the coalesce window to be very long so the next update is suppressed.
+    monkeypatch.setattr(core, "_JOB_COALESCE_SECONDS", 9999.0)
+    # Touch the clock so the coalesce guard thinks a recent write just happened.
+    core._JOB_LAST_REDIS_WRITE["j-map3"] = _t.monotonic()
+    # This update carries scan_id — the mapping must be written even though the coalesce
+    # window would suppress the job-state write.
+    core.update_job("j-map3", {"scan_id": "s-coalesce"})
+    assert core.get_job_id_for_scan("s-coalesce") == "j-map3"
+
+
+def test_unknown_scan_id_returns_none(two_replicas):
+    core, _ = two_replicas
+    assert core.get_job_id_for_scan("s-never-seen") is None
