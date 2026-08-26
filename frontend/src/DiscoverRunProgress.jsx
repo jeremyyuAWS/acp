@@ -174,6 +174,8 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   const lcArchive = progress.lifecycle_archive ?? null
   const lcDelete = progress.lifecycle_delete ?? null
   const lcTagged = progress.lifecycle_tagged ?? null
+  const lcUnevaluable = progress.unevaluable ?? null
+  const evalRate = progress.rate_per_second ?? null
   // Folder activity fields emitted in the post-BFS "discovering" event.
   const foldersVisited = progress.folders_visited ?? null
   const folderWorkersConfigured = progress.folder_workers_configured ?? null
@@ -430,6 +432,12 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
                     lcTagged > 0 && `${n(lcTagged)} tagged`,
                   ].filter(Boolean).join(' · ')}
                 </div>
+              )}
+              {(lcUnevaluable ?? 0) > 0 && (
+                <div>{n(lcUnevaluable)} could not be evaluated</div>
+              )}
+              {evalRate !== null && evalRate > 0 && (
+                <div style={{ color: 'var(--muted)' }}>{n(evalRate)} files/sec</div>
               )}
             </div>
           </div>

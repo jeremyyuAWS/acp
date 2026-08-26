@@ -941,9 +941,11 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
     lc_delete = 0
     lc_tagged_files: set = set()
     lc_errors = 0
+    _eval_start = _dt.datetime.now(_dt.timezone.utc).timestamp()
     for r in core.store.list_inventory(scan_id):
         files_evaluated += 1
         if progress_cb and files_evaluated % tick_every == 0:
+            _elapsed = max(0.1, _dt.datetime.now(_dt.timezone.utc).timestamp() - _eval_start)
             progress_cb({
                 "files_evaluated": files_evaluated,
                 "rules_enabled": len(policies),
@@ -951,6 +953,8 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
                 "archive_candidates": lc_archive,
                 "delete_candidates": lc_delete,
                 "files_tagged": len(lc_tagged_files),
+                "unevaluable": lc_errors,
+                "rate_per_second": round(files_evaluated / _elapsed),
             })
         file = r.get("file")
         # An Exempted file (legal hold etc.) is never moved to a candidate status, tagged, or
@@ -1431,7 +1435,8 @@ def _scan_discover(payload: dict, job: dict) -> None:
                                    "files_matched": 0,
                                    "archive_candidates": 0,
                                    "delete_candidates": 0,
-                                   "files_tagged": 0})
+                                   "files_tagged": 0,
+                                   "unevaluable": 0})
         # Fire roughly 100 ticks regardless of inventory size (min 10 files/tick).
         _tick_every = max(10, _lifecycle_total // 100)
         def _lc_progress(stats):
@@ -1454,7 +1459,8 @@ def _scan_discover(payload: dict, job: dict) -> None:
                                        "files_matched": _lc_stats.get("lifecycle_matches", 0),
                                        "archive_candidates": _lc_stats.get("lifecycle_archive", 0),
                                        "delete_candidates": _lc_stats.get("lifecycle_delete", 0),
-                                       "files_tagged": _lc_stats.get("lifecycle_tagged", 0)})
+                                       "files_tagged": _lc_stats.get("lifecycle_tagged", 0),
+                                       "unevaluable": _lc_stats.get("lifecycle_errors", 0)})
             except Exception:
                 pass
         # Transition the job progress to "done" so DiscoverRunProgress shows the completion
@@ -1470,6 +1476,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
                     "lifecycle_archive": _lc_stats.get("lifecycle_archive", 0),
                     "lifecycle_delete": _lc_stats.get("lifecycle_delete", 0),
                     "lifecycle_tagged": _lc_stats.get("lifecycle_tagged", 0),
+                    "lifecycle_unevaluable": _lc_stats.get("lifecycle_errors", 0),
                 })
             except Exception:
                 pass
