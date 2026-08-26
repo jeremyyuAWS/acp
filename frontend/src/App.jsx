@@ -1034,6 +1034,18 @@ export default function App() {
   // running server-side, so we just resume polling until it finishes.
   const reconnectScan = async (scan_id, job_id = null) => {
     setBusy(true); setProgress({ phase: 'connecting', elapsed: 0 }); setLiveScanId(scan_id)
+    // Same live-push mechanism doScan uses (see its comment) — scan-ID-anchored, so it survives
+    // the worker retrying under a new job_id mid-scan, unlike the old per-tick getJob(job_id)
+    // poll below, which pins the job_id captured at reconnect time and 404s forever once the
+    // worker actually retries (found live 2026-08-26: hundreds of 404s on a stale job_id while
+    // the scan itself kept progressing normally — the "hanging" was the UI going dark, not the
+    // backend stalling).
+    liveJobStateRef.current = null
+    sseFailedRef.current = false
+    const streamHandle = openDiscoverStream(scan_id, {
+      onMessage: (state) => { liveJobStateRef.current = state },
+      onError: () => { sseFailedRef.current = true },
+    })
     const t0 = Date.now()
     let fresh
     try {
@@ -1043,10 +1055,13 @@ export default function App() {
         const elapsed = Math.round((Date.now() - t0) / 1000)
         let g = null
         try { g = await getScan(scan_id); misses = 0 } catch { g = null; misses++ }
-        // Same best-effort live-progress fetch doScan uses — see its comment above. A miss here
-        // never affects this loop's exit decision, only which phase this tick renders with.
-        let job = null
-        if (job_id) { try { job = await getJob(job_id) } catch { job = null } }
+        // Same fallback rule as doScan: prefer the SSE-pushed state; only poll getJob() once the
+        // stream has proven itself dead, not on its first miss. Never affects this loop's exit
+        // decision, only which phase this tick renders with.
+        let job = liveJobStateRef.current
+        if (!job && sseFailedRef.current && job_id) {
+          try { job = await getJob(job_id) } catch { job = null }
+        }
         // A reconnected scan HAS a scan_runs row, so a server-side cancel already settles this
         // loop through the status check below — this is not the queued-scan gap. It is here so
         // Stop ends the poll on the same tick on both paths instead of after another round-trip,
@@ -1075,7 +1090,7 @@ export default function App() {
       // "scan not available" banner left over from an earlier failed reconnect attempt.
       if (fresh) { setScan(fresh); setScanUnavailable(null); resetScanScopedState(); setScanList(await listScans()); setView('overview') }
     } catch { /* best-effort reconnect */ }
-    finally { setBusy(false); setProgress(null); setLiveScanId(null) }
+    finally { streamHandle.close(); setBusy(false); setProgress(null); setLiveScanId(null) }
   }
 
   const run = scan?.run
