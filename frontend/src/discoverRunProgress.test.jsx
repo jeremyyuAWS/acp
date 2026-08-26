@@ -274,14 +274,15 @@ describe('lifecycle KPI live updates during active phase', () => {
     expect(html).not.toContain('1 lifecycle rules')
   })
 
-  it('shows eval progress even before first tick (rules_enabled unknown)', () => {
+  it('shows "Starting evaluation" when files_evaluated is 0', () => {
     const prog = {
       phase: 'lifecycle', files_found: 200,
       files_evaluated: 0,
       files_matched: 0, archive_candidates: 0, delete_candidates: 0, files_tagged: 0,
     }
     const html = render(prog, true)
-    expect(html).toContain('0 of 200 files evaluated')
+    expect(html).toContain('Starting evaluation of 200 files')
+    expect(html).not.toContain('0 of 200 files evaluated')
   })
 
   it('shows "No enabled rules" when rules_enabled is 0', () => {

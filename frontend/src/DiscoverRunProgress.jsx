@@ -274,7 +274,9 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
         const rulesLabel = liveRules !== null
           ? `${n(liveRules)} lifecycle rule${liveRules === 1 ? '' : 's'}`
           : 'lifecycle rules'
-        let detail = `${n(liveEval)} of ${n(liveTotal)} files evaluated`
+        let detail = liveEval === 0 && liveTotal > 0
+          ? `Starting evaluation of ${n(liveTotal)} files…`
+          : `${n(liveEval)} of ${n(liveTotal)} files evaluated`
         if (liveMatched > 0) {
           const sub = []
           if (liveArchive > 0) sub.push(`${n(liveArchive)} archive`)
@@ -505,7 +507,9 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
         )}
         {showLifecycleSlowHint && (
           <p className="muted" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5 }}>
-            Lifecycle evaluation is taking longer than usual.
+            {(progress?.files_evaluated > 0 && progress?.files_found > 0)
+              ? `Lifecycle evaluation is taking longer than usual — ${n(progress.files_evaluated)} of ${n(progress.files_found)} files evaluated so far.`
+              : 'Lifecycle evaluation is taking longer than usual.'}
           </p>
         )}
         {stopHint && (
