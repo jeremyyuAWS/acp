@@ -7,6 +7,7 @@ Verifies:
   3. The deferred path still succeeds when the job dict has no 'id' (existing callers).
 """
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -217,3 +218,138 @@ def test_deferred_path_emits_done_phase_with_lifecycle_fields(isolated_store, mo
     # Completion summary fields must be present (can be 0 when no lifecycle rules are configured).
     for field in ("lifecycle_matches", "lifecycle_archive", "lifecycle_delete", "lifecycle_tagged"):
         assert field in state, f"{field} missing from done-phase job state: {state}"
+
+
+# ── lifecycle per-file resilience (§6.8) ──────────────────────────────────────
+
+def test_lifecycle_eval_survives_one_bad_file(isolated_store, monkeypatch):
+    """One malformed inventory row must not crash the entire lifecycle rule pass.
+
+    The fix wraps per-file match/resolve in try/except so the remaining 49,999
+    files are still evaluated and their tags/statuses are flushed.
+    """
+    import core
+    import disposition
+    import handlers
+    monkeypatch.setattr(core, "store", isolated_store)
+
+    scan_id = "sd-resilient"
+    isolated_store.init_scan_run(scan_id, "local", 3, "2026-01-01T00:00:00+00:00",
+                                 "acp", "h1", owner=None)
+    # Three inventory rows — the second one will poison disposition.matches.
+    isolated_store.add_inventory(scan_id, [
+        {"file": name, "path": f"/{name}", "doc_class": "docx",
+         "size_kb": 10, "owner": "a@b.com", "created_at": "2020-01-01"}
+        for name in ("good1.docx", "bad.docx", "good2.docx")
+    ])
+
+    # A policy that matches everything.
+    import json as _json
+    isolated_store.create_disposition_policy(
+        "pol-tag-all",
+        name="tag-all", action="tag", enabled=True, requires_approval=False,
+        match=_json.dumps([{"field": "age_days", "op": "gte", "value": 0}]),
+        action_config=_json.dumps({"tags": ["auto"]}),
+        owner_email="a@b.com",
+    )
+
+    real_matches = disposition.matches
+
+    def _boom(doc, match):
+        if "bad.docx" in (doc.get("doc_id") or ""):
+            raise ValueError("simulated bad row")
+        return real_matches(doc, match)
+
+    monkeypatch.setattr(disposition, "matches", _boom)
+
+    result = handlers._evaluate_discover_lifecycle_rules(scan_id, "local", "a@b.com")
+
+    assert result["lifecycle_errors"] == 1, f"expected 1 error, got {result}"
+    assert result["files_evaluated"] == 3, f"all 3 files should be evaluated, got {result}"
+    # The two good files should still have been tagged.
+    assert result["lifecycle_tagged"] == 2, \
+        f"expected 2 tagged (good files), got {result['lifecycle_tagged']}; {result}"
+
+
+# ── BFS folder resilience (§6.8) ────────────────────────────────────────────
+
+PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+FOLDER = "application/vnd.google-apps.folder"
+
+
+class _Req:
+    """Minimal stub for a Drive API request object."""
+
+    def __init__(self, payload):
+        self._p = payload
+
+    def execute(self, num_retries=0):
+        return self._p
+
+
+class _BoomReq:
+    """A request that always raises — simulates an inaccessible folder."""
+
+    def execute(self, num_retries=0):
+        raise PermissionError("simulated 403 from Drive API")
+
+
+class _BFSFiles:
+    """Stub for svc.files() that returns _BoomReq for one specific folder."""
+
+    def __init__(self, children, boom_folder_id):
+        self._children = children
+        self._boom = boom_folder_id
+
+    def list(self, **kw):
+        q = kw.get("q", "")
+        if q.startswith("'"):
+            fid = q.split("'")[1]
+            if fid == self._boom:
+                return _BoomReq()
+            return _Req({"files": self._children.get(fid, [])})
+        return _Req({"files": []})
+
+
+class _BFSDrive:
+    """Fake Drive service for BFS tests with one poisoned folder."""
+
+    def __init__(self, children, boom_folder_id):
+        self._files = _BFSFiles(children, boom_folder_id)
+
+    def files(self):
+        return self._files
+
+
+def test_search_folder_survives_one_inaccessible_subfolder(monkeypatch):
+    """One folder that raises on listing must not abort the entire BFS.
+
+    The fix wraps fut.result() in try/except so the remaining subtrees are
+    still walked and their files returned.
+    """
+    import scanner
+
+    core_mod = types.ModuleType("core")
+    core_mod.store = types.SimpleNamespace(get_drive_mirror_folder=lambda: "Remediated")
+    monkeypatch.setitem(sys.modules, "core", core_mod)
+
+    children = {
+        "root": [
+            {"id": "ok_folder", "name": "OK", "mimeType": FOLDER},
+            {"id": "bad_folder", "name": "Bad", "mimeType": FOLDER},
+        ],
+        "ok_folder": [
+            {"id": "f1", "name": "deck.pptx", "mimeType": PPTX, "md5Checksum": "aaa"},
+        ],
+        # bad_folder → _BoomReq raises PermissionError
+    }
+    svc = _BFSDrive(children, boom_folder_id="bad_folder")
+    scope_out = {}
+
+    result = scanner._search_folder(svc, "root", max_files=50,
+                                     exclude_remediated=True, scope_out=scope_out)
+
+    assert len(result) == 1, f"expected 1 file from the accessible folder, got {len(result)}"
+    assert result[0]["name"] == "deck.pptx"
+    assert scope_out.get("skipped_errors") == 1, \
+        f"expected 1 skipped_errors in scope_out, got {scope_out}"
