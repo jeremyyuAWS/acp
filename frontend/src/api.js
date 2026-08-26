@@ -115,7 +115,7 @@ export const getConfig = () => (SIM ? sim({ google_client_id: null, auth: 'demo'
 // Lightweight backend reachability probe. /healthz is always public (no auth header needed).
 // Returns true when the backend responds with HTTP 2xx, false on network error or non-2xx.
 // SIM mode always reports healthy — there is no real server to probe.
-export const checkHealth = () => (SIM ? Promise.resolve(true) : fetch(`${BASE}/healthz`, { method: 'HEAD' }).then((r) => r.ok, () => false))
+export const checkHealth = () => (SIM ? Promise.resolve(true) : fetch(`${BASE}/healthz`).then((r) => r.ok, () => false))
 // Langfuse deep-link base (from /config) → "📊 View trace" chips. traceUrl(null) when unset.
 let lfTraceBase = null
 export const setLangfuseBase = (b) => { lfTraceBase = b || null }
