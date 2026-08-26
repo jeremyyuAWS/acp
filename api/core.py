@@ -880,6 +880,38 @@ def clear_scan_tokens(scan_id: str) -> None:
 # reach today — which is exactly why a job stuck here needs to fail loudly instead of hanging
 # forever (see _JOB_STALE_SECONDS below), not why it's a rare edge case.
 _JOB_TTL = 3600                            # a scan poll outlives the scan; nothing needs longer
+# Coalesce high-frequency progress ticks: at most one Redis write per window, unless the patch
+# carries a phase change, done, or error flag — those always flush immediately.
+_JOB_COALESCE_SECONDS = float(os.environ.get("ACP_JOB_COALESCE_SECONDS", "0.5") or "0.5")
+_JOB_LAST_REDIS_WRITE: dict[str, float] = {}   # monotonic timestamps, never persisted
+
+# scan_id → job_id mapping so scan-based SSE streams can locate the current job without
+# the caller having to thread job_id through every API surface.  Written on set_job (when
+# scan_id is already in the initial state) and on update_job (when it first appears).
+_SCAN_JOB_MAP: dict[str, str] = {}             # in-memory fallback; Redis is canonical
+
+
+def _write_scan_job_mapping(scan_id: str, job_id: str) -> None:
+    r = _get_redis()
+    if r is not None:
+        try:
+            r.set(f"scan_to_job:{scan_id}", job_id, ex=_JOB_TTL)
+            return
+        except Exception:
+            pass
+    _SCAN_JOB_MAP[scan_id] = job_id
+
+
+def get_job_id_for_scan(scan_id: str) -> str | None:
+    """Return the current job_id for a scan (set on the durable queue path when the worker
+    claims it, or on the thread path once the scan_id is assigned in update_job)."""
+    r = _get_redis()
+    if r is not None:
+        try:
+            return r.get(f"scan_to_job:{scan_id}")
+        except Exception:
+            pass
+    return _SCAN_JOB_MAP.get(scan_id)
 
 # A job stuck on a replica that died (redeploy, crash, OOM) leaves NO trace: the thread that
 # would have called update_job() on error or completion is simply gone, so the job sits at
@@ -930,35 +962,74 @@ def _job_is_stale(state: dict) -> bool:
 
 
 def set_job(job_id: str, state: dict) -> None:
-    state = {**state, "updated_at": _job_now_iso()}
+    """Write a fresh job record, replacing any prior state. Uses a Redis hash (HSET) so
+    subsequent update_job calls can atomically patch individual fields without a read-modify-write
+    race. seq is initialised to 0; every update_job call increments it, giving the SSE stream a
+    cheap change signal without a full diff."""
+    state = {**state, "updated_at": _job_now_iso(), "seq": 0}
     r = _get_redis()
     if r is not None:
         try:
             import json as _j
-            r.set(f"job:{job_id}", _j.dumps(state), ex=_JOB_TTL)
+            mapping = {k: _j.dumps(v) for k, v in state.items()}
+            pipe = r.pipeline()
+            pipe.delete(f"job:{job_id}")
+            pipe.hset(f"job:{job_id}", mapping=mapping)
+            pipe.expire(f"job:{job_id}", _JOB_TTL)
+            pipe.execute()
+            _JOB_LAST_REDIS_WRITE[job_id] = 0.0   # reset coalesce clock
+            if state.get("scan_id"):
+                _write_scan_job_mapping(state["scan_id"], job_id)
             return
         except Exception:
             pass                           # fall through to in-memory
+    if not REDIS_URL:
+        import logging as _log
+        _log.warning("REDIS_URL not set — job %s state stored in-memory only; "
+                     "progress will NOT be visible across replicas", job_id)
     JOBS[job_id] = state
+    if state.get("scan_id"):
+        _write_scan_job_mapping(state["scan_id"], job_id)
 
 
 def update_job(job_id: str, patch: dict) -> None:
-    """Merge into the stored state. Read-modify-write rather than a field-wise update because the
-    progress callback sends partial dicts, and a lost key would show the poller a scan that went
-    backwards. Always re-stamps updated_at, even for an empty patch — the heartbeat companion
-    thread in routes/scans.py's work() calls update_job(job_id, {}) for exactly that: proving the
-    replica is still alive without claiming any new progress happened."""
+    """Merge patch into the stored job record.
+
+    Redis path uses HSET (atomic per-field write, no read needed) followed by HINCRBY on the seq
+    counter — both in a single pipeline. Concurrent heartbeat and progress writes can no longer
+    race and overwrite each other's data, unlike the old read-modify-write approach.
+
+    High-frequency ticks (e.g. files_found incrementing during listing) are coalesced: the Redis
+    write is skipped when the last write was < _JOB_COALESCE_SECONDS ago AND the patch carries no
+    phase/done/error key. Those keys always flush immediately so the UI sees transitions right away.
+    The in-memory JOBS dict (same-replica poll fallback) is always updated regardless."""
+    import time as _t
     patch = {**patch, "updated_at": _job_now_iso()}
     r = _get_redis()
     if r is not None:
-        try:
-            import json as _j
-            cur = _j.loads(r.get(f"job:{job_id}") or "{}")
-            cur.update(patch)
-            r.set(f"job:{job_id}", _j.dumps(cur), ex=_JOB_TTL)
-            return
-        except Exception:
-            pass
+        now = _t.monotonic()
+        is_immediate = "phase" in patch or "done" in patch or "error" in patch
+        last = _JOB_LAST_REDIS_WRITE.get(job_id, 0.0)
+        if is_immediate or now - last >= _JOB_COALESCE_SECONDS:
+            try:
+                import json as _j
+                mapping = {k: _j.dumps(v) for k, v in patch.items()}
+                pipe = r.pipeline()
+                pipe.hset(f"job:{job_id}", mapping=mapping)
+                pipe.hincrby(f"job:{job_id}", "seq", 1)
+                pipe.expire(f"job:{job_id}", _JOB_TTL)
+                pipe.execute()
+                _JOB_LAST_REDIS_WRITE[job_id] = now
+                if patch.get("scan_id"):
+                    _write_scan_job_mapping(patch["scan_id"], job_id)
+                return
+            except Exception:
+                pass
+    # scan_id mapping must be written even when the coalesce window suppressed the main write.
+    if patch.get("scan_id"):
+        _write_scan_job_mapping(patch["scan_id"], job_id)
+    # In-memory fallback — either Redis unavailable or coalesce window suppressed the write.
+    # Also updates JOBS in the coalesce case so same-replica reads stay current.
     if job_id in JOBS:
         JOBS[job_id].update(patch)
 
@@ -966,17 +1037,27 @@ def update_job(job_id: str, patch: dict) -> None:
 def get_job_state(job_id: str) -> dict | None:
     """The poll's answer, with staleness resolved into an honest terminal state rather than left
     for the caller to notice. Never mutates the stored record — every replica computes this fresh,
-    so an already-dead job reads the same way from whichever replica answers the next poll."""
+    so an already-dead job reads the same way from whichever replica answers the next poll.
+
+    Reads from a Redis hash (HGETALL). Falls back to the old JSON-string format during the
+    deployment window when string-type keys from pre-HSET instances are still live in Redis."""
     r = _get_redis()
     state = None
     if r is not None:
         try:
             import json as _j
-            v = r.get(f"job:{job_id}")
-            if v:
-                state = _j.loads(v)
+            raw = r.hgetall(f"job:{job_id}")
+            if raw:
+                state = {k: _j.loads(v) for k, v in raw.items()}
         except Exception:
-            pass
+            # Key may be the old JSON-string type (pre-HSET deployment) — try a plain GET.
+            try:
+                import json as _j
+                v = r.get(f"job:{job_id}")
+                if v:
+                    state = _j.loads(v)
+            except Exception:
+                pass
     if state is None:
         state = JOBS.get(job_id)
     if state is None:
