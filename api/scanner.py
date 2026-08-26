@@ -575,6 +575,7 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
     _skipped_excluded = [0]
     _skipped_errors = [0]
     _truncated = [False]
+    _last_progress_at = [0.0]
 
     def _fetch_folder(fid: str) -> tuple[list[dict], list[str], bool]:
         """Fetch all pages for one folder. Returns (raw_files, child_folder_ids, capped).
@@ -668,7 +669,10 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
                     if capped:
                         _truncated[0] = True
                     if progress_cb:
-                        progress_cb(len(raw))
+                        _now = time.monotonic()
+                        if _now - _last_progress_at[0] >= 2.0:
+                            _last_progress_at[0] = _now
+                            progress_cb(len(raw))
                     for child in child_folders:
                         if child in seen_folders:
                             continue
