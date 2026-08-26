@@ -1,0 +1,61 @@
+name: start-staging-worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      rg:
+        description: "Resource group (default: mdk-accessibility)"
+        required: false
+        type: string
+      worker:
+        description: "Worker container app name (default: acp-worker-staging)"
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  start-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Start worker if not Running
+        env:
+          ACP_RG: ${{ inputs.rg || vars.STAGING_RG || 'mdk-accessibility' }}
+          ACP_WORKER: ${{ inputs.worker || vars.STAGING_WORKER || 'acp-worker-staging' }}
+          ACP_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          STATUS=$(az containerapp show --subscription "$ACP_SUBSCRIPTION" \
+            -g "$ACP_RG" -n "$ACP_WORKER" \
+            --query properties.runningStatus -o tsv 2>/dev/null || echo "NotFound")
+          echo "Current status: $STATUS"
+          if [ "$STATUS" = "Running" ]; then
+            echo "Worker is already Running — nothing to do."
+          else
+            echo "Starting $ACP_WORKER (status was '$STATUS')..."
+            az containerapp start --subscription "$ACP_SUBSCRIPTION" \
+              -g "$ACP_RG" -n "$ACP_WORKER"
+            echo "Waiting for Running status..."
+            for i in $(seq 1 24); do
+              sleep 5
+              ST=$(az containerapp show --subscription "$ACP_SUBSCRIPTION" \
+                -g "$ACP_RG" -n "$ACP_WORKER" \
+                --query properties.runningStatus -o tsv 2>/dev/null || echo "Unknown")
+              echo "  ($i) $ST"
+              [ "$ST" = "Running" ] && break
+            done
+            ST=$(az containerapp show --subscription "$ACP_SUBSCRIPTION" \
+              -g "$ACP_RG" -n "$ACP_WORKER" \
+              --query properties.runningStatus -o tsv 2>/dev/null || echo "Unknown")
+            [ "$ST" = "Running" ] || { echo "ERROR: worker did not reach Running (got '$ST')"; exit 1; }
+            echo "Worker is now Running."
+          fi
