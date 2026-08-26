@@ -390,7 +390,9 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           (change / reassess) have no meaning in a static export. */}
       <AssessmentScopeCard
         run={run}
-        fileCount={files.length}
+        fileCount={files.length > 0
+          ? files.length
+          : (run?.scope?.inventory?.assessment_eligible ?? 0)}
         state={busy ? 'running' : 'done'}
         onReassess={onScan ? () => onGo('assess') : undefined}
       />
