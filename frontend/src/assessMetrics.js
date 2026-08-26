@@ -320,7 +320,7 @@ export function assessMetrics(files, { cap, assessment, criteria = SCOPE_SCS, le
 export function statusOf({ selected, assessed, notStarted, findings, anyReviewLane, runStatus }) {
   if (!selected) return 'empty'                        // nothing matched the scope
   if (runStatus === 'error' || !assessed) return 'failed'   // no check reached a terminal state
-  if (runStatus === 'cancelled' || runStatus === 'interrupted' || notStarted > 0) return 'partial'
+  if (runStatus === 'cancelled' || runStatus === 'interrupted' || runStatus === 'superseded' || notStarted > 0) return 'partial'
   if (findings > 0) return 'attention'
   if (anyReviewLane) return 'awaiting_review'          // nothing failed, but a person still decides
   return 'clear'

@@ -7,6 +7,14 @@ listed the same Drive concurrently, racing each other for DB connections and pro
 overlapping results (a tiny folder-scoped listing and a 15k-item whole-Drive listing logging
 almost simultaneously for one account). "Re-scan" means "start fresh, superseding whatever's
 running" — there is no UI for intentionally running two scans in parallel for one user.
+
+REGRESSION found live 2026-08-26, same day: the guard originally reused cancel_scan(), which
+stamps completed_at=now(). That made the superseded run sort as the estate's NEWEST scan in
+list_scans() (ORDER BY completed_at DESC) — with files=0 since it barely started — hiding the
+real completed scan behind it. Production's monitor caught this within minutes: "newest has 0
+documents but a recent scan had 999". The guard now calls supersede_scan() instead, which uses a
+distinct 'superseded' status that list_scans()/list_scans_admin()/list_scans_including_discovered()/
+previous_run_for_source() all exclude — see test_scan_supersede_excluded_from_listings.py.
 """
 from __future__ import annotations
 import sys
@@ -69,7 +77,7 @@ def test_a_second_scan_cancels_the_first_for_the_same_owner(gated_client, isolat
     s2 = _start_queued(gated_client, OWNER)
 
     assert s2 != s1
-    assert isolated_store.get_scan(s1, owner=OWNER)["run"]["status"] == "cancelled"
+    assert isolated_store.get_scan(s1, owner=OWNER)["run"]["status"] == "superseded"
     # The new scan is untouched — it starts at 'queued' like any fresh enqueue.
     assert isolated_store.get_scan(s2, owner=OWNER)["run"]["status"] == "queued"
 
@@ -113,5 +121,5 @@ def test_only_the_most_recent_prior_scan_is_cancelled(gated_client, isolated_sto
 
     s3 = _start_queued(gated_client, OWNER)
 
-    assert isolated_store.get_scan(s2, owner=OWNER)["run"]["status"] == "cancelled"
+    assert isolated_store.get_scan(s2, owner=OWNER)["run"]["status"] == "superseded"
     assert isolated_store.get_scan(s3, owner=OWNER)["run"]["status"] == "queued"

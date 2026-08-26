@@ -31,8 +31,10 @@ describe('Remediate snapshot-separation banner', () => {
 
   it('defines the finished-state set used to derive assessRunning', () => {
     const s = src()
-    // All six end states must appear in the set so a partial list cannot classify a running scan
-    // as finished. Cancelled/interrupted are also "not running" from the user's perspective.
+    // All seven end states must appear in the set so a partial list cannot classify a running scan
+    // as finished. Cancelled/interrupted/superseded are also "not running" from the user's
+    // perspective — superseded is a run the single-flight guard auto-killed (api/store.py
+    // supersede_scan) to make way for a newer scan, same as an explicit stop from here on.
     expect(s).toMatch(/_DONE_STATES/)
     expect(s).toMatch(/'done'/)
     expect(s).toMatch(/'complete'/)
@@ -40,6 +42,7 @@ describe('Remediate snapshot-separation banner', () => {
     expect(s).toMatch(/'finalized'/)
     expect(s).toMatch(/'cancelled'/)
     expect(s).toMatch(/'interrupted'/)
+    expect(s).toMatch(/'superseded'/)
   })
 
   it('derives assessRunning from run.status against the finished-state set', () => {

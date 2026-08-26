@@ -804,7 +804,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const written2 = files.filter((f) => f.drive_write_url)
   const downloadOnly = files.filter((f) => f.remediated_at && !f.drive_write_url)
 
-  const _DONE_STATES = new Set(['done', 'complete', 'completed', 'finalized', 'cancelled', 'interrupted'])
+  const _DONE_STATES = new Set(['done', 'complete', 'completed', 'finalized', 'cancelled', 'interrupted', 'superseded'])
   const assessRunning = run?.status && !_DONE_STATES.has(run.status)
   const showStaleBanner = assessRunning && files.length > 0 && !staleDismissed
 

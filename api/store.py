@@ -1973,8 +1973,13 @@ class Store:
     def list_scans(self, owner: str | None = None) -> list[dict]:
         # Completed scans only — in-flight (status='running', no completed_at) scans
         # are excluded so they don't appear as bogus entries in the scan picker.
+        # 'superseded' (a scan the single-flight guard killed to start a newer one, see
+        # supersede_scan) is excluded too: it has completed_at set but is not a real result — it
+        # would otherwise outrank the actual scan it was replaced by, since it stamps
+        # completed_at=now() at the moment the NEW scan starts. An explicit user Stop
+        # ('cancelled') is NOT excluded — that one is meant to stay visible in scan history.
         # Scoped to the signed-in user (per-user isolation): a user sees only their scans.
-        where, params = "completed_at IS NOT NULL", ()
+        where, params = "completed_at IS NOT NULL AND status != 'superseded'", ()
         if owner:
             where += " AND owner_email=%s"; params = (owner,)
         with self._db.cursor() as cur:
@@ -1999,7 +2004,8 @@ class Store:
             self._db.execute(cur,
                 "SELECT id,completed_at,source,rubric_hash,files,certifiable,uncertain,error,"
                 "avg_score,assessed_at,scope,owner_email "
-                "FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC", ())
+                "FROM scan_runs WHERE completed_at IS NOT NULL AND status != 'superseded' "
+                "ORDER BY completed_at DESC", ())
             rows = self._db.fetchall(cur)
             return [self._fill_run_aggregate(cur, r) for r in rows]
 
@@ -2029,11 +2035,16 @@ class Store:
         ahead of a real one (Postgres and SQLite disagree on default NULL ordering in
         `ORDER BY ... DESC`, so this could pass tests and misbehave in production). Use this
         method only where the caller genuinely wants "the latest scan, assessed or not."
+
+        Excludes status='superseded' (see supersede_scan) for the same reason list_scans does:
+        an auto-cancelled attempt is not a real discovery and must not outrank the real one it
+        replaced — "how many documents would Assess score" must not read 0 because a newer scan
+        pre-empted a still-running one seconds ago.
         """
         with self._db.cursor() as cur:
-            where, params = "1=1", ()
+            where, params = "status != 'superseded'", ()
             if owner:
-                where = "owner_email=%s"; params = (owner,)
+                where += " AND owner_email=%s"; params = (owner,)
             self._db.execute(cur,
                 "SELECT id,completed_at,source,rubric_hash,files,certifiable,uncertain,error,avg_score,assessed_at,scope "
                 f"FROM scan_runs WHERE {where} "
@@ -2215,6 +2226,28 @@ class Store:
         'cancelled'. Owner-scoped like get_scan. Files already analysed keep their records —
         history stays honest about what ran before the stop. False when the scan doesn't
         exist, belongs to someone else, or isn't running (nothing to cancel)."""
+        return self._end_running_scan(sid, owner=owner, terminal_status="cancelled")
+
+    def supersede_scan(self, sid: str, owner: str | None = None) -> bool:
+        """Stop an in-flight scan because a NEW scan for the same owner is taking its place
+        (the single-flight guard in routes/scans.py) — same effect as cancel_scan (jobs killed,
+        partial file_records kept), but a DIFFERENT terminal status.
+
+        Found live 2026-08-26: reusing cancel_scan's 'cancelled' status here made the superseded
+        run stamp completed_at=now() and sort as the NEWEST row in list_scans() (ORDER BY
+        completed_at DESC) — ahead of the real, complete scan it replaced. Since a scan barely
+        underway has files=NULL (filled to 0 for display), the estate's "latest scan" silently
+        read as a 0-document collapse — exactly the fingerprint scripts/monitor.py's collapse
+        check exists to catch, and it did: production's monitor failed with "newest has 0
+        documents but a recent scan had 999" within minutes of a real supersede.
+
+        'superseded' is a status list_scans()/list_scans_admin()/list_scans_including_discovered()/
+        previous_run_for_source() all now exclude, so an auto-superseded attempt never displaces a
+        real result — unlike an explicit user Stop ('cancelled'), which is meant to stay visible
+        in scan history exactly as it does today."""
+        return self._end_running_scan(sid, owner=owner, terminal_status="superseded")
+
+    def _end_running_scan(self, sid: str, *, owner: str | None, terminal_status: str) -> bool:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT owner_email, status FROM scan_runs WHERE id=%s", (sid,))
             row = self._db.fetchone(cur)
@@ -2226,14 +2259,14 @@ class Store:
                 "UPDATE jobs SET status='dead', updated_at=%s "
                 "WHERE scan_id=%s AND status IN ('queued','running')", (self._now(), sid))
             self._db.execute(cur,
-                "UPDATE scan_runs SET status='cancelled', completed_at=%s "
-                "WHERE id=%s AND status='running'", (self._now(), sid))
-            # A cancelled ASSESS fan-out has already assessed some documents (their file_records
-            # exist); stamp assessed_at so the run's PARTIAL results are reachable — the results
-            # views gate on assessed_at, and without this a stopped run showed nothing at all. Only
-            # when something ran: a discover-only cancel has no file_records and stays unassessed,
-            # which is correct — it is not a partial assessment. COALESCE so a run that had already
-            # finalized keeps its original stamp rather than being back-dated to the cancel.
+                "UPDATE scan_runs SET status=%s, completed_at=%s "
+                "WHERE id=%s AND status='running'", (terminal_status, self._now(), sid))
+            # A cancelled/superseded ASSESS fan-out has already assessed some documents (their
+            # file_records exist); stamp assessed_at so the run's PARTIAL results are reachable —
+            # the results views gate on assessed_at, and without this a stopped run showed nothing
+            # at all. Only when something ran: a discover-only stop has no file_records and stays
+            # unassessed, which is correct — it is not a partial assessment. COALESCE so a run that
+            # had already finalized keeps its original stamp rather than being back-dated to the stop.
             self._stamp_assessed_if_ran(cur, sid)
         return True
 
@@ -2377,10 +2410,14 @@ class Store:
         """Never hand out a NULL counter — derive it the way finalize would have.
 
         init_scan_run creates the scan_runs row with certifiable/uncertain/error/avg_score
-        unset; only finalize_scan_run fills them. Two paths close a scan WITHOUT finalizing —
-        cancel_scan ('cancelled') and the lost-worker sweeper ('interrupted') — and both stamp
-        completed_at, so the scan then passes list_scans' `completed_at IS NOT NULL` filter and
-        loads into the dashboard with those counters still NULL.
+        unset; only finalize_scan_run fills them. Three paths close a scan WITHOUT finalizing —
+        cancel_scan ('cancelled'), supersede_scan ('superseded' — killed by the single-flight
+        guard to make way for a newer scan) and the lost-worker sweeper ('interrupted') — and all
+        three stamp completed_at. A 'cancelled'/'interrupted' scan then passes list_scans'
+        `completed_at IS NOT NULL` filter and loads into the dashboard with those counters still
+        NULL; 'superseded' is additionally excluded from list_scans (see supersede_scan) so it
+        never ranks as the estate's latest scan, but is filled the same way here for the rarer
+        direct-lookup case (get_scan by its own id).
 
         NULL is not zero, but every consumer downstream treats it as zero silently: JSON `null`
         reaches JavaScript, `null / files` is 0 and `files - null - null - null` is `files`. On
@@ -2505,7 +2542,7 @@ class Store:
             # jobs are ever purged), so subtracting the analysed files from the enqueued files gives
             # exactly what was left. Additive field, so no other reader of the files array is touched,
             # and computed ONLY for a non-finalized run — a completed run has nothing outstanding.
-            if run.get("status") in ("cancelled", "interrupted"):
+            if run.get("status") in ("cancelled", "interrupted", "superseded"):
                 import json as _json
                 analysed = {f["file"] for f in files}
                 enqueued = []
@@ -2809,7 +2846,11 @@ class Store:
             me = self._db.fetchone(cur)
             if not me or not me.get("at"):
                 return None
-            where, params = "source=%s AND COALESCE(completed_at, started_at) < %s", (me["source"], me["at"])
+            # Excludes status='superseded' (see supersede_scan) — a diff baseline must be a real
+            # prior discovery, not an auto-cancelled attempt that barely started before this run
+            # replaced it.
+            where, params = ("source=%s AND COALESCE(completed_at, started_at) < %s "
+                              "AND status != 'superseded'", (me["source"], me["at"]))
             if owner:
                 where += " AND owner_email=%s"; params = params + (owner,)
             self._db.execute(cur,
