@@ -585,6 +585,18 @@ _SCHEMA = [
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS acknowledged BOOLEAN DEFAULT FALSE",
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS acknowledged_at TEXT",
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS acknowledged_by TEXT",
+    # Sparse durable recovery checkpoint for live Discover progress (Redis live-state spec,
+    # 2026-08-26). The Redis-backed job state (core.update_job/get_job_state) is the fast,
+    # frequent live source the SSE stream normally reads — but it is EPHEMERAL: gone if Redis is
+    # unreachable, a key TTLs out, or a replica with no Redis configured falls to its own
+    # in-memory JOBS dict that no other replica can see. Without a durable fallback, that failure
+    # mode reads as "the scan card went dark" with nothing to show instead. This is that fallback:
+    # written sparsely (on phase changes, and otherwise at most once per _CHECKPOINT_INTERVAL_S —
+    # see core.py's checkpoint throttle), NOT on every progress tick, so it never approaches the
+    # write volume that caused 2026-08-26's Postgres connection exhaustion. JSON text, matching
+    # the existing `scope` column's convention (portable across the SQLite/Postgres dual schema).
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS live_checkpoint TEXT",
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS live_checkpoint_at TEXT",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -1273,6 +1285,19 @@ class Store:
         """
         with self._db.cursor() as cur:
             self._db.execute(cur, "UPDATE scan_runs SET files=%s WHERE id=%s", (files, scan_id))
+
+    def checkpoint_scan_progress(self, scan_id: str, state: dict, at: str) -> None:
+        """Durable, sparse snapshot of live Discover progress — see live_checkpoint's schema
+        comment for why this exists. Caller (core.update_job) owns the throttling; this is a
+        plain UPDATE, cheap enough to call from a worker thread without its own connection-pool
+        concerns. Silently no-ops on an unknown scan_id (the row may not exist yet, or may have
+        been deleted) rather than raising — a checkpoint write must never fail the scan it is
+        merely describing."""
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE scan_runs SET live_checkpoint=%s, live_checkpoint_at=%s WHERE id=%s",
+                (_json.dumps(state), at, scan_id))
 
     def add_inventory(self, scan_id: str, items: list[dict]) -> dict:
         """Persist the Discover-phase inventory (ADR 0020 / lifecycle PRD) — source metadata
@@ -2383,6 +2408,13 @@ class Store:
                 run["scope"] = _json.loads(raw_scope)
             except Exception:
                 run["scope"] = None      # unreadable is unknown, not "whole Drive"
+        raw_checkpoint = run.get("live_checkpoint")
+        if isinstance(raw_checkpoint, str):
+            import json as _json
+            try:
+                run["live_checkpoint"] = _json.loads(raw_checkpoint)
+            except Exception:
+                run["live_checkpoint"] = None
         if self._reconcile_shadowed(cur, run):
             return run
         if all(run.get(k) is not None for k in ("certifiable", "uncertain", "error")):

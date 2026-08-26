@@ -478,6 +478,18 @@ async def stream_discover_state(scan_id: str, request: Request):
             if state is None:
                 not_found_streak += 1
                 if not_found_streak >= 4:
+                    # Redis is the fast live source; it is also ephemeral (unreachable, a key
+                    # TTL'd out, a no-Redis replica's in-memory JOBS no other replica can see).
+                    # Before giving up entirely, offer the sparse Postgres checkpoint
+                    # (core.py's _maybe_checkpoint) so the client can show "last known state, Ns
+                    # ago" instead of nothing. One frame, clearly marked as NOT live, then the
+                    # same terminal error as before — this is a recovery aid, not a substitute
+                    # for the real stream.
+                    row = await asyncio.to_thread(core.store.get_scan, scan_id, _owner(request))
+                    checkpoint = (row or {}).get("run", {}).get("live_checkpoint")
+                    checkpoint_at = (row or {}).get("run", {}).get("live_checkpoint_at")
+                    if checkpoint:
+                        yield f"data: {_j.dumps({**checkpoint, 'live': False, 'checkpoint_at': checkpoint_at})}\n\n"
                     yield "event: error\ndata: {\"error\": \"no active job for this scan\"}\n\n"
                     return
                 await asyncio.sleep(0.25)
