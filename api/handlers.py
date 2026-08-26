@@ -1240,110 +1240,110 @@ def _scan_discover(payload: dict, job: dict) -> None:
     inventory: list[dict] = []
     started = _dt.datetime.now(_dt.timezone.utc).isoformat()
     defer = _defer_analysis_to_assess()
-    # Create the scan_runs row NOW, before the file listing, so GET /scans/{id} returns a result
-    # as soon as a worker claims the job. The frontend polls once per second and gives up at 45
-    # consecutive misses — a large-estate listing takes longer than that window and triggers the
-    # false "this scan never started" error. total=0 is updated by set_scan_files once _list()
-    # returns; scope is written by merge_scan_scope once the listing scope dict is populated.
-    core.store.init_scan_run(scan_id, source, 0, started, rb.name, rb.hash, owner=user,
-                             status="running")
-    # scope_files gates what is READ, not what is scored. This is the PRODUCTION listing path
-    # (ADR 0007 fan-out); run_scan's is the local one, and wiring only that would leave a
-    # hospital's PDFs being downloaded and OCR'd in the deployment that matters.
-    # Emit live file counts during the listing so the frontend ticks up rather than showing 0
-    # for the full duration. Throttled to one DB write every 2 s — the scanner does the timing
-    # inside _search_drive/_search_folder; this callback just persists whatever count arrived.
-    def _listing_progress(count: int) -> None:
-        try:
-            core.store.set_scan_files(scan_id, count)
-            _jid = job.get("id")
-            if _jid:
-                core.update_job(_jid, {"files_found": count})
-        except Exception:  # noqa: BLE001 — a diagnostic must never fail the scan
-            pass
+    # ── Checkpoint: skip listing if inventory already persisted (retry resume) ──
+    # A previous attempt that completed listing + add_inventory but crashed during lifecycle
+    # evaluation or tracing already persisted the estate.  Re-listing the entire Drive API
+    # would double wall-clock time and quota consumption for large estates.  count_inventory
+    # is a cheap COUNT(*) query; the threshold > 0 is correct because add_inventory is
+    # idempotent (ON CONFLICT) and the only writer for this scan_id is us.
+    _checkpoint_resume = False
+    if defer:
+        _existing_inv_count = core.store.count_inventory(scan_id)
+        if _existing_inv_count > 0:
+            _checkpoint_resume = True
 
-    items = _list(source, svc, folder=effective_folder, sp_token=sp_tok,
-                  max_files=FANOUT_MAX_FILES, **({"folders": folders} if folders else {}),
-                  **({"exclude_folders": exclude_folders} if exclude_folders else {}),
-                  exclude_remediated=bool(payload.get("exclude_remediated", False)),
-                  scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory,
-                  progress_cb=_listing_progress)
+    if not _checkpoint_resume:
+        # Create the scan_runs row NOW, before the file listing, so GET /scans/{id} returns a
+        # result as soon as a worker claims the job.  Skipped on retry: the row already exists
+        # and re-initing would reset status and scope to their discover-start defaults.
+        core.store.init_scan_run(scan_id, source, 0, started, rb.name, rb.hash, owner=user,
+                                 status="running")
+
+    if _checkpoint_resume:
+        print(f"[scan] {scan_id}: retry detected — {_existing_inv_count} inventory rows already "
+              f"persisted, skipping Drive API listing", flush=True)
+        inv = core.store.list_inventory(scan_id)
+        items = [r for r in inv if r.get("doc_class") not in (None, "unsupported", "media")]
+        norm = items
+        core.store.set_scan_files(scan_id, len(items))
+        _jid = job.get("id")
+        if _jid:
+            core.update_job(_jid, {"files_found": _existing_inv_count,
+                                   "phase": "lifecycle"})
+    else:
+        # scope_files gates what is READ, not what is scored. This is the PRODUCTION listing path
+        # (ADR 0007 fan-out); run_scan's is the local one, and wiring only that would leave a
+        # hospital's PDFs being downloaded and OCR'd in the deployment that matters.
+        # Emit live file counts during the listing so the frontend ticks up rather than showing 0
+        # for the full duration. Throttled to one DB write every 2 s — the scanner does the timing
+        # inside _search_drive/_search_folder; this callback just persists whatever count arrived.
+        def _listing_progress(count: int) -> None:
+            try:
+                core.store.set_scan_files(scan_id, count)
+                _jid = job.get("id")
+                if _jid:
+                    core.update_job(_jid, {"files_found": count})
+            except Exception:  # noqa: BLE001 — a diagnostic must never fail the scan
+                pass
+
+        items = _list(source, svc, folder=effective_folder, sp_token=sp_tok,
+                      max_files=FANOUT_MAX_FILES, **({"folders": folders} if folders else {}),
+                      **({"exclude_folders": exclude_folders} if exclude_folders else {}),
+                      exclude_remediated=bool(payload.get("exclude_remediated", False)),
+                      scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory,
+                      progress_cb=_listing_progress)
     # shadow_candidate (a file sharing a logical name with another — possibly ACP's own output
     # shadowing its source) is computed inside _enqueue_analysis from the item list, so the same
     # rule applies whether the fan-out runs now or later at Assess.
     _exclude_rem = bool(payload.get("exclude_remediated", False))
 
     incremental = bool(payload.get("incremental", True))
-    # Freeze the enabled per-file WCAG scope rules into this scan alongside scan_scope (PRD §4.4 /
-    # C4). The score and trace paths both resolve each file against THIS frozen set, so an admin
-    # editing rules mid-scan can never make a file's score and its stored traces disagree — the
-    # same frozen-scope discipline scan_scope already follows (Phase 3a).
-    try:
-        scope["scope_rules"] = [
-            {k: r.get(k) for k in ("rule_id", "selector", "value", "codes",
-                                   "priority", "is_override", "enabled")}
-            for r in core.store.list_scope_rules(enabled_only=True)
-        ]
-    except Exception:
-        scope["scope_rules"] = []
-    # Update the file count and full scope now that listing is complete.
-    core.store.set_scan_files(scan_id, len(items))
-    core.store.merge_scan_scope(scan_id, scope)
+    if not _checkpoint_resume:
+        try:
+            scope["scope_rules"] = [
+                {k: r.get(k) for k in ("rule_id", "selector", "value", "codes",
+                                       "priority", "is_override", "enabled")}
+                for r in core.store.list_scope_rules(enabled_only=True)
+            ]
+        except Exception:
+            scope["scope_rules"] = []
+        core.store.set_scan_files(scan_id, len(items))
+        core.store.merge_scan_scope(scan_id, scope)
+        if defer:
+            core.store.set_scan_status(scan_id, "discovered")
+        norm = [{"file": it["name"], "drive_file_id": it.get("id"), "mime": it.get("mime"),
+                 "path": it.get("path"), "checksum": it.get("checksum"),
+                 "drive_id": it.get("driveId"),
+                 "source_modified": it.get("source_modified"),
+                 "source_mime": it.get("source_mime"), "created_at": it.get("created_at"),
+                 "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
+                 "size_kb": it.get("size_kb"),
+                 "content_type": it.get("content_type")} for it in items]
     if defer:
-        core.store.set_scan_status(scan_id, "discovered")
-    # Normalise the source listing to the common analysis-item shape. `mime` stays the Google-
-    # native EXPORT selector _download keys off; `source_mime` (the real MIME) is carried for the
-    # inventory row's `mime` column, along with the source metadata each listing now surfaces.
-    norm = [{"file": it["name"], "drive_file_id": it.get("id"), "mime": it.get("mime"),
-             "path": it.get("path"), "checksum": it.get("checksum"),
-             # THE DRIVE THE ITEM WAS LISTED FROM. _sp_list carries this per file precisely
-             # because Graph item ids are unique only within a drive; dropping it here is what
-             # sent every SharePoint file down _download's Google-Drive branch.
-             "drive_id": it.get("driveId"),
-             "source_modified": it.get("source_modified"),
-             "source_mime": it.get("source_mime"), "created_at": it.get("created_at"),
-             "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
-             "size_kb": it.get("size_kb"),
-             # SharePoint's Content Type name, best-effort (_sp_enrich_content_types). None for
-             # every other source, and None here whenever the tenant did not return one — never
-             # invented. See classificationData.js on the frontend for why absence must stay
-             # absence all the way through this pipeline.
-             "content_type": it.get("content_type")} for it in items]
-    if defer:
-        # ADR 0020 stage 3/4 — Discover LISTS only: classify from metadata (no file opened),
-        # persist the inventory + the scan-level params, and STOP. The estate is browsable in
-        # seconds; the download + WCAG analysis happen at Assess (scan_assess), which rebuilds
-        # identical fan-out work from this inventory — filtered back to the assessable subset, so
-        # the non-scannable rows persisted here are never downloaded. file_records stay empty
-        # until then, so the finalize counter (count_files_done) is untouched by deferral.
-        import classify as _cls
-        from scanner import _dedupe_inventory_files
-        # Scannable rows FIRST (canonical names, from the analysis set) so _dedupe_inventory_files
-        # keeps their names intact; the non-scannable estate rows follow.
-        inv = [{"file": it["file"], "drive_file_id": it.get("drive_file_id"),
-                "mime": it.get("source_mime"), "size_kb": it.get("size_kb"),
-                "doc_class": _cls.classify_from_metadata(it["file"], it.get("source_mime"))["doc_class"],
-                "checksum": it.get("checksum"), "path": it.get("path"),
-                "created_at": it.get("created_at"), "source_modified": it.get("source_modified"),
-                "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
-                # Carried into the row because Assess rebuilds its download work from the
-                # INVENTORY, not from `norm` — so anything the download needs has to survive
-                # the round trip through the table.
-                "drive_id": it.get("drive_id"),
-                "content_type": it.get("content_type")}
-               for it in norm] + inventory
-        _dedupe_inventory_files(inv)
-        if inv:
-            _inv_outcome = core.store.add_inventory(scan_id, inv)
-            _job_id = job.get("id")
-            if _job_id:
-                core.update_job(_job_id, {
-                    "schema_version": 2,
-                    "save_new": _inv_outcome.get("new"),
-                    "save_updated": _inv_outcome.get("updated"),
-                    "save_unchanged": _inv_outcome.get("unchanged"),
-                    "save_failed": _inv_outcome.get("failed"),
-                })
+        if not _checkpoint_resume:
+            import classify as _cls
+            from scanner import _dedupe_inventory_files
+            inv = [{"file": it["file"], "drive_file_id": it.get("drive_file_id"),
+                    "mime": it.get("source_mime"), "size_kb": it.get("size_kb"),
+                    "doc_class": _cls.classify_from_metadata(it["file"], it.get("source_mime"))["doc_class"],
+                    "checksum": it.get("checksum"), "path": it.get("path"),
+                    "created_at": it.get("created_at"), "source_modified": it.get("source_modified"),
+                    "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
+                    "drive_id": it.get("drive_id"),
+                    "content_type": it.get("content_type")}
+                   for it in norm] + inventory
+            _dedupe_inventory_files(inv)
+            if inv:
+                _inv_outcome = core.store.add_inventory(scan_id, inv)
+                _job_id = job.get("id")
+                if _job_id:
+                    core.update_job(_job_id, {
+                        "schema_version": 2,
+                        "save_new": _inv_outcome.get("new"),
+                        "save_updated": _inv_outcome.get("updated"),
+                        "save_unchanged": _inv_outcome.get("unchanged"),
+                        "save_failed": _inv_outcome.get("failed"),
+                    })
         # Phase B4 — with the inventory persisted, run enabled disposition rules against it and
         # record candidate lifecycle outcomes (never executing the Drive move/delete here). Runs
         # before the no-assessable-items short-circuit below because a rule may match a
