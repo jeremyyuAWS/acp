@@ -116,6 +116,14 @@ export const getConfig = () => (SIM ? sim({ google_client_id: null, auth: 'demo'
 // Returns true when the backend responds with HTTP 2xx, false on network error or non-2xx.
 // SIM mode always reports healthy — there is no real server to probe.
 export const checkHealth = () => (SIM ? Promise.resolve(true) : fetch(`${BASE}/healthz`).then((r) => r.ok, () => false))
+// Scan-infra readiness probe. /readyz is always public. Unlike checkHealth (up/down), this
+// reports WHETHER SCANS CAN ACTUALLY RUN right now — the worker tier can be alive at the process
+// level while claim_job is failing (DB out of connections, etc.), which /healthz cannot see.
+// Returns the parsed body ({ready, degraded, workers, ...}) or null on network error/non-2xx —
+// null means "couldn't ask", not "definitely broken", so callers must treat it as inconclusive
+// rather than as a failure. SIM mode always reports ready — there is no real server to probe.
+export const checkReadiness = () => (SIM ? Promise.resolve({ ready: true, degraded: [] })
+  : fetch(`${BASE}/readyz`).then((r) => (r.ok ? r.json() : null), () => null))
 // Langfuse deep-link base (from /config) → "📊 View trace" chips. traceUrl(null) when unset.
 let lfTraceBase = null
 export const setLangfuseBase = (b) => { lfTraceBase = b || null }
