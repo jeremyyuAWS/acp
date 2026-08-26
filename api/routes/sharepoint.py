@@ -113,6 +113,39 @@ def sp_folders(request: Request, drive_id: str = "", parent: str = "root", site:
         raise HTTPException(status_code=502, detail=f"Microsoft Graph error: {e}") from e
 
 
+def describe_sharepoint_readiness(request: Request, roots: list[str] | None) -> dict:
+    """Preflight readiness for a SharePoint/OneDrive source + the SPECIFIC roots selected.
+
+    Mirrors drive.describe_drive_readiness: one Graph metadata call per root
+    (scanner._sp_item_exists), never a /children listing, so this stays bounded regardless of
+    folder size. `roots` are `<driveId>/<itemId>` pairs — the same form /sharepoint/folders hands
+    out and start_scan's `folders` param expects — split the same way sp_folders splits `parent`.
+    An empty/None roots means the signed-in user's whole OneDrive, checked via its default drive.
+    """
+    token = request.headers.get("x-sp-token")
+    if not token:
+        return {"ready": False, "credential_valid": False,
+               "reason": "sign in with Microsoft to scan SharePoint/OneDrive", "roots": []}
+    checked = roots or [None]
+    root_results = []
+    for r in checked:
+        if r:
+            drive_id, _, item_id = r.partition("/") if "/" in r else ("", "", r)
+            if not drive_id:
+                drive_id = scanner._sp_default_drive(token) or ""
+        else:
+            drive_id, item_id = scanner._sp_default_drive(token) or "", "root"
+        if not drive_id:
+            root_results.append({"id": r or "root", "exists": False,
+                                 "error": "no document library found for that site or user"})
+            continue
+        info = scanner._sp_item_exists(token, drive_id, item_id)
+        root_results.append({"id": r or "root", **info})
+    bad = [r for r in root_results if not r.get("exists")]
+    return {"ready": not bad, "credential_valid": True, "roots": root_results,
+           "reason": None if not bad else f"{len(bad)} of {len(checked)} selected folder(s) unreachable"}
+
+
 @router.post("/sharepoint/upload")
 async def sharepoint_upload(request: Request):
     """Write one remediated file back to SharePoint.

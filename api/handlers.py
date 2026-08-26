@@ -1282,7 +1282,21 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 core.store.set_scan_files(scan_id, count)
                 _jid = job.get("id")
                 if _jid:
-                    core.update_job(_jid, {"files_found": count})
+                    # 'phase' matters as much as 'files_found' here: queuedProgress.js (the
+                    # frontend's durable-path progress derivation) only trusts the live job state
+                    # at all once job.phase is set to something other than 'queued' — omitting it
+                    # meant every tick of this callback was silently discarded, and the checklist
+                    # fell back to inferring phase from scan_runs.files (0 vs nonzero), which
+                    # cannot distinguish listing from metadata/classification from lifecycle and
+                    # so jumped straight from "Connected" to "Applying lifecycle rules" the
+                    # instant _list() returned — found live 2026-08-26 from a user screenshot
+                    # showing zero live detail through this entire phase. 'discovering' matches
+                    # DiscoverRunProgress.jsx's PHASE_DONE_COUNT key for "Listing folders and
+                    # files" — listing, metadata and classification are one combined operation in
+                    # _list() today (the Drive/SharePoint list call already returns metadata, and
+                    # classification runs inline per item), so this single phase value covers all
+                    # three checklist rows' real backend execution window honestly.
+                    core.update_job(_jid, {"files_found": count, "phase": "discovering"})
             except Exception:  # noqa: BLE001 — a diagnostic must never fail the scan
                 pass
 

@@ -92,14 +92,24 @@ describe('openDiscoverStream — end to end over a fake fetch', () => {
     expect(seen).toEqual([{ phase: 'lifecycle' }])   // the post-done frame never arrives
   })
 
-  it('calls onError on the server\'s terminal "error" frame', async () => {
+  it('calls onDone, not onError, on the server\'s terminal "error" frame', async () => {
+    // routes/scans.py's ONLY use of `event: error` mid-stream is "no active job for this scan" —
+    // Redis genuinely has nothing more to report, which happens routinely once a job finishes and
+    // its state ages out, not only on a real fault. A real fault (bad scan_id, wrong owner) is
+    // rejected as an HTTP error status before the stream ever starts, never as a mid-stream frame.
+    // Found live 2026-08-26: treating this as onError flipped the caller's sseFailedRef on every
+    // scan that finished cleanly, degrading the tail of the poll loop to getJob(job_id) with a
+    // job_id that had already gone stale — reproducing a handful of the exact 404s the scan-ID-
+    // anchored stream (#843) was built to eliminate.
     setGoogleToken('token')
     const body = streamOf(['event: error\ndata: {"error": "no active job for this scan"}\n\n'])
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, body })))
 
+    let done = false
     let errored = false
-    openDiscoverStream('s3', { onError: () => { errored = true } })
-    await vi.waitFor(() => expect(errored).toBe(true))
+    openDiscoverStream('s3', { onDone: () => { done = true }, onError: () => { errored = true } })
+    await vi.waitFor(() => expect(done).toBe(true))
+    expect(errored).toBe(false)
   })
 
   it('calls onError when the HTTP response itself is not ok (e.g. 404 from the ownership check)', async () => {

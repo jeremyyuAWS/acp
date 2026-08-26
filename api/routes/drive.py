@@ -98,6 +98,36 @@ def sources(request: Request):
         raise _drive_error(e)
 
 
+def describe_drive_readiness(request: Request, roots: list[str] | None) -> dict:
+    """Preflight readiness for a Drive source + the SPECIFIC roots a user selected — the piece
+    `/readyz` cannot answer, since it has no scan_id yet and no idea which folder was picked.
+
+    Deliberately ONE Drive call per root (`files().get`, metadata only — never `.list()`), so
+    this never approaches the full BFS walk it exists to run ahead of. A successful `get` proves
+    both "the token is valid" and "it can read this root" in the same round trip — cheaper and
+    more precise than a separate tokeninfo scope check, since a scope check cannot tell you
+    whether THIS folder is actually reachable (shared-drive membership, trashed, wrong account).
+    `roots=None`/empty means a whole-Drive scan, checked via the synthetic 'root' id.
+    """
+    try:
+        svc = core.drive_service(request)
+    except HTTPException as e:
+        return {"ready": False, "credential_valid": False, "reason": str(e.detail), "roots": []}
+    checked = roots or ["root"]
+    root_results = []
+    for r in checked:
+        try:
+            info = svc.files().get(fileId=r, fields="id,name,trashed").execute()
+            root_results.append({"id": r, "name": info.get("name"), "exists": True,
+                                 "trashed": bool(info.get("trashed"))})
+        except Exception as e:
+            he = _drive_error(e)
+            root_results.append({"id": r, "exists": False, "error": he.detail})
+    bad = [r for r in root_results if not r["exists"] or r.get("trashed")]
+    return {"ready": not bad, "credential_valid": True, "roots": root_results,
+           "reason": None if not bad else f"{len(bad)} of {len(checked)} selected folder(s) unreachable"}
+
+
 def _tokeninfo_scopes(token: str) -> list[str]:
     """Ask Google what scopes an access token actually carries.
 

@@ -3,6 +3,7 @@ import HitlBell from './HitlBell.jsx'
 import { assessmentLine, outcomeChips } from './assessmentProgress.js'
 import { queuedProgress } from './queuedProgress.js'
 import { nextFallbackInterval } from './fallbackPollBackoff.js'
+import { preflightVerdict } from './discoveryPreflightGate.js'
 import { scanPollDecision } from './scanPollDecision.js'
 import LiveAssessmentLive from './LiveAssessmentLive.jsx'
 import ProcessingDetails from './ProcessingDetails.jsx'
@@ -11,7 +12,7 @@ import { armNotifyOnComplete, notifyScanComplete, notificationsSupported, notify
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, checkHealth, openDiscoverStream } from './api'
+import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -424,6 +425,12 @@ export default function App() {
   // Universal scan gate: `{ source, folder }` while the app-level review modal is open. Declared
   // with the other hooks (above the `!me` early return) so the hook order never changes.
   const [pendingScan, setPendingScan] = useState(null)
+  // Non-blocking: the reasons discovery/preflight returned 'degraded' for the scan currently
+  // running, or null. Set once at scan start, shown on the run's own progress card for its
+  // duration (see DiscoverRunProgress) — the degraded condition (e.g. a queue backlog) caused
+  // the scan to queue behind other work, so it stays relevant for as long as the run does,
+  // unlike the ambient pre-scan readyz banner it complements rather than replaces.
+  const [preflightDegraded, setPreflightDegraded] = useState(null)
   // null = unknown; true = down; false = reachable.
   const [backendDown, setBackendDown] = useState(null)
   const [backendRetries, setBackendRetries] = useState(0)
@@ -886,6 +893,7 @@ export default function App() {
     // run's notice hanging over this one, and stops a stale flag ending this scan the moment it
     // starts.
     setStopped(null); scanCancelledRef.current = false
+    setPreflightDegraded(null)   // belongs to the run that's ending; a new run gets its own verdict
     const prevAvg = scan?.run?.avg_score
     // SIM: sim functions handle any source string synthetically.
     // Real: map to a backend-valid source based on what tokens are present.
@@ -926,6 +934,21 @@ export default function App() {
     try {
       let fresh
       if (queuedScan) {
+        // Read-only check on the SPECIFIC source + folders about to be scanned — catches a bad
+        // credential, a deleted folder, or a dead worker tier before a scan row exists, instead
+        // of the scan silently returning "0 documents" after the fact. Only a 'blocked' verdict
+        // stops the start; 'degraded' (e.g. a queue backlog) is allowed through — the readyz
+        // banner already covers ambient warnings, this only stops what would actually fail.
+        // Best-effort: a failed preflight CALL (network hiccup, endpoint down) must never itself
+        // block starting a scan — startScanQueued's own worker_tier_alive check below still
+        // catches the one failure mode that actually matters if this check couldn't run at all.
+        if (!SIM) {
+          let pre = null
+          try { pre = await checkDiscoveryPreflight(apiSource, folder, picked) } catch { pre = null }
+          const { blocked, reason, degradedReasons } = preflightVerdict(pre)
+          if (blocked) throw new Error(`can't start this scan — ${reason}`)
+          if (degradedReasons.length) setPreflightDegraded(degradedReasons)
+        }
         // Durable path: enqueue a scan job, then poll until the scan is persisted.
         const { scan_id, job_id, workers, worker_tier_alive } = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded)
         // Split topology (#113): the API's local pool is 0 by design — the standalone worker
@@ -1455,6 +1478,7 @@ export default function App() {
             onStop={liveScanId ? () => stopScan(liveScanId) : undefined}
             onReview={() => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
             onContinue={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+            preflightDegraded={preflightDegraded}
           />
         </div>
       )}
@@ -1511,7 +1535,7 @@ export default function App() {
           scanId={run?.id}
           onOpenAssess={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} rawFiles={scan?.files ?? []} busy={busy} onScan={requestScan} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} delegations={delegations} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} scope={run?.scope || null} run={run} scanList={scanList} runAt={inventorySnapshot({ run, inventory: run?.scope?.inventory || null })} decisions={decisions} setDecisions={setDecisions}
+        {view === 'discover' && <Discover sources={sources} files={files} rawFiles={scan?.files ?? []} busy={busy} onScan={requestScan} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} delegations={delegations} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} preflightDegraded={preflightDegraded} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} scope={run?.scope || null} run={run} scanList={scanList} runAt={inventorySnapshot({ run, inventory: run?.scope?.inventory || null })} decisions={decisions} setDecisions={setDecisions}
           /* Upload lost its top-level tab in the v2 simplification, but not its capability:
              it is a secondary action inside Discover now, which is where "get files in front
              of ACP" already lives. Dropping it outright would have removed the only way to try

@@ -896,6 +896,24 @@ def _sp_folders(token: str, drive_id: str, item_id: str = "root") -> list[dict]:
     return out
 
 
+def _sp_item_exists(token: str, drive_id: str, item_id: str = "root") -> dict:
+    """Does this ONE driveItem exist and is it readable — metadata only, no /children.
+
+    The preflight existence check for `POST /discovery/preflight`: unlike `_sp_folders`, which
+    lists (and paginates through) every child, this hits the item's own metadata endpoint —
+    bounded to one request regardless of how large the folder is, which matters specifically for
+    a check that runs before every scan start and must never approach a full enumeration.
+    """
+    seg = "root" if item_id in (None, "", "root") else f"items/{item_id}"
+    try:
+        data = _sp_get(token, f"{GRAPH}/drives/{drive_id}/{seg}?$select=id,name,folder")
+        return {"exists": True, "name": data.get("name"), "is_folder": data.get("folder") is not None}
+    except PermissionError as e:
+        return {"exists": False, "error": str(e)}
+    except Exception as e:
+        return {"exists": False, "error": f"{e.__class__.__name__}: {e}"}
+
+
 def _sp_default_drive(token: str, site: str | None = None) -> str | None:
     """The drive a picker starts in: a site's default library, or the user's OneDrive."""
     try:

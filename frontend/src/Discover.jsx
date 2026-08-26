@@ -98,7 +98,7 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 // `me` arrived with Upload, which folded in here when v2 dropped its top-level
 // tab. Both OPTIONAL: every existing caller and test constructs Discover without them, and the
 // ad-hoc panel simply does not render when `me` is absent rather than throwing.
-export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
+export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, preflightDegraded = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
   hasSPToken = false, runAt = null, run = null, scanList = null, rawFiles = null, onStop = null }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
   // component is given neither — Discover takes scanId and scope, not the run. The pieces it needs
@@ -491,7 +491,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           Replaces the shared .scanprog banner (suppressed by App.jsx when view==='discover')
           so the Discover tab stays scoped to inventory. No assessment workers, WCAG content,
           or findings appear here. */}
-      <DiscoverRunProgress progress={progress} busy={busy} onStop={onStop} onContinue={onAdvance} sources={sources} inv={inv} />
+      <DiscoverRunProgress progress={progress} busy={busy} onStop={onStop} onContinue={onAdvance} sources={sources} inv={inv} preflightDegraded={preflightDegraded} />
 
       {/* Completion summary: immutable snapshot of what was found, with the "Continue" CTA.
           Appears only after discovery finishes — DiscoverRunProgress hides itself at that point. */}
