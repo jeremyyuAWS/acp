@@ -1635,12 +1635,22 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         corpus = Path(os.environ.get("ACP_LOCAL_CORPUS") or (ACP / "test-corpus/files"))
         scannable = OFFICE + (".pdf",) + HTML_EXTS
         result: list[dict] = []
+        # Drive-shaped rows for the WHOLE walk (scannable + not), so estate_inventory.summarize
+        # can classify local scans the same way it does Drive/SharePoint. Without this, `_list`
+        # returned no `scope_out["inventory"]` at all for local/demo scans, and the Discover tab's
+        # headline count (scope.inventory.discovered) fell back to 0 until Assess populated
+        # file_records — a local scan read as "0 documents discovered" even when it found plenty.
+        _estate_files: list[dict] = []
         for p in sorted(corpus.rglob("*")):
             if not p.is_file():
                 continue
             if estate_inventory.is_os_metadata(p.name):
                 continue  # OS metadata files (.DS_Store, Thumbs.db, …) — not user content
             meta = _local_stat_meta(p, corpus)
+            _estate_files.append({"id": str(p), "name": p.name, "mimeType": meta["mime"] or "",
+                                  "modifiedTime": meta["source_modified"],
+                                  "size": meta["size"],
+                                  "owners": [{"displayName": meta["owner"]}] if meta["owner"] else []})
             if p.suffix.lower() in scannable:
                 result.append({"name": p.name, "path": str(p),
                                "size_kb": _inv_size_kb(meta["size"]),
@@ -1655,7 +1665,8 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
                     owner=meta["owner"], parent_folder=meta["parent_folder"]))
         if scope_out is not None:
             scope_out.update({"kind": "local", "path": str(corpus), "kept": len(result),
-                              "truncated": False})
+                              "truncated": False,
+                              "inventory": estate_inventory.summarize(_estate_files, truncated=False)})
     elif source == "sharepoint":
         # `folder` carries the SharePoint SITE id here, reusing the parameter Drive already uses
         # to narrow a scan rather than threading a second one through five call sites. "root" is
@@ -1755,10 +1766,16 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
                 if f.get("id") not in result_ids:
                     inventory_out.append(_drive_inventory_row(f))
         if scope_out is not None:
+            # Same estate-summary gap as the local branch above: without this, an ADC/demo scan's
+            # scope carried no `inventory` key, and the Discover tab's headline count fell back to
+            # 0 until Assess populated file_records. `batch` is already Drive-API-shaped, so no
+            # translation is needed — just drop OS metadata the way inventory_out does.
+            _estate_files = [f for f in batch if not estate_inventory.is_os_metadata(f.get("name", "") or "")]
             scope_out.update({"kind": "folder", "folder_id": _DEMO_FOLDER,
                               "folder_name": _folder_name(svc, _DEMO_FOLDER),
                               "folders_walked": 1, "listed": len(batch), "kept": len(result),
-                              "truncated": False})
+                              "truncated": False,
+                              "inventory": estate_inventory.summarize(_estate_files, truncated=False)})
     # ── the operator's file-type scope, applied to what gets READ ───────────────────────────
     #
     # ONE PLACE, NOT FOUR. The proposal for this listed four enumeration sites (local, SharePoint,
