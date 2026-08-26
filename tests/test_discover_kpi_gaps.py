@@ -152,8 +152,9 @@ def test_deferred_path_without_job_id_still_succeeds(isolated_store, monkeypatch
     assert len(inv) == 1  # inventory was still persisted correctly
 
 
-def test_deferred_path_second_run_shows_updated_count(isolated_store, monkeypatch):
-    """Re-running discover on the same scan emits save_updated > 0 for existing rows."""
+def test_deferred_path_second_run_uses_checkpoint_resume(isolated_store, monkeypatch, capsys):
+    """A retry of _scan_discover on the same scan_id skips listing + inventory save
+    (checkpoint resume) and jumps straight to lifecycle evaluation."""
     import core
     import handlers
     import scanner
@@ -172,6 +173,13 @@ def test_deferred_path_second_run_shows_updated_count(isolated_store, monkeypatc
     )
     assert core.JOBS[job_id_1].get("save_new") == 1
 
+    list_calls = []
+    real_list = scanner._list
+    def _tracking_list(*a, **k):
+        list_calls.append(1)
+        return real_list(*a, **k)
+    monkeypatch.setattr(scanner, "_list", _tracking_list)
+
     job_id_2 = "j-run2"
     core.JOBS[job_id_2] = {"phase": "queued"}
     handlers._scan_discover(
@@ -179,9 +187,12 @@ def test_deferred_path_second_run_shows_updated_count(isolated_store, monkeypatc
         {"scan_id": "sd-rerun", "id": job_id_2},
     )
 
+    assert len(list_calls) == 0, "checkpoint should skip _list on retry"
     state2 = core.JOBS.get(job_id_2, {})
-    assert state2.get("save_new") == 0, f"expected 0 new on re-run, got {state2}"
-    assert state2.get("save_updated") == 1, f"expected 1 updated on re-run, got {state2}"
+    assert state2.get("phase") == "done", f"retry should still complete: {state2}"
+    assert "save_new" not in state2, "checkpoint skips add_inventory, so no save KPIs"
+    out = capsys.readouterr().out
+    assert "retry detected" in out, "checkpoint should log retry detection"
 
 
 # ── deferred path done-phase emission (§6.7) ──────────────────────────────────
