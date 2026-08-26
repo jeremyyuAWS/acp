@@ -110,3 +110,32 @@ def test_scope_out_folders_walked_counts_all_visited():
     # root + A + B = 3 folders walked
     assert scope["folders_walked"] == 3
     assert scope["kept"] == 2
+
+
+def test_progress_cb_receives_live_folder_count(monkeypatch):
+    """progress_cb's second argument is the running count of folders visited so far — the
+    frontend's 'N files · M folders' listing KPI (DiscoverRunProgress.jsx) reads this live, and
+    until this was wired through it was always None mid-scan (folders_walked was only ever
+    written to scope_out, computed after the whole BFS finishes)."""
+    drive = FakeDrive({
+        "root": [_folder("A"), _folder("B")],
+        "A":    [_doc("f1")],
+        "B":    [_doc("f2")],
+    })
+    ticks = []
+    # The real throttle gates on wall-clock monotonic() >= 2s since the last tick — too slow to
+    # observe in a synchronous unit test. Force every check past it deterministically instead of
+    # sleeping in the test.
+    clock = [1000.0]
+
+    def _fake_monotonic():
+        clock[0] += 3.0
+        return clock[0]
+
+    monkeypatch.setattr(scanner.time, "monotonic", _fake_monotonic)
+    scanner._search_folder(drive, "root", max_files=100,
+                           progress_cb=lambda count, folders=None: ticks.append((count, folders)))
+    assert ticks, "progress_cb was never called"
+    assert all(folders is not None for _, folders in ticks)
+    # By the last tick, all 3 folders (root, A, B) have been entered.
+    assert ticks[-1][1] == 3
