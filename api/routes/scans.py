@@ -446,6 +446,13 @@ async def stream_discover_state(scan_id: str, request: Request):
     import asyncio
     import json as _j
 
+    # Same ownership check GET /scans/{sid} makes — this endpoint originally had none at all,
+    # so any authenticated user who had (or guessed) a scan_id could stream someone else's live
+    # discovery progress (file counts, phase, lifecycle stats). 404, not 403, for the same reason
+    # get_scan does it: a scan id must not be usable as an existence oracle across accounts.
+    if core.store.get_scan(scan_id, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+
     async def _generate():
         last_seq = -1
         job_id: str | None = None

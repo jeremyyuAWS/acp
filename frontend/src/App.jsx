@@ -10,7 +10,7 @@ import { armNotifyOnComplete, notifyScanComplete, notificationsSupported, notify
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, checkHealth } from './api'
+import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, checkHealth, openDiscoverStream } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -393,6 +393,14 @@ export default function App() {
   // a queued scan that is cancelled simply stops existing, and absence is what it looked like all
   // along.
   const scanCancelledRef = useRef(false)
+  // Live job state pushed by the Discover SSE stream (openDiscoverStream), read by the queued-
+  // scan poll loop instead of it separately fetching getJob() every tick — a ref, not state,
+  // because it updates far more often (~every backend seq bump) than the loop itself renders
+  // (once per 1s tick) and does not need its own re-render. sseFailedRef flips once the stream
+  // errors out (proxy strips SSE, 404, network) so the loop falls back to the old per-tick
+  // getJob() poll for the rest of that scan rather than trusting a connection known to be dead.
+  const liveJobStateRef = useRef(null)
+  const sseFailedRef = useRef(false)
   // "Notify me when complete" (slice 3c): the button drives `notifyArmed` for its label; the ref is what
   // the async scan-completion code reads, since it fires long after this render's closure was captured.
   const [notifyArmed, setNotifyArmed] = useState(false)
@@ -913,6 +921,7 @@ export default function App() {
       }
     }
 
+    let streamHandle = null
     try {
       let fresh
       if (queuedScan) {
@@ -922,6 +931,20 @@ export default function App() {
         // container's heartbeat is what proves the queue is manned.
         if (!SIM && !workers && !worker_tier_alive) throw new Error('no workers available — the worker service looks down; check Monitor')
         setLiveScanId(scan_id)
+        // Live job state arrives by push instead of the loop below fetching getJob() every
+        // tick — a strict reduction in request volume, not just lower latency. onError flips
+        // sseFailedRef so the loop degrades to the old per-tick poll for the rest of this scan
+        // (proxy stripping SSE, a network hiccup) rather than trusting a connection known dead.
+        liveJobStateRef.current = null
+        sseFailedRef.current = false
+        streamHandle = openDiscoverStream(scan_id, {
+          onMessage: (state) => { liveJobStateRef.current = state },
+          onError: () => { sseFailedRef.current = true },
+          // Deliberately NOT flipping sseFailedRef here: onDone means the job finished, not that
+          // the connection is broken — liveJobStateRef.current already holds the final state
+          // (done: true), which is exactly what the loop should keep reading for its last tick
+          // or two until scanPollDecision independently detects settlement via getScan().
+        })
         const t0 = Date.now()
         let misses = 0
         let foundOnce = false
@@ -934,11 +957,16 @@ export default function App() {
           let g = null
           try { g = await getScan(scan_id); misses = 0; foundOnce = true } catch { g = null; misses++ }
           // Best-effort, read-only, and never allowed to affect the poll's exit decision below —
-          // scanPollDecision reads `g`/`scan`, not this. A miss here (job TTL'd out of Redis,
-          // transient error) just means this tick renders with the coarser scan_runs-derived
-          // phase instead of the live one; it must never be mistaken for the scan itself failing.
-          let job = null
-          if (job_id) { try { job = await getJob(job_id) } catch { job = null } }
+          // scanPollDecision reads `g`/`scan`, not this. Prefer the SSE-pushed state (no extra
+          // request); only fall back to polling getJob() once the stream has proven itself dead,
+          // not on its first miss — a single dropped tick must not fall back permanently. A miss
+          // here (job TTL'd out of Redis, transient error) just means this tick renders with the
+          // coarser scan_runs-derived phase instead of the live one; it must never be mistaken
+          // for the scan itself failing.
+          let job = liveJobStateRef.current
+          if (!job && sseFailedRef.current && job_id) {
+            try { job = await getJob(job_id) } catch { job = null }
+          }
           // The exit ladder lives in scanPollDecision.js — pure, ordered, and tested. It was four
           // inline branches with no test reachable from anywhere, which is how the fifth (the user
           // pressing Stop) stayed missing: a QUEUED scan that is cancelled has no scan_runs row and
@@ -994,6 +1022,9 @@ export default function App() {
       // Guide the user into the workflow: land on Discover (step 1) after a scan.
       setView(me?.allow && !me.allow.includes('discover') ? 'overview' : 'discover')
     } catch (e) { setErr(`scan failed: ${e?.message ?? e}`) } finally {
+      // Always close, whatever the loop's own state — the server's generator loop otherwise
+      // keeps polling Redis every 250ms for a client that has already stopped listening.
+      streamHandle?.close()
       setBusy(false); setProgress(null); setLiveScanId(null)
       setNotifyArmed(false); notifyArmedRef.current = false      // one arming per run
     }

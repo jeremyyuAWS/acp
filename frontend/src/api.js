@@ -124,6 +124,76 @@ export const checkHealth = () => (SIM ? Promise.resolve(true) : fetch(`${BASE}/h
 // rather than as a failure. SIM mode always reports ready — there is no real server to probe.
 export const checkReadiness = () => (SIM ? Promise.resolve({ ready: true, degraded: [] })
   : fetch(`${BASE}/readyz`).then((r) => (r.ok ? r.json() : null), () => null))
+
+// Splits a buffered SSE (text/event-stream) chunk into complete frames plus whatever partial
+// frame is still waiting on more bytes. Pure and exported so the parsing logic is unit-testable
+// without a real network stream. A frame is one or more lines ending in a blank line; only
+// `event:`/`data:` lines are recognised (comments and ids are not — the backend emits neither).
+// The backend (api/routes/scans.py's discover/stream) always emits exactly one `data:` line per
+// frame with no embedded newlines (json.dumps produces a single-line string), so multi-line
+// `data:` joining per the SSE spec is deliberately not implemented — there is nothing that needs it.
+export function parseSSEFrames(buffer) {
+  const frames = []
+  let rest = buffer
+  let idx
+  while ((idx = rest.indexOf('\n\n')) !== -1) {
+    const raw = rest.slice(0, idx)
+    rest = rest.slice(idx + 2)
+    let event = 'message'
+    let data = null
+    for (const line of raw.split('\n')) {
+      if (line.startsWith('event:')) event = line.slice(6).trim()
+      else if (line.startsWith('data:')) data = line.slice(5).trim()
+    }
+    if (data !== null) frames.push({ event, data })
+  }
+  return { frames, rest }
+}
+
+// Live Discovery progress over SSE — GET /scans/{scanId}/discover/stream. Deliberately NOT the
+// browser's native EventSource: EventSource cannot send custom headers at all, and every other
+// call in this file authenticates via the Authorization bearer `headers()` builds — sending the
+// token as a URL query param instead would put it in server/proxy access logs and browser
+// history, which this app avoids everywhere else (compliance-focused, HIPAA/BAA context). This
+// reads the same authenticated stream manually via fetch() + a ReadableStream reader instead.
+//
+// onMessage fires with the parsed job-state object (same shape getJob() returns) on every
+// `data:` frame; onDone/onError fire at most once each, whichever way the stream ends — the
+// server's own terminal `event: done`/`event: error` frame, the connection closing, or a fetch
+// failure. Returns {close()}; ALWAYS call it once the caller is done (scan settled, cancelled, or
+// unmounting) — closing aborts the fetch, which is what stops the server's generator loop, so an
+// unclosed stream leaks both the browser connection and the backend coroutine polling Redis
+// every 250ms for it.
+export function openDiscoverStream(scanId, { onMessage, onDone, onError } = {}) {
+  if (SIM) return { close: () => {} }   // SIM has no real server to stream from
+  const controller = new AbortController()
+  ;(async () => {
+    try {
+      const res = await fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/discover/stream`,
+        { headers: headers(), signal: controller.signal })
+      if (!res.ok || !res.body) { onError?.(); return }
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const { frames, rest } = parseSSEFrames(buffer)
+        buffer = rest
+        for (const f of frames) {
+          if (f.event === 'done') { onDone?.(); return }
+          if (f.event === 'error') { onError?.(); return }
+          try { onMessage?.(JSON.parse(f.data)) } catch { /* malformed frame — skip, keep reading */ }
+        }
+      }
+      onDone?.()
+    } catch (e) {
+      if (e?.name !== 'AbortError') onError?.()   // an abort is our own close(), not a failure
+    }
+  })()
+  return { close: () => controller.abort() }
+}
 // Langfuse deep-link base (from /config) → "📊 View trace" chips. traceUrl(null) when unset.
 let lfTraceBase = null
 export const setLangfuseBase = (b) => { lfTraceBase = b || null }
