@@ -5507,6 +5507,25 @@ class Store:
             # (Log Analytics scheduled query) keys on 'job dead-lettered'.
             print(f"[acp] job dead-lettered: id={job_id} type={job.get('type')} "
                   f"class={error_class or 'unclassified'} error={error[:160]}", flush=True)
+            # The scan/scan_discover job IS the scan — unlike a per-file job (remediate_file,
+            # apply_approved_values) whose death doesn't mean the whole run failed. Without
+            # this, a discover job that exhausts retries (an unexpected exception the handler's
+            # own try/except doesn't already catch — see _scan_discover's listing-specific one,
+            # which sets scan_runs.status='failed' itself and never reaches here) leaves
+            # scan_runs stuck at 'running' forever: no retry can help (attempts are exhausted),
+            # no later event ever flips it, and the only user-visible signal is the generic
+            # 90s "appears stalled" warning — which doesn't say it will never finish. Guarded to
+            # non-terminal statuses only, so this can never clobber a scan that already
+            # completed, or was cancelled/superseded, via some other path.
+            if job.get("scan_id") and job.get("type") in ("scan", "scan_discover"):
+                try:
+                    with self._db.cursor() as cur:
+                        self._db.execute(cur,
+                            "UPDATE scan_runs SET status='failed' WHERE id=%s "
+                            "AND status IN ('queued','running')",
+                            (job["scan_id"],))
+                except Exception:
+                    pass  # best-effort — the dead-letter itself must still be recorded
             return "dead"
         run_after = (now + timedelta(seconds=backoff_seconds)).isoformat()
         with self._db.cursor() as cur:
