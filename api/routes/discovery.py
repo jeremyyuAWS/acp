@@ -50,6 +50,7 @@ def discovery_preflight(request: Request, source: str, folder: str | None = None
     roots = list(folders) if folders else ([folder] if folder else None)
 
     reasons: list[str] = []
+    degraded_reasons: list[str] = []
     src: dict = {"ready": True}
     if source == "drive":
         from .drive import describe_drive_readiness
