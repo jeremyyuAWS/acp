@@ -432,20 +432,35 @@ export default function App() {
   // Universal scan gate: `{ source, folder }` while the app-level review modal is open. Declared
   // with the other hooks (above the `!me` early return) so the hook order never changes.
   const [pendingScan, setPendingScan] = useState(null)
-  // null = unknown (first probe not yet returned); true = down; false = reachable.
+  // null = unknown; true = down; false = reachable.
   const [backendDown, setBackendDown] = useState(null)
+  const [backendRetries, setBackendRetries] = useState(0)
+  const [backendLastChecked, setBackendLastChecked] = useState(null)
+  const [backendRetrying, setBackendRetrying] = useState(false)
+  const [backendRestored, setBackendRestored] = useState(false)
+  const backendWasDown = useRef(false)
 
   useEffect(() => {
     const t = setInterval(() => setTick((n) => n + 1), 60_000)
     return () => clearInterval(t)
   }, [])
 
-  // Backend health banner: probe /healthz every 30 s. On failure, show a persistent red banner.
-  // On recovery the banner disappears automatically. Skips the first render's worth of delay so
-  // a flaky-on-startup environment surfaces immediately.
+  // Backend health banner: probe /healthz every 30 s. Tracks retry count for severity tiers.
   useEffect(() => {
     let cancelled = false
-    const probe = () => checkHealth().then((ok) => { if (!cancelled) setBackendDown(!ok) })
+    const probe = () => checkHealth().then((ok) => {
+      if (cancelled) return
+      setBackendLastChecked(Date.now())
+      setBackendDown(!ok)
+      if (ok) {
+        if (backendWasDown.current) { setBackendRestored(true); setTimeout(() => setBackendRestored(false), 4000) }
+        backendWasDown.current = false
+        setBackendRetries(0)
+      } else {
+        backendWasDown.current = true
+        setBackendRetries((n) => n + 1)
+      }
+    })
     probe()
     const t = setInterval(probe, 30_000)
     return () => { cancelled = true; clearInterval(t) }
@@ -1190,20 +1205,62 @@ export default function App() {
           }}>sign out</button>
         </div>
       </header>
-      {backendDown && (
-        <div role="alert" aria-label="Backend unavailable" style={{
-          background: '#fef2f2', borderBottom: '2px solid #ef4444',
-          padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 10,
-          fontSize: 14, color: '#7f1d1d',
-        }}>
-          <span aria-hidden="true">🔴</span>
-          <span style={{ flex: 1 }}>
-            The compliance server is unreachable. Scans and data loads are paused.
-            Retrying automatically — <button onClick={() => checkHealth().then((ok) => setBackendDown(!ok))}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, font: 'inherit', color: 'inherit', textDecoration: 'underline' }}>
-              check now
+      {backendDown && (() => {
+        const secSince = backendLastChecked ? Math.round((Date.now() - backendLastChecked) / 1000) : null
+        const checkedLabel = secSince === null ? '' : secSince < 5 ? 'just now' : secSince < 60 ? `${secSince}s ago` : `${Math.floor(secSince / 60)}m ago`
+        const extended = backendRetries > 3
+        return (
+          <div role="alert" aria-label="Service temporarily unavailable" style={{
+            background: '#fffdf5', borderLeft: '4px solid #f59e0b', borderBottom: '1px solid #fde68a',
+            padding: '9px 20px', display: 'flex', alignItems: 'center', gap: 10,
+            fontSize: 13.5, color: '#1c1917',
+          }}>
+            <span aria-hidden="true" style={{ fontSize: 15, lineHeight: 1, flexShrink: 0, color: '#d97706' }}>⚠</span>
+            <div style={{ flex: 1 }}>
+              <span style={{ fontWeight: 600 }}>{extended ? 'ACP remains unavailable' : 'Reconnecting to ACP'}</span>
+              {' — '}
+              <span style={{ color: '#57534e' }}>
+                Scans and data updates are temporarily paused.
+                {checkedLabel && <span style={{ marginLeft: 6, color: '#78716c' }}>Last checked {checkedLabel}.</span>}
+              </span>
+            </div>
+            <button
+              onClick={() => {
+                setBackendRetrying(true)
+                checkHealth().then((ok) => {
+                  setBackendLastChecked(Date.now())
+                  setBackendDown(!ok)
+                  if (ok) {
+                    if (backendWasDown.current) { setBackendRestored(true); setTimeout(() => setBackendRestored(false), 4000) }
+                    backendWasDown.current = false
+                    setBackendRetries(0)
+                  } else {
+                    backendWasDown.current = true
+                    setBackendRetries((n) => n + 1)
+                  }
+                  setBackendRetrying(false)
+                })
+              }}
+              disabled={backendRetrying}
+              style={{
+                flexShrink: 0, border: '1px solid #d97706', borderRadius: 5,
+                background: 'white', padding: '4px 12px', cursor: backendRetrying ? 'default' : 'pointer',
+                fontSize: 13, color: '#92400e', fontWeight: 500, opacity: backendRetrying ? 0.6 : 1,
+              }}
+            >
+              {backendRetrying ? 'Retrying…' : 'Retry now'}
             </button>
-          </span>
+          </div>
+        )
+      })()}
+      {backendRestored && (
+        <div role="status" style={{
+          background: '#f0fdf4', borderLeft: '4px solid #22c55e', borderBottom: '1px solid #bbf7d0',
+          padding: '9px 20px', display: 'flex', alignItems: 'center', gap: 10,
+          fontSize: 13.5, color: '#14532d',
+        }}>
+          <span aria-hidden="true" style={{ fontSize: 15, color: '#16a34a' }}>✓</span>
+          <span><strong>Connection restored</strong> — Scans and data updates are available again.</span>
         </div>
       )}
       {tokenRefreshError && (
