@@ -124,6 +124,12 @@ _SCHEMA = [
     # recorded" — the newest scan_inventory.discovered_at is the honest derivation for those, and
     # the frontend does exactly that rather than dating them to the render.
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS discovered_at TEXT",
+    # Staging → published snapshot (#1 resilience). Stamped only after discovery passes all
+    # completeness checks (enumeration was not truncated and was not a suspicious zero).
+    # NULL means either the scan predates this column, or it completed but had concerns that
+    # prevented publishing — callers treat NULL as "unpublished" and fall back to the previous
+    # published scan. The scan selection query prefers rows where published_at IS NOT NULL.
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS published_at TEXT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS size_kb INT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS pages INT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS sheets INT",
@@ -597,6 +603,23 @@ _SCHEMA = [
     # the existing `scope` column's convention (portable across the SQLite/Postgres dual schema).
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS live_checkpoint TEXT",
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS live_checkpoint_at TEXT",
+    # Active-Discovery concurrency guard (resilience Phase 1). Exactly one active Discovery
+    # per (owner_email, source) at any time. Claimed transactionally when a discover job starts
+    # and released in the same transaction that sets the terminal scan status — so a crash or
+    # disconnect cannot release it; only durable finalization can. scan_id is UNIQUE so the
+    # finalizer can release by scan_id without knowing the source.
+    #
+    # `owner_email` is the ACP tenant identifier until a first-class tenant_id column is added.
+    # A future Temporal migration keeps the same guard row — only the execution mechanism changes.
+    """CREATE TABLE IF NOT EXISTS active_discovery_guard (
+      owner_email TEXT NOT NULL,
+      source TEXT NOT NULL,
+      scan_id TEXT NOT NULL,
+      acquired_at TEXT NOT NULL,
+      updated_at TEXT,
+      PRIMARY KEY (owner_email, source)
+    )""",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_adg_scan ON active_discovery_guard(scan_id)",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -1374,6 +1397,69 @@ class Store:
             self._db.execute(cur, "SELECT discovered_at FROM scan_runs WHERE id=%s", (scan_id,))
             row = self._db.fetchone(cur)
         return (row or {}).get("discovered_at")
+
+    def acquire_discovery_guard(self, owner_email: str, source: str, scan_id: str) -> str | None:
+        """Claim the active-Discovery slot for (owner_email, source).
+
+        Returns None on success. Returns the scan_id that currently holds the slot when
+        another scan is already active — callers must treat that as a conflict and stop
+        rather than starting a second Discovery over the same source.
+
+        Written in a single INSERT … ON CONFLICT DO NOTHING, then a SELECT, so the check
+        and the claim are one round-trip and two concurrent requests cannot both see "no
+        holder" and both succeed. The conflict case reads the existing row and returns its
+        scan_id; the caller decides what to do (typically raise a 409-style error).
+        """
+        at = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO active_discovery_guard(owner_email, source, scan_id, acquired_at) "
+                "VALUES (%s,%s,%s,%s) ON CONFLICT(owner_email, source) DO NOTHING",
+                (owner_email, source, scan_id, at))
+            self._db.execute(cur,
+                "SELECT scan_id FROM active_discovery_guard WHERE owner_email=%s AND source=%s",
+                (owner_email, source))
+            row = self._db.fetchone(cur)
+        holder = (row or {}).get("scan_id")
+        return None if holder == scan_id else holder
+
+    def release_discovery_guard(self, scan_id: str) -> bool:
+        """Release the active-Discovery slot held by this scan_id.
+
+        Should be called in the same transaction that sets the terminal scan status — so
+        a crash between the status write and the release cannot leave the guard permanently
+        claimed. Returns True if a row was deleted, False if nothing was held (idempotent).
+
+        Never call from an API handler or the browser — only the durable finalizer
+        (scan_finalize job) and the cancellation finalizer should call this.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "DELETE FROM active_discovery_guard WHERE scan_id=%s", (scan_id,))
+            deleted = cur.rowcount if hasattr(cur, "rowcount") else 1
+        return bool(deleted)
+
+    def mark_published(self, scan_id: str, at: str | None = None) -> str | None:
+        """Stamp the scan as published — i.e. its inventory passed all completeness checks.
+
+        SET ONCE, same contract as mark_discovery_complete. A scan that is already published
+        keeps its original stamp; a re-delivery of the same scan_finalize job cannot move it
+        forward. Returns the value now stored, or None if the run does not exist.
+
+        Only call this when:
+        - enumeration was complete (not truncated)
+        - suspicious-zero check passed (0-file result was not preceded by a non-empty scan)
+        A scan without published_at is surfaced to the frontend as "staging" and does not
+        replace the previous published snapshot in scan selection.
+        """
+        at = at or self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE scan_runs SET published_at=%s WHERE id=%s AND published_at IS NULL",
+                (at, scan_id))
+            self._db.execute(cur, "SELECT published_at FROM scan_runs WHERE id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+        return (row or {}).get("published_at")
 
     def get_discovery_completed_at(self, scan_id: str) -> str | None:
         """The instant this run's inventory describes, falling back for runs discovered before
