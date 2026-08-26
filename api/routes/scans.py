@@ -218,7 +218,7 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                                 "folders": folders, "exclude_folders": exclude_folders, "ai": ai,
                                 "user": user, "pii": pii, "batch": batch,
                                 "exclude_remediated": exclude_remediated,
-                                "incremental": incremental}, {"scan_id": sid})
+                                "incremental": incremental}, {"scan_id": sid, "id": job_id})
                 core.update_job(job_id, {"phase": "discovered", "done": True, "scan_id": sid})
                 return
             inv: list = []

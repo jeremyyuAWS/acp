@@ -883,7 +883,7 @@ def _count_inventory_classes(scan_id: str) -> dict:
 
 
 def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | None,
-                                       progress_cb=None) -> dict:
+                                       progress_cb=None, tick_every: int = 10) -> dict:
     """Evaluate enabled disposition policies against the freshly persisted inventory and record
     CANDIDATE outcomes (PRD §4.3 / §6, Phase B4). Candidate-first: a matching archive rule flags
     the file 'Archive Candidate' and a delete rule 'Delete Candidate' — the actual Drive
@@ -942,7 +942,7 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
     lc_tagged_files: set = set()
     for r in core.store.list_inventory(scan_id):
         files_evaluated += 1
-        if progress_cb and files_evaluated % 10 == 0:
+        if progress_cb and files_evaluated % tick_every == 0:
             progress_cb({
                 "files_evaluated": files_evaluated,
                 "rules_enabled": len(policies),
@@ -1343,7 +1343,60 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # record candidate lifecycle outcomes (never executing the Drive move/delete here). Runs
         # before the no-assessable-items short-circuit below because a rule may match a
         # non-scannable estate row (old media to archive, a /tmp file to flag for deletion).
-        _evaluate_discover_lifecycle_rules(scan_id, source, user)
+        # Emit "lifecycle" phase before the call so the frontend step goes active immediately,
+        # then pass a progress_cb so live ticks update the KPI in real time.
+        _jid = job.get("id")
+        _lifecycle_total = len(inv)
+        if _jid and _lifecycle_total > 0:
+            core.update_job(_jid, {"phase": "lifecycle",
+                                   "files_found": _lifecycle_total,
+                                   "files_evaluated": 0,
+                                   "rules_enabled": 0,
+                                   "files_matched": 0,
+                                   "archive_candidates": 0,
+                                   "delete_candidates": 0,
+                                   "files_tagged": 0})
+        # Fire roughly 100 ticks regardless of inventory size (min 10 files/tick).
+        _tick_every = max(10, _lifecycle_total // 100)
+        def _lc_progress(stats):
+            try:
+                if _jid:
+                    core.update_job(_jid, {"phase": "lifecycle",
+                                           "files_found": _lifecycle_total,
+                                           **stats})
+            except Exception:
+                pass
+        _lc_stats = _evaluate_discover_lifecycle_rules(
+            scan_id, source, user, progress_cb=_lc_progress, tick_every=_tick_every)
+        # Final tick with true totals so the KPI reflects the last batch before the phase ends.
+        if _jid and _lifecycle_total > 0:
+            try:
+                core.update_job(_jid, {"phase": "lifecycle",
+                                       "files_found": _lifecycle_total,
+                                       "files_evaluated": _lc_stats.get("files_evaluated", _lifecycle_total),
+                                       "rules_enabled": _lc_stats.get("rules_enabled", 0),
+                                       "files_matched": _lc_stats.get("lifecycle_matches", 0),
+                                       "archive_candidates": _lc_stats.get("lifecycle_archive", 0),
+                                       "delete_candidates": _lc_stats.get("lifecycle_delete", 0),
+                                       "files_tagged": _lc_stats.get("lifecycle_tagged", 0)})
+            except Exception:
+                pass
+        # Transition the job progress to "done" so DiscoverRunProgress shows the completion
+        # summary (with lifecycle breakdown) before the frontend detects scan status="discovered"
+        # and navigates away. Uses the lifecycle_* naming the completion summary reads.
+        if _jid:
+            try:
+                core.update_job(_jid, {
+                    "schema_version": 2,
+                    "phase": "done",
+                    "rules_enabled": _lc_stats.get("rules_enabled", 0),
+                    "lifecycle_matches": _lc_stats.get("lifecycle_matches", 0),
+                    "lifecycle_archive": _lc_stats.get("lifecycle_archive", 0),
+                    "lifecycle_delete": _lc_stats.get("lifecycle_delete", 0),
+                    "lifecycle_tagged": _lc_stats.get("lifecycle_tagged", 0),
+                })
+            except Exception:
+                pass
         # THIS is where an ADR 0020 run's discovery ends — the estate is listed, the inventory is
         # persisted, the lifecycle rules have run, and nothing further happens until somebody
         # triggers Assess. The run stays at status='discovered' with completed_at NULL, possibly

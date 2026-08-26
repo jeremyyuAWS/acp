@@ -79,6 +79,17 @@ describe('Assessment scope on the Overview tab', () => {
     expect(scopeCard(c), 'scope card should show as a read-only record even without onScan').toBeTruthy()
   })
 
+  it('shows assessment_eligible count when Discover is done but Assess has not run yet', async () => {
+    const discoveredRun = {
+      ...RUN,
+      scope: { inventory: { assessment_eligible: 1041 } },
+    }
+    const c = await render({ run: discoveredRun, files: [] })
+    const card = scopeCard(c)
+    expect(card?.textContent).toMatch(/1[,.]?041 documents? in scope/)
+    expect(card?.textContent).not.toMatch(/^0 documents? in scope/)
+  })
+
   it('shows the scope summary line (WCAG level · criteria count)', async () => {
     const c = await render({ onScan: vi.fn() })
     const card = scopeCard(c)
