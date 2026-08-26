@@ -1277,7 +1277,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # Emit live file counts during the listing so the frontend ticks up rather than showing 0
         # for the full duration. Throttled to one DB write every 2 s — the scanner does the timing
         # inside _search_drive/_search_folder; this callback just persists whatever count arrived.
-        def _listing_progress(count: int) -> None:
+        def _listing_progress(count: int, folders: int | None = None) -> None:
             try:
                 core.store.set_scan_files(scan_id, count)
                 _jid = job.get("id")
@@ -1296,7 +1296,15 @@ def _scan_discover(payload: dict, job: dict) -> None:
                     # _list() today (the Drive/SharePoint list call already returns metadata, and
                     # classification runs inline per item), so this single phase value covers all
                     # three checklist rows' real backend execution window honestly.
-                    core.update_job(_jid, {"files_found": count, "phase": "discovering"})
+                    patch = {"files_found": count, "phase": "discovering"}
+                    # folders is None for the flat Drive-query listing path (_search_drive has
+                    # no folder-tree concept) and a real live count for the folder-BFS path
+                    # (_search_folder/_search_folders). Omit the key entirely rather than send
+                    # folders_found: None, so a real count from an earlier tick or root is never
+                    # clobbered by a later call that has none to report.
+                    if folders is not None:
+                        patch["folders_found"] = folders
+                    core.update_job(_jid, patch)
             except Exception:  # noqa: BLE001 — a diagnostic must never fail the scan
                 pass
 

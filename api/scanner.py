@@ -672,7 +672,7 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
                         _now = time.monotonic()
                         if _now - _last_progress_at[0] >= 2.0:
                             _last_progress_at[0] = _now
-                            progress_cb(len(raw))
+                            progress_cb(len(raw), len(seen_folders))
                     for child in child_folders:
                         if child in seen_folders:
                             continue

@@ -82,3 +82,71 @@ def test_listing_progress_tick_survives_multiple_calls(isolated_store, monkeypat
 
     assert [s["files_found"] for s in seen] == [10, 25, 60]
     assert all(s["phase"] == "discovering" for s in seen)
+
+
+def test_listing_progress_forwards_folder_count_when_given(isolated_store, monkeypatch):
+    """The folder-BFS path (_search_folder) reports a live folder count alongside the file
+    count; _listing_progress must forward it as folders_found rather than dropping it —
+    otherwise DiscoverRunProgress.jsx's 'N files · M folders' KPI never has live folder data
+    to show, even though the backend already computed it."""
+    import core
+    import handlers
+    import scanner
+
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setenv("ACP_DEFER_ANALYSIS_TO_ASSESS", "1")
+
+    job_id = "j-listing-phase-folders"
+    core.JOBS[job_id] = {"phase": "queued"}
+    seen = []
+
+    def _list_stub(*a, **k):
+        cb = k.get("progress_cb")
+        cb(12, 4)  # 12 files found so far, across 4 folders visited
+        seen.append(dict(core.JOBS[job_id]))
+        return []
+
+    monkeypatch.setattr(scanner, "_list", _list_stub)
+
+    handlers._scan_discover(
+        {"scan_id": "sd-listing-phase-folders", "source": "local", "user": "test@example.com"},
+        {"scan_id": "sd-listing-phase-folders", "id": job_id},
+    )
+
+    assert seen, "progress_cb (_listing_progress) was never invoked"
+    assert seen[0]["files_found"] == 12
+    assert seen[0]["folders_found"] == 4
+
+
+def test_listing_progress_omits_folder_count_when_not_given(isolated_store, monkeypatch):
+    """The flat Drive-query listing path (_search_drive) has no folder-tree concept and calls
+    progress_cb with only a file count. _listing_progress must not invent a folders_found: None
+    — the frontend's `foldersFound ?? null` read already treats a missing key correctly, and a
+    later tick from a different path must not have its real count clobbered by this one."""
+    import core
+    import handlers
+    import scanner
+
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setenv("ACP_DEFER_ANALYSIS_TO_ASSESS", "1")
+
+    job_id = "j-listing-phase-no-folders"
+    core.JOBS[job_id] = {"phase": "queued"}
+    seen = []
+
+    def _list_stub(*a, **k):
+        cb = k.get("progress_cb")
+        cb(7)  # no folder count — the _search_drive call shape
+        seen.append(dict(core.JOBS[job_id]))
+        return []
+
+    monkeypatch.setattr(scanner, "_list", _list_stub)
+
+    handlers._scan_discover(
+        {"scan_id": "sd-listing-phase-no-folders", "source": "local", "user": "test@example.com"},
+        {"scan_id": "sd-listing-phase-no-folders", "id": job_id},
+    )
+
+    assert seen, "progress_cb (_listing_progress) was never invoked"
+    assert seen[0]["files_found"] == 7
+    assert "folders_found" not in seen[0]
