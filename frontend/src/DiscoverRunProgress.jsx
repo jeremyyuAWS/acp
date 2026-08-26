@@ -24,35 +24,43 @@ const ASSESSABLE_CLASSES = new Set(['slide-deck', 'text-document', 'pdf-document
 const FILE_ACTIVE_PHASES = new Set(['reading', 'analysing', 'scoring'])
 
 // How many steps (from the front of STEPS) are DONE at each backend phase.
-// Steps: 0=connected, 1=listing, 2=metadata, 3=classifying, 4=lifecycle, 5=saving
+// Steps: 0=connected, 1=listing, 2=lifecycle, 3=saving
+//
+// Listing, metadata reading and classification used to be three separate steps here, each with
+// its own KPI — but checked directly against the backend (api/handlers.py, scanner.py's _list):
+// they are ONE combined operation. The Drive/SharePoint list call already returns metadata, and
+// classification runs inline per item as the walk happens; nothing in the backend ever reports
+// them as distinct phases (grepped api/handlers.py, core.py, worker.py — 'reading'/'tagging' are
+// never set as a live job phase; only 'discovering' and 'lifecycle' are, for the durable path).
+// Showing three checkmarks that always flip in the exact same instant was not extra transparency,
+// it was the opposite: a screen implying three timed steps for one, found live 2026-08-26 from a
+// user report of "no updates, then it suddenly jumps to lifecycle rules." One step that ticks a
+// real live file count for its real duration is the honest version of the same information.
+//
+// 'reading'/'tagging'/'analysing'/'scoring'/'finalizing' are kept as tolerant aliases below (not
+// removed) in case an older backend, a different scan path, or queuedProgress.js's own inferred
+// fallback still emits one — never a reason to render fewer done steps than actually happened.
 const PHASE_DONE_COUNT = {
   queued: 0, connecting: 0,
-  discovering: 1,
-  reading: 2,
-  tagging: 3,
-  analysing: 4,
-  lifecycle: 4,
-  scoring: 5, finalizing: 5,
-  done: 6,
+  discovering: 1, reading: 1, tagging: 1,
+  analysing: 2, lifecycle: 2,
+  scoring: 3, finalizing: 3,
+  done: 4,
 }
 
 // Each step has a present-progressive label (active/pending) and a past-tense label (done).
 const STEPS = [
-  { key: 'connected',   label: 'Connected to source',       labelDone: 'Connected to source' },
-  { key: 'listing',     label: 'Listing folders and files',  labelDone: 'Listed folders and files' },
-  { key: 'metadata',    label: 'Reading document metadata',  labelDone: 'Read document metadata' },
-  { key: 'classifying', label: 'Classifying document types', labelDone: 'Classified document types' },
-  { key: 'lifecycle',   label: 'Applying lifecycle rules',   labelDone: 'Applied lifecycle rules' },
-  { key: 'saving',      label: 'Saving inventory',           labelDone: 'Saved inventory' },
+  { key: 'connected', label: 'Connected to source',              labelDone: 'Connected to source' },
+  { key: 'listing',   label: 'Listing and classifying documents', labelDone: 'Listed and classified documents' },
+  { key: 'lifecycle', label: 'Applying lifecycle rules',          labelDone: 'Applied lifecycle rules' },
+  { key: 'saving',    label: 'Saving inventory',                  labelDone: 'Saved inventory' },
 ]
 
 // Per-step explanation of what stop does while that step is active.
 const STOP_HINTS = {
-  listing:     'Stops at the next folder — files listed so far will be kept.',
-  metadata:    'Metadata already read will be kept; unread files will be skipped.',
-  classifying: 'Classification results so far will be kept.',
-  lifecycle:   'Rules already applied will be kept.',
-  saving:      'The inventory save will complete before stopping.',
+  listing:   'Stops at the next folder — files listed and classified so far will be kept.',
+  lifecycle: 'Rules already applied will be kept.',
+  saving:    'The inventory save will complete before stopping.',
 }
 
 function DiscoverStep({ label, kpi, status }) {
@@ -159,16 +167,6 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
     ? inv.total - lifecycleMatchedCount
     : null
 
-  // Metadata completeness: prefer progress-payload fields (schema_version 2+) so a live or
-  // deferred scan shows counts before the inventory is fully loaded. Falls back to inv-derived
-  // counts for backends that predate this field.
-  const metadataCompleteCount = progress.metadata_complete ?? (inv?.rows != null
-    ? inv.rows.filter((r) => r.owner != null && r.source_modified != null).length
-    : null)
-  const metadataIncompleteCount = progress.metadata_incomplete ?? ((metadataCompleteCount !== null && inv?.total != null)
-    ? inv.total - metadataCompleteCount
-    : null)
-
   // Classification stats: 5-bucket breakdown from schema_version 2+ done payloads (PRD §6.4).
   const clsAssessable = progress.assessable ?? null
   const clsMetadataOnly = progress.metadata_only ?? null
@@ -197,37 +195,13 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
         kpi = sourceCount === 1 ? '1 source' : `${sourceCount} sources`
       }
       if (s.key === 'listing' && filesFound > 0) {
+        // Metadata completeness and classification breakdown used to render as separate KPIs on
+        // their own now-removed step rows — the full breakdown still appears in the completion
+        // summary below (classification buckets, metadata exceptions), so nothing is lost; this
+        // row stays a single glanceable count rather than cramming three stat clusters onto it.
         kpi = foldersFound !== null
           ? `${n(filesFound)} files · ${n(foldersFound)} folders`
           : `${n(filesFound)} files found`
-      }
-      if (s.key === 'metadata') {
-        const parts = []
-        if (metadataCompleteCount !== null && metadataIncompleteCount !== null) {
-          parts.push(`${n(metadataCompleteCount)} complete · ${n(metadataIncompleteCount)} incomplete`)
-        }
-        if (totalExceptions > 0) {
-          const excParts = []
-          if (excInaccessible) excParts.push(`${n(excInaccessible)} inaccessible`)
-          if (excDeleted) excParts.push(`${n(excDeleted)} deleted`)
-          if (excMetadataFailure) excParts.push(`${n(excMetadataFailure)} unreadable`)
-          if (excParts.length) parts.push(excParts.join(' · '))
-        }
-        if (parts.length) kpi = parts.join(' — ')
-      }
-      if (s.key === 'classifying') {
-        if (hasClassStats) {
-          const parts = [
-            clsAssessable > 0 && `${n(clsAssessable)} assessable`,
-            clsMetadataOnly > 0 && `${n(clsMetadataOnly)} metadata-only`,
-            clsUnsupported > 0 && `${n(clsUnsupported)} unsupported`,
-            clsEligibilityUnknown > 0 && `${n(clsEligibilityUnknown)} eligibility unknown`,
-            clsExcluded > 0 && `${n(clsExcluded)} excluded`,
-          ].filter(Boolean)
-          if (parts.length) kpi = parts.join(' · ')
-        } else if (assessableCount !== null && unsupportedCount !== null) {
-          kpi = `${n(assessableCount)} assessable · ${n(unsupportedCount)} not assessable`
-        }
       }
       if (s.key === 'lifecycle') {
         if (rulesEnabled !== null) {
@@ -297,8 +271,11 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   const showLongRunningHint = !showStalledWarning && elapsed >= 90 && filesFound === 0 && phase === 'discovering'
   // Lifecycle evaluation can take 30+ s on large inventories.
   const showLifecycleSlowHint = !showStalledWarning && elapsed >= 30 && phase === 'lifecycle'
-  // Show a note during reading when any files have been skipped due to exceptions.
-  const showReadingExceptions = phase === 'reading' && totalExceptions > 0
+  // Show a note during listing when any files have been skipped due to exceptions. Was gated on
+  // 'reading', a phase the backend never actually emits live (listing/metadata/classification are
+  // one operation — see PHASE_DONE_COUNT's comment) — this notice could not fire for a real scan
+  // until now.
+  const showReadingExceptions = phase === 'discovering' && totalExceptions > 0
 
   const activeStepKey = steps.find((s) => s.status === 'active')?.key ?? null
   const stopHint = onStop && busy && !stopping && activeStepKey

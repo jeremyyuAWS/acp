@@ -3,9 +3,17 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 
-// The Discover RUNNING screen: a step checklist scoped to inventory only.
+// The Discover RUNNING screen: a per-step checklist scoped to inventory only.
 // Rule: no assessment content (workers, queues, WCAG, findings) appears here.
 // Steps derive from the backend phase; no percentage is fabricated.
+//
+// Listing, metadata reading and classification are ONE step here ("Listing and classifying
+// documents"), not three. Checked directly against the backend (api/handlers.py, scanner.py's
+// _list): the Drive/SharePoint list call already returns metadata, and classification runs
+// inline per item as the walk happens — nothing in the backend ever reports them as separate live
+// phases. Three checkmarks that always flip in the same instant read as a screen implying three
+// timed steps for one; found live 2026-08-26 from a user report of "no updates, then it suddenly
+// jumps to lifecycle rules." See DiscoverRunProgress.jsx's PHASE_DONE_COUNT comment.
 
 const PROG = { phase: 'discovering', files_found: 8420 }
 const render = (progress, busy, onStop, sources, inv) =>
@@ -37,11 +45,11 @@ describe('the discovery step checklist', () => {
   it('marks Connected as done and Listing as active during the discovering phase', () => {
     const html = render(PROG, true)
     expect(html).toContain('Connected to source')
-    expect(html).toContain('Listing folders and files')
+    expect(html).toContain('Listing and classifying documents')
     expect(html).toContain('8,420 files found so far')
     // Connected must be done (✓), Listing must be active (pulse dot)
     const connectedIdx = html.indexOf('Connected to source')
-    const listingIdx = html.indexOf('Listing folders and files')
+    const listingIdx = html.indexOf('Listing and classifying documents')
     // The ✓ mark appears before Connected (they're in the same listitem)
     const checkBefore = html.lastIndexOf('✓', connectedIdx)
     expect(checkBefore).toBeGreaterThan(-1)
@@ -52,12 +60,10 @@ describe('the discovery step checklist', () => {
     expect(pulseBefore).toBeLessThan(listingIdx)
   })
 
-  it('shows all six steps', () => {
+  it('shows all four steps', () => {
     const html = render(PROG, true)
     expect(html).toContain('Connected to source')
-    expect(html).toContain('Listing folders and files')
-    expect(html).toContain('Reading document metadata')
-    expect(html).toContain('Classifying document types')
+    expect(html).toContain('Listing and classifying documents')
     expect(html).toContain('Applying lifecycle rules')
     expect(html).toContain('Saving inventory')
   })
@@ -86,20 +92,22 @@ describe('phase-driven step completion', () => {
     expect(pulseIdx).toBeGreaterThan(-1)
     expect(pulseIdx).toBeLessThan(connIdx)
     // Listing should be pending (○), not active
-    const listingIdx = html.indexOf('Listing folders and files')
+    const listingIdx = html.indexOf('Listing and classifying documents')
     const circleIdx = html.lastIndexOf('○', listingIdx + 40)
     expect(circleIdx).toBeGreaterThan(-1)
   })
 
-  it('shows Classifying as active during tagging phase', () => {
-    const prog = { phase: 'tagging', files_found: 500 }
-    const html = render(prog, true)
-    expect(html).toContain('Classifying document types')
-    // Saving should still be pending
-    expect(html).toContain('Saving inventory')
-    const savingIdx = html.indexOf('Saving inventory')
-    const circleIdx = html.lastIndexOf('○', savingIdx + 40)
-    expect(circleIdx).toBeGreaterThan(-1)
+  it('aliases the historical reading/tagging phase values to the same merged listing step', () => {
+    // Neither phase is ever actually emitted by the backend (checked directly — see
+    // PHASE_DONE_COUNT's comment), but a tolerant alias must still render sensibly rather than
+    // falling through to doneCount=0.
+    for (const phase of ['reading', 'tagging']) {
+      const html = render({ phase, files_found: 500 }, true)
+      expect(html, `phase ${phase}`).toContain('500 files found so far')
+      const connectedIdx = html.indexOf('Connected to source')
+      const checkBefore = html.lastIndexOf('✓', connectedIdx)
+      expect(checkBefore, `phase ${phase}`).toBeGreaterThan(-1)
+    }
   })
 
   it('shows Saving as active during scoring phase', () => {
@@ -115,43 +123,44 @@ describe('phase-driven step completion', () => {
     const prog = { phase: 'discovering', files_found: 42 }
     const html = render(prog, true)
     expect(html).toContain('42 files found so far')
-    // The count appears in the same listitem as "Listing folders and files"
-    const listingItemStart = html.indexOf('Listing folders and files')
-    const nextStepStart = html.indexOf('Reading document metadata')
+    // The count appears in the same listitem as "Listing and classifying documents"
+    const listingItemStart = html.indexOf('Listing and classifying documents')
+    const nextStepStart = html.indexOf('Applying lifecycle rules')
     const foundAt = html.indexOf('42 files found so far')
     expect(foundAt).toBeGreaterThan(listingItemStart)
     expect(foundAt).toBeLessThan(nextStepStart)
   })
 
   it('shows "files found" without "so far" on the done Listed step when folders_found is absent', () => {
-    const prog = { phase: 'reading', files_found: 148 }
+    // lifecycle phase: listing (index 1) is done, lifecycle (index 2) is active
+    const prog = { phase: 'lifecycle', files_found: 148 }
     const html = render(prog, true)
     expect(html).toContain('148 files found')
     expect(html).not.toContain('148 files found so far')
-    const listedIdx = html.indexOf('Listed folders and files')
-    const nextStepStart = html.indexOf('Reading document metadata')
+    const listedIdx = html.indexOf('Listed and classified documents')
+    const nextStepStart = html.indexOf('Applying lifecycle rules')
     const foundAt = html.indexOf('148 files found')
     expect(foundAt).toBeGreaterThan(listedIdx)
     expect(foundAt).toBeLessThan(nextStepStart)
   })
 
   it('shows "N files · M folders" on the done Listed step when folders_found is present', () => {
-    const prog = { phase: 'reading', files_found: 148, folders_found: 12 }
+    const prog = { phase: 'lifecycle', files_found: 148, folders_found: 12 }
     const html = render(prog, true)
     expect(html).toContain('148 files · 12 folders')
     expect(html).not.toContain('148 files found')
-    const listedIdx = html.indexOf('Listed folders and files')
-    const nextStepStart = html.indexOf('Reading document metadata')
+    const listedIdx = html.indexOf('Listed and classified documents')
+    const nextStepStart = html.indexOf('Applying lifecycle rules')
     const kpiIdx = html.indexOf('148 files · 12 folders')
     expect(kpiIdx).toBeGreaterThan(listedIdx)
     expect(kpiIdx).toBeLessThan(nextStepStart)
   })
 
   it('done steps use past-tense labels', () => {
-    const prog = { phase: 'reading', files_found: 0 }
+    const prog = { phase: 'lifecycle', files_found: 0 }
     const html = render(prog, true)
-    expect(html).toContain('Listed folders and files')
-    expect(html).not.toContain('Listing folders and files')
+    expect(html).toContain('Listed and classified documents')
+    expect(html).not.toContain('Listing and classifying documents')
   })
 })
 
@@ -178,7 +187,7 @@ describe('lifecycle KPI on the lifecycle step', () => {
   ]
   const inv = { rows: INV_ROWS, total: INV_ROWS.length }
 
-  // scoring phase: lifecycle (index 4) is done, saving (index 5) is active
+  // scoring phase: lifecycle (index 2) is done, saving (index 3) is active
   it('shows "N matched · M unchanged" when lifecycle step is done', () => {
     const prog = { phase: 'scoring', files_found: 4 }
     const html = render(prog, true, undefined, undefined, inv)
@@ -337,7 +346,7 @@ describe('active step accessibility and visual treatment', () => {
   it('active step label has bold font-weight', () => {
     const html = render(PROG, true)
     // Listing is active during discovering phase; its label span must carry font-weight:600
-    const listingIdx = html.indexOf('Listing folders and files')
+    const listingIdx = html.indexOf('Listing and classifying documents')
     const weightIdx = html.lastIndexOf('font-weight:600', listingIdx)
     expect(weightIdx).toBeGreaterThan(-1)
     expect(listingIdx - weightIdx).toBeLessThan(200)
@@ -365,8 +374,7 @@ describe('completion summary when phase is done', () => {
   it('shows past-tense step labels in completion summary', () => {
     const prog = { phase: 'done', files_found: 0 }
     const html = render(prog, true)
-    expect(html).toContain('Listed folders and files')
-    expect(html).toContain('Read document metadata')
+    expect(html).toContain('Listed and classified documents')
     expect(html).toContain('Applied lifecycle rules')
     expect(html).toContain('Saved inventory')
   })
@@ -388,93 +396,6 @@ describe('completion summary when phase is done', () => {
   })
 })
 
-describe('metadata KPI on the metadata step', () => {
-  // 1 complete (owner + source_modified both set), 2 incomplete
-  const INV_META = [
-    { file: 'a.docx', owner: 'alice@co.com', source_modified: '2024-01', lifecycle_rule_id: null, doc_class: 'text-document' },
-    { file: 'b.pptx', owner: null,           source_modified: null,       lifecycle_rule_id: null, doc_class: 'slide-deck' },
-    { file: 'c.pdf',  owner: 'bob@co.com',   source_modified: null,       lifecycle_rule_id: null, doc_class: 'pdf-document' },
-  ]
-  const inv = { rows: INV_META, total: INV_META.length }
-
-  it('shows "N complete · M incomplete" when metadata step is done (tagging phase)', () => {
-    // tagging phase: PHASE_DONE_COUNT=3, so steps 0-2 are done; metadata (index 2) is done
-    const prog = { phase: 'tagging', files_found: 3 }
-    const html = render(prog, true, undefined, undefined, inv)
-    expect(html).toContain('1 complete')
-    expect(html).toContain('2 incomplete')
-  })
-
-  it('KPI appears near the Read document metadata step', () => {
-    const prog = { phase: 'tagging', files_found: 3 }
-    const html = render(prog, true, undefined, undefined, inv)
-    const metaIdx = html.indexOf('Read document metadata')
-    const nextIdx = html.indexOf('Classifying document types')
-    const kpiIdx = html.indexOf('1 complete')
-    expect(kpiIdx).toBeGreaterThan(metaIdx)
-    expect(kpiIdx).toBeLessThan(nextIdx)
-  })
-
-  it('omits metadata KPI when inv is null', () => {
-    const prog = { phase: 'tagging', files_found: 3 }
-    const html = render(prog, true)
-    expect(html).not.toContain('complete')
-    expect(html).not.toContain('incomplete')
-  })
-})
-
-describe('classification KPI on the classifying step', () => {
-  // 2 assessable (text-document, slide-deck), 2 unsupported (image, audio-video)
-  const INV_CLASS = [
-    { file: 'a.docx', doc_class: 'text-document', owner: 'u', source_modified: 't', lifecycle_rule_id: null },
-    { file: 'b.pptx', doc_class: 'slide-deck',    owner: 'u', source_modified: 't', lifecycle_rule_id: null },
-    { file: 'c.png',  doc_class: 'image',          owner: null, source_modified: null, lifecycle_rule_id: null },
-    { file: 'd.mp4',  doc_class: 'audio-video',    owner: null, source_modified: null, lifecycle_rule_id: null },
-  ]
-  const inv = { rows: INV_CLASS, total: INV_CLASS.length }
-
-  it('shows "N assessable · M not assessable" (aggregate fallback) when classifying step is done', () => {
-    // analysing phase: PHASE_DONE_COUNT=4, so steps 0-3 are done; classifying (index 3) is done
-    const prog = { phase: 'analysing', files_found: 4 }
-    const html = render(prog, true, undefined, undefined, inv)
-    expect(html).toContain('2 assessable')
-    expect(html).toContain('2 not assessable')
-  })
-
-  it('KPI appears near the Classified document types step', () => {
-    const prog = { phase: 'analysing', files_found: 4 }
-    const html = render(prog, true, undefined, undefined, inv)
-    const classIdx = html.indexOf('Classified document types')
-    const nextIdx = html.indexOf('Applying lifecycle rules')
-    const kpiIdx = html.indexOf('2 assessable')
-    expect(kpiIdx).toBeGreaterThan(classIdx)
-    expect(kpiIdx).toBeLessThan(nextIdx)
-  })
-
-  it('omits classification KPI when inv is null', () => {
-    const prog = { phase: 'analysing', files_found: 4 }
-    const html = render(prog, true)
-    expect(html).not.toContain('assessable')
-    expect(html).not.toContain('unsupported')
-  })
-
-  it('counts all five assessable mime types correctly', () => {
-    const allTypes = [
-      { file: 'a', doc_class: 'slide-deck',    lifecycle_rule_id: null, owner: null, source_modified: null },
-      { file: 'b', doc_class: 'text-document', lifecycle_rule_id: null, owner: null, source_modified: null },
-      { file: 'c', doc_class: 'pdf-document',  lifecycle_rule_id: null, owner: null, source_modified: null },
-      { file: 'd', doc_class: 'spreadsheet',   lifecycle_rule_id: null, owner: null, source_modified: null },
-      { file: 'e', doc_class: 'web-page',      lifecycle_rule_id: null, owner: null, source_modified: null },
-      { file: 'f', doc_class: 'image',         lifecycle_rule_id: null, owner: null, source_modified: null },
-    ]
-    const i2 = { rows: allTypes, total: allTypes.length }
-    const prog = { phase: 'analysing', files_found: 6 }
-    const html = render(prog, true, undefined, undefined, i2)
-    expect(html).toContain('5 assessable')
-    expect(html).toContain('1 not assessable')
-  })
-})
-
 describe('accessibility: KPI spans do not spam screen readers', () => {
   it('KPI spans carry aria-hidden to prevent per-tick announcements', () => {
     const prog = { phase: 'discovering', files_found: 1000 }
@@ -491,12 +412,12 @@ describe('accessibility: KPI spans do not spam screen readers', () => {
     const prog = { phase: 'discovering', files_found: 0 }
     const html = render(prog, true)
     // Must contain a status region with the active step name
-    expect(html).toContain('Step in progress: Listing folders and files')
+    expect(html).toContain('Step in progress: Listing and classifying documents')
   })
 
   it('status region updates when the active step changes phase', () => {
-    const html = render({ phase: 'reading', files_found: 50 }, true)
-    expect(html).toContain('Step in progress: Reading document metadata')
+    const html = render({ phase: 'lifecycle', files_found: 50 }, true)
+    expect(html).toContain('Step in progress: Applying lifecycle rules')
   })
 })
 
@@ -572,10 +493,12 @@ describe('stop hint: per-step explanation of what stop does', () => {
     expect(html).toContain('Stops at the next folder')
   })
 
-  it('shows metadata stop hint during reading phase', () => {
-    const prog = { phase: 'reading', files_found: 10 }
-    const html = render(prog, true, () => {})
-    expect(html).toContain('Metadata already read will be kept')
+  it('shows the listing stop hint during the aliased reading/tagging phases too', () => {
+    // Both alias to the merged listing step being active — same hint, not a separate one.
+    for (const phase of ['reading', 'tagging']) {
+      const html = render({ phase, files_found: 10 }, true, () => {})
+      expect(html, `phase ${phase}`).toContain('Stops at the next folder')
+    }
   })
 
   it('shows saving stop hint during scoring phase', () => {
@@ -634,8 +557,8 @@ describe('lifecycle stall hint', () => {
 })
 
 describe('metadata exception counters (schema_version 2)', () => {
-  it('shows a live exception note during reading phase when inaccessible files are present', () => {
-    const prog = { phase: 'reading', files_found: 10, exc_inaccessible_file: 2,
+  it('shows a live exception note during the (merged) listing phase when inaccessible files are present', () => {
+    const prog = { phase: 'discovering', files_found: 10, exc_inaccessible_file: 2,
                    exc_metadata_failure: 0, exc_deleted_during_scan: 0 }
     const html = render(prog, true)
     expect(html).toContain('2 files inaccessible')
@@ -643,7 +566,7 @@ describe('metadata exception counters (schema_version 2)', () => {
   })
 
   it('shows all three exception types in the live note when multiple are present', () => {
-    const prog = { phase: 'reading', files_found: 20, exc_inaccessible_file: 1,
+    const prog = { phase: 'discovering', files_found: 20, exc_inaccessible_file: 1,
                    exc_metadata_failure: 2, exc_deleted_during_scan: 3 }
     const html = render(prog, true)
     expect(html).toContain('1 file inaccessible')
@@ -653,67 +576,26 @@ describe('metadata exception counters (schema_version 2)', () => {
   })
 
   it('omits the live exception note when all counters are zero', () => {
-    const prog = { phase: 'reading', files_found: 10, exc_inaccessible_file: 0,
+    const prog = { phase: 'discovering', files_found: 10, exc_inaccessible_file: 0,
                    exc_metadata_failure: 0, exc_deleted_during_scan: 0 }
     const html = render(prog, true)
     expect(html).not.toContain('skipped, others continuing')
   })
 
   it('omits the live exception note when exception fields are absent (schema_version 1)', () => {
-    const prog = { phase: 'reading', files_found: 10 }
+    const prog = { phase: 'discovering', files_found: 10 }
     const html = render(prog, true)
     expect(html).not.toContain('skipped, others continuing')
   })
 
-  it('exception note only appears during reading phase, not other phases', () => {
-    const phases = ['discovering', 'tagging', 'analysing', 'scoring']
+  it('exception note only appears during the (merged) listing phase, not other phases', () => {
+    const phases = ['tagging', 'analysing', 'scoring', 'lifecycle']
     for (const phase of phases) {
       const prog = { phase, files_found: 10, exc_inaccessible_file: 2,
                      exc_metadata_failure: 0, exc_deleted_during_scan: 0 }
       const html = render(prog, true)
       expect(html, `phase ${phase} should not show exception note`).not.toContain('skipped, others continuing')
     }
-  })
-
-  it('includes exceptions in the metadata step KPI when step is done', () => {
-    // tagging phase: metadata step (index 2) is done; exceptions are shown alongside completeness
-    const inv = { rows: [
-      { file: 'a.docx', owner: 'u', source_modified: '2024', lifecycle_rule_id: null, doc_class: 'text-document' },
-      { file: 'b.pdf',  owner: null, source_modified: null,   lifecycle_rule_id: null, doc_class: 'pdf-document' },
-    ], total: 2 }
-    const prog = { phase: 'tagging', files_found: 3, exc_inaccessible_file: 1,
-                   exc_metadata_failure: 0, exc_deleted_during_scan: 0 }
-    const html = render(prog, true, undefined, undefined, inv)
-    // Completeness KPI
-    expect(html).toContain('1 complete')
-    expect(html).toContain('1 incomplete')
-    // Exception appended
-    expect(html).toContain('1 inaccessible')
-  })
-
-  it('uses metadata_complete/incomplete from progress payload (schema_version 2+) over inv-derived counts', () => {
-    // Progress payload says 80 complete / 20 incomplete; inv rows say something different.
-    // Progress payload must win.
-    const inv = { rows: [
-      { file: 'a.docx', owner: 'u', source_modified: '2024', lifecycle_rule_id: null, doc_class: 'text-document' },
-    ], total: 1 }
-    const prog = { phase: 'tagging', files_found: 100, metadata_complete: 80, metadata_incomplete: 20 }
-    const html = render(prog, true, undefined, undefined, inv)
-    expect(html).toContain('80 complete')
-    expect(html).toContain('20 incomplete')
-    // inv-derived value (1 complete / 0 incomplete) must not appear
-    expect(html).not.toContain('1 complete')
-  })
-
-  it('falls back to inv-derived metadata counts when payload fields are absent', () => {
-    const inv = { rows: [
-      { file: 'a.docx', owner: 'u', source_modified: '2024', lifecycle_rule_id: null, doc_class: 'text-document' },
-      { file: 'b.pdf',  owner: null, source_modified: null,   lifecycle_rule_id: null, doc_class: 'pdf-document' },
-    ], total: 2 }
-    const prog = { phase: 'tagging', files_found: 2 }  // no metadata_complete/incomplete fields
-    const html = render(prog, true, undefined, undefined, inv)
-    expect(html).toContain('1 complete')
-    expect(html).toContain('1 incomplete')
   })
 
   it('exception summary appears in completion summary when phase is done', () => {
@@ -778,58 +660,10 @@ describe('saving step KPI (schema_version 2 done payload)', () => {
   })
 })
 
-describe('classification 5-bucket breakdown (schema_version 2)', () => {
-  it('shows 5-bucket KPI in classifying step when payload fields are present', () => {
-    // analysing phase: classifying step (index 3) is done
-    const prog = { phase: 'analysing', files_found: 10,
-                   assessable: 6, metadata_only: 2, unsupported: 1, eligibility_unknown: 1, excluded: 0 }
-    const html = render(prog, true)
-    expect(html).toContain('6 assessable')
-    expect(html).toContain('2 metadata-only')
-    expect(html).toContain('1 unsupported')
-    expect(html).toContain('1 eligibility unknown')
-    expect(html).not.toContain('0 excluded')
-  })
-
-  it('payload class stats take precedence over inv-derived in classifying step', () => {
-    // inv says 2 assessable/2 unsupported; payload says 5/4/1 — payload wins
-    const prog = { phase: 'analysing', files_found: 10,
-                   assessable: 5, metadata_only: 4, unsupported: 1, eligibility_unknown: 0, excluded: 0 }
-    const inv = { rows: [
-      { file: 'a.docx', doc_class: 'text-document', lifecycle_rule_id: null, owner: null, source_modified: null },
-      { file: 'b.pptx', doc_class: 'slide-deck',    lifecycle_rule_id: null, owner: null, source_modified: null },
-      { file: 'c.png',  doc_class: 'image',          lifecycle_rule_id: null, owner: null, source_modified: null },
-      { file: 'd.mp4',  doc_class: 'audio-video',    lifecycle_rule_id: null, owner: null, source_modified: null },
-    ], total: 4 }
-    const html = render(prog, true, undefined, undefined, inv)
-    expect(html).toContain('5 assessable')
-    expect(html).toContain('4 metadata-only')
-    expect(html).not.toContain('2 assessable')
-  })
-
-  it('shows only non-zero buckets in the classifying KPI', () => {
-    const prog = { phase: 'analysing', files_found: 8,
-                   assessable: 8, metadata_only: 0, unsupported: 0, eligibility_unknown: 0, excluded: 0 }
-    const html = render(prog, true)
-    expect(html).toContain('8 assessable')
-    expect(html).not.toContain('0 metadata')
-    expect(html).not.toContain('0 unsupported')
-  })
-
-  it('falls back to inv-derived "not assessable" aggregate when payload fields are absent (old backends)', () => {
-    const prog = { phase: 'analysing', files_found: 4 }
-    const inv = { rows: [
-      { file: 'a.docx', doc_class: 'text-document', lifecycle_rule_id: null, owner: null, source_modified: null },
-      { file: 'b.pptx', doc_class: 'slide-deck',    lifecycle_rule_id: null, owner: null, source_modified: null },
-      { file: 'c.png',  doc_class: 'image',          lifecycle_rule_id: null, owner: null, source_modified: null },
-      { file: 'd.mp4',  doc_class: 'audio-video',    lifecycle_rule_id: null, owner: null, source_modified: null },
-    ], total: 4 }
-    const html = render(prog, true, undefined, undefined, inv)
-    expect(html).toContain('2 assessable')
-    expect(html).toContain('2 not assessable')
-    expect(html).not.toContain('metadata-only')
-  })
-
+describe('classification 5-bucket breakdown (schema_version 2, completion summary)', () => {
+  // The per-step classification KPI (shown while the now-removed "Classifying document types"
+  // step was active) is gone with that step — the breakdown still appears in full once the scan
+  // reaches phase='done', which is what these tests cover.
   it('5-bucket breakdown in completion summary when payload fields present', () => {
     const prog = { phase: 'done', files_found: 10,
                    assessable: 5, metadata_only: 3, unsupported: 2, eligibility_unknown: 0, excluded: 0 }
@@ -992,17 +826,17 @@ describe('lifecycle phase: active step KPI (live progress ticks)', () => {
     expect(html).toContain('No enabled rules')
   })
 
-  it('lifecycle step is active and classifying step is done during lifecycle phase', () => {
+  it('lifecycle step is active and listing step is done during lifecycle phase', () => {
     const prog = {
       phase: 'lifecycle', files_found: 100, files_evaluated: 50, rules_enabled: 3,
     }
     const html = render(prog, true)
-    // classifying step (index 3) is done — shows past-tense label with ✓
-    const classifyingIdx = html.indexOf('Classified document types')
-    expect(classifyingIdx).toBeGreaterThan(-1)
-    const checkBefore = html.lastIndexOf('✓', classifyingIdx)
+    // listing step (index 1) is done — shows past-tense label with ✓
+    const listedIdx = html.indexOf('Listed and classified documents')
+    expect(listedIdx).toBeGreaterThan(-1)
+    const checkBefore = html.lastIndexOf('✓', listedIdx)
     expect(checkBefore).toBeGreaterThan(-1)
-    // lifecycle step (index 4) is active — shows pulse dot
+    // lifecycle step (index 2) is active — shows pulse dot
     const lifecycleIdx = html.indexOf('Applying lifecycle rules')
     expect(lifecycleIdx).toBeGreaterThan(-1)
     const pulseBefore = html.lastIndexOf('prep-pulse', lifecycleIdx)
@@ -1096,14 +930,14 @@ describe('stopped card (§9): scan ended before completion', () => {
   })
 
   it('shows elapsed time in stopped card', () => {
-    const prog = { phase: 'reading', files_found: 100 }
+    const prog = { phase: 'lifecycle', files_found: 100 }
     const html = render(prog, false)
     // elapsed renders as "0s" immediately in SSR (no timer has fired)
     expect(html).toContain('0s')
   })
 
   it('shows file count when inv has rows', () => {
-    const prog = { phase: 'reading', files_found: 0 }
+    const prog = { phase: 'discovering', files_found: 0 }
     const inv = { total: 88, rows: [] }
     const html = render(prog, false, undefined, undefined, inv)
     expect(html).toContain('88 files catalogued')
@@ -1129,7 +963,7 @@ describe('stopped card (§9): scan ended before completion', () => {
   })
 
   it('shows "Review partial inventory" button when inv has rows and onReview is provided', () => {
-    const prog = { phase: 'reading', files_found: 0 }
+    const prog = { phase: 'discovering', files_found: 0 }
     const inv = { total: 12, rows: [] }
     const html = render(prog, false, undefined, undefined, inv)
     // onReview not passed — button absent
@@ -1150,14 +984,14 @@ describe('stopped card (§9): scan ended before completion', () => {
   })
 
   it('no pulse dot appears in the stopped card (active step demoted to pending)', () => {
-    const prog = { phase: 'reading', files_found: 100 }
+    const prog = { phase: 'lifecycle', files_found: 100 }
     const html = render(prog, false)
     expect(html).not.toContain('prep-pulse')
   })
 
   it('shows steps completed up to the stop point as done (✓)', () => {
-    // phase=reading → doneCount=2 → Connected and Listing are done
-    const prog = { phase: 'reading', files_found: 80, folders_found: 5 }
+    // phase=discovering → doneCount=1 → Connected is done
+    const prog = { phase: 'discovering', files_found: 80, folders_found: 5 }
     const html = render(prog, false)
     const connectedIdx = html.indexOf('Connected to source')
     const checkBefore = html.lastIndexOf('✓', connectedIdx)
