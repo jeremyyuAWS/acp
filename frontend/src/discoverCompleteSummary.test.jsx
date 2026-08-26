@@ -58,7 +58,7 @@ describe('DiscoverCompleteSummary renders completion state', () => {
 
   it('shows lifecycle rules count', () => {
     const html = render(BASE)
-    expect(html).toContain('3 lifecycle rules matched')
+    expect(html).toContain('Applied 3 lifecycle rules')
   })
 
   it('omits metadata-only row when count is 0', () => {
@@ -76,14 +76,14 @@ describe('DiscoverCompleteSummary renders completion state', () => {
     expect(html).not.toContain('could not be opened')
   })
 
-  it('omits lifecycle rules when count is 0', () => {
+  it('shows "No lifecycle rules enabled" when count is 0', () => {
     const html = render({ ...BASE, lifecycleRulesCount: 0 })
-    expect(html).not.toContain('lifecycle rules')
+    expect(html).toContain('No lifecycle rules enabled')
   })
 
-  it('omits lifecycle rules when count is null', () => {
+  it('shows "No lifecycle rules enabled" when count is null', () => {
     const html = render({ ...BASE, lifecycleRulesCount: null })
-    expect(html).not.toContain('lifecycle rules')
+    expect(html).toContain('No lifecycle rules enabled')
   })
 
   it('shows "Continue to Assessment" CTA', () => {
@@ -110,11 +110,11 @@ describe('DiscoverCompleteSummary renders completion state', () => {
       ...BASE,
       inventoryDelta: { new: 224, updated: 61, unchanged: 963 },
     })
-    expect(html).toContain('Inventory')
+    expect(html).toContain('Changes since previous Discovery')
     expect(html).toContain('224')
-    expect(html).toContain('new')
+    expect(html).toContain('added')
     expect(html).toContain('61')
-    expect(html).toContain('updated')
+    expect(html).toContain('changed')
     expect(html).toContain('963')
     expect(html).toContain('unchanged')
   })
@@ -147,7 +147,7 @@ describe('CTA gating', () => {
 describe('singular lifecycle rule label', () => {
   it('uses singular "lifecycle rule" when count is 1', () => {
     const html = render({ ...BASE, lifecycleRulesCount: 1 })
-    expect(html).toContain('1 lifecycle rule matched')
+    expect(html).toContain('Applied 1 lifecycle rule')
     expect(html).not.toContain('1 lifecycle rules')
   })
 })
