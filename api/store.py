@@ -9,12 +9,15 @@ serializing writes and survives container restarts across all replicas.
 from __future__ import annotations
 import contextlib
 import json
+import logging
 import os
 import re
 import time
 import sqlite3
 import uuid
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _DATABASE_URL = os.environ.get("DATABASE_URL")
 _SQLITE_PATH = Path(__file__).resolve().parent.parent / "acp.db"
@@ -1333,37 +1336,55 @@ class Store:
         rows that did not exist before this call; "updated" is the count of rows that already
         existed (ON CONFLICT DO UPDATE ran); "unchanged" is always 0 because the upsert pattern
         cannot distinguish an update that changed values from one that did not without a
-        per-column comparison; "failed" counts items where the INSERT raised an exception."""
+        per-column comparison; "failed" counts items where the INSERT raised an exception.
+
+        BATCHED, with a per-item fallback. A real estate is thousands of rows, not the handful in
+        a test fixture, and one execute() per row is thousands of separate network round-trips to
+        Postgres — the dominant cost of a Discover run in production, found live 2026-08-27 when a
+        6,922-file scan sat "still running" for 20+ minutes past the point its listing had already
+        completed twice. executemany (execute_batch on Postgres) sends the whole set in one round
+        trip in the overwhelmingly common all-succeed case. If the batch itself raises — a
+        genuinely malformed row, not the common case — fall back to the original per-item loop so
+        one bad row still can't cost the other thousands their fault isolation; this is the same
+        fail-quiet contract _mark_discovered documents for the stamp that runs right after this."""
         if not items:
             return {"new": 0, "updated": 0, "unchanged": 0, "failed": 0}
         now = self._now()
+        sql = ("INSERT INTO scan_inventory(scan_id,file,drive_file_id,mime,size_kb,doc_class,"
+               "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
+               "content_type) "
+               "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
+               "drive_file_id=EXCLUDED.drive_file_id, mime=EXCLUDED.mime, size_kb=EXCLUDED.size_kb, "
+               "doc_class=EXCLUDED.doc_class, checksum=EXCLUDED.checksum, path=EXCLUDED.path, "
+               "created_at=EXCLUDED.created_at, source_modified=EXCLUDED.source_modified, "
+               "owner=EXCLUDED.owner, parent_folder=EXCLUDED.parent_folder, drive_id=EXCLUDED.drive_id, "
+               # COALESCE, not overwrite: a re-list that got no content type this time (a
+               # transient enrichment failure) must not blank out one recorded on a PRIOR
+               # list of the same file — that would be a real answer thrown away for a gap.
+               "content_type=COALESCE(EXCLUDED.content_type, scan_inventory.content_type)")
+
+        def _params(it: dict) -> tuple:
+            return (scan_id, it.get("file"), it.get("drive_file_id"), it.get("mime"),
+                    it.get("size_kb"), it.get("doc_class"), it.get("checksum"), it.get("path"),
+                    it.get("created_at"), it.get("source_modified"), it.get("owner"),
+                    it.get("parent_folder"), it.get("discovered_at") or now, it.get("drive_id"),
+                    it.get("content_type"))
+
         failed = 0
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT COUNT(*) AS cnt FROM scan_inventory WHERE scan_id=%s", (scan_id,))
             before = (self._db.fetchone(cur) or {}).get("cnt", 0)
-            for it in items:
-                try:
-                    self._db.execute(cur,
-                        "INSERT INTO scan_inventory(scan_id,file,drive_file_id,mime,size_kb,doc_class,"
-                        "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
-                        "content_type) "
-                        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
-                        "drive_file_id=EXCLUDED.drive_file_id, mime=EXCLUDED.mime, size_kb=EXCLUDED.size_kb, "
-                        "doc_class=EXCLUDED.doc_class, checksum=EXCLUDED.checksum, path=EXCLUDED.path, "
-                        "created_at=EXCLUDED.created_at, source_modified=EXCLUDED.source_modified, "
-                        "owner=EXCLUDED.owner, parent_folder=EXCLUDED.parent_folder, drive_id=EXCLUDED.drive_id, "
-                        # COALESCE, not overwrite: a re-list that got no content type this time (a
-                        # transient enrichment failure) must not blank out one recorded on a PRIOR
-                        # list of the same file — that would be a real answer thrown away for a gap.
-                        "content_type=COALESCE(EXCLUDED.content_type, scan_inventory.content_type)",
-                        (scan_id, it.get("file"), it.get("drive_file_id"), it.get("mime"),
-                         it.get("size_kb"), it.get("doc_class"), it.get("checksum"), it.get("path"),
-                         it.get("created_at"), it.get("source_modified"), it.get("owner"),
-                         it.get("parent_folder"), it.get("discovered_at") or now, it.get("drive_id"),
-                         it.get("content_type")))
-                except Exception:
-                    failed += 1
+            try:
+                self._db.executemany(cur, sql, [_params(it) for it in items])
+            except Exception:
+                logger.warning("add_inventory: batch insert failed for scan %s (%d items), "
+                               "falling back to per-item", scan_id, len(items), exc_info=True)
+                for it in items:
+                    try:
+                        self._db.execute(cur, sql, _params(it))
+                    except Exception:
+                        failed += 1
             self._db.execute(cur,
                 "SELECT COUNT(*) AS cnt FROM scan_inventory WHERE scan_id=%s", (scan_id,))
             after = (self._db.fetchone(cur) or {}).get("cnt", 0)

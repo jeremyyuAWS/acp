@@ -750,6 +750,99 @@ class TestPersistDiscoveryInventory:
         assert result["metadata_only"] == 0
 
 
+# ── add_inventory batching ───────────────────────────────────────────────────
+# A real estate is thousands of rows, not a handful — found live 2026-08-27 when a 6,922-file
+# production scan sat "still running" for 20+ minutes past the point its listing had already
+# completed twice, because add_inventory issued one execute() per row. These pin the batched
+# path (one executemany call, not N) and the per-item fallback for when a batch itself fails.
+
+class TestAddInventoryBatching:
+    def test_a_large_inventory_is_written_in_one_batch_call(self, isolated_store, monkeypatch):
+        """2,000 rows should cost ONE executemany call, not 2,000 individual execute() calls —
+        the whole point of the fix."""
+        calls = {"executemany": 0, "execute": 0}
+        real_executemany = isolated_store._db.executemany
+        real_execute = isolated_store._db.execute
+
+        def _counted_executemany(cur, sql, params_list):
+            calls["executemany"] += 1
+            return real_executemany(cur, sql, params_list)
+
+        def _counted_execute(cur, sql, params=()):
+            if "INSERT INTO scan_inventory" in sql:
+                calls["execute"] += 1
+            return real_execute(cur, sql, params)
+
+        monkeypatch.setattr(isolated_store._db, "executemany", _counted_executemany)
+        monkeypatch.setattr(isolated_store._db, "execute", _counted_execute)
+
+        sid = "sd-batch-2000"
+        isolated_store.init_scan_run(sid, "local", 2000, "2026-01-01T00:00:00+00:00",
+                                     "acp", "h1", owner="test@example.com")
+        items = [{"file": f"doc_{i:05d}.docx", "doc_class": "text-document", "size_kb": 10,
+                 "owner": "test@example.com", "created_at": "2020-01-01"} for i in range(2000)]
+
+        result = isolated_store.add_inventory(sid, items)
+
+        assert result == {"new": 2000, "updated": 0, "unchanged": 0, "failed": 0}
+        assert calls["executemany"] == 1, "expected exactly one batch call for 2,000 rows"
+        assert calls["execute"] == 0, "the fast path must not fall back to per-item inserts"
+
+    def test_a_failed_batch_falls_back_to_per_item_and_still_succeeds(self, isolated_store, monkeypatch):
+        """If the batch call itself raises (e.g. one malformed row poisons execute_batch), the
+        fallback must still get every good row in, not lose the whole scan's inventory."""
+        def _raise(cur, sql, params_list):
+            raise RuntimeError("simulated batch failure")
+
+        monkeypatch.setattr(isolated_store._db, "executemany", _raise)
+
+        sid = "sd-batch-fallback"
+        isolated_store.init_scan_run(sid, "local", 50, "2026-01-01T00:00:00+00:00",
+                                     "acp", "h1", owner="test@example.com")
+        items = [{"file": f"doc_{i:03d}.docx", "doc_class": "text-document", "size_kb": 10,
+                 "owner": "test@example.com", "created_at": "2020-01-01"} for i in range(50)]
+
+        result = isolated_store.add_inventory(sid, items)
+
+        assert result["new"] == 50, "the fallback must still persist every row"
+        assert result["failed"] == 0
+        assert isolated_store.count_inventory(sid) == 50
+
+    def test_a_genuinely_bad_row_is_isolated_by_the_fallback(self, isolated_store, monkeypatch):
+        """A single row with a value the DB rejects must not cost its neighbours their rows —
+        the per-item fallback's whole reason to exist."""
+        real_execute = isolated_store._db.execute
+
+        def _fail_one(cur, sql, params=()):
+            if "INSERT INTO scan_inventory" in sql and params and params[1] == "poison.docx":
+                raise RuntimeError("simulated constraint violation")
+            return real_execute(cur, sql, params)
+
+        def _raise_batch(cur, sql, params_list):
+            raise RuntimeError("simulated batch failure")
+
+        monkeypatch.setattr(isolated_store._db, "executemany", _raise_batch)
+        monkeypatch.setattr(isolated_store._db, "execute", _fail_one)
+
+        sid = "sd-batch-poison"
+        isolated_store.init_scan_run(sid, "local", 3, "2026-01-01T00:00:00+00:00",
+                                     "acp", "h1", owner="test@example.com")
+        items = [
+            {"file": "good_1.docx", "doc_class": "text-document", "size_kb": 10,
+             "owner": "test@example.com", "created_at": "2020-01-01"},
+            {"file": "poison.docx", "doc_class": "text-document", "size_kb": 10,
+             "owner": "test@example.com", "created_at": "2020-01-01"},
+            {"file": "good_2.docx", "doc_class": "text-document", "size_kb": 10,
+             "owner": "test@example.com", "created_at": "2020-01-01"},
+        ]
+
+        result = isolated_store.add_inventory(sid, items)
+
+        assert result["new"] == 2
+        assert result["failed"] == 1
+        assert isolated_store.count_inventory(sid) == 2
+
+
 # ── Metadata completeness at scale ───────────────────────────────────────────
 
 class TestMetadataCompletenessAtScale:
