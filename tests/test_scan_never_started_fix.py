@@ -60,9 +60,17 @@ def _no_first_scan_retry(isolated_store, monkeypatch):
     The threaded tests below now hold that patch on the main thread instead, so the leak cannot
     recur even if something in here gets slow again. This fixture removes the sleep that made it
     happen, and ~25s of dead wall-clock across the file with it.
+
+    `last_nonempty_run_for_source` is also patched: with the fix that replaced `_first_scan` with
+    `not _baseline_id`, any scan returning 0 files where no non-empty baseline exists would retry.
+    Since `isolated_store` is a fresh empty store, `last_nonempty_run_for_source` returns None by
+    default — which would trigger the retry and its 5s sleep in every test here. The tests in this
+    file are not about that behaviour, so both lookups are suppressed together.
     """
     monkeypatch.setattr(isolated_store, "previous_run_for_source",
                         lambda *a, **kw: "prior-scan-exists", raising=False)
+    monkeypatch.setattr(isolated_store, "last_nonempty_run_for_source",
+                        lambda *a, **kw: "prior-nonempty-scan-exists", raising=False)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -293,6 +301,8 @@ def test_sp_token_from_payload_reaches_list(isolated_store, monkeypatch):
     monkeypatch.setattr(handlers, "_defer_analysis_to_assess", lambda: True)
     monkeypatch.setattr(handlers, "_enqueue_analysis", lambda *a, **kw: None)
     monkeypatch.setattr(isolated_store, "previous_run_for_source", lambda *a, **kw: "fake_prev_scan")
+    monkeypatch.setattr(isolated_store, "last_nonempty_run_for_source",
+                        lambda *a, **kw: "fake_nonempty_scan", raising=False)
 
     received_sp = []
 
@@ -411,3 +421,68 @@ def test_in_memory_token_used_as_fallback(isolated_store, monkeypatch):
         f"_drive_service received {received_token!r}; in-memory token must be the fallback "
         "when no payload token is present"
     )
+
+
+# ── Bug 3: stuck-at-zero loop ─────────────────────────────────────────────────
+
+def test_second_scan_with_no_nonempty_baseline_retries_once(isolated_store, monkeypatch):
+    """A scan for a source whose prior runs all returned 0 must retry once.
+
+    Regression for the stuck-at-zero loop: after the first scan (and its first-scan retry) both
+    returned 0, `_first_scan` is False (a prior run exists) but `_baseline_id` is None (no run
+    ever found files). The old `if _first_scan:` guard silently accepted the zero on every
+    subsequent scan. The fix is `if not _baseline_id:`, which retries regardless of whether this
+    is literally the first scan or the tenth — as long as there is no proven non-empty baseline.
+
+    This is safe: the retry is cheap, and accepting a zero without a baseline means the estate
+    could be silently empty because of an API hiccup that happened to strike on every scan so far.
+    """
+    import core
+    import handlers
+
+    # Seed a prior scan that returned 0 files: _first_scan will be False (a previous run exists)
+    # but last_nonempty_run_for_source returns None (no run ever had files).
+    isolated_store.init_scan_run("prior-zero-scan", "drive", 0, "2026-01-01T00:00:00",
+                                  "rb", "hash", owner="user@x.com", status="discovered")
+
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setattr(core, "get_scan_tokens", lambda sid: {})
+    monkeypatch.setattr(handlers, "_defer_analysis_to_assess", lambda: True)
+    monkeypatch.setattr(handlers, "_enqueue_analysis", lambda *a, **kw: None)
+    # Override the autouse fixture's suppression: this test IS about the no-baseline retry.
+    # last_nonempty_run_for_source returns None because "prior-zero-scan" had 0 files.
+    monkeypatch.setattr(isolated_store, "last_nonempty_run_for_source",
+                        lambda *a, **kw: None, raising=False)
+
+    list_call_count = []
+    sleep_calls = []
+
+    def counting_list(*args, **kwargs):
+        list_call_count.append(1)
+        return []
+
+    fake_scanner = MagicMock()
+    fake_scanner._list = counting_list
+    fake_scanner._drive_service = lambda tok: MagicMock()
+    fake_scanner.ACP = ROOT
+    fake_scanner.FANOUT_MAX_FILES = 5000
+    fake_scanner._scope_for_listing = lambda user: {}
+
+    fake_rubric_mod = MagicMock()
+    fake_rubric_mod.Rubric.load_active.return_value = _fake_rubric()
+
+    import unittest.mock
+    with patch.dict(sys.modules, {"scanner": fake_scanner, "rubric": fake_rubric_mod}):
+        with unittest.mock.patch("time.sleep", lambda s: sleep_calls.append(s)):
+            handlers._scan_discover(
+                {"scan_id": "s_stuck_zero", "source": "drive", "user": "user@x.com",
+                 "drive_token": "SOME_TOKEN"},
+                {"scan_id": "s_stuck_zero"},
+            )
+
+    assert len(list_call_count) == 2, (
+        f"_list was called {len(list_call_count)} time(s); expected 2 — "
+        "a source with no non-empty baseline must retry once to rule out a transient API hiccup, "
+        "even if it has been scanned before (second, third, … scan all returning 0)"
+    )
+    assert sleep_calls, "_scan_discover must sleep before the retry"

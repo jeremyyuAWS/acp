@@ -75,6 +75,10 @@ def test_listing_progress_tick_survives_multiple_calls(isolated_store, monkeypat
 
     monkeypatch.setattr(scanner, "_list", _list_stub)
     monkeypatch.setattr(isolated_store, "previous_run_for_source", lambda *a, **kw: "fake_prev_scan")
+    # Suppress the no-baseline retry: the listing returns [] so the retry guard fires unless a
+    # non-empty baseline exists. This test is not about that behaviour, so patch it out.
+    monkeypatch.setattr(isolated_store, "last_nonempty_run_for_source",
+                        lambda *a, **kw: "fake_nonempty_scan", raising=False)
 
     handlers._scan_discover(
         {"scan_id": "sd-listing-phase-2", "source": "local", "user": "test@example.com"},
