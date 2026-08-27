@@ -14,6 +14,7 @@ import { scopeSentence, isNarrowScope } from './scanScope.js'
 import DiscoveryResults from './DiscoveryResults.jsx'
 import DiscoverInventoryExport from './DiscoverInventoryExport.jsx'
 import DiscoveryCompleteness from './DiscoveryCompleteness.jsx'
+import { snapshotTrust, snapshotTrustMessage } from './discoverySnapshotTrust.js'
 import { acknowledgementSummary } from './discoveryRecommendations.js'
 import { hasClassificationData, NO_CLASSIFICATION_TITLE, NO_CLASSIFICATION_BODY,
          NO_CLASSIFICATION_WHY } from './classificationData.js'
@@ -545,6 +546,26 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           are incomplete or stale. Re-run discovery to get a current inventory.
         </div>
       )}
+
+      {/* A listing that ran to completion but did NOT cover the whole source. The backend has
+          recorded this in scope.enumeration since the resilience work, and nothing read it — so a
+          truncated run rendered its partial counts below exactly like a complete one, with the
+          estate bar stating them as fact. Not shown while busy (the counts are openly provisional
+          then) and not shown for a failed run, which has its own, stronger banner above. */}
+      {!busy && (() => {
+        const msg = snapshotTrustMessage(snapshotTrust(run))
+        if (!msg) return null
+        return (
+          <div className="readywarn" role="status"
+               style={{ marginBottom: 12, padding: '10px 14px', borderRadius: 8,
+                        background: 'var(--amber-bg,#fffbeb)',
+                        border: '1px solid var(--amber,#d97706)',
+                        color: 'var(--amber-ink,#92400e)' }}>
+            <span style={{ fontWeight: 600 }}>⚠ {msg.title}</span>
+            <span style={{ marginLeft: 8 }}>{msg.body}</span>
+          </div>
+        )
+      })()}
 
       {/* Capacity state notice — shown before/after a scan, not during (busy). Shows the most
           specific signal available: preflightCapacityState is set right after a user clicks a

@@ -85,3 +85,66 @@ class TestMarkPublished:
         _make_scan(store, "scan-b")
         store.mark_published("scan-a")
         assert store.mark_published("scan-b") is not None
+
+
+class TestSuspiciousZeroBaseline:
+    """The baseline the suspicious-zero guard compares against, across a retry.
+
+    The guard (handlers._scan_discover) fails a scan whose listing returned 0 when a prior scan of
+    the same source found files, and releases the discovery slot so the run can be retried. The
+    retry is exactly where the choice of baseline decides whether the guard still works — see
+    Store.last_nonempty_run_for_source.
+    """
+
+    def _run(self, store, scan_id, at, *, files=0, status="discovered",
+             source="drive", user="owner@example.com"):
+        store.init_scan_run(scan_id, source, 0, at, "rb", "hash", owner=user, status=status)
+        if files:
+            store.add_inventory(scan_id, [{"file": f"f{i}.pdf"} for i in range(files)])
+
+    def test_skips_the_failed_zero_run_a_retry_would_otherwise_land_on(self, store):
+        # A: real inventory. B: the zero this guard already failed. C: the retry it invited.
+        self._run(store, "A", "2026-01-01T00:00:00", files=3)
+        self._run(store, "B", "2026-01-02T00:00:00", files=0, status="failed")
+        self._run(store, "C", "2026-01-03T00:00:00", files=0, status="running")
+
+        # What the guard used to ask, and why it went quiet on the retry: B IS the prior run, and
+        # it carries no inventory, so "did this source have files last time?" answered no.
+        assert store.previous_run_for_source("C", owner="owner@example.com") == "B"
+        assert store.count_inventory("B") == 0
+
+        # What it asks now.
+        base = store.last_nonempty_run_for_source("C", owner="owner@example.com")
+        assert base == "A", "retry must compare against the last run that found files"
+        assert store.count_inventory(base) == 3
+
+    def test_idempotent_across_many_failed_retries(self, store):
+        self._run(store, "A", "2026-01-01T00:00:00", files=3)
+        for i in range(5):
+            self._run(store, f"F{i}", f"2026-01-1{i}T00:00:00", files=0, status="failed")
+        self._run(store, "LAST", "2026-01-20T00:00:00", files=0, status="running")
+        assert store.last_nonempty_run_for_source("LAST", owner="owner@example.com") == "A"
+
+    def test_none_for_a_genuinely_new_source(self, store):
+        # No prior run at all: a first scan returning 0 is not suspicious, it is just empty. The
+        # guard must stay silent here or every new connector's first scan fails.
+        self._run(store, "ONLY", "2026-01-01T00:00:00", files=0, status="running")
+        assert store.last_nonempty_run_for_source("ONLY", owner="owner@example.com") is None
+
+    def test_does_not_cross_sources(self, store):
+        self._run(store, "D", "2026-01-01T00:00:00", files=3, source="drive")
+        self._run(store, "S", "2026-01-02T00:00:00", files=0, source="sharepoint")
+        assert store.last_nonempty_run_for_source("S", owner="owner@example.com") is None
+
+    def test_does_not_cross_owners(self, store):
+        self._run(store, "MINE", "2026-01-01T00:00:00", files=3, user="alice@a.com")
+        self._run(store, "THEIRS", "2026-01-02T00:00:00", files=0, user="bob@a.com")
+        assert store.last_nonempty_run_for_source("THEIRS", owner="bob@a.com") is None
+
+    def test_ignores_superseded_even_when_it_has_inventory(self, store):
+        # Same exclusion previous_run_for_source makes: a superseded run barely started before
+        # this one replaced it, so its inventory is not evidence about the estate.
+        self._run(store, "A", "2026-01-01T00:00:00", files=3)
+        self._run(store, "SUP", "2026-01-02T00:00:00", files=9, status="superseded")
+        self._run(store, "C", "2026-01-03T00:00:00", files=0, status="running")
+        assert store.last_nonempty_run_for_source("C", owner="owner@example.com") == "A"

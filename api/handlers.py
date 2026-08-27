@@ -1403,7 +1403,14 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # source is new (no previous scan → legitimate first run can return 0).
         if not items and not _truncated:
             try:
-                _prev_scan_id = core.store.previous_run_for_source(scan_id, owner=user)
+                # last_nonempty_run_for_source, NOT previous_run_for_source: the immediately-prior
+                # run is the right diff baseline and the wrong guard baseline. Once this guard
+                # fails a scan, that failed run — 0 inventory rows — becomes "previous", so the
+                # retry it explicitly invites (the slot is released below) compares against 0,
+                # sees nothing suspicious, and publishes the zero the first attempt refused.
+                # Skipping to the last run that PROVED files exist makes the check idempotent:
+                # attempt 2 and attempt 20 both compare against the same real inventory.
+                _prev_scan_id = core.store.last_nonempty_run_for_source(scan_id, owner=user)
                 if _prev_scan_id:
                     _prev_count = core.store.count_inventory(_prev_scan_id)
                     if _prev_count > 0:
