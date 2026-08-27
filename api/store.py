@@ -1505,7 +1505,13 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT COUNT(*) AS n FROM scan_inventory WHERE scan_id=%s", (scan_id,))
             row = self._db.fetchone(cur)
-        return (row or {}).get("n", 0) or 0
+            n = (row or {}).get("n", 0) or 0
+            if n == 0:
+                # Pre-ADR-0020 scans stored files in file_records, not scan_inventory.
+                self._db.execute(cur, "SELECT COUNT(*) AS n FROM file_records WHERE scan_id=%s", (scan_id,))
+                row = self._db.fetchone(cur)
+                n = (row or {}).get("n", 0) or 0
+        return n
 
     def list_inventory_page(self, scan_id: str, *, limit: int, offset: int = 0) -> list[dict]:
         """One page of the per-file discover inventory, ORDER BY file (stable paging). The
@@ -2970,6 +2976,9 @@ class Store:
         EXISTS over a JOIN/COUNT: this only asks whether any inventory row exists, and the caller
         counts separately for its message. On a source with a long history the index probe stops
         at the first hit rather than aggregating every prior run's rows.
+
+        Pre-ADR-0020 scans stored discovered files in file_records rather than scan_inventory.
+        The EXISTS clause covers both tables so that older baselines still disarm the guard.
         """
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -2984,7 +2993,8 @@ class Store:
                 where += " AND r.owner_email=%s"; params = params + (owner,)
             self._db.execute(cur,
                 "SELECT r.id FROM scan_runs r WHERE " + where
-                + " AND EXISTS (SELECT 1 FROM scan_inventory i WHERE i.scan_id = r.id)"
+                + " AND (EXISTS (SELECT 1 FROM scan_inventory i WHERE i.scan_id = r.id)"
+                + "      OR EXISTS (SELECT 1 FROM file_records f WHERE f.scan_id = r.id))"
                 + " ORDER BY COALESCE(r.completed_at, r.started_at) DESC LIMIT 1", params)
             row = self._db.fetchone(cur)
             return row["id"] if row else None

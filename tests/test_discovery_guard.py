@@ -168,3 +168,38 @@ class TestSuspiciousZeroBaseline:
         self._run(store, "SUP", "2026-01-02T00:00:00", files=9, status="superseded")
         self._run(store, "C", "2026-01-03T00:00:00", files=0, status="running")
         assert store.last_nonempty_run_for_source("C", owner="owner@example.com") == "A"
+
+    def _run_with_file_records(self, store, scan_id, at, *, files=0,
+                                source="drive", user="owner@example.com"):
+        """Simulate a pre-ADR-0020 scan: rows in file_records, NOT scan_inventory."""
+        store.init_scan_run(scan_id, source, 0, at, "rb", "hash", owner=user, status="completed")
+        if files:
+            with store._db.cursor() as cur:
+                for i in range(files):
+                    store._db.execute(cur,
+                        "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,"
+                        "skipped_rules,drive_file_id,acp_stamped,checksum,size_kb,pages,sheets,"
+                        "source_modified) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (scan_id, f"file{i}.pdf", "pdfminer", "pass", 1.0, 1,
+                         "[]", None, None, None, None, None, None, None))
+
+    def test_pre_adr0020_file_records_baseline_is_found(self, store):
+        """Pre-ADR-0020 scans stored files in file_records, not scan_inventory.
+
+        last_nonempty_run_for_source must find them so the suspicious-zero guard
+        does not go silent when the only prior successful scan predates the inventory table.
+        """
+        self._run_with_file_records(store, "OLD", "2026-01-01T00:00:00", files=5)
+        self._run(store, "NOW", "2026-01-03T00:00:00", files=0, status="running")
+
+        base = store.last_nonempty_run_for_source("NOW", owner="owner@example.com")
+        assert base == "OLD", (
+            "guard baseline must reach pre-ADR-0020 scans whose files are in file_records"
+        )
+        # count_inventory must also return the file_records count so the guard message is accurate.
+        assert store.count_inventory("OLD") == 5
+
+    def test_count_inventory_falls_back_to_file_records(self, store):
+        """count_inventory returns file_records count when scan_inventory is empty."""
+        self._run_with_file_records(store, "OLD", "2026-01-01T00:00:00", files=7)
+        assert store.count_inventory("OLD") == 7
