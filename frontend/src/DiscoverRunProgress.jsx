@@ -347,6 +347,14 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
                   aria-hidden="true">
               {fmtElapsedSecs(elapsed)} elapsed
             </span>
+            {freshness === 'reconnecting' && (
+              <span title="Live connection lost — reconnecting. Discovery may still be running." role="status"
+                    style={{ fontSize: 11.5, padding: '2px 7px', borderRadius: 4,
+                             background: 'var(--amber-bg,#fffbeb)', color: 'var(--amber-ink,#92400e)',
+                             border: '1px solid var(--amber,#d97706)' }}>
+                reconnecting
+              </span>
+            )}
             {freshness === 'checkpoint' && (
               <span title="Live connection lost — showing last checkpoint" role="status"
                     style={{ fontSize: 11.5, padding: '2px 7px', borderRadius: 4,

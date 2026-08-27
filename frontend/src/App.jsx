@@ -1093,7 +1093,15 @@ export default function App() {
           if (decision.action === 'never-started') {
             throw new Error('this scan never started — the queue may be stuck. Try again, or check Monitor.')
           }
-          setProgress(g ? queuedProgress(g, elapsed, job) : { phase: foundOnce ? 'connecting' : 'queued', elapsed })
+          // sseFailedRef read live here, not via a state flip — a ref because it changes far more
+          // often than the loop renders (see its declaration comment). The fallback getJob() poll
+          // above already compensates for the dead stream; this just tells the person watching
+          // that the *live push* is down, not just that the number happens to be old (that's what
+          // g.run.freshness's own 'checkpoint'/'stale' already cover). A dead SSE stream means we
+          // cannot trust anything about currency until it either recovers or the poll settles.
+          const freshness = sseFailedRef.current ? 'reconnecting' : (g?.run?.freshness ?? null)
+          setProgress(g ? { ...queuedProgress(g, elapsed, job), freshness }
+                         : { phase: foundOnce ? 'connecting' : 'queued', elapsed, freshness })
           if (decision.action === 'settled') fresh = decision.scan
         }
         if (!fresh) throw new Error('scan still processing — watch it finish in the Monitor queue')
@@ -1195,7 +1203,10 @@ export default function App() {
             'The app was updated and this tab’s session ended. Sign in again — your scan kept running server-side and will be here when you return.' } }))
           return
         }
-        setProgress(g ? queuedProgress(g, elapsed, job) : { phase: 'connecting', elapsed })
+        // Same reasoning as doScan's identical line: sseFailedRef read live, ref not state.
+        const freshness = sseFailedRef.current ? 'reconnecting' : (g?.run?.freshness ?? null)
+        setProgress(g ? { ...queuedProgress(g, elapsed, job), freshness }
+                       : { phase: 'connecting', elapsed, freshness })
         if (g && g.run && g.run.status !== 'running') fresh = g
       }
       // Same reset as doScan. Usually a no-op — a reconnect follows a page reload, where React

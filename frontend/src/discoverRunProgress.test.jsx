@@ -755,6 +755,50 @@ describe('stopped card (§9): scan ended before completion', () => {
 
 // discovery/preflight returned 'degraded' when this run started — allowed through rather than
 // blocked, but worth saying why for the run's duration (see discoveryPreflightGate.js).
+// PRD §15 freshness model: 'reconnecting' (client SSE known dead) is distinct from 'checkpoint'/
+// 'stale' (server-computed data-currency, from #883) — see App.jsx's poll loops for how the two
+// are combined. This component just renders whichever single value it's given.
+describe('freshness badges', () => {
+  const renderWithFreshness = (freshness) => renderToStaticMarkup(
+    createElement(DiscoverRunProgress, { progress: PROG, busy: true, freshness }))
+
+  it('shows the reconnecting badge when freshness is "reconnecting"', () => {
+    const html = renderWithFreshness('reconnecting')
+    expect(html).toContain('reconnecting')
+    expect(html).toContain('Discovery may still be running')
+  })
+
+  it('shows the checkpoint badge when freshness is "checkpoint"', () => {
+    const html = renderWithFreshness('checkpoint')
+    expect(html).toContain('checkpoint')
+  })
+
+  it('shows the stale badge when freshness is "stale"', () => {
+    const html = renderWithFreshness('stale')
+    expect(html).toContain('stale')
+  })
+
+  it('shows no badge when freshness is "live"', () => {
+    const html = renderWithFreshness('live')
+    expect(html).not.toContain('reconnecting')
+    expect(html).not.toContain('checkpoint')
+    expect(html).not.toContain('stale')
+  })
+
+  it('shows no badge when freshness is null (default)', () => {
+    const html = renderWithFreshness(null)
+    expect(html).not.toContain('reconnecting')
+    expect(html).not.toContain('checkpoint')
+    expect(html).not.toContain('stale')
+  })
+
+  it('shows only one badge at a time — reconnecting excludes the checkpoint/stale badges', () => {
+    const html = renderWithFreshness('reconnecting')
+    expect(html).not.toContain('>checkpoint<')
+    expect(html).not.toContain('>stale<')
+  })
+})
+
 describe('the preflightDegraded note', () => {
   const renderWith = (progress, preflightDegraded) => renderToStaticMarkup(
     createElement(DiscoverRunProgress, { progress, busy: true, preflightDegraded }))
