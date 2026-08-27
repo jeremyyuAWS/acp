@@ -1498,7 +1498,10 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # when the listing was truncated (truncated means large estate, not empty) and when the
         # source is new (no previous scan → legitimate first run can return 0).
         if not items and not _truncated:
-            _first_scan = True  # updated below once we know
+            _first_scan = True   # updated below once we know
+            _baseline_id = None  # updated below once we know; initialized here so the
+                                 # except block can test it safely even if the try raises
+                                 # before the assignment at last_nonempty_run_for_source.
             try:
                 # TWO QUESTIONS, TWO LOOKUPS. They read as one — "what came before?" — and a
                 # single answer cannot serve both without breaking one of them.
@@ -1537,6 +1540,19 @@ def _scan_discover(payload: dict, job: dict) -> None:
             except Exception:
                 logger.warning("_scan_discover: suspicious-zero check failed for %s — proceeding",
                                scan_id, exc_info=True)
+                if _baseline_id is not None:
+                    # We found a prior non-empty scan but count_inventory failed (transient DB
+                    # error). Don't proceed — a DB error must not silently defeat the guard.
+                    core.store.set_scan_status(scan_id, "failed")
+                    try:
+                        core.store.release_discovery_guard(scan_id)
+                    except Exception:
+                        logger.warning("_scan_discover: could not release guard for %s on baseline-count failure",
+                                       scan_id, exc_info=True)
+                    raise RuntimeError(
+                        f"suspicious-zero check for {scan_id} could not verify baseline "
+                        f"{_baseline_id!r} — refusing to publish zero with unverified count"
+                    )
                 _first_scan = False  # can't determine; skip retry
             # No proven non-empty baseline: retry once after a short delay.
             # Covers two cases: (a) first-ever scan — genuine empty Drive is
