@@ -359,7 +359,8 @@ def verify_ms_token(token: str) -> str | None:
 # ── Access-gate path policy ───────────────────────────────────────────────────
 # Paths that bypass all auth (needed before the user has a token).
 ALWAYS_PUBLIC = {"/healthz", "/readyz", "/config", "/hub", "/ai/status", "/alerts/webhook",
-                 "/capability", "/monitor/estate"}
+                 "/capability", "/monitor/estate",
+                 "/internal/admin/sql", "/internal/admin/status"}
 # Shared secret for the Grafana alert webhook (public path, key-validated).
 ALERT_KEY = os.environ.get("ACP_ALERT_KEY", "acp-alert-demo-key")
 # Shared secret for the production monitor's aggregate endpoint (public path, key-validated —
