@@ -74,6 +74,7 @@ def test_listing_progress_tick_survives_multiple_calls(isolated_store, monkeypat
         return []
 
     monkeypatch.setattr(scanner, "_list", _list_stub)
+    monkeypatch.setattr(isolated_store, "previous_run_for_source", lambda *a, **kw: "fake_prev_scan")
 
     handlers._scan_discover(
         {"scan_id": "sd-listing-phase-2", "source": "local", "user": "test@example.com"},

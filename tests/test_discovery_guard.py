@@ -131,6 +131,26 @@ class TestSuspiciousZeroBaseline:
         self._run(store, "ONLY", "2026-01-01T00:00:00", files=0, status="running")
         assert store.last_nonempty_run_for_source("ONLY", owner="owner@example.com") is None
 
+    def test_a_genuinely_empty_source_is_not_a_first_scan(self, store):
+        """Why _scan_discover keeps BOTH lookups instead of swapping one for the other.
+
+        The suspicious-zero block answers two questions off what looks like one fact. "Has this
+        source ever been scanned?" gates the first-scan retry (#858) — any prior run answers it.
+        "Did it ever prove it had files?" is the guard baseline — only a run with inventory does.
+
+        A genuinely empty source is where they diverge: it HAS prior runs, and none has inventory.
+        Answering the retry gate with the non-empty lookup would call it a first scan forever and
+        re-list it after a 5s sleep on every scan, for as long as the source stays empty.
+        """
+        self._run(store, "EMPTY1", "2026-01-01T00:00:00", files=0)
+        self._run(store, "EMPTY2", "2026-01-02T00:00:00", files=0)
+        self._run(store, "NOW", "2026-01-03T00:00:00", files=0, status="running")
+        owner = "owner@example.com"
+        # Not a first scan — the retry gate must see a prior run and stay quiet.
+        assert store.previous_run_for_source("NOW", owner=owner) == "EMPTY2"
+        # And no baseline to refuse against — the guard must stay quiet too.
+        assert store.last_nonempty_run_for_source("NOW", owner=owner) is None
+
     def test_does_not_cross_sources(self, store):
         self._run(store, "D", "2026-01-01T00:00:00", files=3, source="drive")
         self._run(store, "S", "2026-01-02T00:00:00", files=0, source="sharepoint")

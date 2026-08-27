@@ -21,6 +21,9 @@ export function pickDefaultScan(scans, { ratio = COLLAPSE_RATIO, window = COLLAP
   const biggest = Math.max(...recent.map(_files))
   if (!biggest) return scans[0]                          // no sizes to compare on — keep the newest
   const floor = biggest * ratio
-  // biggest itself clears the floor and is in `recent`, so find() always returns a scan.
-  return recent.find((s) => _files(s) >= floor) || scans[0]
+  // Among candidates that pass the collapse check, prefer a published scan (enumeration
+  // verified complete, not a suspicious zero) over an unverified one.
+  const aboveFloor = recent.filter((s) => _files(s) >= floor)
+  if (!aboveFloor.length) return scans[0]
+  return aboveFloor.find((s) => s.published_at) || aboveFloor[0]
 }

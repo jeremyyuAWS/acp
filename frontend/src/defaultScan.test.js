@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { pickDefaultScan } from './defaultScan.js'
 
 // scans arrive newest-first (list_scans ORDER BY completed_at DESC).
-const scan = (id, files) => ({ id, files })
+const scan = (id, files, published_at = null) => ({ id, files, published_at })
 
 describe('pickDefaultScan', () => {
   it('skips a collapsed newest scan and falls back to the most recent full-size one', () => {
@@ -42,5 +42,17 @@ describe('pickDefaultScan', () => {
     expect(pickDefaultScan([])).toBeNull()
     expect(pickDefaultScan(null)).toBeNull()
     expect(pickDefaultScan([scan('a')]).id).toBe('a')    // files undefined → newest
+  })
+
+  it('prefers a published scan over an unpublished one of similar size', () => {
+    // Both pass the collapse check; the published one should win even if newer unpublished exists.
+    const list = [scan('new-unpub', 20), scan('old-pub', 22, '2026-08-01T00:00:00Z')]
+    expect(pickDefaultScan(list).id).toBe('old-pub')
+  })
+
+  it('still applies collapse check before published preference', () => {
+    // A published but collapsed scan loses to a larger unpublished one above the floor.
+    const list = [scan('small-pub', 5, '2026-08-01T00:00:00Z'), scan('big-unpub', 22)]
+    expect(pickDefaultScan(list).id).toBe('big-unpub')
   })
 })

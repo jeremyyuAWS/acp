@@ -2071,7 +2071,7 @@ class Store:
             where += " AND owner_email=%s"; params = (owner,)
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT id,completed_at,source,rubric_hash,files,certifiable,uncertain,error,avg_score,assessed_at,scope "
+                "SELECT id,completed_at,source,rubric_hash,files,certifiable,uncertain,error,avg_score,assessed_at,scope,published_at "
                 f"FROM scan_runs WHERE {where} ORDER BY completed_at DESC", params)
             rows = self._db.fetchall(cur)
             # A cancelled/interrupted scan reaches this list (it has completed_at) with its

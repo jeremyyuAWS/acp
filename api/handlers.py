@@ -1402,19 +1402,29 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # when the listing was truncated (truncated means large estate, not empty) and when the
         # source is new (no previous scan → legitimate first run can return 0).
         if not items and not _truncated:
+            _first_scan = True  # updated below once we know
             try:
-                # last_nonempty_run_for_source, NOT previous_run_for_source: the immediately-prior
-                # run is the right diff baseline and the wrong guard baseline. Once this guard
-                # fails a scan, that failed run — 0 inventory rows — becomes "previous", so the
-                # retry it explicitly invites (the slot is released below) compares against 0,
-                # sees nothing suspicious, and publishes the zero the first attempt refused.
-                # Skipping to the last run that PROVED files exist makes the check idempotent:
-                # attempt 2 and attempt 20 both compare against the same real inventory.
-                _prev_scan_id = core.store.last_nonempty_run_for_source(scan_id, owner=user)
-                if _prev_scan_id:
-                    _prev_count = core.store.count_inventory(_prev_scan_id)
+                # TWO QUESTIONS, TWO LOOKUPS. They read as one — "what came before?" — and a
+                # single answer cannot serve both without breaking one of them.
+                #
+                # "Has this source EVER been scanned?" gates the first-scan retry below, and any
+                # prior run answers it, empty or not. A source that is genuinely empty has prior
+                # runs with no inventory; asking the non-empty question here would call it a first
+                # scan forever and re-list it after a 5s sleep on every single scan.
+                _prev_scan_id = core.store.previous_run_for_source(scan_id, owner=user)
+                _first_scan = _prev_scan_id is None
+                # "Did this source ever PROVE it had files?" is the guard baseline, and only a run
+                # with inventory answers it. previous_run_for_source excludes just 'superseded', so
+                # once this guard fails a scan, that failed run — 0 inventory rows — becomes the
+                # previous one: the retry the guard explicitly invites (it releases the slot below)
+                # then compared against 0, saw nothing suspicious, and published the zero the first
+                # attempt had refused. Skipping to the last run that proved files exist makes the
+                # check idempotent — attempt 2 and attempt 20 compare against the same inventory.
+                _baseline_id = core.store.last_nonempty_run_for_source(scan_id, owner=user)
+                if _baseline_id:
+                    _prev_count = core.store.count_inventory(_baseline_id)
                     if _prev_count > 0:
-                        _msg = (f"listing returned 0 files but previous scan {_prev_scan_id} "
+                        _msg = (f"listing returned 0 files but previous scan {_baseline_id} "
                                 f"found {_prev_count}; refusing to publish suspicious zero")
                         logger.error("_scan_discover: suspicious zero for %s: %s", scan_id, _msg)
                         core.store.set_scan_status(scan_id, "failed")
@@ -1431,6 +1441,36 @@ def _scan_discover(payload: dict, job: dict) -> None:
             except Exception:
                 logger.warning("_scan_discover: suspicious-zero check failed for %s — proceeding",
                                scan_id, exc_info=True)
+                _first_scan = False  # can't determine; skip retry
+            # First-ever scan for this source returned 0: retry once after a short delay.
+            # A genuine empty Drive is indistinguishable from a transient API hiccup on the
+            # first attempt, so one cheap retry is the right call. A second 0 is accepted —
+            # there is no baseline to refuse against, and "your Drive is empty" may be true.
+            if _first_scan:
+                import time as _time
+                logger.info("_scan_discover: first scan for %s returned 0 files; retrying once in 5s", scan_id)
+                _time.sleep(5)
+                _retry_scope: dict = {}
+                _retry_inv: list = []
+                try:
+                    _retry_items = _list(
+                        source, svc, folder=effective_folder, sp_token=sp_tok,
+                        max_files=FANOUT_MAX_FILES,
+                        **({"folders": folders} if folders else {}),
+                        **({"exclude_folders": exclude_folders} if exclude_folders else {}),
+                        exclude_remediated=bool(payload.get("exclude_remediated", False)),
+                        scope_out=_retry_scope, scope_files=_scope_for_listing(user),
+                        inventory_out=_retry_inv, progress_cb=_listing_progress,
+                    )
+                    if _retry_items:
+                        logger.info("_scan_discover: retry returned %d files for %s",
+                                    len(_retry_items), scan_id)
+                        items = _retry_items
+                        scope.update(_retry_scope)
+                        inventory[:] = _retry_inv
+                except Exception:
+                    logger.warning("_scan_discover: first-scan retry failed for %s",
+                                   scan_id, exc_info=True)
 
         core.store.set_scan_files(scan_id, len(items))
         core.store.merge_scan_scope(scan_id, scope)
