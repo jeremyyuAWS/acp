@@ -1460,6 +1460,12 @@ export default function App() {
             <span className="runinfo-abs">{fmtStamp(run?.completed_at) ?? '—'}</span>
             {run?.source && <span className="runinfo-source">{run.source}</span>}
             {run?.files != null && <span className="muted">{run.files.toLocaleString()} documents</span>}
+            {run?.published_at && (
+              <span style={{ fontSize: 11.5, color: 'var(--green,#1a7f45)', whiteSpace: 'nowrap' }}
+                    title={`Enumeration verified complete — ${fmtStamp(run.published_at)}`}>
+                ✓ Verified
+              </span>
+            )}
           </div>
         )}
         {scanList.length > 1 && (
@@ -1476,7 +1482,7 @@ export default function App() {
                   <option key={s.id} value={s.id}>
                     {i === 0 ? '★ ' : ''}{new Date(s.completed_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                     {s.avg_score != null ? ` · ${s.avg_score}/100` : ''}
-                    {' · '}{timeAgo(s.completed_at)}{i === 0 ? ' · latest' : ''}
+                    {' · '}{timeAgo(s.completed_at)}{i === 0 ? ' · latest' : ''}{s.published_at ? ' · verified' : ''}
                   </option>
                 ))}
               </select>
