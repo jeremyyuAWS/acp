@@ -15,7 +15,13 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [['github'], ['list']] : [['list']],
+  // The html reporter is what writes playwright-report/, which the CI job uploads on failure.
+  // Without it that upload finds nothing and warns instead — the artifact you actually want to
+  // read is missing exactly when a run failed. open:'never' keeps it from trying to launch a
+  // browser on the runner.
+  reporter: process.env.CI
+    ? [['github'], ['list'], ['html', { open: 'never' }]]
+    : [['list']],
   timeout: 120_000,
   expect: { timeout: 15_000 },
 
@@ -51,7 +57,15 @@ export default defineConfig({
       stderr: 'pipe',
     },
     {
-      command: `npx vite --port ${UI_PORT}`,
+      // --host 127.0.0.1 is required, not cosmetic. Vite otherwise binds the hostname
+      // "localhost", and Node ≥17 resolves that to ::1 first wherever IPv6 exists — so on a
+      // GitHub runner vite listens on [::1]:5174 while the readiness probe below dials
+      // 127.0.0.1 and never connects. That failure is silent in the worst way: vite prints its
+      // usual "ready" banner, no request is ever logged, and the job dies 120s later on
+      // "Timed out waiting from config.webServer". It cannot reproduce in a container with no
+      // IPv6, where "localhost" resolves to 127.0.0.1 and everything passes. Binding the
+      // address explicitly — as the API side already does — takes resolution order out of it.
+      command: `npx vite --port ${UI_PORT} --host 127.0.0.1`,
       url: `http://127.0.0.1:${UI_PORT}`,
       // VITE_SIM is the one that matters. sim.js reads `import.meta.env.VITE_SIM !== 'false'`,
       // so simulation is ON unless this exact string is set — and in SIM mode api.js serves
