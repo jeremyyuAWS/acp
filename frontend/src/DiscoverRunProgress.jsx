@@ -120,7 +120,7 @@ function DiscoverStep({ label, kpi, status }) {
   )
 }
 
-export default function DiscoverRunProgress({ progress, busy, onStop, sources, inv = null, onReview, onContinue, preflightDegraded = null }) {
+export default function DiscoverRunProgress({ progress, busy, onStop, sources, inv = null, onReview, onContinue, preflightDegraded = null, freshness = null }) {
   const [startedAt] = useState(() => Date.now())
   const [elapsed, setElapsed] = useState(0)
   const [stopping, setStopping] = useState(false)
@@ -347,6 +347,22 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
                   aria-hidden="true">
               {fmtElapsedSecs(elapsed)} elapsed
             </span>
+            {freshness === 'checkpoint' && (
+              <span title="Live connection lost — showing last checkpoint" role="status"
+                    style={{ fontSize: 11.5, padding: '2px 7px', borderRadius: 4,
+                             background: 'var(--amber-bg,#fffbeb)', color: 'var(--amber-ink,#92400e)',
+                             border: '1px solid var(--amber,#d97706)' }}>
+                checkpoint
+              </span>
+            )}
+            {freshness === 'stale' && (
+              <span title="No live signal and no recent checkpoint — data may be outdated" role="status"
+                    style={{ fontSize: 11.5, padding: '2px 7px', borderRadius: 4,
+                             background: 'var(--red-bg,#fef2f2)', color: 'var(--red,#b91c1c)',
+                             border: '1px solid var(--red-line,#fca5a5)' }}>
+                stale
+              </span>
+            )}
             {onStop && busy && (
               <button type="button" className="ghost small" onClick={handleStop}
                       disabled={stopping}
