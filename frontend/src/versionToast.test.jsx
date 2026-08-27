@@ -23,9 +23,9 @@ describe('VersionToast initial state', () => {
 describe('VersionToastBanner UI', () => {
   const noop = () => {}
 
-  it('contains "New version available" label', () => {
+  it('contains "new version of ACP is available" label', () => {
     const html = renderToStaticMarkup(createElement(VersionToastBanner, { onReload: noop, onDismiss: noop }))
-    expect(html).toContain('New version available')
+    expect(html).toContain('new version of ACP is available')
   })
 
   it('has a Reload button', () => {
