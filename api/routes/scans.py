@@ -17,6 +17,40 @@ from report_tagged import build_tagged_report
 
 router = APIRouter()
 
+_TERMINAL_SCAN_STATUSES = frozenset(
+    {"completed", "failed", "cancelled", "interrupted", "superseded", "discovered"}
+)
+_FRESHNESS_LIVE_THRESHOLD_S = 30
+
+
+def _scan_freshness(scan_id: str, run: dict) -> str:
+    """Classify the data currency of a scan's progress snapshot.
+
+    terminal — scan reached a final state; no worker is running.
+    live     — Redis job state updated within the last 30 s.
+    checkpoint — no live Redis signal but a durable Postgres snapshot exists.
+    stale    — scan is running but no live or checkpoint signal is available.
+    """
+    from datetime import datetime, timezone
+    if (run.get("status") or "") in _TERMINAL_SCAN_STATUSES:
+        return "terminal"
+    job_id = core.get_job_id_for_scan(scan_id)
+    if job_id:
+        state = core.get_job_state(job_id)
+        if state and not state.get("done"):
+            updated_at = state.get("updated_at")
+            if updated_at:
+                try:
+                    ts = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                    age = (datetime.now(timezone.utc) - ts).total_seconds()
+                    if age < _FRESHNESS_LIVE_THRESHOLD_S:
+                        return "live"
+                except Exception:
+                    pass
+    if run.get("live_checkpoint_at"):
+        return "checkpoint"
+    return "stale"
+
 
 def _owner(request: Request) -> str:
     """The current user for per-user data isolation — the gate-verified email, or
@@ -548,6 +582,7 @@ def scan(sid: str, request: Request):
     res = core.store.get_scan(sid, owner=_owner(request))
     if res is None:
         raise HTTPException(404, "scan not found")
+    res["run"]["freshness"] = _scan_freshness(sid, res["run"])
     return res
 
 
