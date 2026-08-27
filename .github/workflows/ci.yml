@@ -291,3 +291,61 @@ jobs:
       - name: Frontend build
         run: npx vite build
         working-directory: frontend
+
+  e2e:
+    name: Playwright E2E (browser + local API)
+    runs-on: ubuntu-latest
+    # Soft launch. `deploy.yml` fires on `workflow_run: [CI] completed` and requires
+    # conclusion success, so a job added here sits on the deploy critical path — a flaky
+    # browser run would block deploys, not just fail a PR. Drop this once the suite has a
+    # track record; until then a red E2E is a signal to read, not a gate.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: api/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'          # pdfjs-dist requires >=22.13
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm 11
+        run: npm install -g npm@11 --no-audit --no-fund
+        # The lockfile is npm-11 authored; npm 10 rejects its nested entries.
+
+      - name: Install frontend dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: frontend
+
+      - name: Install browser
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      # The venv path scripts/e2e-api.sh looks for by default. Only the API's own deps —
+      # no .NET Office CLI, because the e2e corpus is PDF, whose analyser is pure Python
+      # and vendored in-repo (ADR 0029).
+      - name: Install API dependencies
+        run: |
+          python -m venv .venv-e2e
+          .venv-e2e/bin/pip install --quiet -r api/requirements.txt
+
+      # Playwright's webServer config starts both the API (scripts/e2e-api.sh) and vite,
+      # with VITE_SIM=false so the browser drives the real backend rather than sim.js.
+      - name: Playwright E2E
+        run: npx playwright test
+        working-directory: frontend
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 7

@@ -7,6 +7,7 @@ __pycache__/
 *.pyc
 .venv/
 .venv-drive/
+.venv-e2e/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
@@ -28,6 +29,14 @@ test-corpus/files/*.b64
 
 # local sqlite
 acp.db
+# the store scripts/e2e-api.sh moves aside so each E2E run starts on an empty one
+acp.db.prev-e2e
+
+# E2E: the corpus scripts/e2e-api.sh assembles from test-corpus/oracle, and Playwright's
+# own run output. The corpus is derived — the fixtures it copies are what's tracked.
+.e2e/
+frontend/playwright-report/
+frontend/test-results/
 
 # runtime-edited rubric
 config/rubric.active.json
