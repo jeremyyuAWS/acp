@@ -15,12 +15,15 @@ Per-file fan-out (PDF/HTML) is a possible future optimization (ADR 0004 step 3).
 from __future__ import annotations
 
 import json as _json
+import logging
 import os as _os
 
 import core
 import provenance
 from worker import handler, FatalJobError
 from scanner import run_scan
+
+logger = logging.getLogger(__name__)
 
 
 def _defer_analysis_to_assess() -> bool:
@@ -1055,7 +1058,7 @@ def _mark_discovered(scan_id: str) -> None:
     try:
         core.store.mark_discovery_complete(scan_id)
     except Exception:
-        pass
+        logger.warning("_mark_discovered: failed to stamp discovered_at for %s", scan_id, exc_info=True)
 
 
 def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, actor: str | None,
@@ -1269,6 +1272,21 @@ def _scan_discover(payload: dict, job: dict) -> None:
         core.store.init_scan_run(scan_id, source, 0, started, rb.name, rb.hash, owner=user,
                                  status="running")
 
+        # Claim the active-Discovery slot before listing. Two concurrent requests for the same
+        # source will both reach init_scan_run (each with their own scan_id), but only one will
+        # claim the guard — the second sees a non-None holder, fails the scan, and returns early.
+        # Skipped on checkpoint_resume: the slot was already claimed on the first attempt.
+        if user:
+            _holder = core.store.acquire_discovery_guard(user, source, scan_id)
+            if _holder is not None:
+                _conflict_msg = (f"Discovery already active for source {source!r}: "
+                                 f"scan {_holder!r} is still running")
+                logger.warning("_scan_discover: %s (rejecting %s)", _conflict_msg, scan_id)
+                core.store.set_scan_status(scan_id, "failed")
+                core.store.log_decision("system", "scan.discover_conflict",
+                                        scan_id=scan_id, detail=_conflict_msg)
+                return
+
     if _checkpoint_resume:
         print(f"[scan] {scan_id}: retry detected — {_existing_inv_count} inventory rows already "
               f"persisted, skipping Drive API listing", flush=True)
@@ -1316,7 +1334,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
                         patch["folders_found"] = folders
                     core.update_job(_jid, patch)
             except Exception:  # noqa: BLE001 — a diagnostic must never fail the scan
-                pass
+                logger.debug("_listing_progress: progress update failed", exc_info=True)
 
         # init_scan_run (above) already created the scan_runs row — status='running', scope=NULL —
         # before this listing runs, so GET /scans/{id} has something to return the instant the job
@@ -1341,6 +1359,8 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 core.store.set_scan_status(scan_id, "failed")
                 core.store.log_decision("system", "scan.discover_failed", scan_id=scan_id,
                                         detail=f"listing {source} failed: {e}")
+                if user:
+                    core.store.release_discovery_guard(scan_id)
             except Exception:
                 pass
             raise
@@ -1358,7 +1378,53 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 for r in core.store.list_scope_rules(enabled_only=True)
             ]
         except Exception:
+            logger.warning("_scan_discover: failed to load scope_rules for %s", scan_id, exc_info=True)
             scope["scope_rules"] = []
+
+        # Enumeration-completeness flag (#2): persist structured evidence of whether the listing
+        # covered the entire estate. Stored in scope["enumeration"] and persisted via
+        # merge_scan_scope below so that downstream callers (frontend, suspicious-zero check,
+        # published-snapshot gate) can distinguish a verifiably complete listing from a truncated
+        # or partial one without re-deriving it from scattered scope fields.
+        _truncated = bool(scope.get("truncated", False))
+        scope["enumeration"] = {
+            "complete": not _truncated,
+            "auth_ok": True,          # _list() returned without raising — auth was valid
+            "files_found": len(items),
+            "truncated": _truncated,
+            "folders_visited": scope.get("folders"),  # None for flat Drive path
+        }
+
+        # Suspicious-zero protection (#8): if _list() succeeded but returned 0 files, and the
+        # previous scan for this source found files, the zero is likely a transient API failure
+        # (expired token, quota, scope narrowing) rather than a genuinely empty estate. Failing
+        # loudly here avoids publishing an empty inventory that overwrites a real one. Skipped
+        # when the listing was truncated (truncated means large estate, not empty) and when the
+        # source is new (no previous scan → legitimate first run can return 0).
+        if not items and not _truncated:
+            try:
+                _prev_scan_id = core.store.previous_run_for_source(scan_id, owner=user)
+                if _prev_scan_id:
+                    _prev_count = core.store.count_inventory(_prev_scan_id)
+                    if _prev_count > 0:
+                        _msg = (f"listing returned 0 files but previous scan {_prev_scan_id} "
+                                f"found {_prev_count}; refusing to publish suspicious zero")
+                        logger.error("_scan_discover: suspicious zero for %s: %s", scan_id, _msg)
+                        core.store.set_scan_status(scan_id, "failed")
+                        core.store.log_decision("system", "scan.suspicious_zero",
+                                                scan_id=scan_id, detail=_msg)
+                        try:
+                            core.store.release_discovery_guard(scan_id)
+                        except Exception:
+                            logger.warning("_scan_discover: could not release guard on suspicious zero for %s",
+                                           scan_id, exc_info=True)
+                        raise RuntimeError(_msg)
+            except RuntimeError:
+                raise
+            except Exception:
+                logger.warning("_scan_discover: suspicious-zero check failed for %s — proceeding",
+                               scan_id, exc_info=True)
+
         core.store.set_scan_files(scan_id, len(items))
         core.store.merge_scan_scope(scan_id, scope)
         if defer:
@@ -1487,6 +1553,17 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # count rendered from that inventory is a snapshot with no date. Set-once (see the store),
         # so a re-delivered discover job does not move it.
         _mark_discovered(scan_id)
+        # Publish the snapshot only when enumeration was verifiably complete. A truncated
+        # listing (FANOUT_MAX_FILES hit) is an incomplete snapshot; a suspicious zero would
+        # have raised above and never reached this line. Published scans are preferred by
+        # scan selection so the frontend never presents an incomplete estate as the current
+        # truth. The stamp is set-once; a re-delivery of the same job is a no-op.
+        if not _checkpoint_resume and scope.get("enumeration", {}).get("complete"):
+            try:
+                core.store.mark_published(scan_id)
+            except Exception:
+                logger.warning("_scan_discover: failed to mark published for %s",
+                               scan_id, exc_info=True)
         # Discover-phase tracing (lf.discover_run_trace). Until this call, an ADR 0020
         # Discover-only run emitted NOTHING to Langfuse: the "Discover" span lives on the analyse
         # path, which under this ADR runs at Assess time, so the phase that lists the estate and
@@ -1503,7 +1580,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
                                    scope=scope, user=user, file_spans_emitted=_spans)
             _lf.flush()
         except Exception:
-            pass
+            logger.debug("_scan_discover: Langfuse tracing failed for %s", scan_id, exc_info=True)
         if not items:
             # The estate is inventoried, but nothing in it is assessable — close the run rather
             # than leave it waiting for an Assess that would enqueue zero files.
@@ -2177,6 +2254,13 @@ def _scan_finalize(payload: dict, job: dict) -> None:
     core.store.finalize_scan_run(scan_id, now)
     _lf.flush()
     core.finalize_scan(scan_id, ai, source)
+    # Release the active-Discovery slot. Must happen AFTER finalize_scan_run sets the terminal
+    # status so the guard is only free once the scan is durably terminal. Wrapped so a guard-
+    # release failure never loses a finalized scan — the guard can be reconciled later.
+    try:
+        core.store.release_discovery_guard(scan_id)
+    except Exception:
+        logger.warning("_scan_finalize: failed to release discovery guard for %s", scan_id, exc_info=True)
     # ADR 0020 — for a DEFERRED scan the Assess-phase analysis just completed, so this IS the
     # assessment: stamp assessed_at + build the assess trace now (in the immediate-scan model the
     # user runs Assess manually later, so we don't auto-mark there). assess_params exists only for
