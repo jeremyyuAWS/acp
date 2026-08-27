@@ -61,6 +61,17 @@ describe('source — DiscoverCompleteSummary shows after discovery, not assessme
     // The gate must not fall back to completed_at — that is the bug we just fixed.
     expect(discover).not.toMatch(/DiscoverCompleteSummary[\s\S]{0,30}completed_at/)
   })
+
+  it('also accepts status===discovered as a fallback when discovered_at is missing', () => {
+    // A scan whose worker was interrupted after inventory-write but before _mark_discovered
+    // has status='discovered' in Postgres but discovered_at=NULL. That is durable state
+    // (per the PRD, "Postgres checkpoints are sufficient to render a truthful fallback card"),
+    // so the card must render even without the timestamp.
+    expect(discover).toMatch(/run\?\.status\s*===\s*['"]discovered['"]/)
+    // The estatebar fallback hides under the same condition so the two panels don't both show.
+    const estatebarGate = discover.match(/busy\s*\|\|\s*!\(run\?\.discovered_at[^)]+\)/)
+    expect(estatebarGate).not.toBeNull()
+  })
 })
 
 // ── Gap 3 — onContinue wired ──────────────────────────────────────────────────

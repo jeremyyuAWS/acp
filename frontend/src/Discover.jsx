@@ -496,7 +496,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
 
       {/* Completion summary: immutable snapshot of what was found, with the "Continue" CTA.
           Appears only after discovery finishes — DiscoverRunProgress hides itself at that point. */}
-      {!busy && run?.discovered_at && (
+      {!busy && (run?.discovered_at || run?.status === 'discovered') && (
         <DiscoverCompleteSummary
           discoveredCount={discoveredCount}
           assessableCount={scope?.inventory?.by_status?.assessable
@@ -617,7 +617,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       <div className="estatebar">
         {/* Text description only shown while busy or before a scan completes — once the full
             discovery card above appears it covers this same information more richly. */}
-        {(busy || !run?.discovered_at) && (
+        {(busy || !(run?.discovered_at || run?.status === 'discovered')) && (
           <div>
             <b>{discoveredCount} documents</b> discovered across {sources.length} sources · {Object.keys(groups).length} departments
             {busy && (
