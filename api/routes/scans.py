@@ -180,6 +180,12 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                             "user": user, "pii": pii, "batch": batch,
                             "exclude_remediated": exclude_remediated, "incremental": incremental},
                            {"scan_id": scan_id})
+            _sync_run = (core.store.get_scan(scan_id) or {}).get("run") or {}
+            if _sync_run.get("status") == "failed":
+                raise HTTPException(
+                    status_code=409,
+                    detail=_sync_run.get("error") or "Discovery failed — conflict or error",
+                )
             return {"scan_id": scan_id, "source": source, "discovered": True}
         inv: list = []
         report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token,
