@@ -77,7 +77,7 @@ export default function DiscoverCompleteSummary({
         {/* File counts */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 14 }}>
           <div>
-            {n(discoveredCount)} files discovered
+            Inventoried {n(discoveredCount)} files
             {folderCount > 0 ? ` across ${n(folderCount)} folder${folderCount === 1 ? '' : 's'}` : ''}
           </div>
           <div>{n(assessableCount)} assessable</div>
