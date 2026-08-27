@@ -1442,13 +1442,16 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 logger.warning("_scan_discover: suspicious-zero check failed for %s — proceeding",
                                scan_id, exc_info=True)
                 _first_scan = False  # can't determine; skip retry
-            # First-ever scan for this source returned 0: retry once after a short delay.
-            # A genuine empty Drive is indistinguishable from a transient API hiccup on the
-            # first attempt, so one cheap retry is the right call. A second 0 is accepted —
-            # there is no baseline to refuse against, and "your Drive is empty" may be true.
-            if _first_scan:
+            # No proven non-empty baseline: retry once after a short delay.
+            # Covers two cases: (a) first-ever scan — genuine empty Drive is
+            # indistinguishable from a transient API hiccup; (b) all prior scans for
+            # this source also returned 0 — _first_scan is False but _baseline_id is
+            # None, so neither the guard above nor the old _first_scan check would fire,
+            # leaving the zero silent on every subsequent attempt. Retrying once on any
+            # zero-with-no-baseline is cheap and closes the stuck-at-zero loop.
+            if not _baseline_id:
                 import time as _time
-                logger.info("_scan_discover: first scan for %s returned 0 files; retrying once in 5s", scan_id)
+                logger.info("_scan_discover: no non-empty baseline for %s, 0 files returned; retrying once in 5s", scan_id)
                 _time.sleep(5)
                 _retry_scope: dict = {}
                 _retry_inv: list = []
