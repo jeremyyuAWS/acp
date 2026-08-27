@@ -37,6 +37,12 @@ PER_SCAN_ENDPOINTS = [
     ("get", "/scans/{sid}/diff?vs={other}"),
     ("get", "/scans/{sid}/pii"),
     ("post", "/scans/{sid}/drive-token"),
+    # get_scan(sid) here had no owner predicate — an allowed non-owner holding (or guessing)
+    # another tenant's scan id could enqueue remediate_file jobs against it. Found 2026-08-27
+    # auditing get_scan() call sites while investigating an unrelated cross-tenant monitor
+    # false-positive; scan ids are random 12-hex-char strings so not practically guessable, but
+    # the same isolation invariant as the other five applies regardless.
+    ("post", "/scans/{sid}/remediate"),
 ]
 
 
