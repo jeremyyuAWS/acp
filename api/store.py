@@ -1285,9 +1285,21 @@ class Store:
                  _json.dumps(scope) if scope else None))
 
     def set_scan_status(self, scan_id: str, status: str) -> None:
-        """Move a scan between phases — e.g. 'discovered' → 'running' when Assess begins."""
+        """Move a scan between phases — e.g. 'discovered' → 'running' when Assess begins.
+
+        When transitioning TO 'discovered', stamps discovered_at atomically so no code path
+        can leave the scan in a discovered-without-timestamp state. The stamp is set-once
+        (COALESCE guards against overwriting an already-set value), so a re-delivered job
+        or a second call from _mark_discovered later is harmless.
+        """
         with self._db.cursor() as cur:
-            self._db.execute(cur, "UPDATE scan_runs SET status=%s WHERE id=%s", (status, scan_id))
+            if status == "discovered":
+                self._db.execute(cur,
+                    "UPDATE scan_runs SET status=%s, discovered_at=COALESCE(discovered_at, %s) "
+                    "WHERE id=%s",
+                    (status, self._now(), scan_id))
+            else:
+                self._db.execute(cur, "UPDATE scan_runs SET status=%s WHERE id=%s", (status, scan_id))
 
     def set_scan_files(self, scan_id: str, files: int) -> None:
         """Re-point a run's `files` total at the population THIS phase actually enqueued.
