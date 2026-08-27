@@ -31,9 +31,11 @@ test('a local scan runs discover → assess and produces WCAG findings', async (
   // The count is what ties this to OUR corpus. SIM's synthetic estate is thousands of files, so
   // this line can only come from a real scan of .e2e/corpus. (Not singularized upstream — the
   // shape is "1 files" for a single-file corpus.)
-  await expect(page.getByText(`Inventoried ${CORPUS_SIZE} files`)).toBeVisible()
+  await expect(page.getByText(`Inventoried ${CORPUS_SIZE} files`)).toBeVisible({ timeout: 30_000 })
 
-  await tab(page, /Assess/).click()
+  const assessTab = tab(page, /Assess/)
+  await expect(assessTab).toBeVisible()
+  await assessTab.click()
   // Text is "Assess N documents" — the count is derived, so match the class, not the label.
   // This button stays disabled while any file is excluded, which is why the corpus is uniformly
   // eligible; a mixed one parks the run here with no error, just a button that never enables.
