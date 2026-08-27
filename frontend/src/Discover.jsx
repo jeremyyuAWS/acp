@@ -615,32 +615,36 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       })()}
 
       <div className="estatebar">
-        <div>
-          <b>{discoveredCount} documents</b> discovered across {sources.length} sources · {Object.keys(groups).length} departments
-          {busy && (
-            <span className="muted" style={{ marginLeft: 8, fontSize: 12, fontStyle: 'italic' }}>
-              Counts are provisional until discovery completes
-            </span>
-          )}
-          {/* WHAT the count counts. "N documents discovered" alone is what let a one-folder scan
-              reporting 1 and a whole-Drive scan reporting 8 look like the same measurement of a
-              shrinking estate (see scanScope.js). Rendered for every recorded scope, not only
-              the narrow ones — a caveat that appears only sometimes teaches a reader to read its
-              absence as "whole estate", and it is absent on every pre-existing scan. */}
-          {scopeLine && (
-            <div className={isNarrowScope(scope) ? 'scopewarn' : 'muted'} style={{ marginTop: 3, fontSize: 12.5 }}
-                 role={isNarrowScope(scope) ? 'status' : undefined}>
-              {isNarrowScope(scope) ? '⚠ ' : ''}{scopeLine}
-              {scope?.kind === 'folder' && hasDriveToken && !busy && (
-                <> <button className="linklike" onClick={() => onScan('drive')}
-                           title="Re-run discovery with no folder restriction, across your whole Drive">
-                  Scan my whole Drive instead
-                </button></>
-              )}
-            </div>
-          )}
-          <div className="muted" style={{ marginTop: 2 }}>the agent crawls metadata, proposes a classification &amp; a lifecycle action — you confirm or override{lockedCount ? <> · <span className="lockwarn">🔒 {lockedCount} could not be opened (password-protected / unsupported)</span></> : null}</div>
-        </div>
+        {/* Text description only shown while busy or before a scan completes — once the full
+            discovery card above appears it covers this same information more richly. */}
+        {(busy || !run?.discovered_at) && (
+          <div>
+            <b>{discoveredCount} documents</b> discovered across {sources.length} sources · {Object.keys(groups).length} departments
+            {busy && (
+              <span className="muted" style={{ marginLeft: 8, fontSize: 12, fontStyle: 'italic' }}>
+                Counts are provisional until discovery completes
+              </span>
+            )}
+            {/* WHAT the count counts. "N documents discovered" alone is what let a one-folder scan
+                reporting 1 and a whole-Drive scan reporting 8 look like the same measurement of a
+                shrinking estate (see scanScope.js). Rendered for every recorded scope, not only
+                the narrow ones — a caveat that appears only sometimes teaches a reader to read its
+                absence as "whole estate", and it is absent on every pre-existing scan. */}
+            {scopeLine && (
+              <div className={isNarrowScope(scope) ? 'scopewarn' : 'muted'} style={{ marginTop: 3, fontSize: 12.5 }}
+                   role={isNarrowScope(scope) ? 'status' : undefined}>
+                {isNarrowScope(scope) ? '⚠ ' : ''}{scopeLine}
+                {scope?.kind === 'folder' && hasDriveToken && !busy && (
+                  <> <button className="linklike" onClick={() => onScan('drive')}
+                             title="Re-run discovery with no folder restriction, across your whole Drive">
+                    Scan my whole Drive instead
+                  </button></>
+                )}
+              </div>
+            )}
+            <div className="muted" style={{ marginTop: 2 }}>the agent crawls metadata, proposes a classification &amp; a lifecycle action — you confirm or override{lockedCount ? <> · <span className="lockwarn">🔒 {lockedCount} could not be opened (password-protected / unsupported)</span></> : null}</div>
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           {hasDriveToken && (
             <button className="ghost" disabled={busy} onClick={() => setShowPicker(true)}

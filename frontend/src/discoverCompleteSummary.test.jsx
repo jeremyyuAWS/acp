@@ -1,9 +1,9 @@
 /**
  * DiscoverCompleteSummary — the card shown after discovery finishes.
  *
- * Shows an immutable snapshot of what was found (eligible, non-assessable, locked, excluded)
- * plus a prominent "Continue to Assessment →" CTA wired to onAdvance. Tests verify the
- * counts appear correctly and the CTA is disabled when pendingActions or needsAck is set.
+ * Flat-text layout: header with elapsed time, file count block, lifecycle/inventory block,
+ * disclaimer, and a prominent "Continue to Assessment →" CTA. Tests verify the counts appear
+ * correctly and the CTA is disabled when pendingActions or needsAck is set.
  */
 import { describe, it, expect, vi } from 'vitest'
 import { createElement } from 'react'
@@ -58,7 +58,7 @@ describe('DiscoverCompleteSummary renders completion state', () => {
 
   it('shows lifecycle rules count', () => {
     const html = render(BASE)
-    expect(html).toContain('Applied 3 lifecycle rules')
+    expect(html).toContain('3 matched lifecycle rules')
   })
 
   it('omits metadata-only row when count is 0', () => {
@@ -110,7 +110,7 @@ describe('DiscoverCompleteSummary renders completion state', () => {
       ...BASE,
       inventoryDelta: { new: 224, updated: 61, unchanged: 963 },
     })
-    expect(html).toContain('Changes since previous Discovery')
+    expect(html).toContain('Inventory:')
     expect(html).toContain('224')
     expect(html).toContain('added')
     expect(html).toContain('61')
@@ -147,7 +147,7 @@ describe('CTA gating', () => {
 describe('singular lifecycle rule label', () => {
   it('uses singular "lifecycle rule" when count is 1', () => {
     const html = render({ ...BASE, lifecycleRulesCount: 1 })
-    expect(html).toContain('Applied 1 lifecycle rule')
+    expect(html).toContain('1 matched lifecycle rule')
     expect(html).not.toContain('1 lifecycle rules')
   })
 })
