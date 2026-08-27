@@ -310,7 +310,7 @@ async def remediate_scan(sid: str, request: Request):
     Optional body: {"scope": ["file1.html", "file2.pdf", ...]} — when provided,
     only the listed filenames are enqueued (respects the triage decisions made in
     the UI). Omit or pass an empty body to remediate all eligible files."""
-    res = core.store.get_scan(sid)
+    res = core.store.get_scan(sid, owner=_owner(request))
     if res is None:
         raise HTTPException(404, "scan not found")
     token = request.headers.get("x-drive-token")
