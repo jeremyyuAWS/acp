@@ -1151,23 +1151,30 @@ def start_workers() -> int:
         _spawn_worker()
 
     # Always start the sweeper (even at 0 workers) so a later live scale-up is covered.
+    #
+    # Delegates to sweeper.run_sweep() (ADR 0004 step 5) rather than reimplementing the
+    # checks inline. Found live 2026-08-27: run_sweep() already covered four checks —
+    # reclaim_stuck_jobs, sweep_exhausted_jobs, sweep_orphaned_scans, rescue_unfinalized_scans
+    # — and was fully tested (tests/test_reconciliation_sweeper.py), but nothing in
+    # production ever imported it. This inline loop called only two of the four directly,
+    # so a queued job past max_attempts was never dead-lettered, and a 'running' scan_runs
+    # row with zero outstanding jobs (worker died between fan-out and finalize) was never
+    # marked 'interrupted' — both sat silently stuck with no error and no error visible
+    # anywhere. Wiring run_sweep() here means the next sweep check added to sweeper.py
+    # takes effect in production automatically, not on the next person to remember this
+    # loop exists too.
     def _sweep():
         import time as _t
+        import sweeper as _sweeper
         ticks = 0
         while True:
             try:
-                # 30-min lease: scans of large estates legitimately run ~10-15min,
-                # so reclaim only clearly-dead jobs. The worker heartbeat (best-effort)
-                # extends this further; this is the reliable floor if it can't.
-                n = get_store().reclaim_stuck_jobs(lease_seconds=1800)
-                if n:
-                    print(f"[sweeper] reclaimed {n} stuck job(s)", flush=True)
-                # Deploy-safety net (found live 2026-07-11): a scan whose files ALL
-                # persisted but whose finalize was lost to a restart gets its idempotent
-                # finalize re-enqueued — finished, not abandoned.
-                f = get_store().rescue_unfinalized_scans()
-                if f:
-                    print(f"[sweeper] re-enqueued finalize for {f} completed-but-unfinalized scan(s)", flush=True)
+                # 30-min lease: scans of large estates legitimately run ~10-15min, so
+                # reclaim only clearly-dead jobs. The worker heartbeat (best-effort)
+                # extends this further; this is the reliable floor if it can't. Grace
+                # window for orphaned-scan detection uses sweeper.py's own env-driven
+                # default (ACP_SWEEP_GRACE_S, 600s) — no prior production value to match.
+                _sweeper.run_sweep(get_store(), lease_seconds=1800)
                 ticks += 1
                 if ticks % 60 == 0:      # ~hourly: trim old completed jobs so the jobs
                     d = get_store().purge_done_jobs(older_than_hours=24)   # table + claim index don't bloat (audit P2)
