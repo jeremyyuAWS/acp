@@ -525,6 +525,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           inventoryDelta={scope?.inventory_delta ?? null}
           startedAt={run?.started_at ?? null}
           discoveredAt={run?.discovered_at ?? null}
+          publishedAt={run?.published_at ?? null}
           onAdvance={onAdvance}
           onReviewInventory={() => {
             const el = document.getElementById('discover-inventory-table')

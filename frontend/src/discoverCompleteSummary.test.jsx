@@ -224,3 +224,15 @@ describe('folder count in discovered total', () => {
     expect(html).not.toContain('folders')
   })
 })
+
+describe('enumeration verified row', () => {
+  it('shows "Enumeration verified complete" with a formatted date when publishedAt is set', () => {
+    const html = render({ ...BASE, publishedAt: '2026-08-27T01:03:14Z' })
+    expect(html).toContain('Enumeration verified complete')
+  })
+
+  it('omits "Enumeration verified complete" when publishedAt is null', () => {
+    const html = render({ ...BASE, publishedAt: null })
+    expect(html).not.toContain('Enumeration verified complete')
+  })
+})
