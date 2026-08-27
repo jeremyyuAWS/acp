@@ -262,6 +262,7 @@ def test_sp_token_from_payload_reaches_list(isolated_store, monkeypatch):
     monkeypatch.setattr(core, "get_scan_tokens", lambda sid: {})
     monkeypatch.setattr(handlers, "_defer_analysis_to_assess", lambda: True)
     monkeypatch.setattr(handlers, "_enqueue_analysis", lambda *a, **kw: None)
+    monkeypatch.setattr(isolated_store, "previous_run_for_source", lambda *a, **kw: "fake_prev_scan")
 
     received_sp = []
 
