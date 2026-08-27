@@ -49,6 +49,35 @@ def test_cancel_kills_jobs_and_closes_the_run(isolated_store):
     assert s.active_scan(owner="a@x.io") is None
 
 
+def test_cancel_works_when_status_has_drifted_away_from_running_but_a_job_is_still_active(isolated_store):
+    """Found live 2026-08-27: a fan-out discover run's scan_runs.status can read 'discovered'
+    (the ADR 0020 terminal value for that run type, written once at listing time) while its job
+    is still genuinely executing the save phase. Such a scan matched neither the old
+    status='running' check here nor cancel_queued_job's status='queued' check — no path to being
+    cancelled short of the 2-hour stale-guard reclaim. This is the wedge, reproduced directly."""
+    s = isolated_store
+    _running_scan(s, "wedged", owner="a@x.io", jobs=1)
+    s.set_scan_status("wedged", "discovered")   # status drifts away from 'running' mid-job
+    assert s.get_scan("wedged")["run"]["status"] == "discovered"
+    assert s.job_stats().get("queued", 0) == 1   # the job is still genuinely outstanding
+
+    assert s.cancel_scan("wedged", owner="a@x.io") is True
+
+    run = s.get_scan("wedged")["run"]
+    assert run["status"] == "cancelled" and run["completed_at"]
+    assert s.job_stats().get("queued", 0) == 0
+    assert s.job_stats().get("dead", 0) == 1
+
+
+def test_cancel_still_refuses_a_scan_with_no_status_match_and_no_active_job(isolated_store):
+    """The additive job check must not turn cancel into a way to force-terminate an already
+    finished scan — a genuinely 'discovered' run with no outstanding job stays uncancellable."""
+    s = isolated_store
+    _running_scan(s, "done", owner="a@x.io", jobs=0)
+    s.set_scan_status("done", "discovered")
+    assert s.cancel_scan("done", owner="a@x.io") is False
+
+
 def test_cancel_is_owner_scoped_and_only_for_running_scans(isolated_store):
     s = isolated_store
     _running_scan(s, "scanB", owner="a@x.io", jobs=1)

@@ -2393,7 +2393,22 @@ class Store:
         """Stop an in-flight fan-out scan: kill its outstanding jobs and close the run as
         'cancelled'. Owner-scoped like get_scan. Files already analysed keep their records —
         history stays honest about what ran before the stop. False when the scan doesn't
-        exist, belongs to someone else, or isn't running (nothing to cancel)."""
+        exist, belongs to someone else, or is neither 'running' nor has an outstanding job
+        (nothing to cancel).
+
+        Eligibility is `scan_runs.status == 'running'` OR an outstanding `jobs` row — the job
+        check is additive, not a replacement, so every caller/fixture that creates a scan at
+        status='running' with no jobs row keeps working exactly as before. It closes a real gap
+        found live 2026-08-27: a fan-out discover run's `scan_runs.status` can read 'discovered'
+        (the ADR 0020 terminal value for that run type) while its job is still genuinely
+        executing add_inventory's save phase, because that status is written once at listing
+        time, not gated on the save actually finishing. A scan stuck in exactly that gap matched
+        neither the old status='running' check here nor cancel_queued_job's status='queued'
+        check, so a job wedged mid-save had NO path to being cancelled short of the 2-hour
+        stale-guard reclaim (see acquire_discovery_guard) — it held active_discovery_guard the
+        whole time, rejecting every subsequent scan attempt for that source. The `jobs` table's
+        own status is the one place that distinguishes genuinely-still-running from
+        genuinely-done regardless of what scan_runs says."""
         return self._end_running_scan(sid, owner=owner, terminal_status="cancelled")
 
     def supersede_scan(self, sid: str, owner: str | None = None) -> bool:
@@ -2421,14 +2436,25 @@ class Store:
             row = self._db.fetchone(cur)
             if not row or (owner is not None and row.get("owner_email") != owner):
                 return False
-            if row.get("status") != "running":
+            # Eligibility is status=='running' OR an outstanding job — purely additive over the
+            # old status-only check, never narrower: a scan created directly at status='running'
+            # with no jobs row (every existing caller and test fixture) must keep working exactly
+            # as before. The job check is what closes the actual gap — see cancel_scan's docstring.
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS cnt FROM jobs WHERE scan_id=%s AND status IN ('queued','running')",
+                (sid,))
+            has_active_job = (self._db.fetchone(cur) or {}).get("cnt", 0) > 0
+            if row.get("status") != "running" and not has_active_job:
                 return False
             self._db.execute(cur,
                 "UPDATE jobs SET status='dead', updated_at=%s "
                 "WHERE scan_id=%s AND status IN ('queued','running')", (self._now(), sid))
+            # No status guard on this UPDATE: the jobs check above already established there was
+            # genuinely something to stop, and gating on scan_runs.status=='running' here would
+            # silently no-op the transition for the exact drifted-status case this fix exists for.
             self._db.execute(cur,
-                "UPDATE scan_runs SET status=%s, completed_at=%s "
-                "WHERE id=%s AND status='running'", (terminal_status, self._now(), sid))
+                "UPDATE scan_runs SET status=%s, completed_at=%s WHERE id=%s",
+                (terminal_status, self._now(), sid))
             # A cancelled/superseded ASSESS fan-out has already assessed some documents (their
             # file_records exist); stamp assessed_at so the run's PARTIAL results are reachable —
             # the results views gate on assessed_at, and without this a stopped run showed nothing
