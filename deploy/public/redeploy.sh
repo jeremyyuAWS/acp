@@ -75,10 +75,19 @@ elif ! command -v gh >/dev/null 2>&1; then
 elif ! gh auth status >/dev/null 2>&1; then
   echo "  ⚠ CI gate NOT CHECKED — gh is not authenticated"
 else
-  CI_CONC="$(gh run list --commit "$PIN" --workflow CI --limit 1 --json conclusion -q '.[0].conclusion' 2>/dev/null || true)"
+  # The workflow_run trigger fires the instant CI completes, but GitHub's run-list API can take
+  # several seconds to index the finished run. A single query that races the indexer returns an
+  # empty result and produces a false "no CI run found" that kills a perfectly valid deploy.
+  # Retry with backoff (5 × 15 s = up to 75 s) before giving up.
+  CI_CONC=""
+  for _ci_attempt in 1 2 3 4 5; do
+    CI_CONC="$(gh run list --commit "$PIN" --workflow CI --limit 1 --json conclusion -q '.[0].conclusion' 2>/dev/null || true)"
+    [ -n "$CI_CONC" ] && break
+    [ "$_ci_attempt" -lt 5 ] && { echo "  CI run not yet indexed (attempt $_ci_attempt/5) — retrying in 15s"; sleep 15; }
+  done
   case "$CI_CONC" in
     success) echo "  ✓ CI is green on ${PIN:0:7}" ;;
-    "")      die "no CI run found for ${PIN:0:7} — it may still be queued. Wait for it, or set ACP_SKIP_CI_GATE=1 if this pin is deliberately not on a branch CI builds." ;;
+    "")      die "no CI run found for ${PIN:0:7} after 5 attempts — it may not be on a branch CI builds. Set ACP_SKIP_CI_GATE=1 to deploy without the gate." ;;
     *)       die "CI on ${PIN:0:7} concluded '$CI_CONC', not success — refusing to deploy it." ;;
   esac
 fi
