@@ -2620,3 +2620,44 @@ real extracted content, degrading to the generic note, never a fabricated tree.
   not rebuilt. Remaining R-series item: **R15 undo-a-batch** (touches the apply flow; feasibility being scoped).
   Per the new working agreement (#583) CI was not polled — merges gated on a single delayed check per PR.
   **Sync marker deliberately NOT advanced** (same convention).
+- **2026-08-27 (Discover resilience — silent-zero protection, listing-phase visibility, completeness verification, UI)** —
+  Nine PRs across four phases, all to **Discover & Assess lifecycle rules (#4618)**, plus one Playwright suite to
+  **Test corpus and CI (#4605)** and one prod-deploy gate fix to **Continuous deployment (#4614)**.
+
+  **Root cause addressed:** A real prod scan returned `files_found: 0` at every polling tick, then jumped straight
+  to "lifecycle rules applied" the moment listing finished — no intermediate progress, and no way to tell whether
+  zero meant "still listing" or "truly empty." A screenshot from staging surfaced the pattern; investigation found
+  three compounding gaps: (1) `_listing_progress` set `files_found` but never set `phase`, so the frontend's live
+  path silently discarded every tick; (2) zero-file outcomes on a first scan had no retry or user signal; (3) the
+  discovery result card was a checklist-with-icons layout that mixed live-state and done-state into one surface,
+  making the "done" state hard to distinguish at a glance.
+
+  - **Phase 1 — silent-zero protection + completeness flag** (#856). `_scan_discover` detects a zero-listing
+    outcome on a first scan (no prior run for the source) and retries once before surfacing as an error; backend
+    stamps `completeness: 'full' | 'partial' | 'empty'` on the scan record and surfaces it at `GET /scans/{id}`.
+    Frontend `DiscoverRunProgress.jsx` reads the flag and shows a warning banner when `completeness !== 'full'`.
+    12 new backend tests; `test_scan_never_started_fix.py` covers the retry guard end-to-end.
+  - **Playwright E2E suite** (#857). `frontend/e2e/pipeline.spec.js` drives a real browser through the full
+    Discover → Assess pipeline against a 3-file `.e2e/corpus`, asserting the "Discovery complete" region appears
+    and `Inventoried 3 files` is visible. Vite bound to `127.0.0.1` (#859) so the CI readiness probe connects.
+  - **Phase 2 — `published_at`, `pickDefaultScan`, first-scan retry** (#858). `store.py` records `published_at`
+    (the moment `_check_completeness` writes the definitive file count) separately from `discovered_at`
+    (end-of-listing); frontend `pickDefaultScan` prefers the scan with `published_at` set when multiple runs
+    exist; zero-listing retry guard arms on `not _baseline_id` (first scan) rather than `if _first_scan` (which
+    was always false). 8 backend tests; `test_listing_phase_live_tick.py` covers the `_listing_progress`
+    callback setting `phase='discovering'` on every tick.
+  - **Phase 3 — `published_at` UI surface** (#862). `DiscoverRunProgress.jsx` shows "Enumeration verified
+    complete — {date}" when `published_at` is set, distinguishing a fully-verified inventory from a scan that
+    finished listing but whose completeness check is still running or errored.
+    Auth-measurement fix (#863): replaced an asserting auth path with a measuring one so a missing token is
+    diagnosed rather than thrown.
+  - **Phase 4 — flat `DiscoverCompleteSummary` card + zero-listing retry fix** (#864, #865). Replaced the
+    checklist-with-icons discovery-complete layout with a flat plain-text card (`DiscoverCompleteSummary.jsx`):
+    header + elapsed time, file/folder counts with exception breakdown, lifecycle/inventory lines, disclaimer,
+    and a "Continue to Assessment →" CTA (disabled while `pendingActions > 0` or `needsAck`). The zero-listing
+    retry guard bug (`if _first_scan:` → `if not _baseline_id:`) shipped in #865 alongside an E2E text fix
+    (restored "Inventoried N files" to match the Playwright assertion). 17 component unit tests.
+  - **Deploy gate race fix** (#866, in CI). `redeploy.sh`'s CI gate retries `gh run list` up to 5 × 15 s
+    (75 s budget) before failing — prod had been failing on every merge since #862 because the single
+    `gh run list` query raced the GitHub API's indexing lag. **Sync marker deliberately NOT advanced** (same
+    convention: other sessions' undocumented work still in the delta).
