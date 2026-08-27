@@ -2946,6 +2946,49 @@ class Store:
             row = self._db.fetchone(cur)
             return row["id"] if row else None
 
+    def last_nonempty_run_for_source(self, scan_id: str, owner: str | None = None) -> str | None:
+        """The most recent prior run of the SAME SOURCE that actually inventoried something.
+
+        NOT `previous_run_for_source`, and the difference is what stops the suspicious-zero guard
+        (handlers._scan_discover) from disarming itself on the retry it invites.
+
+        That guard asks "did this source have files last time?" to decide whether a zero is a
+        transient API failure or a genuinely empty estate. Asked of the IMMEDIATELY prior run, the
+        answer degrades after one failure:
+
+            scan A → 100 files
+            scan B → 0, guard fires, B is marked failed and keeps 0 inventory rows
+            scan C → 0, baseline is now B, count_inventory(B) == 0, guard stays silent,
+                     and C publishes the zero over A's real inventory
+
+        `previous_run_for_source` excludes only status='superseded', so a failed zero-file run is
+        a perfectly good diff baseline (it IS the immediately prior run — correct for a diff) and
+        a useless guard baseline. The guard needs the last run that PROVED the estate was
+        non-empty, however many failures sit between, so skipping straight to it makes the check
+        idempotent across retries: attempt 2 and attempt 20 compare against the same 100.
+
+        EXISTS over a JOIN/COUNT: this only asks whether any inventory row exists, and the caller
+        counts separately for its message. On a source with a long history the index probe stops
+        at the first hit rather than aggregating every prior run's rows.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT source, COALESCE(completed_at, started_at) AS at FROM scan_runs WHERE id=%s",
+                (scan_id,))
+            me = self._db.fetchone(cur)
+            if not me or not me.get("at"):
+                return None
+            where, params = ("r.source=%s AND COALESCE(r.completed_at, r.started_at) < %s "
+                             "AND r.status != 'superseded'", (me["source"], me["at"]))
+            if owner:
+                where += " AND r.owner_email=%s"; params = params + (owner,)
+            self._db.execute(cur,
+                "SELECT r.id FROM scan_runs r WHERE " + where
+                + " AND EXISTS (SELECT 1 FROM scan_inventory i WHERE i.scan_id = r.id)"
+                + " ORDER BY COALESCE(r.completed_at, r.started_at) DESC LIMIT 1", params)
+            row = self._db.fetchone(cur)
+            return row["id"] if row else None
+
     def get_inventory_diff(self, cur_id: str, prev_id: str, owner: str | None = None) -> dict | None:
         """Diff two runs' DISCOVERY inventories → what the estate gained, lost and changed.
 

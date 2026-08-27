@@ -1404,12 +1404,27 @@ def _scan_discover(payload: dict, job: dict) -> None:
         if not items and not _truncated:
             _first_scan = True  # updated below once we know
             try:
+                # TWO QUESTIONS, TWO LOOKUPS. They read as one — "what came before?" — and a
+                # single answer cannot serve both without breaking one of them.
+                #
+                # "Has this source EVER been scanned?" gates the first-scan retry below, and any
+                # prior run answers it, empty or not. A source that is genuinely empty has prior
+                # runs with no inventory; asking the non-empty question here would call it a first
+                # scan forever and re-list it after a 5s sleep on every single scan.
                 _prev_scan_id = core.store.previous_run_for_source(scan_id, owner=user)
                 _first_scan = _prev_scan_id is None
-                if _prev_scan_id:
-                    _prev_count = core.store.count_inventory(_prev_scan_id)
+                # "Did this source ever PROVE it had files?" is the guard baseline, and only a run
+                # with inventory answers it. previous_run_for_source excludes just 'superseded', so
+                # once this guard fails a scan, that failed run — 0 inventory rows — becomes the
+                # previous one: the retry the guard explicitly invites (it releases the slot below)
+                # then compared against 0, saw nothing suspicious, and published the zero the first
+                # attempt had refused. Skipping to the last run that proved files exist makes the
+                # check idempotent — attempt 2 and attempt 20 compare against the same inventory.
+                _baseline_id = core.store.last_nonempty_run_for_source(scan_id, owner=user)
+                if _baseline_id:
+                    _prev_count = core.store.count_inventory(_baseline_id)
                     if _prev_count > 0:
-                        _msg = (f"listing returned 0 files but previous scan {_prev_scan_id} "
+                        _msg = (f"listing returned 0 files but previous scan {_baseline_id} "
                                 f"found {_prev_count}; refusing to publish suspicious zero")
                         logger.error("_scan_discover: suspicious zero for %s: %s", scan_id, _msg)
                         core.store.set_scan_status(scan_id, "failed")
