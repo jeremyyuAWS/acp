@@ -1,9 +1,10 @@
 /**
  * DiscoverCompleteSummary — the card shown after discovery finishes.
  *
- * Flat-text layout: header with elapsed time, file count block, lifecycle/inventory block,
- * disclaimer, and a prominent "Continue to Assessment →" CTA. Tests verify the counts appear
- * correctly and the CTA is disabled when pendingActions or needsAck is set.
+ * Structured-row layout: header with green check + elapsed time, total files inventoried,
+ * "Assessment eligibility" section with parent-child rows and percentages, "Lifecycle rules"
+ * section, a tinted safety disclaimer, and a specific CTA ("Assess N documents →").
+ * Tests verify counts, section labels, percentages, sub-breakdown, and CTA gating.
  */
 import { describe, it, expect, vi } from 'vitest'
 import { createElement } from 'react'
@@ -86,8 +87,15 @@ describe('DiscoverCompleteSummary renders completion state', () => {
     expect(html).toContain('No lifecycle rules enabled')
   })
 
-  it('shows "Continue to Assessment" CTA', () => {
+  it('shows CTA with assessable document count', () => {
     const html = render(BASE)
+    expect(html).toContain('Assess')
+    expect(html).toContain('170')
+    expect(html).toContain('documents')
+  })
+
+  it('CTA falls back to "Continue to Assessment" when assessableCount is 0', () => {
+    const html = render({ ...BASE, assessableCount: 0 })
     expect(html).toContain('Continue to Assessment')
   })
 
@@ -234,5 +242,54 @@ describe('enumeration verified row', () => {
   it('omits "Enumeration verified complete" when publishedAt is null', () => {
     const html = render({ ...BASE, publishedAt: null })
     expect(html).not.toContain('Enumeration verified complete')
+  })
+})
+
+describe('structured-row layout', () => {
+  it('shows "Assessment eligibility" section header', () => {
+    const html = render(BASE)
+    expect(html).toContain('Assessment eligibility')
+  })
+
+  it('shows "Lifecycle rules" section header', () => {
+    const html = render(BASE)
+    expect(html).toContain('Lifecycle rules')
+  })
+
+  it('shows percentages for assessable and not-assessable rows', () => {
+    // 170 assessable out of 200 = 85%; 30 not assessable = 15%
+    const html = render(BASE)
+    expect(html).toContain('85%')
+    expect(html).toContain('15%')
+  })
+
+  it('shows "Not currently assessable" parent row when there are non-assessable files', () => {
+    const html = render(BASE)
+    expect(html).toContain('Not currently assessable')
+  })
+
+  it('omits "Not currently assessable" row when all files are assessable', () => {
+    const html = render({ ...BASE, discoveredCount: 170, assessableCount: 170,
+                          metadataOnlyCount: 0, unsupportedCount: 0, lockedCount: 0 })
+    expect(html).not.toContain('Not currently assessable')
+  })
+
+  it('uses "files inventoried" in the total line', () => {
+    const html = render(BASE)
+    expect(html).toContain('files inventoried')
+  })
+
+  it('shows safety disclaimer with info icon', () => {
+    const html = render(BASE)
+    expect(html).toContain('No documents were assessed or changed')
+    expect(html).toContain('ⓘ')
+  })
+
+  it('sub-breakdown items are indented under not-assessable parent', () => {
+    const html = render(BASE)
+    // Both "Not currently assessable" and "unsupported" must appear in the same render.
+    expect(html).toContain('Not currently assessable')
+    expect(html).toContain('unsupported')
+    expect(html).toContain('metadata-only')
   })
 })
