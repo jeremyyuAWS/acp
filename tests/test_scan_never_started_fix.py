@@ -40,6 +40,31 @@ _remediate_stub.remediate_html = MagicMock(return_value=b"<html/>")
 sys.modules.setdefault("remediate", _remediate_stub)
 
 
+@pytest.fixture(autouse=True)
+def _no_first_scan_retry(isolated_store, monkeypatch):
+    """Keep the first-scan retry out of a file that is not about the first-scan retry.
+
+    `_scan_discover` retries a listing once, after `time.sleep(5)`, when it returns 0 files for
+    a source that has never been scanned. Every store here is fresh, so every empty listing in
+    this file qualifies — and none of these tests is about that behaviour: they are about
+    init_scan_run ordering and token forwarding.
+
+    Left alone it costs more than time. `test_scan_row_exists_before_list_returns` runs
+    `_scan_discover` on a thread and joins with a 3s timeout, so a 5s sleep means the join gives
+    up while the thread is still inside `patch.dict(sys.modules, {"scanner": ...})` — a
+    PROCESS-GLOBAL patch. `sys.modules["scanner"]` then stays a MagicMock for whatever runs next,
+    and the damage lands somewhere else entirely: 13 tests in test_sweep_failure_visible.py and
+    test_smb_source.py failed with `assert <MagicMock name='mock._flag_on()'> is False`, having
+    imported a scanner that another file had replaced and not put back.
+
+    The threaded tests below now hold that patch on the main thread instead, so the leak cannot
+    recur even if something in here gets slow again. This fixture removes the sleep that made it
+    happen, and ~25s of dead wall-clock across the file with it.
+    """
+    monkeypatch.setattr(isolated_store, "previous_run_for_source",
+                        lambda *a, **kw: "prior-scan-exists", raising=False)
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _wait_until(predicate, timeout=3.0, interval=0.02):
@@ -129,27 +154,32 @@ def test_scan_row_exists_before_list_returns(isolated_store, monkeypatch):
 
     payload = {"scan_id": "s_bug1", "source": "local", "user": "test@x.com"}
 
-    def _run():
-        with patch.dict(sys.modules, {"scanner": fake_scanner, "rubric": fake_rubric_mod}):
-            handlers._scan_discover(payload, {"scan_id": "s_bug1"})
+    # patch.dict on the MAIN thread, spanning start→join, not inside the worker. sys.modules is
+    # process-global: with the patch held by a daemon thread, a join that times out leaves
+    # "scanner" mocked for every test that runs next, and the failure surfaces in an unrelated
+    # file (see _no_first_scan_retry). Held here, the context manager exits on the way out of
+    # this test whatever the thread is doing.
+    with patch.dict(sys.modules, {"scanner": fake_scanner, "rubric": fake_rubric_mod}):
+        t = threading.Thread(target=handlers._scan_discover,
+                             args=(payload, {"scan_id": "s_bug1"}), daemon=True)
+        t.start()
 
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
+        assert _wait_until(listing_started.is_set, timeout=3), "_list never started"
 
-    assert _wait_until(listing_started.is_set, timeout=3), "_list never started"
+        # While _list is still running, the scan_runs row must already exist.
+        row = isolated_store.get_scan(payload["scan_id"])
+        assert row is not None, (
+            "scan_runs row not found while _list() was still running — "
+            "a slow listing makes GET /scans/{id} return 404 and the frontend "
+            "throws 'this scan never started'"
+        )
+        run = row.get("run", row)  # get_scan returns {"run": {...}, "files": [...]}
+        assert run.get("completed_at") is None
 
-    # While _list is still running, the scan_runs row must already exist.
-    row = isolated_store.get_scan(payload["scan_id"])
-    assert row is not None, (
-        "scan_runs row not found while _list() was still running — "
-        "a slow listing makes GET /scans/{id} return 404 and the frontend "
-        "throws 'this scan never started'"
-    )
-    run = row.get("run", row)  # get_scan returns {"run": {...}, "files": [...]}
-    assert run.get("completed_at") is None
-
-    listing_may_finish.set()
-    t.join(timeout=3)
+        listing_may_finish.set()
+        t.join(timeout=5)
+        # Fail here rather than let a still-running thread reach into the next test.
+        assert not t.is_alive(), "_scan_discover thread did not finish — it would outlive the patch"
 
 
 def test_scan_row_has_zero_files_before_list_returns(isolated_store, monkeypatch):
@@ -182,22 +212,22 @@ def test_scan_row_has_zero_files_before_list_returns(isolated_store, monkeypatch
 
     payload = {"scan_id": "s_bug1b", "source": "local", "user": "test@x.com"}
 
-    def _run():
-        with patch.dict(sys.modules, {"scanner": fake_scanner, "rubric": fake_rubric_mod}):
-            handlers._scan_discover(payload, {"scan_id": "s_bug1b"})
+    # Main-thread patch spanning start→join, for the reason given in the test above.
+    with patch.dict(sys.modules, {"scanner": fake_scanner, "rubric": fake_rubric_mod}):
+        t = threading.Thread(target=handlers._scan_discover,
+                             args=(payload, {"scan_id": "s_bug1b"}), daemon=True)
+        t.start()
+        assert _wait_until(listing_started.is_set, timeout=3)
 
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    assert _wait_until(listing_started.is_set, timeout=3)
+        row = isolated_store.get_scan("s_bug1b")
+        assert row is not None
+        run = row.get("run", row)  # get_scan returns {"run": {...}, "files": [...]}
+        # files=0 while listing is in progress
+        assert run.get("files") == 0, f"expected files=0 before listing done, got {run.get('files')}"
 
-    row = isolated_store.get_scan("s_bug1b")
-    assert row is not None
-    run = row.get("run", row)  # get_scan returns {"run": {...}, "files": [...]}
-    # files=0 while listing is in progress
-    assert run.get("files") == 0, f"expected files=0 before listing done, got {run.get('files')}"
-
-    listing_may_finish.set()
-    t.join(timeout=3)
+        listing_may_finish.set()
+        t.join(timeout=5)
+        assert not t.is_alive(), "_scan_discover thread did not finish — it would outlive the patch"
 
     # After listing completes the count is updated to the real number.
     final = isolated_store.get_scan("s_bug1b")
