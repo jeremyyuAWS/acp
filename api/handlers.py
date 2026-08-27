@@ -1213,6 +1213,83 @@ def _scan_folder(payload: dict, job: dict) -> None:
             scan_id=scan_id)
 
 
+def _roots_reachable(source: str, svc, roots, sp_token: str | None, corpus) -> tuple[bool, str | None]:
+    """Can this listing's roots actually be read? One metadata call each — never a listing.
+
+    Exists because an empty result is not the same fact as a reachable-and-empty source, and the
+    two are indistinguishable from the listing alone. A Drive folder the token cannot see, a
+    SharePoint item in a library the account lost membership of, a corpus path that is not
+    mounted: each returns an empty page with a 200 and no exception. That is the silent zero in
+    its purest form — the listing succeeds, finds nothing, and nothing anywhere says the source
+    was never actually read.
+
+    Mirrors routes/drive.describe_drive_readiness and routes/sharepoint.describe_sharepoint_readiness
+    rather than calling them: those take a FastAPI Request (for the header-derived credential) and
+    this runs on a worker, which has the service object and raw token instead. Same probes, same
+    bounded cost — `files().get` / the driveItem metadata endpoint, never `.list()` or /children.
+
+    Returns (ok, reason). Two different failures, deliberately not collapsed:
+
+    * a PER-ROOT call that fails (403, 404, a dead service object) means that root could not be
+      confirmed readable. Not-confirmed is reason enough to refuse a zero — the question here is
+      whether the empty result is evidence, and an unconfirmed root makes it not evidence.
+    * the probe's own scaffolding failing (a bad argument, an import error — a bug in here) is
+      inconclusive about the source, and falls open. A defect in this function must not become a
+      scan outage for estates that were fine.
+    """
+    try:
+        if source == "local":
+            from pathlib import Path as _P
+            p = _P(corpus) if corpus else None
+            if p is not None and not p.is_dir():
+                return False, f"local corpus path is not a readable directory: {p}"
+            return True, None
+        if source == "sharepoint":
+            if not sp_token:
+                return False, "no SharePoint token — the listing ran unauthenticated"
+            from scanner import _sp_item_exists, _sp_default_drive
+            checked = list(roots) if roots else [None]
+            bad = []
+            for r in checked:
+                if r:
+                    drive_id, _, item_id = r.partition("/") if "/" in r else ("", "", r)
+                    if not drive_id:
+                        drive_id = _sp_default_drive(sp_token) or ""
+                else:
+                    drive_id, item_id = (_sp_default_drive(sp_token) or ""), "root"
+                if not drive_id:
+                    bad.append("no default drive")
+                    continue
+                res = _sp_item_exists(sp_token, drive_id, item_id)
+                if not res.get("exists"):
+                    bad.append(res.get("error") or str(r))
+            if bad:
+                return False, f"{len(bad)} of {len(checked)} root(s) unreachable: {bad[0]}"
+            return True, None
+        if svc is None:
+            return True, None
+        checked = list(roots) if roots else ["root"]
+        bad = []
+        for r in checked:
+            try:
+                info = svc.files().get(fileId=r, fields="id,trashed").execute()
+                # `is True`, not truthiness: Drive returns a JSON boolean here, so anything else
+                # is not a trashed flag and must not be read as one. Truthiness quietly condemned
+                # every root whose metadata came back as something unexpected — refusing a scan
+                # for a field it never actually saw.
+                if info.get("trashed") is True:
+                    bad.append(f"{r} is trashed")
+            except Exception as e:
+                bad.append(f"{r}: {e.__class__.__name__}")
+        if bad:
+            return False, f"{len(bad)} of {len(checked)} root(s) unreachable: {bad[0]}"
+        return True, None
+    except Exception:
+        logger.warning("_roots_reachable: probe failed for source=%s — reporting reachable",
+                       source, exc_info=True)
+        return True, None
+
+
 @handler("scan_discover")
 def _scan_discover(payload: dict, job: dict) -> None:
     """List the source (paginated, no cap), create the scan_runs row, and enqueue one
@@ -1285,6 +1362,17 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 core.store.set_scan_status(scan_id, "failed")
                 core.store.log_decision("system", "scan.discover_conflict",
                                         scan_id=scan_id, detail=_conflict_msg)
+                # Tell the JOB, not just the scan row. The queued poll settles on
+                # scan_runs.status and does see the 'failed' above — but the SSE progress stream
+                # and GET /scans/jobs/{id} read the job record, and returning here without
+                # touching it left the last write standing: files_found=0, error=null, and a
+                # phase that reads as a finished discovery. A rejection is then indistinguishable
+                # from a source that really is empty, on the surface built to narrate the run.
+                # Shape matches core.get_job's own stale-job terminal (phase/done/error).
+                _cjid = job.get("id")
+                if _cjid:
+                    core.update_job(_cjid, {"phase": "error", "done": True,
+                                            "error": _conflict_msg})
                 return
 
     if _checkpoint_resume:
@@ -1389,11 +1477,19 @@ def _scan_discover(payload: dict, job: dict) -> None:
         _truncated = bool(scope.get("truncated", False))
         scope["enumeration"] = {
             "complete": not _truncated,
-            "auth_ok": True,          # _list() returned without raising — auth was valid
+            # Measured on the zero path below, not asserted here. This used to read
+            # `"auth_ok": True,  # _list() returned without raising — auth was valid`, which is
+            # the one inference the silent zero defeats: a folder the token cannot see returns an
+            # empty page with a 200 and raises nothing, so the flag recorded auth_ok=True for
+            # exactly the case it exists to catch. None means "not probed" — a non-empty listing
+            # proved it read the source by returning files, so there is nothing to establish.
+            "auth_ok": None,
             "files_found": len(items),
             "truncated": _truncated,
             "folders_visited": scope.get("folders"),  # None for flat Drive path
         }
+        if items:
+            scope["enumeration"]["auth_ok"] = True
 
         # Suspicious-zero protection (#8): if _list() succeeded but returned 0 files, and the
         # previous scan for this source found files, the zero is likely a transient API failure
@@ -1474,6 +1570,44 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 except Exception:
                     logger.warning("_scan_discover: first-scan retry failed for %s",
                                    scan_id, exc_info=True)
+
+            # Still nothing. Before recording an empty estate as fact, establish that the source
+            # was actually READ — the listing returning cleanly does not establish it, which is
+            # what makes this class of zero silent. Runs last, after the baseline check and after
+            # the retry above has had its chance, so a transient blip is not reported as a
+            # permissions problem; and only on the zero path, so a normal scan pays nothing.
+            #
+            # This is also the only signal that speaks to a FIRST scan of a source. The retry
+            # above accepts a second zero because "there is no baseline to refuse against" — true
+            # of history, but the root is checkable right now, and an unreachable root means the
+            # zero is not evidence of an empty estate no matter how new the source is.
+            if not items:
+                _reach_ok, _reach_why = _roots_reachable(
+                    source, svc,
+                    (folders or ([folder] if folder else None)),
+                    sp_tok,
+                    scope.get("path"),   # scanner sets this for source=local (the corpus dir)
+                )
+                scope.setdefault("enumeration", {})["auth_ok"] = _reach_ok
+                if not _reach_ok:
+                    _msg = (f"listing returned 0 files and the source could not be read "
+                            f"({_reach_why}); refusing to publish an unverified empty estate")
+                    logger.error("_scan_discover: unreachable source for %s: %s", scan_id, _msg)
+                    core.store.set_scan_status(scan_id, "failed")
+                    core.store.log_decision("system", "scan.unreachable_zero",
+                                            scan_id=scan_id, detail=_msg)
+                    core.store.merge_scan_scope(scan_id, scope)
+                    try:
+                        core.store.release_discovery_guard(scan_id)
+                    except Exception:
+                        logger.warning("_scan_discover: could not release guard on unreachable "
+                                       "zero for %s", scan_id, exc_info=True)
+                    # Deliberately NOT marking the job done/error here, unlike the conflict path
+                    # above. This raises, which hands the job to the worker's retry-and-backoff
+                    # machinery; stamping done=True first would tell the SSE stream the run had
+                    # ended while attempts were still pending. The conflict path returns cleanly
+                    # and owns its job state precisely because nothing else will touch it.
+                    raise RuntimeError(_msg)
 
         core.store.set_scan_files(scan_id, len(items))
         core.store.merge_scan_scope(scan_id, scope)
@@ -1608,7 +1742,27 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # have raised above and never reached this line. Published scans are preferred by
         # scan selection so the frontend never presents an incomplete estate as the current
         # truth. The stamp is set-once; a re-delivery of the same job is a no-op.
-        if not _checkpoint_resume and scope.get("enumeration", {}).get("complete"):
+        #
+        # ON A CHECKPOINT RESUME, READ THE FLAG BACK RATHER THAN SKIPPING THE STAMP. The resume
+        # path skips the listing, so the local `scope` never gets an `enumeration` block and this
+        # gate could only ever be false — meaning a scan that crashed once, resumed, and finished
+        # perfectly stayed unpublished forever. That made a missing published_at ambiguous
+        # ("incomplete" OR "merely retried"), and an ambiguous flag cannot be read as evidence:
+        # anything falling back to the last published snapshot would skip good scans, so nothing
+        # could safely consume it. Attempt 1 persisted the enumeration via merge_scan_scope before
+        # it died — a resume only happens when inventory rows exist, which is written after that —
+        # so the answer is already in the store. Reading it makes published_at mean exactly one
+        # thing: enumeration was verifiably complete, however many attempts it took.
+        _enum = scope.get("enumeration") or {}
+        if _checkpoint_resume and not _enum:
+            try:
+                _enum = (((core.store.get_scan(scan_id, owner=user) or {})
+                          .get("run") or {}).get("scope") or {}).get("enumeration") or {}
+            except Exception:
+                logger.warning("_scan_discover: could not read persisted enumeration for %s",
+                               scan_id, exc_info=True)
+                _enum = {}
+        if _enum.get("complete"):
             try:
                 core.store.mark_published(scan_id)
             except Exception:
