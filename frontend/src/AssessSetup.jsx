@@ -402,17 +402,27 @@ export default function AssessSetup({ onRun, onSaved, busy = false, discoveredAt
                   </div>
 
                   {/* THE FRACTION, IN WORDS, and the run waits for it. The operator has to have
-                      seen the ratio — that is the entire job of this control. */}
+                      seen the ratio — that is the entire job of this control. When unchecked the
+                      row extends to the box edges and the fraction renders in ink (not muted) so
+                      the numbers that need reading are the most visible thing on the screen. */}
                   <label className="assesssetup-ack"
-                         style={{ display: 'flex', gap: 9, alignItems: 'flex-start', marginTop: 11,
-                                  paddingTop: 11, borderTop: '1px solid var(--line)', fontSize: 12.5,
-                                  lineHeight: 1.5, cursor: 'pointer' }}>
+                         style={{ display: 'flex', gap: 9, alignItems: 'flex-start', fontSize: 12.5,
+                                  lineHeight: 1.5, cursor: 'pointer',
+                                  ...(!acked
+                                    ? { margin: '8px -14px -12px', padding: '11px 14px 12px',
+                                        background: 'var(--ack-warn-bg, #fffbf4)',
+                                        borderTop: '1px solid var(--ack-warn-border, #fcd34d)',
+                                        borderRadius: '0 0 10px 10px' }
+                                    : { marginTop: 11, paddingTop: 11,
+                                        borderTop: '1px solid var(--line)' }) }}>
                     <input type="checkbox" checked={acked} style={{ marginTop: 2 }}
                            onChange={(e) => setAcked(e.target.checked)}
                            aria-label={`I have reviewed what is excluded. Assessing ${documents} of ${discovered} discovered files.`} />
                     <span>I have reviewed what is excluded.{' '}
-                      <span className="muted">Assessing {n(documents)} of {n(discovered)} discovered
-                        {' '}{plural(discovered, 'file', 'files')}.</span></span>
+                      <span {...(acked ? { className: 'muted' } : {})}>
+                        Assessing {n(documents)} of {n(discovered)} discovered
+                        {' '}{plural(discovered, 'file', 'files')}.
+                      </span></span>
                   </label>
                 </div>
               )}
@@ -496,8 +506,8 @@ export default function AssessSetup({ onRun, onSaved, busy = false, discoveredAt
             </span>
           )}
           {needsAck && !acked && (
-            <span className="muted" style={{ fontSize: 12.5 }} role="status">
-              Confirm what is excluded before starting.
+            <span style={{ fontSize: 12.5, color: 'var(--ink)' }} role="status">
+              Check the box above to continue.
             </span>
           )}
         </div>
