@@ -300,6 +300,9 @@ export default function App() {
   const hydratingRef = useRef(false)                    // suppress the save effect during hydration
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [scanList, setScanList] = useState([])
+  // true only when the user explicitly picked an older scan from the time-travel picker —
+  // distinguishes "user went back in time" from "a new scan arrived while they were reading".
+  const [explicitTimeTravel, setExplicitTimeTravel] = useState(false)
   const [delta, setDelta] = useState(null)
   const [deltaKey, setDeltaKey] = useState(0)
   const [progress, setProgress] = useState(null)
@@ -516,6 +519,20 @@ export default function App() {
   // file_records changed — see scanRefetch.js for which events and why.
   useScanRefetch(scan?.run?.id, setScan)
 
+  // Background scan-list refresh so a scan that finishes in another tab (or via a scheduled
+  // run) surfaces here without a page reload. Only runs while idle — no scan in flight from
+  // this tab — and at a slow interval to avoid burning API quota across concurrent sessions.
+  // When the list updates, isTimeTravel reacts automatically: if the user was viewing the
+  // "latest" scan and a newer one appeared, the banner offers a one-click switch; if they
+  // explicitly time-traveled, the existing time-travel banner is already showing.
+  useEffect(() => {
+    if (!me || busy) return
+    const id = setInterval(() => {
+      listScans().then(setScanList).catch(() => {})
+    }, 60_000)
+    return () => clearInterval(id)
+  }, [me, busy])
+
   // Publish writes back per file; refetching once per click would fire dozens of
   // times on "Publish all", so debounce — one getScan after the burst settles
   // makes published_at the durable source of the checkmarks (they survive tab
@@ -659,7 +676,7 @@ export default function App() {
     // Reset ALL downstream state so the new session starts blank — including the pieces the
     // old reset missed (triage, the assess-completion phase, the optimistic-assess flag, and
     // the localStorage-backed published/ontology), so no tab shows legacy data on first view.
-    setPersona(p); setScan(null); setScanList([]); setLoaded(false)
+    setPersona(p); setScan(null); setScanList([]); setExplicitTimeTravel(false); setLoaded(false)
     resetScanScopedState()
     // Sign-in additionally resets what a scan change deliberately leaves alone: a new session
     // has no assessment in flight to report a phase for.
@@ -788,6 +805,10 @@ export default function App() {
 
   const switchScan = async (id) => {
     if (id === scan?.run?.id) return
+    // "Going to the latest" clears the explicit flag; picking any older scan sets it.
+    // scanList[0] is the newest completed scan — if the list isn't loaded yet, treat
+    // every switch as forward (non-explicit) so the banner stays quiet on init.
+    setExplicitTimeTravel(scanList.length > 0 && id !== scanList[0].id)
     setScanLoading(true)
     try {
       setScan(await getScan(id))
@@ -884,7 +905,7 @@ export default function App() {
     setBusy(true); setErr(null); setProgress({ phase: 'connecting' })
     try {
       const fresh = await pollScanJob(job_id)
-      setScan(fresh)
+      setScan(fresh); setExplicitTimeTravel(false)
       // A fresh, successfully-reconnected scan supersedes any earlier "scan not available"
       // banner — found live 2026-08-21: a stale banner from an EARLIER failed reconnect (a
       // sessionStorage active_job_id surviving a reload past the scan it pointed at) kept
@@ -1080,7 +1101,7 @@ export default function App() {
         const { job_id } = await startScan(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded)
         fresh = await pollScanJob(job_id)
       }
-      setScan(fresh)
+      setScan(fresh); setExplicitTimeTravel(false)
       // See reconnectJob's identical line: a fresh successful scan supersedes any stale
       // "scan not available" banner left over from an earlier failed reconnect attempt.
       setScanUnavailable(null)
@@ -1183,7 +1204,7 @@ export default function App() {
       // exactly how the three before it drifted apart.
       // See reconnectJob's identical line: a fresh successful scan supersedes any stale
       // "scan not available" banner left over from an earlier failed reconnect attempt.
-      if (fresh) { setScan(fresh); setScanUnavailable(null); resetScanScopedState(); setScanList(await listScans()); setView('overview') }
+      if (fresh) { setScan(fresh); setExplicitTimeTravel(false); setScanUnavailable(null); resetScanScopedState(); setScanList(await listScans()); setView('overview') }
     } catch { /* best-effort reconnect */ }
     finally { streamHandle.close(); setBusy(false); setProgress(null); setLiveScanId(null) }
   }
@@ -1499,11 +1520,17 @@ export default function App() {
 
       {isTimeTravel && (
         <div className="ttbanner" role="status">
-          {/* fmtStamp returns null for a missing stamp; the guard on isTimeTravel means that
-              can no longer happen here, but the fallback stays so a null can never again
-              render as a bold empty span followed by a bare period. */}
-          <span style={{ fontSize: 13.5 }}>🕐 <b>Time-travel replay</b> — viewing the scan from <b>{fmtStamp(run.completed_at) ?? 'an earlier scan'}</b>{run.avg_score != null ? ` · ${run.avg_score}/100` : ''}. Every tab, the dashboard and your saved decisions reflect this past scan.</span>
-          <button className="ttexit" onClick={() => switchScan(scanList[0].id)}>↩ Back to latest</button>
+          {explicitTimeTravel ? (
+            <>
+              {/* fmtStamp returns null for a missing stamp; the guard on isTimeTravel means that
+                  can no longer happen here, but the fallback stays so a null can never again
+                  render as a bold empty span followed by a bare period. */}
+              <span style={{ fontSize: 13.5 }}>🕐 <b>Time-travel replay</b> — viewing the scan from <b>{fmtStamp(run.completed_at) ?? 'an earlier scan'}</b>{run.avg_score != null ? ` · ${run.avg_score}/100` : ''}. Every tab, the dashboard and your saved decisions reflect this past scan.</span>
+            </>
+          ) : (
+            <span style={{ fontSize: 13.5 }}>✨ <b>New scan available</b> from <b>{fmtStamp(scanList[0]?.completed_at) ?? 'just now'}</b> — a more recent scan finished while you were reviewing this one.</span>
+          )}
+          <button className="ttexit" onClick={() => switchScan(scanList[0].id)}>↩ Switch to latest</button>
         </div>
       )}
 

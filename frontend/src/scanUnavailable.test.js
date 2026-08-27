@@ -183,14 +183,15 @@ describe('a fresh successful scan clears a stale banner from an earlier one', ()
   const app = code('App.jsx')
 
   it('doScan and reconnectJob each clear it right after setting the fresh scan', () => {
-    // `code()` strips comments, so both call sites reduce to the same two-line shape —
-    // asserting the pattern appears twice (once per site) rather than trying to tell them
-    // apart by surrounding prose that will not be there once comments are stripped.
-    const matches = app.match(/setScan\(fresh\)\s*\n\s*setScanUnavailable\(null\)/g) || []
+    // `code()` strips comments, so both call sites reduce to the same shape —
+    // setScan(fresh) [optionally + setExplicitTimeTravel(false) on the same line]
+    // then setScanUnavailable(null) on the next line.
+    const matches = app.match(/setScan\(fresh\).*\n\s*setScanUnavailable\(null\)/g) || []
     expect(matches.length).toBe(2)
   })
 
   it('reconnectScan clears it in the same statement it sets the fresh scan', () => {
-    expect(app).toMatch(/setScan\(fresh\); setScanUnavailable\(null\); resetScanScopedState\(\)/)
+    // The reconnectScan one-liner now includes setExplicitTimeTravel(false) between the two.
+    expect(app).toMatch(/setScan\(fresh\)[^}]*setScanUnavailable\(null\)[^}]*resetScanScopedState\(\)/)
   })
 })
