@@ -1273,7 +1273,11 @@ def _roots_reachable(source: str, svc, roots, sp_token: str | None, corpus) -> t
         for r in checked:
             try:
                 info = svc.files().get(fileId=r, fields="id,trashed").execute()
-                if info.get("trashed"):
+                # `is True`, not truthiness: Drive returns a JSON boolean here, so anything else
+                # is not a trashed flag and must not be read as one. Truthiness quietly condemned
+                # every root whose metadata came back as something unexpected — refusing a scan
+                # for a field it never actually saw.
+                if info.get("trashed") is True:
                     bad.append(f"{r} is trashed")
             except Exception as e:
                 bad.append(f"{r}: {e.__class__.__name__}")

@@ -69,6 +69,15 @@ class TestRootsReachable:
         assert ok is False
         assert "trashed" in why
 
+    def test_only_a_real_true_counts_as_trashed(self):
+        # `trashed` is a JSON boolean from Drive. Reading it by truthiness condemned every root
+        # whose metadata came back as anything else — a scan refused over a field never actually
+        # seen. Caught by three token-forwarding tests whose fake service returns a MagicMock.
+        svc = MagicMock()
+        svc.files.return_value.get.return_value.execute.return_value = {"id": "f", "trashed": "no"}
+        ok, why = self._probe(source="drive", svc=svc, roots=["f"], sp_token=None, corpus=None)
+        assert (ok, why) == (True, None)
+
     def test_sharepoint_without_a_token_is_unreachable(self):
         ok, why = self._probe(source="sharepoint", svc=None, roots=None, sp_token=None, corpus=None)
         assert ok is False
