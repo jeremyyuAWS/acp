@@ -64,10 +64,10 @@ describe('one reset, used by every path that changes the active scan', () => {
   it('a new scan resets, which is the case that never did', () => {
     const doScan = code.match(/const doScan = async[\s\S]*?\n  \}\n/)
     expect(doScan).toBeTruthy()
-    // setScanUnavailable(null) landed between these two lines (a stale-banner fix, found live
-    // 2026-08-21: a fresh successful scan never cleared an earlier failed reconnect's leftover
-    // "scan not available" banner) — still immediately followed by the reset this test pins.
-    expect(doScan[0]).toMatch(/setScan\(fresh\)\s*\n\s*setScanUnavailable\(null\)\s*\n\s*resetScanScopedState\(\)/)
+    // setScanUnavailable(null) follows on the next line after setScan(fresh) (optionally with
+    // setExplicitTimeTravel(false) on the same line — a scan completing from this tab is never
+    // a time-travel replay), then resetScanScopedState() on the line after that.
+    expect(doScan[0]).toMatch(/setScan\(fresh\).*\n\s*setScanUnavailable\(null\)\s*\n\s*resetScanScopedState\(\)/)
   })
 
   it('time-travel resets, and no longer clears decisions while leaving triage behind', () => {
