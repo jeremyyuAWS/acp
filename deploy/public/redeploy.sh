@@ -75,19 +75,49 @@ elif ! command -v gh >/dev/null 2>&1; then
 elif ! gh auth status >/dev/null 2>&1; then
   echo "  ⚠ CI gate NOT CHECKED — gh is not authenticated"
 else
-  # The workflow_run trigger fires the instant CI completes, but GitHub's run-list API can take
-  # several seconds to index the finished run. A single query that races the indexer returns an
-  # empty result and produces a false "no CI run found" that kills a perfectly valid deploy.
-  # Retry with backoff (5 × 15 s = up to 75 s) before giving up.
-  CI_CONC=""
+  # Two-phase CI gate.
+  #
+  # The workflow_run trigger fires the instant CI completes on the triggering commit, but the
+  # deploy checks out CURRENT main — which may be a newer commit whose CI hasn't started yet.
+  # A single gh run list query can return empty either because the API hasn't indexed the run
+  # yet (takes a few seconds) OR because CI for this commit hasn't been queued at all yet.
+  #
+  # Phase 1 — wait for any run to appear (5 × 15 s = 75 s, covers API indexing lag).
+  # Phase 2 — if the run is in_progress/queued, wait for it to finish (20 × 60 s = 20 min).
+  _ci_json="[]"
+  _ci_count=0
   for _ci_attempt in 1 2 3 4 5; do
-    CI_CONC="$(gh run list --commit "$PIN" --workflow CI --limit 1 --json conclusion -q '.[0].conclusion' 2>/dev/null || true)"
-    [ -n "$CI_CONC" ] && break
+    _ci_json="$(gh run list --commit "$PIN" --workflow CI --limit 1 --json status,conclusion 2>/dev/null || echo '[]')"
+    _ci_count="$(printf '%s' "${_ci_json:-[]}" | jq 'length' 2>/dev/null || echo 0)"
+    [ "${_ci_count:-0}" -gt 0 ] && break
     [ "$_ci_attempt" -lt 5 ] && { echo "  CI run not yet indexed (attempt $_ci_attempt/5) — retrying in 15s"; sleep 15; }
   done
+
+  if [ "${_ci_count:-0}" -eq 0 ]; then
+    die "no CI run found for ${PIN:0:7} after 5 attempts — it may not be on a branch CI builds. Set ACP_SKIP_CI_GATE=1 to deploy without the gate."
+  fi
+
+  # Phase 2: run is indexed — if it's still in_progress, wait for it to complete.
+  _ci_status="$(printf '%s' "$_ci_json" | jq -r '.[0].status // ""')"
+  case "$_ci_status" in
+    in_progress|queued|waiting|pending)
+      echo "  CI is ${_ci_status} on ${PIN:0:7} — waiting up to 20 min for it to finish…"
+      for _ci_wait in $(seq 1 20); do
+        sleep 60
+        _ci_json="$(gh run list --commit "$PIN" --workflow CI --limit 1 --json status,conclusion 2>/dev/null || echo '[]')"
+        _ci_status="$(printf '%s' "$_ci_json" | jq -r '.[0].status // ""')"
+        case "$_ci_status" in
+          in_progress|queued|waiting|pending) echo "  CI still ${_ci_status} (${_ci_wait}/20 min)…" ;;
+          *) break ;;
+        esac
+      done
+      ;;
+  esac
+
+  CI_CONC="$(printf '%s' "$_ci_json" | jq -r '.[0].conclusion // ""')"
   case "$CI_CONC" in
     success) echo "  ✓ CI is green on ${PIN:0:7}" ;;
-    "")      die "no CI run found for ${PIN:0:7} after 5 attempts — it may not be on a branch CI builds. Set ACP_SKIP_CI_GATE=1 to deploy without the gate." ;;
+    "")      die "CI on ${PIN:0:7} is still in progress after 20 min — timed out waiting. Re-run the deploy when CI finishes, or set ACP_SKIP_CI_GATE=1." ;;
     *)       die "CI on ${PIN:0:7} concluded '$CI_CONC', not success — refusing to deploy it." ;;
   esac
 fi
