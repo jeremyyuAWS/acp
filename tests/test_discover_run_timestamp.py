@@ -145,6 +145,64 @@ def test_a_failed_stamp_never_costs_the_inventory(st, monkeypatch):
     assert st.count_inventory("s3") == 1        # the inventory survived the failed stamp
 
 
+# ── a genuinely empty run has no per-file fallback, so a lost stamp is invisible ─────────────
+# unless the loss itself is recorded. These pin the retry-then-record contract in _mark_discovered.
+def test_a_transient_stamp_failure_is_recovered_by_the_retry(st, monkeypatch):
+    """The single most likely real-world cause of one guarded UPDATE failing is a transient DB
+    blip, not a persistent defect — one retry should close that case without any visible gap."""
+    import core
+    import handlers
+
+    calls = {"n": 0}
+    real_mark = st.mark_discovery_complete
+
+    class FlakyOnce:
+        def __getattr__(self, name):
+            if name == "mark_discovery_complete":
+                def _flaky(*a, **k):
+                    calls["n"] += 1
+                    if calls["n"] == 1:
+                        raise RuntimeError("connection reset")
+                    return real_mark(*a, **k)
+                return _flaky
+            return getattr(st, name)
+
+    monkeypatch.setattr(core, "store", FlakyOnce())
+    st.init_scan_run("s4", "drive", 0, "2026-08-19T09:00:00+00:00", "acp", "h",
+                     owner="dana@x.com", status="discovered")
+    handlers._mark_discovered("s4")
+    assert calls["n"] == 2
+    assert st.get_discovery_completed_at("s4")   # the retry landed the stamp
+    assert st.list_decisions("s4") == []          # no failure to record — nothing logged
+
+
+def test_a_persistent_stamp_failure_on_an_empty_run_is_logged_as_a_decision(st, monkeypatch):
+    """A genuinely empty run (no inventory rows) has no `scan_inventory.discovered_at` to fall
+    back to, so a lost stamp here is otherwise permanently invisible. The decision log is the one
+    channel already used to diagnose zero-file scans (`scan.suspicious_zero`,
+    `scan.unreachable_zero`), so a stamp failure needs to speak through the same channel rather
+    than only a container log nobody watching the UI can read."""
+    import core
+    import handlers
+
+    class AlwaysBoom:
+        def __getattr__(self, name):
+            if name == "mark_discovery_complete":
+                def _raise(*a, **k):
+                    raise RuntimeError("db went away")
+                return _raise
+            return getattr(st, name)
+
+    monkeypatch.setattr(core, "store", AlwaysBoom())
+    st.init_scan_run("s5", "drive", 0, "2026-08-19T09:00:00+00:00", "acp", "h",
+                     owner="dana@x.com", status="discovered")
+    handlers._mark_discovered("s5")               # must not raise — discovery still "succeeded"
+    logged = st.list_decisions("s5")
+    assert len(logged) == 1
+    assert logged[0]["action"] == "scan.discovered_at_stamp_failed"
+    assert logged[0]["scan_id"] == "s5"
+
+
 # ── the ADR 0020 Discover-only path is the reason this exists ────────────────
 _PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 

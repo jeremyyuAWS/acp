@@ -1053,12 +1053,35 @@ def _mark_discovered(scan_id: str) -> None:
     The inventory is already written by the time this runs. Losing the timestamp costs a date on
     a screen; raising here would lose the inventory the job just spent the estate's listing budget
     producing — the same fail-quiet contract the Langfuse discover trace already follows, and for
-    the same reason. A run that misses the stamp still reads correctly: the frontend falls
-    back to the newest per-file `scan_inventory.discovered_at`."""
+    the same reason. A run with inventory rows still reads correctly if the stamp is lost: the
+    frontend falls back to the newest per-file `scan_inventory.discovered_at`.
+
+    A GENUINELY EMPTY run has no such fallback — zero rows means `resolveInventoryTime` on the
+    frontend has nothing to fall back to, so a run that lists 0 files and then loses this stamp to
+    a transient DB error shows "completion time not recorded" forever, with nothing in the UI or
+    the decision log to say why. One retry closes the transient case without weakening the
+    fail-quiet contract (a second failure still doesn't raise), and logging it as a decision makes
+    a persistent failure visible via the same `/decisions?scan_id=` channel already used to
+    diagnose `scan.suspicious_zero` / `scan.unreachable_zero` — no DB access required to tell the
+    two apart from here on."""
     try:
         core.store.mark_discovery_complete(scan_id)
+        return
     except Exception:
-        logger.warning("_mark_discovered: failed to stamp discovered_at for %s", scan_id, exc_info=True)
+        logger.warning("_mark_discovered: failed to stamp discovered_at for %s, retrying once",
+                       scan_id, exc_info=True)
+    try:
+        core.store.mark_discovery_complete(scan_id)
+        return
+    except Exception as exc:
+        logger.warning("_mark_discovered: retry also failed to stamp discovered_at for %s",
+                       scan_id, exc_info=True)
+        try:
+            core.store.log_decision("system", "scan.discovered_at_stamp_failed",
+                                    scan_id=scan_id, detail=str(exc))
+        except Exception:
+            logger.warning("_mark_discovered: could not even log the stamp failure for %s",
+                           scan_id, exc_info=True)
 
 
 def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, actor: str | None,
