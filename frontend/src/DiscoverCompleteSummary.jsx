@@ -1,6 +1,6 @@
-// Shown after a discovery scan completes — a flat snapshot of what was found, with a
-// prominent CTA to continue to Assess. Replaces the estatebar description section so the
-// top of the Discover tab always shows a clear "what happened / what next".
+// Shown after a discovery scan completes — structured-row summary of what was found, with a
+// prominent CTA to continue to Assess. Uses a parent-child layout for assessment eligibility
+// so the relationship between the aggregate (not-assessable total) and its breakdown is clear.
 
 function fmtDuration(startedAt, discoveredAt) {
   if (!startedAt || !discoveredAt) return null
@@ -13,6 +13,33 @@ function fmtDuration(startedAt, discoveredAt) {
 }
 
 function n(count) { return Number(count).toLocaleString() }
+
+function pct(part, total) {
+  if (!total) return null
+  return Math.round((part / total) * 100)
+}
+
+// A single assessment-eligibility row: right-aligned count, label, optional percentage.
+function EligRow({ count, label, muted = false, pctValue = null }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+      <span style={{ minWidth: '4.2em', textAlign: 'right',
+                     fontVariantNumeric: 'tabular-nums',
+                     color: muted ? 'var(--muted)' : 'var(--ink)' }}>
+        {n(count)}
+      </span>
+      <span style={{ flex: 1, color: muted ? 'var(--muted)' : 'var(--ink)' }}>
+        {label}
+      </span>
+      {pctValue !== null && (
+        <span style={{ minWidth: '2.5em', textAlign: 'right',
+                       fontVariantNumeric: 'tabular-nums', color: 'var(--muted)', fontSize: 12.5 }}>
+          {pctValue}%
+        </span>
+      )}
+    </div>
+  )
+}
 
 export default function DiscoverCompleteSummary({
   discoveredCount,
@@ -56,6 +83,24 @@ export default function DiscoverCompleteSummary({
   const hasExcDeleted = (excDeleted ?? 0) > 0
   const hasExceptions = hasExcInaccessible || hasExcMetadata || hasExcDeleted
 
+  // Not-currently-assessable total and sub-breakdown.
+  const notAssessableCount = discoveredCount - assessableCount
+  const assessablePct = pct(assessableCount, discoveredCount)
+  const notAssessablePct = assessablePct !== null ? 100 - assessablePct : null
+
+  // Sub-breakdown items (indented under "Not currently assessable").
+  const subBreakdown = [
+    (unsupportedCount ?? 0) > 0 && { count: unsupportedCount, label: 'unsupported' },
+    (metadataOnlyCount ?? 0) > 0 && { count: metadataOnlyCount, label: 'metadata-only' },
+    (eligibilityUnknownCount ?? 0) > 0 && { count: eligibilityUnknownCount, label: 'eligibility unknown' },
+    (excludedCount ?? 0) > 0 && { count: excludedCount, label: 'excluded' },
+    (lockedCount ?? 0) > 0 && { count: lockedCount, label: 'could not be opened' },
+  ].filter(Boolean)
+
+  const ctaLabel = assessableCount > 0
+    ? `Assess ${n(assessableCount)} documents →`
+    : 'Continue to Assessment →'
+
   return (
     <section className="discover-run-progress" role="region" aria-label="Discovery complete"
              style={{ marginBottom: 16 }}>
@@ -66,7 +111,10 @@ export default function DiscoverCompleteSummary({
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
                       marginBottom: 14 }}>
-          <span style={{ fontWeight: 650, fontSize: 14.5 }}>Discovery complete</span>
+          <span style={{ fontWeight: 650, fontSize: 14.5, display: 'flex', alignItems: 'center', gap: 7 }}>
+            <span style={{ color: 'var(--green,#1a7f45)', fontSize: 13 }} aria-hidden="true">✓</span>
+            Discovery complete
+          </span>
           {elapsed && (
             <span style={{ fontSize: 13, color: 'var(--muted)', fontVariantNumeric: 'tabular-nums' }}>
               {elapsed}
@@ -74,45 +122,69 @@ export default function DiscoverCompleteSummary({
           )}
         </div>
 
-        {/* File counts */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 14 }}>
-          <div>
-            {n(discoveredCount)} files discovered
-            {folderCount > 0 ? ` across ${n(folderCount)} folder${folderCount === 1 ? '' : 's'}` : ''}
+        {/* Total files */}
+        <div style={{ marginBottom: 12 }}>
+          {n(discoveredCount)} files inventoried
+          {(folderCount ?? 0) > 0 ? ` across ${n(folderCount)} folder${folderCount === 1 ? '' : 's'}` : ''}
+        </div>
+
+        {/* Assessment eligibility */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase',
+                        letterSpacing: '0.06em', color: 'var(--muted)', marginBottom: 6 }}>
+            Assessment eligibility
           </div>
-          <div>{n(assessableCount)} assessable</div>
-          {(unsupportedCount ?? 0) > 0 && <div style={{ color: 'var(--muted)' }}>{n(unsupportedCount)} unsupported</div>}
-          {(metadataOnlyCount ?? 0) > 0 && <div style={{ color: 'var(--muted)' }}>{n(metadataOnlyCount)} metadata-only</div>}
-          {(eligibilityUnknownCount ?? 0) > 0 && <div style={{ color: 'var(--muted)' }}>{n(eligibilityUnknownCount)} eligibility unknown</div>}
-          {(excludedCount ?? 0) > 0 && <div style={{ color: 'var(--muted)' }}>{n(excludedCount)} excluded</div>}
-          {(lockedCount ?? 0) > 0 && <div style={{ color: 'var(--muted)' }}>{n(lockedCount)} could not be opened</div>}
-          {hasExceptions && (
-            <div style={{ color: 'var(--muted)', marginTop: 2 }}>
-              {[
-                hasExcInaccessible && `${n(excInaccessible)} inaccessible — skipped`,
-                hasExcMetadata && `${n(excMetadataFailure)} unreadable`,
-                hasExcDeleted && `${n(excDeleted)} deleted during scan`,
-              ].filter(Boolean).join(' · ')}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <EligRow count={assessableCount} label="Assessable" pctValue={assessablePct} />
+            {notAssessableCount > 0 && (
+              <EligRow count={notAssessableCount} label="Not currently assessable"
+                       muted pctValue={notAssessablePct} />
+            )}
+          </div>
+
+          {/* Sub-breakdown indented under the not-assessable parent */}
+          {subBreakdown.length > 0 && (
+            <div style={{ paddingLeft: 'calc(4.2em + 8px)', marginTop: 5,
+                          display: 'flex', flexDirection: 'column', gap: 2,
+                          fontSize: 12.5, color: 'var(--muted)' }}>
+              {subBreakdown.map(({ count, label }) => (
+                <div key={label}>{n(count)} {label}</div>
+              ))}
+              {hasExceptions && (
+                <div>
+                  {[
+                    hasExcInaccessible && `${n(excInaccessible)} inaccessible — skipped`,
+                    hasExcMetadata && `${n(excMetadataFailure)} unreadable`,
+                    hasExcDeleted && `${n(excDeleted)} deleted during scan`,
+                  ].filter(Boolean).join(' · ')}
+                </div>
+              )}
             </div>
           )}
         </div>
 
-        {/* Lifecycle + inventory */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 14 }}>
+        {/* Lifecycle rules */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase',
+                        letterSpacing: '0.06em', color: 'var(--muted)', marginBottom: 6 }}>
+            Lifecycle rules
+          </div>
           {hasLifecycleRules ? (
             <>
               <div>
                 {n(lifecycleRulesCount)} matched lifecycle rule{lifecycleRulesCount === 1 ? '' : 's'}
               </div>
               {lifecycleBreakdown.length > 0 && (
-                <div style={{ color: 'var(--muted)' }}>{lifecycleBreakdown.join(' · ')}</div>
+                <div style={{ color: 'var(--muted)', fontSize: 12.5, marginTop: 3 }}>
+                  {lifecycleBreakdown.join(' · ')}
+                </div>
               )}
             </>
           ) : (
             <div style={{ color: 'var(--muted)' }}>No lifecycle rules enabled</div>
           )}
           {inventoryDelta && (inventoryDelta.new > 0 || inventoryDelta.updated > 0 || inventoryDelta.unchanged > 0) && (
-            <div>
+            <div style={{ marginTop: 4 }}>
               {'Inventory: '}
               {[
                 inventoryDelta.new > 0 && `${n(inventoryDelta.new)} added`,
@@ -122,17 +194,21 @@ export default function DiscoverCompleteSummary({
             </div>
           )}
           {publishedAt && (
-            <div>
+            <div style={{ marginTop: 4 }}>
               Enumeration verified complete —{' '}
               {new Date(publishedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
             </div>
           )}
         </div>
 
-        {/* Disclaimer */}
-        <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '0 0 14px', lineHeight: 1.5 }}>
-          No documents were assessed or changed.
-        </p>
+        {/* Safety disclaimer — tinted info footer */}
+        <div style={{ fontSize: 12.5, color: 'var(--muted)',
+                      background: 'var(--info-bg,#f0f7ff)', borderRadius: 6,
+                      padding: '6px 10px', marginBottom: 14, display: 'flex',
+                      alignItems: 'flex-start', gap: 6, lineHeight: 1.5 }}>
+          <span aria-hidden="true" style={{ marginTop: 1 }}>ⓘ</span>
+          <span>No documents were assessed or changed.</span>
+        </div>
 
         {/* CTA row */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -156,7 +232,7 @@ export default function DiscoverCompleteSummary({
                   title={pendingActions > 0
                     ? `${pendingActions} action${pendingActions === 1 ? '' : 's'} still pending`
                     : needsAck ? 'Approve discovery recommendations above to continue' : undefined}>
-            Continue to Assessment →
+            {ctaLabel}
           </button>
           {ctaDisabled && (
             <span className="muted" style={{ fontSize: 12, maxWidth: 240, lineHeight: 1.4 }}>
