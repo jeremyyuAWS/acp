@@ -1949,7 +1949,8 @@ class Store:
                          "disposition_audit", "decision_log", "inventory", "jobs", "documents",
                          "org_memory", "remediation_state", "remediation_diff", "applied_fixes",
                          "ai_calls", "finding_comments",
-                         "scan_inputs"]  # Stage 1 item 3: per-scan enqueue snapshots are customer data
+                         "scan_inputs",  # Stage 1 item 3: per-scan enqueue snapshots are customer data
+                         "active_discovery_guard"]  # transient lock state — cleared on reset
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
