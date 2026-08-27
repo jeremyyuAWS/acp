@@ -191,3 +191,21 @@ steps:
   - script: npx vite build
     workingDirectory: frontend
     displayName: Frontend build
+
+  # Mirrors ci.yml's `e2e` job (see this file's header — the two gates stay step for step).
+  # This pipeline is one flat job, so the API deps installed above are already on the system
+  # interpreter; ACP_E2E_PYTHON points scripts/e2e-api.sh at it instead of a .venv-e2e.
+  - script: npx playwright install --with-deps chromium
+    workingDirectory: frontend
+    displayName: Install browser
+
+  # continueOnError mirrors ci.yml's `continue-on-error: true` — a soft launch while the
+  # suite earns a track record. Playwright's webServer config starts both the API
+  # (scripts/e2e-api.sh) and vite, with VITE_SIM=false so the browser drives the real
+  # backend rather than sim.js.
+  - script: npx playwright test
+    workingDirectory: frontend
+    continueOnError: true
+    env:
+      ACP_E2E_PYTHON: python
+    displayName: Playwright E2E (browser + local API)
