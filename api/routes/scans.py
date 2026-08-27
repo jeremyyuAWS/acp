@@ -235,7 +235,12 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                                 "user": user, "pii": pii, "batch": batch,
                                 "exclude_remediated": exclude_remediated,
                                 "incremental": incremental}, {"scan_id": sid, "id": job_id})
-                core.update_job(job_id, {"phase": "discovered", "done": True, "scan_id": sid})
+                # _scan_discover returns (without raising) on conflict, after writing phase=error
+                # to the job. Only overwrite with phase=discovered when it actually succeeded —
+                # otherwise this unconditional write masks the conflict and makes 0 files look
+                # like a successful empty-corpus scan to the frontend.
+                if (core.get_job_state(job_id) or {}).get("phase") != "error":
+                    core.update_job(job_id, {"phase": "discovered", "done": True, "scan_id": sid})
                 return
             inv: list = []
             report = run_scan(source, progress=lambda d: core.update_job(job_id, d),
