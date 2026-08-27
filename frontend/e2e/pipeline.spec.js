@@ -29,9 +29,8 @@ test('a local scan runs discover → assess and produces WCAG findings', async (
     .toBeVisible({ timeout: 120_000 })
 
   // The count is what ties this to OUR corpus. SIM's synthetic estate is thousands of files, so
-  // this line can only come from a real scan of .e2e/corpus. (Not singularized upstream — the
-  // shape is "1 files" for a single-file corpus.)
-  await expect(page.getByText(`Inventoried ${CORPUS_SIZE} files`)).toBeVisible({ timeout: 30_000 })
+  // this line can only come from a real scan of .e2e/corpus.
+  await expect(page.getByText(`${CORPUS_SIZE} files discovered`)).toBeVisible({ timeout: 30_000 })
 
   const assessTab = tab(page, /Assess/)
   await expect(assessTab).toBeVisible()
