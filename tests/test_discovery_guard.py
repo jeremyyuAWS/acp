@@ -64,6 +64,92 @@ class TestActiveDiscoveryGuard:
         assert holder is None
 
 
+class TestStaleDiscoveryGuardReclaim:
+    """release_discovery_guard is meant to fire in the same transaction as the terminal
+    scan-status write, but nothing enforces that pairing. A worker that dies before either
+    write runs (OOM kill, hard process termination, any exception path that predates this
+    guard) leaves the row claimed forever — found live: a single stale row blocked every
+    subsequent scan attempt for that (owner, source) indefinitely, indistinguishable on the
+    surface from a genuinely busy source."""
+
+    def test_reclaimed_when_holders_scan_already_reads_terminal(self, store):
+        # The crash-after-status-write-but-before-release case: the holder's OWN scan_runs
+        # row already says the run ended, so the guard is provably stale.
+        _make_scan(store, "scan-1")
+        store.acquire_discovery_guard("user@a.com", "drive", "scan-1")
+        store.set_scan_status("scan-1", "failed")
+        holder = store.acquire_discovery_guard("user@a.com", "drive", "scan-2")
+        assert holder is None, "a terminal holder must not block a new claim"
+        # scan-2 genuinely holds the slot now.
+        holder2 = store.acquire_discovery_guard("user@a.com", "drive", "scan-3")
+        assert holder2 == "scan-2"
+
+    def test_terminal_status_reclaim_covers_every_terminal_state(self, store):
+        for status in ("discovered", "failed", "cancelled", "superseded", "dead"):
+            sid = f"scan-{status}"
+            _make_scan(store, sid)
+            store.acquire_discovery_guard("user@a.com", "drive", sid)
+            store.set_scan_status(sid, status)
+            holder = store.acquire_discovery_guard("user@a.com", "drive", f"retry-{status}")
+            assert holder is None, f"status={status} must be treated as stale"
+            store.release_discovery_guard(f"retry-{status}")
+
+    def test_genuinely_running_holder_still_blocks(self, store):
+        # Unchanged behavior — a real, recent, still-running scan is a real conflict.
+        _make_scan(store, "scan-1")
+        store.acquire_discovery_guard("user@a.com", "drive", "scan-1")
+        holder = store.acquire_discovery_guard("user@a.com", "drive", "scan-2")
+        assert holder == "scan-1"
+
+    def test_reclaimed_by_age_even_when_status_never_updated(self, store):
+        # The abrupt-crash case: scan_runs was never touched again either (still 'running'),
+        # but the guard has been held far longer than any real Discovery run takes.
+        _make_scan(store, "scan-1")
+        store.acquire_discovery_guard("user@a.com", "drive", "scan-1")
+        from datetime import datetime, timezone, timedelta
+        old = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+        with store._db.cursor() as cur:
+            store._db.execute(cur,
+                "UPDATE active_discovery_guard SET acquired_at=%s WHERE scan_id=%s",
+                (old, "scan-1"))
+        holder = store.acquire_discovery_guard("user@a.com", "drive", "scan-2")
+        assert holder is None
+
+    def test_recent_running_holder_not_reclaimed_by_age(self, store):
+        _make_scan(store, "scan-1")
+        store.acquire_discovery_guard("user@a.com", "drive", "scan-1")
+        holder = store.acquire_discovery_guard("user@a.com", "drive", "scan-2")
+        assert holder == "scan-1", "a fresh acquired_at must not trip the age ceiling"
+
+    def test_age_ceiling_is_configurable(self, store, monkeypatch):
+        monkeypatch.setenv("ACP_DISCOVERY_GUARD_STALE_S", "100")
+        _make_scan(store, "scan-1")
+        store.acquire_discovery_guard("user@a.com", "drive", "scan-1")
+        from datetime import datetime, timezone, timedelta
+        old = (datetime.now(timezone.utc) - timedelta(seconds=200)).isoformat()
+        with store._db.cursor() as cur:
+            store._db.execute(cur,
+                "UPDATE active_discovery_guard SET acquired_at=%s WHERE scan_id=%s",
+                (old, "scan-1"))
+        holder = store.acquire_discovery_guard("user@a.com", "drive", "scan-2")
+        assert holder is None, "200s old must exceed a 100s ceiling"
+
+    def test_a_third_genuine_claimant_wins_the_race_over_the_original_asker(self, store):
+        # Reclaiming deletes the stale row and retries ONCE. If a real scan raced into the
+        # gap and claimed it first, the original asker must see THAT as the new holder, not
+        # loop or silently steal the slot.
+        _make_scan(store, "scan-1")
+        store.acquire_discovery_guard("user@a.com", "drive", "scan-1")
+        store.set_scan_status("scan-1", "failed")
+
+        # scan-2 reclaims the stale slot first (simulating the race winner)...
+        holder_for_2 = store.acquire_discovery_guard("user@a.com", "drive", "scan-2")
+        assert holder_for_2 is None  # scan-2 reclaimed it
+
+        holder_for_3 = store.acquire_discovery_guard("user@a.com", "drive", "scan-3")
+        assert holder_for_3 == "scan-2", "scan-3 must see scan-2's genuine, fresh claim"
+
+
 class TestMarkPublished:
     def test_stamps_published_at(self, store):
         _make_scan(store, "scan-x")

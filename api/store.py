@@ -1402,24 +1402,78 @@ class Store:
         """Claim the active-Discovery slot for (owner_email, source).
 
         Returns None on success. Returns the scan_id that currently holds the slot when
-        another scan is already active — callers must treat that as a conflict and stop
-        rather than starting a second Discovery over the same source.
+        another scan is GENUINELY still active — callers must treat that as a conflict and
+        stop rather than starting a second Discovery over the same source.
 
         Written in a single INSERT … ON CONFLICT DO NOTHING, then a SELECT, so the check
         and the claim are one round-trip and two concurrent requests cannot both see "no
         holder" and both succeed. The conflict case reads the existing row and returns its
         scan_id; the caller decides what to do (typically raise a 409-style error).
+
+        STALE-HOLDER RECLAIM. release_discovery_guard is meant to fire in the same
+        transaction as the terminal scan-status write, but nothing enforces that pairing —
+        a worker that dies before either write runs (OOM kill, hard process termination,
+        an exception path that predates this guard and never learned to release it) leaves
+        the row claimed forever. Found live: a stale row from one crashed run blocked every
+        subsequent scan attempt for that (owner, source) indefinitely, each rejected as
+        "Discovery already active" — indistinguishable, on the surface, from a genuinely
+        busy source. Two independent staleness signals, either is enough to reclaim:
+          1. The holder's OWN scan_runs row already reads a terminal status (release simply
+             never ran for it — the crash case above, or any other path with the same gap).
+          2. The holder has been claimed for longer than any real Discovery run takes
+             (ACP_DISCOVERY_GUARD_STALE_S, default 2h) — covers a crash so abrupt scan_runs
+             itself was never updated either.
+        Reclaiming deletes the stale row and retries the claim ONCE — a second genuine
+        conflict (a fresh, real holder that raced in between) is returned normally rather
+        than looped on.
         """
+        import os as _os
         at = self._now()
+
+        def _try_claim() -> str | None:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "INSERT INTO active_discovery_guard(owner_email, source, scan_id, acquired_at) "
+                    "VALUES (%s,%s,%s,%s) ON CONFLICT(owner_email, source) DO NOTHING",
+                    (owner_email, source, scan_id, at))
+                self._db.execute(cur,
+                    "SELECT scan_id, acquired_at FROM active_discovery_guard "
+                    "WHERE owner_email=%s AND source=%s", (owner_email, source))
+                return self._db.fetchone(cur)
+
+        row = _try_claim()
+        holder = (row or {}).get("scan_id")
+        if holder is None or holder == scan_id:
+            return None
+
+        stale = False
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT status FROM scan_runs WHERE id=%s", (holder,))
+            holder_row = self._db.fetchone(cur)
+        holder_status = (holder_row or {}).get("status")
+        if holder_status and holder_status not in ("queued", "running"):
+            stale = True
+        else:
+            try:
+                from datetime import datetime, timezone
+                ceiling_s = int(_os.environ.get("ACP_DISCOVERY_GUARD_STALE_S", "7200") or "7200")
+                acquired = datetime.fromisoformat((row or {}).get("acquired_at").replace("Z", "+00:00"))
+                if acquired.tzinfo is None:
+                    acquired = acquired.replace(tzinfo=timezone.utc)
+                age_s = (datetime.now(timezone.utc) - acquired).total_seconds()
+                if age_s > ceiling_s:
+                    stale = True
+            except Exception:
+                pass  # an unparseable timestamp must never crash a scan start — treat as live
+
+        if not stale:
+            return holder
+
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "INSERT INTO active_discovery_guard(owner_email, source, scan_id, acquired_at) "
-                "VALUES (%s,%s,%s,%s) ON CONFLICT(owner_email, source) DO NOTHING",
-                (owner_email, source, scan_id, at))
-            self._db.execute(cur,
-                "SELECT scan_id FROM active_discovery_guard WHERE owner_email=%s AND source=%s",
-                (owner_email, source))
-            row = self._db.fetchone(cur)
+                "DELETE FROM active_discovery_guard WHERE owner_email=%s AND source=%s "
+                "AND scan_id=%s", (owner_email, source, holder))
+        row = _try_claim()
         holder = (row or {}).get("scan_id")
         return None if holder == scan_id else holder
 
