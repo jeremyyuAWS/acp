@@ -56,6 +56,7 @@ export default function DiscoverCompleteSummary({
   inventoryDelta,
   startedAt,
   discoveredAt,
+  publishedAt,
   onAdvance,
   onReviewInventory,
   pendingActions = 0,
@@ -150,6 +151,14 @@ export default function DiscoverCompleteSummary({
             <CheckRow
               label="Saved inventory"
               kpi={`${n(savedTotal)} record${savedTotal === 1 ? '' : 's'}`}
+            />
+          )}
+
+          {/* 6 — Enumeration verified */}
+          {publishedAt && (
+            <CheckRow
+              label="Enumeration verified complete"
+              kpi={new Date(publishedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
             />
           )}
         </div>
