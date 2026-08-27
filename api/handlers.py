@@ -1769,6 +1769,17 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 })
             except Exception:
                 pass
+        # Persist lifecycle stats alongside inventory_delta so the completion card shows them
+        # correctly after a page reload (job state in Redis is ephemeral).
+        try:
+            core.store.merge_scan_scope(scan_id, {
+                "lifecycle_rules_enabled": _lc_stats.get("rules_enabled", 0),
+                "lifecycle_archive": _lc_stats.get("lifecycle_archive", 0),
+                "lifecycle_delete": _lc_stats.get("lifecycle_delete", 0),
+                "lifecycle_tagged": _lc_stats.get("lifecycle_tagged", 0),
+            })
+        except Exception:
+            pass
         # THIS is where an ADR 0020 run's discovery ends — the estate is listed, the inventory is
         # persisted, the lifecycle rules have run, and nothing further happens until somebody
         # triggers Assess. The run stays at status='discovered' with completed_at NULL, possibly

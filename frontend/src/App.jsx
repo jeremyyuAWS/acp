@@ -360,7 +360,7 @@ export default function App() {
   const [fileTypeConfig, setFileTypeConfig] = useState(loadFileTypeConfig)
   const [rolePrivileges, setRolePrivileges] = useState(loadRolePrivileges)
   const [ontology, setOntology] = useState(loadPublished)
-  const [aiEnabled, setAiEnabled] = useState(true)
+  const [aiEnabled, setAiEnabled] = useState(false)
   const [hitlCount, setHitlCount] = useState(0)  // pending HITL items, reported up from Remediate for the nav badge
   // Durable (background queue) is the default (2026-08-21). The session-scoped path runs as a
   // bare in-process thread with no queue behind it — the code's own comment on it has always said
