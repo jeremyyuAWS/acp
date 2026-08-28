@@ -20,6 +20,26 @@ describe('snapshotTrust', () => {
       .toEqual({ partial: false })
   })
 
+  it('flags a complete listing that skipped rate-limited folders', () => {
+    const v = snapshotTrust(run({
+      complete: true, truncated: false, files_found: 900, skipped_rate_limited: 2,
+    }))
+    expect(v).toEqual({ partial: true, reason: 'rate_limited', filesFound: 900, skippedRateLimited: 2 })
+  })
+
+  it('does not flag rate-limiting for a run with none (0 or absent)', () => {
+    expect(snapshotTrust(run({ complete: true, truncated: false, files_found: 3, skipped_rate_limited: 0 })))
+      .toEqual({ partial: false })
+    // Every run predating this field simply lacks the key — must read the same as zero.
+    expect(snapshotTrust(run({ complete: true, truncated: false, files_found: 3 })))
+      .toEqual({ partial: false })
+  })
+
+  it('ranks truncated/incomplete above rate-limited — both are the stronger claim', () => {
+    const v = snapshotTrust(run({ complete: false, truncated: true, files_found: 5, skipped_rate_limited: 3 }))
+    expect(v.reason).toBe('truncated')
+  })
+
   // The three ways a banner here would cry wolf. Each one would put a warning on a scan that is
   // fine, and a warning that fires on good scans stops being read on bad ones.
   describe('says nothing rather than guessing', () => {
@@ -70,5 +90,18 @@ describe('snapshotTrustMessage', () => {
   it('does not describe a truncated estate as the whole estate', () => {
     const m = snapshotTrustMessage({ partial: true, reason: 'truncated', filesFound: 10 })
     expect(m.title).toMatch(/not all of it/)
+  })
+
+  it('names Drive rate-limiting specifically, with the real skipped-folder count', () => {
+    const m = snapshotTrustMessage({ partial: true, reason: 'rate_limited', skippedRateLimited: 3 })
+    expect(m.title).toMatch(/rate-limited/i)
+    expect(m.body).toMatch(/3 folders/)
+    expect(m.body).toMatch(/re-run discovery later/i)
+  })
+
+  it('singularizes the rate-limited message for exactly one folder', () => {
+    const m = snapshotTrustMessage({ partial: true, reason: 'rate_limited', skippedRateLimited: 1 })
+    expect(m.body).toMatch(/1 folder /)
+    expect(m.body).not.toMatch(/1 folders/)
   })
 })

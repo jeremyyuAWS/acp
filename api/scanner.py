@@ -413,6 +413,32 @@ def _is_scannable_mime(f: dict) -> bool:
     return f.get("mimeType") in _SCANNABLE_MIME
 
 
+def _is_drive_rate_limit_error(exc: BaseException) -> bool:
+    """Was this exception Drive telling us to slow down, specifically — not just any failure?
+
+    `.execute(num_retries=N)` already retries 429/5xx internally with backoff (see its call
+    sites); by the time this sees the exception, those retries are exhausted and the folder is
+    about to be silently skipped. This only CLASSIFIES what already happened — it does not touch
+    retry behavior or timing, so it carries none of the risk a change to the actual backoff logic
+    would. 403 is included because Drive reports its per-user rate limit as a 403 with a specific
+    reason string, not a 429 — a bare 403 (e.g. permission denied) does NOT match unless that
+    reason text is present.
+    """
+    try:
+        from googleapiclient.errors import HttpError
+    except ImportError:
+        return False
+    if not isinstance(exc, HttpError):
+        return False
+    status = getattr(exc.resp, "status", None) if getattr(exc, "resp", None) is not None else None
+    if status == 429:
+        return True
+    if status == 403:
+        reason = str(exc)
+        return any(r in reason for r in ("rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded"))
+    return False
+
+
 def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
                   scope_out: dict | None = None, inventory_out: list | None = None,
                   progress_cb=None) -> list[dict]:
@@ -582,6 +608,7 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
     _skipped_mirror = [0]
     _skipped_excluded = [0]
     _skipped_errors = [0]
+    _skipped_rate_limited = [0]
     _truncated = [False]
     _last_progress_at = [0.0]
 
@@ -661,8 +688,17 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
                 fid = pending.pop(fut)
                 try:
                     local_raw, child_folders, capped = fut.result()
-                except Exception:  # noqa: BLE001 — one inaccessible folder must not abort the BFS
-                    print(f"[scan] folder {fid}: listing failed, skipping subtree", flush=True)
+                except Exception as _fetch_exc:  # noqa: BLE001 — one inaccessible folder must not abort the BFS
+                    # Classified AFTER the fact, from an exception .execute()'s own internal
+                    # retries already exhausted — this does not change what was retried or when,
+                    # only whether the reason a subtree was skipped is visible to anyone.
+                    if _is_drive_rate_limit_error(_fetch_exc):
+                        print(f"[scan] folder {fid}: Google Drive rate-limited this request "
+                              f"(exhausted retries) — skipping subtree", flush=True)
+                        with _lock:
+                            _skipped_rate_limited[0] += 1
+                    else:
+                        print(f"[scan] folder {fid}: listing failed, skipping subtree", flush=True)
                     with _lock:
                         _skipped_errors[0] += 1
                     continue
@@ -717,12 +753,14 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
                           "skipped_acp": _skipped_acp[0], "skipped_mirror": _skipped_mirror[0],
                           "skipped_excluded": _skipped_excluded[0],
                           "skipped_errors": _skipped_errors[0],
+                          "skipped_rate_limited": _skipped_rate_limited[0],
                           "kept": len(result), "truncated": truncated, "cap": max_files,
                           "inventory": estate_inventory.summarize(raw[:max_files], truncated=truncated)})
     _err_msg = f" · {_skipped_errors[0]} folder(s) inaccessible" if _skipped_errors[0] else ""
+    _rl_msg = f" ({_skipped_rate_limited[0]} rate-limited)" if _skipped_rate_limited[0] else ""
     print(f"[scan] discovery (folder subtree): {len(seen_folders)} folder(s) walked · "
           f"{_listed[0]} listed · {_skipped_acp[0]} skipped as ACP-generated output · "
-          f"{_skipped_mirror[0]} mirror folder(s) skipped · {len(result)} scannable{_err_msg}",
+          f"{_skipped_mirror[0]} mirror folder(s) skipped · {len(result)} scannable{_err_msg}{_rl_msg}",
           flush=True)
     return result
 

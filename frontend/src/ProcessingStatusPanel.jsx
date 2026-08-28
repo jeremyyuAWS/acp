@@ -21,7 +21,8 @@ const SEVERITY_COLORS = {
 }
 
 export default function ProcessingStatusPanel({ derived, onStartWorkers, onRerun, onViewMonitor }) {
-  const { state, headline, detail, recommendedAction, severity, pickupUnavailable, live } = derived || {}
+  const { state, headline, detail, recommendedAction, severity, pickupUnavailable, live,
+          facts, next, comingSoon } = derived || {}
   if (!state || state === 'idle') return null
   const c = SEVERITY_COLORS[severity] || SEVERITY_COLORS.info
 
@@ -53,6 +54,34 @@ export default function ProcessingStatusPanel({ derived, onStartWorkers, onRerun
         )}
       </div>
       {detail && <div style={{ marginTop: 3, fontWeight: 400 }}>{detail}</div>}
+      {/* Stakeholder review (2026-08-28): a queued scan needs more than one detail sentence — the
+          PRD's own worked example is a small grid of independent facts (work ahead, worker pool,
+          submitted/updated time), not prose. `facts` is an ordered [{label, value}] array a
+          caller's derivation builds ONLY from fields it actually has — never padded with a
+          placeholder for what it doesn't know, matching pickupUnavailable's own honesty rule
+          below rather than working around it. */}
+      {facts && facts.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 20px', marginTop: 8 }}>
+          {facts.map((f) => (
+            <div key={f.label} style={{ minWidth: 120 }}>
+              <div className="muted" style={{ fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.02em' }}>{f.label}</div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{f.value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {next && <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>Next: {next}</div>}
+      {/* An honest "not built yet", not a fake value. `comingSoon` names a specific signal this
+          card deliberately does not show a number for — distinct styling (dashed border) so it
+          never reads as a live fact that merely hasn't loaded. This grows into a real fact the
+          day a caller's derivation starts setting it instead — nothing about this line implies
+          that day is imminent. */}
+      {comingSoon && (
+        <div className="muted" style={{ marginTop: 8, padding: '6px 10px', fontSize: 11.5,
+             fontStyle: 'italic', border: '1px dashed currentColor', borderRadius: 6, opacity: 0.75 }}>
+          {comingSoon}
+        </div>
+      )}
       {recommendedAction === 'start_workers' && onStartWorkers && (
         <button onClick={onStartWorkers} style={{ marginTop: 8, padding: '4px 12px', borderRadius: 5,
                  border: `1px solid ${c.ink}`, background: c.ink, color: '#fff', fontSize: 12,

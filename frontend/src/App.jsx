@@ -395,6 +395,11 @@ export default function App() {
   // The in-flight durable scan's id — what the banner's Stop button cancels. null when
   // no queued scan is being polled (sync scans finish in-request and can't be stopped).
   const [liveScanId, setLiveScanId] = useState(null)
+  // The in-flight discover job's id — lets Discover poll GET /jobs/{id} (the durable SQL queue
+  // row, with a real locked_at claim timestamp) the same way AssessRunner already polls its own
+  // job, to tell "queued, nobody's claimed it" from "a worker claimed it Ns ago and is opening
+  // the source" — a real signal that existed already but nothing on Discover ever read.
+  const [discoverJobId, setDiscoverJobId] = useState(null)
   // Did the user press Stop for the run currently being polled? A ref, not state, for the same
   // reason notifyArmedRef is: the poll loop below runs inside a closure captured at scan start and
   // would never see a state update. Reset at the top of every run, so a stop never leaks into the
@@ -1026,6 +1031,7 @@ export default function App() {
         // container's heartbeat is what proves the queue is manned.
         if (!SIM && !workers && !worker_tier_alive) throw new Error('no workers available — the worker service looks down; check Monitor')
         setLiveScanId(scan_id)
+        setDiscoverJobId(job_id)
         // Live job state arrives by push instead of the loop below fetching getJob() every
         // tick — a strict reduction in request volume, not just lower latency. onError flips
         // sseFailedRef so the loop degrades to the old per-tick poll for the rest of this scan
@@ -1151,7 +1157,7 @@ export default function App() {
       // Always close, whatever the loop's own state — the server's generator loop otherwise
       // keeps polling Redis every 250ms for a client that has already stopped listening.
       streamHandle?.close()
-      setBusy(false); setProgress(null); setLiveScanId(null)
+      setBusy(false); setProgress(null); setLiveScanId(null); setDiscoverJobId(null)
       setNotifyArmed(false); notifyArmedRef.current = false      // one arming per run
     }
   }
@@ -1160,6 +1166,7 @@ export default function App() {
   // running server-side, so we just resume polling until it finishes.
   const reconnectScan = async (scan_id, job_id = null) => {
     setBusy(true); setProgress({ phase: 'connecting', elapsed: 0 }); setLiveScanId(scan_id)
+    setDiscoverJobId(job_id)
     // Same live-push mechanism doScan uses (see its comment) — scan-ID-anchored, so it survives
     // the worker retrying under a new job_id mid-scan, unlike the old per-tick getJob(job_id)
     // poll below, which pins the job_id captured at reconnect time and 404s forever once the
@@ -1233,7 +1240,7 @@ export default function App() {
       // "scan not available" banner left over from an earlier failed reconnect attempt.
       if (fresh) { setScan(fresh); setExplicitTimeTravel(false); setScanUnavailable(null); resetScanScopedState(); setScanList(await listScans()); setView('overview') }
     } catch { /* best-effort reconnect */ }
-    finally { streamHandle.close(); setBusy(false); setProgress(null); setLiveScanId(null) }
+    finally { streamHandle.close(); setBusy(false); setProgress(null); setLiveScanId(null); setDiscoverJobId(null) }
   }
 
   const run = scan?.run
@@ -1662,7 +1669,7 @@ export default function App() {
           scanId={run?.id}
           onOpenAssess={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} rawFiles={scan?.files ?? []} busy={busy} onScan={requestScan} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} delegations={delegations} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} preflightDegraded={preflightDegraded} preflightCapacityState={preflightCapacityState} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} scope={run?.scope || null} run={run} scanList={scanList} runAt={inventorySnapshot({ run, inventory: run?.scope?.inventory || null })} decisions={decisions} setDecisions={setDecisions}
+        {view === 'discover' && <Discover sources={sources} files={files} rawFiles={scan?.files ?? []} busy={busy} onScan={requestScan} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} delegations={delegations} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} preflightDegraded={preflightDegraded} preflightCapacityState={preflightCapacityState} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} jobId={discoverJobId} scope={run?.scope || null} run={run} scanList={scanList} runAt={inventorySnapshot({ run, inventory: run?.scope?.inventory || null })} decisions={decisions} setDecisions={setDecisions}
           /* Upload lost its top-level tab in the v2 simplification, but not its capability:
              it is a secondary action inside Discover now, which is where "get files in front
              of ACP" already lives. Dropping it outright would have removed the only way to try

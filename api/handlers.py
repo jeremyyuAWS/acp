@@ -1526,6 +1526,11 @@ def _scan_discover(payload: dict, job: dict) -> None:
             "files_found": len(items),
             "truncated": _truncated,
             "folders_visited": scope.get("folders"),  # None for flat Drive path
+            # How many folder subtrees scanner._search_folder skipped after Drive rate-limited
+            # (exhausted-retries) requests to them — 0/None for the flat Drive-query path, which
+            # has no per-subtree concept. Real count of a real, already-caught exception; not a
+            # new failure mode, just one that was previously invisible past a server print line.
+            "skipped_rate_limited": scope.get("skipped_rate_limited"),
         }
         if items:
             scope["enumeration"]["auth_ok"] = True

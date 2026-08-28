@@ -23,9 +23,13 @@ vi.mock('./api.js', () => ({
   overrideLifecycleRecommendation: vi.fn(),
   acknowledgeScan: vi.fn(),
   unacknowledgeScan: vi.fn(),
-  // Stubbed so the worker-availability poll (mounted unconditionally) doesn't throw — its own
-  // behavior is covered in discoverWorkerAvailability.test.jsx, out of scope for this file.
-  getJobs: vi.fn(() => Promise.resolve({})),
+  // Stubbed so the worker-availability poll (mounted unconditionally), the richer-queued-card
+  // poll, and the job-claim poll (all mounted whenever busy && phase is queued-or-unset) don't
+  // throw — their own behavior is covered in discoverWorkerAvailability.test.jsx,
+  // discoverQueueContextAndRate.test.jsx, and discoverWorkerAssigned.test.jsx respectively,
+  // out of scope for this file.
+  getJobs: vi.fn(() => Promise.resolve({ jobs: [] })),
+  getQueueJob: vi.fn(() => Promise.resolve({})),
   setWorkers: vi.fn(() => Promise.resolve({ workers: 0 })),
 }))
 
