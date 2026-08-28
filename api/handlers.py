@@ -1329,8 +1329,14 @@ def _scan_discover(payload: dict, job: dict) -> None:
     # that didn't happen to still hold it in the per-process _SCAN_JOB_MAP fallback. The SSE stream
     # then fell through to its 4-miss giveup path after ~1s, degrading every durable scan straight
     # to the Postgres-checkpoint fallback frame instead of ever actually going live.
+    # `attempt` rides along on the same write: job["attempts"] is claim_job()'s own durable,
+    # monotonic-per-job-row counter (Postgres jobs.attempts, bumped on every claim) — already
+    # exactly the "attempt number" PRD Discover-card work wants, so this reuses it rather than
+    # inventing a second counter. Read once at handler entry: attempts is fixed for the life of
+    # THIS invocation (claim_job bumps it before the handler starts, not during), so every SSE
+    # frame this run emits carries the same, correct attempt number.
     if job.get("id") and scan_id:
-        core.update_job(job["id"], {"scan_id": scan_id})
+        core.update_job(job["id"], {"scan_id": scan_id, "attempt": job.get("attempts", 1)})
     source = payload.get("source", "drive")
     ai = bool(payload.get("ai", True)) and core.store.get_ai_enabled()
     pii = bool(payload.get("pii", False))
