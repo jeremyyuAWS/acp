@@ -128,6 +128,74 @@ def test_purge_scan_deletes_by_prefix():
     assert len(result) == 3
 
 
+def test_purge_scan_also_deletes_checksum_keyed_sources_blobs():
+    """ADR 0020 §2: the sources cache keys a file by {owner}/{checksum} when a pre-download
+    checksum was known, dropping scan_id from the path — so the plain prefix sweep above
+    can't find it. Passing `checksums` (from store.scan_checksums) must delete those too."""
+    import blob as blob_mod
+
+    fake_container = MagicMock()
+    fake_container.list_blobs.return_value = []          # nothing under the scan_id prefix
+    fake_service = MagicMock()
+    fake_service.get_container_client.return_value = fake_container
+
+    with patch.object(blob_mod, "_service_client", return_value=fake_service):
+        result = blob_mod.purge_scan("alice@example.com", "s1", checksums=["ck1", "ck2"])
+
+    deleted = {c.args[0] for c in fake_container.delete_blob.call_args_list}
+    assert "alice@example.com/ck1" in deleted
+    assert "alice@example.com/ck2" in deleted
+    assert result[blob_mod._SOURCES_CONTAINER] == 2
+
+
+def test_purge_scan_without_checksums_only_does_the_prefix_sweep():
+    """Omitting `checksums` (the default) is unchanged from before ADR 0020 §2 — callers
+    that don't have them (e.g. any future caller besides delete_scan) see today's behavior."""
+    import blob as blob_mod
+
+    fake_container = MagicMock()
+    fake_container.list_blobs.return_value = []
+    fake_service = MagicMock()
+    fake_service.get_container_client.return_value = fake_container
+
+    with patch.object(blob_mod, "_service_client", return_value=fake_service):
+        result = blob_mod.purge_scan("alice@example.com", "s1")
+
+    assert not fake_container.delete_blob.called
+    assert result[blob_mod._SOURCES_CONTAINER] == 0
+
+
+# ── store.scan_checksums ─────────────────────────────────────────────────────
+
+def test_scan_checksums_returns_distinct_non_null_checksums(isolated_store):
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "INSERT INTO scan_runs (id, owner_email) VALUES (%s,%s)", ("s1", "alice@example.com"))
+        isolated_store._db.execute(cur,
+            "INSERT INTO file_records (scan_id, file, checksum) VALUES (%s,%s,%s)",
+            ("s1", "a.pdf", "ck1"))
+        isolated_store._db.execute(cur,
+            "INSERT INTO file_records (scan_id, file, checksum) VALUES (%s,%s,%s)",
+            ("s1", "b.pdf", "ck1"))          # duplicate checksum — dedup'd content
+        isolated_store._db.execute(cur,
+            "INSERT INTO file_records (scan_id, file, checksum) VALUES (%s,%s,%s)",
+            ("s1", "c.pdf", None))           # SharePoint/local — no checksum, excluded
+    result = isolated_store.scan_checksums("s1", "alice@example.com")
+    assert result == ["ck1"]
+
+
+def test_scan_checksums_is_owner_scoped(isolated_store):
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "INSERT INTO scan_runs (id, owner_email) VALUES (%s,%s)", ("s1", "alice@example.com"))
+        isolated_store._db.execute(cur,
+            "INSERT INTO file_records (scan_id, file, checksum) VALUES (%s,%s,%s)",
+            ("s1", "a.pdf", "ck1"))
+    # Bob cannot see Alice's checksums by guessing her scan_id
+    assert isolated_store.scan_checksums("s1", "bob@example.com") == []
+    assert isolated_store.scan_checksums("does-not-exist", "alice@example.com") == []
+
+
 # ── DELETE /scans/{sid} route ─────────────────────────────────────────────────
 
 @pytest.fixture()
@@ -163,6 +231,21 @@ def test_route_delete_scan_404_for_wrong_owner(app_client, isolated_store):
     with patch.object(blob_mod, "_service_client", return_value=None):
         resp = app_client.delete("/scans/scan-xyz")
     assert resp.status_code == 404
+
+
+def test_route_delete_scan_passes_checksums_to_purge_scan(app_client, isolated_store):
+    """The route must read scan_checksums BEFORE delete_scan (which removes the file_records
+    row that query reads) and forward the result to purge_scan, or a checksum-keyed source
+    blob outlives the HIPAA erasure that was supposed to remove it."""
+    _seed_scan(isolated_store, "scan-ck", "demo")
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "UPDATE file_records SET checksum=%s WHERE scan_id=%s", ("ck1", "scan-ck"))
+    import blob as blob_mod
+    with patch.object(blob_mod, "purge_scan", return_value={}) as mock_purge:
+        resp = app_client.delete("/scans/scan-ck")
+    assert resp.status_code == 200
+    mock_purge.assert_called_once_with("demo", "scan-ck", checksums=["ck1"])
 
 
 def test_route_delete_scan_appends_decision_log(app_client, isolated_store):

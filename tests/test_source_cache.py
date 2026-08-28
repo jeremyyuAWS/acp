@@ -1,10 +1,12 @@
-"""ADR 0020 stage 1 — the source-bytes blob cache seam.
+"""ADR 0020 — the source-bytes blob cache seam.
 
 A scan's download loop stashes each file's bytes in the blob 'sources' container as it
-downloads them. read_cached_source is the read side: a retry or resume of the SAME scan
-(e.g. a worker restart mid-Assess, or a retried ADR 0007 per-file job) checks the cache
-before hitting Drive/SharePoint again. A cache failure (or no blob configured) must never
-fail a scan — every miss falls back to the ordinary download path unchanged.
+downloads them, keyed by content checksum when one was known before download (Drive's
+md5Checksum) — so a LATER, different scan that re-encounters the same content is a cache
+hit, not just a retry of the same scan. Without a pre-download checksum (SharePoint, local),
+the key falls back to {owner}/{scan_id}/{filename} — a same-scan-retry benefit only. A cache
+failure (or no blob configured) must never fail a scan — every miss falls back to the
+ordinary download path unchanged.
 
 Hermetic: a fake in-memory BlobServiceClient stands in for Azure, so the tests prove the
 round-trip, the container/key layout, and the lazy-container retry without any infra.
@@ -89,6 +91,39 @@ def test_missing_sources_container_is_created_and_the_write_retried(fake_blob):
     assert ("sources", "demo/s1/f.docx") in fake_blob.store   # owner-less → 'demo', like ADR 0010
 
 
+# ── checksum-keyed cache: the cross-scan hit ────────────────────────────────────
+
+def test_checksum_keyed_write_is_found_by_a_different_scan(fake_blob):
+    # The whole point of re-keying: scan1 caches "deck.pptx" under its content checksum;
+    # scan2, downloading a file with the SAME checksum under a DIFFERENT name, hits it.
+    fake_blob.containers.add("sources")
+    url = blob.upload_source("a@x.io", "scan1", "deck.pptx", b"PK-bytes", checksum="abc123")
+    assert url and url.endswith("/sources/a@x.io/abc123")
+    assert blob.download_source("a@x.io", "scan2", "renamed-deck.pptx", checksum="abc123") == b"PK-bytes"
+    # A read for the SAME scan/name but the WRONG checksum is still a miss — the checksum,
+    # not the scan_id/filename, is what decides identity once one is given.
+    assert blob.download_source("a@x.io", "scan1", "deck.pptx", checksum="different") is None
+
+
+def test_no_checksum_falls_back_to_scan_id_keying_no_cross_scan_bleed(fake_blob):
+    # Unchanged from ADR 0020 §1: SharePoint/local (checksum=None) still key by scan_id, so
+    # two scans of an unrelated file never collide just for lacking a checksum.
+    fake_blob.containers.add("sources")
+    blob.upload_source("a@x.io", "scan1", "deck.pptx", b"PK-bytes")
+    assert blob.download_source("a@x.io", "scan1", "deck.pptx") == b"PK-bytes"
+    assert blob.download_source("a@x.io", "scan2", "deck.pptx") is None
+
+
+def test_checksum_and_scan_id_keys_never_collide(fake_blob):
+    # A checksum string can never equal a real scan_id/filename path (the key shapes are
+    # disjoint: one segment vs two), but pin it down explicitly rather than assuming.
+    fake_blob.containers.add("sources")
+    blob.upload_source("a@x.io", "scan1", "deck.pptx", b"scan-id-keyed")
+    blob.upload_source("a@x.io", "scan1", "deck.pptx", b"checksum-keyed", checksum="abc123")
+    assert blob.download_source("a@x.io", "scan1", "deck.pptx") == b"scan-id-keyed"
+    assert blob.download_source("a@x.io", "scan1", "deck.pptx", checksum="abc123") == b"checksum-keyed"
+
+
 def test_unconfigured_blob_is_a_silent_noop():
     # No ACP_BLOB_ACCOUNT (the default in this suite) → every call returns None, never raises.
     assert blob.upload_source("a@x.io", "s", "f", b"d") is None
@@ -103,6 +138,16 @@ def test_cache_source_bytes_uploads_the_downloaded_file(tmp_path, monkeypatch, f
     (tmp_path / "report.docx").write_bytes(b"DOCX")
     scanner.cache_source_bytes(tmp_path, "report.docx", "scanX", "u@x.io")
     assert fake_blob.store[("sources", "u@x.io/scanX/report.docx")] == b"DOCX"
+
+
+def test_cache_source_bytes_with_checksum_is_found_by_read_from_a_different_scan(
+        tmp_path, monkeypatch, fake_blob):
+    fake_blob.containers.add("sources")
+    monkeypatch.setattr(blob, "enabled", lambda: True)
+    (tmp_path / "report.docx").write_bytes(b"DOCX")
+    scanner.cache_source_bytes(tmp_path, "report.docx", "scan1", "u@x.io", checksum="ck1")
+    assert fake_blob.store[("sources", "u@x.io/ck1")] == b"DOCX"
+    assert scanner.read_cached_source("scan2", "report.docx", "u@x.io", checksum="ck1") == b"DOCX"
 
 
 def test_cache_source_bytes_never_raises(tmp_path, monkeypatch):
@@ -144,25 +189,30 @@ def test_read_cached_source_never_raises(monkeypatch, fake_blob):
     assert scanner.read_cached_source("scan1", "f.docx", "u@x.io") is None
 
 
-# ── wiring: BOTH download paths write AND read the cache ────────────────────────
+# ── wiring: BOTH download paths write AND read the cache, checksum included ─────
 
-def test_both_scan_paths_cache_after_download():
+def test_both_scan_paths_cache_after_download_with_checksum():
     api = Path(__file__).resolve().parent.parent / "api"
     scan_src = (api / "scanner.py").read_text()
     hand_src = (api / "handlers.py").read_text()
     # monolithic read loop (run_scan) and the fan-out per-file body both call the helper
-    # immediately after _download — the ADR's 'open once' seam has no uncovered path.
-    assert "cache_source_bytes(tmp, it[\"name\"], scan_id, user)" in scan_src
-    assert "cache_source_bytes(tmp, name, scan_id, user)" in hand_src
+    # immediately after _download, passing the item's pre-download checksum through so a
+    # cache write can be found by a LATER, different scan — the ADR's 'open once' seam has
+    # no uncovered path.
+    assert 'cache_source_bytes(tmp, it["name"], scan_id, user' in scan_src
+    assert 'checksum=it.get("checksum")' in scan_src
+    assert "cache_source_bytes(tmp, name, scan_id, user, checksum=checksum)" in hand_src
 
 
 def test_both_scan_paths_check_the_cache_before_download():
     api = Path(__file__).resolve().parent.parent / "api"
     scan_src = (api / "scanner.py").read_text()
     hand_src = (api / "handlers.py").read_text()
-    # Both download sites now try read_cached_source before calling _download, so a
-    # retry/resume of the same scan can skip Drive/SharePoint on a hit.
-    assert "read_cached_source(scan_id, it[\"name\"], user)" in scan_src
-    assert scan_src.index("read_cached_source(scan_id, it[\"name\"], user)") < scan_src.index('_download(it, tmp, svc, sp_token=sp_token)')
-    assert "read_cached_source(scan_id, name, user)" in hand_src
-    assert hand_src.index("read_cached_source(scan_id, name, user)") < hand_src.index("_download(it, tmp, svc, sp_token=toks.get(\"sp\"))")
+    # Both download sites now try read_cached_source (with the item's checksum) before
+    # calling _download, so an unchanged file is a cache hit across scans, not just within one.
+    read_call = 'read_cached_source(scan_id, it["name"], user, checksum=it.get("checksum"))'
+    assert read_call in scan_src
+    assert scan_src.index(read_call) < scan_src.index('_download(it, tmp, svc, sp_token=sp_token)')
+    read_call_h = "read_cached_source(scan_id, name, user, checksum=checksum)"
+    assert read_call_h in hand_src
+    assert hand_src.index(read_call_h) < hand_src.index("_download(it, tmp, svc, sp_token=toks.get(\"sp\"))")
