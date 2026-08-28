@@ -56,6 +56,30 @@ describe('deriveDiscoverProcessingState', () => {
     expect(d.severity).toBe('waiting')
   })
 
+  it('reports "Worker assigned" once the durable-queue job has been claimed, with elapsed time', () => {
+    const d = deriveDiscoverProcessingState({
+      busy: true, phase: 'queued', jobClaimed: true, assignedSecsAgo: 12.7,
+    })
+    expect(d.state).toBe('assigned')
+    expect(d.headline).toMatch(/worker assigned/i)
+    expect(d.detail).toMatch(/claimed this job 13s ago/i)
+    expect(d.severity).toBe('active')
+    expect(d.pickupUnavailable).toBeFalsy()
+  })
+
+  it('falls back to generic assigned copy when no claim timestamp is known', () => {
+    const d = deriveDiscoverProcessingState({ busy: true, phase: 'queued', jobClaimed: true })
+    expect(d.detail).toMatch(/a worker has claimed this job/i)
+  })
+
+  it('prefers "Worker assigned" over a degraded-capacity queued message once claimed', () => {
+    const d = deriveDiscoverProcessingState({
+      busy: true, phase: 'queued', capacityState: 'unavailable', jobClaimed: true, assignedSecsAgo: 3,
+    })
+    expect(d.headline).toMatch(/worker assigned/i)
+    expect(d.severity).toBe('active')
+  })
+
   it('explains degraded capacity instead of the generic queued message', () => {
     const d = deriveDiscoverProcessingState({ busy: true, phase: 'queued', capacityState: 'starting' })
     expect(d.detail).toMatch(/a worker is starting/i)

@@ -22,7 +22,7 @@ import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 import DiscoverCompleteSummary from './DiscoverCompleteSummary.jsx'
 import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
 import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation,
-         acknowledgeScan, unacknowledgeScan, checkReadiness } from './api.js'
+         acknowledgeScan, unacknowledgeScan, checkReadiness, getQueueJob } from './api.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
 import { discoveryFailureReason } from './discoveryFailureReason.js'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
@@ -101,7 +101,7 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 // `me` arrived with Upload, which folded in here when v2 dropped its top-level
 // tab. Both OPTIONAL: every existing caller and test constructs Discover without them, and the
 // ad-hoc panel simply does not render when `me` is absent rather than throwing.
-export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, preflightDegraded = null, preflightCapacityState = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
+export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, preflightDegraded = null, preflightCapacityState = null, scanPct = 0, scanId = null, jobId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
   hasSPToken = false, runAt = null, run = null, scanList = null, rawFiles = null, onStop = null, onViewMonitor = null }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
   // component is given neither — Discover takes scanId and scope, not the run. The pieces it needs
@@ -156,6 +156,23 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
     checkReadiness().then((r) => { if (live) setReadiness(r) })
     return () => { live = false }
   }, [busy])
+  // Worker-assignment signal (PRD "Live Discover Journey", Phase 1): GET /jobs/{id} carries a
+  // real claim timestamp (jobs.locked_at) — the same one AssessRunner already polls for its own
+  // job — that nothing on Discover read before. Polled only for the pre-listing window (job
+  // queued, nothing found yet); once a real listing tick lands, progress.phase leaves 'queued'
+  // and this stops — nothing past that point needs it, since the busy/discovering state already
+  // implies a worker is active.
+  const [discoverJobInfo, setDiscoverJobInfo] = useState(null)
+  useEffect(() => {
+    setDiscoverJobInfo(null)
+    const phase = progress?.phase ?? null
+    if (!busy || !jobId || (phase && phase !== 'queued')) return undefined
+    let live = true
+    const load = () => getQueueJob(jobId).then((d) => { if (live) setDiscoverJobInfo(d) }).catch(() => {})
+    load()
+    const id = setInterval(load, 3000)
+    return () => { live = false; clearInterval(id) }
+  }, [busy, jobId, progress?.phase])
   const [inv, setInv] = useState(null)
   useEffect(() => {
     let live = true
@@ -525,6 +542,9 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           busy, phase: progress?.phase ?? null, freshness: progress?.freshness ?? run?.freshness ?? null,
           runStatus: run?.status ?? null, failureReason, capacityState: preflightCapacityState,
           discoveredCount, elapsedSecs: progress?.elapsed ?? null,
+          jobClaimed: !!(discoverJobInfo && discoverJobInfo.status && discoverJobInfo.status !== 'queued'),
+          assignedSecsAgo: discoverJobInfo?.locked_at
+            ? (Date.now() - Date.parse(discoverJobInfo.locked_at)) / 1000 : null,
         })}
         onRerun={() => onScan('all')}
         onViewMonitor={onViewMonitor}

@@ -32,6 +32,12 @@ const STAGE_HEADLINE = {
 export function deriveDiscoverProcessingState({
   busy, phase, freshness, runStatus, failureReason, capacityState, discoveredCount = null,
   elapsedSecs = null,
+  // Whether the durable-queue job (GET /jobs/{id}, polled only while nothing has progressed
+  // yet — see Discover.jsx) has been claimed by a worker, and how long ago. This is a REAL
+  // claim timestamp (jobs.locked_at), the same one AssessRunner's own job strip already reads
+  // for the identical reason: "queued, nobody's claimed it" and "a worker claimed it Ns ago and
+  // is opening the source" are different situations that used to render identically here.
+  jobClaimed = false, assignedSecsAgo = null,
 } = {}) {
   if (!busy && runStatus === 'failed') {
     return {
@@ -71,6 +77,17 @@ export function deriveDiscoverProcessingState({
     }
   }
   if (busy && phase === 'queued') {
+    if (jobClaimed) {
+      return {
+        state: 'assigned',
+        headline: 'Worker assigned',
+        detail: assignedSecsAgo != null
+          ? `A worker claimed this job ${Math.round(assignedSecsAgo)}s ago and is opening the source.`
+          : 'A worker has claimed this job and is opening the source.',
+        recommendedAction: null,
+        severity: 'active',
+      }
+    }
     const degraded = capacityState && capacityState !== 'ready'
     return {
       state: 'queued',
