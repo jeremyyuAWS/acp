@@ -200,8 +200,13 @@ describe('App renders the gate once and routes every entry point through it', ()
   const code = codeOf('App.jsx')
 
   it('opens the gate via requestScan instead of scanning inline', () => {
-    expect(code).toMatch(/const requestScan = \(source, folder = null\) => setPendingScan/)
+    // Third argument (2026-08-28): `folderFirst` lets a caller that already knows the user wants
+    // to narrow to a folder — Discover's "Choose folder to scan…" — open the gate pre-set to
+    // "Specific folders" instead of re-asking "entire source or specific folders?" from scratch.
+    expect(code).toMatch(/const requestScan = \(source, folder = null, \{ folderFirst = false \} = \{\}\) =>/)
+    expect(code).toMatch(/setPendingScan\(\{ source, folder, folderFirst \}\)/)
     expect(code).toMatch(/<ScanReviewModal/)
+    expect(code).toMatch(/startInFolderMode=\{pendingScan\.folderFirst\}/)
     // The confirm is the only path that dispatches doScan. It now also carries the wizard's
     // per-run folder scope as a third argument — the intent (one dispatch path) is unchanged.
     expect(code).toMatch(/onConfirm=\{[\s\S]*?doScan\(source, folder, runScope\)/)
