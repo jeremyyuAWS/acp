@@ -41,3 +41,42 @@ describe('a failed discovery run', () => {
     expect(c.textContent).not.toMatch(/discovery did not finish/i)
   })
 })
+
+// Found live 2026-08-28: a scan that got orphaned (worker died without ever reaching a terminal
+// status) showed "0 documents discovered" with no explanation — status stayed 'running' forever,
+// which the 'failed' banner above never covers, and 'cancelled'/'interrupted' (a stop the codebase
+// already tracks distinctly elsewhere, e.g. DiscoverRunProgress's own "Discovery stopped" card)
+// had no banner here at all when viewed without live progress data. All three are the same shape
+// as the failed-run gap this file already pins: a status that means "don't trust these counts",
+// silently indistinguishable from a genuinely clean, complete, empty scan.
+describe('a run whose counts should not be trusted (stuck, stopped, or interrupted)', () => {
+  it('flags a scan stuck at "running" with nothing here tracking it live', async () => {
+    const c = await mount({ scope: null, run: { id: 's3', status: 'running' }, busy: false })
+    expect(c.textContent).toMatch(/still shows as running/i)
+    expect(c.querySelector('[role="alert"]')).toBeTruthy()
+  })
+
+  it('does not flag "running" while this tab IS actively tracking it (busy)', async () => {
+    const c = await mount({ scope: null, run: { id: 's3', status: 'running' }, busy: true })
+    expect(c.textContent).not.toMatch(/still shows as running/i)
+  })
+
+  it('explains a user-cancelled run distinctly from a failure', async () => {
+    const c = await mount({ scope: null, run: { id: 's4', status: 'cancelled' } })
+    expect(c.textContent).toMatch(/stopped before it finished/i)
+    expect(c.textContent).not.toMatch(/discovery did not finish/i)
+  })
+
+  it('explains a server-interrupted run distinctly from both a failure and a cancel', async () => {
+    const c = await mount({ scope: null, run: { id: 's5', status: 'interrupted' } })
+    expect(c.textContent).toMatch(/interrupted before it finished/i)
+    expect(c.textContent).not.toMatch(/discovery did not finish/i)
+    expect(c.textContent).not.toMatch(/stopped before it finished/i)
+  })
+
+  it('shows none of these banners for a healthy discovered run', async () => {
+    const c = await mount({ scope: { kind: 'drive', inventory: { discovered: 5 } },
+                            run: { id: 's6', status: 'discovered' }, busy: false })
+    expect(c.querySelector('[role="alert"]')).toBeFalsy()
+  })
+})
