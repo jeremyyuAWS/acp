@@ -226,11 +226,19 @@ def _backoff_seconds(attempts: int, base: float = 2.0, cap: float = 300.0) -> fl
 
 
 class JobWorker:
-    def __init__(self, store, *, worker_id: str | None = None, poll_interval: float = 0.5):
+    def __init__(self, store, *, worker_id: str | None = None, poll_interval: float = 0.5,
+                 on_retry=None):
         self.store = store
         self.worker_id = worker_id or f"worker-{uuid.uuid4().hex[:8]}"
         self.poll_interval = poll_interval
         self._running = False
+        # Optional (job_id: str, patch: dict) -> None hook, called after a transient failure
+        # is requeued (never on dead-letter). Dependency-injected rather than imported here:
+        # this module is intentionally infrastructure-only (see its docstring) and does not
+        # know about core.update_job/Redis — core.py wires this to update_job when it spawns
+        # workers, so the frontend's live job poll can distinguish "still running" from "failed,
+        # waiting to retry" instead of showing the last attempt's frozen progress in between.
+        self.on_retry = on_retry
 
     def run_once(self) -> bool:
         """Claim and process at most one job. Returns True if a job was handled
@@ -291,6 +299,23 @@ class JobWorker:
             force_dead, backoff = job_retry_policy(eclass, job["attempts"])
             self.store.fail_job(job["id"], msg, backoff_seconds=backoff,
                                 force_dead=force_dead, error_class=eclass)
+            # fail_job returns "queued" even when a zombie worker's write was actually
+            # suppressed by the reclaim-race guard (see test_job_completion_race.py) — a
+            # second worker may already have completed or dead-lettered this exact job_id.
+            # Re-read the row rather than trusting that return value, so a zombie's late
+            # failure can never announce "retrying" over a job that already finished.
+            if self.on_retry:
+                try:
+                    fresh = self.store.get_job(job["id"])
+                    if fresh and fresh.get("status") == "queued":
+                        self.on_retry(job["id"], {
+                            "phase": "retrying",
+                            "attempt": job["attempts"],
+                            "max_attempts": job.get("max_attempts"),
+                            "last_error": msg[:200],
+                        })
+                except Exception:
+                    pass  # best-effort — a progress-signal failure must never affect the retry
         finally:
             _cancel_local.check = None
             stop_hb.set()

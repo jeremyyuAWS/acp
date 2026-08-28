@@ -703,7 +703,11 @@ def _spawn_worker() -> None:
     import threading
     from worker import JobWorker
     global _worker_seq
-    w = JobWorker(get_store(), worker_id=f"w{_worker_seq}")
+    # on_retry=update_job: lets a worker announce "failed, waiting to retry" on the live job
+    # poll/SSE stream without worker.py importing core (it is deliberately infra-only — see its
+    # own docstring). See _job_is_stale's phase=='retrying' exemption below for why this signal
+    # can outlive the normal 90s staleness window (backoff can run up to 600s).
+    w = JobWorker(get_store(), worker_id=f"w{_worker_seq}", on_retry=update_job)
     t = threading.Thread(target=w.run_forever, daemon=True, name=f"jobworker-{_worker_seq}")
     _worker_seq += 1
     t.start()
@@ -986,8 +990,16 @@ def _job_is_stale(state: dict) -> bool:
     """True if `state` describes unfinished work with no liveness signal recent enough to trust.
     A MISSING updated_at (a job written before this instrumentation existed, or one whose replica
     died before its first heartbeat) counts as stale, not exempt — that is precisely the case the
-    live incident above was."""
-    if state.get("done"):
+    live incident above was.
+
+    phase=='retrying' is exempt for the same reason 'done' is: it is a legitimate WAITING state,
+    not a stalled one. No worker holds this job while it sits out its backoff — heartbeats
+    stop by design — and rate-limit backoff alone can run up to 600s, well past the normal 90s
+    staleness window. The exemption is bounded in practice: fail_job's own idempotency guard
+    (see worker.py's on_retry call) only ever writes this phase when the job is genuinely
+    'queued' for another attempt, and the next real attempt overwrites it with a live phase
+    within seconds of being claimed."""
+    if state.get("done") or state.get("phase") == "retrying":
         return False
     ts = state.get("updated_at")
     if not ts:
