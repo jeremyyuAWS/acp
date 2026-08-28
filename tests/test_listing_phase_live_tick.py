@@ -155,3 +155,73 @@ def test_listing_progress_omits_folder_count_when_not_given(isolated_store, monk
     assert seen, "progress_cb (_listing_progress) was never invoked"
     assert seen[0]["files_found"] == 7
     assert "folders_found" not in seen[0]
+
+
+def test_listing_progress_forwards_active_and_recent_folders_when_given(isolated_store, monkeypatch):
+    """scanner._search_folder's folder-activity slice reports which folders are being fetched
+    right now and the last few that finished (see its own header comment) — _listing_progress
+    must forward both onto the job state, the same channel files_found/phase already use, so
+    the frontend has something to read without a new endpoint."""
+    import core
+    import handlers
+    import scanner
+
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setenv("ACP_DEFER_ANALYSIS_TO_ASSESS", "1")
+
+    job_id = "j-listing-phase-activity"
+    core.JOBS[job_id] = {"phase": "queued"}
+    seen = []
+    active = [{"name": "Policies", "path": "My Drive/Policies", "started_at": "t0"}]
+    recent = [{"name": "Benefits", "path": "My Drive/Benefits", "state": "completed",
+              "files_found": 12, "completed_at": "t1"}]
+
+    def _list_stub(*a, **k):
+        cb = k.get("progress_cb")
+        cb(12, 4, active=active, recent=recent)
+        seen.append(dict(core.JOBS[job_id]))
+        return []
+
+    monkeypatch.setattr(scanner, "_list", _list_stub)
+
+    handlers._scan_discover(
+        {"scan_id": "sd-listing-phase-activity", "source": "local", "user": "test@example.com"},
+        {"scan_id": "sd-listing-phase-activity", "id": job_id},
+    )
+
+    assert seen, "progress_cb (_listing_progress) was never invoked"
+    assert seen[0]["active_folders"] == active
+    assert seen[0]["recent_folders"] == recent
+
+
+def test_listing_progress_omits_active_recent_when_not_given(isolated_store, monkeypatch):
+    """The flat Drive-query path (_search_drive) has no folder-activity concept yet and calls
+    progress_cb without active/recent — must not invent empty lists that would read as "nothing
+    is happening" instead of "this path doesn't track that"."""
+    import core
+    import handlers
+    import scanner
+
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setenv("ACP_DEFER_ANALYSIS_TO_ASSESS", "1")
+
+    job_id = "j-listing-phase-no-activity"
+    core.JOBS[job_id] = {"phase": "queued"}
+    seen = []
+
+    def _list_stub(*a, **k):
+        cb = k.get("progress_cb")
+        cb(7)
+        seen.append(dict(core.JOBS[job_id]))
+        return []
+
+    monkeypatch.setattr(scanner, "_list", _list_stub)
+
+    handlers._scan_discover(
+        {"scan_id": "sd-listing-phase-no-activity", "source": "local", "user": "test@example.com"},
+        {"scan_id": "sd-listing-phase-no-activity", "id": job_id},
+    )
+
+    assert seen, "progress_cb (_listing_progress) was never invoked"
+    assert "active_folders" not in seen[0]
+    assert "recent_folders" not in seen[0]
