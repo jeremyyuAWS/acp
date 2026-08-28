@@ -16,6 +16,14 @@ function fmtElapsedSecs(s) {
   return r ? `${m}m ${r}s` : `${m}m`
 }
 
+// Seconds since a real ISO timestamp, clamped to >= 0 (clock skew, or a timestamp that arrives
+// fractionally in the future relative to this tab's clock, must never show as negative).
+function secsSince(iso) {
+  if (!iso) return null
+  const ms = Date.now() - Date.parse(iso)
+  return Number.isFinite(ms) ? Math.max(0, Math.round(ms / 1000)) : null
+}
+
 function n(count) { return count.toLocaleString() }
 
 const ASSESSABLE_CLASSES = new Set(['slide-deck', 'text-document', 'pdf-document', 'spreadsheet', 'web-page'])
@@ -331,6 +339,46 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
               {lastError}
             </div>
           )}
+        </div>
+      </section>
+    )
+  }
+
+  // Queued card — a job has been enqueued but no worker has claimed it yet. Distinct from
+  // 'connecting' (a worker IS actively reaching the source): showing the same checklist for
+  // both, as this used to, told the user a connection attempt was underway when really nothing
+  // had started. No queue position (not tracked, and the PRD's own principle is to show one only
+  // when it's accurate) and no per-file checklist — there is nothing running yet to check off.
+  // "Created Ns ago" prefers progress.started_at (the real enqueue instant, threaded through
+  // queuedProgress.js on a refresh) over the component's own mount-relative `elapsed`, so
+  // reloading the page while queued does not reset the wait time back to zero.
+  if (busy && phase === 'queued') {
+    const waitedSecs = secsSince(progress.started_at) ?? elapsed
+    return (
+      <section className="discover-run-progress" role="region" aria-label="Discovery queued"
+               style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
+        <div className="assess-run-card" style={{ border: '1px solid var(--line,#e4e8ec)', borderRadius: 12,
+                                                  padding: '14px 16px', background: 'var(--panel,#fff)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 14.5, fontWeight: 650 }}>Discovery queued</div>
+            {onStop && (
+              <button type="button" className="ghost small" onClick={handleStop}
+                      disabled={stopping}
+                      title="Cancel this queued Discovery — nothing has started yet">
+                {stopping ? 'Cancelling…' : 'Cancel'}
+              </button>
+            )}
+          </div>
+          <div role="status" aria-live="polite" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span className="prep-pulse" aria-hidden="true" />
+            <span style={{ fontSize: 13.5 }}>
+              Waiting for an available worker
+              <span className="muted" style={{ marginLeft: 8, fontVariantNumeric: 'tabular-nums' }}>
+                · created {fmtElapsedSecs(waitedSecs)} ago
+              </span>
+            </span>
+          </div>
         </div>
       </section>
     )
