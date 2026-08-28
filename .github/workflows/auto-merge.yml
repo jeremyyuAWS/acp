@@ -12,7 +12,33 @@ jobs:
       pull-requests: write
       contents: write
     steps:
+      # GH_TOKEN must NOT be secrets.GITHUB_TOKEN. GitHub does not run other workflows off
+      # anything the default token does (merges included) — it exists specifically to stop a
+      # workflow from recursively triggering itself. Enabling auto-merge with it worked fine (the
+      # PR shows "auto-merge enabled"), but the SQUASH ITSELF, performed later by GitHub's platform
+      # once required checks pass, inherits that same non-triggering identity. Every push it
+      # produces to main is invisible to `on: push` — ci.yml, matrix-progress-log.yml, and by
+      # extension deploy.yml (which only fires off ci.yml's own `workflow_run` completion) all go
+      # silent. Found live 2026-08-28: two consecutive real merges landed with zero push-triggered
+      # CI runs for either — production sat 11+ hours behind main before anyone noticed, and the
+      # only reason it surfaced was a manual review of the deploy history, not an alert.
+      #
+      # A personal PAT was the first fix here and it is directionally right (a merge performed
+      # with one is a normal push again, not GITHUB_TOKEN-flavored) — but it shares its owner's
+      # OWN GraphQL rate-limit bucket with everything else that account does anywhere: this repo's
+      # own manual API checks, any other automation under that login, anything. It failed on its
+      # very first real run with "GraphQL: API rate limit already exceeded", for reasons entirely
+      # unrelated to this workflow. A GitHub App installation token draws from the App's own
+      # separate pool instead, so nothing outside this workflow can ever starve it. Minted fresh
+      # each run (it expires in ~1h, unlike a PAT) from AUTOMERGE_APP_ID / AUTOMERGE_APP_PRIVATE_KEY
+      # — the App needs only Contents: RW and Pull requests: RW, installed on this repo alone.
+      - name: Generate a token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.AUTOMERGE_APP_ID }}
+          private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
       - name: Enable squash auto-merge
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: gh pr merge --squash --auto "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}"
