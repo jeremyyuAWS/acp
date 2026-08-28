@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement, act } from 'react'
 import { createTestRoot, unmountAll } from './testRoots.js'
 
@@ -22,6 +22,7 @@ vi.mock('./api.js', () => ({
   unacknowledgeScan: vi.fn(),
   getQueueJob: (...a) => getQueueJob(...a),
   getJobs: (...a) => getJobs(...a),
+  setWorkers: vi.fn(() => Promise.resolve({ workers: 0 })),
 }))
 
 const { default: Discover } = await import('./Discover.jsx')
@@ -40,6 +41,10 @@ const rerender = async (props) => {
   })
 }
 const settle = async (n = 4) => { for (let k = 0; k < n; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
+// Discover also mounts an UNCONDITIONAL worker-availability poll (WorkerAvailability, #925) that
+// calls this same getJobs() on every render regardless of busy/phase — give it a default so a
+// test that isn't exercising that strip doesn't hit a bare, unresolved vi.fn().
+beforeEach(() => { getJobs.mockResolvedValue({ workers: 0, worker_tier_alive: false, jobs: [] }) })
 afterEach(() => { unmountAll(); getQueueJob.mockReset(); getJobs.mockReset() })
 
 // ProcessingStatusPanel renders each fact as a [label-div, value-div] pair — find the value next
@@ -85,13 +90,16 @@ describe('the richer queued card', () => {
     expect(factValue(c, 'Worker pool')).toBe('offline')
   })
 
-  it('does not poll GET /jobs once real listing progress has started', async () => {
+  it('stops asking for queue context once real listing progress has started', async () => {
+    // getJobs() itself is still called — WorkerAvailability (#925) polls it unconditionally,
+    // the whole time this tab is mounted, for an unrelated reason (ambient worker-pool
+    // visibility). This queue-context effect's own call — status='queued' — is what should stop.
     await mount({
       scope: null, run: { id: 's3', status: 'running' }, busy: true, jobId: 'j1',
       progress: { phase: 'discovering', elapsed: 5, files_found: 10 },
     })
     await settle()
-    expect(getJobs).not.toHaveBeenCalled()
+    expect(getJobs).not.toHaveBeenCalledWith('queued')
   })
 })
 

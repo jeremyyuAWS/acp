@@ -2183,41 +2183,50 @@ def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _l
                                         detail=f"from scan {reused_from_scan}: {pinfo['total']} item(s)")
         else:
             try:
-                # An earlier file in this scan already proved the credential cannot read Drive.
-                # Downloading anyway costs six HTTP round-trips (MediaIoBaseDownload retries
-                # five times) to re-learn it, per file. Raise the known reason instead and let
-                # the handler below record the row exactly as it would have.
-                # Drive only, and never a local file: `source` is what decides which credential
-                # the download will use, so it is what decides whether a Drive credential
-                # failure is relevant. A SharePoint or local-corpus scan is unaffected.
-                halted = (drive_download_halted(scan_id)
-                          if source == "drive" and not item.get("path") else None)
-                if halted:
-                    raise RuntimeError(halted)
-                it = {"name": name, "id": item.get("drive_file_id")}
-                if item.get("mime"):
-                    it["mime"] = item["mime"]
-                if item.get("path"):                       # local source — read from disk
-                    it["path"] = item["path"]
-                # SHAREPOINT GOES THROUGH GRAPH, NOT THE DRIVE CLIENT. Derived from the scan's own
-                # `source` rather than carried as a flag: a stored marker can drift out of step
-                # with the scan it belongs to, and this cannot. Without it `_download` fell through
-                # to files().get_media() with a Graph item id and every SharePoint file recorded
-                # status='error' — surfacing as "could not analyse — file unreadable" for files
-                # that were never fetched at all.
-                if source == "sharepoint" and not item.get("path"):
-                    it["sp"] = True
-                    # May be absent for a OneDrive listing, which genuinely has no driveId;
-                    # _sp_download reads that as /me/drive, which is correct there and ONLY there.
-                    if item.get("drive_id"):
-                        it["driveId"] = item["drive_id"]
                 _dl_t0 = _time.monotonic()
-                _download(it, tmp, svc, sp_token=toks.get("sp"))
-                # ADR 0020 §1 — cache the source bytes for a later Assess phase (best-effort,
-                # never blocks the scan). Dedup'd files skip this branch entirely: their bytes
-                # live under the PRIOR scan's key, which the stage-3 reader will fall back to.
-                from scanner import cache_source_bytes
-                cache_source_bytes(tmp, name, scan_id, user)
+                # ADR 0020 §1 read side: a retry/resume of this same scan may already have
+                # this file's bytes cached in blob (e.g. a worker restart mid-Assess, or a
+                # retried ADR 0007 per-file job) — skip Drive/SharePoint entirely on a hit,
+                # including the halted-credential check below, since no network call is made
+                # either way. Cache miss (or no blob configured) falls through unchanged.
+                from scanner import cache_source_bytes, read_cached_source
+                cached = read_cached_source(scan_id, name, user)
+                if cached is not None:
+                    (tmp / name).write_bytes(cached)
+                else:
+                    # An earlier file in this scan already proved the credential cannot read Drive.
+                    # Downloading anyway costs six HTTP round-trips (MediaIoBaseDownload retries
+                    # five times) to re-learn it, per file. Raise the known reason instead and let
+                    # the handler below record the row exactly as it would have.
+                    # Drive only, and never a local file: `source` is what decides which credential
+                    # the download will use, so it is what decides whether a Drive credential
+                    # failure is relevant. A SharePoint or local-corpus scan is unaffected.
+                    halted = (drive_download_halted(scan_id)
+                              if source == "drive" and not item.get("path") else None)
+                    if halted:
+                        raise RuntimeError(halted)
+                    it = {"name": name, "id": item.get("drive_file_id")}
+                    if item.get("mime"):
+                        it["mime"] = item["mime"]
+                    if item.get("path"):                       # local source — read from disk
+                        it["path"] = item["path"]
+                    # SHAREPOINT GOES THROUGH GRAPH, NOT THE DRIVE CLIENT. Derived from the scan's own
+                    # `source` rather than carried as a flag: a stored marker can drift out of step
+                    # with the scan it belongs to, and this cannot. Without it `_download` fell through
+                    # to files().get_media() with a Graph item id and every SharePoint file recorded
+                    # status='error' — surfacing as "could not analyse — file unreadable" for files
+                    # that were never fetched at all.
+                    if source == "sharepoint" and not item.get("path"):
+                        it["sp"] = True
+                        # May be absent for a OneDrive listing, which genuinely has no driveId;
+                        # _sp_download reads that as /me/drive, which is correct there and ONLY there.
+                        if item.get("drive_id"):
+                            it["driveId"] = item["drive_id"]
+                    _download(it, tmp, svc, sp_token=toks.get("sp"))
+                    # ADR 0020 §1 — cache the source bytes for a later Assess phase (best-effort,
+                    # never blocks the scan). Dedup'd files skip this branch entirely: their bytes
+                    # live under the PRIOR scan's key, which the stage-3 reader will fall back to.
+                    cache_source_bytes(tmp, name, scan_id, user)
                 _timings.add("download", _time.monotonic() - _dl_t0)   # ADR 0037 Step 0
                 # Stop BEFORE the expensive analysis. This file shares its logical name with
                 # another discovered file and carries ACP's in-document stamp, so it is our own

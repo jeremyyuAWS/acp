@@ -22,11 +22,12 @@ import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 import DiscoverCompleteSummary from './DiscoverCompleteSummary.jsx'
 import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
 import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation,
-         acknowledgeScan, unacknowledgeScan, checkReadiness, getQueueJob, getJobs } from './api.js'
+         acknowledgeScan, unacknowledgeScan, checkReadiness, getQueueJob, getJobs, setWorkers } from './api.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
 import { discoveryFailureReason } from './discoveryFailureReason.js'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
 import { deriveDiscoverProcessingState } from './discoverProcessingState.js'
+import WorkerAvailability from './WorkerAvailability.jsx'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
@@ -199,6 +200,56 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
     const id = setInterval(load, 5000)
     return () => { live = false; clearInterval(id) }
   }, [busy, jobId, progress?.phase])
+  // "How many workers are available to pick up scan jobs" — the same GET /jobs signal
+  // AssessRunner's worker strip already polls (workers/alive/suggested), shown here so this
+  // question is answered directly on Discover instead of only inside a "Preparing capacity"
+  // banner. Polled the whole time this tab is mounted, not just while busy — the point is to
+  // tell a user BEFORE they click "Re-scan" whether anything would pick the job up, not only to
+  // narrate a run already in flight.
+  const [workerSnap, setWorkerSnap] = useState(null)
+  const [workerBusy, setWorkerBusy] = useState(false)
+  const [workerMsg, setWorkerMsg] = useState(null)
+  const workerMsgTimer = useRef(null)
+  useEffect(() => {
+    let live = true
+    const load = () => getJobs().then((d) => {
+      if (!live) return
+      setWorkerSnap({ workers: d.workers ?? 0, alive: !!d.worker_tier_alive,
+                      suggested: d.suggested_workers ?? 4, runtime_mode: d.runtime_mode ?? 'auto' })
+    }).catch(() => {})
+    load()
+    const id = setInterval(load, 10000)
+    return () => { live = false; clearInterval(id) }
+  }, [])
+  useEffect(() => () => clearTimeout(workerMsgTimer.current), [])
+  const adjustWorkers = (delta) => {
+    if (!workerSnap || workerBusy) return
+    const next = (delta === 1 && workerSnap.workers === 0)
+      ? (workerSnap.suggested ?? 4)
+      : Math.max(0, Math.min(16, workerSnap.workers + delta))
+    if (next === workerSnap.workers) return
+    const count = Math.abs(next - workerSnap.workers)
+    const noun = count === 1 ? 'worker' : 'workers'
+    clearTimeout(workerMsgTimer.current)
+    setWorkerMsg(next > workerSnap.workers ? `Starting ${count} ${noun}…` : `Stopping ${count} ${noun}…`)
+    setWorkerBusy(true)
+    const prev = workerSnap.workers
+    setWorkerSnap((s) => ({ ...s, workers: next }))   // optimistic
+    setWorkers(next)
+      .then((d) => {
+        const actual = d.workers ?? next
+        setWorkerSnap((s) => ({ ...s, workers: actual }))
+        setWorkerMsg(actual > 0 ? `${actual} ${actual === 1 ? 'worker' : 'workers'} active` : 'Workers stopped')
+      })
+      .catch(() => {
+        setWorkerSnap((s) => ({ ...s, workers: prev }))
+        setWorkerMsg('Failed to update — try again')
+      })
+      .finally(() => {
+        setWorkerBusy(false)
+        workerMsgTimer.current = setTimeout(() => setWorkerMsg(null), 3500)
+      })
+  }
   const [inv, setInv] = useState(null)
   useEffect(() => {
     let live = true
@@ -594,6 +645,11 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           from the last GET /scans/{id} the outer `scan` state holds, which during an active run
           can be the PREVIOUS scan's terminal value until this one settles. */}
       <DiscoverRunProgress progress={progress} busy={busy} onStop={onStop} onContinue={onAdvance} sources={sources} inv={inv} preflightDegraded={preflightDegraded} freshness={progress?.freshness ?? run?.freshness ?? null} />
+
+      {/* "How many workers are available to pick up scan jobs" — answered directly, ambiently, not
+          only inferred from a capacity banner mid-run. Polled the whole time this tab is mounted
+          (see the effect above), so it also answers the question BEFORE a scan is even started. */}
+      <WorkerAvailability snap={workerSnap} busy={workerBusy} msg={workerMsg} onAdjust={adjustWorkers} />
 
       {/* PRD "Processing status" — the Discover instance of the same panel Assess uses (#922),
           reusing the exact signals this tab already computes for its own terminal-status banners
