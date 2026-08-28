@@ -43,3 +43,19 @@ describe('non-queued (thread) scan path', () => {
     expect(src()).toMatch(/run\.finally\(/)
   })
 })
+
+describe('reconnecting freshness — durable-queue and reconnect poll loops', () => {
+  // 'reconnecting' (PRD §15) is a client-connection fact the backend cannot know: whether THIS
+  // browser's SSE push has died. It can't come from GET /scans/{id}'s freshness field (that
+  // classifies data currency from Redis/Postgres timestamps) — sseFailedRef is the only thing
+  // that actually knows the live channel is down. Source assertions, same reasoning as above:
+  // this is App.jsx closure state, not an importable module.
+  it('both poll loops compute freshness from sseFailedRef, overriding the server value while down', () => {
+    const matches = src().match(/sseFailedRef\.current \? 'reconnecting' : \(g\?\.run\?\.freshness \?\? null\)/g) || []
+    expect(matches.length).toBe(2)   // doScan's durable-queue loop + reconnectScan's loop
+  })
+
+  it('threads the computed freshness into setProgress on both loops', () => {
+    expect(src()).toMatch(/setProgress\(g \? \{ \.\.\.queuedProgress\(g, elapsed, job\), freshness \}/)
+  })
+})

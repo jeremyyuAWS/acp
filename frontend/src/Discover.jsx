@@ -492,7 +492,11 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           Replaces the shared .scanprog banner (suppressed by App.jsx when view==='discover')
           so the Discover tab stays scoped to inventory. No assessment workers, WCAG content,
           or findings appear here. */}
-      <DiscoverRunProgress progress={progress} busy={busy} onStop={onStop} onContinue={onAdvance} sources={sources} inv={inv} preflightDegraded={preflightDegraded} freshness={run?.freshness ?? null} />
+      {/* progress.freshness (set per-tick by App.jsx's poll loops, including 'reconnecting' when
+          the live SSE push has died) takes priority over run.freshness — the latter is a snapshot
+          from the last GET /scans/{id} the outer `scan` state holds, which during an active run
+          can be the PREVIOUS scan's terminal value until this one settles. */}
+      <DiscoverRunProgress progress={progress} busy={busy} onStop={onStop} onContinue={onAdvance} sources={sources} inv={inv} preflightDegraded={preflightDegraded} freshness={progress?.freshness ?? run?.freshness ?? null} />
 
       {/* Completion summary: immutable snapshot of what was found, with the "Continue" CTA.
           Appears only after discovery finishes — DiscoverRunProgress hides itself at that point. */}
