@@ -1875,12 +1875,10 @@ def _folder_name(svc, folder_id: str) -> str | None:
 
 def cache_source_bytes(tmp: Path, name: str, scan_id: str, user: str | None) -> None:
     """ADR 0020 stage 1: stash a just-downloaded file's original bytes in the blob source
-    cache ({owner}/{scan_id}/{filename} in the 'sources' container) so a later Assess phase
-    can re-read them without a second Drive/SharePoint download — the 'open each file once'
-    property, kept across the phase boundary. Strictly best-effort and non-blocking: a cache
-    failure (or no blob configured) must never fail or slow a scan, and NOTHING reads from
-    the cache yet — this stage only proves the bytes round-trip before anything depends on
-    them (ADR 0020 rollout §1)."""
+    cache ({owner}/{scan_id}/{filename} in the 'sources' container) so a retried or resumed
+    per-file job for this same scan (see read_cached_source) can skip a second Drive/
+    SharePoint download of a file this scan already fetched once. Strictly best-effort and
+    non-blocking: a cache failure (or no blob configured) must never fail or slow a scan."""
     try:
         import blob
         if not blob.enabled():
@@ -1888,6 +1886,22 @@ def cache_source_bytes(tmp: Path, name: str, scan_id: str, user: str | None) -> 
         blob.upload_source(user, scan_id, name, (tmp / name).read_bytes())
     except Exception:
         pass
+
+
+def read_cached_source(scan_id: str, name: str, user: str | None) -> bytes | None:
+    """ADR 0020 stage 1 read side: return this scan's previously-cached original bytes for
+    `name` (written by cache_source_bytes), or None on any cache miss, failure, or unconfigured
+    blob store — the caller's existing download path is the fallback either way. This is what
+    lets a retried/resumed per-file job (ADR 0007's durable fan-out) avoid re-hitting Drive or
+    SharePoint for a file this same scan already downloaded once, e.g. after a worker restart
+    mid-Assess. Best-effort and non-blocking, matching cache_source_bytes."""
+    try:
+        import blob
+        if not blob.enabled():
+            return None
+        return blob.download_source(user, scan_id, name)
+    except Exception:
+        return None
 
 
 def _download(item: dict, dest: Path, svc=None, sp_token: str | None = None) -> None:
@@ -3053,37 +3067,45 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                       "exc_missing_required": exc_missing_required,
                       "metadata_complete": n - exc_missing_optional,
                       "metadata_incomplete": exc_missing_optional})
-            try:
-                _download(it, tmp, svc, sp_token=sp_token)
-            except PermissionError:
-                exc_inaccessible_file += 1
-                skipped.add(it["name"])
-                continue
-            except Exception as _dl_exc:
-                # Detect 404 (item deleted between listing and download) vs generic failures.
-                _status = None
+            # ADR 0020 §1 read side: a retry/resume of this same scan may already have this
+            # file's bytes cached in blob (e.g. a worker restart mid-Assess) — skip a second
+            # Drive/SharePoint download when so. Cache miss (or no blob configured) falls
+            # through to the normal download path, unchanged.
+            cached = read_cached_source(scan_id, it["name"], user)
+            if cached is not None:
+                (tmp / it["name"]).write_bytes(cached)
+            else:
                 try:
-                    import httpx as _httpx
-                    if isinstance(_dl_exc, _httpx.HTTPStatusError):
-                        _status = _dl_exc.response.status_code
-                except Exception:
-                    pass
-                if _status is None:
+                    _download(it, tmp, svc, sp_token=sp_token)
+                except PermissionError:
+                    exc_inaccessible_file += 1
+                    skipped.add(it["name"])
+                    continue
+                except Exception as _dl_exc:
+                    # Detect 404 (item deleted between listing and download) vs generic failures.
+                    _status = None
                     try:
-                        from googleapiclient.errors import HttpError as _HttpError
-                        if isinstance(_dl_exc, _HttpError) and getattr(_dl_exc, "resp", None):
-                            _status = int(_dl_exc.resp.status)
+                        import httpx as _httpx
+                        if isinstance(_dl_exc, _httpx.HTTPStatusError):
+                            _status = _dl_exc.response.status_code
                     except Exception:
                         pass
-                if _status == 404:
-                    exc_deleted_during_scan += 1
-                elif _status in (401, 403):
-                    exc_inaccessible_file += 1
-                else:
-                    exc_metadata_failure += 1
-                skipped.add(it["name"])
-                continue
-            cache_source_bytes(tmp, it["name"], scan_id, user)   # ADR 0020 §1 — best-effort
+                    if _status is None:
+                        try:
+                            from googleapiclient.errors import HttpError as _HttpError
+                            if isinstance(_dl_exc, _HttpError) and getattr(_dl_exc, "resp", None):
+                                _status = int(_dl_exc.resp.status)
+                        except Exception:
+                            pass
+                    if _status == 404:
+                        exc_deleted_during_scan += 1
+                    elif _status in (401, 403):
+                        exc_inaccessible_file += 1
+                    else:
+                        exc_metadata_failure += 1
+                    skipped.add(it["name"])
+                    continue
+                cache_source_bytes(tmp, it["name"], scan_id, user)   # ADR 0020 §1 — best-effort
 
         # Remove skipped files from the items list so downstream phases don't try to analyse them.
         if skipped:

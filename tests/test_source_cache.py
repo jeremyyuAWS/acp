@@ -1,9 +1,10 @@
 """ADR 0020 stage 1 — the source-bytes blob cache seam.
 
-Discover downloads each file once; stage 1 stashes those bytes in the blob 'sources'
-container so a later Assess phase can re-read them without a second source download.
-This stage is groundwork only: NOTHING reads from the cache yet, a cache failure must
-never fail a scan, and without ACP_BLOB_ACCOUNT the whole seam is a silent no-op.
+A scan's download loop stashes each file's bytes in the blob 'sources' container as it
+downloads them. read_cached_source is the read side: a retry or resume of the SAME scan
+(e.g. a worker restart mid-Assess, or a retried ADR 0007 per-file job) checks the cache
+before hitting Drive/SharePoint again. A cache failure (or no blob configured) must never
+fail a scan — every miss falls back to the ordinary download path unchanged.
 
 Hermetic: a fake in-memory BlobServiceClient stands in for Azure, so the tests prove the
 round-trip, the container/key layout, and the lazy-container retry without any infra.
@@ -117,7 +118,33 @@ def test_cache_source_bytes_never_raises(tmp_path, monkeypatch):
     scanner.cache_source_bytes(tmp_path, "never-downloaded.pdf", "s", None)
 
 
-# ── wiring: BOTH download paths feed the cache ──────────────────────────────────
+# ── scanner.read_cached_source: the stage 1 read side ───────────────────────────
+
+def test_read_cached_source_returns_a_prior_cache_hit(fake_blob):
+    # fake_blob already sets blob._ENABLED = True for the duration of this test.
+    fake_blob.containers.add("sources")
+    blob.upload_source("u@x.io", "scan1", "deck.pptx", b"PK-bytes")
+    assert scanner.read_cached_source("scan1", "deck.pptx", "u@x.io") == b"PK-bytes"
+
+
+def test_read_cached_source_is_none_on_a_miss(fake_blob):
+    fake_blob.containers.add("sources")
+    assert scanner.read_cached_source("scan1", "never-cached.docx", "u@x.io") is None
+
+
+def test_read_cached_source_is_none_when_blob_unconfigured():
+    # No ACP_BLOB_ACCOUNT (the default in this suite) → miss, never raises.
+    assert scanner.read_cached_source("scan1", "f.docx", "u@x.io") is None
+
+
+def test_read_cached_source_never_raises(monkeypatch, fake_blob):
+    monkeypatch.setattr(blob, "enabled", lambda: True)
+    monkeypatch.setattr(blob, "download_source",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert scanner.read_cached_source("scan1", "f.docx", "u@x.io") is None
+
+
+# ── wiring: BOTH download paths write AND read the cache ────────────────────────
 
 def test_both_scan_paths_cache_after_download():
     api = Path(__file__).resolve().parent.parent / "api"
@@ -127,3 +154,15 @@ def test_both_scan_paths_cache_after_download():
     # immediately after _download — the ADR's 'open once' seam has no uncovered path.
     assert "cache_source_bytes(tmp, it[\"name\"], scan_id, user)" in scan_src
     assert "cache_source_bytes(tmp, name, scan_id, user)" in hand_src
+
+
+def test_both_scan_paths_check_the_cache_before_download():
+    api = Path(__file__).resolve().parent.parent / "api"
+    scan_src = (api / "scanner.py").read_text()
+    hand_src = (api / "handlers.py").read_text()
+    # Both download sites now try read_cached_source before calling _download, so a
+    # retry/resume of the same scan can skip Drive/SharePoint on a hit.
+    assert "read_cached_source(scan_id, it[\"name\"], user)" in scan_src
+    assert scan_src.index("read_cached_source(scan_id, it[\"name\"], user)") < scan_src.index('_download(it, tmp, svc, sp_token=sp_token)')
+    assert "read_cached_source(scan_id, name, user)" in hand_src
+    assert hand_src.index("read_cached_source(scan_id, name, user)") < hand_src.index("_download(it, tmp, svc, sp_token=toks.get(\"sp\"))")
