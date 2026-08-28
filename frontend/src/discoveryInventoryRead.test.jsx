@@ -251,3 +251,34 @@ describe('the scan ID on screen — QA and auditing need a name for this exact r
     expect(text()).not.toContain('Scan ID:')
   })
 })
+
+describe('raw scan data — clicking the scan ID surfaces scope + the decision log for support', () => {
+  it('is collapsed by default', async () => {
+    await render({ scope: { kind: 'drive', inventory: { discovered: 32 },
+                            enumeration: { auth_ok: true, files_found: 32, truncated: false } } })
+    expect(text()).not.toContain('RAW SCAN DATA')
+    expect(text()).toContain('show raw scan data')
+  })
+
+  it('reveals scope.enumeration and the decision log on click, copyable as one JSON blob', async () => {
+    const c = await render({
+      scope: { kind: 'drive', inventory: { discovered: 0 },
+               enumeration: { auth_ok: true, files_found: 0, truncated: false } },
+    })
+    const toggle = [...c.querySelectorAll('button')].find((b) => /show raw scan data/.test(b.textContent))
+    expect(toggle, 'no toggle to reveal the raw data').toBeTruthy()
+    await act(async () => { toggle.click() })
+    expect(text()).toContain('RAW SCAN DATA')
+    // The exact fields a "why did this find nothing" investigation starts from.
+    expect(text()).toContain('"auth_ok": true')
+    expect(text()).toContain('"files_found": 0')
+    expect(text()).toContain('scan-1')   // scan_id, inside the same JSON blob
+    expect(text()).toContain('Copy to clipboard')
+  })
+
+  it('is absent entirely when there is no scan on screen', async () => {
+    await render({ scanId: null, scope: null, files: [], run: null })
+    expect(text()).not.toContain('show raw scan data')
+    expect(text()).not.toContain('RAW SCAN DATA')
+  })
+})

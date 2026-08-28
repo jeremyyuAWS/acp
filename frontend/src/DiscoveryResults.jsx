@@ -124,8 +124,17 @@ export default function DiscoveryResults({
   // resolve truthy on success; the caller (Discover.jsx) owns refetching the inventory afterward
   // so the recorded override reaches this table on the next render.
   onOverrideRecommendation = null,
+  // For support/debugging (2026-08-28): the run's raw `scope` (includes `enumeration` — whether
+  // the source was reachable, the raw pre-filter file count, truncation) and its decision-log
+  // rows (system.py GET /decisions — the same audit trail a `scan.suspicious_zero` or
+  // `scan.unreachable_zero` entry lands in when discovery refuses to publish a zero it can't
+  // trust). Both are already loaded client-side for other reasons — Discover.jsx passes them
+  // straight through — so showing them here costs no extra request.
+  rawScope = null, rawDecisions = null,
 }) {
   const [filter, setFilter] = useState('all')
+  const [showRaw, setShowRaw] = useState(false)
+  const [copied, setCopied] = useState(false)
   // Uncontrolled by default, exactly like Discover's own `decisions` prop: a caller that wants the
   // overrides to survive a reload passes its own state in, and one that does not still gets a
   // working control.
@@ -208,10 +217,46 @@ export default function DiscoveryResults({
           copyable text rather than only the URL: the URL scrolls out of view, gets lost across a
           screenshot crop, and is not what a reviewer thinks to check first. */}
       {scanId && (
-        <p className="muted" style={{ margin: '4px 0 0', fontSize: 11.5,
-                                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
-          Scan ID: {scanId}
-        </p>
+        <>
+          <p className="muted" style={{ margin: '4px 0 0', fontSize: 11.5,
+                                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+            Scan ID: {scanId}{' '}
+            <button type="button" className="linklike" style={{ fontSize: 11.5 }}
+                    aria-expanded={showRaw} onClick={() => setShowRaw((s) => !s)}>
+              {showRaw ? '▾ hide raw scan data' : '▸ show raw scan data (for support)'}
+            </button>
+          </p>
+          {/* The whole point: something a user can select-all and paste into a support thread
+              without hunting through DevTools for the right network request and its auth header
+              — which is exactly what got asked for after that turned out to be the alternative.
+              scope.enumeration (auth_ok/files_found/truncated) and the decision-log rows are the
+              two places a "why did this find nothing" investigation actually starts. */}
+          {showRaw && (
+            <div className="panel" style={{ marginTop: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <h2 style={{ margin: 0 }}>RAW SCAN DATA</h2>
+                <span className="muted" style={{ fontSize: 11.5 }}>
+                  scope.enumeration and the decision log — the two places a "why did this find
+                  nothing" investigation starts
+                </span>
+                <button type="button" className="ghost small" style={{ marginLeft: 'auto' }}
+                        onClick={async () => {
+                          const blob = JSON.stringify(
+                            { scan_id: scanId, scope: rawScope, decisions: rawDecisions }, null, 2)
+                          try { await navigator.clipboard.writeText(blob) } catch { /* clipboard may be unavailable */ }
+                          setCopied(true); setTimeout(() => setCopied(false), 2000)
+                        }}>
+                  {copied ? 'Copied' : 'Copy to clipboard'}
+                </button>
+              </div>
+              <pre style={{ fontSize: 11, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                            maxHeight: 360, overflow: 'auto', margin: 0,
+                            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                {JSON.stringify({ scan_id: scanId, scope: rawScope, decisions: rawDecisions }, null, 2)}
+              </pre>
+            </div>
+          )}
+        </>
       )}
 
       <div style={{ display: 'flex', gap: 12, marginTop: 16, flexWrap: 'wrap' }}>
