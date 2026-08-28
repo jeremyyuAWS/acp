@@ -134,7 +134,8 @@ def test_progress_cb_receives_live_folder_count(monkeypatch):
 
     monkeypatch.setattr(scanner.time, "monotonic", _fake_monotonic)
     scanner._search_folder(drive, "root", max_files=100,
-                           progress_cb=lambda count, folders=None: ticks.append((count, folders)))
+                           progress_cb=lambda count, folders=None, active=None, recent=None:
+                           ticks.append((count, folders)))
     assert ticks, "progress_cb was never called"
     assert all(folders is not None for _, folders in ticks)
     # By the last tick, all 3 folders (root, A, B) have been entered.
