@@ -1481,7 +1481,16 @@ export default function App() {
             // While a scan/assessment is running, lock the OTHER numbered workflow steps: jumping
             // to Assess mid-scan would show the previous scan's data, not the one in flight. The
             // current view + the utility tabs (step 0) stay reachable.
-            const locked = busy && step > 0 && view !== k
+            //
+            // `k !== 'discover'`: `busy` is exclusively the Discover-scan flag (never set by
+            // AssessRunner — see the note on the runinfo section below), so Discover is never
+            // "other" relative to the thing making busy true. Without this, navigating away from
+            // Discover during a scan (to Overview, a step-0 tab that stays reachable) locked
+            // Discover itself out until the scan finished — the one tab a user watching a running
+            // scan would most want to click back into became the one tab they couldn't reach.
+            // Found live 2026-08-28 while adding the live-scan nav badge just below: the badge
+            // would have pointed at a tab nothing could open.
+            const locked = busy && step > 0 && k !== 'discover' && view !== k
             return (
               <button key={k} role="tab" aria-selected={view === k}
                       aria-current={view === k ? 'step' : undefined}
@@ -1493,6 +1502,21 @@ export default function App() {
                 <span className="tablbl">{done && <span className="vh">completed: </span>}{label}</span>
                 <span className="rg">{rg}</span>
                 {k === 'remediate' && hitlCount > 0 && <span title={`${hitlCount} document${hitlCount !== 1 ? 's' : ''} awaiting your review`} style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, minWidth: 16, height: 16, lineHeight: '16px', textAlign: 'center', padding: '0 5px', borderRadius: 9, background: '#B4690E', color: '#fff', display: 'inline-block' }}>{hitlCount}</span>}
+                {/* Every fix so far for "does the user know their scan is still running" lived
+                    entirely inside the Discover tab body — a user who navigates to Overview or
+                    Assess while a scan is queued/running saw nothing anywhere telling them so,
+                    and (until the `locked` fix just above) could not even click back into
+                    Discover to check. `.pulsedot` is the same green live-indicator already used
+                    for a running job elsewhere (QueuePanel, Monitor's audit trail, and the
+                    Discover progress card itself per #916) — reused here, not reinvented, so it
+                    reads as the same signal wherever it appears. Shown only while NOT already on
+                    Discover: the tab body's own cards already say this far more richly there. */}
+                {k === 'discover' && busy && view !== 'discover' && (
+                  <span title="A scan is running — open Discover to see progress" role="status"
+                        style={{ marginLeft: 6, display: 'inline-flex', alignItems: 'center' }}>
+                    <span className="pulsedot" aria-hidden="true" />
+                  </span>
+                )}
               </button>
             )
           })}
