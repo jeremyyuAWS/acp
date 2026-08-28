@@ -191,3 +191,55 @@ def test_does_not_let_a_scan_still_listing_masquerade_as_the_newest(prod_client)
     body = client.get("/monitor/estate", headers={"X-Monitor-Key": KEY}).json()
     assert body["scans"]["total"] == 1
     assert body["scans"]["recent_files"] == [5000]
+
+
+def test_sweep_defaults_reflect_a_never_configured_schedule(prod_client):
+    """No schedule ever saved — must not error, and must read as genuinely unconfigured."""
+    client, _store = prod_client
+    body = client.get("/monitor/estate", headers={"X-Monitor-Key": KEY}).json()
+    assert body["sweep"]["enabled"] is False
+    assert body["sweep"]["last_ok"] is None
+    assert body["sweep"]["last_files"] is None
+
+
+def test_sweep_reports_a_narrow_scoped_run_distinctly_from_a_collapse(prod_client):
+    """Found live 2026-08-28: the background sweep runs under the service-account ADC identity,
+    which can legitimately see far fewer files than a user's own OAuth-scoped manual scan of the
+    same source — a small number here looks IDENTICAL to a genuine collapse in
+    scans.recent_files alone. This is what lets the two be told apart: was the newest run
+    actually the scheduled sweep, and how many files did it, specifically, see."""
+    client, store = prod_client
+    store.save_schedule(True, 30, owner="alice@movate.com", source="drive")
+    store.record_sweep_outcome(ok=True, when="2026-08-28T14:20:00+00:00", source="drive",
+                               scan_id="sweep01", files=32)
+
+    body = client.get("/monitor/estate", headers={"X-Monitor-Key": KEY}).json()
+    assert body["sweep"]["enabled"] is True
+    assert body["sweep"]["interval_minutes"] == 30
+    assert body["sweep"]["last_ok"] is True
+    assert body["sweep"]["last_files"] == 32
+    assert body["sweep"]["last_at"] == "2026-08-28T14:20:00+00:00"
+
+
+def test_sweep_surfaces_a_failure_ok_false(prod_client):
+    client, store = prod_client
+    store.save_schedule(True, 30, owner="alice@movate.com", source="drive")
+    store.record_sweep_outcome(ok=False, when="2026-08-28T14:20:00+00:00", source="drive",
+                               error="insufficient authentication scopes")
+
+    body = client.get("/monitor/estate", headers={"X-Monitor-Key": KEY}).json()
+    assert body["sweep"]["last_ok"] is False
+    assert body["sweep"]["last_files"] is None
+
+
+def test_sweep_hands_over_no_owner_or_scan_identity(prod_client):
+    """Same counts-only contract as the rest of this route — the sweep addition must not become
+    the leak the other fields were designed to avoid."""
+    client, store = prod_client
+    store.save_schedule(True, 30, owner="alice@movate.com", source="drive")
+    store.record_sweep_outcome(ok=True, when="2026-08-28T14:20:00+00:00", source="drive",
+                               scan_id="sweep01", files=32)
+
+    raw = client.get("/monitor/estate", headers={"X-Monitor-Key": KEY}).text
+    assert "alice@movate.com" not in raw
+    assert "sweep01" not in raw

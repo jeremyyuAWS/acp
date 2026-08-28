@@ -2267,7 +2267,7 @@ class Store:
             if owner:
                 where += " AND owner_email=%s"; params = (owner,)
             self._db.execute(cur,
-                "SELECT id,completed_at,source,rubric_hash,files,certifiable,uncertain,error,avg_score,assessed_at,scope "
+                "SELECT id,completed_at,discovered_at,source,rubric_hash,files,certifiable,uncertain,error,avg_score,assessed_at,scope "
                 f"FROM scan_runs WHERE {where} "
                 "ORDER BY COALESCE(completed_at, discovered_at) DESC", params)
             rows = self._db.fetchall(cur)

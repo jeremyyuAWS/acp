@@ -157,3 +157,15 @@ def test_files_reflects_the_real_discovered_count(isolated_store):
     _discovered(st, "s1", OWNER, files=6922)
     row = st.list_finished_scans(owner=OWNER)[0]
     assert row["files"] == 6922
+
+
+def test_discovered_at_is_selected_so_a_caller_can_read_the_real_timestamp(isolated_store):
+    """Found live 2026-08-28: /schedule's last_at read `row["completed_at"]` alone off a
+    list_finished_scans() row and got None for a genuinely-newest Discover-only scan, because
+    discovered_at was never in the SELECT for a caller to fall back to. Pinning its presence so
+    that regression cannot come back silently."""
+    st = isolated_store
+    _discovered(st, "s1", OWNER, discovered_at="2026-08-28T09:05:00+00:00")
+    row = st.list_finished_scans(owner=OWNER)[0]
+    assert row["completed_at"] is None
+    assert row["discovered_at"] == "2026-08-28T09:05:00+00:00"

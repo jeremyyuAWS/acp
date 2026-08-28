@@ -416,6 +416,20 @@ def monitor_estate(request: Request):
     # in the first place).
     scans = core.store.list_finished_scans() or []
     pending = core.store.list_hitl_queue(status="pending") or []
+
+    # The background scheduler (core._do_scheduled_scan) runs under the service-account ADC
+    # identity, not a user's own OAuth token — it can legitimately see far fewer files than a
+    # user's manual scan of the same source, since ADC's Drive access is whatever the service
+    # account was explicitly granted, not the signed-in user's full permission set. Found live
+    # 2026-08-28: "newest scan is full-size" (below) has no way to tell that shape apart from a
+    # genuine collapse — both look identical, a small scan sitting where a large one was. This
+    # says whether the newest scan run WAS a scheduled sweep and how many files it saw, so the
+    # two causes stop being indistinguishable from the same three numbers.
+    #
+    # Config (enabled/interval) and a file COUNT only — no owner email, no scan id, matching
+    # this route's own counts-only contract.
+    cfg = core.store.get_schedule()
+    last_sweep = core.store.get_last_sweep()
     return {
         "service": "acp",
         "scans": {
@@ -425,6 +439,13 @@ def monitor_estate(request: Request):
             "recent_files": [int(s.get("files") or 0) for s in scans[:MONITOR_SCAN_WINDOW]],
         },
         "inbox": {"pending": len(pending)},
+        "sweep": {
+            "enabled": bool(cfg.get("enabled")),
+            "interval_minutes": cfg.get("interval_minutes"),
+            "last_ok": last_sweep.get("ok") if last_sweep else None,
+            "last_at": last_sweep.get("at") if last_sweep else None,
+            "last_files": last_sweep.get("files") if last_sweep else None,
+        },
     }
 
 
@@ -527,8 +548,14 @@ def schedule():
     cfg = core.store.get_schedule()
     job = core.scheduler.get_job("scheduled_local_scan")
     cfg["next_at"] = job.next_run_time.isoformat() if job and job.next_run_time else None
-    scans = core.store.list_scans()
-    cfg["last_at"] = scans[0]["completed_at"] if scans else None
+    # list_scans() filters to completed_at IS NOT NULL, which an ADR 0020 Discover-only run
+    # never sets (see list_finished_scans' own docstring) — a discover-only sweep landed here
+    # and last_at kept showing the last scan that was ever ASSESSED, which can be arbitrarily
+    # older than the estate's true last refresh. list_finished_scans() plus the same
+    # COALESCE(completed_at, discovered_at) its own ordering uses is the fix: whichever
+    # timestamp the newest row actually has.
+    scans = core.store.list_finished_scans()
+    cfg["last_at"] = (scans[0].get("completed_at") or scans[0].get("discovered_at")) if scans else None
     # The last sweep's OUTCOME, not just when a scan last completed. A failing sweep saves
     # nothing by design, so `last_at` keeps pointing at the last SUCCESSFUL scan and reads as
     # healthy while the estate quietly goes stale. None until a sweep has run.
