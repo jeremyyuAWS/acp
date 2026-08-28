@@ -80,3 +80,25 @@ describe('a run whose counts should not be trusted (stuck, stopped, or interrupt
     expect(c.querySelector('[role="alert"]')).toBeFalsy()
   })
 })
+
+// Found live 2026-08-28: a page showing a stale, already-terminal `run` (from BEFORE the
+// currently-tracked scan started — `run` is `scan?.run` in App.jsx, only replaced once a poll
+// SETTLES) rendered a live "Discovering documents" progress card directly above a "Discovery was
+// stopped before it finished" banner — true of two different scans, read as one. 'running' already
+// guarded on `!busy` for the same reason; 'failed' and 'cancelled'/'interrupted' did not.
+describe('a stale terminal run does not shadow a scan that is actively in flight', () => {
+  it('suppresses the "failed" banner while a new scan is busy', async () => {
+    const c = await mount({ scope: null, run: { id: 's1', status: 'failed' }, busy: true })
+    expect(c.textContent).not.toMatch(/discovery did not finish/i)
+  })
+
+  it('suppresses the "cancelled" banner while a new scan is busy', async () => {
+    const c = await mount({ scope: null, run: { id: 's4', status: 'cancelled' }, busy: true })
+    expect(c.textContent).not.toMatch(/stopped before it finished/i)
+  })
+
+  it('suppresses the "interrupted" banner while a new scan is busy', async () => {
+    const c = await mount({ scope: null, run: { id: 's5', status: 'interrupted' }, busy: true })
+    expect(c.textContent).not.toMatch(/interrupted before it finished/i)
+  })
+})
