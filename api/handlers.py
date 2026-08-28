@@ -1321,6 +1321,16 @@ def _scan_discover(payload: dict, job: dict) -> None:
     from rubric import Rubric
     from scanner import _list, _drive_service, ACP, FANOUT_MAX_FILES, _scope_for_listing
     scan_id = payload.get("scan_id") or job.get("scan_id")
+    # Populate scan_to_job:{scan_id} as early as possible so GET /scans/{scan_id}/discover/stream
+    # can find this job's live Redis state. Found live 2026-08-28: no call anywhere in this durable
+    # (queue=true) handler ever included "scan_id" in an update_job patch, so
+    # core.get_job_id_for_scan(scan_id) — which reads ONLY that Redis mapping, with no fallback to
+    # the jobs table's own scan_id column — returned None for every durable scan on any replica
+    # that didn't happen to still hold it in the per-process _SCAN_JOB_MAP fallback. The SSE stream
+    # then fell through to its 4-miss giveup path after ~1s, degrading every durable scan straight
+    # to the Postgres-checkpoint fallback frame instead of ever actually going live.
+    if job.get("id") and scan_id:
+        core.update_job(job["id"], {"scan_id": scan_id})
     source = payload.get("source", "drive")
     ai = bool(payload.get("ai", True)) and core.store.get_ai_enabled()
     pii = bool(payload.get("pii", False))
