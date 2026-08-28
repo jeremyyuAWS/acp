@@ -565,14 +565,25 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
             (worker died without ever reaching a terminal status) looks IDENTICAL to a healthy
             small one here unless this says so. Deliberately does not attempt to distinguish
             "still genuinely running elsewhere" from "stuck forever" — this tab cannot tell either
-            way, and both deserve the same "don't trust this yet" reading. */}
-      {run?.status === 'failed' && (
+            way, and both deserve the same "don't trust this yet" reading.
+
+          ALL THREE now also require `!busy`. `run` is `scan?.run`, which App.jsx only replaces
+          once a poll SETTLES — while a scan is in flight (doScan/reconnectScan), `run` still
+          describes whatever scan was on screen before this one started, not the one `busy` and
+          the progress card above are tracking. `running` already guarded on this; `failed` and
+          `cancelled`/`interrupted` did not, so a brand-new scan's live "Discovering documents"
+          card could render directly above a banner reading "Discovery was stopped before it
+          finished" or "did not finish" — both true, about two different scans, read as one.
+          Found live 2026-08-28: a reconnected scan stuck at "Discovering documents · 41m
+          elapsed" sat under a stale "Discovery was stopped" banner left over from the PRIOR
+          scan on this source, which really had been cancelled. */}
+      {run?.status === 'failed' && !busy && (
         <div className="err" role="alert" style={{ marginBottom: 12 }}>
           Discovery did not finish — the last attempt to list this source failed. The counts below
           are incomplete or stale. Re-run discovery to get a current inventory.
         </div>
       )}
-      {(run?.status === 'cancelled' || run?.status === 'interrupted') && (
+      {(run?.status === 'cancelled' || run?.status === 'interrupted') && !busy && (
         <div className="err" role="alert" style={{ marginBottom: 12 }}>
           {run.status === 'cancelled'
             ? 'Discovery was stopped before it finished.'
