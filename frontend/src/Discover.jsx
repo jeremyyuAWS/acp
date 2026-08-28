@@ -599,6 +599,24 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           shortly.
         </div>
       )}
+      {/* A scan can be `status: 'queued'` on the displayed run without this tab tracking it live
+          (busy=false) — e.g. the default-scan pick lands on a just-created scan this tab never
+          reconnected to. `busy && progress.phase === 'queued'` (the estatebar guard just below,
+          and the "Discovery queued" card in DiscoverRunProgress) only covers the case where THIS
+          tab started or reconnected to it; this covers the case where it did not. Without this,
+          "0 documents discovered · 0 could not be read" reads as a completed, genuinely empty
+          scan — found live 2026-08-28 on scan 90203ef148e3. Informational, not `err` styling: a
+          scan that has not started yet is not a failure the way stuck/cancelled/failed are. */}
+      {run?.status === 'queued' && !busy && (
+        <div className="readywarn" role="status" style={{ marginBottom: 12, padding: '10px 14px',
+                                                          borderRadius: 8,
+                                                          background: 'var(--blue-bg,#eef4ff)',
+                                                          border: '1px solid var(--blue,#3b82f6)',
+                                                          color: 'var(--blue-ink,#1e40af)' }}>
+          This scan is queued and has not started yet — the counts below are not from this scan.
+          It will begin automatically once a worker is free.
+        </div>
+      )}
 
       {/* A listing that ran to completion but did NOT cover the whole source. The backend has
           recorded this in scope.enumeration since the resilience work, and nothing read it — so a
@@ -670,12 +688,17 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         {/* Text description only shown while busy or before a scan completes — once the full
             discovery card above appears it covers this same information more richly.
 
-            Suppressed while phase === 'queued': DiscoverRunProgress is already showing its own
-            "Discovery queued — waiting for an available worker" card immediately above, which
-            says nothing has started. This line's "0 documents discovered" is bold and reads as a
-            result, not a caveat — the "provisional" note next to it is small italic text easily
-            missed. A scan that hasn't started yet showed as prominently as a genuine empty one. */}
-        {(busy || !(run?.discovered_at || run?.status === 'discovered')) && progress?.phase !== 'queued' && (
+            Suppressed while progress.phase === 'queued' (this tab is tracking a scan it just
+            started/reconnected to): DiscoverRunProgress is already showing its own "Discovery
+            queued — waiting for an available worker" card immediately above, which says nothing
+            has started. Also suppressed while run.status === 'queued' with busy false (this tab
+            is showing a queued scan it is NOT tracking live): the banner just above this one now
+            covers that case instead. Either way, this line's "0 documents discovered" is bold and
+            reads as a result, not a caveat — the "provisional" note next to it is small italic
+            text easily missed. A scan that hasn't started yet showed as prominently as a genuine
+            empty one — found live 2026-08-28 twice, once for each of these two paths. */}
+        {(busy || !(run?.discovered_at || run?.status === 'discovered'))
+          && progress?.phase !== 'queued' && run?.status !== 'queued' && (
           <div>
             <b>{discoveredCount} documents</b> discovered across {sources.length} sources · {Object.keys(groups).length} departments
             {busy && (

@@ -126,3 +126,16 @@ describe('the live banner while a scan is queued (not yet claimed by a worker)',
     expect(t).toMatch(/0 documents discovered/i)
   })
 })
+
+// Same shape, different path: found live 2026-08-28, scan 90203ef148e3. Here `progress` is null
+// (this tab is not tracking the scan — busy is false) but the DISPLAYED run's own status is
+// 'queued'. The queued-progress-card guard above never fires (no progress object at all), so
+// without this the bold zero line rendered alone, with no "Discovery queued" card and no caveat —
+// read as a completed, genuinely empty scan. The informational banner from discoverFailedRun.test
+// covers the explanation; this confirms the zero-count line itself is also suppressed.
+describe('the live banner for a queued run this tab is not tracking (busy false)', () => {
+  it('is suppressed when run.status is "queued" even with no progress object at all', async () => {
+    const t = await mount({ files: [], scope: null, busy: false, run: { id: 's7', status: 'queued' } })
+    expect(t).not.toMatch(/documents discovered/i)
+  })
+})
