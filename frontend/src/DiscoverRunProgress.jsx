@@ -465,6 +465,23 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
                   aria-hidden="true">
               {fmtElapsedSecs(elapsed)} elapsed
             </span>
+            {/* 'live' is a real value api/routes/scans.py's _scan_freshness computes — the job's
+                Redis state updated within the last 30s — distinct from null/undefined (the field
+                simply absent) and from the three degraded states below. It was already flowing
+                through App.jsx's poll loops into this prop and being silently dropped: the three
+                bad states got a colored badge, the good one got no visual confirmation at all,
+                which reads as "unknown" rather than "confirmed live". Reuses .pulsedot, the same
+                green live-indicator dot already used for a running job elsewhere (QueuePanel,
+                Monitor's audit trail) — same visual language, not a new one. */}
+            {freshness === 'live' && (
+              <span title="Receiving live updates for this scan" role="status"
+                    style={{ fontSize: 11.5, padding: '2px 7px', borderRadius: 4,
+                             background: 'var(--green-bg,#f0f7e6)', color: 'var(--green,#3B6D11)',
+                             border: '1px solid var(--green-line,#a8cf7a)',
+                             display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <span className="pulsedot" aria-hidden="true" /> live
+              </span>
+            )}
             {freshness === 'reconnecting' && (
               <span title="Live connection lost — reconnecting. Discovery may still be running." role="status"
                     style={{ fontSize: 11.5, padding: '2px 7px', borderRadius: 4,
