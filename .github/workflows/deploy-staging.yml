@@ -52,6 +52,11 @@ on:
         description: "Commit to deploy to staging (default: current main)"
         required: false
         type: string
+      skip_ci_gate:
+        description: "Bypass redeploy.sh's CI-conclusion gate (ACP_SKIP_CI_GATE=1) — for a manual dispatch when CI is red on a known-unrelated flake, not routine use"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   # Same hazard as prod: two staging deploys at once race the CalVer ordinal and could split
@@ -115,6 +120,10 @@ jobs:
           ACP_RG: ${{ vars.STAGING_RG || 'mdk-accessibility' }}
           ACP_APP: ${{ vars.STAGING_APP || 'acp-app-staging' }}
           ACP_WORKER: ${{ vars.STAGING_WORKER || 'acp-worker-staging' }}
+          # Only reachable via an explicit manual dispatch with the checkbox set — `inputs` is
+          # empty on the auto (workflow_run) trigger, so this is unset there and the gate behaves
+          # exactly as before. See the input's own description for when this is legitimate.
+          ACP_SKIP_CI_GATE: ${{ inputs.skip_ci_gate && '1' || '' }}
         run: bash deploy/public/redeploy.sh
 
       - name: Confirm staging reports the new build
