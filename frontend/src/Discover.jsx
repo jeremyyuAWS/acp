@@ -24,6 +24,7 @@ import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
 import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation,
          acknowledgeScan, unacknowledgeScan, checkReadiness } from './api.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
+import { discoveryFailureReason } from './discoveryFailureReason.js'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
@@ -220,6 +221,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
     () => (errLog ? buildUnreadableWhy(errLog, estateFiles) : null),
     [errLog, estateFiles],
   )
+  const failureReason = useMemo(() => discoveryFailureReason(errLog), [errLog])
 
   // The folder portion of a file's path, when it carries one — real scans name files by path
   // (`HR/policies/leave.docx`), SIM by bare filename. Empty string when there is no folder.
@@ -577,10 +579,23 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           Found live 2026-08-28: a reconnected scan stuck at "Discovering documents · 41m
           elapsed" sat under a stale "Discovery was stopped" banner left over from the PRIOR
           scan on this source, which really had been cancelled. */}
+      {/* failureReason reads api/handlers.py's _scan_discover's own decision-log entry for THIS
+          failure (scan.discover_conflict / scan.discover_failed / scan.suspicious_zero /
+          scan.unreachable_zero — see discoveryFailureReason.js). Every one of those is a
+          different, specific, already-recorded reason — a single-flight rejection because
+          another scan of this source is still running reads nothing like an expired token or a
+          dead API, and until this they were indistinguishable, both behind the same generic "the
+          last attempt to list this source failed". Shown verbatim, not paraphrased: a restatement
+          of what was logged, the same choice unreadableWhy.js makes for per-file reasons, so the
+          banner can never say something the log does not back up. Falls back to the old generic
+          text only when nothing was recorded (e.g. a transient DB error mid-check logs no
+          decision at all) — never fabricated. */}
       {run?.status === 'failed' && !busy && (
         <div className="err" role="alert" style={{ marginBottom: 12 }}>
-          Discovery did not finish — the last attempt to list this source failed. The counts below
-          are incomplete or stale. Re-run discovery to get a current inventory.
+          {failureReason
+            ? <>Discovery did not finish: {failureReason}.</>
+            : 'Discovery did not finish — the last attempt to list this source failed.'}
+          {' '}The counts below are incomplete or stale. Re-run discovery to get a current inventory.
         </div>
       )}
       {(run?.status === 'cancelled' || run?.status === 'interrupted') && !busy && (

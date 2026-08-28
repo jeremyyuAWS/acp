@@ -1,4 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import { createElement, act } from 'react'
 import { createTestRoot, unmountAll } from './testRoots.js'
 
@@ -10,6 +13,29 @@ import { createTestRoot, unmountAll } from './testRoots.js'
 // of them the honest text for "nothing happened yet", none of them saying discovery actually broke.
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
+
+// source — the failed banner reads the SPECIFIC recorded reason, not a static string.
+//
+// discoveryFailureReason.js is fully covered as a pure function in its own test file; a DOM test
+// here would need to mock the async listScanDecisions() fetch that populates errLog, which is
+// exactly the pattern this codebase already avoids for the sibling feature next to it
+// (buildUnreadableWhy/errLog — see unreadableWhy.test.jsx for the pure-function coverage and
+// discoveryResultsWiring.test.jsx for the source check, never a mocked-fetch DOM test). A source
+// regex is what catches the failure mode that actually matters here: the import or the prop name
+// silently drifting so the banner falls back to the generic text for every failure, forever.
+const here = dirname(fileURLToPath(import.meta.url))
+const discoverSrc = readFileSync(join(here, 'Discover.jsx'), 'utf8')
+describe('source — the failed banner reads the recorded reason', () => {
+  it('imports discoveryFailureReason and derives it from errLog', () => {
+    expect(discoverSrc).toMatch(/import \{ discoveryFailureReason \} from '\.\/discoveryFailureReason\.js'/)
+    expect(discoverSrc).toMatch(/discoveryFailureReason\(errLog\)/)
+  })
+
+  it('renders failureReason in the failed banner, with the old generic text only as a fallback', () => {
+    expect(discoverSrc).toMatch(/failureReason\s*\n?\s*\? <>Discovery did not finish: \{failureReason\}\.<\/>/)
+    expect(discoverSrc).toMatch(/the last attempt to list this source failed/)
+  })
+})
 
 const { default: Discover } = await import('./Discover.jsx')
 
