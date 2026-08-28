@@ -20,8 +20,8 @@ const SEVERITY_COLORS = {
   info: { bg: 'var(--surface)', border: 'var(--line)', ink: 'var(--ink)' },
 }
 
-export default function ProcessingStatusPanel({ derived, onStartWorkers, onViewMonitor }) {
-  const { state, headline, detail, recommendedAction, severity } = derived || {}
+export default function ProcessingStatusPanel({ derived, onStartWorkers, onRerun, onViewMonitor }) {
+  const { state, headline, detail, recommendedAction, severity, pickupUnavailable } = derived || {}
   if (!state || state === 'idle') return null
   const c = SEVERITY_COLORS[severity] || SEVERITY_COLORS.info
 
@@ -44,12 +44,22 @@ export default function ProcessingStatusPanel({ derived, onStartWorkers, onViewM
           Start workers
         </button>
       )}
+      {recommendedAction === 'rerun' && onRerun && (
+        <button onClick={onRerun} style={{ marginTop: 8, padding: '4px 12px', borderRadius: 5,
+                 border: `1px solid ${c.ink}`, background: c.ink, color: '#fff', fontSize: 12,
+                 fontWeight: 600, cursor: 'pointer' }}>
+          Re-run
+        </button>
+      )}
       {recommendedAction === 'check_worker_service' && (
         <div style={{ marginTop: 4, fontSize: 12 }}>
           Check that the worker service is reachable and that documents are not repeatedly failing.
         </div>
       )}
-      {(state === 'waiting' || state === 'no_capacity') && (
+      {/* Driven by the derivation, not a hardcoded state-name list here: a THIRD caller
+          (Remediate) will have its own state vocabulary, and this component should not need to
+          know it. Each deriveXState() sets this explicitly on the states where it applies. */}
+      {pickupUnavailable && (
         <div className="muted" style={{ marginTop: 4, fontSize: 11.5, fontStyle: 'italic' }}>
           Pickup time not available — not enough completed-job history is tracked yet to estimate one.
         </div>

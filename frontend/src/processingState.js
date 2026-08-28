@@ -27,6 +27,7 @@ export function deriveProcessingState({
         + 'online to process them.',
       recommendedAction: 'start_workers',
       severity: 'blocked',
+      pickupUnavailable: true,
     }
   }
   if (stalled) {
@@ -70,5 +71,6 @@ export function deriveProcessingState({
       + (lastActivityMins != null ? ` Last activity ${lastActivityMins} min ago.` : ''),
     recommendedAction: null,
     severity: 'waiting',
+    pickupUnavailable: true,
   }
 }

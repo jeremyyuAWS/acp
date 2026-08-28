@@ -25,6 +25,8 @@ import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation,
          acknowledgeScan, unacknowledgeScan, checkReadiness } from './api.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
 import { discoveryFailureReason } from './discoveryFailureReason.js'
+import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
+import { deriveDiscoverProcessingState } from './discoverProcessingState.js'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
@@ -100,7 +102,7 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 // tab. Both OPTIONAL: every existing caller and test constructs Discover without them, and the
 // ad-hoc panel simply does not render when `me` is absent rather than throwing.
 export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, preflightDegraded = null, preflightCapacityState = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
-  hasSPToken = false, runAt = null, run = null, scanList = null, rawFiles = null, onStop = null }) {
+  hasSPToken = false, runAt = null, run = null, scanList = null, rawFiles = null, onStop = null, onViewMonitor = null }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
   // component is given neither — Discover takes scanId and scope, not the run. The pieces it needs
   // are assembled here rather than threading the whole run object through a new prop; the resolver
@@ -511,6 +513,22 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           from the last GET /scans/{id} the outer `scan` state holds, which during an active run
           can be the PREVIOUS scan's terminal value until this one settles. */}
       <DiscoverRunProgress progress={progress} busy={busy} onStop={onStop} onContinue={onAdvance} sources={sources} inv={inv} preflightDegraded={preflightDegraded} freshness={progress?.freshness ?? run?.freshness ?? null} />
+
+      {/* PRD "Processing status" — the Discover instance of the same panel Assess uses (#922),
+          reusing the exact signals this tab already computes for its own terminal-status banners
+          below (failureReason from #919, the same capacity signal the "Preparing Discovery
+          capacity" notice reads) rather than a second, possibly-diverging notion of the same
+          thing. Additive, not a replacement for those banners yet — same rollout shape as Assess's
+          own panel. */}
+      <ProcessingStatusPanel
+        derived={deriveDiscoverProcessingState({
+          busy, phase: progress?.phase ?? null, freshness: progress?.freshness ?? run?.freshness ?? null,
+          runStatus: run?.status ?? null, failureReason, capacityState: preflightCapacityState,
+          discoveredCount, elapsedSecs: progress?.elapsed ?? null,
+        })}
+        onRerun={() => onScan('all')}
+        onViewMonitor={onViewMonitor}
+      />
 
       {/* Completion summary: immutable snapshot of what was found, with the "Continue" CTA.
           Appears only after discovery finishes — DiscoverRunProgress hides itself at that point. */}

@@ -1667,7 +1667,7 @@ export default function App() {
              it is a secondary action inside Discover now, which is where "get files in front
              of ACP" already lives. Dropping it outright would have removed the only way to try
              a single ad-hoc file without wiring a whole source. */
-          onStop={() => stopScan(liveScanId)} me={me} />}
+          onStop={() => stopScan(liveScanId)} me={me} onViewMonitor={() => setView('monitor')} />}
 
         {view === 'assess' && (run ? (
           <>

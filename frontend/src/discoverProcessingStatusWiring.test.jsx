@@ -1,0 +1,82 @@
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import { createElement, act } from 'react'
+import { createTestRoot, unmountAll } from './testRoots.js'
+
+// Proves Discover actually wires its own live signals into the shared ProcessingStatusPanel
+// (the same component Assess uses, #922) — deriveDiscoverProcessingState is covered on its own
+// (discoverProcessingState.test.js); this is the DOM leg, matching this codebase's own
+// SOURCE/DOM/unit split used elsewhere (see discoveryResultsWiring.test.jsx's own header comment).
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true
+
+const { default: Discover } = await import('./Discover.jsx')
+
+let container, root
+const mount = async (props) => {
+  ;({ container, root } = createTestRoot())
+  await act(async () => {
+    root.render(createElement(Discover, { sources: [], files: [], busy: false, onScan: () => {}, ...props }))
+  })
+  return container
+}
+afterEach(() => unmountAll())
+
+describe('the Processing status panel on Discover', () => {
+  it('shows the failure reason from discoveryFailureReason via the errLog it already loads', async () => {
+    // errLog populates async (listScanDecisions) — SIM mode with no scanId means it never
+    // fires, so this proves the FALLBACK generic text renders, matching the pure-function's own
+    // "no reason recorded" case. The live wiring (real errLog → real reason text) is covered at
+    // the unit level in discoverProcessingState.test.js; scanId-driven async population is
+    // exercised by discoverFailedRun.test.jsx's own sibling tests for the same errLog signal.
+    const c = await mount({ scope: null, run: { id: 's1', status: 'failed' }, busy: false })
+    expect(c.textContent).toMatch(/discovery did not finish/i)
+  })
+
+  it('shows a queued explanation with no pickup estimate when this tab is not tracking the scan', async () => {
+    const c = await mount({ scope: null, run: { id: 's2', status: 'queued' }, busy: false })
+    expect(c.textContent).toMatch(/queued.{0,10}not started yet/i)
+    expect(c.textContent).toMatch(/pickup time not available/i)
+  })
+
+  it('shows "waiting for a worker" while this tab is tracking a freshly queued scan', async () => {
+    const c = await mount({
+      scope: null, run: { id: 's3', status: 'queued' }, busy: true,
+      progress: { phase: 'queued', started_at: '2026-08-28T21:00:00Z' },
+    })
+    expect(c.textContent).toMatch(/waiting for a worker/i)
+  })
+
+  it('shows the active discovery stage while busy and progressing', async () => {
+    const c = await mount({
+      scope: { kind: 'drive', inventory: { discovered: 12 } }, run: { id: 's4', status: 'running' },
+      busy: true, progress: { phase: 'discovering', elapsed: 5 },
+    })
+    expect(c.textContent).toMatch(/discovering documents/i)
+    expect(c.textContent).toMatch(/12 found so far/i)
+  })
+
+  it('offers a "View in Monitor" link that calls the onViewMonitor prop', async () => {
+    const onViewMonitor = vi.fn()
+    const c = await mount({ scope: null, run: { id: 's5', status: 'failed' }, busy: false, onViewMonitor })
+    const link = [...c.querySelectorAll('button')].find((b) => b.textContent.includes('View in Monitor'))
+    expect(link, 'no View in Monitor link rendered').toBeTruthy()
+    await act(async () => { link.click() })
+    expect(onViewMonitor).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers a Re-run button for a failed scan that calls onScan("all")', async () => {
+    const onScan = vi.fn()
+    const c = await mount({ scope: null, run: { id: 's6', status: 'failed' }, busy: false, onScan })
+    const btn = [...c.querySelectorAll('button')].find((b) => b.textContent === 'Re-run')
+    expect(btn, 'no Re-run button rendered').toBeTruthy()
+    await act(async () => { btn.click() })
+    expect(onScan).toHaveBeenCalledWith('all')
+  })
+
+  it('renders nothing from this panel for a healthy, already-discovered run', async () => {
+    const c = await mount({
+      scope: { kind: 'drive', inventory: { discovered: 5 } }, run: { id: 's7', status: 'discovered' }, busy: false,
+    })
+    expect(c.querySelector('[aria-label="Processing status"]')).toBeFalsy()
+  })
+})

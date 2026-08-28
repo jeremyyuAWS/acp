@@ -53,6 +53,18 @@ describe('ProcessingStatusPanel', () => {
     expect([...c.querySelectorAll('button')].some((b) => b.textContent === 'Start workers')).toBe(false)
   })
 
+  it('shows a Re-run button and calls onRerun when clicked — a different caller, same action shape', async () => {
+    const onRerun = vi.fn()
+    const c = await mount({
+      derived: { state: 'failed', headline: 'Discovery did not finish', detail: '', recommendedAction: 'rerun', severity: 'blocked' },
+      onRerun,
+    })
+    const btn = [...c.querySelectorAll('button')].find((b) => b.textContent === 'Re-run')
+    expect(btn).toBeTruthy()
+    await act(async () => { btn.click() })
+    expect(onRerun).toHaveBeenCalledTimes(1)
+  })
+
   it('shows the worker-service recommendation for a stalled run', async () => {
     const c = await mount({
       derived: { state: 'stalled', headline: 'Assessment may be stalled', detail: '', recommendedAction: 'check_worker_service', severity: 'warning' },
@@ -60,12 +72,21 @@ describe('ProcessingStatusPanel', () => {
     expect(c.textContent).toMatch(/check that the worker service is reachable/i)
   })
 
-  it('says pickup time is not available for waiting and no_capacity, but not for assessing or completed', async () => {
-    const waiting = await mount({ derived: { state: 'waiting', headline: 'h', detail: '', recommendedAction: null, severity: 'waiting' } })
-    expect(waiting.textContent).toMatch(/pickup time not available/i)
-    await unmountAll()
-    const assessing = await mount({ derived: { state: 'assessing', headline: 'h', detail: '', recommendedAction: null, severity: 'active' } })
-    expect(assessing.textContent).not.toMatch(/pickup time not available/i)
+  it('says pickup time is not available when derived sets pickupUnavailable', async () => {
+    // Driven by the flag, not a hardcoded state-name list — a caller with its own state
+    // vocabulary (Discover, Remediate) sets this explicitly rather than the component guessing
+    // from a name it may not recognize. See processingState.js for the Assess states that set it.
+    const c = await mount({
+      derived: { state: 'waiting', headline: 'h', detail: '', recommendedAction: null, severity: 'waiting', pickupUnavailable: true },
+    })
+    expect(c.textContent).toMatch(/pickup time not available/i)
+  })
+
+  it('does not say pickup time is unavailable when the flag is absent', async () => {
+    const c = await mount({
+      derived: { state: 'assessing', headline: 'h', detail: '', recommendedAction: null, severity: 'active' },
+    })
+    expect(c.textContent).not.toMatch(/pickup time not available/i)
   })
 
   it('renders a "View in Monitor" link that calls onViewMonitor', async () => {
