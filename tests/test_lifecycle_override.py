@@ -130,6 +130,39 @@ def test_route_writes_both_audit_tables_and_returns_the_updated_row(client):
     assert dec[0]["actor"] == OWNER
 
 
+def test_a_repeated_identical_override_does_not_duplicate_the_audit_row(client):
+    """PRD §20 idempotency audit, 2026-08-28: the disposition_audit id used to be uuid.uuid4()
+    here, so a double-click or an HTTP client retry of this POST inserted a second, distinct
+    audit row for what was meant to be one user action. The id is now deterministic from
+    (sid, filename, rule_id, reason), so an exact repeat collides via ON CONFLICT(id) DO NOTHING
+    instead of duplicating."""
+    c, st = client
+    _seed(st, "s1", "Finance/old.pdf", rule_id="r-42")
+    same_reason = "under active legal hold"
+    r1 = c.post("/scans/s1/files/Finance/old.pdf/lifecycle-override", json={"reason": same_reason})
+    assert r1.status_code == 200
+    r2 = c.post("/scans/s1/files/Finance/old.pdf/lifecycle-override", json={"reason": same_reason})
+    assert r2.status_code == 200
+
+    audit = st.list_disposition_audit(owner=OWNER)
+    hits = [a for a in audit if a["doc_id"] == "scan:s1:Finance/old.pdf"]
+    assert len(hits) == 1, "a retried/double-submitted override must not duplicate the audit row"
+
+
+def test_a_genuinely_new_override_with_a_different_reason_is_still_recorded(client):
+    """The dedup must not be so aggressive it drops a real second override — a human changing
+    their mind later, with a new reason, is a distinct, legitimate audit event."""
+    c, st = client
+    _seed(st, "s1", "Finance/old.pdf", rule_id="r-42")
+    c.post("/scans/s1/files/Finance/old.pdf/lifecycle-override", json={"reason": "first reason"})
+    c.post("/scans/s1/files/Finance/old.pdf/lifecycle-override", json={"reason": "second, different reason"})
+
+    audit = st.list_disposition_audit(owner=OWNER)
+    hits = [a for a in audit if a["doc_id"] == "scan:s1:Finance/old.pdf"]
+    assert len(hits) == 2
+    assert {h["detail"] for h in hits} == {"first reason", "second, different reason"}
+
+
 def test_override_reaches_the_scan_inventory_endpoint(client):
     """The whole point: GET /scans/{id}/inventory is what the frontend actually reads (via
     getScanInventory / mergeLifecycle), so the override must round-trip through it, not just

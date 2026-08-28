@@ -214,6 +214,39 @@ def test_tag_policy_execute_writes_file_tags_idempotently(routed):
     assert len(st.list_file_tags("drive:t1", "Reports/old.docx")) == 2
 
 
+def test_execute_policy_audit_id_is_deterministic_per_doc_and_policy(routed):
+    """PRD §20 idempotency audit, 2026-08-28: audit_id used to be uuid.uuid4().hex[:12], so two
+    concurrent execute_policy calls for the same (doc, policy) — a retried request racing the
+    original, or two workers — could both pass the app-level doc_has_disposition check before
+    either had inserted, producing two audit rows for what this route's own docstring promises is
+    a single, idempotent outcome. The id is now derived from (doc_id, policy_id) alone, so the
+    same pair always computes the same id and a race collides via ON CONFLICT(id) DO NOTHING
+    instead of duplicating — this asserts the id itself is a pure, deterministic function of the
+    pair, independent of when/how often it's computed."""
+    rd, core, st = routed
+    _seed_doc(st)
+    pid = _make_tag_policy(rd, "tag legacy drive", requires_approval=False)
+
+    rd.execute_policy(pid, _Req())
+    audit = st.list_disposition_audit()
+    assert len(audit) == 1
+    first_id = audit[0]["id"]
+
+    # Simulate a second, concurrent caller racing the first: it recomputes the same audit_id for
+    # the same (doc, policy) pair before observing the first call's insert. Direct store call
+    # (not another execute_policy) isolates the id-collision guarantee from the app-level
+    # doc_has_disposition skip already covered by test_tag_policy_execute_writes_file_tags_idempotently.
+    import hashlib
+    racing_id = hashlib.sha256(f"policy_execute:{'drive:t1'}:{pid}".encode()).hexdigest()[:24]
+    assert racing_id == first_id, "the id must be a pure function of (doc_id, policy_id)"
+    st.create_disposition_audit(racing_id, doc_id="drive:t1", policy_id=pid,
+                                action="tag", result="applied", detail="racing duplicate")
+
+    audit_after = st.list_disposition_audit()
+    assert len(audit_after) == 1, "a racing duplicate insert must collide, not add a second row"
+    assert audit_after[0]["detail"] != "racing duplicate"   # the ON CONFLICT kept the original
+
+
 def test_tag_policy_needs_no_drive_connection_on_execute(routed):
     # A non-Drive document, no x-drive-token header: archive/delete would 400 here,
     # but tag applies because it never calls Drive.
