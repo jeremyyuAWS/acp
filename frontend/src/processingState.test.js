@@ -17,6 +17,7 @@ describe('deriveProcessingState', () => {
     expect(d.detail).toMatch(/12 documents queued/)
     expect(d.recommendedAction).toBe('start_workers')
     expect(d.severity).toBe('blocked')
+    expect(d.pickupUnavailable).toBe(true)
   })
 
   it('reports stalled distinctly from no_capacity, even when noCapacity would also be checked', () => {
@@ -66,6 +67,7 @@ describe('deriveProcessingState', () => {
     expect(d.state).toBe('waiting')
     expect(d.detail).toMatch(/12 documents ahead/)
     expect(d.detail).toMatch(/Last activity 2 min ago/)
+    expect(d.pickupUnavailable).toBe(true)
   })
 
   it('omits the "last activity" clause when none is known yet', () => {
