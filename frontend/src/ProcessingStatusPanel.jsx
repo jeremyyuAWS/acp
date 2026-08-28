@@ -21,7 +21,7 @@ const SEVERITY_COLORS = {
 }
 
 export default function ProcessingStatusPanel({ derived, onStartWorkers, onRerun, onViewMonitor }) {
-  const { state, headline, detail, recommendedAction, severity, pickupUnavailable } = derived || {}
+  const { state, headline, detail, recommendedAction, severity, pickupUnavailable, live } = derived || {}
   if (!state || state === 'idle') return null
   const c = SEVERITY_COLORS[severity] || SEVERITY_COLORS.info
 
@@ -29,7 +29,23 @@ export default function ProcessingStatusPanel({ derived, onStartWorkers, onRerun
     <div role="status" aria-label="Processing status" style={{ margin: '8px 0', padding: '10px 14px',
          borderRadius: 8, fontSize: 13, background: c.bg, border: `1px solid ${c.border}`, color: c.ink }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-        <b>{headline}</b>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <b>{headline}</b>
+          {/* Same green live-indicator dot already used elsewhere (QueuePanel, Monitor's audit
+              trail, DiscoverRunProgress's own freshness badge per #916) — reused, not reinvented,
+              so "near real-time" reads as the same signal wherever it appears. Driven by the
+              `live` flag a caller's derivation sets from its own freshness/SSE signal, not
+              inferred from severity here — a caller with no such signal simply never sets it. */}
+          {live && (
+            <span title="Receiving live updates for this scan" role="status"
+                  style={{ fontSize: 11, padding: '1px 7px', borderRadius: 4,
+                           background: 'var(--green-bg,#f0f7e6)', color: 'var(--green,#3B6D11)',
+                           border: '1px solid var(--green-line,#a8cf7a)',
+                           display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span className="pulsedot" aria-hidden="true" /> live
+            </span>
+          )}
+        </span>
         {onViewMonitor && (
           <button onClick={onViewMonitor} className="linklike" style={{ fontSize: 12, color: 'inherit' }}>
             View in Monitor →

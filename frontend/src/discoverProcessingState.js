@@ -94,6 +94,12 @@ export function deriveDiscoverProcessingState({
       ].filter(Boolean).join(' · '),
       recommendedAction: null,
       severity: freshness === 'stale' ? 'warning' : 'active',
+      // freshness === 'live' means api/routes/scans.py's _scan_freshness saw this scan's Redis
+      // job state update within the last 30s (#916) — the SSE-fed signal already flowing into
+      // `progress.freshness`. Surfaced here as its own flag (not inferred from severity/state by
+      // the panel) so "near real-time" is an honest claim tied to the same freshness value the
+      // reconnecting/stale clauses above already read, not a separate, invented notion of live.
+      live: freshness === 'live',
     }
   }
   return { state: 'idle', headline: null, detail: null, recommendedAction: null, severity: 'info' }
