@@ -24,11 +24,13 @@ def _stub(monkeypatch, payload, code=200):
     monkeypatch.setattr(M, "get", lambda url, key=None, timeout=20: (code, json.dumps(payload), 5.0))
 
 
-def estate(*counts, pending=0):
+def estate(*counts, pending=0, sweep=None):
     """A /monitor/estate payload. Counts are newest first, as list_scans orders them."""
     return {"service": "acp",
             "scans": {"total": len(counts), "recent_files": list(counts)},
-            "inbox": {"pending": pending}}
+            "inbox": {"pending": pending},
+            "sweep": sweep or {"enabled": False, "interval_minutes": None,
+                               "last_ok": None, "last_at": None, "last_files": None}}
 
 
 # ── the sweep collapse ────────────────────────────────────────────────────────────────
@@ -73,6 +75,54 @@ def test_the_backlog_is_reported(monkeypatch, rep):
     M.check_estate("https://x", "k", rep)
     assert rep.failed == 0
     assert any("17 pending review items" in r[2] for r in rep.rows)
+
+
+# ── the sweep number, so a "newest scan collapsed" fail is explainable on sight ────────
+
+def test_no_sweep_configured_is_informational_not_a_failure(monkeypatch, rep):
+    _stub(monkeypatch, estate(258, 258))
+    M.check_estate("https://x", "k", rep)
+    assert rep.failed == 0
+    assert any("no scheduled sweep configured" in r[2] for r in rep.rows)
+
+
+def test_a_configured_sweep_that_has_never_run_is_informational(monkeypatch, rep):
+    _stub(monkeypatch, estate(258, 258, sweep={"enabled": True, "interval_minutes": 30,
+                                               "last_ok": None, "last_at": None, "last_files": None}))
+    M.check_estate("https://x", "k", rep)
+    assert rep.failed == 0
+    assert any("has not run yet" in r[2] for r in rep.rows)
+
+
+def test_a_narrow_scoped_sweep_run_is_reported_alongside_the_collapse_it_explains(monkeypatch, rep):
+    """Found live 2026-08-28: 'newest scan is full-size' fired on 32 vs 989 documents, and there
+    was no way to tell — from the monitor's own output — whether that was a real collapse or the
+    background sweep's narrower ADC-scoped Drive access. This is what answers it in one line."""
+    _stub(monkeypatch, estate(32, 989, 989, sweep={"enabled": True, "interval_minutes": 30,
+                                                   "last_ok": True, "last_at": "2026-08-28T14:20:00+00:00",
+                                                   "last_files": 32}))
+    M.check_estate("https://x", "k", rep)
+    assert rep.failed == 1   # the collapse check itself still fires — this only explains it
+    assert any("last ok at 2026-08-28T14:20:00+00:00, 32 files" in r[2] for r in rep.rows)
+
+
+def test_a_failed_sweep_is_its_own_failure(monkeypatch, rep):
+    _stub(monkeypatch, estate(258, 258, sweep={"enabled": True, "interval_minutes": 30,
+                                               "last_ok": False, "last_at": "2026-08-28T14:20:00+00:00",
+                                               "last_files": None}))
+    M.check_estate("https://x", "k", rep)
+    assert rep.failed == 1
+    assert any("the last scheduled sweep FAILED" in r[2] for r in rep.rows)
+
+
+def test_sweep_missing_from_an_older_deployment_does_not_crash(monkeypatch, rep):
+    """A deployment running the build before this field existed sends no `sweep` key at all —
+    must read as 'no sweep configured', not throw."""
+    payload = estate(258, 258)
+    del payload["sweep"]
+    _stub(monkeypatch, payload)
+    M.check_estate("https://x", "k", rep)
+    assert rep.failed == 0
 
 
 # ── the deep tier's own auth, which is the part that was broken ───────────────────────

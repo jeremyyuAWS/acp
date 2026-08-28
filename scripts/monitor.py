@@ -224,6 +224,28 @@ def check_estate(base: str, key: str, rep: Report) -> None:
     else:
         rep.ok("inbox readable", f"{pending} pending review items")
 
+    # THE OTHER HALF OF "newest scan is full-size" — WHY, not just whether. That check alone
+    # cannot tell a genuine estate collapse apart from the background sweep (core._do_scheduled_
+    # scan) legitimately seeing far fewer files than a user's own OAuth-scoped manual scan: the
+    # sweep runs under the service-account ADC identity, whose Drive access is whatever was
+    # explicitly granted, not the signed-in user's full permission set (tests/test_drive_adc_
+    # scopes.py). Found live 2026-08-28 chasing a "0 documents discovered" report: /monitor/
+    # estate had carried this data (#908) but nothing printed it, so answering "is this the sweep
+    # or a real collapse" needed a manual API read instead of one line of monitor output.
+    sweep = est.get("sweep") or {}
+    if not sweep.get("enabled"):
+        rep.ok("sweep status", "no scheduled sweep configured on this deployment")
+    elif sweep.get("last_at") is None:
+        rep.ok("sweep status", f"enabled, every {sweep.get('interval_minutes')} min, has not run yet")
+    elif sweep.get("last_ok") is False:
+        # A failing sweep saves nothing (core._do_scheduled_scan's own contract) and the previous
+        # scan stands — not itself evidence of a collapse, but worth knowing when reading one.
+        rep.fail("sweep status", f"the last scheduled sweep FAILED at {sweep.get('last_at')} — "
+                                  "no scan was saved; if the estate looks stale, this may be why")
+    else:
+        rep.ok("sweep status", f"last ok at {sweep.get('last_at')}, {sweep.get('last_files')} files "
+                                f"— compare against 'newest scan is full-size' above")
+
 
 # Paths that provably CANNOT reach the container image, checked against every `COPY` in
 # deploy/public/Dockerfile. A commit touching only these changes nothing that production runs, so
