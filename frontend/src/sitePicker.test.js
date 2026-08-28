@@ -63,11 +63,17 @@ describe('Discover wires it', () => {
     expect(read('App.jsx')).toMatch(/hasSPToken=\{hasSPToken\}/)
   })
 
-  it('keeps the Drive picker independent', () => {
-    // Two modals, two states. One shared flag would open both or neither.
+  it('keeps the SharePoint site picker independent of the Drive scan gate', () => {
+    // The SharePoint site picker is still Discover's own local modal; Drive folder selection no
+    // longer has a matching local state at all — it opens the SAME app-level scan gate every
+    // other entry point does (2026-08-28: a standalone FolderPicker modal used to duplicate that
+    // gate's own folder step, so picking a folder there immediately re-asked the same question a
+    // second time). One shared flag between the two would open both or neither; there is no
+    // longer a flag to share.
     const d = read('Discover.jsx')
-    expect(d).toMatch(/const \[showPicker, setShowPicker\] = useState\(false\)/)
     expect(d).toMatch(/const \[showSites, setShowSites\] = useState\(false\)/)
-    expect(d).toMatch(/onScan\('drive', folder\)/)
+    expect(d).not.toMatch(/showPicker/)
+    expect(d).toMatch(/onScan\('drive', null, \{ folderFirst: true \}\)/)
+    expect(d).toMatch(/onScan\('sharepoint', siteId\)/)
   })
 })

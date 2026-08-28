@@ -202,7 +202,15 @@ export function locationsKeyFor(source, { hasDrive = false, hasSP = false } = {}
 export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                                           canEditScope = true, rememberDefault = false,
                                           source = 'all', hasDrive = false, hasSP = false,
-                                          scans = [] }) {
+                                          scans = [],
+                                          // The caller already knows the user wants to narrow to a
+                                          // folder — Discover's "Choose folder to scan…" button, not
+                                          // a fresh "New discovery". Landing on 'all' and asking
+                                          // "Entire source or specific folders?" again would be
+                                          // re-asking a question already answered. See the
+                                          // scopeModeTouched seed below for why this has to win over
+                                          // the saved-locations fetch, not just set the initial value.
+                                          startInFolderMode = false }) {
   // ── FOLDER SCOPE (PRD §6, step 1) ──────────────────────────────────────────────────────────
   //
   // WHOSE ANSWER IS THIS? The Sources card stores a folder set per CONNECTION; this wizard
@@ -231,7 +239,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   // "Entire source" vs "Specific folders" is asked EXPLICITLY rather than inferred from an empty
   // selection. Empty and everything look identical otherwise, and the reassuring reading of a
   // blank list is the wrong one — the same rule the picker and the source card already follow.
-  const [scopeMode, setScopeMode] = useState('all')   // 'all' | 'some'
+  const [scopeMode, setScopeMode] = useState(startInFolderMode ? 'some' : 'all')   // 'all' | 'some'
   const [saveFolders, setSaveFolders] = useState(false)    // write back to the card, off by default
   // Set the instant a person picks a tile — guards the fetch below from overwriting an explicit
   // choice with the saved default. Found live 2026-08-21: `scopeMode` starts 'all' (painting
@@ -240,7 +248,11 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   // during that window can render as selected and then revert under the user, and clicking
   // Continue during the flash proceeds with whichever won the race rather than what's on screen.
   // A ref, not state — read inside the fetch's `.then`, which must never rerun the effect.
-  const scopeModeTouched = useRef(false)
+  //
+  // Seeded from `startInFolderMode`, not just `scopeMode`'s own initial value above: without this
+  // the saved-locations fetch still treats 'some' as untouched and can overwrite it (or the
+  // folders it seeds) the instant it resolves, the exact race this ref exists to prevent.
+  const scopeModeTouched = useRef(startInFolderMode)
 
   useEffect(() => {
     if (!locKey) { setSavedFolders([]); return undefined }

@@ -141,3 +141,43 @@ describe('the universal scan gate (App)', () => {
     expect(startScan).not.toHaveBeenCalled()
   })
 })
+
+describe('"Choose folder to scan…" opens the SAME gate, not a second folder picker', () => {
+  // Found live 2026-08-28: this button used to open a standalone FolderPicker modal, and on a
+  // selection immediately opened THIS wizard again at its default "Entire connected source" step
+  // — re-asking the folder question a moment after it was answered, which read as a regression
+  // rather than a review step. It now opens the same gate, pre-set to "Specific folders".
+  //
+  // "Choose folder to scan…" is gated on hasDriveToken (App.jsx), which the demo persona used by
+  // mountSignedInOnDiscover() does not set — matches App.jsx's own `sessionStorage.getItem('gd_token')`
+  // initializer, so the button renders exactly as it would after a real Drive connection.
+  afterEach(() => sessionStorage.removeItem('gd_token'))
+
+  it('lands on "Specific folders" already selected, not "Entire connected source"', async () => {
+    sessionStorage.setItem('gd_token', 'test-token')
+    const c = await mountSignedInOnDiscover()
+    expect(dialog(c)).toBeNull()
+    await click(byText(c, 'button', /Choose folder to scan…/))
+    const d = dialog(c)
+    expect(d, 'no gate opened').toBeTruthy()
+    expect(d.getAttribute('aria-label')).toBe('New discovery')
+    const radios = [...d.querySelectorAll('[role="radio"]')]
+    const specific = radios.find((r) => /Specific folders/.test(r.textContent))
+    const entire = radios.find((r) => /Entire connected source/.test(r.textContent))
+    expect(specific, 'no "Specific folders" option in the gate').toBeTruthy()
+    expect(specific.getAttribute('aria-checked')).toBe('true')
+    expect(entire.getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('"Re-scan all sources" still lands on "Entire connected source" by default', async () => {
+    // Also needs a connected source with a folder hierarchy — without one, the wizard shows its
+    // flat "no folder hierarchy to narrow" case instead of the two-option radiogroup at all.
+    sessionStorage.setItem('gd_token', 'test-token')
+    const c = await mountSignedInOnDiscover()
+    await click(byText(c, 'button', /Re-scan all sources/))
+    const d = dialog(c)
+    const radios = [...d.querySelectorAll('[role="radio"]')]
+    const entire = radios.find((r) => /Entire connected source/.test(r.textContent))
+    expect(entire.getAttribute('aria-checked')).toBe('true')
+  })
+})

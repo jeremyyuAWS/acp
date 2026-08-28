@@ -49,7 +49,7 @@ export function scanSourceLabel(source, opts = {}) {
 }
 
 export default function ScanReviewModal({
-  source = 'all', folder = null,
+  source = 'all', folder = null, startInFolderMode = false,
   deepScan, setDeepScan, queuedScan, setQueuedScan,
   excludeRemediated, setExcludeRemediated, incremental, setIncremental,
   estCount = null, estWhere = null,
@@ -132,6 +132,7 @@ export default function ScanReviewModal({
               claim. Threaded rather than fetched here: App already holds the list. */}
           <ScanScopeWizard showStartButton canEditScope={canEditScope} rememberDefault={rememberDefault}
             source={source} hasDrive={hasDrive} hasSP={hasSP} scans={scans}
+            startInFolderMode={startInFolderMode}
             onStartScan={(o) => { if (o?.cancel) onCancel?.(); else onConfirm?.(o) }} />
         </div>
       </div>

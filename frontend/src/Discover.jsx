@@ -4,7 +4,6 @@ import WindowedRows from './WindowedRows.jsx'
 import FileDrawer from './FileDrawer.jsx'
 import { retentionBucket, isAcceptable } from './retentionSignal.js'
 import SegmentDrawer from './SegmentDrawer.jsx'
-import FolderPicker from './FolderPicker.jsx'
 import SitePicker from './SitePicker.jsx'
 import DispositionRules from './DispositionRules.jsx'
 import { Bars } from './charts.jsx'
@@ -109,7 +108,6 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   const runForExport = { id: scanId, discovered_at: run?.discovered_at ?? null, completed_at: run?.completed_at ?? null }
   const [sel, setSel] = useState(null)
   const [estOnlyFile, setEstOnlyFile] = useState(null)
-  const [showPicker, setShowPicker] = useState(false)   // Drive folder picker modal (Choose folder to scan)
   const [showSites, setShowSites] = useState(false)     // SharePoint site picker modal
   const [open, setOpen] = useState(() => new Set())
   const toggle = (d) => setOpen((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n })
@@ -690,7 +688,12 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         )}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           {hasDriveToken && (
-            <button className="ghost" disabled={busy} onClick={() => setShowPicker(true)}
+            // Opens the SAME review wizard "Re-scan all sources" does, pre-set to "Specific
+            // folders" — not a second, standalone folder picker. That used to open its own
+            // FolderPicker modal and, on a selection, immediately reopen this wizard again at its
+            // default "Entire connected source" step: the folder just picked, re-asked from
+            // scratch a moment later, which read as a regression rather than a review step.
+            <button className="ghost" disabled={busy} onClick={() => onScan('drive', null, { folderFirst: true })}
                     title="Browse your Google Drive and scan just one folder (and its subfolders)">
               Choose folder to scan…
             </button>
@@ -707,12 +710,6 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           <button disabled={busy} onClick={() => onScan('all')}>{busy ? 'scanning…' : 'Re-scan all sources'}</button>
         </div>
       </div>
-
-      {showPicker && (
-        <FolderPicker
-          onScan={(folder) => { setShowPicker(false); onScan('drive', folder) }}
-          onClose={() => setShowPicker(false)} />
-      )}
 
       {/* The site id travels as `folder`, which is what the backend reads it as — _list treats
           `folder` as the site for source='sharepoint' (#156). One parameter, not two. */}

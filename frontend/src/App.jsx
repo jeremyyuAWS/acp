@@ -829,7 +829,15 @@ export default function App() {
   // unbypassable from Discover, Overview, EmptyState/ScanSetup, the Sources tab, and the
   // Drive/SharePoint browse panels alike — before this, the modal lived inside Integrations and
   // only the Sources tab reached it. (`pendingScan` state is declared with the other hooks above.)
-  const requestScan = (source, folder = null) => setPendingScan({ source, folder })
+  // `folderFirst` unifies the two "pick a folder" entry points that used to run independently:
+  // Discover's own "Choose folder to scan…" button opened a standalone FolderPicker modal, and on
+  // a selection immediately opened THIS SAME wizard again at its default "Entire connected
+  // source" step — the folder chosen a moment ago request re-asked from scratch, which read as a
+  // regression, not a review step. FolderPicker's `layout="inline"` is already what the wizard's
+  // own step 1 embeds for "Specific folders" (see FolderPicker.jsx's own header), so the fix is
+  // routing straight there instead of opening a second, separate instance of the same picker.
+  const requestScan = (source, folder = null, { folderFirst = false } = {}) =>
+    setPendingScan({ source, folder, folderFirst })
 
   // The DEFAULT (session-scoped, non-durable) scan path has no scan_runs row until AFTER its
   // crawl finishes — _scan_discover creates it partway through its own function body, well past
@@ -1802,6 +1810,7 @@ export default function App() {
       {pendingScan && (
         <ScanReviewModal
           source={pendingScan.source} folder={pendingScan.folder}
+          startInFolderMode={pendingScan.folderFirst}
           deepScan={deepScan} setDeepScan={setDeepScan}
           queuedScan={queuedScan} setQueuedScan={setQueuedScan}
           excludeRemediated={excludeRemediated} setExcludeRemediated={setExcludeRemediated}
