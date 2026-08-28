@@ -16,6 +16,7 @@ actually AUTHORISE or PERFORM a move-or-trash — execute and approve — are OW
 a doc/policy pair with a live outcome (pending or applied) is never re-queued.
 """
 from __future__ import annotations
+import hashlib
 import json
 import uuid
 
@@ -587,7 +588,17 @@ def execute_policy(policy_id: str, request: Request):
         if core.store.doc_has_disposition(doc["doc_id"], policy_id):
             summary["skipped"] += 1
             continue
-        audit_id = uuid.uuid4().hex[:12]
+        # Deterministic id, not uuid.uuid4() — PRD §20 idempotency audit, 2026-08-28: the
+        # doc_has_disposition check above is app-level check-then-insert, not a DB constraint, so
+        # two concurrent execute_policy calls (a retried request racing the original, or two
+        # workers) can both pass it before either inserts, producing two audit rows for the same
+        # (doc, policy). This route's own docstring already promises "Idempotent per (doc,
+        # policy)" — a doc/policy pair is meant to have at most one live disposition outcome ever,
+        # per doc_has_disposition's contract (pending/applied/approved AND rejected/failed all
+        # count), so keying the id on exactly that pair makes the promise a real DB-level
+        # guarantee instead of a race-prone best-effort one.
+        audit_id = hashlib.sha256(
+            f"policy_execute:{doc['doc_id']}:{policy_id}".encode()).hexdigest()[:24]
         if policy.get("requires_approval"):
             detail = f"queued by policy '{policy['name']}' — awaiting approval"
             core.store.create_disposition_audit(

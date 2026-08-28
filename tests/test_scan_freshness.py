@@ -25,6 +25,23 @@ def _freshness(scan_id, run, *, job_state=None, job_id="j1"):
     fake_core.get_job_id_for_scan = lambda sid: job_id if job_state is not None else None
     fake_core.get_job_state = lambda jid: job_state
 
+    # Save the REAL module objects, not just their names — restoring by sys.modules.pop(...)
+    # (as this used to) leaves "core" absent afterward, so the next `import core` anywhere in
+    # the process builds a BRAND NEW module object rather than reusing the one every
+    # already-imported module (handlers.py, routes/scans.py, ...) is still holding a reference
+    # to internally. That produces two live "core" modules with independently-initialized
+    # globals (_SCAN_JOB_MAP, JOBS, _redis, ...) — a real, live cross-test-pollution bug found
+    # 2026-08-28: with this test running earlier in a shard, core.get_job_id_for_scan() calls
+    # made from a freshly-reimported "core" silently read an empty dict the durable-path write
+    # (through the ORIGINAL "core" object) never touched, failing
+    # test_scan_id_job_mapping_durable_path.py and test_scan_job_heartbeat.py with no
+    # indication anything upstream was at fault. Restoring the exact prior objects (falling back
+    # to a pop only when nothing was previously imported) keeps identity intact for every other
+    # consumer.
+    real_core = sys.modules.get("core")
+    real_routes_scans = sys.modules.get("routes.scans")
+    real_routes = sys.modules.get("routes")
+
     sys.modules["core"] = fake_core
     # Force re-import of routes.scans so it picks up the patched core.
     sys.modules.pop("routes.scans", None)
@@ -34,9 +51,18 @@ def _freshness(scan_id, run, *, job_state=None, job_id="j1"):
         from routes.scans import _scan_freshness
         return _scan_freshness(scan_id, run)
     finally:
-        sys.modules.pop("routes.scans", None)
-        sys.modules.pop("routes", None)
-        sys.modules.pop("core", None)
+        if real_core is not None:
+            sys.modules["core"] = real_core
+        else:
+            sys.modules.pop("core", None)
+        if real_routes_scans is not None:
+            sys.modules["routes.scans"] = real_routes_scans
+        else:
+            sys.modules.pop("routes.scans", None)
+        if real_routes is not None:
+            sys.modules["routes"] = real_routes
+        else:
+            sys.modules.pop("routes", None)
 
 
 def _now_iso():
@@ -135,6 +161,14 @@ def test_get_scan_response_includes_freshness_field(isolated_store, monkeypatch)
     fake_core.get_job_state = lambda jid: None
     fake_core.store = s
 
+    # Same identity-preserving save/restore as _freshness() above, and for the same reason:
+    # popping "core" instead of restoring it leaves a second, independently-initialized core
+    # module for whatever imports it fresh next, silently diverging from the one every
+    # already-imported module (handlers.py, routes/scans.py, ...) still references internally.
+    real_core = sys.modules.get("core")
+    real_routes_scans = sys.modules.get("routes.scans")
+    real_routes = sys.modules.get("routes")
+
     sys.modules.pop("routes.scans", None)
     sys.modules.pop("routes", None)
     sys.modules["core"] = fake_core
@@ -145,6 +179,15 @@ def test_get_scan_response_includes_freshness_field(isolated_store, monkeypatch)
         result = _scan_freshness(sid, run)
         assert result == "terminal"
     finally:
-        sys.modules.pop("routes.scans", None)
-        sys.modules.pop("routes", None)
-        sys.modules.pop("core", None)
+        if real_core is not None:
+            sys.modules["core"] = real_core
+        else:
+            sys.modules.pop("core", None)
+        if real_routes_scans is not None:
+            sys.modules["routes.scans"] = real_routes_scans
+        else:
+            sys.modules.pop("routes.scans", None)
+        if real_routes is not None:
+            sys.modules["routes"] = real_routes
+        else:
+            sys.modules.pop("routes", None)
