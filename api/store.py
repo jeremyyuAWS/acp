@@ -2115,6 +2115,24 @@ class Store:
             cleared.append("scan_runs")
         return {"owner": owner_email, "cleared_tables": cleared}
 
+    def scan_checksums(self, scan_id: str, owner_email: str) -> list[str]:
+        """Distinct non-null content-hash checksums this scan actually downloaded
+        (file_records.checksum — Drive's md5Checksum; None for SharePoint/local, which never
+        carry one). This is the set of `{owner}/{checksum}` keys the ADR 0020 sources blob
+        cache may hold this scan's bytes under (upload_source keys by checksum, not scan_id,
+        whenever one was known pre-download) — call BEFORE delete_scan, since that removes
+        the file_records rows this reads, and pass the result to blob.purge_scan so the
+        HIPAA erasure route reaches those blobs too. Owner-scoped like delete_scan: returns
+        [] for a scan_id that doesn't belong to owner_email, never another owner's checksums.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT DISTINCT fr.checksum FROM file_records fr "
+                "JOIN scan_runs sr ON sr.id = fr.scan_id "
+                "WHERE fr.scan_id=%s AND sr.owner_email=%s AND fr.checksum IS NOT NULL",
+                (scan_id, owner_email))
+            return [r["checksum"] for r in self._db.fetchall(cur)]
+
     def delete_scan(self, scan_id: str, owner_email: str) -> dict | None:
         """Delete ONE scan and every row tied to it — the per-scan erasure path required for
         a HIPAA Business Associate Agreement.
@@ -2130,9 +2148,11 @@ class Store:
           - decision_log — immutable append-only audit trail; the deletion event is ADDED to
             it by the caller, not the other way round.
           - inventory — global path-dedup index with no scan_id link.
-          - Blob storage bytes — call blob.purge_scan(owner, scan_id) separately (the route
-            does this).  Kept separate so a DB-only operation never blocks on a slow storage
-            call and the two failure modes surface independently.
+          - Blob storage bytes — call blob.purge_scan(owner, scan_id, checksums) separately
+            (the route does this; checksums comes from scan_checksums(), called BEFORE this
+            method since it reads the file_records rows this method deletes). Kept separate
+            so a DB-only operation never blocks on a slow storage call and the two failure
+            modes surface independently.
         """
         # Verify ownership before touching anything.
         with self._db.cursor() as cur:

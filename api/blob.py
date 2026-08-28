@@ -132,26 +132,44 @@ def download_render(owner: str | None, scan_id: str, filename: str) -> bytes | N
         return None
 
 
-# --- ADR 0020 stage 1: source-bytes cache -------------------------------------
-# Discover downloads each file once; a later Assess phase (ADR 0020 stage 3) reads the
-# SAME bytes back from this cache instead of paying a second Drive/SharePoint download —
-# the 'open each file once' property, kept across the phase boundary. A distinct
-# container so a source original can never be mistaken for a remediated artifact or a
-# thumbnail. Same discipline as the render cache: lazy container creation, best-effort,
-# a no-op returning None when blob storage isn't configured (local dev re-reads the
-# source instead — the ADR's stated degradation, not an error).
+# --- ADR 0020 source-bytes cache -----------------------------------------------
+# Discover downloads each file once; a later Assess phase (or a retried/resumed job) reads
+# the SAME bytes back from this cache instead of paying a second Drive/SharePoint download.
+# A distinct container so a source original can never be mistaken for a remediated artifact
+# or a thumbnail. Same discipline as the render cache: lazy container creation, best-effort,
+# a no-op returning None when blob storage isn't configured (local dev re-reads the source
+# instead — the ADR's stated degradation, not an error).
+#
+# Keyed by content hash when one is known BEFORE download (Drive's md5Checksum, read from
+# listing metadata) — {owner}/{checksum} — so an unchanged file is a cache hit across scans,
+# not just within one (ADR 0020 §2). SharePoint and local sources carry no pre-download
+# checksum today, so those fall back to the original {owner}/{scan_id}/{filename} key: a
+# same-scan-retry benefit only, exactly ADR 0020 §1's behavior — no regression, no
+# collision between the two key shapes (a checksum is never a valid scan_id).
 _SOURCES_CONTAINER = os.environ.get("ACP_BLOB_SOURCES_CONTAINER", "sources")
 
 
-def upload_source(owner: str | None, scan_id: str, filename: str, data: bytes) -> str | None:
-    """Cache a discovered file's original bytes. Returns the blob URL, or None when blob
-    storage isn't configured or the write fails — caching is best-effort and must NEVER
-    raise into the scan path. Self-heals a missing container on first use."""
+def _checksum_key(owner: str | None, checksum: str) -> str:
+    return f"{owner or 'demo'}/{checksum}"
+
+
+def _source_key(owner: str | None, scan_id: str, filename: str, checksum: str | None = None) -> str:
+    return _checksum_key(owner, checksum) if checksum else _blob_path(owner, scan_id, filename)
+
+
+def upload_source(owner: str | None, scan_id: str, filename: str, data: bytes,
+                  checksum: str | None = None) -> str | None:
+    """Cache a discovered file's original bytes, keyed by `checksum` when the caller has one
+    (a pre-download source checksum, e.g. Drive's md5Checksum), else by scan_id/filename.
+    Returns the blob URL, or None when blob storage isn't configured or the write fails —
+    caching is best-effort and must NEVER raise into the scan path. Self-heals a missing
+    container on first use."""
     svc = _service_client()
     if svc is None:
         return None
     from azure.storage.blob import ContentSettings
-    blob = svc.get_blob_client(container=_SOURCES_CONTAINER, blob=_blob_path(owner, scan_id, filename))
+    key = _source_key(owner, scan_id, filename, checksum)
+    blob = svc.get_blob_client(container=_SOURCES_CONTAINER, blob=key)
     settings = ContentSettings(content_type="application/octet-stream")
     try:
         blob.upload_blob(data, overwrite=True, content_settings=settings)
@@ -168,13 +186,17 @@ def upload_source(owner: str | None, scan_id: str, filename: str, data: bytes) -
             return None
 
 
-def download_source(owner: str | None, scan_id: str, filename: str) -> bytes | None:
-    """Read a discovered file's cached original bytes back out. None if not configured or
-    not cached (the caller falls back to a fresh source download — today's behavior)."""
+def download_source(owner: str | None, scan_id: str, filename: str,
+                    checksum: str | None = None) -> bytes | None:
+    """Read a discovered file's cached original bytes back out, checking the same key
+    upload_source would have written (checksum when given, else scan_id/filename). None if
+    not configured or not cached (the caller falls back to a fresh source download — today's
+    behavior)."""
     svc = _service_client()
     if svc is None:
         return None
-    blob = svc.get_blob_client(container=_SOURCES_CONTAINER, blob=_blob_path(owner, scan_id, filename))
+    key = _source_key(owner, scan_id, filename, checksum)
+    blob = svc.get_blob_client(container=_SOURCES_CONTAINER, blob=key)
     try:
         return blob.download_blob().readall()
     except Exception:
@@ -221,13 +243,22 @@ def purge_all(owner: str | None = None) -> dict:
     return out
 
 
-def purge_scan(owner: str, scan_id: str) -> dict:
+def purge_scan(owner: str, scan_id: str, checksums: list[str] | None = None) -> dict:
     """Delete every blob that belongs to ONE scan (BAA/HIPAA right-to-erasure path).
 
     Blob paths follow the `{owner}/{scan_id}/{filename}` convention defined in _blob_path,
-    so listing with the prefix `{owner}/{scan_id}/` finds exactly this scan's bytes across
-    all three data containers. Best-effort and never raises; returns {container: deleted_count}
-    with -1 for a container that errored. No-op ({}) when blob storage isn't configured.
+    so listing with the prefix `{owner}/{scan_id}/` finds this scan's bytes across all three
+    data containers — EXCEPT the 'sources' container's checksum-keyed entries (upload_source
+    keys a file by `{owner}/{checksum}` whenever a pre-download checksum was known, dropping
+    scan_id from the path entirely so the same bytes are a cache hit across scans). Pass this
+    scan's own downloaded-file checksums (see store.scan_checksums) to also delete those:
+    still owner-scoped, so this never reaches another owner's content. Deleting a checksum
+    another live scan still references just costs that scan a cache hit on next use — the
+    bytes are re-downloaded from source, no data loss — so it's safe to always include every
+    checksum this scan touched rather than trying to prove exclusivity first.
+
+    Best-effort and never raises; returns {container: deleted_count} with -1 for a container
+    that errored. No-op ({}) when blob storage isn't configured.
     """
     svc = _service_client()
     if svc is None:
@@ -247,4 +278,17 @@ def purge_scan(owner: str, scan_id: str) -> dict:
             out[cname] = n
         except Exception:
             out[cname] = -1
+    if checksums:
+        try:
+            cc = svc.get_container_client(_SOURCES_CONTAINER)
+            extra = 0
+            for checksum in checksums:
+                try:
+                    cc.delete_blob(_checksum_key(owner, checksum))
+                    extra += 1
+                except Exception:
+                    pass  # never cached under this checksum, or already gone — not an error
+            out[_SOURCES_CONTAINER] = out.get(_SOURCES_CONTAINER, 0) + extra
+        except Exception:
+            pass  # container missing — the prefix sweep above already recorded that
     return out

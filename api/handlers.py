@@ -2184,13 +2184,13 @@ def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _l
         else:
             try:
                 _dl_t0 = _time.monotonic()
-                # ADR 0020 §1 read side: a retry/resume of this same scan may already have
-                # this file's bytes cached in blob (e.g. a worker restart mid-Assess, or a
-                # retried ADR 0007 per-file job) — skip Drive/SharePoint entirely on a hit,
-                # including the halted-credential check below, since no network call is made
-                # either way. Cache miss (or no blob configured) falls through unchanged.
+                # ADR 0020 read side: `checksum` (above, from item metadata) lets this hit a
+                # DIFFERENT scan's earlier download of the same content, not just a retry of
+                # this one (e.g. a worker restart mid-Assess) — skip Drive/SharePoint entirely
+                # on a hit, including the halted-credential check below, since no network call
+                # is made either way. Cache miss (or no blob configured) falls through unchanged.
                 from scanner import cache_source_bytes, read_cached_source
-                cached = read_cached_source(scan_id, name, user)
+                cached = read_cached_source(scan_id, name, user, checksum=checksum)
                 if cached is not None:
                     (tmp / name).write_bytes(cached)
                 else:
@@ -2223,10 +2223,11 @@ def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _l
                         if item.get("drive_id"):
                             it["driveId"] = item["drive_id"]
                     _download(it, tmp, svc, sp_token=toks.get("sp"))
-                    # ADR 0020 §1 — cache the source bytes for a later Assess phase (best-effort,
-                    # never blocks the scan). Dedup'd files skip this branch entirely: their bytes
-                    # live under the PRIOR scan's key, which the stage-3 reader will fall back to.
-                    cache_source_bytes(tmp, name, scan_id, user)
+                    # ADR 0020 — cache the source bytes for a later read (best-effort, never
+                    # blocks the scan). Dedup'd files skip this branch entirely: their bytes
+                    # live under the prior download's key, which the read side above already
+                    # tried.
+                    cache_source_bytes(tmp, name, scan_id, user, checksum=checksum)
                 _timings.add("download", _time.monotonic() - _dl_t0)   # ADR 0037 Step 0
                 # Stop BEFORE the expensive analysis. This file shares its logical name with
                 # another discovered file and carries ACP's in-document stamp, so it is our own

@@ -1911,33 +1911,39 @@ def _folder_name(svc, folder_id: str) -> str | None:
         return None
 
 
-def cache_source_bytes(tmp: Path, name: str, scan_id: str, user: str | None) -> None:
-    """ADR 0020 stage 1: stash a just-downloaded file's original bytes in the blob source
-    cache ({owner}/{scan_id}/{filename} in the 'sources' container) so a retried or resumed
-    per-file job for this same scan (see read_cached_source) can skip a second Drive/
-    SharePoint download of a file this scan already fetched once. Strictly best-effort and
-    non-blocking: a cache failure (or no blob configured) must never fail or slow a scan."""
+def cache_source_bytes(tmp: Path, name: str, scan_id: str, user: str | None,
+                       checksum: str | None = None) -> None:
+    """ADR 0020: stash a just-downloaded file's original bytes in the blob source cache
+    (the 'sources' container), so a later read (see read_cached_source) can skip a second
+    Drive/SharePoint download of the same content. Keyed by `checksum` when the caller has
+    one (a pre-download source checksum, e.g. Drive's md5Checksum) — a cache hit then spans
+    ANY scan that re-encounters this same content, not just a retry of this one. Without a
+    checksum (SharePoint, local, Google-native exports), falls back to {owner}/{scan_id}/
+    {filename} — a same-scan-retry benefit only, ADR 0020 §1's original behavior. Strictly
+    best-effort and non-blocking: a cache failure (or no blob configured) must never fail or
+    slow a scan."""
     try:
         import blob
         if not blob.enabled():
             return
-        blob.upload_source(user, scan_id, name, (tmp / name).read_bytes())
+        blob.upload_source(user, scan_id, name, (tmp / name).read_bytes(), checksum=checksum)
     except Exception:
         pass
 
 
-def read_cached_source(scan_id: str, name: str, user: str | None) -> bytes | None:
-    """ADR 0020 stage 1 read side: return this scan's previously-cached original bytes for
-    `name` (written by cache_source_bytes), or None on any cache miss, failure, or unconfigured
-    blob store — the caller's existing download path is the fallback either way. This is what
-    lets a retried/resumed per-file job (ADR 0007's durable fan-out) avoid re-hitting Drive or
-    SharePoint for a file this same scan already downloaded once, e.g. after a worker restart
-    mid-Assess. Best-effort and non-blocking, matching cache_source_bytes."""
+def read_cached_source(scan_id: str, name: str, user: str | None,
+                       checksum: str | None = None) -> bytes | None:
+    """ADR 0020 read side: return previously-cached original bytes for `name` (written by
+    cache_source_bytes), checking the same key a write would use — `checksum` when given
+    (so this can hit on a DIFFERENT scan's earlier download of the same content), else this
+    scan's own scan_id/filename key (a same-scan retry/resume only). None on any cache miss,
+    failure, or unconfigured blob store — the caller's existing download path is the fallback
+    either way. Best-effort and non-blocking, matching cache_source_bytes."""
     try:
         import blob
         if not blob.enabled():
             return None
-        return blob.download_source(user, scan_id, name)
+        return blob.download_source(user, scan_id, name, checksum=checksum)
     except Exception:
         return None
 
@@ -3105,11 +3111,11 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                       "exc_missing_required": exc_missing_required,
                       "metadata_complete": n - exc_missing_optional,
                       "metadata_incomplete": exc_missing_optional})
-            # ADR 0020 §1 read side: a retry/resume of this same scan may already have this
-            # file's bytes cached in blob (e.g. a worker restart mid-Assess) — skip a second
-            # Drive/SharePoint download when so. Cache miss (or no blob configured) falls
-            # through to the normal download path, unchanged.
-            cached = read_cached_source(scan_id, it["name"], user)
+            # ADR 0020 read side: a pre-download checksum (Drive md5, when present) lets this
+            # hit a DIFFERENT scan's earlier download of the same content, not just a retry of
+            # this one — skip a second Drive/SharePoint download when so. Cache miss (or no
+            # blob configured) falls through to the normal download path, unchanged.
+            cached = read_cached_source(scan_id, it["name"], user, checksum=it.get("checksum"))
             if cached is not None:
                 (tmp / it["name"]).write_bytes(cached)
             else:
@@ -3143,7 +3149,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                         exc_metadata_failure += 1
                     skipped.add(it["name"])
                     continue
-                cache_source_bytes(tmp, it["name"], scan_id, user)   # ADR 0020 §1 — best-effort
+                cache_source_bytes(tmp, it["name"], scan_id, user,  # ADR 0020 — best-effort
+                                  checksum=it.get("checksum"))
 
         # Remove skipped files from the items list so downstream phases don't try to analyse them.
         if skipped:

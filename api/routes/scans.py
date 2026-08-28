@@ -613,7 +613,10 @@ def delete_scan(sid: str, request: Request):
       - All database rows keyed on scan_id (findings, file records, rule traces, HITL queue,
         AI call log, applied fixes, stage timings, PII findings, jobs, …).
       - The scan_runs row itself.
-      - All blobs under {owner}/{scan_id}/ (remediated files, source copies, render previews).
+      - All blobs under {owner}/{scan_id}/ (remediated files, source copies, render previews)
+        PLUS any {owner}/{checksum} source-cache blobs this scan's own downloads populated
+        (ADR 0020 keys the sources cache by content checksum, not scan_id, when one was known
+        pre-download — a plain {owner}/{scan_id}/ prefix sweep alone would miss those).
 
     What survives:
       - decision_log — the immutable audit trail. A deletion event IS appended to it here so
@@ -622,10 +625,12 @@ def delete_scan(sid: str, request: Request):
     import blob as blob_mod
 
     owner = _owner(request)
+    # Read BEFORE delete_scan: it queries file_records, which delete_scan is about to remove.
+    checksums = core.store.scan_checksums(sid, owner)
     result = core.store.delete_scan(sid, owner)
     if result is None:
         raise HTTPException(404, "scan not found")
-    blobs = blob_mod.purge_scan(owner, sid)
+    blobs = blob_mod.purge_scan(owner, sid, checksums=checksums)
     core.store.log_decision(owner, "delete_scan", scan_id=sid,
                             detail=f"scan deleted; blobs={blobs}")
     return {"deleted": True, "scan_id": sid, "blobs_purged": blobs}
