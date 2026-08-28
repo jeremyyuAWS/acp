@@ -1714,7 +1714,8 @@ export default function App() {
             {!(busy && !run?.completed_at) && (
               <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy}
                             controlled onReady={registerAssessStart}
-                            onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase} />
+                            onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase}
+                            onViewMonitor={() => setView('monitor')} />
             )}
             {/* Gated on assessPhase === 'done', not just `assessed` — `assessed` flips true the
                 instant Assess is clicked (before AssessRunner's own progress animation even

@@ -4,6 +4,8 @@ import { WCAG } from './wcagCatalog.js'
 import { assessScan, getCapability, getScan, getScanLive, getScanTraces, refreshScanDriveToken, getQueueJob, getJobs, setWorkers } from './api.js'
 import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
 import WorkerReplicaControl from './WorkerReplicaControl.jsx'
+import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
+import { deriveProcessingState } from './processingState.js'
 import { assessLine } from './phaseNarration.js'
 import { coreStats } from './coreStats.js'
 // Separate line on purpose: coreStats.test.js pins the exact `import { coreStats } from
@@ -78,7 +80,7 @@ const SKEY = (id) => `acp-assess-${id || 'none'}`
 const loadSaved = (id) => { try { return JSON.parse(sessionStorage.getItem(SKEY(id)) || 'null') } catch { return null } }
 
 export default function AssessRunner({ files = [], runId, scanBusy = false, onAssessed, onPhase,
-                                       controlled = false, onReady }) {
+                                       controlled = false, onReady, onViewMonitor }) {
   const saved = loadSaved(runId)
   // Derived from the selected scope, not a picker — see deriveLevel above.
   const level = DERIVED_LEVEL
@@ -528,6 +530,32 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
       <div role="status" aria-live="polite">
         {phase === 'running' && (
           <div className="assessrun">
+            {/* PRD "Processing details" (Phase 1 slice, 2026-08-28) — leads the running view with
+                ONE plain-language sentence before the granular strip below, per the PRD's own
+                principle: "explain status before showing metrics". Reuses the exact same signals
+                the strip and the two banners below already compute (noCapacity/stalled match
+                those banners' own conditions) rather than deriving a second, possibly-diverging
+                notion of the same thing. */}
+            {(() => {
+              const noCapacity = !!(workerSnap && workerSnap.workers === 0 && !workersDown
+                && !(workerSnap.runtime_mode === 'distributed' && workerSnap.alive))
+              const stalled = !!(workerSnap && workerSnap.workers > 0 && assessStartedAt && (() => {
+                const lastActivityMs = Math.max(lastProgressRef.current ?? 0, lastInFlightRef.current ?? 0) || assessStartedAt
+                return lastActivityMs < nowTick - 5 * 60 * 1000
+              })())
+              const processingCount = liveQueue ? liveQueue.workersBusy : 0
+              const waitingCount = liveQueue ? liveQueue.queued : Math.max(0, assessN - progress - processingCount)
+              const lastActivityMs = Math.max(lastProgressRef.current ?? 0, lastInFlightRef.current ?? 0) || null
+              const lastActivityMins = lastActivityMs ? Math.round((nowTick - lastActivityMs) / 60000) : null
+              const derived = deriveProcessingState({
+                phase, noCapacity, stalled, completedCount: progress, totalCount: assessN,
+                processingCount, waitingCount, lastActivityMins, currentFile, currentPhase,
+              })
+              return (
+                <ProcessingStatusPanel derived={derived} onViewMonitor={onViewMonitor}
+                                       onStartWorkers={() => adjustWorkers(+1)} />
+              )
+            })()}
             {workersDown && (
               <div role="alert" style={{ margin: '0 0 10px', padding: '10px 14px', borderRadius: 8,
                    fontSize: 13, background: '#FBE9E7', border: '1px solid #E7B4AC', color: '#8A2A20' }}>
