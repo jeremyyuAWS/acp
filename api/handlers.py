@@ -1666,8 +1666,6 @@ def _scan_discover(payload: dict, job: dict) -> None:
 
         core.store.set_scan_files(scan_id, len(items))
         core.store.merge_scan_scope(scan_id, scope)
-        if defer:
-            core.store.set_scan_status(scan_id, "discovered")
         norm = [{"file": it["name"], "drive_file_id": it.get("id"), "mime": it.get("mime"),
                  "path": it.get("path"), "checksum": it.get("checksum"),
                  "drive_id": it.get("driveId"),
@@ -1834,6 +1832,18 @@ def _scan_discover(payload: dict, job: dict) -> None:
             except Exception:
                 logger.warning("_scan_discover: failed to mark published for %s",
                                scan_id, exc_info=True)
+        if not items:
+            # The estate is inventoried, but nothing in it is assessable — close the run rather
+            # than leave it waiting for an Assess that would enqueue zero files.
+            core.store.enqueue_job("scan_finalize",
+                                   {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)
+        else:
+            core.store.set_setting(f"assess_params:{scan_id}", _json.dumps(
+                {"source": source, "ai": ai, "pii": pii, "incremental": incremental,
+                 "exclude_remediated": _exclude_rem, "batch": bool(payload.get("batch"))}))
+            core.store.log_decision("system", "scan.discovered", scan_id=scan_id,
+                                    detail=f"{len(inv)} file(s) inventoried from metadata (no file opened) — "
+                                           f"{len(items)} assessable, awaiting Assess")
         # Discover-phase tracing (lf.discover_run_trace). Until this call, an ADR 0020
         # Discover-only run emitted NOTHING to Langfuse: the "Discover" span lives on the analyse
         # path, which under this ADR runs at Assess time, so the phase that lists the estate and
@@ -1851,18 +1861,21 @@ def _scan_discover(payload: dict, job: dict) -> None:
             _lf.flush()
         except Exception:
             logger.debug("_scan_discover: Langfuse tracing failed for %s", scan_id, exc_info=True)
-        if not items:
-            # The estate is inventoried, but nothing in it is assessable — close the run rather
-            # than leave it waiting for an Assess that would enqueue zero files.
-            core.store.enqueue_job("scan_finalize",
-                                   {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)
-            return
-        core.store.set_setting(f"assess_params:{scan_id}", _json.dumps(
-            {"source": source, "ai": ai, "pii": pii, "incremental": incremental,
-             "exclude_remediated": _exclude_rem, "batch": bool(payload.get("batch"))}))
-        core.store.log_decision("system", "scan.discovered", scan_id=scan_id,
-                                detail=f"{len(inv)} file(s) inventoried from metadata (no file opened) — "
-                                       f"{len(items)} assessable, awaiting Assess")
+        # The durable STATUS flips to "discovered" LAST — after every other write this function
+        # makes (inventory, lifecycle stats, discovered_at, published flag, assess_params/finalize
+        # dispatch, tracing). It used to flip right after listing, long before any of that. Found
+        # live 2026-08-28: two independent readers key off exactly this status — the frontend's
+        # poll loop, which clears `busy` the instant status != "running" and renders
+        # DiscoverCompleteSummary, and POST /scans/{sid}/assess's deferred_pending check, which
+        # requires status == "discovered" AND count_inventory(sid) > 0 AND assess_params:{sid} set.
+        # A reader in the old window could see a scan that looked complete with an empty
+        # scan_inventory table and un-evaluated lifecycle rules — the Discover card showed
+        # "0 files inventoried" that silently self-corrected once the real writes landed — and a
+        # client hitting /assess in that window fell through to the wrong (immediate-model) branch
+        # instead of the deferred one. Putting the flip last means no reader can ever observe
+        # "discovered" with any of this still unwritten — a status can lag behind what's true, but
+        # what it says has to already be true when it's said.
+        core.store.set_scan_status(scan_id, "discovered")
         return
     if not items:
         core.store.enqueue_job("scan_finalize",
