@@ -1130,6 +1130,13 @@ export default function App() {
       // Guide the user into the workflow: land on Discover (step 1) after a scan.
       setView(me?.allow && !me.allow.includes('discover') ? 'overview' : 'discover')
     } catch (e) {
+      // A stale 'starting'/'busy' capacity notice from the preflight probe earlier in this same
+      // attempt must not keep telling the user "you can scan now" underneath a banner that just
+      // said the scan failed for lack of workers — found live 2026-08-28: the two are set at
+      // different points (preflight vs. this catch) and nothing cleared the first on failure, so
+      // both rendered at once and directly contradicted each other. The failure is the newer,
+      // harder signal; it wins.
+      setPreflightCapacityState(null)
       setErr(`scan failed: ${e?.message ?? e}`)
     } finally {
       // Always close, whatever the loop's own state — the server's generator loop otherwise
