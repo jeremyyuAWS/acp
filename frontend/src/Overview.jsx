@@ -593,7 +593,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         <section className="panel">
           <h2>Scan history <span className="muted" style={{ fontWeight: 400 }}>· master score = latest run · click a row to view it</span></h2>
           <div className="tablewrap"><table>
-            <thead><tr><th></th><th>scan</th><th>score</th><th>change</th><th>certifiable</th><th>source</th><th></th></tr></thead>
+            <thead><tr><th></th><th>scan</th><th>score</th><th>change</th><th>files</th><th>certifiable</th><th>source</th><th></th></tr></thead>
             <tbody>
               {scanList.map((s, i) => {
                 const prev = scanList[i + 1]
@@ -611,6 +611,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
                     <td>{d == null ? <span className="muted">—</span> : (
                       <span style={{ color: d > 0 ? '#3B6D11' : d < 0 ? '#B43A2A' : '#6B7280', fontWeight: 600, fontSize: 12 }}>
                         {d > 0 ? `▲ +${d}` : d < 0 ? `▼ ${d}` : '±0'}</span>)}</td>
+                    <td className="muted">{(s.files ?? 0).toLocaleString()}</td>
                     <td className="muted">{s.certifiable ?? '—'} / {(s.files ?? 0).toLocaleString()}</td>
                     {/* This table is WHERE the 2026-07-30 report was formed: a one-folder scan and
                         a whole-Drive scan of the same account sat in adjacent rows, both labelled
