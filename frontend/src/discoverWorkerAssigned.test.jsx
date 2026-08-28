@@ -19,6 +19,10 @@ vi.mock('./api.js', () => ({
   acknowledgeScan: vi.fn(),
   unacknowledgeScan: vi.fn(),
   getQueueJob: (...a) => getQueueJob(...a),
+  // Stubbed so the richer-queued-card poll (mounted alongside the claim poll whenever
+  // busy && phase === 'queued') doesn't throw — its own behavior is covered in
+  // discoverQueueContextAndRate.test.jsx, out of scope for this file.
+  getJobs: vi.fn(() => Promise.resolve({ jobs: [] })),
 }))
 
 const { default: Discover } = await import('./Discover.jsx')

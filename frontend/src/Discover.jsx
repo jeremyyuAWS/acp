@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import WindowedRows from './WindowedRows.jsx'
 import FileDrawer from './FileDrawer.jsx'
@@ -22,7 +22,7 @@ import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 import DiscoverCompleteSummary from './DiscoverCompleteSummary.jsx'
 import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
 import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation,
-         acknowledgeScan, unacknowledgeScan, checkReadiness, getQueueJob } from './api.js'
+         acknowledgeScan, unacknowledgeScan, checkReadiness, getQueueJob, getJobs } from './api.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
 import { discoveryFailureReason } from './discoveryFailureReason.js'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
@@ -101,6 +101,11 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 // `me` arrived with Upload, which folded in here when v2 dropped its top-level
 // tab. Both OPTIONAL: every existing caller and test constructs Discover without them, and the
 // ad-hoc panel simply does not render when `me` is absent rather than throwing.
+// Discovery-related job types (QueuePanel.jsx's own JOBLABEL keys) — used to count "compatible
+// jobs ahead" honestly: this owner's OTHER queued discovery-lane jobs, not a literal priority
+// position (see discoverProcessingState.js's own comment on why a fixed "#N in queue" is fragile).
+const DISCOVERY_JOB_TYPES = new Set(['scan_discover', 'scan_batch', 'scan_finalize', 'scan_file', 'scan'])
+
 export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, preflightDegraded = null, preflightCapacityState = null, scanPct = 0, scanId = null, jobId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
   hasSPToken = false, runAt = null, run = null, scanList = null, rawFiles = null, onStop = null, onViewMonitor = null }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
@@ -171,6 +176,27 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
     const load = () => getQueueJob(jobId).then((d) => { if (live) setDiscoverJobInfo(d) }).catch(() => {})
     load()
     const id = setInterval(load, 3000)
+    return () => { live = false; clearInterval(id) }
+  }, [busy, jobId, progress?.phase])
+  // Queue-context facts for the same pre-listing window (stakeholder review, 2026-08-28): "N
+  // compatible jobs ahead" and worker-pool size, the same GET /jobs data WorkerAvailability
+  // polls elsewhere, read here too since this effect needs it merged with the job-specific claim
+  // signal above into one card. compatibleJobsAhead counts this owner's OTHER queued
+  // discovery-lane jobs — real, but not a promise of exact order (see DISCOVERY_JOB_TYPES above).
+  const [queueSnap, setQueueSnap] = useState(null)   // {compatibleJobsAhead, workersTotal, workersOnline}
+  useEffect(() => {
+    setQueueSnap(null)
+    const phase = progress?.phase ?? null
+    if (!busy || (phase && phase !== 'queued')) return undefined
+    let live = true
+    const load = () => getJobs('queued').then((d) => {
+      if (!live) return
+      const ahead = (d.jobs || []).filter((j) => DISCOVERY_JOB_TYPES.has(j.type) && j.id !== jobId).length
+      setQueueSnap({ compatibleJobsAhead: ahead, workersTotal: d.workers ?? null,
+                     workersOnline: !!d.worker_tier_alive })
+    }).catch(() => {})
+    load()
+    const id = setInterval(load, 5000)
     return () => { live = false; clearInterval(id) }
   }, [busy, jobId, progress?.phase])
   const [inv, setInv] = useState(null)
@@ -289,6 +315,44 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // (ADR 0020's get_scan fallback), so files.length is real ground truth here — `||`, not `??`,
   // so it also overrides an explicit-but-wrong 0, not just a missing value.
   const completionDiscoveredCount = discoveredCount || files.length
+  // Live-activity rate for the discovering/lifecycle stage (stakeholder review, 2026-08-28):
+  // a "recent discovery rate" derived client-side from real (count, timestamp) poll samples —
+  // not a backend field. progress.files_found is the true live counter here (the Redis job
+  // state _listing_progress ticks, per queuedProgress.js), not `discoveredCount` above
+  // (scope-derived, which App.jsx only refreshes once the scan SETTLES and stays stale for the
+  // whole busy run). Keeps a short rolling window rather than a two-point instantaneous delta
+  // so the rate doesn't swing between 0 and a spike on noisy ticks, and withholds a reading
+  // entirely until the window spans a meaningful interval — no first-tick guess.
+  const liveDiscoveredCount = progress?.files_found ?? discoveredCount
+  const [filesPerSec, setFilesPerSec] = useState(null)
+  const [inventoryChangedSecsAgo, setInventoryChangedSecsAgo] = useState(null)
+  const rateSamplesRef = useRef([])       // [{count, t}], oldest first, capped at 4
+  const lastChangeAtRef = useRef(null)    // ms timestamp the count last increased
+  useEffect(() => {
+    const phase = progress?.phase ?? null
+    const inDiscoveringStage = busy && phase && phase !== 'queued'
+    if (!inDiscoveringStage || liveDiscoveredCount == null) {
+      rateSamplesRef.current = []; lastChangeAtRef.current = null
+      setFilesPerSec(null); setInventoryChangedSecsAgo(null)
+      return undefined
+    }
+    const now = Date.now()
+    const samples = rateSamplesRef.current
+    const prevCount = samples.length ? samples[samples.length - 1].count : null
+    if (prevCount == null || liveDiscoveredCount !== prevCount) {
+      if (prevCount == null || liveDiscoveredCount > prevCount) lastChangeAtRef.current = now
+      rateSamplesRef.current = [...samples, { count: liveDiscoveredCount, t: now }].slice(-4)
+    }
+    const win = rateSamplesRef.current
+    if (win.length >= 2 && win[win.length - 1].t - win[0].t >= 1000) {
+      const rate = (win[win.length - 1].count - win[0].count) / ((win[win.length - 1].t - win[0].t) / 1000)
+      setFilesPerSec(rate >= 0 ? rate : null)
+    } else {
+      setFilesPerSec(null)
+    }
+    setInventoryChangedSecsAgo(lastChangeAtRef.current != null ? (now - lastChangeAtRef.current) / 1000 : null)
+    return undefined
+  }, [busy, progress?.phase, liveDiscoveredCount])
   const ownerOf = (f) => delegations[f.owner] || f.owner
   const isDelegated = (f) => !!delegations[f.owner]
 
@@ -541,10 +605,17 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         derived={deriveDiscoverProcessingState({
           busy, phase: progress?.phase ?? null, freshness: progress?.freshness ?? run?.freshness ?? null,
           runStatus: run?.status ?? null, failureReason, capacityState: preflightCapacityState,
-          discoveredCount, elapsedSecs: progress?.elapsed ?? null,
+          discoveredCount: liveDiscoveredCount, elapsedSecs: progress?.elapsed ?? null,
           jobClaimed: !!(discoverJobInfo && discoverJobInfo.status && discoverJobInfo.status !== 'queued'),
           assignedSecsAgo: discoverJobInfo?.locked_at
             ? (Date.now() - Date.parse(discoverJobInfo.locked_at)) / 1000 : null,
+          compatibleJobsAhead: queueSnap?.compatibleJobsAhead ?? null,
+          workersTotal: queueSnap?.workersTotal ?? null,
+          workersOnline: queueSnap?.workersOnline ?? null,
+          submittedSecsAgo: progress?.started_at
+            ? (Date.now() - Date.parse(progress.started_at)) / 1000 : null,
+          foldersFound: progress?.folders_found ?? null,
+          filesPerSec, inventoryChangedSecsAgo,
         })}
         onRerun={() => onScan('all')}
         onViewMonitor={onViewMonitor}

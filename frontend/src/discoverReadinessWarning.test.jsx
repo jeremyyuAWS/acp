@@ -23,6 +23,10 @@ vi.mock('./api.js', () => ({
   overrideLifecycleRecommendation: vi.fn(),
   acknowledgeScan: vi.fn(),
   unacknowledgeScan: vi.fn(),
+  // Stubbed so the richer-queued-card poll (mounted whenever busy && phase is queued-or-unset)
+  // doesn't throw — its own behavior is covered in discoverQueueContextAndRate.test.jsx.
+  getJobs: vi.fn(() => Promise.resolve({ jobs: [] })),
+  getQueueJob: vi.fn(() => Promise.resolve({})),
 }))
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true

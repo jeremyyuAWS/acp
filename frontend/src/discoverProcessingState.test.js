@@ -52,7 +52,7 @@ describe('deriveDiscoverProcessingState', () => {
     const d = deriveDiscoverProcessingState({ busy: true, phase: 'queued', runStatus: 'queued' })
     expect(d.state).toBe('queued')
     expect(d.headline).toMatch(/waiting for a worker/i)
-    expect(d.detail).toMatch(/will begin automatically/i)
+    expect(d.detail).toMatch(/will start automatically/i)
     expect(d.severity).toBe('waiting')
   })
 
@@ -85,6 +85,29 @@ describe('deriveDiscoverProcessingState', () => {
     expect(d.detail).toMatch(/a worker is starting/i)
   })
 
+  it('builds "compatible jobs ahead" / worker-pool / submitted facts when given, omitting what it lacks', () => {
+    const d = deriveDiscoverProcessingState({
+      busy: true, phase: 'queued', compatibleJobsAhead: 3, workersTotal: 4, workersOnline: true,
+      submittedSecsAgo: 130,
+    })
+    expect(d.facts).toEqual([
+      { label: 'Compatible jobs ahead', value: '3' },
+      { label: 'Worker pool', value: '4 online' },
+      { label: 'Submitted', value: '2m ago' },
+    ])
+    expect(d.next).toMatch(/connect to the source/i)
+  })
+
+  it('shows the worker pool as offline rather than a fabricated busy fraction', () => {
+    const d = deriveDiscoverProcessingState({ busy: true, phase: 'queued', workersTotal: 0, workersOnline: false })
+    expect(d.facts).toContainEqual({ label: 'Worker pool', value: 'offline' })
+  })
+
+  it('omits queue facts entirely when the caller has none yet, rather than a placeholder', () => {
+    const d = deriveDiscoverProcessingState({ busy: true, phase: 'queued' })
+    expect(d.facts).toEqual([])
+  })
+
   it('escalates severity to blocked when capacity is unavailable', () => {
     const d = deriveDiscoverProcessingState({ busy: true, phase: 'queued', capacityState: 'unavailable' })
     expect(d.severity).toBe('blocked')
@@ -104,6 +127,31 @@ describe('deriveDiscoverProcessingState', () => {
   it('labels the lifecycle stage distinctly from discovering', () => {
     const d = deriveDiscoverProcessingState({ busy: true, phase: 'lifecycle' })
     expect(d.headline).toBe('Applying lifecycle rules')
+  })
+
+  it('adds live-activity facts (found/folders found/recent rate/inventory updated) when given', () => {
+    const d = deriveDiscoverProcessingState({
+      busy: true, phase: 'discovering', discoveredCount: 951, foldersFound: 14,
+      filesPerSec: 23.4, inventoryChangedSecsAgo: 2,
+    })
+    expect(d.facts).toEqual([
+      { label: 'Files found', value: '951' },
+      { label: 'Folders found', value: '14' },
+      { label: 'Recent discovery rate', value: '23 files/sec' },
+      { label: 'Inventory updated', value: '2s ago' },
+    ])
+  })
+
+  it('withholds the discovery-rate fact when the caller has not smoothed a reading yet', () => {
+    const d = deriveDiscoverProcessingState({ busy: true, phase: 'discovering', discoveredCount: 5, filesPerSec: null })
+    expect(d.facts.find((f) => f.label === 'Recent discovery rate')).toBeUndefined()
+  })
+
+  it('formats a sub-10 files/sec rate with one decimal, and rounds a faster one', () => {
+    const slow = deriveDiscoverProcessingState({ busy: true, phase: 'discovering', filesPerSec: 3.14 })
+    expect(slow.facts.find((f) => f.label === 'Recent discovery rate').value).toBe('3.1 files/sec')
+    const fast = deriveDiscoverProcessingState({ busy: true, phase: 'discovering', filesPerSec: 87.6 })
+    expect(fast.facts.find((f) => f.label === 'Recent discovery rate').value).toBe('88 files/sec')
   })
 
   it('flags a stale live signal as a warning, not just active progress', () => {

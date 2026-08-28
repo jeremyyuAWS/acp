@@ -120,4 +120,40 @@ describe('ProcessingStatusPanel', () => {
     })
     expect(c.querySelector('.pulsedot')).toBeFalsy()
   })
+
+  it('renders a facts grid when given, each as a [label, value] pair', async () => {
+    const c = await mount({
+      derived: {
+        state: 'queued', headline: 'Waiting for a worker', detail: '', recommendedAction: null, severity: 'waiting',
+        facts: [{ label: 'Compatible jobs ahead', value: '2' }, { label: 'Worker pool', value: '4 online' }],
+      },
+    })
+    expect(c.textContent).toContain('Compatible jobs ahead')
+    expect(c.textContent).toContain('Worker pool')
+    expect(c.textContent).toContain('4 online')
+  })
+
+  it('renders nothing extra for an empty or missing facts array', async () => {
+    const c = await mount({
+      derived: { state: 'queued', headline: 'h', detail: '', recommendedAction: null, severity: 'waiting', facts: [] },
+    })
+    expect(c.textContent).toBe('h')
+  })
+
+  it('renders the "Next" hint when given', async () => {
+    const c = await mount({
+      derived: {
+        state: 'queued', headline: 'h', detail: '', recommendedAction: null, severity: 'waiting',
+        next: 'A worker will connect to the source and begin discovering documents.',
+      },
+    })
+    expect(c.textContent).toMatch(/Next: A worker will connect/)
+  })
+
+  it('does not render a "Next" line when absent', async () => {
+    const c = await mount({
+      derived: { state: 'queued', headline: 'h', detail: '', recommendedAction: null, severity: 'waiting' },
+    })
+    expect(c.textContent).not.toMatch(/Next:/)
+  })
 })
