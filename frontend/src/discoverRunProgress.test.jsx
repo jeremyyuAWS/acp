@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest'
-import { createElement } from 'react'
+import { describe, it, expect, afterEach } from 'vitest'
+import { createElement, act } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import DiscoverRunProgress from './DiscoverRunProgress.jsx'
+import { createTestRoot, unmountAll } from './testRoots.js'
 
 // The Discover RUNNING screen: a per-step checklist scoped to inventory only.
 // Rule: no assessment content (workers, queues, WCAG, findings) appears here.
@@ -935,5 +936,66 @@ describe('the queued state (PRD §16.1)', () => {
     // scan already stopped — busy is the durable signal, not the phase string alone.
     const html = render({ phase: 'queued' }, false)
     expect(html).not.toContain('Discovery queued')
+  })
+})
+
+// A "Cancel requested" acknowledgment for the Stop/Cancel button, added instead of a full
+// "Stopping…" state: cancel_scan is synchronous (one DB transaction, no cooperative in-between
+// window — see api/store.py's _end_running_scan), so there is no real intermediate state to show
+// honestly. What IS true the instant the button is clicked is that the request was made — this
+// says only that, disabled-button-label ("Cancelling…"/"Stopping…") aside, so a slow poll tick
+// before the card actually swaps away doesn't read as an unresponsive click.
+//
+// Needs a real click + re-render to observe (the `stopping` flag is internal component state),
+// which the static renderToStaticMarkup helper above cannot do — so this block mounts
+// interactively instead, per testRoots.js's usage note.
+globalThis.IS_REACT_ACT_ENVIRONMENT = true
+
+describe('the "Cancel requested" acknowledgment', () => {
+  const flush = async () => { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() }) }
+  const mount = async (props) => {
+    const { container, root } = createTestRoot()
+    await act(async () => {
+      root.render(createElement(DiscoverRunProgress, { onStop: () => {}, ...props }))
+    })
+    return container
+  }
+  const click = async (el) => { await act(async () => { el.click() }); await flush() }
+  const byText = (c, sel, re) => [...c.querySelectorAll(sel)].find((e) => re.test(e.textContent))
+  afterEach(unmountAll)
+
+  it('is absent until Stop is clicked, on the ordinary in-progress checklist', async () => {
+    const c = await mount({ progress: PROG, busy: true })
+    expect(c.textContent).not.toMatch(/Cancel requested/)
+    await click(byText(c, 'button', /^Stop$/))
+    expect(c.textContent).toMatch(/Cancel requested/)
+  })
+
+  it('is absent until Cancel is clicked, on the queued card', async () => {
+    const c = await mount({ progress: { phase: 'queued' }, busy: true })
+    expect(c.textContent).not.toMatch(/Cancel requested/)
+    await click(byText(c, 'button', /^Cancel$/))
+    expect(c.textContent).toMatch(/Cancel requested/)
+  })
+
+  it('is absent until Cancel is clicked, on the retrying card', async () => {
+    const c = await mount({ progress: { phase: 'retrying', attempt: 1 }, busy: true })
+    expect(c.textContent).not.toMatch(/Cancel requested/)
+    await click(byText(c, 'button', /^Cancel$/))
+    expect(c.textContent).toMatch(/Cancel requested/)
+  })
+
+  it('replaces the pre-click stop hint rather than showing both at once', async () => {
+    const c = await mount({ progress: { phase: 'lifecycle', files_evaluated: 1, files_found: 10 }, busy: true })
+    expect(c.textContent).toMatch(/Rules already applied will be kept/)
+    await click(byText(c, 'button', /^Stop$/))
+    expect(c.textContent).not.toMatch(/Rules already applied will be kept/)
+    expect(c.textContent).toMatch(/Cancel requested/)
+  })
+
+  it('does not appear at all when onStop is not provided — nothing was clickable to acknowledge', async () => {
+    const c = await mount({ progress: PROG, busy: true, onStop: undefined })
+    expect(c.querySelector('button')).toBeFalsy()
+    expect(c.textContent).not.toMatch(/Cancel requested/)
   })
 })
