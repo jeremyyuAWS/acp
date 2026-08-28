@@ -779,11 +779,18 @@ describe('freshness badges', () => {
     expect(html).toContain('stale')
   })
 
-  it('shows no badge when freshness is "live"', () => {
+  // Found live 2026-08-28: api/routes/scans.py's _scan_freshness already computes 'live' (the
+  // job's Redis state updated within the last 30s) and it was already reaching this prop —
+  // App.jsx's poll loops pass g.run.freshness straight through — but the three degraded states
+  // got a colored badge while this, the actively-good state, got none. A user watching a healthy
+  // scan had no visual confirmation it was live at all, only silence indistinguishable from "no
+  // information available".
+  it('shows a green "live" badge when freshness is "live"', () => {
     const html = renderWithFreshness('live')
+    expect(html).toContain('live')
     expect(html).not.toContain('reconnecting')
     expect(html).not.toContain('checkpoint')
-    expect(html).not.toContain('stale')
+    expect(html).not.toContain('>stale<')
   })
 
   it('shows no badge when freshness is null (default)', () => {
