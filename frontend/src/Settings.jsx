@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { resetDemoData, resetMyData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, getAiStatus, getAdmins, setAdmins, getMe, getToken } from './api.js'
 import { SIM } from './sim.js'
+import WorkerReplicaControl from './WorkerReplicaControl.jsx'
 
 // What a write is allowed to claim when the API layer marked its own answer `simulated`.
 // A simulated response never reached a server, so it is neither a success nor a failure — the
@@ -800,6 +801,29 @@ function CopyToken() {
   )
 }
 
+// Settings' role is CONFIGURATION, not observation — "Settings lets an administrator change how
+// workers operate" (the navigation this was steered toward, 2026-08-28). The live queue/job view
+// (QueuePanel) belongs in Monitor → Workers & Queue instead, where every other live operational
+// view already lives (Source drift, Scheduled re-scans, the Audit trail). This tab is deliberately
+// just the one thing that IS configuration: the Azure Container Apps replica floor.
+function WorkerConfiguration() {
+  return (
+    <div style={{ maxWidth: 560 }}>
+      <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+        "Warm capacity" is the Azure Container Apps replica floor: raise it before a large batch to
+        have workers already up rather than cold-starting on demand; lower it after to stop paying
+        for idle containers. For what the workers are doing right now, see Monitor → Workers &amp; Queue.
+      </p>
+      {/* No wrapping label: WorkerReplicaControl already renders nothing when Azure replica
+          control isn't configured (no AZURE_SUBSCRIPTION_ID), and its own trailing "Azure
+          replicas (max N)" text self-describes what the control is when it does render — an
+          external label here would dangle with nothing beside it in the common case where
+          it's unconfigured (local dev, most demo deployments). */}
+      <WorkerReplicaControl />
+    </div>
+  )
+}
+
 export default function Settings({ onClose, files = [], onDelegationChange }) {
   const [tab, setTab] = useState('users')
   const panelRef = useRef(null)
@@ -824,12 +848,14 @@ export default function Settings({ onClose, files = [], onDelegationChange }) {
           <button role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'fchip on' : 'fchip'} onClick={() => setTab('users')}>Users</button>
           <button role="tab" aria-selected={tab === 'mydata'} className={tab === 'mydata' ? 'fchip on' : 'fchip'} onClick={() => setTab('mydata')}>My Data</button>
           <button role="tab" aria-selected={tab === 'myscope'} className={tab === 'myscope' ? 'fchip on' : 'fchip'} onClick={() => setTab('myscope')}>My Scope</button>
+          <button role="tab" aria-selected={tab === 'workers'} className={tab === 'workers' ? 'fchip on' : 'fchip'} onClick={() => setTab('workers')}>Worker Configuration</button>
         </div>
         <div className="setbody">
           {tab === 'owners' && <OwnerDelegate files={files} onChanged={onDelegationChange} />}
           {tab === 'users' && <AllowList />}
           {tab === 'mydata' && <><ResetMyData /><CopyToken /></>}
           {tab === 'myscope' && <MyScanScope />}
+          {tab === 'workers' && <WorkerConfiguration />}
         </div>
       </div>
     </div>

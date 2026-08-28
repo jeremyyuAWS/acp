@@ -1,12 +1,19 @@
 /**
  * Settings is scoped to access management (Owners + Users) plus the one self-service action every
- * signed-in user needs (My Data — reset only your own scans; see resetMyData.test.jsx).
+ * signed-in user needs (My Data — reset only your own scans; see resetMyData.test.jsx), plus
+ * Worker Configuration (2026-08-28) — administrator-controlled worker CAPACITY only (the Azure
+ * replica floor). "Settings lets an administrator change how workers operate" — the live queue/
+ * job view lives in Monitor → Workers & Queue instead (monitorWorkersQueue.test.jsx), not here;
+ * mixing observation into a configuration surface was the first draft of this and was steered
+ * away from directly.
  *
  * The six OTHER admin panels (Scoring rules, Estate, File types, Remediated storage, Disposition,
  * the global admin Data reset, AI-provider governance) were removed from the tab bar on request.
  * They were NOT deleted — their components are still exported from Settings.jsx and still covered
  * by their own tests (see simAdminWriteHonesty / aiProviders / aiEndpointSettings). This test pins
- * both halves: those six are gone, and the code that could bring one back is still here.
+ * both halves: those six are gone, and the code that could bring one back is still here. Worker
+ * Configuration is not one of the six — it was added, not restored, and is covered separately
+ * below.
  *
  * It also covers the Users-tab onboarding: two equal paths, Microsoft (SharePoint/OneDrive) and
  * Google (Drive), each ending at the same allowlist.
@@ -37,8 +44,8 @@ const setValue = (el, v) => {
 }
 
 describe('the settings panel is access-only, plus self-service My Data and My Scope', () => {
-  it('shows exactly the Owners, Users, My Data and My Scope tabs, in that order', async () => {
-    expect(tabTexts(await render())).toEqual(['Owners', 'Users', 'My Data', 'My Scope'])
+  it('shows exactly the Owners, Users, My Data, My Scope and Worker Configuration tabs, in that order', async () => {
+    expect(tabTexts(await render())).toEqual(['Owners', 'Users', 'My Data', 'My Scope', 'Worker Configuration'])
   })
 
   it('no longer offers any of the removed ADMIN-ONLY tabs', async () => {
@@ -51,6 +58,24 @@ describe('the settings panel is access-only, plus self-service My Data and My Sc
   it('opens on the Users tab', async () => {
     const c = await render()
     expect(c.querySelector('button[role="tab"][aria-selected="true"]').textContent.trim()).toBe('Users')
+  })
+})
+
+// WorkerReplicaControl is already fully self-contained (its own polling, its own state) — this
+// only proves Settings mounts it on the new tab, not its own internal behavior (see
+// workerReplicaControl.test.jsx for that). Deliberately asserts QueuePanel does NOT render here —
+// the live queue view belongs in Monitor → Workers & Queue, not in a configuration surface (see
+// monitorWorkersQueue.test.jsx for that mount).
+describe('the Worker Configuration tab', () => {
+  it('mounts the capacity control, not the live queue view', async () => {
+    const c = await render()
+    const tabs = [...c.querySelectorAll('button[role="tab"]')]
+    const workerTab = tabs.find((b) => b.textContent.trim() === 'Worker Configuration')
+    expect(workerTab, 'no Worker Configuration tab').toBeTruthy()
+    await act(async () => { workerTab.click() })
+    await settle()
+    expect(c.textContent).toMatch(/Warm capacity/)
+    expect(c.textContent).not.toMatch(/Async job queue/)
   })
 })
 

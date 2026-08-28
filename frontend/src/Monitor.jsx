@@ -5,6 +5,7 @@ import { prefersReducedMotion } from './a11y.js'
 import RegressionRadar from './RegressionRadar.jsx'
 import ComplianceDigest from './ComplianceDigest.jsx'
 import FailureLane from './FailureLane.jsx'
+import QueuePanel from './QueuePanel.jsx'
 
 // Step 10 · Monitor — the always-on surface. Shows every connected source being
 // continuously watched for new files and changes, a live event stream (with demo
@@ -514,6 +515,23 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
             )}
           </div>
         )}
+      </section>
+
+      {/* "Monitor tells me why" — the operational deep dive, distinct from Assess's own
+          in-scan "what is happening right now" panel and from Settings' capacity CONFIG.
+          QueuePanel is already fully self-contained (own polling, own state) — reused
+          here directly, not duplicated. Placed as its own section: this is a starting
+          slice of a larger Workers & Queue console (worker health, queue lanes, retries,
+          dead letters, stalled scans, job timelines) requested 2026-08-28 — not the whole
+          of it. */}
+      <section className="panel" style={{ marginTop: 14 }}>
+        <h2 style={{ margin: '0 0 4px' }}>Workers &amp; Queue</h2>
+        <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+          What the workers are doing right now, across every scan and assessment — reachable
+          without an active run, so this no longer means checking Azure logs directly. Adjust
+          how many are warm ahead of a large batch in Settings → Worker Configuration.
+        </p>
+        <QueuePanel />
       </section>
 
       <section className="panel" style={{ marginTop: 14 }} ref={evidenceRef}>
