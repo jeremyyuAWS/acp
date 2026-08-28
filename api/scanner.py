@@ -619,7 +619,13 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
     # answers honestly, and only this: "what is the BFS doing at this instant", which a single
     # aggregate total (files_found/folders_found) cannot.
     _folder_paths: dict[str, str] = {}
-    _root_name = _folder_name(svc, folder_id) or "(scan root)"
+    # The lookup itself is a real Drive API call — spent only when something will actually see
+    # the name (progress_cb is the only consumer of _active/_recent). A caller that wants files
+    # and no live activity must not pay for a metadata read it will never look at, matching the
+    # same rule scope_out's own folder-name lookup already follows elsewhere in this file. When
+    # skipped, `folder_id` stands in as the path/name — never actually observed by anyone, since
+    # nothing reads _active/_recent without a progress_cb to receive them.
+    _root_name = (_folder_name(svc, folder_id) or "(scan root)") if progress_cb else folder_id
     _folder_paths[folder_id] = _root_name
     _active: dict[str, dict] = {}      # folder_id -> {name, path, started_at}
     _recent: list[dict] = []           # bounded to _RECENT_CAP, oldest dropped first
