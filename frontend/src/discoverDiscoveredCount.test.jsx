@@ -52,3 +52,52 @@ describe('the "N documents discovered" headline', () => {
     expect(t).toMatch(/12 documents discovered/i)
   })
 })
+
+// The completion card ("N files inventoried") reads a SEPARATE, self-healing count from the live
+// banner above — root cause fixed backend-side 2026-08-28 (api/handlers.py's _scan_discover used
+// to flip scan_runs.status to 'discovered' before scope.inventory was actually persisted, so a
+// reader in that race window could see status='discovered' with scope.inventory.discovered still
+// 0). That closes the window for every NEW scan, but a scan that already reached 'discovered' with
+// the bad snapshot BEFORE the fix deployed keeps reading it forever — a page refresh re-reads the
+// same wrong persisted value from Postgres, it does not repair it. Once a scan is genuinely
+// complete (!busy, status='discovered'), file_records has been backfilled from scan_inventory
+// (ADR 0020's get_scan fallback — see store.py), so files.length is real ground truth there,
+// unlike on the live banner above where file_records is still empty pre-Assess.
+describe('the completion card ("N files inventoried") self-heals a stale zero', () => {
+  const doneRun = (extra = {}) => ({ id: 's1', status: 'discovered', discovered_at: '2026-08-28T04:00:00Z', ...extra })
+
+  it('shows the real inventory count when scope.inventory.discovered is a stale/wrong 0', async () => {
+    const files = Array.from({ length: 6922 }, (_, i) => ({ file: `f${i}.docx`, status: 'discovered' }))
+    const c = await mount({
+      files, scope: { kind: 'drive', inventory: { discovered: 0 } }, run: doneRun(),
+    })
+    expect(c).toMatch(/6,922 files inventoried/)
+  })
+
+  it('does not touch a genuinely correct non-zero discoveredCount', async () => {
+    const files = Array.from({ length: 170 }, (_, i) => ({ file: `f${i}.docx`, status: 'discovered' }))
+    const c = await mount({
+      files, scope: { kind: 'drive', inventory: { discovered: 170 } }, run: doneRun(),
+    })
+    expect(c).toMatch(/170 files inventoried/)
+  })
+
+  it('still shows 0 for a genuinely empty estate — not a false positive', async () => {
+    const c = await mount({
+      files: [], scope: { kind: 'drive', inventory: { discovered: 0 } }, run: doneRun(),
+    })
+    expect(c).toMatch(/0 files inventoried/)
+  })
+
+  it('does not affect the live "N documents discovered" banner while the scan is still running', async () => {
+    // Same stale-zero shape, but busy=true (or not yet 'discovered') — the completion card must
+    // not render at all here, so this can only be the live banner, which correctly keeps
+    // preferring scope.inventory.discovered per its own (untouched) fallback rule above.
+    const files = Array.from({ length: 6922 }, (_, i) => ({ file: `f${i}.docx`, status: 'discovered' }))
+    const t = await mount({
+      files, scope: { kind: 'drive', inventory: { discovered: 0 } }, busy: true, run: { id: 's1', status: 'running' },
+    })
+    expect(t).toMatch(/0 documents discovered/i)
+    expect(t).not.toMatch(/files inventoried/)
+  })
+})

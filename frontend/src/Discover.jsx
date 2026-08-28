@@ -256,6 +256,20 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // Stated against the raw discovered count — the estate line describes discovery, which the
   // location view filter never restricts.
   const scopeLine = scopeSentence(scope, discoveredCount)
+  // Self-heals a scan whose persisted scope.inventory.discovered is a stale/wrong 0 — root
+  // cause fixed backend-side (2026-08-28: the durable Discover job used to flip scan_runs.status
+  // to 'discovered' before add_inventory() and the scope.inventory summary were actually
+  // written, so a reader in that window persisted "0 files inventoried" permanently even though
+  // the fix later closed the window for every NEW scan). A scan that already reached
+  // 'discovered' status with that bad snapshot before the fix deployed keeps reading it forever
+  // — a page refresh alone cannot repair data already written. Only applied here, for the
+  // COMPLETE-scan card: `discoveredCount`'s own `??` fallback above must stay untouched for the
+  // live-run/scopeLine uses right above it, where files.length is the unreliable one (file_records
+  // stays empty pre-Assess — see that fallback's own comment). Once a scan is genuinely
+  // '!busy'/'discovered', though, file_records has already been backfilled from scan_inventory
+  // (ADR 0020's get_scan fallback), so files.length is real ground truth here — `||`, not `??`,
+  // so it also overrides an explicit-but-wrong 0, not just a missing value.
+  const completionDiscoveredCount = discoveredCount || files.length
   const ownerOf = (f) => delegations[f.owner] || f.owner
   const isDelegated = (f) => !!delegations[f.owner]
 
@@ -502,9 +516,9 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           Appears only after discovery finishes — DiscoverRunProgress hides itself at that point. */}
       {!busy && (run?.discovered_at || run?.status === 'discovered') && (
         <DiscoverCompleteSummary
-          discoveredCount={discoveredCount}
+          discoveredCount={completionDiscoveredCount}
           assessableCount={scope?.inventory?.by_status?.assessable
-            ?? Math.max(0, discoveredCount - nonAssessable.length - lockedCount)}
+            ?? Math.max(0, completionDiscoveredCount - nonAssessable.length - lockedCount)}
           metadataOnlyCount={scope?.inventory?.by_status?.metadata_only ?? 0}
           unsupportedCount={scope?.inventory?.by_status?.unsupported ?? 0}
           eligibilityUnknownCount={scope?.inventory?.by_status?.eligibility_unknown ?? 0}
