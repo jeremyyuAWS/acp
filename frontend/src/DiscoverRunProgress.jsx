@@ -293,6 +293,23 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
     onStop?.()
   }
 
+  // Acknowledges the click itself, not a server round trip: cancel_scan is synchronous
+  // (one DB transaction, no cooperative in-between state — see api/store.py's
+  // _end_running_scan), so there is no honest "Stopping…" progress to show, and building one
+  // would mean fabricating a state the backend doesn't have (the exact dishonest-progress
+  // pattern this component exists to avoid elsewhere). What IS true the instant the button is
+  // clicked is that the request was made — this says only that, and keeps saying it for as
+  // long as `stopping` is true, i.e. until the card itself swaps away once the cancel lands.
+  function StopAcknowledgment() {
+    if (!stopping) return null
+    return (
+      <p role="status" aria-live="polite" className="muted"
+         style={{ fontSize: 12.5, margin: '10px 0 0', lineHeight: 1.5 }}>
+        Cancel requested — this may take a moment.
+      </p>
+    )
+  }
+
   // Retrying card (PRD §16.8) — a transient failure requeued the job with backoff; a worker will
   // reclaim it, but nothing is running right now. Distinct from the stopped/failed card below:
   // `busy` is still true (the scan is not over — see worker.py's on_retry hook, core.py's
@@ -339,6 +356,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
               {lastError}
             </div>
           )}
+          <StopAcknowledgment />
         </div>
       </section>
     )
@@ -379,6 +397,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
               </span>
             </span>
           </div>
+          <StopAcknowledgment />
         </div>
       </section>
     )
@@ -616,6 +635,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
             {stopHint}
           </p>
         )}
+        <StopAcknowledgment />
         {showReadingExceptions && (
           <p className="muted" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5 }}>
             {[
