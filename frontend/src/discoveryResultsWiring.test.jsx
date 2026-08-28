@@ -46,6 +46,10 @@ describe('source — Discover is the caller, and it passes the real discovery da
     // Lifecycle rules #8 — a real handler, not a stub: wired to the same reload path every other
     // scan_inventory mutation would need, so the recorded override actually reaches this screen.
     expect(discover).toMatch(/onOverrideRecommendation=\{overrideRecommendation\}/)
+    // Raw scan data for support/debugging (2026-08-28) — both already loaded for other reasons
+    // (scope for the header/breakdowns, errLog for the "could not be read" reasons), so passing
+    // them through costs no extra request.
+    expect(discover).toMatch(/rawScope=\{scope\} rawDecisions=\{errLog\}/)
   })
 
   it('overrideRecommendation POSTs the override then reloads the inventory, never patches state locally', () => {
