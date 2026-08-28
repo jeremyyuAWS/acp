@@ -30,7 +30,13 @@ export function queuedProgress(g, elapsed, job) {
   const done = (run && run.files_done) || 0
   // Pre-created stub: job enqueued but no worker has claimed it yet. Surfaces as
   // phase:'queued' so the checklist shows the correct waiting state without 404s.
-  if (run && run.status === 'queued') return { phase: 'queued', elapsed }
+  //
+  // started_at carries the REAL enqueue instant (store.pre_create_queued_scan stamps it at
+  // creation) — not the component's own mount time. Without it, "Created Ns ago" on a page
+  // refresh would restart from 0 on every reload of a scan that has actually been queued for
+  // minutes, which is exactly the kind of dishonest-progress bug this component exists to avoid
+  // elsewhere (see DiscoverRunProgress.jsx's own comments on simulated progress).
+  if (run && run.status === 'queued') return { phase: 'queued', elapsed, started_at: run.started_at }
   if (!total) return { phase: 'discovering', elapsed }        // estate not listed yet
   const phase = done < total ? 'analysing' : 'scoring'
   const pct = Math.round(12 + Math.min(1, done / total) * (95 - 12))

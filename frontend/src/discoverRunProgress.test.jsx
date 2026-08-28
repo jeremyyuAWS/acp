@@ -830,3 +830,55 @@ describe('the preflightDegraded note', () => {
     expect(stoppedHtml).not.toContain('Started with a note')
   })
 })
+
+// A job enqueued but not yet claimed by a worker — distinct from 'connecting' (a worker IS
+// actively reaching the source). Found live 2026-08-28: both used to render the same checklist
+// with "Connect to source" pulsing, implying a connection attempt was already underway when
+// really nothing had started yet — dishonest progress of exactly the kind this component's own
+// design comments elsewhere warn against.
+describe('the queued state (PRD §16.1)', () => {
+  it('shows a distinct "Discovery queued" card, not the connecting checklist', () => {
+    const html = render({ phase: 'queued' }, true)
+    expect(html).toContain('Discovery queued')
+    expect(html).toContain('Waiting for an available worker')
+    expect(html).not.toContain('Discovering documents')
+    expect(html).not.toContain('Connect to source')
+  })
+
+  it('prefers the real enqueue timestamp (started_at) over component-mount-relative elapsed', () => {
+    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+    const html = render({ phase: 'queued', started_at: thirtyMinAgo }, true)
+    // fmtElapsedSecs renders >= 60s as "Nm" — accept 29m or 30m for clock-tick tolerance.
+    expect(html).toMatch(/created (29|30)m ago/)
+  })
+
+  it('falls back to mount-relative elapsed when started_at is absent (fresh submission)', () => {
+    const html = render({ phase: 'queued' }, true)
+    expect(html).toMatch(/created 0s ago/)
+  })
+
+  it('never shows a negative wait time when started_at is slightly in the future (clock skew)', () => {
+    const future = new Date(Date.now() + 5000).toISOString()
+    const html = render({ phase: 'queued', started_at: future }, true)
+    expect(html).toMatch(/created 0s ago/)
+    expect(html).not.toMatch(/created -/)
+  })
+
+  it('renders a Cancel button, not the Stop button used once a worker has claimed the job', () => {
+    const html = render({ phase: 'queued' }, true, () => {})
+    expect(html).toContain('Cancel')
+    expect(html).not.toContain('>Stop<')
+  })
+
+  it('does not fabricate a queue position or a Notify-me action — neither is backed by real data', () => {
+    const html = render({ phase: 'queued' }, true)
+    expect(html).not.toMatch(/position|Notify me/i)
+  })
+
+  it('does not render the queued card once busy is false', () => {
+    // Guards against the queued phase string lingering in a stale progress object after the
+    // scan already stopped — busy is the durable signal, not the phase string alone.
+    const html = render({ phase: 'queued' }, false)
+    expect(html).not.toContain('Discovery queued')
+  })
+})
