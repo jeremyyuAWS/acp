@@ -567,7 +567,21 @@ async def stream_discover_state(scan_id: str, request: Request):
 
 @router.get("/scans")
 def scans(request: Request):
-    return core.store.list_scans(owner=_owner(request))
+    # list_scans() filters to completed_at IS NOT NULL, which an ADR 0020 Discover-only run
+    # never sets — the same blind spot list_finished_scans() was built to fix for /monitor/estate
+    # (#907) and /schedule (#908). THIS is the call site those two were downstream symptoms of:
+    # the SPA's own App.jsx calls listScans() -> here on every load, and pickDefaultScan() (see
+    # frontend/src/defaultScan.js) returns null for an empty list — so on any deployment where
+    # Discover-only is the default (ADR 0020, the common case since it shipped), a user whose
+    # most recent scans are all Discover-only got NO scan auto-selected at all. Every tab reads
+    # that as "nothing has ever been scanned": Discover shows 0 documents with no scope line, no
+    # runinfo bar, and no inventory fetch even attempted (scanId was undefined, not just empty)
+    # — because Assess is gated on the same missing `run`, it read as 0 there too.
+    #
+    # Found live 2026-08-28 from a genuinely fresh scan reporting 0/0 on both tabs, traced via a
+    # screenshot showing the runinfo bar (which requires scanList.length > 0) entirely absent —
+    # proof scanList itself was empty, not just under-detailed.
+    return core.store.list_finished_scans(owner=_owner(request))
 
 
 # Registered before /scans/{sid} so "active" isn't treated as a scan id.

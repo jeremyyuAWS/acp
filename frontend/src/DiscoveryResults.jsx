@@ -203,6 +203,17 @@ export default function DiscoveryResults({
         was opened and nothing in the source was changed.
       </p>
 
+      {/* Visible identifier for QA and auditing — the ONLY way to name this exact run when
+          reporting a discrepancy or asking support to look something up. Deliberately plain,
+          copyable text rather than only the URL: the URL scrolls out of view, gets lost across a
+          screenshot crop, and is not what a reviewer thinks to check first. */}
+      {scanId && (
+        <p className="muted" style={{ margin: '4px 0 0', fontSize: 11.5,
+                                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+          Scan ID: {scanId}
+        </p>
+      )}
+
       <div style={{ display: 'flex', gap: 12, marginTop: 16, flexWrap: 'wrap' }}>
         <Stat n={summary.discovered} label={`${plural(summary.discovered, 'file', 'files')} discovered`} />
         {/* SECOND, because it qualifies the number beside it. Discovery lists everything; only some
