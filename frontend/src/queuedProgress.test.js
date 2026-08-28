@@ -9,7 +9,17 @@ import { queuedProgress } from './queuedProgress.js'
 describe('queuedProgress — no live job state (job is null/undefined)', () => {
   it('reports queued while the job has not been claimed yet', () => {
     const g = { run: { status: 'queued' } }
-    expect(queuedProgress(g, 3, null)).toEqual({ phase: 'queued', elapsed: 3 })
+    expect(queuedProgress(g, 3, null)).toEqual({ phase: 'queued', elapsed: 3, started_at: undefined })
+  })
+
+  it('threads the real enqueue timestamp through so a refresh does not reset the wait clock', () => {
+    // store.pre_create_queued_scan stamps started_at at the true enqueue instant. Without this,
+    // DiscoverRunProgress's "Created Ns ago" would fall back to component-mount-relative elapsed
+    // on every page reload — showing "0s ago" for a scan that has actually been queued for
+    // minutes. Found live 2026-08-28 alongside the missing distinct queued card.
+    const g = { run: { status: 'queued', started_at: '2026-08-28T04:00:00Z' } }
+    expect(queuedProgress(g, 3, null)).toEqual(
+      { phase: 'queued', elapsed: 3, started_at: '2026-08-28T04:00:00Z' })
   })
 
   it('reports discovering before any file has been listed', () => {
