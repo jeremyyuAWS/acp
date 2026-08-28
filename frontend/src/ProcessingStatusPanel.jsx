@@ -22,7 +22,7 @@ const SEVERITY_COLORS = {
 
 export default function ProcessingStatusPanel({ derived, onStartWorkers, onRerun, onViewMonitor }) {
   const { state, headline, detail, recommendedAction, severity, pickupUnavailable, live,
-          facts, next } = derived || {}
+          facts, next, comingSoon } = derived || {}
   if (!state || state === 'idle') return null
   const c = SEVERITY_COLORS[severity] || SEVERITY_COLORS.info
 
@@ -71,6 +71,17 @@ export default function ProcessingStatusPanel({ derived, onStartWorkers, onRerun
         </div>
       )}
       {next && <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>Next: {next}</div>}
+      {/* An honest "not built yet", not a fake value. `comingSoon` names a specific signal this
+          card deliberately does not show a number for — distinct styling (dashed border) so it
+          never reads as a live fact that merely hasn't loaded. This grows into a real fact the
+          day a caller's derivation starts setting it instead — nothing about this line implies
+          that day is imminent. */}
+      {comingSoon && (
+        <div className="muted" style={{ marginTop: 8, padding: '6px 10px', fontSize: 11.5,
+             fontStyle: 'italic', border: '1px dashed currentColor', borderRadius: 6, opacity: 0.75 }}>
+          {comingSoon}
+        </div>
+      )}
       {recommendedAction === 'start_workers' && onStartWorkers && (
         <button onClick={onStartWorkers} style={{ marginTop: 8, padding: '4px 12px', borderRadius: 5,
                  border: `1px solid ${c.ink}`, background: c.ink, color: '#fff', fontSize: 12,

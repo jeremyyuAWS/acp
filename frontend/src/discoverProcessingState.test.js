@@ -147,6 +147,11 @@ describe('deriveDiscoverProcessingState', () => {
     expect(d.facts.find((f) => f.label === 'Recent discovery rate')).toBeUndefined()
   })
 
+  it('names folder/file-level detail as not-yet-tracked, rather than a fabricated value', () => {
+    const d = deriveDiscoverProcessingState({ busy: true, phase: 'discovering', discoveredCount: 5 })
+    expect(d.comingSoon).toMatch(/isn't tracked yet/i)
+  })
+
   it('formats a sub-10 files/sec rate with one decimal, and rounds a faster one', () => {
     const slow = deriveDiscoverProcessingState({ busy: true, phase: 'discovering', filesPerSec: 3.14 })
     expect(slow.facts.find((f) => f.label === 'Recent discovery rate').value).toBe('3.1 files/sec')

@@ -156,4 +156,21 @@ describe('ProcessingStatusPanel', () => {
     })
     expect(c.textContent).not.toMatch(/Next:/)
   })
+
+  it('renders a distinctly-styled "coming soon" note when given, not a fabricated fact', async () => {
+    const c = await mount({
+      derived: {
+        state: 'discovering', headline: 'h', detail: '', recommendedAction: null, severity: 'active',
+        comingSoon: "Folder-level detail isn't tracked yet.",
+      },
+    })
+    expect(c.textContent).toContain("Folder-level detail isn't tracked yet.")
+  })
+
+  it('does not render a "coming soon" note when absent', async () => {
+    const c = await mount({
+      derived: { state: 'discovering', headline: 'h', detail: '', recommendedAction: null, severity: 'active' },
+    })
+    expect(c.textContent).toBe('h')
+  })
 })

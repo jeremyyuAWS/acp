@@ -174,6 +174,12 @@ export function deriveDiscoverProcessingState({
       // reconnecting/stale clauses above already read, not a separate, invented notion of live.
       live: freshness === 'live',
       facts,
+      // Not a value the UI is missing by accident — the backend genuinely has no per-folder or
+      // per-file signal today (a thread-pool BFS walks several folders at once and reports one
+      // aggregate total). Says so, rather than a "Now scanning: —" that would look like a real
+      // field waiting to populate.
+      comingSoon: 'Folder- and file-level detail (which folder or file is being read right now) '
+        + "isn't tracked yet — this section will show it once that backend signal ships.",
     }
   }
   return { state: 'idle', headline: null, detail: null, recommendedAction: null, severity: 'info' }
