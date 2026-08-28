@@ -5559,17 +5559,33 @@ class Store:
             data.pop(k, None)
         return _j.dumps(data)
 
-    def complete_job(self, job_id: str) -> None:
+    def complete_job(self, job_id: str) -> bool:
+        """Mark the job done. Guarded against a reclaimed job's original (zombie) worker
+        completing AFTER a second worker already finished it: reclaim_stuck_jobs() requeues a
+        job whose lease expired so a SECOND worker can claim and run it, but does nothing to
+        stop the FIRST worker's handler from finishing later and calling complete_job on the
+        same job_id, unaware it lost the lease. Without this guard that late call would
+        silently overwrite whatever terminal status the second run already recorded — harmless
+        when both happen to write 'done', but a real clobber (a completed job flipped back to
+        'dead'/'cancelled') if the zombie instead hits fail_job/mark_job_cancelled. Whichever
+        writer's terminal state lands first now wins; every later one is a safe no-op.
+        Returns True if this call's write applied, False if the job was already terminal."""
         scrubbed = self._scrub_payload_secrets(job_id)
         with self._db.cursor() as cur:
             if scrubbed is not None:
                 self._db.execute(cur,
-                    "UPDATE jobs SET status='done', updated_at=%s, last_error=NULL, payload=%s WHERE id=%s",
+                    "UPDATE jobs SET status='done', updated_at=%s, last_error=NULL, payload=%s "
+                    "WHERE id=%s AND status NOT IN ('done','dead','cancelled')",
                     (self._now(), scrubbed, job_id))
             else:
                 self._db.execute(cur,
-                    "UPDATE jobs SET status='done', updated_at=%s, last_error=NULL WHERE id=%s",
+                    "UPDATE jobs SET status='done', updated_at=%s, last_error=NULL "
+                    "WHERE id=%s AND status NOT IN ('done','dead','cancelled')",
                     (self._now(), job_id))
+            won = (getattr(cur, "rowcount", 0) or 0) > 0
+        if not won:
+            print(f"[acp] complete_job: job {job_id} already terminal — zombie-worker no-op", flush=True)
+        return won
 
     def request_job_cancellation(self, job_id: str) -> bool:
         """Signal a running or queued job to stop at its next checkpoint.
@@ -5593,12 +5609,22 @@ class Store:
             row = self._db.fetchone(cur)
         return bool(row and row.get("cancel_requested_at"))
 
-    def mark_job_cancelled(self, job_id: str) -> None:
-        """Stamp the job as status='cancelled' after cooperative cancellation completes."""
+    def mark_job_cancelled(self, job_id: str) -> bool:
+        """Stamp the job as status='cancelled' after cooperative cancellation completes.
+
+        Same reclaimed-job guard as complete_job (see its docstring): a late call arriving
+        after the job already reached a DIFFERENT terminal state — e.g. a second worker's
+        complete_job already ran following a lease reclaim — is a safe no-op, never a clobber.
+        Returns True if this call's write applied, False if the job was already terminal."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "UPDATE jobs SET status='cancelled', updated_at=%s WHERE id=%s",
+                "UPDATE jobs SET status='cancelled', updated_at=%s "
+                "WHERE id=%s AND status NOT IN ('done','dead','cancelled')",
                 (self._now(), job_id))
+            won = (getattr(cur, "rowcount", 0) or 0) > 0
+        if not won:
+            print(f"[acp] mark_job_cancelled: job {job_id} already terminal — zombie-worker no-op", flush=True)
+        return won
 
     def dead_letter_breakdown(self, owner: str | None = None) -> dict:
         """Diagnostic: dead-lettered jobs grouped by type + the most common errors.
@@ -5745,17 +5771,27 @@ class Store:
             # BEFORE the payload is scrubbed — scrubbing is what removes the file names this needs.
             self._record_dead_scan_files(job, error, now.isoformat())
             scrubbed = self._scrub_payload_secrets(job_id)
+            # Guarded against a reclaimed job's original (zombie) worker dead-lettering it AFTER
+            # a second worker already completed/cancelled it — same race as complete_job's
+            # docstring describes. Without this, a zombie's late failure could flip a job a
+            # fresher worker already finished successfully back to 'dead', with no error raised
+            # anywhere. Whichever writer's terminal state lands first wins.
             with self._db.cursor() as cur:
                 if scrubbed is not None:
                     self._db.execute(cur,
                         "UPDATE jobs SET status='dead', last_error=%s, error_class=%s, "
-                        "updated_at=%s, payload=%s WHERE id=%s",
+                        "updated_at=%s, payload=%s WHERE id=%s AND status NOT IN ('done','dead','cancelled')",
                         (error[:2000], error_class, now.isoformat(), scrubbed, job_id))
                 else:
                     self._db.execute(cur,
                         "UPDATE jobs SET status='dead', last_error=%s, error_class=%s, "
-                        "updated_at=%s WHERE id=%s",
+                        "updated_at=%s WHERE id=%s AND status NOT IN ('done','dead','cancelled')",
                         (error[:2000], error_class, now.isoformat(), job_id))
+                won = (getattr(cur, "rowcount", 0) or 0) > 0
+            if not won:
+                print(f"[acp] fail_job: job {job_id} already terminal — zombie-worker "
+                      "no-op (dead-letter suppressed)", flush=True)
+                return "dead"
             # One greppable stdout line per dead-letter — the platform alert
             # (Log Analytics scheduled query) keys on 'job dead-lettered'.
             print(f"[acp] job dead-lettered: id={job_id} type={job.get('type')} "
@@ -5781,11 +5817,18 @@ class Store:
                     pass  # best-effort — the dead-letter itself must still be recorded
             return "dead"
         run_after = (now + timedelta(seconds=backoff_seconds)).isoformat()
+        # Same reclaimed-job guard as the dead-letter branch above: a zombie's late transient
+        # failure must not requeue a job a second worker already finished or dead-lettered.
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "UPDATE jobs SET status='queued', run_after=%s, locked_at=NULL, "
-                "locked_by=NULL, last_error=%s, error_class=%s, updated_at=%s WHERE id=%s",
+                "locked_by=NULL, last_error=%s, error_class=%s, updated_at=%s "
+                "WHERE id=%s AND status NOT IN ('done','dead','cancelled')",
                 (run_after, error[:2000], error_class, now.isoformat(), job_id))
+            won = (getattr(cur, "rowcount", 0) or 0) > 0
+        if not won:
+            print(f"[acp] fail_job: job {job_id} already terminal — zombie-worker "
+                  "no-op (requeue suppressed)", flush=True)
         return "queued"
 
     def reclaim_stuck_jobs(self, lease_seconds: int = 600) -> int:
