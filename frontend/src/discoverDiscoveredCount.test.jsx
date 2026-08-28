@@ -101,3 +101,28 @@ describe('the completion card ("N files inventoried") self-heals a stale zero', 
     expect(t).not.toMatch(/files inventoried/)
   })
 })
+
+// A scan that has been created but not yet claimed by a worker (progress.phase === 'queued')
+// looked identical to a genuine empty result: DiscoverRunProgress already shows its own
+// "Discovery queued" card, but the bold "0 documents discovered" line directly below it repeated
+// the zero as if it were a finding, with only a small italic "provisional" caveat easy to miss —
+// reported live 2026-08-28 against a freshly-queued scan (raw scan data: status: 'queued', scope:
+// null, decisions: []).
+describe('the live banner while a scan is queued (not yet claimed by a worker)', () => {
+  it('is suppressed in favor of the "Discovery queued" card, not shown as "0 documents discovered"', async () => {
+    const t = await mount({
+      files: [], scope: null, busy: true, run: { id: 's1', status: 'queued' },
+      progress: { phase: 'queued', started_at: '2026-08-28T17:00:00Z' },
+    })
+    expect(t).toMatch(/Discovery queued/)
+    expect(t).not.toMatch(/documents discovered/i)
+  })
+
+  it('reappears once the scan moves past queued into an active phase', async () => {
+    const t = await mount({
+      files: [], scope: null, busy: true, run: { id: 's1', status: 'running' },
+      progress: { phase: 'discovering', started_at: '2026-08-28T17:00:00Z' },
+    })
+    expect(t).toMatch(/0 documents discovered/i)
+  })
+})

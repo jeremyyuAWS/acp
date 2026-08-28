@@ -657,8 +657,14 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
 
       <div className="estatebar">
         {/* Text description only shown while busy or before a scan completes — once the full
-            discovery card above appears it covers this same information more richly. */}
-        {(busy || !(run?.discovered_at || run?.status === 'discovered')) && (
+            discovery card above appears it covers this same information more richly.
+
+            Suppressed while phase === 'queued': DiscoverRunProgress is already showing its own
+            "Discovery queued — waiting for an available worker" card immediately above, which
+            says nothing has started. This line's "0 documents discovered" is bold and reads as a
+            result, not a caveat — the "provisional" note next to it is small italic text easily
+            missed. A scan that hasn't started yet showed as prominently as a genuine empty one. */}
+        {(busy || !(run?.discovered_at || run?.status === 'discovered')) && progress?.phase !== 'queued' && (
           <div>
             <b>{discoveredCount} documents</b> discovered across {sources.length} sources · {Object.keys(groups).length} departments
             {busy && (
