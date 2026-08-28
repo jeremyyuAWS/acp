@@ -12,7 +12,19 @@ jobs:
       pull-requests: write
       contents: write
     steps:
+      # GH_TOKEN must NOT be secrets.GITHUB_TOKEN. GitHub does not run other workflows off
+      # anything the default token does (merges included) — it exists specifically to stop a
+      # workflow from recursively triggering itself. Enabling auto-merge with it worked fine (the
+      # PR shows "auto-merge enabled"), but the SQUASH ITSELF, performed later by GitHub's platform
+      # once required checks pass, inherits that same non-triggering identity. Every push it
+      # produces to main is invisible to `on: push` — ci.yml, matrix-progress-log.yml, and by
+      # extension deploy.yml (which only fires off ci.yml's own `workflow_run` completion) all go
+      # silent. Found live 2026-08-28: two consecutive real merges landed with zero push-triggered
+      # CI runs for either — production sat 11+ hours behind main before anyone noticed, and the
+      # only reason it surfaced was a manual review of the deploy history, not an alert. AUTOMERGE_PAT
+      # is a repo secret holding a PAT (or an installation token from a GitHub App), neither of
+      # which carries this restriction — a merge performed with it is a normal push again.
       - name: Enable squash auto-merge
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.AUTOMERGE_PAT }}
         run: gh pr merge --squash --auto "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}"
