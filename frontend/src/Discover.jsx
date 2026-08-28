@@ -550,15 +550,44 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         />
       )}
 
-      {/* A listing failure (expired token, a transient API error, the worker dying mid-list)
-          leaves scan_runs at status='failed' — set by handlers._scan_discover before it re-raises.
-          Without this, the tab below reads exactly like a clean, empty scan: 0 documents, no
-          scope line, "inventory could not be read" with no reason given. This is the one place
-          that says outright that discovery did not finish, rather than that it found nothing. */}
+      {/* Any run whose numbers below cannot be trusted as "the whole source, as of now" —
+          not just the outright failure this used to cover alone. Without one of these, EVERY
+          one of these statuses reads exactly like a clean, complete, empty scan: 0 documents, no
+          scope line, "inventory could not be read" with no reason given — the same silent-zero
+          shape found live 2026-08-28 on a scan that was actually stuck, not empty. This is the
+          one place that says outright why the counts below should not be trusted, rather than
+          leaving the reader to conclude the source itself had nothing in it.
+
+          - failed: set by handlers._scan_discover right before it re-raises (expired token, a
+            transient API error, the worker dying mid-list).
+          - cancelled / interrupted: an explicit user Stop, or the server restarting mid-run —
+            both have real (if partial) inventory, described as such, not as "0 found".
+          - running with nothing tracking it live (busy is false): the persisted row still says
+            in-flight, but this tab has no active reconnect/poll for it — a scan that got orphaned
+            (worker died without ever reaching a terminal status) looks IDENTICAL to a healthy
+            small one here unless this says so. Deliberately does not attempt to distinguish
+            "still genuinely running elsewhere" from "stuck forever" — this tab cannot tell either
+            way, and both deserve the same "don't trust this yet" reading. */}
       {run?.status === 'failed' && (
         <div className="err" role="alert" style={{ marginBottom: 12 }}>
           Discovery did not finish — the last attempt to list this source failed. The counts below
           are incomplete or stale. Re-run discovery to get a current inventory.
+        </div>
+      )}
+      {(run?.status === 'cancelled' || run?.status === 'interrupted') && (
+        <div className="err" role="alert" style={{ marginBottom: 12 }}>
+          {run.status === 'cancelled'
+            ? 'Discovery was stopped before it finished.'
+            : 'Discovery was interrupted before it finished (the server likely restarted mid-run).'}
+          {' '}The counts below reflect only what was found up to that point — not the whole
+          source. Re-run discovery to get a current inventory.
+        </div>
+      )}
+      {run?.status === 'running' && !busy && (
+        <div className="err" role="alert" style={{ marginBottom: 12 }}>
+          This scan still shows as running, but nothing here is tracking its live progress right
+          now — it may be stuck. The counts below are not final. Re-run discovery, or check back
+          shortly.
         </div>
       )}
 
