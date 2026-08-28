@@ -59,3 +59,24 @@ describe('reconnecting freshness — durable-queue and reconnect poll loops', ()
     expect(src()).toMatch(/setProgress\(g \? \{ \.\.\.queuedProgress\(g, elapsed, job\), freshness \}/)
   })
 })
+
+describe('out-of-order protection on the live SSE job state (PRD §11)', () => {
+  // A fallback getJob() poll tick and a late SSE frame from before the fallback kicked in write
+  // liveJobStateRef from two different code paths with no ordering guarantee between them.
+  // acceptLiveJobState (liveJobStateGuard.js) is the single source of truth for "is this newer";
+  // both onMessage handlers must go through it rather than assigning liveJobStateRef directly.
+  it('imports acceptLiveJobState', () => {
+    expect(src()).toMatch(/import \{ acceptLiveJobState \} from '\.\/liveJobStateGuard\.js'/)
+  })
+
+  it('both openDiscoverStream onMessage handlers gate the assignment through acceptLiveJobState', () => {
+    const matches = src().match(
+      /onMessage: \(state\) => \{ if \(acceptLiveJobState\(liveJobStateRef\.current, state\)\) liveJobStateRef\.current = state \},/g
+    ) || []
+    expect(matches.length).toBe(2)   // doScan's durable-queue loop + reconnectScan's loop
+  })
+
+  it('no remaining unguarded liveJobStateRef.current assignment inside an onMessage handler', () => {
+    expect(src()).not.toMatch(/onMessage: \(state\) => \{ liveJobStateRef\.current = state \},/)
+  })
+})

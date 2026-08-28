@@ -97,3 +97,50 @@ def test_scan_discover_skips_the_mapping_write_when_job_has_no_id(isolated_store
     )
 
     assert core.get_job_id_for_scan(scan_id) is None
+
+
+def test_scan_discover_writes_attempt_from_the_durable_jobs_row(isolated_store, monkeypatch):
+    """attempt (PRD §11) reuses job["attempts"] — claim_job()'s own durable, monotonic-per-row
+    counter — rather than inventing a second one. It must land in the SSE-visible job state so a
+    stale frame from a superseded attempt can be told apart from current data."""
+    import core
+    import handlers
+    import scanner
+
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setenv("ACP_DEFER_ANALYSIS_TO_ASSESS", "1")
+
+    job_id = "j-mapping-attempt"
+    scan_id = "sd-mapping-attempt"
+    core.JOBS[job_id] = {"phase": "queued"}
+    monkeypatch.setattr(scanner, "_list", lambda *a, **k: [])
+
+    handlers._scan_discover(
+        {"scan_id": scan_id, "source": "local", "user": "test@example.com"},
+        {"scan_id": scan_id, "id": job_id, "attempts": 3},
+    )
+
+    assert core.get_job_state(job_id)["attempt"] == 3
+
+
+def test_scan_discover_defaults_attempt_to_1_when_the_job_dict_omits_it(isolated_store, monkeypatch):
+    """A direct/synthetic call (or an old caller shape) with no 'attempts' key must not crash and
+    must not read as a retry — 1 is the correct default for a job's first attempt."""
+    import core
+    import handlers
+    import scanner
+
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setenv("ACP_DEFER_ANALYSIS_TO_ASSESS", "1")
+
+    job_id = "j-mapping-attempt-default"
+    scan_id = "sd-mapping-attempt-default"
+    core.JOBS[job_id] = {"phase": "queued"}
+    monkeypatch.setattr(scanner, "_list", lambda *a, **k: [])
+
+    handlers._scan_discover(
+        {"scan_id": scan_id, "source": "local", "user": "test@example.com"},
+        {"scan_id": scan_id, "id": job_id},
+    )
+
+    assert core.get_job_state(job_id)["attempt"] == 1

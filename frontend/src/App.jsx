@@ -3,6 +3,7 @@ import HitlBell from './HitlBell.jsx'
 import { assessmentLine, outcomeChips } from './assessmentProgress.js'
 import { queuedProgress } from './queuedProgress.js'
 import { nextFallbackInterval } from './fallbackPollBackoff.js'
+import { acceptLiveJobState } from './liveJobStateGuard.js'
 import { preflightVerdict } from './discoveryPreflightGate.js'
 import { scanPollDecision } from './scanPollDecision.js'
 import LiveAssessmentLive from './LiveAssessmentLive.jsx'
@@ -1024,7 +1025,7 @@ export default function App() {
         liveJobStateRef.current = null
         sseFailedRef.current = false
         streamHandle = openDiscoverStream(scan_id, {
-          onMessage: (state) => { liveJobStateRef.current = state },
+          onMessage: (state) => { if (acceptLiveJobState(liveJobStateRef.current, state)) liveJobStateRef.current = state },
           onError: () => { sseFailedRef.current = true },
           // Deliberately NOT flipping sseFailedRef here: onDone means the job finished, not that
           // the connection is broken — liveJobStateRef.current already holds the final state
@@ -1160,7 +1161,7 @@ export default function App() {
     liveJobStateRef.current = null
     sseFailedRef.current = false
     const streamHandle = openDiscoverStream(scan_id, {
-      onMessage: (state) => { liveJobStateRef.current = state },
+      onMessage: (state) => { if (acceptLiveJobState(liveJobStateRef.current, state)) liveJobStateRef.current = state },
       onError: () => { sseFailedRef.current = true },
     })
     const t0 = Date.now()
