@@ -830,3 +830,58 @@ describe('the preflightDegraded note', () => {
     expect(stoppedHtml).not.toContain('Started with a note')
   })
 })
+
+describe('the retrying state (PRD §16.8)', () => {
+  it('shows a distinct "Discovery retrying" card, not the ordinary in-progress checklist', () => {
+    const html = render({ phase: 'retrying', attempt: 2, max_attempts: 5 }, true)
+    expect(html).toContain('Discovery retrying')
+    expect(html).not.toContain('Discovering documents')
+    // Must not read as a fresh restart: step 0 ("Connect to source") must not show active.
+    expect(html).not.toContain('aria-current="step"')
+  })
+
+  it('shows the attempt count when both attempt and max_attempts are present', () => {
+    const html = render({ phase: 'retrying', attempt: 2, max_attempts: 5 }, true)
+    expect(html).toMatch(/attempt 2 of 5/)
+  })
+
+  it('shows just the attempt number when max_attempts is absent', () => {
+    const html = render({ phase: 'retrying', attempt: 3 }, true)
+    expect(html).toMatch(/attempt 3/)
+    expect(html).not.toMatch(/attempt 3 of/)
+  })
+
+  it('renders without an attempt count at all rather than crashing when neither is present', () => {
+    const html = render({ phase: 'retrying' }, true)
+    expect(html).toContain('Discovery retrying')
+    expect(html).not.toMatch(/attempt \d/)
+  })
+
+  it('surfaces the last error so the user knows what failed', () => {
+    const html = render({ phase: 'retrying', attempt: 1, last_error: '429 rate limit exceeded' }, true)
+    expect(html).toContain('429 rate limit exceeded')
+  })
+
+  it('omits the error section entirely when last_error is absent', () => {
+    const html = render({ phase: 'retrying', attempt: 1 }, true)
+    expect(html).not.toContain('border-top')  // no error panel rendered
+  })
+
+  it('does not fabricate a countdown to the next attempt — backoff is jittered server-side', () => {
+    const html = render({ phase: 'retrying', attempt: 1 }, true)
+    expect(html).not.toMatch(/retrying in \d/i)
+    expect(html).not.toMatch(/\d+s remaining/i)
+  })
+
+  it('renders a Cancel button, not the Stop button used once a worker has claimed the job', () => {
+    const html = render({ phase: 'retrying', attempt: 1 }, true, () => {})
+    expect(html).toContain('Cancel')
+    expect(html).not.toContain('>Stop<')
+  })
+
+  it('falls through to the stopped card once busy goes false — retrying only applies while busy', () => {
+    const html = render({ phase: 'retrying', attempt: 1 }, false)
+    expect(html).not.toContain('Discovery retrying')
+    expect(html).toContain('Discovery stopped')
+  })
+})

@@ -126,6 +126,95 @@ def test_worker_retries_then_dead(store):
     assert store.get_job(jid)["status"] == "dead"
 
 
+def test_worker_on_retry_fires_when_a_transient_failure_is_requeued(store):
+    """The live progress signal for PRD Discover-card §16.8 (Retrying): a caller-supplied
+    on_retry hook lets core.py announce "failed, waiting to retry" on the job's live poll/SSE
+    state without worker.py importing core (see JobWorker's own docstring on why — it is
+    deliberately infrastructure-only)."""
+    import worker
+
+    @worker.handler("flaky")
+    def _flaky(payload, job):
+        raise ValueError("transient boom")
+
+    jid = store.enqueue_job("flaky", {}, max_attempts=5)
+    calls = []
+    w = worker.JobWorker(store, worker_id="w-test", on_retry=lambda jid_, patch: calls.append((jid_, patch)))
+    assert w.run_once() is True
+    assert store.get_job(jid)["status"] == "queued"           # requeued, not dead-lettered
+    assert len(calls) == 1
+    seen_jid, patch = calls[0]
+    assert seen_jid == jid
+    assert patch["phase"] == "retrying"
+    assert patch["attempt"] == 1
+    assert patch["max_attempts"] == 5
+    assert "transient boom" in patch["last_error"]
+
+
+def test_worker_on_retry_does_not_fire_on_dead_letter(store):
+    """A job that exhausts its attempts (or fails fatally) is DONE, not retrying — firing
+    on_retry here would tell the frontend a dead job is about to come back."""
+    import worker
+
+    @worker.handler("always_fail_retry_check")
+    def _boom(payload, job):
+        raise ValueError("nope")
+
+    jid = store.enqueue_job("always_fail_retry_check", {}, max_attempts=1)
+    calls = []
+    w = worker.JobWorker(store, worker_id="w-test", on_retry=lambda jid_, patch: calls.append((jid_, patch)))
+    w.run_once()
+    assert store.get_job(jid)["status"] == "dead"
+    assert calls == []
+
+
+def test_worker_on_retry_does_not_fire_for_a_fatal_error(store):
+    """FatalJobError always force-dead-letters immediately (no requeue) — same guard as above,
+    covering the other dead-letter path (worker.py's separate except FatalJobError branch)."""
+    import worker
+    from worker import FatalJobError
+
+    @worker.handler("fatal_kind")
+    def _fatal(payload, job):
+        raise FatalJobError("unrecoverable")
+
+    jid = store.enqueue_job("fatal_kind", {}, max_attempts=5)
+    calls = []
+    w = worker.JobWorker(store, worker_id="w-test", on_retry=lambda jid_, patch: calls.append((jid_, patch)))
+    w.run_once()
+    assert store.get_job(jid)["status"] == "dead"
+    assert calls == []
+
+
+def test_worker_on_retry_does_not_fire_when_a_zombie_lost_the_completion_race(store):
+    """The exact race test_job_completion_race.py documents: fail_job() returns "queued" even
+    when a zombie worker's requeue write was suppressed because a second worker already
+    completed the same job_id. on_retry must re-read the row's REAL status rather than trust
+    that return value, or a finished job could flash "retrying" right after it finished.
+
+    The handler itself performs the "concurrent" second-worker reclaim + completion before
+    raising, so this exercises run_once()'s actual except-branch — not a re-implementation of
+    its guard logic — for the same interleaving reclaim_stuck_jobs() makes possible: a second
+    worker finishes the job while the first (zombie) worker's handler is still on the stack."""
+    import worker
+
+    @worker.handler("zombie_flavor")
+    def _boom(payload, job):
+        store.reclaim_stuck_jobs(lease_seconds=0)     # this job's lease "expires" immediately
+        reclaimed = store.claim_job("w2")              # a second worker reclaims the SAME job
+        assert reclaimed["id"] == job["id"]
+        assert store.complete_job(job["id"]) is True   # ...and finishes it successfully
+        raise ValueError("zombie's late failure")       # only now does the zombie's own call fail
+
+    jid = store.enqueue_job("zombie_flavor", {}, max_attempts=5)
+    calls = []
+    w = worker.JobWorker(store, worker_id="w1",
+                         on_retry=lambda jid_, patch: calls.append((jid_, patch)))
+    assert w.run_once() is True
+    assert store.get_job(jid)["status"] == "done"      # worker B's completion, untouched
+    assert calls == []                                  # the zombie's late failure announced nothing
+
+
 def test_worker_no_handler_dead_letters_eventually(store):
     import worker
     jid = store.enqueue_job("unknown_type", {}, max_attempts=1)

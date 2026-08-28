@@ -285,6 +285,57 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
     onStop?.()
   }
 
+  // Retrying card (PRD §16.8) — a transient failure requeued the job with backoff; a worker will
+  // reclaim it, but nothing is running right now. Distinct from the stopped/failed card below:
+  // `busy` is still true (the scan is not over — see worker.py's on_retry hook, core.py's
+  // _job_is_stale phase=='retrying' exemption), so falling through to the ordinary checklist
+  // would show step 0 ("Connect to source") as newly active — implying the scan restarted from
+  // nothing, when really it is the SAME job, SAME attempt count, waiting on backoff. No countdown
+  // to the next attempt is shown: backoff is jittered server-side and a fabricated ETA would be
+  // wrong as often as right, the same reasoning that keeps the queued card free of a queue
+  // position (see that card's own comment).
+  if (busy && phase === 'retrying') {
+    const attempt = progress.attempt ?? null
+    const maxAttempts = progress.max_attempts ?? null
+    const lastError = progress.last_error ?? null
+    return (
+      <section className="discover-run-progress" role="region" aria-label="Discovery retrying"
+               style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
+        <div className="assess-run-card" style={{ border: '1px solid var(--line,#e4e8ec)', borderRadius: 12,
+                                                  padding: '14px 16px', background: 'var(--panel,#fff)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 14.5, fontWeight: 650 }}>Discovery retrying</div>
+            {onStop && (
+              <button type="button" className="ghost small" onClick={handleStop}
+                      disabled={stopping}
+                      title="Cancel — no attempt is currently running">
+                {stopping ? 'Cancelling…' : 'Cancel'}
+              </button>
+            )}
+          </div>
+          <div role="status" aria-live="polite" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span className="prep-pulse" aria-hidden="true" />
+            <span style={{ fontSize: 13.5 }}>
+              A previous attempt failed — waiting to retry
+              {attempt !== null && (
+                <span className="muted" style={{ marginLeft: 8, fontVariantNumeric: 'tabular-nums' }}>
+                  · attempt {attempt}{maxAttempts ? ` of ${maxAttempts}` : ''}
+                </span>
+              )}
+            </span>
+          </div>
+          {lastError && (
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line,#e4e8ec)',
+                          fontSize: 12.5, color: 'var(--muted)' }}>
+              {lastError}
+            </div>
+          )}
+        </div>
+      </section>
+    )
+  }
+
   // Stopped / failed card — scan ended before completion (user stop, auth failure, network drop).
   // The active step is demoted to pending so no pulse dot appears on a stopped scan.
   if (isStopped) {

@@ -272,6 +272,27 @@ def test_a_completed_job_is_never_reported_stale_regardless_of_age(two_replicas,
     assert got["done"] is True and got["phase"] == "done" and got["scan_id"] == "s-old"
 
 
+def test_a_retrying_job_is_never_reported_stale_within_the_max_backoff_window(two_replicas, monkeypatch):
+    """PRD Discover-card §16.8: worker.py's on_retry hook writes phase='retrying' when a job is
+    requeued after a transient failure, then goes quiet — no heartbeat, because nothing is
+    running while a job sits out its backoff. Rate-limit backoff alone can run up to 600s, well
+    past the normal 90s staleness window, so phase=='retrying' needs the same exemption 'done'
+    already gets — otherwise a job legitimately waiting to retry would flip to a false
+    phase:'error' done:true mid-backoff, exactly the dishonest-progress bug this module exists
+    to avoid elsewhere."""
+    core, fake = two_replicas
+    monkeypatch.setattr(core, "_JOB_STALE_SECONDS", 90)
+    core.set_job("j-retry", {"phase": "retrying", "done": False, "attempt": 2, "max_attempts": 5,
+                             "last_error": "429 rate limit exceeded"})
+    import json as _j
+    fake.kv["job:j-retry"]["updated_at"] = _j.dumps(_age_iso(500))   # past 90s, within 600s cap
+
+    got = core.get_job_state("j-retry")
+    assert got["phase"] == "retrying" and got["done"] is False
+    assert got["attempt"] == 2 and got["max_attempts"] == 5
+    assert got["last_error"] == "429 rate limit exceeded"
+
+
 def test_an_existing_error_message_is_not_overwritten_by_the_generic_one(two_replicas, monkeypatch):
     """A job that failed with a specific message (e.g. from the except Exception clause in
     routes/scans.py's work()) keeps that message even if it also happens to be old — done=True
