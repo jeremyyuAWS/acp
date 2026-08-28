@@ -33,7 +33,7 @@ test('a local scan runs discover → assess and produces WCAG findings', async (
   // "files discovered" — PR #884 (structured-row completion card) renamed it and updated
   // discoverCompleteSummary.test.jsx to match, but left this E2E assertion on the old copy, so
   // it has silently timed out on every main-branch CI run since (visible from commit 0d456ebc
-  // onward). Ported from #898.
+  // onward).
   await expect(page.getByText(`${CORPUS_SIZE} files inventoried`, { exact: true })).toBeVisible({ timeout: 30_000 })
 
   const assessTab = tab(page, /Assess/)
