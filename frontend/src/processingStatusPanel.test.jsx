@@ -105,4 +105,19 @@ describe('ProcessingStatusPanel', () => {
     const c = await mount({ derived: { state: 'waiting', headline: 'h', detail: '', recommendedAction: null, severity: 'waiting' } })
     expect(c.textContent).not.toMatch(/view in monitor/i)
   })
+
+  it('shows a green "live" badge when derived.live is true', async () => {
+    const c = await mount({
+      derived: { state: 'discovering', headline: 'Discovering documents', detail: '', recommendedAction: null, severity: 'active', live: true },
+    })
+    expect(c.textContent).toMatch(/live/)
+    expect(c.querySelector('.pulsedot')).toBeTruthy()
+  })
+
+  it('does not show the live badge when derived.live is absent — a caller with no such signal', async () => {
+    const c = await mount({
+      derived: { state: 'discovering', headline: 'Discovering documents', detail: '', recommendedAction: null, severity: 'active' },
+    })
+    expect(c.querySelector('.pulsedot')).toBeFalsy()
+  })
 })

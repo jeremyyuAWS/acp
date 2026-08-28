@@ -92,4 +92,16 @@ describe('deriveDiscoverProcessingState', () => {
     const d = deriveDiscoverProcessingState({ busy: true, phase: 'discovering', freshness: 'reconnecting' })
     expect(d.detail).toMatch(/reconnecting/i)
   })
+
+  it('sets the live flag when freshness is "live" — the Redis job state updated within 30s', () => {
+    const d = deriveDiscoverProcessingState({ busy: true, phase: 'discovering', freshness: 'live' })
+    expect(d.live).toBe(true)
+  })
+
+  it('does not set the live flag for reconnecting, stale, checkpoint, or unknown freshness', () => {
+    for (const freshness of ['reconnecting', 'stale', 'checkpoint', null, undefined]) {
+      const d = deriveDiscoverProcessingState({ busy: true, phase: 'discovering', freshness })
+      expect(d.live, `freshness=${freshness} should not set live`).toBeFalsy()
+    }
+  })
 })

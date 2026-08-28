@@ -55,6 +55,23 @@ describe('the Processing status panel on Discover', () => {
     expect(c.textContent).toMatch(/12 found so far/i)
   })
 
+  it('shows the live SSE badge while discovering with a fresh Redis heartbeat', async () => {
+    const c = await mount({
+      scope: null, run: { id: 's4b', status: 'running' },
+      busy: true, progress: { phase: 'discovering', elapsed: 5, freshness: 'live' },
+    })
+    expect(c.querySelector('[aria-label="Processing status"] .pulsedot')).toBeTruthy()
+    expect(c.textContent).toMatch(/\blive\b/)
+  })
+
+  it('does not show the live badge while reconnecting', async () => {
+    const c = await mount({
+      scope: null, run: { id: 's4c', status: 'running' },
+      busy: true, progress: { phase: 'discovering', elapsed: 5, freshness: 'reconnecting' },
+    })
+    expect(c.querySelector('[aria-label="Processing status"] .pulsedot')).toBeFalsy()
+  })
+
   it('offers a "View in Monitor" link that calls the onViewMonitor prop', async () => {
     const onViewMonitor = vi.fn()
     const c = await mount({ scope: null, run: { id: 's5', status: 'failed' }, busy: false, onViewMonitor })
