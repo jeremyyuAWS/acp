@@ -191,3 +191,63 @@ describe('discovery-only run — no WCAG files, only unsupported formats in the 
     expect(assess.disabled).toBe(false)
   })
 })
+
+// ── the live 2026-08-28 "0 documents discovered" report ────────────────────────────────
+//
+// Traced to GET /scans (api/routes/scans.py) using list_scans(), which filters to
+// `completed_at IS NOT NULL` — never set on an ADR 0020 Discover-only run. App.jsx calls that
+// route on load to build scanList and pickDefaultScan() (frontend/src/defaultScan.js) returns
+// null for an empty list, so `run` (and therefore `scanId`/`scope`, both passed down from it)
+// never got set at all on a deployment where Discover-only is the default. These two tests pin
+// that exact contrast: the same DiscoveryResults component renders the live bug's symptom when
+// scanId/scope are absent, and the REAL count once they carry what a fixed /scans route lets
+// App.jsx actually find (api/store.py's list_finished_scans(), same fix already shipped for
+// /monitor/estate in #907 and /schedule in #908).
+describe('the live 2026-08-28 zero-documents report, reproduced and then fixed', () => {
+  it('reproduces the exact symptom: no scanId/scope at all reads as a measured zero, not a missing answer', async () => {
+    // This is what App.jsx handed Discover before the /scans fix, on any account whose most
+    // recent scans were all Discover-only: pickDefaultScan([]) -> null -> setScan() never called.
+    await render({ scanId: null, scope: null, files: [], run: null })
+    expect(h.calls, 'no scanId means the inventory route must never even be called').toHaveLength(0)
+    expect(text()).toContain('DISCOVERY RESULTS')
+    expect(text()).toContain('0 documents discovered across 1 sources')
+    expect(text()).toContain('0files discovered')
+    // The header's scope/"listed" line is entirely absent, matching the live screenshot exactly
+    // (no "folder:", no "listed <date>") — see DiscoveryResults.jsx's own header comment.
+    expect(text()).not.toMatch(/listed \w+ \d/)
+  })
+
+  it('fixed: once scanId and scope.inventory carry what the now-fixed /scans route lets the app find, the real count renders', async () => {
+    h.rows = [
+      { file: 'Drive/report.pdf', path: 'Drive/report.pdf', status: 'discovered' },
+      { file: 'Drive/handbook.docx', path: 'Drive/handbook.docx', status: 'discovered' },
+    ]
+    await render({
+      scanId: 'scan-1',
+      files: [],                                          // still nothing assessed — Discover-only
+      scope: { kind: 'drive', inventory: { discovered: 32, truncated: false } },
+      run: { id: 'scan-1', discovered_at: '2026-08-28T14:00:00Z' },
+    })
+    expect(h.calls[0]).toMatchObject({ scanId: 'scan-1' })
+    expect(text()).toContain('DISCOVERY RESULTS')
+    // The completion banner, the eligibility breakdown and the results panel all agree — this is
+    // the concrete, DOM-level proof the fix works end to end, not just at the API layer.
+    expect(text()).toContain('Discovery complete')
+    expect(text()).toContain('32 files inventoried')
+    expect(text()).toContain('32files discovered')
+    expect(text()).not.toContain('0files discovered')
+    expect(text()).toMatch(/Assess \d+ documents/)
+  })
+})
+
+describe('the scan ID on screen — QA and auditing need a name for this exact run', () => {
+  it('shows the scan ID when one is on screen', async () => {
+    await render()                       // default render() props include scanId: 'scan-1'
+    expect(text()).toContain('Scan ID: scan-1')
+  })
+
+  it('shows nothing when there is no scan to name', async () => {
+    await render({ scanId: null, scope: null, files: [], run: null })
+    expect(text()).not.toContain('Scan ID:')
+  })
+})
