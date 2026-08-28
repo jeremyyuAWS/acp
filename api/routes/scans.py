@@ -1,6 +1,7 @@
 """Scan lifecycle, results, traces, manifest, report, inventory, and per-file
 remediation endpoints."""
 from __future__ import annotations
+import hashlib
 import os
 import threading
 import uuid
@@ -1216,7 +1217,16 @@ def override_file_lifecycle(sid: str, filename: str, body: LifecycleOverrideIn, 
     rule_id = prior.get("lifecycle_rule_id")
     doc_id = f"scan:{sid}:{filename}"
     if rule_id:
-        core.store.create_disposition_audit(uuid.uuid4().hex, doc_id=doc_id, policy_id=rule_id,
+        # Deterministic id (same pattern as handlers.py's Discover lifecycle evaluator, #808) —
+        # PRD §20 idempotency audit, 2026-08-28: this used to be uuid.uuid4().hex, so a
+        # double-click or an HTTP client retry of this POST inserted a second, distinct
+        # disposition_audit row for the same override. Keyed on the reason text too (not just
+        # sid/filename/rule_id): a genuinely NEW override with a different reason must still be
+        # recorded — only an exact repeat of the same request collides via ON CONFLICT(id) DO
+        # NOTHING.
+        _audit_id = hashlib.sha256(
+            f"override:{sid}:{filename}:{rule_id}:{reason}".encode()).hexdigest()[:24]
+        core.store.create_disposition_audit(_audit_id, doc_id=doc_id, policy_id=rule_id,
             action="tag", result="overridden", detail=reason, owner_email=owner)
     core.store.log_decision(owner, "disposition.file_overridden", scan_id=sid, file=filename,
         rule_id=rule_id, detail=reason)
