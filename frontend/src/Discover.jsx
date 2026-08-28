@@ -654,22 +654,14 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       )}
       {/* A scan can be `status: 'queued'` on the displayed run without this tab tracking it live
           (busy=false) — e.g. the default-scan pick lands on a just-created scan this tab never
-          reconnected to. `busy && progress.phase === 'queued'` (the estatebar guard just below,
-          and the "Discovery queued" card in DiscoverRunProgress) only covers the case where THIS
-          tab started or reconnected to it; this covers the case where it did not. Without this,
-          "0 documents discovered · 0 could not be read" reads as a completed, genuinely empty
-          scan — found live 2026-08-28 on scan 90203ef148e3. Informational, not `err` styling: a
-          scan that has not started yet is not a failure the way stuck/cancelled/failed are. */}
-      {run?.status === 'queued' && !busy && (
-        <div className="readywarn" role="status" style={{ marginBottom: 12, padding: '10px 14px',
-                                                          borderRadius: 8,
-                                                          background: 'var(--blue-bg,#eef4ff)',
-                                                          border: '1px solid var(--blue,#3b82f6)',
-                                                          color: 'var(--blue-ink,#1e40af)' }}>
-          This scan is queued and has not started yet — the counts below are not from this scan.
-          It will begin automatically once a worker is free.
-        </div>
-      )}
+          reconnected to. Without SOME notice, "0 documents discovered · 0 could not be read"
+          reads as a completed, genuinely empty scan — found live 2026-08-28 on scan
+          90203ef148e3. That notice used to live here, as its own banner; it was consolidated
+          into ProcessingStatusPanel above (2026-08-28: `!busy && runStatus === 'queued'` in
+          discoverProcessingState.js says the same thing — "Queued — not started yet / This scan
+          has not been picked up by a worker yet") after a stakeholder review flagged two blue
+          banners saying the same thing back to back on this exact screen. Do not re-add a
+          banner here; extend that one branch instead. */}
 
       {/* A listing that ran to completion but did NOT cover the whole source. The backend has
           recorded this in scope.enumeration since the resilience work, and nothing read it — so a

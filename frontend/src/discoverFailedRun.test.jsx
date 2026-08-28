@@ -131,15 +131,14 @@ describe('a stale terminal run does not shadow a scan that is actively in flight
 
 // Found live 2026-08-28, scan 90203ef148e3: a queued scan displayed with busy=false (this tab
 // never reconnected to it — e.g. the default-scan pick landed on it, not an active start/reconnect)
-// showed "0 documents discovered · 0 could not be read" with no explanation at all — the same
-// shape as every other case in this file, but for 'queued' specifically, which had no banner here.
-// 'running' already had a !busy banner for exactly this "not tracked live" reason; 'queued' did
-// not. This one is informational (role="status", not role="alert") — a scan that has not started
-// yet is not a failure the way stuck/cancelled/failed are.
+// showed "0 documents discovered · 0 could not be read" with no explanation at all. The notice
+// that fixed this originally lived here as its own banner; it was consolidated into
+// ProcessingStatusPanel (2026-08-28, after a stakeholder review flagged two near-identical blue
+// banners stacked on this exact screen) — this now asserts on that single surviving notice.
 describe('a queued run this tab is not tracking live', () => {
   it('explains that the scan has not started yet, distinctly from a failure', async () => {
     const c = await mount({ scope: null, run: { id: 's7', status: 'queued' }, busy: false })
-    expect(c.textContent).toMatch(/queued and has not started yet/i)
+    expect(c.textContent).toMatch(/not started yet/i)
     expect(c.textContent).not.toMatch(/discovery did not finish/i)
     expect(c.querySelector('[role="alert"]')).toBeFalsy()
     expect(c.querySelector('[role="status"]')).toBeTruthy()
@@ -147,6 +146,6 @@ describe('a queued run this tab is not tracking live', () => {
 
   it('does not show it while this tab IS tracking the scan live (busy)', async () => {
     const c = await mount({ scope: null, run: { id: 's7', status: 'queued' }, busy: true })
-    expect(c.textContent).not.toMatch(/queued and has not started yet/i)
+    expect(c.textContent).not.toMatch(/not started yet/i)
   })
 })
