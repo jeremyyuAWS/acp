@@ -2232,6 +2232,47 @@ class Store:
             rows = self._db.fetchall(cur)
             return [self._fill_run_aggregate(cur, r) for r in rows]
 
+    def list_finished_scans(self, owner: str | None = None) -> list[dict]:
+        """Every scan that actually reached a real, trustworthy terminal state — completed_at
+        (assessed) OR discovered_at (ADR 0020 Discover-only, never assessed) — newest first.
+
+        Neither list_scans() nor list_scans_including_discovered() is right for a caller that
+        wants "the latest FINISHED snapshot" specifically:
+
+          - list_scans() filters to completed_at IS NOT NULL alone, which a Discover-only run
+            never sets — the exact 2026-08-21 blind spot (a real, fully-discovered 170-file
+            estate read as "0 documents" to a caller using this filter). A production monitor
+            hitting the identical gap found live 2026-08-28: /monitor/estate's "did the newest
+            scan collapse" check used list_scans() and could never see a Discover-only run at
+            all, so its "newest scan" was whatever full-analysis scan happened to predate
+            ADR 0020 becoming the default — stale by definition, on every deployment where
+            Discover-only scans are now the common case.
+          - list_scans_including_discovered() fixes that blind spot but deliberately widens too
+            far for THIS purpose: it includes 'running'/'queued' scans too (ordered by
+            started_at when neither timestamp is set), so a scan that started 2 seconds ago and
+            has not listed a single file yet would outrank a real, finished 5,000-document scan
+            as "the newest" — the identical shape of dishonest-zero bug DiscoverRunProgress.jsx
+            fights on the frontend, reintroduced server-side. A 'failed' scan is excluded too
+            (discovered_at is only ever set on _scan_discover's success path, right before the
+            final status flip — see #900) — a failed attempt has no real data to compare.
+
+        'cancelled'/'interrupted' scans DO have completed_at set and are NOT excluded here,
+        matching list_scans' own convention: a user-visible stop with partial data is real
+        history, not a blind spot. 'superseded' is excluded for the reason both other methods
+        exclude it — an auto-cancelled attempt is not a real result.
+        """
+        with self._db.cursor() as cur:
+            where, params = ("(completed_at IS NOT NULL OR discovered_at IS NOT NULL) "
+                             "AND status != 'superseded'", ())
+            if owner:
+                where += " AND owner_email=%s"; params = (owner,)
+            self._db.execute(cur,
+                "SELECT id,completed_at,source,rubric_hash,files,certifiable,uncertain,error,avg_score,assessed_at,scope "
+                f"FROM scan_runs WHERE {where} "
+                "ORDER BY COALESCE(completed_at, discovered_at) DESC", params)
+            rows = self._db.fetchall(cur)
+            return [self._fill_run_aggregate(cur, r) for r in rows]
+
     def mark_assessed(self, scan_id: str, when: str) -> None:
         """Stamp the scan as assessed (the user ran Assess). Results views gate on this."""
         with self._db.cursor() as cur:

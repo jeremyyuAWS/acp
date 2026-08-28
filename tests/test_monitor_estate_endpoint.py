@@ -47,6 +47,16 @@ def _seed_scan(store, sid: str, owner: str, files: int) -> None:
     })
 
 
+def _seed_discover_only_scan(store, sid: str, owner: str, files: int,
+                             started_at: str = "2026-08-28T21:00:00+00:00") -> None:
+    """An ADR 0020 Discover-only run: status='discovered', discovered_at stamped by
+    set_scan_status, completed_at never set — the shape /monitor/estate used to be blind to."""
+    store.init_scan_run(sid, "drive", files, started_at, "wcag-aa", "h", owner=owner,
+                        status="running", scope={"kind": "drive"})
+    store.set_scan_files(sid, files)
+    store.set_scan_status(sid, "discovered")
+
+
 @pytest.fixture()
 def prod_client(monkeypatch, isolated_store):
     """A TestClient in PRODUCTION SHAPE: the GIS gate live, the test bypass dead.
@@ -148,3 +158,36 @@ def test_it_hands_over_counts_and_nothing_else(prod_client):
     assert "alice@movate.com" not in raw
     assert "doc0.pdf" not in raw
     assert "@" not in raw and ".pdf" not in raw
+
+
+def test_sees_a_discover_only_scan_list_scans_would_hide(prod_client):
+    """Found live 2026-08-28: this route used list_scans() (completed_at IS NOT NULL), which an
+    ADR 0020 Discover-only run never sets — the identical blind spot list_scans_including_
+    discovered already fixed for api/routes/assess.py on 2026-08-21, reappearing here. A
+    production estate whose scans are all Discover-only reported "no completed scans at all"
+    against a perfectly healthy, fully-discovered estate."""
+    client, store = prod_client
+    _seed_discover_only_scan(store, "scan01", "alice@movate.com", files=6922)
+
+    res = client.get("/monitor/estate", headers={"X-Monitor-Key": KEY})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["scans"]["total"] == 1
+    assert body["scans"]["recent_files"] == [6922]
+
+
+def test_does_not_let_a_scan_still_listing_masquerade_as_the_newest(prod_client):
+    """The precise reason this route needed list_finished_scans(), not the wider list_scans_
+    including_discovered(): a scan that started seconds ago and has not listed a single file yet
+    must not outrank a real, finished large scan — that would reintroduce the exact
+    dishonest-zero shape this check exists to catch, from the other direction."""
+    client, store = prod_client
+    _seed_discover_only_scan(store, "scan_old", "alice@movate.com", files=5000,
+                             started_at="2026-08-20T09:00:00+00:00")
+    # Still mid-listing: no discovered_at, no completed_at.
+    store.init_scan_run("scan_new", "drive", 0, "2026-08-28T23:59:00+00:00", "wcag-aa", "h",
+                        owner="alice@movate.com", status="running", scope={"kind": "drive"})
+
+    body = client.get("/monitor/estate", headers={"X-Monitor-Key": KEY}).json()
+    assert body["scans"]["total"] == 1
+    assert body["scans"]["recent_files"] == [5000]
