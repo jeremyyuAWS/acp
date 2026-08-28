@@ -405,13 +405,23 @@ def monitor_estate(request: Request):
     if not hmac.compare_digest(presented, core.MONITOR_KEY):
         raise HTTPException(401, "bad monitor key")
 
-    scans = core.store.list_scans() or []
+    # list_scans() filters to completed_at IS NOT NULL, which an ADR 0020 Discover-only run
+    # never sets — the exact 2026-08-21 blind spot (see list_finished_scans' own docstring).
+    # Found live 2026-08-28: this route hit that identical gap, so "did the newest scan
+    # collapse" could never see a Discover-only run at all — its "newest scan" was stale by
+    # definition on any deployment where Discover-only is now the default scan type.
+    # list_finished_scans() is the narrower fix: completed_at OR discovered_at, excluding
+    # anything still in-flight (so a scan that started seconds ago and has not listed a single
+    # file yet cannot masquerade as "the newest," the same dishonest-zero shape this checks for
+    # in the first place).
+    scans = core.store.list_finished_scans() or []
     pending = core.store.list_hitl_queue(status="pending") or []
     return {
         "service": "acp",
         "scans": {
             "total": len(scans),
-            # Newest first, exactly as list_scans orders them (completed_at DESC).
+            # Newest first, exactly as list_finished_scans orders them
+            # (COALESCE(completed_at, discovered_at) DESC).
             "recent_files": [int(s.get("files") or 0) for s in scans[:MONITOR_SCAN_WINDOW]],
         },
         "inbox": {"pending": len(pending)},
