@@ -30,9 +30,21 @@ sys.path.insert(0, str(ROOT / "api"))
 # handlers.py has a module-level `from remediate import remediate_html`, which chains
 # into lxml (not installed in the test environment). Stub the entire dependency tree
 # once so every test in this file can `import handlers` without error.
-for _mod in ("lxml", "lxml.html", "reportlab",
-             "reportlab.graphics", "reportlab.graphics.charts",
-             "reportlab.graphics.charts.barcharts"):
+#
+# reportlab is NOT part of that chain — handlers.py's own imports (core, provenance, worker,
+# scanner, remediate) never touch it — and it IS genuinely installed in this environment, so
+# stubbing it here is both unnecessary and actively harmful: `sys.modules.setdefault` only
+# takes effect while the real "reportlab.graphics.charts" hasn't been imported yet, which at
+# pytest COLLECTION time (when this loop runs) is true regardless of whether some OTHER test
+# file will need the real package later — most consumers only reach it lazily, via `from app
+# import app` inside a fixture body, not at their own module level. Found live 2026-08-28: this
+# stub then permanently replaces "reportlab.graphics.charts" in sys.modules with a MagicMock
+# lacking __path__, and since nothing ever reverts a bare sys.modules.setdefault, every later
+# test whose fixture pulls in api/report.py's `from reportlab.graphics.charts.piecharts import
+# Pie` fails with "reportlab.graphics.charts is not a package" — a wide, seemingly unrelated
+# spread of failures across whatever test files happen to run after this one in the same
+# process, entirely dependent on file-execution order.
+for _mod in ("lxml", "lxml.html"):
     sys.modules.setdefault(_mod, MagicMock())
 
 _remediate_stub = MagicMock()
