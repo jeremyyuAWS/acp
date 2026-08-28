@@ -30,11 +30,21 @@ export function snapshotTrust(run) {
   if (run?.status === 'failed') return null
 
   const filesFound = Number.isFinite(enumeration.files_found) ? enumeration.files_found : null
+  const skippedRateLimited = Number.isFinite(enumeration.skipped_rate_limited)
+    ? enumeration.skipped_rate_limited : null
 
   // truncated is the concrete cause — the listing stopped at FANOUT_MAX_FILES — so it is worth
   // distinguishing from a generic incomplete, which is what `complete: false` alone would say.
   if (enumeration.truncated === true) return { partial: true, reason: 'truncated', filesFound }
   if (enumeration.complete === false) return { partial: true, reason: 'incomplete', filesFound }
+  // Ranked below truncated/incomplete (both mean the LISTING ITSELF didn't finish, a stronger
+  // claim) — this run completed, but some subtrees were skipped because Drive rate-limited
+  // those specific requests (scanner._search_folder — real, classified from what execute()'s own
+  // internal retries already exhausted, not a guess). A real, non-zero count only; the field is
+  // absent/0 for every run predating this, which correctly reads as "nothing to report" here.
+  if (skippedRateLimited > 0) {
+    return { partial: true, reason: 'rate_limited', filesFound, skippedRateLimited }
+  }
   return { partial: false }
 }
 
@@ -51,6 +61,16 @@ export function snapshotTrustMessage(verdict) {
       body: `${counted}The listing hit its per-run file cap, so the counts below describe what was `
           + 'reached — not the whole source. Narrow the scan to specific folders and run it again '
           + 'to inventory the rest.',
+    }
+  }
+  if (verdict.reason === 'rate_limited') {
+    const n = verdict.skippedRateLimited
+    return {
+      title: 'Google Drive rate-limited part of this scan',
+      body: `${n} folder${n === 1 ? '' : 's'} could not be listed because Drive rate-limited `
+          + `those requests, so ${n === 1 ? 'it is' : 'they are'} missing from the counts below. `
+          + 'Nothing else about the scan failed — re-run discovery later, when Drive has eased '
+          + 'up, to pick up the rest.',
     }
   }
   return {
