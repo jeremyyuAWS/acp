@@ -129,8 +129,12 @@ export default function DiscoveryResults({
   // rows (system.py GET /decisions — the same audit trail a `scan.suspicious_zero` or
   // `scan.unreachable_zero` entry lands in when discovery refuses to publish a zero it can't
   // trust). Both are already loaded client-side for other reasons — Discover.jsx passes them
-  // straight through — so showing them here costs no extra request.
-  rawScope = null, rawDecisions = null,
+  // straight through — so showing them here costs no extra request. `runStatus` rides along for
+  // the same reason: it is what decides whether the page's OWN "Discovery did not finish" banner
+  // (Discover.jsx, run?.status === 'failed') should be showing — printing it here is what lets a
+  // "the banner isn't showing but I expected it to be" report be checked directly instead of
+  // guessed at.
+  rawScope = null, rawDecisions = null, runStatus = null,
 }) {
   const [filter, setFilter] = useState('all')
   const [showRaw, setShowRaw] = useState(false)
@@ -242,7 +246,7 @@ export default function DiscoveryResults({
                 <button type="button" className="ghost small" style={{ marginLeft: 'auto' }}
                         onClick={async () => {
                           const blob = JSON.stringify(
-                            { scan_id: scanId, scope: rawScope, decisions: rawDecisions }, null, 2)
+                            { scan_id: scanId, status: runStatus, scope: rawScope, decisions: rawDecisions }, null, 2)
                           try { await navigator.clipboard.writeText(blob) } catch { /* clipboard may be unavailable */ }
                           setCopied(true); setTimeout(() => setCopied(false), 2000)
                         }}>
@@ -252,7 +256,7 @@ export default function DiscoveryResults({
               <pre style={{ fontSize: 11, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                             maxHeight: 360, overflow: 'auto', margin: 0,
                             fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
-                {JSON.stringify({ scan_id: scanId, scope: rawScope, decisions: rawDecisions }, null, 2)}
+                {JSON.stringify({ scan_id: scanId, status: runStatus, scope: rawScope, decisions: rawDecisions }, null, 2)}
               </pre>
             </div>
           )}

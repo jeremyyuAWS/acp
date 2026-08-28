@@ -766,7 +766,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                         overrides={assessAnyway} onOverridesChange={setAssessAnyway}
                         onOverrideRecommendation={overrideRecommendation}
                         actor={me?.email || me?.name || null} scanId={scanId}
-                        rawScope={scope} rawDecisions={errLog} />
+                        rawScope={scope} rawDecisions={errLog} runStatus={run?.status ?? null} />
 
       {/* TAKE THE INVENTORY OUT OF ACP, DATED. Metadata-only CSV/JSON for the compliance reader,
           with the snapshot instant on every row — a count is a fact about a boundary at an
