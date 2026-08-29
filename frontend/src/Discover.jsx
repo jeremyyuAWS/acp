@@ -23,7 +23,8 @@ import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 import DiscoverCompleteSummary from './DiscoverCompleteSummary.jsx'
 import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
 import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation,
-         acknowledgeScan, unacknowledgeScan, checkReadiness, getQueueJob, getJobs, setWorkers } from './api.js'
+         acknowledgeScan, unacknowledgeScan, checkReadiness, getQueueJob, getJobs, setWorkers,
+         getSourceStatus } from './api.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
 import { discoveryFailureReason } from './discoveryFailureReason.js'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
@@ -51,6 +52,19 @@ const TYPE_COLOR = { PDF: '#C2410C', DOCX: '#2563EB', PPTX: '#D97706', XLSX: '#1
 const CLASS_TAGS = ['PII', 'legal-hold', 'public-facing', 'high-traffic']
 const CLASS_COLOR = { PII: '#1F5FA8', 'legal-hold': '#854F0B', 'public-facing': '#D85A30', 'high-traffic': '#A56814' }
 const OVERRIDE_ACTIONS = ['keep', 'archive', 'retain', 'delete']
+// Source freshness badge text/color, from a /source-status row. 'unchanged'/'untracked' render
+// nothing — same convention the Release Center and Monitor already use, so a normal, unremarkable
+// file doesn't get a badge just for being fine. 'unavailable' branches on the server's `error`
+// code (PRD's "Deleted at source" / "Authorization required" vs a generic unreachable source) —
+// data the endpoint has always returned but no surface has read until now.
+export function sourceFreshnessBadge(row) {
+  if (!row) return null
+  if (row.state === 'stale') return { label: '⚠ source changed', color: '#8A1F1F', title: 'The source file in Drive changed after this scan' }
+  if (row.state !== 'unavailable') return null
+  if (row.error === 'not_found') return { label: 'deleted at source', color: '#8A1F1F', title: 'The source file in Drive no longer exists' }
+  if (row.error === 'forbidden') return { label: 'authorization required', color: '#854F0B', title: 'ACP no longer has permission to read this file in Drive' }
+  return { label: 'source unreachable', color: '#5F5E5A', title: 'ACP could not read the source now (moved, deleted, or access lost)' }
+}
 
 const SH = ({ n, label, desc, id }) => (
   <div id={id} style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '28px 0 10px', paddingTop: 16, borderTop: '1px solid var(--line)' }}>
@@ -282,6 +296,23 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   const reloadInventory = useCallback(() => {
     if (!scanId) return
     loadDiscoveryInventory(scanId, getScanInventory).then((r) => setInv(r))
+  }, [scanId])
+  // Source freshness (PRD Phase 3 — sync states): the same /source-status the Release Center and
+  // Monitor already surface, now on Discover too, where the PRD's own inventory spec asks for it.
+  // Best-effort like those two: an empty map on any failure means no badges, never a false claim.
+  const [srcStatus, setSrcStatus] = useState({})
+  useEffect(() => {
+    let live = true
+    if (!scanId) { setSrcStatus({}); return undefined }
+    getSourceStatus(scanId)
+      .then((s) => {
+        if (!live) return
+        const byFile = {}
+        ;(s?.files || []).forEach((r) => { byFile[r.file] = r })
+        setSrcStatus(byFile)
+      })
+      .catch(() => { if (live) setSrcStatus({}) })
+    return () => { live = false }
   }, [scanId])
   // Persist the acknowledgement decision to the backend (PRD §EX-10). Optimistic local state
   // update so the Assess gate responds immediately; the server write is best-effort and
@@ -542,6 +573,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         {isOpen && (
           <div className="depttable">
             <WindowedRows items={fs} renderRow={(f) => {
+              const fresh = f.locked ? null : sourceFreshnessBadge(srcStatus[f.file])
               const meta = (
                 <div className="filemeta">
                   <span className="srcpill">{f.sourceName}</span>
@@ -549,6 +581,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                     ? <span className="lockflag">🔒 {f.openIssue}</span>
                     : <span className="muted">{f.modifiedAge} · {f.views90d?.toLocaleString()} views/90d{f.superseded ? ' · superseded' : ''}
                         {isDelegated(f) && <span className="badge" style={{ marginLeft: 6, background: '#E7F0DC', color: '#3B6D11', fontSize: 10 }}>delegated → {ownerOf(f)}</span>}
+                        {fresh && <span title={fresh.title} style={{ marginLeft: 6, fontWeight: 600, color: fresh.color }}>{fresh.label}</span>}
                       </span>}
                 </div>
               )
