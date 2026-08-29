@@ -79,6 +79,14 @@ export function deriveDiscoverProcessingState({
   // withhold comingSoon once there is actually something else on the page saying otherwise; a
   // flat Drive-query scan (no folder concept at all) still gets the honest "not tracked" note.
   hasFolderActivity = false,
+  // The THIRD of the "Live Discovery Operations Card" PRD's three freshness timestamps (§15):
+  // whether the ASSIGNED WORKER is still alive, distinct from `freshness` (the browser's own
+  // SSE connection to the server) and `inventoryChangedSecsAgo` (whether the count has actually
+  // moved). GET /jobs' worker_heartbeat_age_s (added 2026-08-29) — a worker container can be
+  // alive with a fresh heartbeat while genuinely taking a long time on one large folder, which
+  // is a different situation from the connection dropping or the worker having actually died;
+  // this is what lets the card tell those apart instead of only ever showing two of three facts.
+  workerHeartbeatAgeS = null,
 } = {}) {
   if (!busy && runStatus === 'failed') {
     return {
@@ -163,6 +171,8 @@ export function deriveDiscoverProcessingState({
         ? { label: 'Recent discovery rate', value: `${filesPerSec < 10 ? filesPerSec.toFixed(1) : Math.round(filesPerSec)} files/sec` } : null,
       inventoryChangedSecsAgo != null
         ? { label: 'Inventory updated', value: fmtAgo(inventoryChangedSecsAgo) } : null,
+      workerHeartbeatAgeS != null
+        ? { label: 'Worker heartbeat', value: fmtAgo(workerHeartbeatAgeS) } : null,
     ].filter(Boolean)
     return {
       state: 'discovering',

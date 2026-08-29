@@ -156,6 +156,27 @@ describe('Azure replica visibility/control wiring on Discover', () => {
   })
 })
 
+// GET /jobs' worker_heartbeat_age_s (2026-08-29) — the third of the PRD's three freshness
+// timestamps, threaded from getJobs() into workerSnap into the processing panel's own facts.
+describe('Worker-heartbeat freshness wired into the processing panel', () => {
+  it('shows "Worker heartbeat" once getJobs reports a heartbeat age, while a scan is busy', async () => {
+    getJobs.mockResolvedValue({ workers: 4, worker_tier_alive: true, suggested_workers: 4,
+                                runtime_mode: 'auto', worker_heartbeat_age_s: 7 })
+    const c = await mount({ busy: true, progress: { phase: 'discovering' } })
+    await settle()
+    expect(c.textContent).toMatch(/Worker heartbeat/)
+    expect(c.textContent).toMatch(/7s ago/)
+  })
+
+  it('shows nothing for worker heartbeat when getJobs reports none', async () => {
+    getJobs.mockResolvedValue({ workers: 4, worker_tier_alive: true, suggested_workers: 4,
+                                runtime_mode: 'auto', worker_heartbeat_age_s: null })
+    const c = await mount({ busy: true, progress: { phase: 'discovering' } })
+    await settle()
+    expect(c.textContent).not.toMatch(/Worker heartbeat/)
+  })
+})
+
 // GET /control/workers/capacity is a SEPARATE fetch from GET /control/workers/replicas — current
 // replica count and CPU/memory, not the configured min/max. Same visibility rule: open to
 // everyone, only fetched once the tier reports 'distributed', no admin gate at all (there's

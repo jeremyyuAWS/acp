@@ -872,10 +872,19 @@ def jobs(request: Request, status: str | None = None, limit: int = 100):
     filenames in job payloads / error text never leak across tenants. The worker
     count is global (shared infra, not sensitive)."""
     owner = getattr(request.state, "user_email", None) or "demo"
+    # worker_tier_status() is a strict superset of worker_tier_alive() — same freshness check,
+    # plus the beat's own timestamp and age. Discover's processing panel already distinguishes
+    # connection freshness (its SSE stream) from progress freshness (inventory last changing);
+    # this is the third of the PRD's three timestamps — whether the ASSIGNED WORKER is still
+    # alive — which nothing here exposed before. "alive" below is unchanged in shape (still a
+    # bare bool at the same key), so this is additive, not a breaking change to the response.
+    _wt = core.store.worker_tier_status()
     return {"workers": core.WORKERS,
             # Standalone worker container's heartbeat (#113) — in the split topology the
             # API's own pool is 0, so Monitor must show the tier that actually runs jobs.
-            "worker_tier_alive": core.store.worker_tier_alive(),
+            "worker_tier_alive": _wt["alive"],
+            "worker_heartbeat_at": _wt["heartbeat_at"],
+            "worker_heartbeat_age_s": _wt["age_s"],
             # Conservative starting recommendation. Local AI workloads are memory- and
             # GPU-constrained, not CPU-constrained; 4 is a safe floor the user can raise.
             "suggested_workers": 4,
