@@ -314,6 +314,25 @@ class JobWorker:
                             "max_attempts": job.get("max_attempts"),
                             "last_error": msg[:200],
                         })
+                        # ADR 0042 — the durable lifecycle log gets the same announcement, gated
+                        # by the SAME re-read above rather than by a second one: a zombie whose
+                        # fail_job was suppressed must not append "retrying" to a run another
+                        # worker already finished. Called on the store directly (not through
+                        # handlers.scan_event) because handlers imports THIS module — the wrapper
+                        # would be a circular import. The enclosing try/except already provides
+                        # the never-raises contract; scan_id comes off the freshly-read row, the
+                        # authority on which run this job belongs to. The scan_id check is
+                        # explicit rather than left to that except: most jobs in this queue are
+                        # not scan-anchored at all, and append_scan_event raises on a missing
+                        # scan_id by design, so leaning on exception flow for the ordinary case
+                        # would make a real failure indistinguishable from a plain non-scan job.
+                        if fresh.get("scan_id"):
+                            self.store.append_scan_event(
+                                fresh["scan_id"], "scan.retrying", phase="retrying",
+                                job_id=job["id"], worker_id=self.worker_id,
+                                attempt=job["attempts"],
+                                detail={"max_attempts": job.get("max_attempts"),
+                                        "error_class": eclass, "last_error": msg[:200]})
                 except Exception:
                     pass  # best-effort — a progress-signal failure must never affect the retry
         finally:

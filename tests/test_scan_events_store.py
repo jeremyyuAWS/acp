@@ -272,23 +272,3 @@ def test_reset_user_data_clears_the_owners_scan_events(isolated_store):
 
     assert st.list_scan_events("s1") == []
     assert len(st.list_scan_events("s2")) == 1, "the other tenant's log survives"
-
-
-# ── PR 1 is deliberately unused — assert that, so it can't read as live code ──
-
-def test_nothing_emits_scan_events_yet(isolated_store):
-    """ADR 0042 lands this table in PR 1 with NO caller, so it can be reviewed on its own.
-
-    Written down as a test for the reason CLAUDE.md gives for `discoverUploadRemoved.test.jsx`
-    and `scopeStep.test.js`: an orphan nobody records becomes a lie — this would otherwise read
-    as shipped lifecycle logging on every status list, while emitting nothing at all. When PR 2
-    wires the emit sites, THIS TEST FAILING IS THE REMINDER TO DELETE IT, not a regression.
-    """
-    api = Path(__file__).resolve().parent.parent / "api"
-    callers = sorted(
-        p.relative_to(api).as_posix()
-        for p in api.rglob("*.py")
-        if p.name != "store.py" and "append_scan_event" in p.read_text(encoding="utf-8"))
-    assert callers == [], (
-        f"append_scan_event now has callers ({callers}) — that is ADR 0042 PR 2 landing, which "
-        f"is good. Delete this test rather than un-wiring them.")
