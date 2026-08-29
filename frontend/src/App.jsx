@@ -38,6 +38,7 @@ import AssessRunner from './AssessRunner.jsx'
 import AssessSetup from './AssessSetup.jsx'
 import AssessFileFindings from './AssessFileFindings.jsx'
 import { inventorySnapshot } from './discoverRunTime.js'
+import { scanOptionAt } from './scanOptionDate.js'
 import AssessSummary from './AssessSummary.jsx'
 import AssessWorklist from './AssessWorklist.jsx'
 import { documentRows } from './assessMetrics.js'
@@ -1546,7 +1547,19 @@ export default function App() {
             </span>
             <span className="runinfo-abs">{fmtStamp(run?.completed_at) ?? '—'}</span>
             {run?.source && <span className="runinfo-source">{run.source}</span>}
-            {run?.files != null && <span className="muted">{run.files.toLocaleString()} documents</span>}
+            {/* NOT the same population as the Discover completion card's "N files inventoried" —
+                by design, not staleness. run.files (scan_runs.files) is set from `_list()`'s
+                RETURN value (scanner.py's _search_drive/_search_folder), which is already
+                filtered to scannable MIME types; scope.inventory.discovered counts the whole
+                estate, every file type, via a SEPARATE `inventory_out` accumulator inside the
+                same call. A Drive full of photos/videos alongside a smaller set of real
+                documents legitimately produces two correct, differently-scoped numbers here —
+                found live 2026-08-29 as an apparent contradiction (1,033 here vs. 6,922 on the
+                completion card, same scan) that traced to exactly this, not a bug in either
+                count. Labelled "scannable" — the same word scope.scannable already uses
+                internally (scanner.py) — so the difference reads as two facts, not one wrong
+                one. */}
+            {run?.files != null && <span className="muted">{run.files.toLocaleString()} scannable documents</span>}
             {run?.published_at && (
               <span style={{ fontSize: 11.5, color: 'var(--green,#1a7f45)', whiteSpace: 'nowrap' }}
                     title={`Enumeration verified complete — ${fmtStamp(run.published_at)}`}>
@@ -1565,13 +1578,23 @@ export default function App() {
                 aria-label="Select scan run"
                 style={{ fontSize: 12, padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--surface)', color: 'inherit', cursor: 'pointer' }}
               >
-                {scanList.map((s, i) => (
-                  <option key={s.id} value={s.id}>
-                    {i === 0 ? '★ ' : ''}{new Date(s.completed_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
-                    {s.avg_score != null ? ` · ${s.avg_score}/100` : ''}
-                    {' · '}{timeAgo(s.completed_at)}{i === 0 ? ' · latest' : ''}{s.published_at ? ' · verified' : ''}
-                  </option>
-                ))}
+                {scanList.map((s, i) => {
+                  // scanOptionDate.js: `at` is completed_at when assessed, discovered_at (ADR
+                  // 0020) when only discovered, null when neither is set. Falls back to "not yet
+                  // dated" rather than `new Date(null)`, which silently renders as the Unix
+                  // epoch — "Dec 31, 4:00 PM" in Pacific time — found live 2026-08-29 in an
+                  // unassessed scan's own picker entry, from this label reading completed_at
+                  // alone.
+                  const at = scanOptionAt(s)
+                  return (
+                    <option key={s.id} value={s.id}>
+                      {i === 0 ? '★ ' : ''}
+                      {at ? new Date(at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'not yet dated'}
+                      {s.avg_score != null ? ` · ${s.avg_score}/100` : ''}
+                      {' · '}{at ? timeAgo(at) : ''}{i === 0 ? ' · latest' : ''}{s.published_at ? ' · verified' : ''}
+                    </option>
+                  )
+                })}
               </select>
               {scanLoading && <span className="spinner" />}
             </label>

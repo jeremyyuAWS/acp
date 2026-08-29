@@ -66,6 +66,7 @@ function EligRow({ count, label, muted = false, pctValue = null }) {
 
 export default function DiscoverCompleteSummary({
   discoveredCount,
+  scannableCount,
   assessableCount,
   metadataOnlyCount,
   unsupportedCount,
@@ -172,6 +173,27 @@ export default function DiscoverCompleteSummary({
             </span>
           )}
         </div>
+
+        {/* Scannable vs. whole estate — a THIRD population, not a restatement of either number
+            below. scanner.py's _search_drive/_search_folder/_list return only files whose MIME
+            type ACP can open (PDF, Office, Google-native, HTML) — filtered BEFORE the whole-estate
+            inventory above is even built — while `discoveredCount` above counts every file of
+            every type. A Drive that is mostly photos and videos alongside a smaller set of real
+            documents produces a scannable count far below the total, correctly, every time — not
+            an error. Found live 2026-08-29: the top nav bar's own (unlabelled) count of this same
+            number read as a contradiction against this card's "files inventoried" a few pixels
+            away, because nothing said what it was counting.
+            "Scannable" ⊇ "Assessable" below (some scannable-type files are still excluded by
+            eligibility — locked, unreadable, …), so this is not one edge of the Assessable /
+            Not-currently-assessable partition; it stays a separate line so that partition keeps
+            summing cleanly to the total. */}
+        {scannableCount != null && (
+          <div style={{ marginBottom: 12, fontSize: 12.5, color: 'var(--muted)' }}>
+            {n(scannableCount)} of {n(discoveredCount)} are scannable document types
+            (PDF, Office, HTML) — everything else is excluded by file type before assessment
+            eligibility is even checked.
+          </div>
+        )}
 
         {/* Assessment eligibility */}
         <div style={{ marginBottom: 14 }}>

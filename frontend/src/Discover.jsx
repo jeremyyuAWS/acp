@@ -724,6 +724,16 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       {!busy && (run?.discovered_at || run?.status === 'discovered') && (
         <DiscoverCompleteSummary
           discoveredCount={completionDiscoveredCount}
+          /* `run.files` (scan_runs.files) — NOT scan?.files/file_records, a differently-named,
+             differently-shaped field. Persisted from scanner.py's _list() RETURN value across
+             every discovery path (local, whole-Drive, folder-BFS, SharePoint — see
+             DiscoverCompleteSummary.jsx's own comment on the line that renders this), which is
+             already filtered to scannable MIME types before the whole-estate inventory is even
+             built. The one comprehensive, consistently-populated "how many of the total are a
+             document type ACP can open" signal — scope.scannable exists too but only
+             _search_drive's whole-Drive path ever sets it, so it is not comprehensive across
+             scan kinds the way this column is. */
+          scannableCount={run?.files ?? null}
           /* `assessmentEligible()` is the SAME helper DiscoveryResults' headline "Assessable" tile
              calls (estateFunnel.js) — it prefers the direct `assessment_eligible` field over the
              older `by_status.assessable` shape, which this line used to read on its own, skipping
