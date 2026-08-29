@@ -174,6 +174,16 @@ _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS schedule_config (
       key TEXT PRIMARY KEY, value TEXT
     )""",
+    # PRD Phase 3 (incremental connector sync). One row per source: the connector-native
+    # cursor (Drive's changes.list page token today; a Graph delta link would be a future
+    # row) that lets the scheduled sweep ask "what changed since last time" instead of
+    # re-listing the whole estate. owner_email is carried for attribution/debugging only —
+    # the cursor itself is source-scoped, not per-user (the scheduled sweep is a single
+    # service-account identity, see core._do_scheduled_scan). Customer/scan-derived state,
+    # not configuration — cleared by reset_analytics like scan_inventory/documents.
+    """CREATE TABLE IF NOT EXISTS sync_cursors (
+      source TEXT PRIMARY KEY, owner_email TEXT, page_token TEXT, updated_at TEXT
+    )""",
     """CREATE TABLE IF NOT EXISTS scan_rule_traces (
       scan_id TEXT, file TEXT, rule_id TEXT, rule_name TEXT, plain_name TEXT,
       level TEXT, fix_mode TEXT, outcome TEXT, finding_count INT,
@@ -2043,7 +2053,8 @@ class Store:
                          "org_memory", "remediation_state", "remediation_diff", "applied_fixes",
                          "ai_calls", "finding_comments",
                          "scan_inputs",  # Stage 1 item 3: per-scan enqueue snapshots are customer data
-                         "active_discovery_guard"]  # transient lock state — cleared on reset
+                         "active_discovery_guard",  # transient lock state — cleared on reset
+                         "sync_cursors"]  # connector sync position is customer-derived, not config
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
@@ -3322,6 +3333,26 @@ class Store:
                 self._db.execute(cur,
                     "INSERT INTO schedule_config(key,value) VALUES(%s,%s) "
                     "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", (k, v))
+
+    def get_sync_cursor(self, source: str) -> dict | None:
+        """The connector-native cursor (e.g. Drive's changes.list page token) the scheduled
+        sweep last advanced to for `source`, or None if this source has never been synced
+        incrementally (first-ever sweep, or a previous seed attempt never succeeded)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT source, owner_email, page_token, updated_at FROM sync_cursors WHERE source=%s",
+                (source,))
+            rows = self._db.fetchall(cur)
+            return rows[0] if rows else None
+
+    def save_sync_cursor(self, source: str, owner_email: str | None, page_token: str) -> None:
+        import datetime as _dt
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO sync_cursors(source,owner_email,page_token,updated_at) VALUES(%s,%s,%s,%s) "
+                "ON CONFLICT(source) DO UPDATE SET owner_email=EXCLUDED.owner_email, "
+                "page_token=EXCLUDED.page_token, updated_at=EXCLUDED.updated_at",
+                (source, owner_email, page_token, _dt.datetime.now(_dt.timezone.utc).isoformat()))
 
     def get_scan_traces(self, scan_id: str, file: str | None = None) -> list[dict]:
         with self._db.cursor() as cur:
@@ -5115,14 +5146,21 @@ class Store:
 
     def record_sweep_outcome(self, *, ok: bool, when: str, source: str,
                              scan_id: str | None = None, files: int | None = None,
-                             error: str | None = None) -> None:
+                             error: str | None = None, skipped: bool = False) -> None:
         """Persist the most recent scheduled sweep's outcome. Best-effort: a sweep must not fail
-        because its bookkeeping did."""
+        because its bookkeeping did.
+
+        `skipped=True` (source='drive' only, when a sync cursor confirms nothing changed) means
+        no scan ran at all — deliberately NOT recorded as files=0, which already has a different
+        meaning here (a scan DID run and legitimately saw zero files under the sweep's limited
+        ADC identity). Conflating the two would recreate exactly the "sweep outcome
+        indistinguishable from a collapse" failure mode this method exists to prevent — see
+        /monitor/estate's own comment on telling a sweep apart from a real collapse."""
         import json as _json
         try:
             self.set_setting(self._SWEEP_KEY, _json.dumps({
                 "ok": bool(ok), "at": when, "source": source,
-                "scan_id": scan_id, "files": files,
+                "scan_id": scan_id, "files": files, "skipped": bool(skipped),
                 # Truncated: this reaches the browser, and a Google HttpError repr carries the
                 # full request URL. Enough to recognise the failure, not a wall of query string.
                 "error": (error or None) and str(error)[:400],
