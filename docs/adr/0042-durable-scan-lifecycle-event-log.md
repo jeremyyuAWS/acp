@@ -1,6 +1,6 @@
 # ADR 0042 — A durable scan-lifecycle event log (Postgres), with SSE kept as the live transport
 
-**Status:** Accepted — open questions resolved by the owner 2026-08-29; implementation under way (PR 1 of 4: the table, unused)
+**Status:** Accepted — all four PRs shipped 2026-08-29 (table → emit → read surface → fallback frame). PR 5 (Last-Event-ID resume) remains deferred to its own ADR.
 **Date:** 2026-08-29
 **Related:** ADR 0004 (Postgres job queue), ADR 0013 (worker durability hardening / finalize by
 count), ADR 0020 (Discover/Assess phase separation), ADR 0038 (pausable-resumable scans),
@@ -388,7 +388,7 @@ deletes the question it answered leaves the answer looking arbitrary.
 |---|---|---|
 | 1 | Coexist vs. replace | **Coexist**, as recommended. Redis stays the live cell; Postgres becomes the history. Revisit only if the horizon moves from the current pilot to customer-production (ADR 0039) — that is a new ADR, not a refactor of this one. |
 | 2 | Per-file events in or out | **Out**, as recommended. Run-level transitions only. |
-| 3 | Does PR 4 ship | **Decide on production evidence**, as recommended — PRs 1–3 first; PR 4 is judged once the history read surface has run against real scans. Not cancelled, not pre-approved. |
+| 3 | Does PR 4 ship | Originally **decide on production evidence**, as recommended. **Superseded 2026-08-29: the owner asked for PR 4 directly, ahead of that evidence, and it shipped.** The deferral was a caution about touching `stream_discover_state`, not a finding against the change; recorded here so the reversal is visible rather than looking like the recommendation was never made. |
 
 The original framing follows.
 
