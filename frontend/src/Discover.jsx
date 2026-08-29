@@ -247,7 +247,8 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       if (!live) return
       setWorkerSnap({ workers: d.workers ?? 0, alive: !!d.worker_tier_alive,
                       suggested: d.suggested_workers ?? 4, runtime_mode: d.runtime_mode ?? 'auto',
-                      oldestQueuedCreatedAt: d.oldest_queued?.created_at ?? null })
+                      oldestQueuedCreatedAt: d.oldest_queued?.created_at ?? null,
+                      workerHeartbeatAgeS: d.worker_heartbeat_age_s ?? null })
     }).catch(() => {})
     load()
     const id = setInterval(load, 10000)
@@ -792,6 +793,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           foldersFound: progress?.folders_found ?? null,
           filesPerSec, inventoryChangedSecsAgo,
           hasFolderActivity: !!(progress?.active_folders?.length || progress?.recent_folders?.length),
+          workerHeartbeatAgeS: workerSnap?.workerHeartbeatAgeS ?? null,
         })}
         onRerun={() => onScan('all')}
         onViewMonitor={onViewMonitor}

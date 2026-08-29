@@ -142,6 +142,23 @@ describe('deriveDiscoverProcessingState', () => {
     ])
   })
 
+  it('adds the worker-heartbeat fact when given — the third of the PRD\'s three freshness timestamps', () => {
+    const d = deriveDiscoverProcessingState({
+      busy: true, phase: 'discovering', discoveredCount: 951, workerHeartbeatAgeS: 3,
+    })
+    expect(d.facts).toContainEqual({ label: 'Worker heartbeat', value: '3s ago' })
+  })
+
+  it('formats a worker heartbeat over a minute old in minutes, matching fmtAgo elsewhere', () => {
+    const d = deriveDiscoverProcessingState({ busy: true, phase: 'discovering', workerHeartbeatAgeS: 125 })
+    expect(d.facts).toContainEqual({ label: 'Worker heartbeat', value: '2m ago' })
+  })
+
+  it('withholds the worker-heartbeat fact when the caller has no heartbeat data', () => {
+    const d = deriveDiscoverProcessingState({ busy: true, phase: 'discovering', discoveredCount: 5 })
+    expect(d.facts.find((f) => f.label === 'Worker heartbeat')).toBeUndefined()
+  })
+
   it('withholds the discovery-rate fact when the caller has not smoothed a reading yet', () => {
     const d = deriveDiscoverProcessingState({ busy: true, phase: 'discovering', discoveredCount: 5, filesPerSec: null })
     expect(d.facts.find((f) => f.label === 'Recent discovery rate')).toBeUndefined()
