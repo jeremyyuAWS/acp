@@ -429,3 +429,32 @@ describe('the "See what\'s changed" redirect to SourceDrawer', () => {
     expect(onViewSourceHistory).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('the scannable-vs-total document count', () => {
+  it('shows both numbers when scannableCount is provided', () => {
+    const html = render({ ...BASE, scannableCount: 173 })
+    expect(html).toContain('173')
+    expect(html).toContain('scannable document types')
+    // discoveredCount is 200 in BASE — the "of N" half of "173 of 200".
+    expect(html).toMatch(/173 of 200/)
+  })
+
+  it('omits the line entirely when scannableCount is not provided — never a fabricated 0', () => {
+    const html = render(BASE)
+    expect(html).not.toContain('scannable document type')
+  })
+
+  it('renders even when every discovered file is scannable — the number is still informative, '
+     + 'not just a caveat for the narrow case', () => {
+    const html = render({ ...BASE, scannableCount: 200 })
+    expect(html).toMatch(/200 of 200/)
+  })
+
+  it('is a separate line from the Assessable / Not-currently-assessable partition, not a third '
+     + 'edge of it — that pair still sums to the discovered total on its own', () => {
+    const html = render({ ...BASE, scannableCount: 173 })
+    // 170 assessable + 30 not-assessable = 200 = discoveredCount, unaffected by scannableCount.
+    expect(html).toContain('170')
+    expect(html).toContain('Assessable')
+  })
+})

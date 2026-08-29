@@ -172,3 +172,32 @@ describe('the completion card\'s "Assessable" count agrees with DiscoveryResults
     expect(c).toMatch(/\b170\b/)
   })
 })
+
+// The completion card's "N of M are scannable document types" line reads run.files —
+// scan_runs.files, a scalar column set from scanner.py's _list() return value (already
+// filtered to scannable MIME types) — NOT scan?.files/file_records, a same-named but
+// differently-shaped field passed as the `files` prop. Found live 2026-08-29: a real Drive
+// scan showed "1,033 documents" in the top nav bar and "6,922 files inventoried" in this
+// exact card, same scan — traced to run.files (scannable-only) vs scope.inventory.discovered
+// (whole estate), two legitimately different, unlabelled numbers read as a contradiction.
+describe('the completion card\'s scannable-document count reads run.files', () => {
+  const doneRun = (extra = {}) => ({ id: 's10', status: 'discovered', discovered_at: '2026-08-29T04:00:00Z', ...extra })
+
+  it('threads run.files through as the scannable count, separate from the discovered total', async () => {
+    const files = Array.from({ length: 200 }, (_, i) => ({ file: `f${i}.pdf`, status: 'discovered' }))
+    const c = await mount({
+      files, run: doneRun({ files: 173 }),
+      scope: { kind: 'drive', inventory: { discovered: 6922, assessment_eligible: 173 } },
+    })
+    expect(c).toMatch(/173 of 6,922/)
+  })
+
+  it('omits the line when run.files is absent — a scan predating the column, not a fabricated 0', async () => {
+    const files = Array.from({ length: 200 }, (_, i) => ({ file: `f${i}.pdf`, status: 'discovered' }))
+    const c = await mount({
+      files, run: doneRun({ files: null }),
+      scope: { kind: 'drive', inventory: { discovered: 200 } },
+    })
+    expect(c).not.toMatch(/scannable document type/)
+  })
+})
