@@ -100,8 +100,14 @@ def _drive_client(token: str):
     an ADR, not a fabricated expiry."""
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
+    import httplib2
+    from google_auth_httplib2 import AuthorizedHttp
     creds = Credentials(token=token, scopes=core.DRIVE_SCOPES)
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
+    # Bounded socket — see core._DRIVE_HTTP_TIMEOUT_S / scanner._DRIVE_HTTP_TIMEOUT_S's identical
+    # fix (found live 2026-08-29). `credentials=` builds its own AuthorizedHttp with no way to
+    # carry a timeout, so a stalled write (not just a slow one) blocks this worker thread forever.
+    http = AuthorizedHttp(creds, http=httplib2.Http(timeout=core._DRIVE_HTTP_TIMEOUT_S))
+    return build("drive", "v3", http=http, cache_discovery=False)
 
 
 def ensure_remediated_folder(svc) -> str:

@@ -369,14 +369,17 @@ describe('inventory sub-step expansion during discovering phase', () => {
     const prog = { phase: 'discovering', files_found: 148, folders_found: 12 }
     const html = render(prog, true)
     expect(html).toContain('Listing folders')
-    expect(html).toContain('12 visited')
+    // The count now renders through LiveCounter (a nested span for its count-up/delta
+    // machinery), so "12 visited" is no longer one contiguous text run — assert the number and
+    // the trailing word separately instead of a single substring match.
+    expect(html).toMatch(/livecounter-n">12<\/span><\/span> visited/)
   })
 
   it('shows metadata reading sub-step when files_found > 0', () => {
     const prog = { phase: 'discovering', files_found: 50 }
     const html = render(prog, true)
     expect(html).toContain('Reading metadata')
-    expect(html).toContain('50 found')
+    expect(html).toMatch(/livecounter-n">50<\/span><\/span> found/)
   })
 
   it('shows classification sub-step when assessable count is available', () => {
@@ -1004,5 +1007,51 @@ describe('the "Cancel requested" acknowledgment', () => {
     const c = await mount({ progress: PROG, busy: true, onStop: undefined })
     expect(c.querySelector('button')).toBeFalsy()
     expect(c.textContent).not.toMatch(/Cancel requested/)
+  })
+})
+
+// "1,000 documents found" milestone announcement (design review: "Announce only meaningful
+// milestones... 1,000 documents found"). Needs a real re-render with an increasing files_found to
+// exercise the effect at all — renderToStaticMarkup never runs effects, so this mounts
+// interactively, same reasoning as the "Cancel requested" block above.
+describe('the "N,000 documents found" milestone announcement', () => {
+  const flush = async () => { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() }) }
+  const mount = async (props) => {
+    const { container, root } = createTestRoot()
+    await act(async () => { root.render(createElement(DiscoverRunProgress, props)) })
+    return { container, root }
+  }
+  const rerender = async (root, props) => {
+    await act(async () => { root.render(createElement(DiscoverRunProgress, props)) })
+    await flush()
+  }
+  afterEach(unmountAll)
+
+  it('is silent below the first thousand', async () => {
+    const { container } = await mount({ progress: { phase: 'discovering', files_found: 400 }, busy: true })
+    expect(container.textContent).not.toMatch(/documents found/)
+  })
+
+  it('announces once a thousand is crossed between renders', async () => {
+    const { container, root } = await mount({ progress: { phase: 'discovering', files_found: 400 }, busy: true })
+    await rerender(root, { progress: { phase: 'discovering', files_found: 1204 }, busy: true })
+    expect(container.textContent).toMatch(/1,000 documents found/)
+  })
+
+  it('does not re-announce the same threshold on a later tick that has not crossed the next one', async () => {
+    const { container, root } = await mount({ progress: { phase: 'discovering', files_found: 1204 }, busy: true })
+    await flush()
+    const before = container.textContent
+    expect(before).toMatch(/1,000 documents found/)
+    await rerender(root, { progress: { phase: 'discovering', files_found: 1900 }, busy: true })
+    // Still 1,000 — 2,000 has not been crossed yet.
+    expect(container.textContent).toMatch(/1,000 documents found/)
+    expect(container.textContent).not.toMatch(/2,000 documents found/)
+  })
+
+  it('advances to the next threshold once it is crossed', async () => {
+    const { container, root } = await mount({ progress: { phase: 'discovering', files_found: 1204 }, busy: true })
+    await rerender(root, { progress: { phase: 'discovering', files_found: 2050 }, busy: true })
+    expect(container.textContent).toMatch(/2,000 documents found/)
   })
 })

@@ -445,6 +445,11 @@ def monitor_estate(request: Request):
             "last_ok": last_sweep.get("ok") if last_sweep else None,
             "last_at": last_sweep.get("at") if last_sweep else None,
             "last_files": last_sweep.get("files") if last_sweep else None,
+            # PRD Phase 3: True when the last sweep found (via Drive's sync cursor) that
+            # nothing had changed and skipped the full re-scan entirely — last_files is then
+            # None, not 0, deliberately: 0 already means "a scan ran and legitimately saw no
+            # files under ADC" elsewhere in this same block, and this must not read the same.
+            "last_skipped": bool(last_sweep.get("skipped")) if last_sweep else None,
         },
     }
 

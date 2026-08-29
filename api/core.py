@@ -225,6 +225,11 @@ DRIVE_SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/drive.file",
 ]
+# Same knob and same reasoning as scanner._DRIVE_HTTP_TIMEOUT_S — shared here rather than
+# imported from scanner because core.py must not depend on it (scanner already imports core-
+# adjacent modules; core stays the lower layer). Kept as one env var name across both so a
+# deploy-time override covers both call sites with a single setting.
+_DRIVE_HTTP_TIMEOUT_S = int(os.environ.get("ACP_DRIVE_HTTP_TIMEOUT_S", "60"))
 HITL_WEBHOOK = os.environ.get("HITL_WEBHOOK_URL", "")
 
 # ── Shared singletons ─────────────────────────────────────────────────────────
@@ -524,7 +529,15 @@ def drive_service(request=None):
     else:
         import google.auth
         creds, _ = google.auth.default(scopes=DRIVE_SCOPES)
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
+    # See scanner._drive_service's identical fix (found live 2026-08-29) for why this can't stay
+    # `credentials=creds`: that shortcut builds its own AuthorizedHttp with no way to bound its
+    # socket, so a stalled connection (not just a slow one — one that never returns data or an
+    # error) blocks this request thread forever. build() refuses `http=` and `credentials=`
+    # together, so the AuthorizedHttp has to be constructed here instead.
+    import httplib2
+    from google_auth_httplib2 import AuthorizedHttp
+    http = AuthorizedHttp(creds, http=httplib2.Http(timeout=_DRIVE_HTTP_TIMEOUT_S))
+    return build("drive", "v3", http=http, cache_discovery=False)
 
 
 # ── HITL webhook ──────────────────────────────────────────────────────────────
@@ -594,6 +607,47 @@ def stop_scheduler() -> None:
         scheduler.shutdown(wait=False)
 
 
+def _drive_sync_gate(owner: str | None) -> bool:
+    """PRD Phase 3: True only when a stored Drive sync cursor confirms nothing changed since
+    the last scheduled sweep, so _do_scheduled_scan can skip a full re-scan. False in every
+    other case — first sweep ever, a real change, an expired/invalid cursor, or any error
+    reaching Drive — so uncertainty always falls back to today's full-scan behavior rather
+    than risking a skip that hides a real change. Best-effort bookkeeping: it always
+    advances (or seeds) the stored cursor before returning, so the NEXT sweep's check starts
+    from wherever this one left off."""
+    from scanner import _drive_service, drive_changes_since, drive_start_page_token
+    cur = get_store().get_sync_cursor("drive")
+    try:
+        svc = _drive_service(None)   # ADC — the same identity the sweep itself scans with
+        if not cur or not cur.get("page_token"):
+            # No baseline yet (first-ever drive sweep, or a previous seed attempt never
+            # landed) — nothing to compare against, so there is nothing to skip. Seed one
+            # now so the NEXT sweep has something to gate on.
+            get_store().save_sync_cursor("drive", owner, drive_start_page_token(svc))
+            return False
+        items, removed, new_token = drive_changes_since(svc, cur["page_token"])
+        get_store().save_sync_cursor("drive", owner, new_token)  # advance regardless of outcome
+        if items or removed:
+            print(f"scheduled drive sweep: {len(items)} changed, {removed} removed/trashed "
+                  f"since last sync — running a full re-scan", flush=True)
+            return False
+        return True
+    except BaseException as e:
+        # BaseException, deliberately wider than the rest of this codebase's `except
+        # Exception`: a broken native dependency in the googleapiclient/google-auth import
+        # chain (e.g. a cryptography/cffi ABI mismatch) surfaces as a Rust pyo3_runtime.
+        # PanicException, which subclasses BaseException specifically so it is NOT caught by
+        # `except Exception` — and this gate's whole contract is "never turn uncertainty into
+        # a skip," which an uncaught panic here would silently violate by crashing the sweep
+        # instead of falling back to it. An expired/invalid page token (Drive 404s that after
+        # ~1 week unused) and ordinary API/ADC failures fall through here too; the existing
+        # Drive-failure path in _do_scheduled_scan already handles those safely (records the
+        # failure, changes nothing).
+        print(f"scheduled drive sweep: change-check failed ({e}) — running a full scan instead",
+              flush=True)
+        return False
+
+
 def _do_scheduled_scan():
     """A scheduled sweep. Re-scans the configured source (Drive via the service-account
     ADC identity — no user token is available in the background), stamps it with the
@@ -623,6 +677,11 @@ def _do_scheduled_scan():
 
     import datetime as _dt
     now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+
+    if source == "drive" and _drive_sync_gate(owner):
+        print("scheduled drive sweep skipped — no changes since the last sync", flush=True)
+        get_store().record_sweep_outcome(ok=True, when=now, source=source, skipped=True)
+        return
 
     try:
         report = run_scan(source, drive_token=None, ai_enabled=ai, user=owner)  # ADC for drive

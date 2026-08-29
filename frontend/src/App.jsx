@@ -6,6 +6,7 @@ import { nextFallbackInterval } from './fallbackPollBackoff.js'
 import { acceptLiveJobState } from './liveJobStateGuard.js'
 import { preflightVerdict } from './discoveryPreflightGate.js'
 import { scanPollDecision } from './scanPollDecision.js'
+import { scanFailureDetail, hasFallbackInventory } from './scanFailureMessage.js'
 import LiveAssessmentLive from './LiveAssessmentLive.jsx'
 import ProcessingDetails from './ProcessingDetails.jsx'
 import ScopeFunnel from './ScopeFunnel.jsx'
@@ -929,7 +930,7 @@ export default function App() {
       resetScanScopedState()
       setScanList(await listScans())
     } catch (e) {
-      setErr(`scan failed: ${e?.message ?? e}`)
+      setErr(`scan failed: ${scanFailureDetail(e?.message ?? e)}`)
     } finally {
       setBusy(false); setProgress(null)
     }
@@ -1152,7 +1153,7 @@ export default function App() {
       // both rendered at once and directly contradicted each other. The failure is the newer,
       // harder signal; it wins.
       setPreflightCapacityState(null)
-      setErr(`scan failed: ${e?.message ?? e}`)
+      setErr(`scan failed: ${scanFailureDetail(e?.message ?? e)}`)
     } finally {
       // Always close, whatever the loop's own state — the server's generator loop otherwise
       // keeps polling Redis every 250ms for a client that has already stopped listening.
@@ -1592,7 +1593,22 @@ export default function App() {
         </div>
       )}
 
-      {err && <div className="err" role="alert">{err}</div>}
+      {/* A failed scan attempt never clears `scan` — setScan(fresh) only runs on success — so the
+          previous run's own completed results routinely stay on screen directly under this
+          banner. Found live 2026-08-29: "scan failed: 500" over a "Discovery complete" card reads
+          as a flat contradiction with nothing explaining that the two describe different
+          attempts. Naming the earlier run's timestamp says explicitly what "unaffected" means,
+          rather than asking the reader to infer it from a card that never changed. */}
+      {err && (
+        <div className="err" role="alert">
+          <div>{err}</div>
+          {hasFallbackInventory(run?.completed_at) && (
+            <div style={{ fontWeight: 400, fontSize: 12.5, marginTop: 3 }}>
+              Your previous inventory from {fmtStamp(run.completed_at)} is unaffected and still shown below.
+            </div>
+          )}
+        </div>
+      )}
       {/* A deliberate stop is not a fault, so it is reported as status rather than as an alert —
           role="status" and the muted panel treatment, not role="alert" and the red one. */}
       {stopped && (
