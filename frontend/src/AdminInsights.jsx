@@ -6,9 +6,29 @@ const SOURCE_LABEL = { drive: 'Google Drive', sharepoint: 'SharePoint', local: '
 // A scan lands in this table with completed_at set — but 'done' is not the only way to get
 // there. cancel_scan and the lost-worker sweeper both stamp completed_at on a scan that never
 // reached assessment, leaving files/certifiable at 0 for a reason that has nothing to do with
-// what was found. Anything other than 'done' gets a badge instead of bare zeros, so "0 docs"
+// what was found. A 0 on one of those statuses renders as the status word itself, so "0 docs"
 // never has to be read as "assessed, found nothing."
 const SCAN_STATUS_LABEL = { cancelled: 'Cancelled', interrupted: 'Interrupted', failed: 'Failed' }
+const SCAN_STATUS_TITLE = {
+  cancelled: 'Stopped before assessment finished — this reflects only what ran before the stop.',
+  interrupted: 'The worker running this scan died mid-run — this reflects only what ran before it died.',
+  failed: 'This scan never completed — this is not a finished result.',
+}
+
+/** Docs/Certifiable read as a real zero on a normal completed scan, but on a scan that never
+ * reached assessment a 0 means something else entirely — swap in the status word itself rather
+ * than let both cases render identically. */
+function statusOrCount(status, value, render) {
+  const label = SCAN_STATUS_LABEL[status]
+  if (label && !value) {
+    return (
+      <span style={{ color: '#854F0B', fontStyle: 'italic', fontSize: 12.5 }} title={SCAN_STATUS_TITLE[status]}>
+        {label}
+      </span>
+    )
+  }
+  return render()
+}
 const PERIOD_OPTS = [
   ['today', 'Today'],
   ['7d',    'Last 7 days'],
@@ -384,7 +404,7 @@ export function AdminInsights({ me }) {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                  {['Date', 'Source', 'Docs', 'Certifiable', 'Score', 'Status', 'Owner'].map((h) => (
+                  {['Date', 'Source', 'Docs', 'Certifiable', 'Score', 'Owner'].map((h) => (
                     <th key={h} style={{ textAlign: 'left', padding: '4px 10px 8px 0',
                                          fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
@@ -404,29 +424,16 @@ export function AdminInsights({ me }) {
                           {SOURCE_LABEL[s.source] || s.source || '—'}
                         </span>
                       </td>
-                      <td style={{ padding: '7px 10px 7px 0', fontVariantNumeric: 'tabular-nums' }}>{fmt(s.files)}</td>
                       <td style={{ padding: '7px 10px 7px 0', fontVariantNumeric: 'tabular-nums' }}>
-                        {s.certifiable != null ? `${fmt(s.certifiable)} (${fmt(pct)}%)` : '—'}
+                        {statusOrCount(s.status, s.files, () => fmt(s.files))}
+                      </td>
+                      <td style={{ padding: '7px 10px 7px 0', fontVariantNumeric: 'tabular-nums' }}>
+                        {statusOrCount(s.status, s.certifiable,
+                          () => s.certifiable != null ? `${fmt(s.certifiable)} (${fmt(pct)}%)` : '—')}
                       </td>
                       <td style={{ padding: '7px 10px 7px 0', fontVariantNumeric: 'tabular-nums',
                                     color: scoreColor(s.avg_score) }}>
                         {s.avg_score != null ? fmt(s.avg_score, 1) : '—'}
-                      </td>
-                      <td style={{ padding: '7px 10px 7px 0' }}>
-                        {SCAN_STATUS_LABEL[s.status] ? (
-                          <span style={{ fontSize: 11, fontWeight: 600, color: '#854F0B',
-                                         background: '#854F0B1a', borderRadius: 4, padding: '2px 8px',
-                                         whiteSpace: 'nowrap' }}
-                                title={
-                                  s.status === 'cancelled'
-                                    ? 'Stopped before assessment finished — the counts above reflect only what ran.'
-                                    : s.status === 'interrupted'
-                                    ? 'The worker running this scan died mid-run — the counts above reflect only what ran.'
-                                    : 'This scan never completed — the counts above are not a finished result.'
-                                }>
-                            {SCAN_STATUS_LABEL[s.status]}
-                          </span>
-                        ) : null}
                       </td>
                       <td style={{ padding: '7px 0 7px 0', color: 'var(--muted)', fontSize: 12,
                                     maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
