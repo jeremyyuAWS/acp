@@ -60,6 +60,13 @@ const OVERRIDE_ACTIONS = ['keep', 'archive', 'retain', 'delete']
 // data the endpoint has always returned but no surface has read until now.
 export function sourceFreshnessBadge(row) {
   if (!row) return null
+  // PRD Phase 3's fuller sync-state vocabulary — ACP's own side of the round trip, layered by
+  // the backend (source_staleness.classify_sync_state) on top of the four states below.
+  if (row.state === 'importing') return { label: 'importing…', color: '#1F5FA8', title: 'ACP is still importing this file from the source' }
+  if (row.state === 'import_failed') return { label: 'import failed', color: '#8A1F1F', title: 'ACP could not import this file from the source' }
+  if (row.state === 'conflict') return { label: '⚠ conflict', color: '#8A1F1F', title: 'The source changed and ACP holds an unpublished fix — both sides changed since the scan' }
+  if (row.state === 'acp_newer') return { label: 'ACP version newer', color: '#3B6D11', title: "ACP's fixed version is newer than the current source file" }
+  if (row.state === 'publish_pending') return { label: 'publish pending', color: '#854F0B', title: 'A fixed version is ready but has not been published back to the source yet' }
   if (row.state === 'stale') return { label: '⚠ source changed', color: '#8A1F1F', title: 'The source file in Drive changed after this scan' }
   if (row.state !== 'unavailable') return null
   if (row.error === 'not_found') return { label: 'deleted at source', color: '#8A1F1F', title: 'The source file in Drive no longer exists' }
