@@ -58,7 +58,7 @@ describe('one reset, used by every path that changes the active scan', () => {
     const handler = code.match(/const onUnavailable = async[\s\S]*?\n    \}\n/)
     expect(handler, 'the acp:scan-unavailable handler should be found').toBeTruthy()
     expect(handler[0]).toMatch(/setScan\(loaded\); resetScanScopedState\(\)/)
-    expect(handler[0]).toMatch(/setScan\(null\); resetScanScopedState\(\)/)
+    expect(handler[0]).toMatch(/setScan\(null\); setOverviewPreview\(null\); resetScanScopedState\(\)/)
   })
 
   it('a new scan resets, which is the case that never did', () => {

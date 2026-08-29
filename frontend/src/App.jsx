@@ -50,6 +50,7 @@ import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 import { CAPABILITY_FALLBACK, ASSESSMENT_FALLBACK, fmtOf } from './capability.js'
 import Remediate from './Remediate.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
+import OverviewPreviewCard from './OverviewPreviewCard.jsx'
 import ScanReviewModal from './ScanReviewModal.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
 import { applyScopeConfig } from './activeScope.js'
@@ -842,7 +843,9 @@ export default function App() {
         } else {
           // Nothing of their own to fall back to. Clear the dead scan and send them to the one
           // action that can produce one, rather than leaving a scored-looking empty dashboard.
-          setScan(null); resetScanScopedState()
+          // overviewPreview must go too: it now renders directly (OverviewPreviewCard) whenever
+          // `run` is null, and this scan's aggregate numbers are exactly as dead as the scan.
+          setScan(null); setOverviewPreview(null); resetScanScopedState()
           setScanUnavailable({ scanId: badId, reason: e?.detail?.reason || '', recoveredTo: null, recovered: true })
           setView((v) => (me?.allow && !me.allow.includes('discover') ? v : 'discover'))
         }
@@ -1753,7 +1756,13 @@ export default function App() {
             discovery numbers first, the assessment KPIs once Assess has run). This reverses the older
             OV-01/OV-04 gate — "Overview stays blank until assessed" — which the reveal-as-completed
             structure makes unnecessary: there is no empty-findings page to guard against any more. */}
-        {view === 'overview' && (run ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} me={me} onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onFileTypeChange={setFileTypeConfig} cap={cap} assessment={assessment} /> : placeholder)}
+        {/* Stale-while-revalidate: before `run` (GET /scans/{id}'s full file/finding payload)
+            has ever arrived, bootstrap's cached aggregate snapshot is already enough for a real
+            (if reduced) Overview — OverviewPreviewCard — rather than leaving the tab on a
+            spinner for the heavier call's whole duration. Once `run` is set, this branch never
+            applies again for the life of the workspace (a later scan switch already has data to
+            show, via `run` from the previous scan, while the new one loads). */}
+        {view === 'overview' && (run ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} me={me} onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onFileTypeChange={setFileTypeConfig} cap={cap} assessment={assessment} /> : (overviewPreview ? <OverviewPreviewCard preview={overviewPreview} /> : placeholder))}
 
         {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
           scanId={run?.id}
