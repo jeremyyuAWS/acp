@@ -607,6 +607,56 @@ def stop_scheduler() -> None:
         scheduler.shutdown(wait=False)
 
 
+def _drive_delta_check(cursor_key: str, owner: str | None,
+                       build_svc) -> tuple[list[dict], set] | None:
+    """The shared core of the Drive delta gate: advance (or seed) the stored cursor at
+    `cursor_key` and return (changed_files, removed_ids) from Drive's Changes API, or None
+    when there is nothing yet to compare — a first-ever check for this cursor_key, or the
+    check itself failed. None is NEVER 'nothing changed': both callers below must fall back
+    to a full listing on None, and both do.
+
+    `cursor_key` is what gives the scheduled sweep and an interactive scan two independent
+    cursors under one cursor store with no schema change: the sweep's own identity is the
+    fixed string "drive" (unchanged since #933), while an interactive caller namespaces its
+    key per signed-in user (see _interactive_drive_sync_plan) so two different users' Drive
+    accounts never share or clobber each other's delta position.
+
+    `build_svc` is a zero-arg callable returning the Drive service to check against — called
+    INSIDE the try below, deferred, so a broken build is covered by the same fallback-to-full-
+    listing guarantee as the API calls after it. The scheduled sweep has nothing built yet and
+    passes a fresh `lambda: _drive_service(None)` (ADC); an interactive caller already has a
+    service built for the very same request it is about to list with and passes THAT one back
+    (`lambda: svc`) rather than have this function build a second one from the raw token —
+    building a second service per request is both wasteful and, in any caller that mocks
+    scanner._drive_service to assert it was called exactly once, a real regression.
+    """
+    from scanner import drive_changes_since, drive_start_page_token
+    cur = get_store().get_sync_cursor(cursor_key)
+    try:
+        svc = build_svc()
+        if not cur or not cur.get("page_token"):
+            # No baseline yet for this cursor_key — nothing to compare against. Seed one now
+            # so the NEXT check has something to gate on.
+            get_store().save_sync_cursor(cursor_key, owner, drive_start_page_token(svc))
+            return None
+        changed, removed_ids, new_token = drive_changes_since(svc, cur["page_token"])
+        get_store().save_sync_cursor(cursor_key, owner, new_token)  # advance regardless of outcome
+        return changed, removed_ids
+    except BaseException as e:
+        # BaseException, deliberately wider than the rest of this codebase's `except
+        # Exception`: a broken native dependency in the googleapiclient/google-auth import
+        # chain (e.g. a cryptography/cffi ABI mismatch) surfaces as a Rust pyo3_runtime.
+        # PanicException, which subclasses BaseException specifically so it is NOT caught by
+        # `except Exception` — and this function's whole contract is "never turn uncertainty
+        # into an unvouched-for reconstruction," which an uncaught panic here would silently
+        # violate by crashing the caller instead of falling back to it. An expired/invalid
+        # page token (Drive 404s that after ~1 week unused) and ordinary API/ADC failures
+        # fall through here too.
+        print(f"drive sync check ({cursor_key}): change-check failed ({e}) — falling back to "
+              f"a full listing", flush=True)
+        return None
+
+
 def _drive_sync_plan(owner: str | None) -> tuple[bool, dict | None]:
     """PRD Phase 3: decide what the scheduled Drive sweep should do, from the stored sync
     cursor. Returns (skip, drive_delta):
@@ -621,54 +671,73 @@ def _drive_sync_plan(owner: str | None) -> tuple[bool, dict | None]:
                           failed.
 
     Uncertainty always resolves to (False, None) — a full, already-correct scan — never to a
-    skip, and never to a reconstruction this function can't vouch for. Best-effort bookkeeping:
-    it always advances (or seeds) the stored cursor before returning, so the NEXT sweep's check
-    starts from wherever this one left off."""
-    from scanner import (_drive_service, _drive_file_from_inventory_row, drive_changes_since,
-                        drive_start_page_token)
-    cur = get_store().get_sync_cursor("drive")
-    try:
-        svc = _drive_service(None)   # ADC — the same identity the sweep itself scans with
-        if not cur or not cur.get("page_token"):
-            # No baseline yet (first-ever drive sweep, or a previous seed attempt never
-            # landed) — nothing to compare against, so there is nothing to skip OR reconstruct.
-            # Seed one now so the NEXT sweep has something to gate on.
-            get_store().save_sync_cursor("drive", owner, drive_start_page_token(svc))
-            return False, None
-        changed, removed_ids, new_token = drive_changes_since(svc, cur["page_token"])
-        get_store().save_sync_cursor("drive", owner, new_token)  # advance regardless of outcome
-        if not changed and not removed_ids:
-            return True, None
-        prior = get_store().latest_scan_inventory_items(owner, "drive")
-        if prior is None:
-            # A cursor exists but no completed scan does (e.g. every prior sweep since it was
-            # seeded has failed before saving) — nothing to reconstruct FROM. A full listing
-            # gives the NEXT sweep a real baseline again.
-            print(f"scheduled drive sweep: {len(changed)} changed, {len(removed_ids)} removed/"
-                  f"trashed, but no prior scan to reconstruct from — running a full scan",
-                  flush=True)
-            return False, None
+    skip, and never to a reconstruction this function can't vouch for. A SKIP is the right
+    answer for THIS caller specifically because nobody is waiting on a scheduled sweep's
+    result — see _interactive_drive_sync_plan below for why an interactive scan can never use
+    the same shortcut."""
+    from scanner import _drive_service
+    result = _drive_delta_check("drive", owner, lambda: _drive_service(None))
+    if result is None:
+        return False, None
+    changed, removed_ids = result
+    if not changed and not removed_ids:
+        return True, None
+    prior = get_store().latest_scan_inventory_items(owner, "drive")
+    if prior is None:
+        # A cursor exists but no completed scan does (e.g. every prior sweep since it was
+        # seeded has failed before saving) — nothing to reconstruct FROM. A full listing
+        # gives the NEXT sweep a real baseline again.
         print(f"scheduled drive sweep: {len(changed)} changed, {len(removed_ids)} removed/"
-              f"trashed since last sync — reconstructing the estate instead of a full re-list",
-              flush=True)
-        prior_files = [_drive_file_from_inventory_row(r) for r in prior]
-        return False, {"prior_files": prior_files, "changed": changed,
-                       "removed_ids": removed_ids}
-    except BaseException as e:
-        # BaseException, deliberately wider than the rest of this codebase's `except
-        # Exception`: a broken native dependency in the googleapiclient/google-auth import
-        # chain (e.g. a cryptography/cffi ABI mismatch) surfaces as a Rust pyo3_runtime.
-        # PanicException, which subclasses BaseException specifically so it is NOT caught by
-        # `except Exception` — and this function's whole contract is "never turn uncertainty
-        # into a skip or an unvouched-for reconstruction," which an uncaught panic here would
-        # silently violate by crashing the sweep instead of falling back to it. An expired/
-        # invalid page token (Drive 404s that after ~1 week unused) and ordinary API/ADC
-        # failures fall through here too; the existing Drive-failure path in
-        # _do_scheduled_scan already handles those safely (records the failure, changes
-        # nothing).
-        print(f"scheduled drive sweep: change-check failed ({e}) — running a full scan instead",
+              f"trashed, but no prior scan to reconstruct from — running a full scan",
               flush=True)
         return False, None
+    print(f"scheduled drive sweep: {len(changed)} changed, {len(removed_ids)} removed/"
+          f"trashed since last sync — reconstructing the estate instead of a full re-list",
+          flush=True)
+    from scanner import _drive_file_from_inventory_row
+    prior_files = [_drive_file_from_inventory_row(r) for r in prior]
+    return False, {"prior_files": prior_files, "changed": changed, "removed_ids": removed_ids}
+
+
+def _interactive_drive_sync_plan(owner: str, svc) -> dict | None:
+    """PRD Phase 3, interactive scans: the same drive_delta reconstruction _drive_sync_plan
+    gives the scheduled sweep, but for a user-initiated whole-Drive scan — keyed per SIGNED-
+    IN USER (cursor_key=f"drive:{owner}"). `svc` is the Drive service the CALLER already built
+    for this same request (from this user's own per-request token, never ADC) — reused here
+    rather than built a second time (see _drive_delta_check's docstring for why).
+
+    Returns the SAME drive_delta dict _list()'s drive_delta= already knows how to reconstruct
+    from (see drive_reconstructed_listing), or None to fall back to a normal full listing.
+
+    DELIBERATELY NO SKIP, unlike _drive_sync_plan. The scheduled sweep's "nothing changed —
+    do nothing" is only correct because nobody is watching it; a user who clicked "scan"
+    is watching, and is owed a completed scan every time, even when nothing changed. So
+    'nothing changed' here still returns a drive_delta — {"changed": [], "removed_ids":
+    set()} reconstructs the prior scan's inventory UNCHANGED, which is a genuine, complete,
+    just very fast scan rather than the absence of one.
+
+    Callers restrict this to a whole-Drive request (no folder/folders narrowing) before
+    calling — see handlers._scan_discover. Drive's Changes API has no folder filter, so
+    reconciling it against a folder-scoped baseline would need a containment check this
+    function does not do.
+    """
+    result = _drive_delta_check(f"drive:{owner}", owner, lambda: svc)
+    if result is None:
+        return None
+    changed, removed_ids = result
+    prior = get_store().latest_scan_inventory_items(owner, "drive")
+    if prior is None:
+        # A cursor exists but no completed whole-Drive scan for this user does (their first
+        # scan predates this cursor, or every prior one failed before saving) — nothing to
+        # reconstruct FROM. A full listing gives the NEXT interactive scan a real baseline.
+        return None
+    if changed or removed_ids:
+        print(f"interactive drive scan ({owner}): {len(changed)} changed, {len(removed_ids)} "
+              f"removed/trashed since last sync — reconstructing the estate instead of a full "
+              f"re-list", flush=True)
+    from scanner import _drive_file_from_inventory_row
+    prior_files = [_drive_file_from_inventory_row(r) for r in prior]
+    return {"prior_files": prior_files, "changed": changed, "removed_ids": removed_ids}
 
 
 def _sp_sync_gate(owner: str | None, token: str) -> bool:
