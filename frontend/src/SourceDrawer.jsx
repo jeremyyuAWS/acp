@@ -59,8 +59,12 @@ const Kpi = ({ label, value }) => (
   </div>
 )
 
-export default function SourceDrawer({ source, files = [], scans = [], onClose, onPickFile, onScan, onOpenAssess, busy = false }) {
-  const [tab, setTab] = useState('Overview')
+export default function SourceDrawer({ source, files = [], scans = [], onClose, onPickFile, onScan, onOpenAssess, busy = false,
+                                       initialTab = 'Overview' }) {
+  // A fresh mount every time this drawer opens (Integrations.jsx renders it only while
+  // `selSrc` is set), so the literal prop-as-initial-state read is enough — no effect needed
+  // to keep it in sync with a prop that can't change under an already-mounted drawer.
+  const [tab, setTab] = useState(initialTab)
   const [policies, setPolicies] = useState(null)   // null = still loading / unavailable
   const [policyErr, setPolicyErr] = useState('')
   const [invDiff, setInvDiff] = useState(null)     // null = none to show; the line is omitted

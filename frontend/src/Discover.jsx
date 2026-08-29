@@ -15,6 +15,7 @@ import DiscoverInventoryExport from './DiscoverInventoryExport.jsx'
 import DiscoveryCompleteness from './DiscoveryCompleteness.jsx'
 import { snapshotTrust, snapshotTrustMessage } from './discoverySnapshotTrust.js'
 import { acknowledgementSummary } from './discoveryRecommendations.js'
+import { assessmentEligible } from './estateFunnel.js'
 import { hasClassificationData, NO_CLASSIFICATION_TITLE, NO_CLASSIFICATION_BODY,
          NO_CLASSIFICATION_WHY } from './classificationData.js'
 import { loadDiscoveryInventory, mergeLifecycle, inventoryOnlyRows } from './discoveryInventory.js'
@@ -30,6 +31,7 @@ import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
 import { deriveDiscoverProcessingState } from './discoverProcessingState.js'
 import WorkerAvailability from './WorkerAvailability.jsx'
 import FolderActivity from './FolderActivity.jsx'
+import QueueJobDetails from './QueueJobDetails.jsx'
 import DiscoveryQueuedPlaceholder from './DiscoveryQueuedPlaceholder.jsx'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
@@ -124,7 +126,8 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 const DISCOVERY_JOB_TYPES = new Set(['scan_discover', 'scan_batch', 'scan_finalize', 'scan_file', 'scan'])
 
 export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, preflightDegraded = null, preflightCapacityState = null, scanPct = 0, scanId = null, jobId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
-  hasSPToken = false, runAt = null, run = null, scanList = null, rawFiles = null, onStop = null, onViewMonitor = null }) {
+  hasSPToken = false, runAt = null, run = null, scanList = null, rawFiles = null, onStop = null, onViewMonitor = null,
+  onOpenSource = null }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
   // component is given neither — Discover takes scanId and scope, not the run. The pieces it needs
   // are assembled here rather than threading the whole run object through a new prop; the resolver
@@ -187,21 +190,26 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   }, [busy])
   // Worker-assignment signal (PRD "Live Discover Journey", Phase 1): GET /jobs/{id} carries a
   // real claim timestamp (jobs.locked_at) — the same one AssessRunner already polls for its own
-  // job — that nothing on Discover read before. Polled only for the pre-listing window (job
-  // queued, nothing found yet); once a real listing tick lands, progress.phase leaves 'queued'
-  // and this stops — nothing past that point needs it, since the busy/discovering state already
-  // implies a worker is active.
+  // job — that nothing on Discover read before.
+  //
+  // Originally polled only for the pre-listing window (job queued, nothing found yet), stopping
+  // the instant progress.phase left 'queued' — correct for jobClaimed/assignedSecsAgo below,
+  // which deriveDiscoverProcessingState only ever reads inside its `phase === 'queued'` branch.
+  // But the "Processing details" expandable row (QueueJobDetails.jsx, stakeholder review) reads
+  // the SAME job's attempts/max_attempts/id for as long as this scan is busy, not just before the
+  // first listing tick — so gating the whole effect on phase silently wiped that data the moment
+  // discovery actually started, which is exactly when someone would go looking for it. Polls for
+  // the entire busy window instead; the two now-stale-during-'discovering' fields simply go
+  // unused past that point, same as before, since their one reader never looks past 'queued'.
   const [discoverJobInfo, setDiscoverJobInfo] = useState(null)
   useEffect(() => {
-    setDiscoverJobInfo(null)
-    const phase = progress?.phase ?? null
-    if (!busy || !jobId || (phase && phase !== 'queued')) return undefined
+    if (!busy || !jobId) { setDiscoverJobInfo(null); return undefined }
     let live = true
     const load = () => getQueueJob(jobId).then((d) => { if (live) setDiscoverJobInfo(d) }).catch(() => {})
     load()
     const id = setInterval(load, 3000)
     return () => { live = false; clearInterval(id) }
-  }, [busy, jobId, progress?.phase])
+  }, [busy, jobId])
   // Queue-context facts for the same pre-listing window (stakeholder review, 2026-08-28): "N
   // compatible jobs ahead" and worker-pool size, the same GET /jobs data WorkerAvailability
   // polls elsewhere, read here too since this effect needs it merged with the job-specific claim
@@ -238,7 +246,8 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
     const load = () => getJobs().then((d) => {
       if (!live) return
       setWorkerSnap({ workers: d.workers ?? 0, alive: !!d.worker_tier_alive,
-                      suggested: d.suggested_workers ?? 4, runtime_mode: d.runtime_mode ?? 'auto' })
+                      suggested: d.suggested_workers ?? 4, runtime_mode: d.runtime_mode ?? 'auto',
+                      oldestQueuedCreatedAt: d.oldest_queued?.created_at ?? null })
     }).catch(() => {})
     load()
     const id = setInterval(load, 10000)
@@ -727,6 +736,15 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         onViewMonitor={onViewMonitor}
       />
 
+      {/* "Processing details" expandable row (stakeholder review): attempt count against its real
+          ceiling, and a truncated job id, for the whole busy window — not just the pre-listing
+          queued phase discoverJobInfo originally stopped polling after (see that effect's own
+          comment above for why it now keeps going). Renders nothing on its own when there's
+          nothing real to show yet (jobId not assigned, or attempts/max_attempts genuinely absent
+          — SIM mode's getQueueJob fixture doesn't track them). */}
+      {busy && <QueueJobDetails jobId={jobId} attempts={discoverJobInfo?.attempts ?? null}
+                                maxAttempts={discoverJobInfo?.max_attempts ?? null} />}
+
       {/* Folder-level detail underneath the aggregate counts above (#929's backend slice) — which
           folders the BFS is fetching right now, and the last few that finished. Renders nothing
           on its own when there's nothing to show (the flat Drive-query path, a scan not yet
@@ -739,7 +757,15 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       {!busy && (run?.discovered_at || run?.status === 'discovered') && (
         <DiscoverCompleteSummary
           discoveredCount={completionDiscoveredCount}
-          assessableCount={scope?.inventory?.by_status?.assessable
+          /* `assessmentEligible()` is the SAME helper DiscoveryResults' headline "Assessable" tile
+             calls (estateFunnel.js) — it prefers the direct `assessment_eligible` field over the
+             older `by_status.assessable` shape, which this line used to read on its own, skipping
+             that preference entirely. The two numbers sit on the same screen once discovery
+             completes; deriving them from two different rules is the exact "four-denominator"
+             defect estateFunnel.js's own header comment warns about, just not yet caught here.
+             The local subtraction survives as the last resort, for a scan whose scope.inventory
+             predates BOTH fields. */
+          assessableCount={assessmentEligible(scope?.inventory)
             ?? Math.max(0, completionDiscoveredCount - nonAssessable.length - lockedCount)}
           metadataOnlyCount={scope?.inventory?.by_status?.metadata_only ?? 0}
           unsupportedCount={scope?.inventory?.by_status?.unsupported ?? 0}
@@ -762,6 +788,12 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           startedAt={run?.started_at ?? null}
           discoveredAt={run?.discovered_at ?? null}
           publishedAt={run?.published_at ?? null}
+          /* Same `runAt` object DiscoveryResults renders a few hundred pixels below this card —
+             not a second call to inventorySnapshot(). Two independently-derived timestamps for
+             "when was this counted" can drift out of formatting sync (a locale change, a staleness
+             threshold edit) even when they resolve to the same instant; sharing the one App.jsx
+             already computed makes that structurally impossible instead of merely unlikely. */
+          runAt={runAt}
           onAdvance={onAdvance}
           onReviewInventory={() => {
             const el = document.getElementById('discover-inventory-table')
@@ -769,6 +801,16 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           }}
           pendingActions={pendingActions}
           needsAck={needsAck}
+          /* Whether this run's own estate CHANGED since the last scan of this same source is a
+             question this card cannot honestly answer — see the "This run's writes" comment
+             inside DiscoverCompleteSummary.jsx for why. A real cross-scan diff already exists,
+             one tab over: Integrations' SourceDrawer (store.get_inventory_diff). Point there
+             instead of half-answering it here. `run?.source === 'all'` is a real, different
+             fact (a whole-Drive/multi-source scan, not one connector) that SourceDrawer's own
+             sourceKeys() matching cannot resolve to a single source card, so the link is
+             withheld rather than landing on a dead end. */
+          onViewSourceHistory={onOpenSource && run?.source && run.source !== 'all'
+            ? () => onOpenSource(run.source) : undefined}
         />
       )}
 

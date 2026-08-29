@@ -71,4 +71,22 @@ describe('Worker availability on Discover', () => {
     await settle()
     expect(c.textContent).not.toMatch(/available to pick up jobs/i)
   })
+
+  it('threads oldest_queued.created_at through to the stall warning', async () => {
+    const stale = new Date(Date.now() - 150_000).toISOString()
+    getJobs.mockResolvedValue({ workers: 4, worker_tier_alive: true, suggested_workers: 4,
+                                runtime_mode: 'auto', oldest_queued: { id: 'j1', type: 'scan_discover',
+                                created_at: stale } })
+    const c = await mount({})
+    await settle()
+    expect(c.textContent).toMatch(/may not be actually claiming work/i)
+  })
+
+  it('shows no stall warning when getJobs reports no queued job', async () => {
+    getJobs.mockResolvedValue({ workers: 4, worker_tier_alive: true, suggested_workers: 4,
+                                runtime_mode: 'auto', oldest_queued: null })
+    const c = await mount({})
+    await settle()
+    expect(c.textContent).not.toMatch(/may not be actually claiming work/i)
+  })
 })

@@ -880,6 +880,12 @@ def jobs(request: Request, status: str | None = None, limit: int = 100):
             # GPU-constrained, not CPU-constrained; 4 is a safe floor the user can raise.
             "suggested_workers": 4,
             "runtime_mode": core._RUNTIME_MODE,
+            # Global like `workers`/`worker_tier_alive` above, not owner-scoped: the question
+            # this answers ("is the shared worker tier actually draining its queue") is about the
+            # tier, not this caller's own jobs — scoping it to owner would go dark the moment
+            # THIS user has nothing queued, even while every other tenant's queue is stalled.
+            # Only id/type/created_at are exposed — no payload, so no filenames cross tenants.
+            "oldest_queued": core.store.oldest_queued_job(),
             "stats": core.store.job_stats(owner=owner),
             "dead_letters": core.store.dead_letter_breakdown(owner=owner),
             "jobs": core.store.list_jobs(status=status, limit=limit, owner=owner)}
@@ -903,7 +909,7 @@ def queue_job(job_id: str, request: Request):
     if j is None or not j.get("scan_id") or core.store.get_scan(j["scan_id"], owner=owner) is None:
         raise HTTPException(404, "job not found")
     return {"id": j["id"], "type": j["type"], "status": j["status"],
-            "attempts": j.get("attempts"), "error": j.get("last_error"),
+            "attempts": j.get("attempts"), "max_attempts": j.get("max_attempts"), "error": j.get("last_error"),
             "scan_id": j.get("scan_id"), "phase": j.get("phase"), "locked_at": j.get("locked_at")}
 
 

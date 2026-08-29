@@ -334,8 +334,15 @@ async def drive_upload(request: Request):
     try:
         from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
+        import httplib2
+        from google_auth_httplib2 import AuthorizedHttp
+        import core
         creds = Credentials(token=token, scopes=["https://www.googleapis.com/auth/drive.file"])
-        svc = build("drive", "v3", credentials=creds, cache_discovery=False)
+        # Bounded socket — see core._DRIVE_HTTP_TIMEOUT_S's identical fix (found live 2026-08-29).
+        # `credentials=` builds its own AuthorizedHttp with no way to carry a timeout, so a
+        # stalled upload (not just a slow one) would block this request forever.
+        http = AuthorizedHttp(creds, http=httplib2.Http(timeout=core._DRIVE_HTTP_TIMEOUT_S))
+        svc = build("drive", "v3", http=http, cache_discovery=False)
 
         # The folder name is admin-configurable (settings.drive_mirror_folder). This route used
         # to hardcode 'Remediated', so an operator who renamed the mirror got their per-file
