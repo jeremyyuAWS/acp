@@ -102,3 +102,49 @@ def test_core_drive_service_adc_fallback_gets_a_bounded_http_client(capture_buil
     kwargs = capture_build[0]
     assert "credentials" not in kwargs
     assert kwargs["http"].http.timeout == core._DRIVE_HTTP_TIMEOUT_S
+
+
+# ── handlers._drive_client — the worker (no-request) call site, same bug ───────────────────────
+
+import handlers  # noqa: E402
+
+
+def test_handlers_drive_client_gets_a_bounded_http_client(capture_build, monkeypatch):
+    handlers._drive_client("fake-token")
+
+    kwargs = capture_build[0]
+    assert "credentials" not in kwargs
+    assert kwargs["http"].http.timeout == core._DRIVE_HTTP_TIMEOUT_S
+
+
+# ── routes/drive.py's /drive/upload — a fourth call site with the same shape, found in the ──────
+# ── same sweep. Exercised through the route rather than as a bare function since the build() ────
+# ── call is inline, not its own helper.
+
+@pytest.fixture()
+def upload_client(monkeypatch, isolated_store):
+    from fastapi.testclient import TestClient
+    from app import app
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setattr(core, "ACCESS_CODE", "", raising=False)
+    monkeypatch.setattr(core, "GOOGLE_CLIENT_ID", "", raising=False)
+    monkeypatch.setattr(core, "E2E_KEY", None, raising=False)
+    monkeypatch.setattr(core, "OWNER_EMAIL", "", raising=False)
+    return TestClient(app)
+
+
+def test_drive_upload_route_gets_a_bounded_http_client(capture_build, upload_client, monkeypatch):
+    # The route calls handlers.ensure_remediated_folder(svc) next, which our fake "svc" (a bare
+    # string) can't satisfy — that's fine, the route's own try/except turns it into a handled
+    # HTTPException. The build() call captured below happens before that point either way.
+    r = upload_client.post(
+        "/drive/upload",
+        headers={"x-drive-token": "fake-token"},
+        data={"scan_id": "s1", "file": "doc.pdf"},
+        files={"blob": ("doc.pdf", b"fake bytes", "application/pdf")},
+    )
+    assert r.status_code != 200   # the fake service can't actually complete the upload
+    assert len(capture_build) == 1
+    kwargs = capture_build[0]
+    assert "credentials" not in kwargs
+    assert kwargs["http"].http.timeout == core._DRIVE_HTTP_TIMEOUT_S
