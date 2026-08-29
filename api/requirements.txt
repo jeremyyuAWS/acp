@@ -32,6 +32,13 @@ azure-storage-blob==12.24.0
 azure-identity==1.19.0
 # --- Azure Container Apps management (replica-count control via managed identity) ---
 azure-mgmt-appcontainers==5.0.0
+# --- Azure Monitor metrics (current replica count, CPU/memory utilization) — the older
+# azure-mgmt-* management-plane family, matching azure-mgmt-appcontainers' own auth pattern
+# (DefaultAzureCredential + subscription_id), deliberately NOT azure-monitor-query: as of that
+# package's 2.0.0 (2025-07-30) MetricsQueryClient was removed entirely and split across two
+# other packages — azure-mgmt-monitor's MonitorManagementClient.metrics.list() predates that
+# churn and is the stabler surface to build on.
+azure-mgmt-monitor==7.0.0
 
 # --- PDF analyser engine ---
 pikepdf==10.8.0

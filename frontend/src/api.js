@@ -961,6 +961,15 @@ export const setWorkerReplicas = (minReplicas) => (SIM
       headers: { ...headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ min_replicas: minReplicas }),
     }).then(j))
+// Azure-side capacity EVIDENCE — how many replicas are actually running right now and recent
+// CPU/memory utilization — distinct from getWorkerReplicas' CONFIGURED min/max. Read-only, open
+// to any signed-in user (same reasoning as getWorkerReplicas). Individual fields (current_replicas,
+// cpu_percent, memory_percent) may be null even when configured:true — that's the backend's own
+// per-field graceful degradation, not a fetch failure; never rendered as a fabricated 0/'—'.
+export const getWorkerCapacity = () => (SIM
+  ? sim({ configured: false, current_replicas: null, min_replicas: null, max_replicas: null,
+          cpu_percent: null, memory_percent: null, metrics_available: false, measured_at: null })
+  : fetch(`${BASE}/control/workers/capacity`, { headers: headers() }).then(j))
 // Reset demo data — clears scan results (Grafana) and/or Langfuse traces. Keeps settings.
 export const resetDemoData = (scope = 'all') => (SIM
   ? sim({ scope, cleared_tables: [], langfuse_traces_deleted: 0 })

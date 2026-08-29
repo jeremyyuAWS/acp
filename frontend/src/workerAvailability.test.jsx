@@ -179,3 +179,66 @@ describe('WorkerAvailability queue-stall warning', () => {
     expect(c.textContent).not.toMatch(/may not be actually claiming work/i)
   })
 })
+
+// GET /control/workers/capacity is a SEPARATE question from replicas above — that's the
+// configured min/max; this is what Azure has actually provisioned and how loaded it is. No
+// admin gate anywhere (read-only, same as `replicas`), and individual fields degrade to
+// omitted-not-fabricated when the backend couldn't measure them.
+describe('WorkerAvailability capacity evidence (current replicas, CPU/memory)', () => {
+  const distributedSnap = { workers: 8, alive: true, runtime_mode: 'distributed' }
+
+  it('shows current replica count and CPU/memory when the backend has all of it', async () => {
+    const c = await mount({
+      snap: distributedSnap,
+      capacity: { configured: true, current_replicas: 2, cpu_percent: 23.5, memory_percent: 40,
+                  metrics_available: true },
+    })
+    expect(c.textContent).toMatch(/2 replicas running now/)
+    expect(c.textContent).toMatch(/CPU 23\.5%/)
+    expect(c.textContent).toMatch(/Memory 40%/)
+  })
+
+  it('singularizes "replica" for a count of one', async () => {
+    const c = await mount({
+      snap: distributedSnap,
+      capacity: { configured: true, current_replicas: 1, cpu_percent: null, memory_percent: null,
+                  metrics_available: false },
+    })
+    expect(c.textContent).toMatch(/1 replica running now/)
+    expect(c.textContent).not.toMatch(/1 replicas/)
+  })
+
+  it('shows replica count alone when metrics are unavailable, not a fabricated 0%', async () => {
+    const c = await mount({
+      snap: distributedSnap,
+      capacity: { configured: true, current_replicas: 3, cpu_percent: null, memory_percent: null,
+                  metrics_available: false },
+    })
+    expect(c.textContent).toMatch(/3 replicas running now/)
+    expect(c.textContent).not.toMatch(/CPU/)
+    expect(c.textContent).not.toMatch(/Memory/)
+  })
+
+  it('renders nothing extra when capacity has not loaded yet', async () => {
+    const c = await mount({ snap: distributedSnap, capacity: null })
+    expect(c.textContent).not.toMatch(/running now/)
+  })
+
+  it('renders nothing extra when Azure capacity reporting is not configured', async () => {
+    const c = await mount({
+      snap: distributedSnap,
+      capacity: { configured: false, current_replicas: null, cpu_percent: null,
+                  memory_percent: null, metrics_available: false },
+    })
+    expect(c.textContent).not.toMatch(/running now/)
+  })
+
+  it('renders nothing extra for the in-process (non-distributed) worker mode', async () => {
+    const c = await mount({
+      snap: { workers: 3, alive: true, runtime_mode: 'auto' },
+      capacity: { configured: true, current_replicas: 2, cpu_percent: 10, memory_percent: 20,
+                  metrics_available: true },
+    })
+    expect(c.textContent).not.toMatch(/running now/)
+  })
+})
