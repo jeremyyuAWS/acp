@@ -24,15 +24,20 @@ globalThis.__BUILD_VERSION__ = '2026.8.1'
 const startScan = vi.fn()
 const getJob = vi.fn()
 const getScan = vi.fn(async () => ({ run: { id: 's1', status: 'done', files: 3 }, files: [] }))
-const listScans = vi.fn(async () => [])
+// GET /workspace/bootstrap now answers what listScans + getActiveScan used to for App.jsx's
+// initial-load effect (see overviewLoadStages.test.jsx) — mocked fast (no scan, no active job)
+// so it never becomes the critical-path delay these tests' real-time waits are budgeted against.
+const getWorkspaceBootstrap = vi.fn(async () => ({
+  me: { email: 'demo@example.com' }, scan_id: null, scan_status: null, revision: null,
+  overview: null, scans: [], active_job: {},
+}))
 
 vi.mock('./api.js', async (importActual) => ({
   ...(await importActual()),
   getConfig: vi.fn(async () => ({ auth: 'demo' })),
   getRubric: vi.fn(async () => ({ target: 'WCAG 2.1 AA', hash: 'abcdef0123' })),
   getSources: vi.fn(async () => []),
-  listScans,
-  getActiveScan: vi.fn(async () => null),
+  getWorkspaceBootstrap,
   getSettings: vi.fn(async () => ({ scan_scope: '' })),
   updateSettings: vi.fn(async () => ({ scan_scope: '' })),
   getScan,
@@ -47,7 +52,7 @@ const { default: App } = await import('./App.jsx')
 afterEach(() => { unmountAll(); sessionStorage.clear() })
 beforeEach(() => {
   sessionStorage.clear()
-  startScan.mockClear(); getJob.mockClear(); getScan.mockClear(); listScans.mockClear()
+  startScan.mockClear(); getJob.mockClear(); getScan.mockClear(); getWorkspaceBootstrap.mockClear()
 })
 
 const flush = async () => { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() }) }

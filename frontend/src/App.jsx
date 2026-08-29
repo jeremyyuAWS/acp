@@ -14,7 +14,7 @@ import { armNotifyOnComplete, notifyScanComplete, notifyScanFailed, notification
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
+import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, getWorkspaceBootstrap, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -56,7 +56,6 @@ import { applyScopeConfig } from './activeScope.js'
 import A11ySelfCheck from './A11ySelfCheck.jsx'
 import { scanPhaseLine, NARRATION_STEPS, activityLine } from './phaseNarration.js'
 import { useScanRefetch } from './scanRefetch.js'
-import { pickDefaultScan } from './defaultScan.js'
 import ConfirmDialog from './ConfirmDialog.jsx'
 import { AdminInsights } from './AdminInsights.jsx'
 
@@ -321,6 +320,11 @@ export default function App() {
   // more specific than a static "Loading your workspace…" the whole way through — see the
   // effect below and Loading()'s own comment (EmptyState.jsx) for what each value means.
   const [loadStage, setLoadStage] = useState(null)
+  // GET /workspace/bootstrap's cached Overview snapshot for the default scan, set as soon as
+  // that one request resolves — before getScan's full file/finding payload arrives. Only
+  // consumed by the loading screen's preview line (Loading preview prop, EmptyState.jsx); every
+  // other view still renders from `run`/`files` once those load, unchanged.
+  const [overviewPreview, setOverviewPreview] = useState(null)
   // Externally-certified documents, read by Publish. NOTHING WRITES THIS ANY MORE: its only writer
   // was the ad-hoc single-file upload panel on Discover, removed on request — and that was the
   // app's only mount of Upload, so there is no other route to it.
@@ -569,41 +573,47 @@ export default function App() {
     if (!me) return
     getRubric().then(setRubric).catch(() => {})
     getSources().then(setSources).catch(() => {})
-    setLoadStage('scans')
-    listScans()
-      .then(async (l) => {
-        // Default to the newest NON-collapsed scan, not blindly the newest: a degenerate small
-        // scan on top would otherwise make every view show a shrunken estate (see defaultScan.js).
-        setScanList(l)
-        const d = pickDefaultScan(l)
+    setLoadStage('bootstrap')
+    getWorkspaceBootstrap()
+      .then(async (b) => {
+        // Which scan is "the" default (newest NON-collapsed — a degenerate small scan on top
+        // would otherwise make every view show a shrunken estate) is now decided server-side,
+        // the SAME rule pickDefaultScan/defaultScan.js applies, pinned against the same test
+        // cases (api/routes/workspace.py pick_default_scan) — so this one request already
+        // carries the pick, the scan-picker list, the active-job summary, and (Phase 1a) the
+        // picked scan's cached Overview snapshot, in place of listScans + getActiveScan.
+        setScanList(b.scans || [])
+        setOverviewPreview(b.overview || null)
+        const scanId = b.scan_id || null
         // If a scan is still running (e.g. user reloaded mid-scan), resume tracking it. The
         // default-path job is checked FIRST: it can be mid-crawl with no scan_runs row at all
-        // (see ACTIVE_JOB_KEY above), a window getActiveScan() cannot see into, so a pending job
-        // and an active scan_runs row are never both real at once — no double-reconnect risk.
+        // (see ACTIVE_JOB_KEY above), a window bootstrap's active_job cannot see into, so a
+        // pending job and an active scan_runs row are never both real at once — no double-
+        // reconnect risk.
         const pendingJobId = sessionStorage.getItem(ACTIVE_JOB_KEY)
-        setLoadStage(d ? 'scan' : 'jobs')
+        // Only a stage that gates something worth waiting on is worth naming: with active_job
+        // already resolved as part of bootstrap, a missing scanId has nothing left to await in
+        // either branch below, so there is no meaningful "checking…" period left to narrate —
+        // unlike the pre-bootstrap chain, where getActiveScan() was still a real network call.
+        if (scanId) setLoadStage('scan')
         if (pendingJobId) {
           // reconnectJob owns its OWN busy/progress UI (setBusy/setProgress) and can run for as
           // long as the reconnected job takes to settle — it must stay fire-and-forget, exactly
-          // as before, never awaited into the chain that flips `loaded`. getActiveScan is
-          // skipped in this branch on purpose (see the comment above): a pending job and an
-          // active scan_runs row are never both real at once, so there is nothing for it to
-          // find here — only getScan is left to actually wait on.
+          // as before, never awaited into the chain that flips `loaded`. active_job is ignored
+          // in this branch on purpose (see the comment above): a pending job and an active
+          // scan_runs row are never both real at once, so there is nothing in it to act on here
+          // — only getScan is left to actually wait on.
           reconnectJob(pendingJobId)
-          if (d) await getScan(d.id).then(setScan)
+          if (scanId) await getScan(scanId).then(setScan)
         } else {
-          // getScan(d.id) — which can be a genuinely heavy query on a large estate: file_records
-          // joined against scan_inventory, shadow-file reconciliation, counter aggregation — and
-          // the active-job check have no data dependency on each other, so they no longer wait
-          // in a line: running them together removes one full network round-trip from the
-          // loading screen's critical path. reconnectScan, like reconnectJob above, stays
-          // fire-and-forget once getActiveScan resolves. Found live 2026-08-29: "Loading your
-          // workspace…" with no further detail, reported as hanging with nothing to show for it
-          // — a fully sequential three-call chain with a single static message the whole way.
-          await Promise.all([
-            d ? getScan(d.id).then(setScan) : Promise.resolve(),
-            getActiveScan().then((a) => { if (a && a.id) reconnectScan(a.id, a.job_id) }).catch(() => {}),
-          ])
+          // reconnectScan, like reconnectJob above, stays fire-and-forget — bootstrap already
+          // resolved active_job in the SAME request that gave us scanId, so unlike the old
+          // listScans+getScan+getActiveScan chain there is nothing left to race here: only
+          // getScan(scanId) — a genuinely heavy query on a large estate (file_records joined
+          // against scan_inventory, shadow-file reconciliation, counter aggregation) — still
+          // gates `loaded`.
+          if (b.active_job && b.active_job.id) reconnectScan(b.active_job.id, b.active_job.job_id)
+          if (scanId) await getScan(scanId).then(setScan)
         }
       })
       .catch(() => {})
@@ -719,6 +729,7 @@ export default function App() {
     // old reset missed (triage, the assess-completion phase, the optimistic-assess flag, and
     // the localStorage-backed published/ontology), so no tab shows legacy data on first view.
     setPersona(p); setScan(null); setScanList([]); setExplicitTimeTravel(false); setLoaded(false)
+    setOverviewPreview(null)
     resetScanScopedState()
     // Sign-in additionally resets what a scan change deliberately leaves alone: a new session
     // has no assessment in flight to report a phase for.
@@ -1305,7 +1316,7 @@ export default function App() {
   // where the eligible-file count can be shown against them.
   const placeholder = loaded
     ? <EmptyState onGoToSource={() => { setView('integrations'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
-    : <Loading stage={loadStage} />
+    : <Loading stage={loadStage} preview={overviewPreview} />
   // The scan panel renders inside whichever view is open, so scope its narration to that view
   // when the view is a pipeline step that owns scan phases. The view ids ARE the step names in
   // PHASE_STEP ('discover', 'assess'); anything else is a non-step view and narrates the job.
