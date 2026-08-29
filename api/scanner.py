@@ -371,17 +371,26 @@ _DRIVE_CHANGES_FIELDS = ("nextPageToken,newStartPageToken,"
                         f"changes(fileId,removed,file({provenance.DRIVE_FIELDS},trashed))")
 
 
-def drive_changes_since(svc, page_token: str) -> tuple[list[dict], int, str]:
-    """Page through Drive's changes.list from `page_token` to the end. Returns
-    (changed items — same shape _search_drive produces, via _normalize — a count of files
-    removed or trashed since `page_token`, and the new page token to persist for next time).
+def drive_changes_since(svc, page_token: str) -> tuple[list[dict], set[str], str]:
+    """Page through Drive's changes.list from `page_token` to the end. Returns (changed_files —
+    RAW Drive file resources, unfiltered and unnormalized, the exact shape files().list() would
+    give you — removed_ids — file ids removed or trashed since `page_token` — and the new page
+    token to persist for next time).
+
+    Raw, not _normalize()d: a caller reconstructing a full estate (see apply_drive_delta) needs
+    to run the SAME _normalize()/estate_inventory.summarize() pass over the MERGED prior+delta
+    set that a fresh listing would, not a pre-filtered one — normalizing here would silently
+    drop non-scannable changed files from that reconstruction (a video's metadata changing, a
+    brand-new .zip) even though a fresh listing would have counted them in the estate inventory.
+    OS metadata (.DS_Store, Thumbs.db, …) is dropped here, same as _search_drive's own page
+    filter, since it is never a real document under any listing path.
 
     Raises the SDK's own HttpError on an expired or invalid page token (Drive expires an
     unused one after ~1 week — a 404) or any other API failure; the caller decides how to
     degrade (core._drive_sync_gate always falls back to a full scan rather than trusting a
     failed check)."""
     raw_files: list[dict] = []
-    removed = 0
+    removed_ids: set[str] = set()
     token = page_token
     while True:
         resp = svc.changes().list(pageToken=token, fields=_DRIVE_CHANGES_FIELDS,
@@ -389,15 +398,17 @@ def drive_changes_since(svc, page_token: str) -> tuple[list[dict], int, str]:
                                   spaces="drive").execute(num_retries=5)
         for ch in resp.get("changes", []):
             f = ch.get("file")
+            fid = ch.get("fileId")
             if ch.get("removed") or (f and f.get("trashed")):
-                removed += 1
+                if fid:
+                    removed_ids.add(fid)
                 continue
-            if f:
+            if f and not estate_inventory.is_os_metadata(f.get("name", "") or ""):
                 raw_files.append(f)
         if "nextPageToken" in resp:
             token = resp["nextPageToken"]
             continue
-        return _normalize(raw_files), removed, resp["newStartPageToken"]
+        return raw_files, removed_ids, resp["newStartPageToken"]
 
 
 def _find_remediated_folder_id(svc) -> str | None:
@@ -592,6 +603,26 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
         print(f"[scan] discovery settle: {extra} extra pass(es) over ~{extra * settle_secs:.0f}s "
               f"to let Drive's live listing settle", flush=True)
 
+    if hit_cap:
+        print(f"[scan] whole-Drive listing hit the {raw_cap}-item raw cap — not all files were "
+              f"listed; raise ACP_FANOUT_MAX_FILES to cover the full estate", flush=True)
+    return _finish_drive_listing(by_id, inv_by_id, raw_seen=raw_seen, hit_cap=hit_cap,
+                                 max_files=max_files, exclude_remediated=exclude_remediated,
+                                 scope_out=scope_out, inventory_out=inventory_out, cap=raw_cap)
+
+
+def _finish_drive_listing(by_id: dict[str, dict], inv_by_id: dict[str, dict], *, raw_seen: int,
+                          hit_cap: bool, max_files: int, exclude_remediated: bool,
+                          scope_out: dict | None, inventory_out: list | None,
+                          cap: int | None = None, extra_scope: dict | None = None) -> list[dict]:
+    """The common tail of a whole-Drive listing, regardless of how `by_id`/`inv_by_id` (every
+    scannable / every discovered file, keyed by Drive id) were built: a live walk (_search_drive)
+    and a delta-reconstructed listing (drive_reconstructed_listing) both end here, so a
+    reconstruction is indistinguishable downstream from a fresh listing — same provenance
+    filtering, same _normalize(), same non-scannable estate inventory, same scope_out contract.
+    `cap` is the raw-listing ceiling (meaningless for a reconstruction, so omitted there);
+    `extra_scope` merges into scope_out last, for caller-specific keys (e.g. marking a listing
+    as reconstructed) without touching this shared contract."""
     listed = len(by_id)              # distinct SCANNABLE items, before provenance filtering
     files = list(by_id.values())
     skipped_acp = 0
@@ -600,9 +631,6 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
         kept = [f for f in files if not provenance.is_acp_generated(f)]
         skipped_acp = len(files) - len(kept)
         files = kept
-    if hit_cap:
-        print(f"[scan] whole-Drive listing hit the {raw_cap}-item raw cap — not all files were "
-              f"listed; raise ACP_FANOUT_MAX_FILES to cover the full estate", flush=True)
     result = _normalize(files[:max_files])
     # Whole-estate inventory: classify every file discovered (any format), flagging ACP's own
     # output as EXCLUDED so it isn't counted as the user's content. Assessment/remediation are
@@ -629,7 +657,11 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
         scope_out.update({"kind": "drive", "raw": raw_seen, "scannable": listed,
                           "skipped_acp": skipped_acp, "kept": len(result),
                           "truncated": bool(hit_cap or len(files) > max_files),
-                          "cap": raw_cap, "inventory": inventory})
+                          "inventory": inventory})
+        if cap is not None:
+            scope_out["cap"] = cap
+        if extra_scope:
+            scope_out.update(extra_scope)
     print(f"[scan] estate inventory: {inventory['discovered']} file(s) discovered · "
           f"{inventory['assessment_eligible']} assessment-eligible · "
           f"by format {inventory['by_format']}", flush=True)
@@ -639,6 +671,74 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
           f"{skipped_acp} skipped as ACP-generated output · {len(result)} kept", flush=True)
     print(f"[scan] discovery:   kept {len(result)} file(s)", flush=True)
     return result
+
+
+# --- PRD Phase 3: reconstruct a whole-Drive listing from a prior scan + a Changes API delta ----
+# Avoids walking Drive at all for a scheduled sweep when SOMETHING changed but not everything:
+# the prior scan's own persisted scan_inventory already IS last known estate, and Drive's
+# Changes API already hands over fresh metadata for exactly what's different. Reusing
+# _finish_drive_listing above means this produces the identical scope_out/inventory_out
+# contract a fresh _search_drive call would — the one property CLAUDE.md's own incident
+# history says is easy to get subtly wrong for a partial result.
+
+def _drive_file_from_inventory_row(row: dict) -> dict:
+    """The inverse of _drive_inventory_row: reconstruct a raw Drive-file-resource-shaped dict
+    from one persisted scan_inventory row (store.latest_scan_inventory_items), so a
+    reconstructed listing can run through the exact same _normalize()/estate_inventory.summarize
+    tail a fresh Drive listing does. `size` is approximate — scan_inventory only ever stored the
+    KB-rounded value, so the byte count round-trips lossily — but size is cosmetic (sort/display
+    only, e.g. 'biggest files first'), never a compliance-relevant fact, so the precision loss
+    is acceptable and never surfaces as a wrong finding."""
+    size_kb = row.get("size_kb")
+    return {"id": row.get("drive_file_id"), "name": row.get("file"),
+           "mimeType": row.get("mime"), "md5Checksum": row.get("checksum"),
+           "createdTime": row.get("created_at"), "modifiedTime": row.get("source_modified"),
+           "size": int(size_kb) * 1024 if size_kb is not None else None,
+           "owners": [{"displayName": row["owner"]}] if row.get("owner") else [],
+           "parents": [row["parent_folder"]] if row.get("parent_folder") else []}
+
+
+def apply_drive_delta(prior_files: list[dict], changed_files: list[dict],
+                      removed_ids) -> list[dict]:
+    """Reconstruct 'the current known Drive estate' from `prior_files` (raw Drive-file-shaped
+    dicts — see _drive_file_from_inventory_row) with `changed_files` (fresh raw Drive file
+    resources from drive_changes_since) overlaid and `removed_ids` dropped. A changed id
+    replaces its prior entry WHOLLY (fresh metadata wins, never merged field-by-field); anything
+    not mentioned by the delta carries forward untouched, unlisted, unopened. A changed id with
+    no prior entry is a genuinely new file. Pure and side-effect free."""
+    removed_ids = set(removed_ids or ())
+    changed_by_id = {f["id"]: f for f in changed_files if f.get("id")}
+    seen: set[str] = set()
+    out = []
+    for f in prior_files:
+        fid = f.get("id")
+        if not fid or fid in removed_ids:
+            continue
+        seen.add(fid)
+        out.append(changed_by_id.get(fid, f))
+    for fid, f in changed_by_id.items():
+        if fid not in seen and fid not in removed_ids:
+            out.append(f)
+    return out
+
+
+def drive_reconstructed_listing(prior_files: list[dict], changed_files: list[dict],
+                                removed_ids, *, max_files: int = 500,
+                                exclude_remediated: bool = False,
+                                scope_out: dict | None = None,
+                                inventory_out: list | None = None) -> list[dict]:
+    """A whole-Drive listing's worth of result, WITHOUT walking Drive — see apply_drive_delta for
+    how the estate is reconstructed. `scope_out['reconstructed'] = True` is the only difference
+    from a fresh _search_drive call's contract; everything else (kept/truncated/inventory) means
+    exactly what it means for a live listing, since it is computed the same way, over the same
+    shape of data."""
+    merged = apply_drive_delta(prior_files, changed_files, removed_ids)
+    by_id = {f["id"]: f for f in merged if f.get("id") and _is_scannable_mime(f)}
+    inv_by_id = {f["id"]: f for f in merged if f.get("id")}
+    return _finish_drive_listing(by_id, inv_by_id, raw_seen=len(merged), hit_cap=False,
+                                 max_files=max_files, exclude_remediated=exclude_remediated,
+                                 scope_out=scope_out, inventory_out=inventory_out,
+                                 extra_scope={"reconstructed": True})
 
 
 def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediated: bool = False,
@@ -1767,7 +1867,7 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
           inventory_out: list | None = None,
           folders: list[str] | None = None,
           exclude_folders: list[str] | None = None,
-          progress_cb=None) -> list[dict]:
+          progress_cb=None, drive_delta: dict | None = None) -> list[dict]:
     """List the source. `scope_out`, when given, is filled in with WHAT WAS COVERED.
 
     `inventory_out`, when given, is filled with per-file inventory rows for the NON-scannable
@@ -1927,10 +2027,19 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         if scope_out is not None:
             scope_out["folder_name"] = _folder_name(svc, roots[0])
     elif folder == "root" or folder is None:
-        # No specific folder chosen: search the whole Drive
-        result = _search_drive(svc, max_files or 500, exclude_remediated=exclude_remediated,
-                               scope_out=scope_out, inventory_out=inventory_out,
-                               progress_cb=progress_cb)
+        if drive_delta is not None:
+            # PRD Phase 3: reconstruct the whole-Drive estate from the prior scan's inventory +
+            # a Changes API delta instead of walking Drive — see core._drive_sync_plan for how
+            # `drive_delta` is built and why this is only ever populated for a whole-Drive scan.
+            result = drive_reconstructed_listing(
+                drive_delta["prior_files"], drive_delta["changed"], drive_delta["removed_ids"],
+                max_files=max_files or 500, exclude_remediated=exclude_remediated,
+                scope_out=scope_out, inventory_out=inventory_out)
+        else:
+            # No specific folder chosen: search the whole Drive
+            result = _search_drive(svc, max_files or 500, exclude_remediated=exclude_remediated,
+                                   scope_out=scope_out, inventory_out=inventory_out,
+                                   progress_cb=progress_cb)
     else:
         # ADC/demo mode with a pinned folder. Requests provenance.DRIVE_FIELDS and honours
         # exclude_remediated like the two GIS paths above: this branch asked for a narrower
@@ -3143,7 +3252,13 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
              user: str | None = None, detect_pii: bool = False,
              exclude_remediated: bool = False, inventory_out: list | None = None,
              folders: list[str] | None = None,
-             exclude_folders: list[str] | None = None) -> dict:
+             exclude_folders: list[str] | None = None,
+             drive_delta: dict | None = None) -> dict:
+    # `drive_delta` — PRD Phase 3: {"prior_files", "changed", "removed_ids"}, produced by
+    # core._drive_sync_plan for the scheduled sweep only. When given (whole-Drive scans only —
+    # folder/folders narrows the scope in a way a delta reconstruction can't honor), `_list`
+    # reconstructs the estate from the prior scan's inventory + this delta instead of walking
+    # Drive. None (every other caller) is today's unchanged behavior.
     from store import RULE_CATALOG, _extract_sc  # import here to avoid circular at module load
     rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
@@ -3203,7 +3318,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                      **({"folders": folders} if folders else {}),
                      **({"exclude_folders": exclude_folders} if exclude_folders else {}),
                      exclude_remediated=exclude_remediated, scope_out=scope,
-                     scope_files=_scope_for_listing(user), inventory_out=inventory_out)
+                     scope_files=_scope_for_listing(user), inventory_out=inventory_out,
+                     drive_delta=drive_delta)
         n = len(items)
         # Metadata completeness: derivable from the listing itself before any download.
         exc_missing_optional = sum(
