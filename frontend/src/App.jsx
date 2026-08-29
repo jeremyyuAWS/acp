@@ -295,6 +295,13 @@ export default function App() {
   // fault that does not exist.
   const [stopped, setStopped] = useState(null)
   const [view, setView] = useState('overview')
+  // A pending "open this source's history" redirect from Discover's completion card (the "See
+  // what's changed since your last scan of this source" link) to Integrations' SourceDrawer —
+  // the raw scan-source string (run.source), not a source object; Integrations does its own
+  // sourceKeys() matching, the same lookup SourceDrawer's own data already relies on. Cleared by
+  // Integrations once it has consumed it, so switching away and back to Discover's card doesn't
+  // replay a stale redirect.
+  const [pendingSourceOpen, setPendingSourceOpen] = useState(null)
   const [decisions, setDecisions] = useState({})
   const [triage, setTriage] = useState({})              // per-scan triage, lifted from Remediate for time-travel
   const [assignees, setAssignees] = useState({})        // per-file assignee ({file: email}) for the "Assigned to me" inbox filter (#417 backend)
@@ -1683,6 +1690,7 @@ export default function App() {
 
         {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
           scanId={run?.id}
+          openSourceKey={pendingSourceOpen} onOpenSourceHandled={() => setPendingSourceOpen(null)}
           onOpenAssess={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />}
 
         {view === 'discover' && <Discover sources={sources} files={files} rawFiles={scan?.files ?? []} busy={busy} onScan={requestScan} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} delegations={delegations} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} preflightDegraded={preflightDegraded} preflightCapacityState={preflightCapacityState} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} jobId={discoverJobId} scope={run?.scope || null} run={run} scanList={scanList} runAt={inventorySnapshot({ run, inventory: run?.scope?.inventory || null })} decisions={decisions} setDecisions={setDecisions}
@@ -1690,7 +1698,8 @@ export default function App() {
              it is a secondary action inside Discover now, which is where "get files in front
              of ACP" already lives. Dropping it outright would have removed the only way to try
              a single ad-hoc file without wiring a whole source. */
-          onStop={() => stopScan(liveScanId)} me={me} onViewMonitor={() => setView('monitor')} />}
+          onStop={() => stopScan(liveScanId)} me={me} onViewMonitor={() => setView('monitor')}
+          onOpenSource={(sourceKey) => { setPendingSourceOpen(sourceKey); setView('integrations'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />}
 
         {view === 'assess' && (run ? (
           <>

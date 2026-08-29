@@ -4,7 +4,7 @@ import { SIM } from './sim.js'
 import { googleUserInfo } from './googleIdentity.js'
 import SourceDrawer from './SourceDrawer.jsx'
 import FileDrawer from './FileDrawer.jsx'
-import { filesForSource, inventoryFacts, fmtSize } from './sourceOps.js'
+import { filesForSource, inventoryFacts, fmtSize, sourceKeys } from './sourceOps.js'
 // Single source of truth for the SharePoint/Graph scopes, so this sign-in path and SharePoint.jsx
 // can never request different permissions than IT consented to (read-only; see that module).
 import { SP_SCOPES, getMicrosoftTenants } from './sharepointScopes.js'
@@ -157,9 +157,32 @@ const LOC_KEY = (type) => (type === 'google_drive' ? 'drive'
   : (type === 'sharepoint' || type === 'onedrive') ? 'sharepoint' : null)
 
 export default function Integrations({ sources, files = [], scans = [], onScan, busy, hasDriveToken, hasSPToken, onConnect,
-                                       scanId = null, onOpenAssess = null }) {
+                                       scanId = null, onOpenAssess = null,
+                                       openSourceKey = null, onOpenSourceHandled = null }) {
   const [selSrc,      setSelSrc]      = useState(null)
+  const [selSrcInitialTab, setSelSrcInitialTab] = useState('Overview')
   const [selFile,     setSelFile]     = useState(null)
+
+  // A redirect FROM elsewhere (today: the Discover completion card's "what changed since your
+  // last scan" link) — `openSourceKey` is the raw scan-source string (run.source: 'local',
+  // 'drive', 'sharepoint', a SharePoint site id, …), not a source object, so it goes through the
+  // same `sourceKeys` matching SourceDrawer's own data (runsForSource/filesForSource) already
+  // uses — a second, ad-hoc string comparison here is exactly how the OneDrive/'sharepoint' vs
+  // 'sp-root' mismatch this file's header comment describes would happen again. Opens straight to
+  // the Activity tab, where the real cross-scan diff (getInventoryDiff) actually lives — a normal
+  // "Manage" click below still opens on Overview.
+  useEffect(() => {
+    if (!openSourceKey) return
+    const key = String(openSourceKey).toLowerCase()
+    const match = (sources || []).find((s) => sourceKeys(s).includes(key))
+    if (match) { setSelSrcInitialTab('Activity'); setSelSrc(match) }
+    onOpenSourceHandled?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openSourceKey])
+  // Every OTHER way of opening the drawer (Manage / View files / Details, below) is a direct
+  // click on a specific card — it always means Overview, never a stale Activity tab left over
+  // from an earlier redirect.
+  const openSrc = (s) => { setSelSrcInitialTab('Overview'); setSelSrc(s) }
   const [gdConnecting, setGdConnecting] = useState(false)
   const [gdError,      setGdError]      = useState('')
   const [spConnecting, setSpConnecting] = useState(false)
@@ -443,12 +466,12 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                     <button disabled={busy} onClick={() => onScan(cardScanArg(src))}>
                       {busy ? 'Scanning…' : lastRun ? 'New scan' : 'Run first discovery'}
                     </button>
-                    <button className="ghost small" onClick={() => setSelSrc(src)}>Manage</button>
+                    <button className="ghost small" onClick={() => openSrc(src)}>Manage</button>
                     <details className="srccard-ovf">
                       <summary aria-label="More actions" title="More actions">⋯</summary>
                       <div className="srccard-ovf-menu">
-                        <button type="button" onClick={() => setSelSrc(src)}>View files</button>
-                        <button type="button" onClick={() => setSelSrc(src)}>Details</button>
+                        <button type="button" onClick={() => openSrc(src)}>View files</button>
+                        <button type="button" onClick={() => openSrc(src)}>Details</button>
                       </div>
                     </details>
                   </div>
@@ -517,6 +540,7 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
           row's `source` key — `sp-root` never matched `sharepoint` — and filtering here on
           `f.source === selSrc.id` is what handed it an empty list to call "0 docs". */}
       {selSrc  && <SourceDrawer source={selSrc} files={files} scans={scans} busy={busy}
+                                initialTab={selSrcInitialTab}
                                 onScan={(src) => onScan(cardScanArg(src))}
                                 onOpenAssess={onOpenAssess}
                                 onClose={() => setSelSrc(null)}  onPickFile={setSelFile} />}

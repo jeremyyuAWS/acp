@@ -85,6 +85,7 @@ export default function DiscoverCompleteSummary({
   discoveredAt,
   publishedAt,
   runAt,
+  onViewSourceHistory,
   onAdvance,
   onReviewInventory,
   pendingActions = 0,
@@ -264,6 +265,21 @@ export default function DiscoverCompleteSummary({
                 inventoryDelta.updated > 0 && `${n(inventoryDelta.updated)} re-written on resume`,
                 inventoryDelta.unchanged > 0 && `${n(inventoryDelta.unchanged)} unchanged`,
               ].filter(Boolean).join(' · ')}
+            </div>
+          )}
+          {/* THE redirect, not a second attempt at the answer. Product decision 2026-08-29: this
+              card keeps the narrow, honest "This run's writes" line above (still accurate for
+              what it measures — see its own comment) rather than growing a real cross-scan diff
+              of its own. A reader who actually wants "has this estate changed since I last
+              scanned it" gets sent to the place that can already answer it correctly —
+              SourceDrawer's Activity tab, backed by the real store.get_inventory_diff — instead
+              of a second, differently-scoped number competing with the first on this same card. */}
+          {onViewSourceHistory && (
+            <div style={{ marginTop: 4 }}>
+              <button type="button" className="linklike" style={{ fontSize: 12.5 }}
+                      onClick={onViewSourceHistory}>
+                See what's changed since your last scan of this source →
+              </button>
             </div>
           )}
           {publishedAt && (

@@ -404,3 +404,28 @@ describe('the "Why aren\'t N assessable?" disclosure', () => {
     expect(container.textContent).not.toContain('metadata-only')
   })
 })
+
+describe('the "See what\'s changed" redirect to SourceDrawer', () => {
+  it('renders the link when onViewSourceHistory is provided', () => {
+    const html = render({ ...BASE, onViewSourceHistory: () => {} })
+    // Apostrophe comes through the static-markup output HTML-entity-escaped (&#x27;), not literal
+    // — matched on the text either side of it instead of asserting the exact byte sequence.
+    expect(html).toMatch(/See what.*?s changed since your last scan of this source/)
+  })
+
+  it('omits the link when there is nowhere to send the reader', () => {
+    const html = render(BASE)
+    expect(html).not.toContain('See what')
+  })
+
+  it('calls onViewSourceHistory on click — this card never resolves the source itself', async () => {
+    const onViewSourceHistory = vi.fn()
+    const { container, root } = createTestRoot()
+    await act(async () => {
+      root.render(createElement(DiscoverCompleteSummary, { ...BASE, onViewSourceHistory }))
+    })
+    const link = [...container.querySelectorAll('button')].find((b) => /See what.s changed/.test(b.textContent))
+    await act(async () => { link.click() })
+    expect(onViewSourceHistory).toHaveBeenCalledTimes(1)
+  })
+})
