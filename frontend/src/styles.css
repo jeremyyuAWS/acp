@@ -251,6 +251,19 @@ input:focus-visible, [role="tab"]:focus-visible {
 .delta.up { color: #3B6D11; }
 .delta.down { color: #1F5FA8; }
 @keyframes floatup { 0% { opacity: 0; transform: translateY(10px); } 25% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-22px); } }
+
+/* LiveCounter (Discover live-progress numbers) — a soft green wash on the number itself plus a
+   fading "+N" beside it, distinct from .delta/.floatup above (a floating score badge) since this
+   sits inline in a KPI row, not over a ring. Both are CSS animations, so the global
+   prefers-reduced-motion rule at the top of this file already neutralizes them; LiveCounter.jsx
+   separately skips the JS count-up itself, which that rule cannot reach. */
+.livecounter { display: inline-flex; align-items: baseline; gap: 5px; }
+.livecounter-n { font-variant-numeric: tabular-nums; }
+.livecounter-n.flash { border-radius: 4px; padding: 0 2px; margin: 0 -2px; animation: livecounter-flash 1400ms ease-out; }
+@keyframes livecounter-flash { 0% { background: var(--green-bg,#f0f7e6); } 100% { background: transparent; } }
+.livecounter-delta { font-size: 11px; font-weight: 600; color: var(--green,#1a7f45); animation: livecounter-delta-fade 2000ms ease-out forwards; }
+@keyframes livecounter-delta-fade { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
+
 .heroright { flex: 1; min-width: 230px; }
 .herostats { display: flex; gap: 26px; flex-wrap: wrap; }
 .herostat b { font-size: 25px; font-weight: 600; display: block; line-height: 1.1; }

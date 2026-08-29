@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import WorkerCard from './WorkerCard.jsx'
+import LiveCounter from './LiveCounter.jsx'
+import { nextMilestone } from './discoveryMilestone.js'
 
 // The Discover RUNNING screen: a per-step checklist showing what the discovery agent is doing.
 // This replaces the generic scan-progress banner on the Discover tab so the screen stays scoped
@@ -134,12 +136,27 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   const [stopping, setStopping] = useState(false)
   const [stalledSecs, setStalledSecs] = useState(0)
   const lastTickRef = useRef(Date.now())
+  const milestoneRef = useRef(0)
+  const [milestoneAnnouncement, setMilestoneAnnouncement] = useState(null)
 
   // Reset stall counter whenever a new progress payload arrives.
   useEffect(() => {
     lastTickRef.current = Date.now()
     setStalledSecs(0)
   }, [progress])
+
+  // "1,000 documents found" — the one live-count milestone worth announcing to a screen-reader
+  // user mid-discovery (design review). Runs on every progress tick, same as the stall-counter
+  // reset above, but only actually updates state (and so only re-announces) when a new thousand
+  // is crossed — see discoveryMilestone.js's own reasoning for why this fires once per threshold,
+  // not once per tick.
+  useEffect(() => {
+    const m = nextMilestone(progress?.files_found, milestoneRef.current)
+    if (m != null) {
+      milestoneRef.current = m
+      setMilestoneAnnouncement(`${m.toLocaleString()} documents found`)
+    }
+  }, [progress?.files_found])
 
   useEffect(() => {
     if (!busy || !progress) return
@@ -531,7 +548,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>Listing folders</span>
                 <span style={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {foldersFound !== null ? `${n(foldersFound)} visited` : null}
+                  {foldersFound !== null && <><LiveCounter value={foldersFound} /> visited</>}
                   {(progress.folder_requests_active ?? 0) > 0
                     ? ` · ${n(progress.folder_requests_active)} active` : null}
                 </span>
@@ -542,8 +559,8 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
                 <span>Reading metadata</span>
                 <span style={{ fontVariantNumeric: 'tabular-nums' }}>
                   {(progress.metadata_complete ?? null) !== null
-                    ? `${n(progress.metadata_complete)} complete`
-                    : `${n(filesFound)} found`}
+                    ? <><LiveCounter value={progress.metadata_complete} /> complete</>
+                    : <><LiveCounter value={filesFound} /> found</>}
                   {(progress.metadata_incomplete ?? 0) > 0
                     ? ` · ${n(progress.metadata_incomplete)} incomplete` : null}
                 </span>
@@ -616,6 +633,16 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
                        overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap',
                        border: 0 }}>
           {activeStepLabel ? `Step in progress: ${activeStepLabel}` : null}
+        </span>
+
+        {/* "1,000 documents found" etc. — a separate live region from the one above so a
+            milestone announcement and a step-transition announcement can never race each other
+            into one that clobbers the other; each fires independently, on its own condition. */}
+        <span role="status" aria-live="polite" aria-atomic="true"
+              style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,
+                       overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap',
+                       border: 0 }}>
+          {milestoneAnnouncement}
         </span>
 
         {/* discovery/preflight returned 'degraded' when this scan started (e.g. the durable
