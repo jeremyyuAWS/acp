@@ -14,6 +14,13 @@ uvicorn==0.49.0
 pydantic==2.13.4
 httpx==0.28.1
 redis==5.2.1
+# starlette's Request.form() (multipart/form-data parsing) needs this at runtime and raises an
+# AssertionError without it — not a test-only dependency. /drive/upload (routes/drive.py) is the
+# one route that calls it. Never declared here before; found live 2026-08-29 when a new test for
+# that route's Drive-timeout fix (test_drive_service_timeout.py) was the first thing in this
+# suite to ever actually exercise multipart parsing — CI failed with exactly this AssertionError,
+# meaning the route was very likely broken the same way in production before this line existed.
+python-multipart==0.0.32
 
 # --- Google Drive source (keyless ADC) ---
 google-api-python-client==2.197.0
