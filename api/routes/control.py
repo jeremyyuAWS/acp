@@ -187,7 +187,7 @@ def _empty_capacity(configured: bool) -> dict:
         "max_replicas": None, "cpu_percent": None, "memory_percent": None,
         "metrics_available": False, "measured_at": None,
         "revision_health": None, "revision_provisioning_state": None, "draining_replicas": None,
-        "revision_traffic_percent": None,
+        "revision_traffic_percent": None, "metrics_unavailable_reason": None,
     }
 
 
@@ -229,6 +229,14 @@ def get_capacity():
     stranding it at 0% until someone noticed customer-facing requests were still hitting the old
     one). `active` in list_revisions() and "receiving traffic" are independently-tracked Azure
     states — this field is what closes that specific gap.
+
+    And `metrics_unavailable_reason`, set whenever `metrics_available` is false: `"permission"`
+    (the Azure Monitor call itself failed with a 401/403 — the identity is very likely missing
+    the Monitoring Reader role this docstring already asks for), `"no_data"` (the call succeeded
+    but came back with no data points — CpuPercentage/MemoryPercentage are Microsoft Preview
+    metrics and can simply be unpopulated on a fresh or freshly-scaled resource, nothing wrong),
+    or `"error"` (anything else — network, quota, a transient Azure fault). Before this field
+    existed, all three looked identical: silence. `None` when `metrics_available` is true.
 
     Graceful at every step, matching the rest of this module: `configured: false` when Azure
     isn't set up; `current_replicas`/`cpu_percent`/`memory_percent`/`revision_health`/
@@ -288,8 +296,25 @@ def get_capacity():
             elif metric_name == "MemoryPercentage":
                 result["memory_percent"] = avg
         result["metrics_available"] = result["cpu_percent"] is not None or result["memory_percent"] is not None
-    except Exception:  # noqa: BLE001 — metrics_available stays False; min/max/current_replicas
-        pass           # (already gathered above) are still returned rather than lost.
+        if not result["metrics_available"]:
+            # The call succeeded — this is Azure Monitor genuinely having no data points yet
+            # (CpuPercentage/MemoryPercentage are Microsoft Preview metrics and can simply be
+            # unpopulated on a freshly-created or freshly-scaled resource), not a permission or
+            # network problem. Distinct from the except branch below on purpose: "we asked and
+            # got nothing back" and "we couldn't ask at all" want different operator responses.
+            result["metrics_unavailable_reason"] = "no_data"
+    except Exception as e:  # noqa: BLE001 — metrics_available stays False; min/max/current_replicas
+        # `status_code` is the standard azure-core HttpResponseError attribute — checked via
+        # getattr rather than an isinstance import, since this module only imports the Azure SDK
+        # lazily inside _az_client()/_monitor_client() and every other except clause here follows
+        # the same "no top-level Azure import" convention. 401/403 is the single most actionable
+        # case: the identity is very likely missing the Monitoring Reader role this endpoint's
+        # own module docstring already tells an operator to grant. Anything else (network, quota,
+        # a genuinely transient Azure error) is not distinguishable this cheaply and stays "error"
+        # rather than guessing at a category the exception doesn't actually support.
+        status = getattr(e, "status_code", None)
+        result["metrics_unavailable_reason"] = "permission" if status in (401, 403) else "error"
+        # (already gathered above) are still returned rather than lost.
 
     try:
         revisions = client.container_apps_revisions.list_revisions(_AZ_RG, _AZ_APP)

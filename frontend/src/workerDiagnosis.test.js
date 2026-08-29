@@ -176,4 +176,35 @@ describe('diagnoseWorkerHealth', () => {
   it('returns null for the ordinary in-process mode with no capacity/replicas data at all', () => {
     expect(diagnoseWorkerHealth({ snap: okSnap, nowMs: NOW })).toBeNull()
   })
+
+  it('warns when metrics are unavailable specifically due to a permission error', () => {
+    const snap = { ...okSnap }
+    const capacity = { configured: true, current_replicas: 2, metrics_available: false,
+                        metrics_unavailable_reason: 'permission' }
+    const d = diagnoseWorkerHealth({ snap, capacity, nowMs: NOW })
+    expect(d.severity).toBe('warning')
+    expect(d.message).toMatch(/Monitoring Reader role/)
+  })
+
+  it('does not flag metrics_unavailable_reason "no_data" — expected right after a cold start', () => {
+    const snap = { ...okSnap }
+    const capacity = { configured: true, current_replicas: 2, metrics_available: false,
+                        metrics_unavailable_reason: 'no_data' }
+    expect(diagnoseWorkerHealth({ snap, capacity, nowMs: NOW })).toBeNull()
+  })
+
+  it('does not flag metrics_unavailable_reason "error" — treated as transient, not actionable', () => {
+    const snap = { ...okSnap }
+    const capacity = { configured: true, current_replicas: 2, metrics_available: false,
+                        metrics_unavailable_reason: 'error' }
+    expect(diagnoseWorkerHealth({ snap, capacity, nowMs: NOW })).toBeNull()
+  })
+
+  it('prioritizes the zero-replicas-while-min-configured rule over the permission warning', () => {
+    const snap = { ...okSnap }
+    const capacity = { configured: true, current_replicas: 0, metrics_unavailable_reason: 'permission' }
+    const replicas = { configured: true, min_replicas: 2, max_replicas: 5 }
+    const d = diagnoseWorkerHealth({ snap, capacity, replicas, nowMs: NOW })
+    expect(d.message).toMatch(/none are currently running/)
+  })
 })

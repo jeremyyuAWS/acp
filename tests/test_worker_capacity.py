@@ -186,6 +186,88 @@ def test_metrics_unavailable_does_not_block_replica_data(open_client, monkeypatc
     assert body["cpu_percent"] is None
     assert body["memory_percent"] is None
     assert body["metrics_available"] is False
+    assert body["metrics_unavailable_reason"] == "no_data"
+
+
+# --- metrics_unavailable_reason (2026-08-29) --------------------------------------------------
+# Before this field existed, a missing Monitoring Reader grant, a transient Azure error, and
+# "genuinely no data points yet" all looked identical: metrics_available: false, no explanation.
+
+def test_metrics_available_true_leaves_the_reason_none(open_client, monkeypatch):
+    import routes.control as control_module
+    monkeypatch.setattr(control_module, "_AZ_CONFIGURED", True)
+    fake_app = _fake_app()
+    az_client = SimpleNamespace(
+        container_apps=SimpleNamespace(get=lambda rg, name: fake_app),
+        container_apps_revision_replicas=SimpleNamespace(
+            list_replicas=lambda rg, name, rev: SimpleNamespace(value=[])),
+    )
+    monkeypatch.setattr(control_module, "_az_client", lambda: az_client)
+    cpu_metric = SimpleNamespace(
+        name=SimpleNamespace(value="CpuPercentage"),
+        timeseries=[SimpleNamespace(data=[SimpleNamespace(average=10.0)])])
+    monkeypatch.setattr(control_module, "_monitor_client",
+                         lambda: SimpleNamespace(metrics=SimpleNamespace(
+                             list=lambda *a, **kw: SimpleNamespace(value=[cpu_metric]))))
+
+    r = open_client.get("/control/workers/capacity")
+    body = r.json()
+    assert body["metrics_available"] is True
+    assert body["metrics_unavailable_reason"] is None
+
+
+def test_metrics_unavailable_reason_is_permission_on_a_401_or_403(open_client, monkeypatch):
+    import routes.control as control_module
+    monkeypatch.setattr(control_module, "_AZ_CONFIGURED", True)
+    fake_app = _fake_app()
+    az_client = SimpleNamespace(
+        container_apps=SimpleNamespace(get=lambda rg, name: fake_app),
+        container_apps_revision_replicas=SimpleNamespace(
+            list_replicas=lambda rg, name, rev: SimpleNamespace(value=[])),
+    )
+    monkeypatch.setattr(control_module, "_az_client", lambda: az_client)
+
+    def _raise_403(*a, **kw):
+        exc = RuntimeError("(AuthorizationFailed) The client does not have authorization")
+        exc.status_code = 403
+        raise exc
+
+    monkeypatch.setattr(control_module, "_monitor_client",
+                         lambda: SimpleNamespace(metrics=SimpleNamespace(list=_raise_403)))
+
+    r = open_client.get("/control/workers/capacity")
+    body = r.json()
+    assert body["metrics_available"] is False
+    assert body["metrics_unavailable_reason"] == "permission"
+
+
+def test_metrics_unavailable_reason_is_error_for_anything_else(open_client, monkeypatch):
+    """A network timeout, a 500, or any exception with no recognizable status_code must not be
+    misreported as a permission problem — that would send an operator chasing the wrong fix."""
+    import routes.control as control_module
+    monkeypatch.setattr(control_module, "_AZ_CONFIGURED", True)
+    fake_app = _fake_app()
+    az_client = SimpleNamespace(
+        container_apps=SimpleNamespace(get=lambda rg, name: fake_app),
+        container_apps_revision_replicas=SimpleNamespace(
+            list_replicas=lambda rg, name, rev: SimpleNamespace(value=[])),
+    )
+    monkeypatch.setattr(control_module, "_az_client", lambda: az_client)
+    monkeypatch.setattr(control_module, "_monitor_client",
+                         lambda: SimpleNamespace(metrics=SimpleNamespace(
+                             list=lambda *a, **kw: (_ for _ in ()).throw(TimeoutError("timed out")))))
+
+    r = open_client.get("/control/workers/capacity")
+    body = r.json()
+    assert body["metrics_available"] is False
+    assert body["metrics_unavailable_reason"] == "error"
+
+
+def test_metrics_unavailable_reason_stays_none_when_azure_is_not_configured(open_client, monkeypatch):
+    import routes.control as control_module
+    monkeypatch.setattr(control_module, "_AZ_CONFIGURED", False)
+    r = open_client.get("/control/workers/capacity")
+    assert r.json()["metrics_unavailable_reason"] is None
 
 
 def test_replica_list_falls_back_to_direct_iteration_when_no_value_attribute(open_client, monkeypatch):
