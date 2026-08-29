@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 @pytest.fixture()
 def core_mod(monkeypatch):
     import core
+    import scanner
     calls = {"scans": [], "saved": 0, "finalized": 0, "reloads": 0}
 
     class _Store:
@@ -36,6 +37,7 @@ def core_mod(monkeypatch):
             self.schedule = {"enabled": True, "interval_minutes": 5,
                              "owner_email": "a@b.c", "source": "drive"}
             self.sweeps = []
+            self.sync_cursors: dict = {}   # source -> {"page_token": ..., "owner_email": ...}
         def get_schedule(self): return dict(self.schedule)
         def get_ai_enabled(self): return False
         def save_scan(self, report): calls["saved"] += 1; return "sid-1"
@@ -43,6 +45,15 @@ def core_mod(monkeypatch):
         # is now part of what _do_scheduled_scan is responsible for (see the third section
         # below), so a double that omitted it would only prove the method is never called.
         def record_sweep_outcome(self, **kw): self.sweeps.append(kw)
+        # PRD Phase 3: mirrors Store.get_sync_cursor/save_sync_cursor. A fresh instance starts
+        # with no cursor, so every pre-existing test below (none of which pre-seeds one) takes
+        # _drive_sync_gate's "no baseline yet — seed one, never skip" branch and runs exactly as
+        # before this feature existed.
+        def get_sync_cursor(self, source):
+            return dict(self.sync_cursors[source]) if source in self.sync_cursors else None
+        def save_sync_cursor(self, source, owner_email, page_token):
+            self.sync_cursors[source] = {"source": source, "owner_email": owner_email,
+                                         "page_token": page_token}
 
     store = _Store()
     monkeypatch.setattr(core, "get_store", lambda: store)
@@ -56,6 +67,14 @@ def core_mod(monkeypatch):
         return {"summary": {"files": 1}}
 
     monkeypatch.setattr(core, "run_scan", _scan)
+
+    # Hermetic doubles for _drive_sync_gate's own calls (it imports these from `scanner` at
+    # call time) — no real Drive API access from this test module. Default: seeding a fresh
+    # cursor returns "seed-token", and a check against an existing cursor finds no changes;
+    # individual tests override drive_changes_since to exercise the other branches.
+    monkeypatch.setattr(scanner, "_drive_service", lambda token=None: object())
+    monkeypatch.setattr(scanner, "drive_start_page_token", lambda svc: "seed-token")
+    monkeypatch.setattr(scanner, "drive_changes_since", lambda svc, token: ([], 0, "next-token"))
     return core, store, calls
 
 
@@ -151,6 +170,86 @@ def test_a_disabled_schedule_records_nothing(core_mod):
     store.schedule["enabled"] = False
     core._do_scheduled_scan()
     assert store.sweeps == []
+
+
+# ── 4. PRD Phase 3 — the Drive sync gate ──────────────────────────────────────────────
+
+def test_first_ever_sweep_has_nothing_to_compare_against_so_it_scans_and_seeds_a_cursor(core_mod):
+    core, store, calls = core_mod
+    core._do_scheduled_scan()
+    assert calls["scans"] == ["drive"], "no cursor yet — nothing to skip, so it must scan"
+    assert store.sync_cursors["drive"]["page_token"] == "seed-token"
+
+
+def test_a_cursor_with_no_changes_skips_the_scan_entirely(core_mod, monkeypatch):
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive"] = {"page_token": "tok-1"}
+    monkeypatch.setattr(scanner, "drive_changes_since", lambda svc, token: ([], 0, "tok-2"))
+    core._do_scheduled_scan()
+    assert calls["scans"] == [], "nothing changed — a full re-scan must not run"
+    assert calls["saved"] == 0
+    assert store.sync_cursors["drive"]["page_token"] == "tok-2", "the cursor still advances"
+
+
+def test_a_skipped_sweep_is_recorded_distinctly_from_a_zero_file_scan(core_mod, monkeypatch):
+    """skipped=True with files=None must never look like 'a scan ran and saw 0 files' —
+    those already mean something different (a legitimately small ADC-scoped estate)."""
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive"] = {"page_token": "tok-1"}
+    monkeypatch.setattr(scanner, "drive_changes_since", lambda svc, token: ([], 0, "tok-2"))
+    core._do_scheduled_scan()
+    rec = store.sweeps[-1]
+    assert rec["ok"] is True
+    assert rec["skipped"] is True
+    assert rec.get("files") is None
+    assert rec.get("scan_id") is None
+
+
+def test_a_cursor_with_changes_runs_the_full_scan(core_mod, monkeypatch):
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive"] = {"page_token": "tok-1"}
+    monkeypatch.setattr(scanner, "drive_changes_since",
+                        lambda svc, token: ([{"name": "changed.pdf"}], 0, "tok-2"))
+    core._do_scheduled_scan()
+    assert calls["scans"] == ["drive"], "a real change must trigger the full re-scan, not a skip"
+    assert store.sync_cursors["drive"]["page_token"] == "tok-2"
+
+
+def test_a_cursor_with_removed_files_also_runs_the_full_scan(core_mod, monkeypatch):
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive"] = {"page_token": "tok-1"}
+    monkeypatch.setattr(scanner, "drive_changes_since", lambda svc, token: ([], 3, "tok-2"))
+    core._do_scheduled_scan()
+    assert calls["scans"] == ["drive"], "a removal is still a change — must not be skipped"
+
+
+def test_a_failed_change_check_falls_back_to_a_full_scan_never_a_skip(core_mod, monkeypatch):
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive"] = {"page_token": "tok-1"}
+    monkeypatch.setattr(scanner, "drive_changes_since",
+                        lambda svc, token: (_ for _ in ()).throw(RuntimeError("HttpError 404")))
+    core._do_scheduled_scan()
+    assert calls["scans"] == ["drive"], "an uncertain check must never cause a skip"
+    # the failing scan itself is still recorded as a failure, not silently swallowed
+    assert store.sweeps[-1]["ok"] is False
+
+
+def test_a_non_drive_source_never_consults_the_gate(core_mod, monkeypatch):
+    import scanner
+    core, store, calls = core_mod
+    store.schedule["source"] = "local"
+
+    def _boom(*a, **k):
+        raise AssertionError("the drive sync gate must not run for a non-drive source")
+    monkeypatch.setattr(scanner, "drive_changes_since", _boom)
+    monkeypatch.setattr(scanner, "drive_start_page_token", _boom)
+    core._do_scheduled_scan()
+    assert calls["scans"] == ["local"]
 
 
 # ── the happy path still works ────────────────────────────────────────────────────────

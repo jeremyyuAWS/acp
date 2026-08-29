@@ -344,6 +344,62 @@ def _normalize(files: list[dict]) -> list[dict]:
     return result
 
 
+# --- PRD Phase 3: Drive incremental sync (changes.list) -------------------------
+# The scheduled sweep (core._do_scheduled_scan) re-lists Drive's ENTIRE estate on every
+# fire today, even when nothing changed. Drive's Changes API answers "what changed since
+# a prior checkpoint" directly, so a sweep can check cheaply and skip the expensive full
+# scan when the answer is "nothing" — see core._drive_sync_gate for how this is used.
+#
+# Deliberately NOT plumbed into the scan pipeline itself (run_scan/_list still always do a
+# full listing+download+analyse pass when they run at all): _list's scope/inventory/
+# truncation bookkeeping is exactly the kind of estate-size accounting CLAUDE.md's own
+# incident history warns is easy to get subtly wrong for a PARTIAL result. Gating whether
+# the existing, already-correct full scan runs is the safe slice; feeding a partial item
+# list into that pipeline is a larger, separate piece of work.
+
+def drive_start_page_token(svc) -> str:
+    """The current 'blank slate' cursor: changes.list(pageToken=this) returns nothing until
+    something changes henceforth. Used to seed a fresh baseline when no cursor is stored yet."""
+    return svc.changes().getStartPageToken().execute(num_retries=5)["startPageToken"]
+
+
+# Same fields _search_drive/_normalize already read (provenance.DRIVE_FIELDS), plus `trashed`
+# — changes.list is the only listing path that needs it: a trashed file is still technically
+# present as far as `_search_drive`'s live q= filters are concerned (they exclude trashed at
+# query time), but a change EVENT for a trashed file must be told apart from a real edit here.
+_DRIVE_CHANGES_FIELDS = ("nextPageToken,newStartPageToken,"
+                        f"changes(fileId,removed,file({provenance.DRIVE_FIELDS},trashed))")
+
+
+def drive_changes_since(svc, page_token: str) -> tuple[list[dict], int, str]:
+    """Page through Drive's changes.list from `page_token` to the end. Returns
+    (changed items — same shape _search_drive produces, via _normalize — a count of files
+    removed or trashed since `page_token`, and the new page token to persist for next time).
+
+    Raises the SDK's own HttpError on an expired or invalid page token (Drive expires an
+    unused one after ~1 week — a 404) or any other API failure; the caller decides how to
+    degrade (core._drive_sync_gate always falls back to a full scan rather than trusting a
+    failed check)."""
+    raw_files: list[dict] = []
+    removed = 0
+    token = page_token
+    while True:
+        resp = svc.changes().list(pageToken=token, fields=_DRIVE_CHANGES_FIELDS,
+                                  includeItemsFromAllDrives=True, supportsAllDrives=True,
+                                  spaces="drive").execute(num_retries=5)
+        for ch in resp.get("changes", []):
+            f = ch.get("file")
+            if ch.get("removed") or (f and f.get("trashed")):
+                removed += 1
+                continue
+            if f:
+                raw_files.append(f)
+        if "nextPageToken" in resp:
+            token = resp["nextPageToken"]
+            continue
+        return _normalize(raw_files), removed, resp["newStartPageToken"]
+
+
 def _find_remediated_folder_id(svc) -> str | None:
     """Look up the configured Drive mirror folder (default 'Remediated') WITHOUT
     creating it (unlike handlers.ensure_remediated_folder) — a discovery-time

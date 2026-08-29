@@ -21,8 +21,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 def sched(monkeypatch, isolated_store):
     """core wired to an isolated store, with the schedule on and pointed at drive."""
     import core
+    import scanner
     monkeypatch.setattr(core, "store", isolated_store)
     isolated_store.save_schedule(True, 5, owner="owner@example.com", source="drive")
+    # This file's whole point is exercising the FAILURE-RECORDING plumbing over a real store,
+    # not real Drive access — it already keeps that boundary by mocking core.run_scan in every
+    # test below. PRD Phase 3's sync gate runs before run_scan for source='drive' though, and
+    # left unmocked it would build a REAL googleapiclient/ADC client on every test here. Keep
+    # the same hermetic boundary: no stored cursor yet in a fresh isolated_store, so the gate
+    # takes its "seed a baseline, never skip" branch — exactly the pre-Phase-3 behavior these
+    # tests were written against.
+    monkeypatch.setattr(scanner, "_drive_service", lambda token=None: object())
+    monkeypatch.setattr(scanner, "drive_start_page_token", lambda svc: "seed-token")
     return core, isolated_store
 
 
