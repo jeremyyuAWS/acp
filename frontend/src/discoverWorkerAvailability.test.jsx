@@ -225,3 +225,49 @@ describe('Azure capacity-evidence wiring on Discover', () => {
     expect(c.textContent).not.toMatch(/running now/)
   })
 })
+
+// Revision health + draining replicas (2026-08-29) — the third capacity fact, threaded through
+// the SAME GET /control/workers/capacity fetch, visible to everyone (no admin gate, matching
+// current_replicas/cpu_percent/memory_percent above).
+describe('Azure revision-health wiring on Discover', () => {
+  const distributed = { workers: 8, worker_tier_alive: true, suggested_workers: 4, runtime_mode: 'distributed' }
+
+  it('shows the active revision health and draining-replica count for a non-admin', async () => {
+    getJobs.mockResolvedValue(distributed)
+    getWorkerReplicas.mockResolvedValue({ configured: true, min_replicas: 2, max_replicas: 5 })
+    getWorkerCapacity.mockResolvedValue({ configured: true, current_replicas: 3, cpu_percent: 20,
+                                          memory_percent: 40, metrics_available: true,
+                                          revision_health: 'Healthy', revision_provisioning_state: 'Provisioned',
+                                          draining_replicas: 2 })
+    const c = await mount({ me: { email: 'a@b.com', is_admin: false } })
+    await settle()
+    expect(c.textContent).toMatch(/Revision healthy/)
+    expect(c.textContent).toMatch(/2 replicas draining from an older revision/)
+  })
+
+  it('omits the draining line entirely when nothing is draining', async () => {
+    getJobs.mockResolvedValue(distributed)
+    getWorkerReplicas.mockResolvedValue({ configured: true, min_replicas: 2, max_replicas: 5 })
+    getWorkerCapacity.mockResolvedValue({ configured: true, current_replicas: 3, cpu_percent: null,
+                                          memory_percent: null, metrics_available: false,
+                                          revision_health: 'Healthy', revision_provisioning_state: 'Provisioned',
+                                          draining_replicas: 0 })
+    const c = await mount({ me: { email: 'a@b.com', is_admin: false } })
+    await settle()
+    expect(c.textContent).toMatch(/Revision healthy/)
+    expect(c.textContent).not.toMatch(/draining/)
+  })
+
+  it('omits revision health entirely when the backend could not read it', async () => {
+    getJobs.mockResolvedValue(distributed)
+    getWorkerReplicas.mockResolvedValue({ configured: true, min_replicas: 2, max_replicas: 5 })
+    getWorkerCapacity.mockResolvedValue({ configured: true, current_replicas: 3, cpu_percent: null,
+                                          memory_percent: null, metrics_available: false,
+                                          revision_health: null, revision_provisioning_state: null,
+                                          draining_replicas: null })
+    const c = await mount({ me: { email: 'a@b.com', is_admin: false } })
+    await settle()
+    expect(c.textContent).not.toMatch(/Revision/)
+    expect(c.textContent).not.toMatch(/draining/)
+  })
+})

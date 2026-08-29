@@ -197,3 +197,127 @@ def test_replica_list_falls_back_to_direct_iteration_when_no_value_attribute(ope
 
     r = open_client.get("/control/workers/capacity")
     assert r.json()["current_replicas"] == 3
+
+
+# --- Revision health / draining-replicas (2026-08-29) ------------------------------------------
+# `container_apps_revisions.list_revisions()` is a THIRD Azure call, alongside the container-app
+# lookup and the replica-count call above — its own try/except so a failure here never loses the
+# min/max/current_replicas/metrics data the other two calls already gathered.
+
+def _fake_revision(name, active, health_state=None, provisioning_state=None, replicas=0,
+                    nested=True):
+    """`nested=True` puts health_state/provisioning_state/replicas/active under `.properties`
+    (the shape _rev_field() tries first, matching this file's `app.properties.template.scale`
+    convention); `nested=False` puts them at the top level, proving the fallback path works too —
+    the exact uncertainty _rev_field()'s docstring in control.py explains."""
+    fields = dict(active=active, health_state=health_state,
+                  provisioning_state=provisioning_state, replicas=replicas)
+    if nested:
+        return SimpleNamespace(properties=SimpleNamespace(**fields))
+    return SimpleNamespace(properties=SimpleNamespace(), **fields)
+
+
+def _capacity_client(fake_app, revisions):
+    return SimpleNamespace(
+        container_apps=SimpleNamespace(get=lambda rg, name: fake_app),
+        container_apps_revision_replicas=SimpleNamespace(
+            list_replicas=lambda rg, name, rev: SimpleNamespace(value=[])),
+        container_apps_revisions=SimpleNamespace(
+            list_revisions=lambda rg, name: SimpleNamespace(value=revisions)),
+    )
+
+
+def _no_metrics_monitor():
+    return SimpleNamespace(metrics=SimpleNamespace(list=lambda *a, **kw: SimpleNamespace(value=[])))
+
+
+def test_reports_active_revision_health_and_sums_draining_replicas_on_old_revisions(
+        open_client, monkeypatch):
+    import routes.control as control_module
+    monkeypatch.setattr(control_module, "_AZ_CONFIGURED", True)
+    fake_app = _fake_app(latest_revision="acp-worker--rev2")
+    revisions = [
+        _fake_revision("acp-worker--rev1", active=False, replicas=2),   # still draining
+        _fake_revision("acp-worker--rev2", active=True, health_state="Healthy",
+                        provisioning_state="Provisioned", replicas=3),
+    ]
+    monkeypatch.setattr(control_module, "_az_client", lambda: _capacity_client(fake_app, revisions))
+    monkeypatch.setattr(control_module, "_monitor_client", _no_metrics_monitor)
+
+    r = open_client.get("/control/workers/capacity")
+    body = r.json()
+    assert body["revision_health"] == "Healthy"
+    assert body["revision_provisioning_state"] == "Provisioned"
+    assert body["draining_replicas"] == 2
+
+
+def test_draining_replicas_is_zero_not_none_when_only_the_active_revision_holds_replicas(
+        open_client, monkeypatch):
+    import routes.control as control_module
+    monkeypatch.setattr(control_module, "_AZ_CONFIGURED", True)
+    fake_app = _fake_app()
+    revisions = [_fake_revision("acp-worker--rev1", active=True, health_state="Healthy",
+                                 provisioning_state="Provisioned", replicas=1)]
+    monkeypatch.setattr(control_module, "_az_client", lambda: _capacity_client(fake_app, revisions))
+    monkeypatch.setattr(control_module, "_monitor_client", _no_metrics_monitor)
+
+    r = open_client.get("/control/workers/capacity")
+    body = r.json()
+    assert body["draining_replicas"] == 0
+    assert body["revision_health"] == "Healthy"
+
+
+def test_falls_back_to_flattened_top_level_revision_fields_when_not_nested_under_properties(
+        open_client, monkeypatch):
+    """Proves _rev_field()'s fallback: if the real SDK ever returns these fields at the top
+    level instead of nested under `.properties`, health/draining must still be read correctly."""
+    import routes.control as control_module
+    monkeypatch.setattr(control_module, "_AZ_CONFIGURED", True)
+    fake_app = _fake_app()
+    revisions = [
+        _fake_revision("acp-worker--rev1", active=False, replicas=1, nested=False),
+        _fake_revision("acp-worker--rev2", active=True, health_state="Unhealthy",
+                        provisioning_state="Failed", replicas=1, nested=False),
+    ]
+    monkeypatch.setattr(control_module, "_az_client", lambda: _capacity_client(fake_app, revisions))
+    monkeypatch.setattr(control_module, "_monitor_client", _no_metrics_monitor)
+
+    r = open_client.get("/control/workers/capacity")
+    body = r.json()
+    assert body["revision_health"] == "Unhealthy"
+    assert body["revision_provisioning_state"] == "Failed"
+    assert body["draining_replicas"] == 1
+
+
+def test_revision_health_stays_none_when_list_revisions_fails_without_losing_other_data(
+        open_client, monkeypatch):
+    """A partial failure in the THIRD Azure call must not lose what the first two DID return."""
+    import routes.control as control_module
+    monkeypatch.setattr(control_module, "_AZ_CONFIGURED", True)
+    fake_app = _fake_app(min_replicas=2, max_replicas=6)
+    az_client = SimpleNamespace(
+        container_apps=SimpleNamespace(get=lambda rg, name: fake_app),
+        container_apps_revision_replicas=SimpleNamespace(
+            list_replicas=lambda rg, name, rev: SimpleNamespace(value=[object()])),
+        container_apps_revisions=SimpleNamespace(
+            list_revisions=lambda rg, name: (_ for _ in ()).throw(RuntimeError("no permission"))),
+    )
+    monkeypatch.setattr(control_module, "_az_client", lambda: az_client)
+    monkeypatch.setattr(control_module, "_monitor_client", _no_metrics_monitor)
+
+    r = open_client.get("/control/workers/capacity")
+    body = r.json()
+    assert body["min_replicas"] == 2
+    assert body["current_replicas"] == 1
+    assert body["revision_health"] is None
+    assert body["draining_replicas"] is None
+
+
+def test_capacity_unconfigured_response_includes_revision_health_keys_as_none(open_client, monkeypatch):
+    import routes.control as control_module
+    monkeypatch.setattr(control_module, "_AZ_CONFIGURED", False)
+    r = open_client.get("/control/workers/capacity")
+    body = r.json()
+    assert body["revision_health"] is None
+    assert body["revision_provisioning_state"] is None
+    assert body["draining_replicas"] is None
