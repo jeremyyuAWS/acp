@@ -18,8 +18,9 @@ const HEARTBEAT_AGING_THRESHOLD_S = 60
 
 // Round-number threshold for "loaded enough that more replicas or a bigger SKU is worth
 // considering" — deliberately not exact tuning, just the point past which "fine" stops being the
-// obvious read of the number.
-const HIGH_UTILIZATION_PCT = 80
+// obvious read of the number. Exported so UtilizationBar.jsx's color bands agree with this rule
+// about what counts as "hot" — the bar and the diagnosis text must never disagree.
+export const HIGH_UTILIZATION_PCT = 80
 
 /** Returns `{ severity: 'warning'|'critical', message: string }` for the single most actionable
  *  problem, or `null` when nothing in the passed-in signals looks wrong. `snap` is the GET /jobs-
