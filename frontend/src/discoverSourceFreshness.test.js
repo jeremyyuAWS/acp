@@ -74,4 +74,26 @@ describe('sourceFreshnessBadge (pure label function)', () => {
     expect(sourceFreshnessBadge({ state: 'unavailable' }).label)   // no error code at all
       .toBe('source unreachable')
   })
+
+  // PRD Phase 3's fuller vocabulary — ACP's own import/publish state, layered by the backend
+  // (source_staleness.classify_sync_state) on top of the four states above.
+  it('flags a file still being imported', () => {
+    expect(sourceFreshnessBadge({ state: 'importing' }).label).toBe('importing…')
+  })
+
+  it('flags a failed import', () => {
+    expect(sourceFreshnessBadge({ state: 'import_failed' }).label).toBe('import failed')
+  })
+
+  it('flags publish pending — a fix exists and has not been published yet', () => {
+    expect(sourceFreshnessBadge({ state: 'publish_pending' }).label).toBe('publish pending')
+  })
+
+  it('flags a conflict — the source changed and ACP holds an unpublished fix', () => {
+    expect(sourceFreshnessBadge({ state: 'conflict' }).label).toBe('⚠ conflict')
+  })
+
+  it("flags ACP's version as newer than the live source", () => {
+    expect(sourceFreshnessBadge({ state: 'acp_newer' }).label).toBe('ACP version newer')
+  })
 })

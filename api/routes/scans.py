@@ -1092,10 +1092,13 @@ def remediation_status(sid: str, request: Request):
 
 @router.get("/scans/{sid}/source-status")
 def source_status(sid: str, request: Request):
-    """Has each file's SOURCE changed in Drive since ACP scanned it?
+    """Has each file's SOURCE changed since ACP scanned it, and — PRD Phase 3 — where does ACP's
+    own side of the round trip stand: importing, failed, an unpublished fix, or the two sides
+    actively disagreeing?
 
     Compares the source's CURRENT modifiedTime (fetched now with the caller's read-only Drive
-    creds) to the baseline captured at scan time (file_records.source_modified). Owner-scoped.
+    creds) to the baseline captured at scan time (file_records.source_modified), then layers
+    ACP's import/publish state on top (source_staleness.classify_sync_state). Owner-scoped.
 
     A file with no baseline or no Drive id — and EVERY file when the scan's source isn't Drive —
     is 'untracked', never a false 'unchanged'. A source that 404s/403s is 'unavailable', not
@@ -1106,6 +1109,7 @@ def source_status(sid: str, request: Request):
     if scan is None:
         raise HTTPException(404, "scan not found")
     files = scan.get("files") or []
+    run_status = (scan.get("run") or {}).get("status")
     source_is_drive = (scan.get("run") or {}).get("source") == "drive"
     trackable = source_is_drive and any(f.get("source_modified") and f.get("drive_file_id") for f in files)
     svc = core.drive_service(request) if trackable else None   # 401 in GIS mode without X-Drive-Token
@@ -1114,7 +1118,8 @@ def source_status(sid: str, request: Request):
     for f in files:
         baseline, drive_id = f.get("source_modified"), f.get("drive_file_id")
         if not source_is_drive or not drive_id or not baseline:
-            row = _ss.classify_file(f, None, source_is_drive=source_is_drive)
+            row = _ss.classify_sync_state(f, None, source_is_drive=source_is_drive,
+                                          run_status=run_status)
         else:
             current, err = None, None
             try:
@@ -1125,11 +1130,16 @@ def source_status(sid: str, request: Request):
                 err = "not_found" if status == 404 else "forbidden" if status == 403 else "drive_error"
             except Exception:
                 err = "drive_error"   # a bad file must never 500 the batch
-            row = _ss.classify_file(f, current, source_is_drive=source_is_drive, fetch_error=err)
+            row = _ss.classify_sync_state(f, current, source_is_drive=source_is_drive,
+                                          fetch_error=err, run_status=run_status)
         rows.append({"file": f["file"], "drive_file_id": drive_id, **row})
     count = lambda st: sum(1 for r in rows if r["state"] == st)
     return {"scan_id": sid, "stale_count": count("stale"), "untracked_count": count("untracked"),
-            "unavailable_count": count("unavailable"), "files": rows}
+            "unavailable_count": count("unavailable"), "importing_count": count("importing"),
+            "import_failed_count": count("import_failed"),
+            "publish_pending_count": count("publish_pending"),
+            "conflict_count": count("conflict"), "acp_newer_count": count("acp_newer"),
+            "files": rows}
 
 
 @router.get("/scans/{sid}/inventory")

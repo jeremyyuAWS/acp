@@ -1,6 +1,8 @@
 """GET /scans/{sid}/source-status — end to end through the real gate, with a FAKE Drive service
 (monkeypatched core.drive_service) so no network or credentials are involved. Pins the four
-states, the counts, owner isolation (404), and that a non-Drive scan never touches Drive."""
+original states, the PRD Phase 3 fuller vocabulary (importing/import_failed/publish_pending/
+conflict/acp_newer), the counts, owner isolation (404), and that a non-Drive scan never touches
+Drive."""
 from __future__ import annotations
 
 import sys
@@ -134,3 +136,84 @@ def test_sharepoint_scan_is_all_untracked_and_never_calls_drive(gated_client, is
     res = gated_client(OWNER).get("/scans/scan3/source-status")
     assert res.status_code == 200
     assert all(r["state"] == "untracked" for r in res.json()["files"])
+
+
+# ── PRD Phase 3's fuller vocabulary — end to end through the real route ──────────────────────
+#
+# save_scan (used by _seed) always writes scan_runs.status='done' and a plain file status, with
+# no remediated_at/published_at — record_remediation/record_publish/set_scan_status below layer
+# on the import/publish state these tests need, exactly the way the real handlers do.
+
+def test_importing_when_the_scan_is_running_and_the_file_has_no_result_yet(
+        gated_client, isolated_store, monkeypatch):
+    import core
+    _seed(isolated_store, "scan4", OWNER, [
+        {"file": "queued.docx", "engine": "n/a", "status": "discovered", "score": None,
+         "compliant": 0, "skipped_rules": 0, "issues": [], "drive_file_id": None,
+         "source_modified": None},
+    ])
+    isolated_store.set_scan_status("scan4", "running")
+    monkeypatch.setattr(core, "drive_service", lambda request=None: _FakeSvc())
+    res = gated_client(OWNER).get("/scans/scan4/source-status")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["files"][0]["state"] == "importing"
+    assert body["importing_count"] == 1
+
+
+def test_import_failed_for_an_errored_file(gated_client, isolated_store, monkeypatch):
+    import core
+    _seed(isolated_store, "scan5", OWNER, [
+        {"file": "broken.docx", "engine": "n/a", "status": "error", "score": None,
+         "compliant": 0, "skipped_rules": 0, "issues": [], "drive_file_id": None,
+         "source_modified": None},
+    ])
+    monkeypatch.setattr(core, "drive_service", lambda request=None: _FakeSvc())
+    res = gated_client(OWNER).get("/scans/scan5/source-status")
+    body = res.json()
+    assert body["files"][0]["state"] == "import_failed"
+    assert body["import_failed_count"] == 1
+
+
+def test_publish_pending_for_a_remediated_but_unpublished_file(
+        gated_client, isolated_store, monkeypatch):
+    import core
+    _seed(isolated_store, "scan6", OWNER,
+          [_f("fixed.docx", "1f", "2026-08-01T09:00:00.000Z")])
+    isolated_store.record_remediation("scan6", "fixed.docx")
+    current = {"1f": "2026-08-01T09:00:00.000Z"}   # source unchanged — not a conflict
+    monkeypatch.setattr(core, "drive_service", lambda request=None: _FakeSvc(current))
+    res = gated_client(OWNER).get("/scans/scan6/source-status")
+    body = res.json()
+    assert body["files"][0]["state"] == "publish_pending"
+    assert body["publish_pending_count"] == 1
+
+
+def test_conflict_when_the_source_changed_before_ACP_could_publish_its_fix(
+        gated_client, isolated_store, monkeypatch):
+    import core
+    _seed(isolated_store, "scan7", OWNER,
+          [_f("fought-over.docx", "1c", "2026-08-01T09:00:00.000Z")])
+    isolated_store.record_remediation("scan7", "fought-over.docx")   # unpublished
+    current = {"1c": "2026-08-05T00:00:00.000Z"}   # source changed AFTER the scan's baseline
+    monkeypatch.setattr(core, "drive_service", lambda request=None: _FakeSvc(current))
+    res = gated_client(OWNER).get("/scans/scan7/source-status")
+    body = res.json()
+    assert body["files"][0]["state"] == "conflict"
+    assert body["conflict_count"] == 1
+
+
+def test_acp_newer_when_the_published_fix_outdates_the_live_source(
+        gated_client, isolated_store, monkeypatch):
+    import core
+    _seed(isolated_store, "scan8", OWNER,
+          [_f("acp-ahead.docx", "1n", "2020-01-01T00:00:00.000Z")])
+    isolated_store.record_remediation("scan8", "acp-ahead.docx")
+    isolated_store.record_publish("scan8", "acp-ahead.docx")   # published_at = now (~2026)
+    # The source's live modifiedTime is well before "now" — ACP's published fix outdates it.
+    current = {"1n": "2020-06-01T00:00:00.000Z"}
+    monkeypatch.setattr(core, "drive_service", lambda request=None: _FakeSvc(current))
+    res = gated_client(OWNER).get("/scans/scan8/source-status")
+    body = res.json()
+    assert body["files"][0]["state"] == "acp_newer"
+    assert body["acp_newer_count"] == 1
