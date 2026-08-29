@@ -740,6 +740,64 @@ def _interactive_drive_sync_plan(owner: str, svc) -> dict | None:
     return {"prior_files": prior_files, "changed": changed, "removed_ids": removed_ids}
 
 
+def _sp_delta_check(cursor_key: str, owner: str | None, token: str,
+                    drive_id: str | None) -> tuple[list[dict], set] | None:
+    """The shared core of the SharePoint delta gate — the SharePoint mirror of
+    _drive_delta_check. Advance (or seed) the stored cursor at `cursor_key` and return
+    (changed_files, removed_ids) from Graph's delta query, or None when there is nothing yet
+    to compare — a first-ever check for this cursor_key, or the check itself failed. None is
+    NEVER 'nothing changed': every caller below must fall back to a full listing on None.
+
+    Best-effort bookkeeping: always advances (or seeds) the stored cursor before returning. A
+    SEED call is more expensive than Drive's equivalent (drive_start_page_token): Graph's delta
+    API has no free-standing "just give me a baseline" call, so a token-less first call walks
+    the ENTIRE current tree to reach the first deltaLink — paid once, here, and discarded rather
+    than processed, not paid again until the drive itself resets."""
+    from scanner import sp_delta_since
+    cur = get_store().get_sync_cursor(cursor_key)
+    try:
+        if not cur or not cur.get("page_token"):
+            _, _, new_link = sp_delta_since(token, drive_id, None)
+            get_store().save_sync_cursor(cursor_key, owner, new_link)
+            return None
+        changed, removed_ids, new_link = sp_delta_since(token, drive_id, cur["page_token"])
+        get_store().save_sync_cursor(cursor_key, owner, new_link)  # advance regardless of outcome
+        return changed, removed_ids
+    except BaseException as e:
+        # BaseException — same reasoning as _drive_delta_check's identical catch: a broken
+        # native dependency in an HTTP/crypto import chain must never turn uncertainty into an
+        # unvouched-for reconstruction.
+        print(f"sharepoint sync check ({cursor_key}): change-check failed ({e}) — falling back "
+              f"to a full listing", flush=True)
+        return None
+
+
+def _sp_prior_inventory_for_drive(owner: str | None, drive_id: str | None) -> list[dict] | None:
+    """The most recent completed SharePoint scan's inventory, but ONLY if it was actually a
+    scan of THIS drive_id. store.latest_scan_inventory_items has no drive-scoped query of its
+    own — it returns whatever the most recent 'sharepoint'-source scan for this owner covered.
+
+    For the scheduled sweep that is a non-issue (every sweep targets the one configured
+    sp_sync.sync_drive_id(), so the most recent scan is always for that same drive) UNLESS an
+    operator repoints ACP_SP_SYNC_DRIVE_ID at a different library, in which case the stored
+    inventory belongs to the OLD one. For an interactive scan it is a real, expected case: a
+    signed-in user can scan a different SharePoint library — or their own OneDrive — from one
+    scan to the next, and each has its own identity.
+
+    Either way, reconstructing one drive's estate from another's inventory would silently show
+    the wrong documents, so a drive_id mismatch on ANY row is treated the same as 'no prior scan
+    to reconstruct from' — never a partial or approximate match. An empty-but-real prior scan
+    (a library that was genuinely empty) is not a mismatch and still returns (as `[]`, not
+    None) — this is the same 'is a real answer, not missing data' distinction None vs. []
+    already carries for _drive_sync_plan's own use of latest_scan_inventory_items."""
+    prior = get_store().latest_scan_inventory_items(owner, "sharepoint")
+    if prior is None:
+        return None
+    if any(r.get("drive_id") != drive_id for r in prior):
+        return None
+    return prior
+
+
 def _sp_sync_plan(owner: str | None, token: str) -> tuple[bool, dict | None]:
     """PRD Phase 3: the SharePoint mirror of _drive_sync_plan — decide what the scheduled
     sweep should do, from the stored Graph deltaLink. Returns (skip, sp_delta):
@@ -753,50 +811,72 @@ def _sp_sync_plan(owner: str | None, token: str) -> tuple[bool, dict | None]:
                           completed scan to reconstruct from, or the change-check itself failed.
 
     Uncertainty always resolves to (False, None) — a full, already-correct scan — never to a
-    skip, and never to a reconstruction this function can't vouch for. Only ever called once
-    sp_sync.sp_sync_configured() is already true — `token` is the dedicated sync app's own
-    token, never a signed-in user's.
-
-    Best-effort bookkeeping: always advances (or seeds) the stored cursor before returning. A
-    SEED call is more expensive than Drive's equivalent (drive_start_page_token): Graph's delta
-    API has no free-standing "just give me a baseline" call, so a token-less first call walks
-    the ENTIRE current tree to reach the first deltaLink — paid once, here, and discarded rather
-    than processed, not paid again until the drive itself resets."""
-    from scanner import sp_delta_since
+    skip, and never to a reconstruction this function can't vouch for. A SKIP is the right
+    answer for THIS caller specifically because nobody is waiting on a scheduled sweep's
+    result — see _interactive_sp_sync_plan below for why an interactive scan can never use the
+    same shortcut. Only ever called once sp_sync.sp_sync_configured() is already true — `token`
+    is the dedicated sync app's own token, never a signed-in user's."""
     import sp_sync
     drive_id = sp_sync.sync_drive_id()
-    cur = get_store().get_sync_cursor("sharepoint")
-    try:
-        if not cur or not cur.get("page_token"):
-            _, _, new_link = sp_delta_since(token, drive_id, None)
-            get_store().save_sync_cursor("sharepoint", owner, new_link)
-            return False, None
-        changed, removed_ids, new_link = sp_delta_since(token, drive_id, cur["page_token"])
-        get_store().save_sync_cursor("sharepoint", owner, new_link)
-        if not changed and not removed_ids:
-            return True, None
-        prior = get_store().latest_scan_inventory_items(owner, "sharepoint")
-        if prior is None:
-            # A cursor exists but no completed scan does (e.g. every prior sweep since it was
-            # seeded has failed before saving) — nothing to reconstruct FROM. A full listing
-            # gives the NEXT sweep a real baseline again.
-            print(f"scheduled sharepoint sweep: {len(changed)} changed, {len(removed_ids)} "
-                  f"removed since last sync, but no prior scan to reconstruct from — running a "
-                  f"full scan", flush=True)
-            return False, None
-        print(f"scheduled sharepoint sweep: {len(changed)} changed, {len(removed_ids)} removed "
-              f"since last sync — reconstructing the estate instead of a full re-list",
-              flush=True)
-        from scanner import _sp_file_from_inventory_row
-        prior_files = [_sp_file_from_inventory_row(r) for r in prior]
-        return False, {"prior_files": prior_files, "changed": changed,
-                       "removed_ids": removed_ids}
-    except BaseException as e:
-        # BaseException — same reasoning as _drive_sync_plan's identical catch: a broken native
-        # dependency in an HTTP/crypto import chain must never turn uncertainty into a skip.
-        print(f"scheduled sharepoint sweep: change-check failed ({e}) — running a full scan "
-              f"instead", flush=True)
+    result = _sp_delta_check("sharepoint", owner, token, drive_id)
+    if result is None:
         return False, None
+    changed, removed_ids = result
+    if not changed and not removed_ids:
+        return True, None
+    prior = _sp_prior_inventory_for_drive(owner, drive_id)
+    if prior is None:
+        # A cursor exists but no completed scan of THIS drive does (e.g. every prior sweep
+        # since it was seeded has failed before saving, or the configured drive changed) —
+        # nothing to reconstruct FROM. A full listing gives the NEXT sweep a real baseline.
+        print(f"scheduled sharepoint sweep: {len(changed)} changed, {len(removed_ids)} "
+              f"removed since last sync, but no prior scan to reconstruct from — running a "
+              f"full scan", flush=True)
+        return False, None
+    print(f"scheduled sharepoint sweep: {len(changed)} changed, {len(removed_ids)} removed "
+          f"since last sync — reconstructing the estate instead of a full re-list",
+          flush=True)
+    from scanner import _sp_file_from_inventory_row
+    prior_files = [_sp_file_from_inventory_row(r) for r in prior]
+    return False, {"prior_files": prior_files, "changed": changed, "removed_ids": removed_ids}
+
+
+def _interactive_sp_sync_plan(owner: str, token: str, drive_id: str | None) -> dict | None:
+    """PRD Phase 3, interactive SharePoint scans: the same delta reconstruction _sp_sync_plan
+    gives the scheduled sweep, but for a user-initiated whole-library (or whole OneDrive,
+    drive_id=None) SharePoint scan — keyed per (SIGNED-IN USER, DRIVE):
+    f"sharepoint:{owner}:{drive_id}". Unlike Drive (one account, one drive, always the same)
+    and unlike the scheduled sweep (always the one configured drive), a SharePoint user can
+    interactively scan a DIFFERENT library from one scan to the next, so there is no single
+    fixed cursor or baseline to assume — both are keyed (and, for the baseline, VERIFIED via
+    _sp_prior_inventory_for_drive) per drive, not just per user.
+
+    Returns the SAME sp_delta dict shape scanner.sp_reconstructed_listing already knows how to
+    build from, or None to fall back to a normal full listing.
+
+    DELIBERATELY NO SKIP, same reasoning as _interactive_drive_sync_plan: an interactive user is
+    owed a completed scan every time, so 'nothing changed' still returns a delta with empty
+    changed/removed sets rather than signalling 'do nothing'.
+
+    Callers restrict this to a single whole Graph drive (see
+    scanner._sp_whole_library_target / handlers._scan_discover) — sp_delta_since has no folder
+    filter of its own, so it cannot honor a sub-folder narrowing, and it is scoped to exactly
+    one drive, so it cannot answer for a multi-library site scan either. `token` is the
+    signed-in user's own Graph token, never the scheduled sweep's dedicated sync app token."""
+    result = _sp_delta_check(f"sharepoint:{owner}:{drive_id}", owner, token, drive_id)
+    if result is None:
+        return None
+    changed, removed_ids = result
+    prior = _sp_prior_inventory_for_drive(owner, drive_id)
+    if prior is None:
+        return None
+    if changed or removed_ids:
+        print(f"interactive sharepoint scan ({owner}, drive={drive_id}): {len(changed)} "
+              f"changed, {len(removed_ids)} removed since last sync — reconstructing the "
+              f"estate instead of a full re-list", flush=True)
+    from scanner import _sp_file_from_inventory_row
+    prior_files = [_sp_file_from_inventory_row(r) for r in prior]
+    return {"prior_files": prior_files, "changed": changed, "removed_ids": removed_ids}
 
 
 def _do_scheduled_scan():
