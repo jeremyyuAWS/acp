@@ -48,6 +48,9 @@ def _enqueue_analysis(scan_id: str, source: str, items: list[dict], *, ai: bool,
     # forget it — otherwise fixing the credential and pressing Assess again would short-circuit
     # every file against a stale marker and look like the fix had not worked.
     clear_drive_stop(scan_id)
+    # ADR 0038 — same reasoning as clear_drive_stop above: any re-dispatch through this choke
+    # point (resume included) must not find a stale pause marker and silently no-op every file.
+    clear_scan_paused_marker(scan_id)
     if not items:
         core.store.enqueue_job("scan_finalize",
                                {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)
@@ -2458,6 +2461,44 @@ def clear_drive_stop(scan_id: str) -> None:
         pass
 
 
+# ADR 0038 — pausable/resumable scans. Same marker mechanism as _DRIVE_STOP_KEY above, but the
+# opposite finalize semantics: a paused file gets NO row (the run stays legitimately unfinalized
+# until resumed), where a halted file still gets a skip row (the run wants to finalize). Store
+# methods only in this PR — pause_scan/resume_scan (api/store.py) and the marker below are wired
+# into the job handlers so the mechanism is real and tested, but nothing sets the marker yet:
+# the HTTP routes and frontend control are a deliberately separate follow-up PR, per this ADR's
+# own "small, seam-aligned change" framing.
+_PAUSE_KEY = "scan_paused:%s"
+
+
+def scan_paused(scan_id: str) -> bool:
+    """Whether new work should stop dispatching for this scan. Fails open to False — a marker
+    that cannot be read must not accidentally freeze a scan that was never actually paused."""
+    try:
+        return bool(core.store.get_setting(_PAUSE_KEY % scan_id))
+    except Exception:
+        return False
+
+
+def set_scan_paused_marker(scan_id: str) -> None:
+    """Step 2 of ADR 0038's pause recipe (step 1 is store.pause_scan's CAS) — a caller sets both,
+    same two-step shape as _stop_scan_downloads writing its own marker after the status check."""
+    try:
+        core.store.set_setting(_PAUSE_KEY % scan_id, "1")
+    except Exception:
+        pass    # a marker that cannot be written must not take the pause request down with it
+
+
+def clear_scan_paused_marker(scan_id: str) -> None:
+    """Step 2 of ADR 0038's resume recipe. Also called defensively from _enqueue_analysis (below)
+    for the same reason clear_drive_stop is: any re-dispatch of this scan_id must not find a
+    stale marker from an earlier pause and silently no-op every file."""
+    try:
+        core.store.set_setting(_PAUSE_KEY % scan_id, "")
+    except Exception:
+        pass
+
+
 def _make_svc(source, toks):
     """Build the Drive client once per job, resiliently — a build failure degrades to
     None (downloads then fail per-file into 'error' records) rather than killing the job."""
@@ -2501,6 +2542,13 @@ def _scan_batch(payload: dict, job: dict) -> None:
         workers = 4
 
     def _run_one(it):
+        # ADR 0038 — checked once per item, right when the executor actually starts it (not at
+        # submission time, when all items in a batch are handed to the pool at once). A file
+        # already past this point when pause fires runs to completion and persists its row, same
+        # as the ADR requires; one not yet started gets no row at all, which is what keeps
+        # count_files_done() below scan_runs.files and the run legitimately unfinalized.
+        if scan_paused(scan_id):
+            return
         _analyse_and_persist_one(scan_id, it, source, pii, svc, toks, now, _lf, user=user,
                                  rubric_hash=rubric_hash, incremental=incremental)
 
@@ -2543,9 +2591,12 @@ def _scan_file(payload: dict, job: dict) -> None:
     toks = core.get_scan_tokens(scan_id)
     now = _dt.datetime.now(_dt.timezone.utc).isoformat()
     svc = _make_svc(source, toks)
-    _analyse_and_persist_one(scan_id, payload, source, pii, svc, toks, now, _lf, user=user,
-                             rubric_hash=core.active_rubric().hash,
-                             incremental=bool(payload.get("incremental", True)))
+    # ADR 0038 — same checkpoint as _scan_batch's _run_one: a job not yet started when pause
+    # fires is skipped entirely (no row), leaving it for resume's re-dispatch to pick up.
+    if not scan_paused(scan_id):
+        _analyse_and_persist_one(scan_id, payload, source, pii, svc, toks, now, _lf, user=user,
+                                 rubric_hash=core.active_rubric().hash,
+                                 incremental=bool(payload.get("incremental", True)))
     _lf.flush()  # send file span before this per-file job exits
     done, total = core.store.count_files_done(scan_id)   # ADR 0013: count, not a running counter
     if done >= total > 0:

@@ -101,6 +101,32 @@ class TestStaleDiscoveryGuardReclaim:
         holder = store.acquire_discovery_guard("user@a.com", "drive", "scan-2")
         assert holder == "scan-1"
 
+    def test_paused_holder_still_blocks_not_reclaimed_as_stale(self, store):
+        # ADR 0038 — a paused scan has, by design, no active workers, which makes it look
+        # identical to a crashed/abandoned holder to this check's "not queued/running -> stale"
+        # rule unless 'paused' is explicitly exempted. Found by inspection while implementing
+        # pause/resume: without the fix, a second scan for the same source could reclaim a
+        # paused run's slot out from under it, and Resume would find its slot already gone.
+        _make_scan(store, "scan-1")
+        store.acquire_discovery_guard("user@a.com", "drive", "scan-1")
+        store.set_scan_status("scan-1", "paused")
+        holder = store.acquire_discovery_guard("user@a.com", "drive", "scan-2")
+        assert holder == "scan-1", "a paused holder must still block a new claim"
+
+    def test_paused_holder_still_reclaimable_by_age(self, store):
+        # The age-based fallback (an abandoned pause, never resumed) must still work — 'paused'
+        # is exempt from the STATUS check only, not from staleness altogether.
+        import datetime as _dt
+        _make_scan(store, "scan-1")
+        store.acquire_discovery_guard("user@a.com", "drive", "scan-1")
+        store.set_scan_status("scan-1", "paused")
+        old = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=3)).isoformat()
+        with store._db.cursor() as cur:
+            store._db.execute(cur,
+                "UPDATE active_discovery_guard SET acquired_at=%s WHERE scan_id='scan-1'", (old,))
+        holder = store.acquire_discovery_guard("user@a.com", "drive", "scan-2")
+        assert holder is None, "a paused holder abandoned past the age ceiling must be reclaimable"
+
     def test_reclaimed_by_age_even_when_status_never_updated(self, store):
         # The abrupt-crash case: scan_runs was never touched again either (still 'running'),
         # but the guard has been held far longer than any real Discovery run takes.
