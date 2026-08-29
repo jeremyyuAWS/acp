@@ -6,6 +6,7 @@ import RegressionRadar from './RegressionRadar.jsx'
 import ComplianceDigest from './ComplianceDigest.jsx'
 import FailureLane from './FailureLane.jsx'
 import QueuePanel from './QueuePanel.jsx'
+import RevisionHistoryPanel from './RevisionHistoryPanel.jsx'
 
 // Step 10 · Monitor — the always-on surface. Shows every connected source being
 // continuously watched for new files and changes, a live event stream (with demo
@@ -532,6 +533,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
           how many are warm ahead of a large batch in Settings → Worker Configuration.
         </p>
         <QueuePanel />
+        <RevisionHistoryPanel />
       </section>
 
       <section className="panel" style={{ marginTop: 14 }} ref={evidenceRef}>
