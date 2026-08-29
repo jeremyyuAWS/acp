@@ -6,13 +6,28 @@
  * section, a tinted safety disclaimer, and a specific CTA ("Assess N documents →").
  * Tests verify counts, section labels, percentages, sub-breakdown, and CTA gating.
  */
-import { describe, it, expect, vi } from 'vitest'
-import { createElement } from 'react'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { createElement, act } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import DiscoverCompleteSummary from './DiscoverCompleteSummary.jsx'
+import { createTestRoot, unmountAll } from './testRoots.js'
 
 const render = (props) =>
   renderToStaticMarkup(createElement(DiscoverCompleteSummary, props))
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true
+
+// The "Why aren't N assessable?" disclosure needs a real click to open, which
+// renderToStaticMarkup (one static pass, no event handling) cannot exercise — these mount
+// interactively instead, same reasoning as this app's other disclosure-toggle tests.
+afterEach(unmountAll)
+const mountAndExpand = async (props) => {
+  const { container, root } = createTestRoot()
+  await act(async () => { root.render(createElement(DiscoverCompleteSummary, props)) })
+  const toggle = [...container.querySelectorAll('button')].find((b) => /Why aren.t/.test(b.textContent))
+  if (toggle) await act(async () => { toggle.click() })
+  return container
+}
 
 const BASE = {
   discoveredCount: 200,
@@ -39,22 +54,22 @@ describe('DiscoverCompleteSummary renders completion state', () => {
     expect(html).toContain('assessable')
   })
 
-  it('shows metadata-only count and label when > 0', () => {
-    const html = render(BASE)
-    expect(html).toContain('10')
-    expect(html).toContain('metadata-only')
+  it('shows metadata-only count and label when > 0, once expanded', async () => {
+    const c = await mountAndExpand(BASE)
+    expect(c.textContent).toContain('10')
+    expect(c.textContent).toContain('metadata-only')
   })
 
-  it('shows unsupported count and label when > 0', () => {
-    const html = render({ ...BASE, unsupportedCount: 8 })
-    expect(html).toContain('8')
-    expect(html).toContain('unsupported')
+  it('shows unsupported count and label when > 0, once expanded', async () => {
+    const c = await mountAndExpand({ ...BASE, unsupportedCount: 8 })
+    expect(c.textContent).toContain('8')
+    expect(c.textContent).toContain('unsupported')
   })
 
-  it('shows locked count and label', () => {
-    const html = render(BASE)
-    expect(html).toContain('5')
-    expect(html).toContain('could not be opened')
+  it('shows locked count and label, once expanded', async () => {
+    const c = await mountAndExpand(BASE)
+    expect(c.textContent).toContain('5')
+    expect(c.textContent).toContain('could not be opened')
   })
 
   it('shows lifecycle rules count', () => {
@@ -82,20 +97,21 @@ describe('DiscoverCompleteSummary renders completion state', () => {
     expect(html).toContain('No lifecycle rules enabled')
   })
 
-  it('renders the sub-breakdown as a real bulleted list, not bare stacked rows', () => {
-    const html = render(BASE)
+  it('renders the sub-breakdown as a real bulleted list, not bare stacked rows, once expanded', async () => {
+    const c = await mountAndExpand(BASE)
     // metadata-only (10) and unsupported (10) and locked (5) are all > 0 in BASE.
-    expect(html).toMatch(/<ul[^>]*>[\s\S]*<li[^>]*>[\s\S]*<\/li>[\s\S]*<\/ul>/)
+    expect(c.innerHTML).toMatch(/<ul[^>]*>[\s\S]*<li[^>]*>[\s\S]*<\/li>[\s\S]*<\/ul>/)
   })
 
-  it('wraps each sub-breakdown label with its glossary definition, hoverable via Term', () => {
-    const html = render(BASE)
+  it('wraps each sub-breakdown label with its glossary definition, hoverable via Term, once expanded', async () => {
+    const c = await mountAndExpand(BASE)
     // Term renders a "terminfo" button beside the label — one per glossary-backed sub-row
-    // (metadata-only, unsupported, could not be opened) present in BASE.
-    const termButtons = html.match(/class="terminfo"/g) || []
-    expect(termButtons.length).toBe(3)
-    expect(html).toContain('What does &quot;Unsupported&quot; mean?')
-    expect(html).toContain('What does &quot;Metadata-only&quot; mean?')
+    // (metadata-only, unsupported, could not be opened) present in BASE, plus the disclosure's
+    // own toggle button — four buttons total.
+    expect(c.querySelectorAll('.terminfo').length).toBe(3)
+    const ariaLabels = [...c.querySelectorAll('.terminfo')].map((b) => b.getAttribute('aria-label'))
+    expect(ariaLabels).toContain('What does "Unsupported" mean?')
+    expect(ariaLabels).toContain('What does "Metadata-only" mean?')
   })
 
   it('shows "No lifecycle rules enabled" when count is null', () => {
@@ -207,20 +223,20 @@ describe('lifecycle action breakdown', () => {
 })
 
 describe('exception summary', () => {
-  it('shows inaccessible count when > 0', () => {
-    const html = render({ ...BASE, excInaccessible: 3 })
-    expect(html).toContain('3 inaccessible')
-    expect(html).toContain('skipped')
+  it('shows inaccessible count when > 0, once expanded', async () => {
+    const c = await mountAndExpand({ ...BASE, excInaccessible: 3 })
+    expect(c.textContent).toContain('3 inaccessible')
+    expect(c.textContent).toContain('skipped')
   })
 
-  it('shows unreadable count when > 0', () => {
-    const html = render({ ...BASE, excMetadataFailure: 2 })
-    expect(html).toContain('2 unreadable')
+  it('shows unreadable count when > 0, once expanded', async () => {
+    const c = await mountAndExpand({ ...BASE, excMetadataFailure: 2 })
+    expect(c.textContent).toContain('2 unreadable')
   })
 
-  it('shows deleted-during-scan count when > 0', () => {
-    const html = render({ ...BASE, excDeleted: 1 })
-    expect(html).toContain('1 deleted during scan')
+  it('shows deleted-during-scan count when > 0, once expanded', async () => {
+    const c = await mountAndExpand({ ...BASE, excDeleted: 1 })
+    expect(c.textContent).toContain('1 deleted during scan')
   })
 
   it('omits exception summary when all exception counts are absent or zero', () => {
@@ -301,11 +317,49 @@ describe('structured-row layout', () => {
     expect(html).toContain('ⓘ')
   })
 
-  it('sub-breakdown items are indented under not-assessable parent', () => {
-    const html = render(BASE)
+  it('sub-breakdown items are indented under not-assessable parent, once expanded', async () => {
+    const c = await mountAndExpand(BASE)
     // Both "Not currently assessable" and "unsupported" must appear in the same render.
-    expect(html).toContain('Not currently assessable')
-    expect(html).toContain('unsupported')
-    expect(html).toContain('metadata-only')
+    expect(c.textContent).toContain('Not currently assessable')
+    expect(c.textContent).toContain('unsupported')
+    expect(c.textContent).toContain('metadata-only')
+  })
+})
+
+describe('the "Why aren\'t N assessable?" disclosure', () => {
+  it('is collapsed by default — the breakdown is not in the initial render', () => {
+    const html = render(BASE)
+    expect(html).toContain('Why aren')
+    expect(html).not.toContain('metadata-only')
+    expect(html).not.toContain('unsupported')
+    expect(html).not.toContain('could not be opened')
+  })
+
+  it('names the not-assessable count in the toggle', () => {
+    const html = render(BASE)
+    // 200 discovered - 170 assessable = 30 not assessable.
+    expect(html).toContain('Why aren’t 30 assessable?')
+  })
+
+  it('is absent entirely when everything is assessable — nothing to explain', () => {
+    const html = render({ ...BASE, discoveredCount: 170, assessableCount: 170,
+                          metadataOnlyCount: 0, unsupportedCount: 0, lockedCount: 0 })
+    expect(html).not.toContain('Why aren')
+  })
+
+  it('reveals the full breakdown on click, and can be collapsed again', async () => {
+    const { container, root } = createTestRoot()
+    await act(async () => { root.render(createElement(DiscoverCompleteSummary, BASE)) })
+    const toggle = [...container.querySelectorAll('button')].find((b) => /Why aren.t/.test(b.textContent))
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(container.textContent).not.toContain('metadata-only')
+
+    await act(async () => { toggle.click() })
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(container.textContent).toContain('metadata-only')
+
+    await act(async () => { toggle.click() })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(container.textContent).not.toContain('metadata-only')
   })
 })
