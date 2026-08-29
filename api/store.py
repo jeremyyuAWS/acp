@@ -1699,14 +1699,21 @@ class Store:
 
     def latest_scan_inventory_items(self, owner: str, source: str) -> list[dict] | None:
         """The full scan_inventory of the most recent COMPLETED scan for (owner, source) —
-        PRD Phase 3's reconstruction seam: scanner.apply_drive_delta rebuilds 'the current known
-        Drive estate' from these rows plus a Changes API delta, without a fresh Drive listing.
-        None when there is no prior completed scan to reconstruct from (the first-ever
-        incremental sweep) — the caller falls back to a full listing in that case, same as
-        core._drive_sync_gate already does for a missing cursor.
+        PRD Phase 3's reconstruction seam: scanner.apply_drive_delta / apply_sp_delta rebuild
+        'the current known estate' from these rows plus a Changes API / Graph delta, without a
+        fresh listing. None when there is no prior completed scan to reconstruct from (the
+        first-ever incremental sweep) — the caller falls back to a full listing in that case,
+        same as core._drive_sync_plan already does for a missing cursor.
+
+        `drive_id` is the Graph DRIVE a SharePoint/OneDrive row was listed from (see
+        scanner._inv_row) — None for Drive (which has no such concept) and for a OneDrive row
+        (legitimately no drive to name; scanner._sp_base reads that as /me/drive). Selected
+        alongside the rest so scanner._sp_file_from_inventory_row's reconstruction can restamp
+        it, matching apply_sp_delta's (drive_id, item_id) identity — a Graph item id is unique
+        only within its drive.
 
         Rows with no drive_file_id are dropped (a local/non-Drive row, or one from a scan old
-        enough to predate that column) — they carry nothing a Drive delta could ever reconcile
+        enough to predate that column) — they carry nothing a delta could ever reconcile
         against."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -1718,7 +1725,8 @@ class Store:
                 return None
             self._db.execute(cur,
                 "SELECT file, drive_file_id, mime, size_kb, checksum, created_at, "
-                "source_modified, owner, parent_folder FROM scan_inventory WHERE scan_id=%s",
+                "source_modified, owner, parent_folder, drive_id FROM scan_inventory "
+                "WHERE scan_id=%s",
                 (row["id"],))
             return [r for r in self._db.fetchall(cur) if r.get("drive_file_id")]
 
