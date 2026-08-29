@@ -16,6 +16,14 @@
  * blocks the load; bootstrap's active_job is used for reconnectScan instead of a separate
  * getActiveScan call; and the bootstrap's `overview` field reaches the loading screen as its
  * preview line before getScan resolves.
+ *
+ * Stale-while-revalidate went a step further still: when the Overview tab (the default view) has
+ * a cached snapshot to show, it no longer shows a "Loading your latest scan…" spinner with a
+ * one-line preview underneath at all — OverviewPreviewCard renders real aggregate tiles in its
+ * place, swapped for the full Overview the instant getScan resolves. The stage-text mechanism
+ * itself is unchanged and still gates every OTHER tab (and Overview before any snapshot exists),
+ * so the test below that exercises it uses a bootstrap response with no `overview` snapshot to
+ * isolate that behavior from the preview card's.
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { createElement } from 'react'
@@ -91,18 +99,26 @@ describe('the initial-load screen', () => {
     expect(c.textContent).toMatch(/Loading your workspace/)
   })
 
-  it('shows the scan-specific stage message once bootstrap resolves with a default scan', async () => {
+  it('shows the scan-specific stage message once bootstrap resolves with a default scan '
+     + 'but no cached snapshot yet', async () => {
     const c = await mountSignedIn()
-    await act(async () => { bootstrapDeferred.resolve(defaultBootstrap()); await Promise.resolve() })
+    await act(async () => {
+      bootstrapDeferred.resolve({ ...defaultBootstrap(), overview: null })
+      await Promise.resolve()
+    })
     await flush()
     expect(c.textContent).toMatch(/Loading your latest scan/)
   })
 
-  it('previews the bootstrap overview snapshot while getScan is still in flight', async () => {
+  it('renders the aggregate preview card — not the bare loading screen — the instant bootstrap\'s '
+     + 'overview snapshot arrives, while getScan is still in flight', async () => {
     const c = await mountSignedIn()
     await act(async () => { bootstrapDeferred.resolve(defaultBootstrap()); await Promise.resolve() })
     await flush()
-    expect(c.textContent).toMatch(/3 documents · 67% certifiable/)
+    expect(c.textContent).not.toMatch(/Loading your latest scan/)
+    expect(c.textContent).toMatch(/loading full detail/)
+    expect(c.textContent).toContain('3')   // estate.discovered
+    expect(c.textContent).toContain('2')   // documents.certifiable
   })
 
   it('calls getWorkspaceBootstrap once, then getScan for the picked default scan — no separate '
@@ -115,11 +131,11 @@ describe('the initial-load screen', () => {
     expect(getScan).toHaveBeenCalledWith('s1')
   })
 
-  it('finishes loading (leaves the loading screen) once getScan resolves', async () => {
+  it('finishes loading (swaps the preview card for the full Overview) once getScan resolves', async () => {
     const c = await mountSignedIn()
     await act(async () => { bootstrapDeferred.resolve(defaultBootstrap()); await Promise.resolve() })
     await flush()
-    expect(c.textContent).toMatch(/Loading your latest scan/)
+    expect(c.textContent).toMatch(/loading full detail/)
 
     await act(async () => {
       scanDeferred.resolve({ run: { id: 's1', status: 'done', files: 3 }, files: [] })
@@ -129,6 +145,7 @@ describe('the initial-load screen', () => {
 
     expect(c.textContent).not.toMatch(/Loading your latest scan/)
     expect(c.textContent).not.toMatch(/Loading your workspace/)
+    expect(c.textContent).not.toMatch(/loading full detail/)
   })
 
   it('a pending reconnectJob never blocks the workspace from loading, even if its poll never '

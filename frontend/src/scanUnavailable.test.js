@@ -159,7 +159,10 @@ describe('App recovers to a scan the user can actually load', () => {
   })
 
   it('clears the dead scan and routes to Discover when the user has none of their own', () => {
-    expect(app).toMatch(/setScan\(null\); resetScanScopedState\(\)/)
+    // overviewPreview must be cleared alongside `scan` — since OverviewPreviewCard now renders
+    // straight from it whenever `run` is null, a stale snapshot here would show numbers for the
+    // exact scan this branch just confirmed is gone.
+    expect(app).toMatch(/setScan\(null\); setOverviewPreview\(null\); resetScanScopedState\(\)/)
     expect(app).toMatch(/'discover'/)
   })
 
