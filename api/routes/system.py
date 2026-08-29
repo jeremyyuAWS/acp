@@ -880,6 +880,12 @@ def jobs(request: Request, status: str | None = None, limit: int = 100):
             # GPU-constrained, not CPU-constrained; 4 is a safe floor the user can raise.
             "suggested_workers": 4,
             "runtime_mode": core._RUNTIME_MODE,
+            # Global like `workers`/`worker_tier_alive` above, not owner-scoped: the question
+            # this answers ("is the shared worker tier actually draining its queue") is about the
+            # tier, not this caller's own jobs — scoping it to owner would go dark the moment
+            # THIS user has nothing queued, even while every other tenant's queue is stalled.
+            # Only id/type/created_at are exposed — no payload, so no filenames cross tenants.
+            "oldest_queued": core.store.oldest_queued_job(),
             "stats": core.store.job_stats(owner=owner),
             "dead_letters": core.store.dead_letter_breakdown(owner=owner),
             "jobs": core.store.list_jobs(status=status, limit=limit, owner=owner)}
