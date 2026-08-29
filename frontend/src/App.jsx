@@ -10,7 +10,7 @@ import { scanFailureDetail, hasFallbackInventory } from './scanFailureMessage.js
 import LiveAssessmentLive from './LiveAssessmentLive.jsx'
 import ProcessingDetails from './ProcessingDetails.jsx'
 import ScopeFunnel from './ScopeFunnel.jsx'
-import { armNotifyOnComplete, notifyScanComplete, notificationsSupported, notifyPermission } from './scanNotify.js'
+import { armNotifyOnComplete, notifyScanComplete, notifyScanFailed, notificationsSupported, notifyPermission } from './scanNotify.js'
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
@@ -1189,6 +1189,12 @@ export default function App() {
       // harder signal; it wins.
       setPreflightCapacityState(null)
       setErr(`scan failed: ${scanFailureDetail(e?.message ?? e)}`)
+      // Same "notify me" arming as the completion path below — a user who opted to walk away
+      // wants to know the scan failed just as much as that it finished (see scanNotify.js).
+      // A second scanFailureDetail() call, not a shared variable, deliberately keeps the line
+      // above byte-for-byte identical to reconnectScan's own catch site — pinned by
+      // discoverFailedVsCompleteContradiction.test.js as an exact source-level match.
+      if (notifyArmedRef.current) notifyScanFailed(scanFailureDetail(e?.message ?? e))
     } finally {
       // Always close, whatever the loop's own state — the server's generator loop otherwise
       // keeps polling Redis every 250ms for a client that has already stopped listening.
