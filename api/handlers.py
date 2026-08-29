@@ -1432,7 +1432,8 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # Emit live file counts during the listing so the frontend ticks up rather than showing 0
         # for the full duration. Throttled to one DB write every 2 s — the scanner does the timing
         # inside _search_drive/_search_folder; this callback just persists whatever count arrived.
-        def _listing_progress(count: int, folders: int | None = None) -> None:
+        def _listing_progress(count: int, folders: int | None = None,
+                               active: list | None = None, recent: list | None = None) -> None:
             try:
                 core.store.set_scan_files(scan_id, count)
                 _jid = job.get("id")
@@ -1459,6 +1460,15 @@ def _scan_discover(payload: dict, job: dict) -> None:
                     # clobbered by a later call that has none to report.
                     if folders is not None:
                         patch["folders_found"] = folders
+                    # Folder-level activity (bounded — see scanner._search_folder's own comment):
+                    # which folders the BFS is fetching RIGHT NOW, and the last few that finished.
+                    # None for the flat Drive-query path, same "omit rather than clobber" rule as
+                    # folders_found above. A frontend without this field yet (or a scan predating
+                    # it) simply never sees `active`/`recent` — nothing downstream requires them.
+                    if active is not None:
+                        patch["active_folders"] = active
+                    if recent is not None:
+                        patch["recent_folders"] = recent
                     core.update_job(_jid, patch)
             except Exception:  # noqa: BLE001 — a diagnostic must never fail the scan
                 logger.debug("_listing_progress: progress update failed", exc_info=True)

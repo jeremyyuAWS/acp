@@ -667,15 +667,47 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
     _skipped_rate_limited = [0]
     _truncated = [False]
     _last_progress_at = [0.0]
+    # Folder-level activity (PRD "Live Discover Journey", folder-activity slice): which folders
+    # are being fetched RIGHT NOW, and the last few that finished — bounded, ephemeral, and fed
+    # into the SAME Redis job-state channel files_found/phase already flow through (no new
+    # storage). This is deliberately NOT a durable, queryable history of every folder a scan ever
+    # touched — that needs a real event store and is a separate, later piece of work. What this
+    # answers honestly, and only this: "what is the BFS doing at this instant", which a single
+    # aggregate total (files_found/folders_found) cannot.
+    _folder_paths: dict[str, str] = {}
+    # The lookup itself is a real Drive API call — spent only when something will actually see
+    # the name (progress_cb is the only consumer of _active/_recent). A caller that wants files
+    # and no live activity must not pay for a metadata read it will never look at, matching the
+    # same rule scope_out's own folder-name lookup already follows elsewhere in this file. When
+    # skipped, `folder_id` stands in as the path/name — never actually observed by anyone, since
+    # nothing reads _active/_recent without a progress_cb to receive them.
+    _root_name = (_folder_name(svc, folder_id) or "(scan root)") if progress_cb else folder_id
+    _folder_paths[folder_id] = _root_name
+    _active: dict[str, dict] = {}      # folder_id -> {name, path, started_at}
+    _recent: list[dict] = []           # bounded to _RECENT_CAP, oldest dropped first
+    _RECENT_CAP = 5
 
-    def _fetch_folder(fid: str) -> tuple[list[dict], list[str], bool]:
-        """Fetch all pages for one folder. Returns (raw_files, child_folder_ids, capped).
+    def _record_folder_done(fid: str, state: str, files_found: int) -> None:
+        """Move a folder from _active to _recent. MUST be called with `_lock` already held —
+        this only touches the two dicts/list above, never the network or Drive API."""
+        meta = _active.pop(fid, None)
+        path = _folder_paths.get(fid, fid)
+        name = (meta or {}).get("name") or path.rsplit("/", 1)[-1]
+        _recent.append({"name": name, "path": path, "state": state, "files_found": files_found,
+                        "completed_at": datetime.now(timezone.utc).isoformat()})
+        if len(_recent) > _RECENT_CAP:
+            del _recent[0]
+
+    def _fetch_folder(fid: str) -> tuple[list[dict], list[tuple[str, str]], bool]:
+        """Fetch all pages for one folder. Returns (raw_files, child_folders, capped) — each
+        child folder as (id, name), the name needed to build its display path once it is
+        actually enqueued (see the caller below).
 
         `capped` is True when pagination stopped because the cap was reached (meaning there are
         more pages we did not fetch) rather than because the server sent the last page naturally.
         The caller uses this to set the truncated flag even when the raw list fills exactly."""
         local_raw: list[dict] = []
-        child_folders: list[str] = []
+        child_folders: list[tuple[str, str]] = []
         local_listed = local_skipped_acp = local_skipped_mirror = local_skipped_excluded = 0
         page_token = None
         capped = False
@@ -714,7 +746,7 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
                     if f["id"] in excluded:
                         local_skipped_excluded += 1
                         continue
-                    child_folders.append(f["id"])
+                    child_folders.append((f["id"], f["name"]))
                     continue
                 local_listed += 1
                 if estate_inventory.is_os_metadata(f.get("name", "") or ""):
@@ -737,6 +769,8 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
     # Each completed folder's children are immediately submitted, so deeper levels start
     # as soon as any ancestor finishes — no level-barrier, no idle time between BFS levels.
     with _cf.ThreadPoolExecutor(max_workers=_DISCOVERY_WORKERS) as ex:
+        _active[folder_id] = {"name": _root_name, "path": _root_name,
+                              "started_at": datetime.now(timezone.utc).isoformat()}
         pending: dict[_cf.Future, str] = {ex.submit(_fetch_folder, folder_id): folder_id}
         while pending:
             done, _ = _cf.wait(list(pending.keys()), return_when=_cf.FIRST_COMPLETED)
@@ -748,15 +782,17 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
                     # Classified AFTER the fact, from an exception .execute()'s own internal
                     # retries already exhausted — this does not change what was retried or when,
                     # only whether the reason a subtree was skipped is visible to anyone.
-                    if _is_drive_rate_limit_error(_fetch_exc):
+                    rate_limited = _is_drive_rate_limit_error(_fetch_exc)
+                    if rate_limited:
                         print(f"[scan] folder {fid}: Google Drive rate-limited this request "
                               f"(exhausted retries) — skipping subtree", flush=True)
-                        with _lock:
-                            _skipped_rate_limited[0] += 1
                     else:
                         print(f"[scan] folder {fid}: listing failed, skipping subtree", flush=True)
                     with _lock:
+                        if rate_limited:
+                            _skipped_rate_limited[0] += 1
                         _skipped_errors[0] += 1
+                        _record_folder_done(fid, "rate_limited" if rate_limited else "failed", 0)
                     continue
                 with _lock:
                     space = max_files - len(raw)
@@ -768,19 +804,32 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
                         _truncated[0] = True
                     if capped:
                         _truncated[0] = True
+                    _record_folder_done(fid, "completed", len(local_raw))
                     if progress_cb:
                         _now = time.monotonic()
                         if _now - _last_progress_at[0] >= 2.0:
                             _last_progress_at[0] = _now
-                            progress_cb(len(raw), len(seen_folders))
-                    for child in child_folders:
-                        if child in seen_folders:
+                            progress_cb(len(raw), len(seen_folders),
+                                       active=list(_active.values()), recent=list(_recent))
+                    for child_id, child_name in child_folders:
+                        if child_id in seen_folders:
                             continue
-                        seen_folders.add(child)
+                        seen_folders.add(child_id)
+                        _folder_paths[child_id] = f"{_folder_paths.get(fid, _root_name)}/{child_name}"
                         if len(raw) < max_files:
-                            pending[ex.submit(_fetch_folder, child)] = child
+                            _active[child_id] = {"name": child_name, "path": _folder_paths[child_id],
+                                                 "started_at": datetime.now(timezone.utc).isoformat()}
+                            pending[ex.submit(_fetch_folder, child_id)] = child_id
                         else:
                             _truncated[0] = True
+
+    # Unconditional final tick, bypassing the throttle above. Without it, the LAST folder(s)
+    # processed can go unreported: `_cf.wait()`'s `done` set has no guaranteed order, so a
+    # failing folder (whose branch never calls progress_cb — see above) processed after the last
+    # successful one in the same batch would otherwise never appear in `recent` at all, not even
+    # briefly. This guarantees the true end state is seen once, however fast the scan was.
+    if progress_cb:
+        progress_cb(len(raw), len(seen_folders), active=list(_active.values()), recent=list(_recent))
 
     truncated = _truncated[0]
     if truncated:
