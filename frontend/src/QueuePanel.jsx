@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import { getJobs, setWorkers, clearDeadJobs } from './api.js'
+import { getJobs, setWorkers, clearDeadJobs, getWorkerReplicas, getWorkerCapacity } from './api.js'
 import { TraceChip } from './Transparency.jsx'
 import { phaseLine, isStalled, STALLED_AFTER_S } from './jobPhase.js'
 
@@ -98,6 +98,36 @@ export default function QueuePanel() {
     return () => { on = false; clearInterval(t) }
   }, [])
 
+  // Azure Container App replica config + capacity evidence — the SAME /control/workers/replicas
+  // and /control/workers/capacity signals Discover.jsx's WorkerAvailability strip already shows
+  // for a single active scan, surfaced here too because Monitor is meant to be the estate-wide
+  // operational view and previously had NO Azure visibility at all (only the in-process pool
+  // above, via getJobs/setWorkers). `q.runtime_mode`/`q.worker_tier_alive` come from the SAME
+  // /jobs payload this panel already polls — no extra fetch needed to detect the mode.
+  //
+  // Deliberately READ-ONLY here, both endpoints being open reads (not admin-gated) notwithstanding
+  // — monitorWorkersQueue.test.jsx already pins Monitor's own copy as "points to Settings for
+  // capacity changes rather than duplicating the control here", and Settings' Worker Configuration
+  // tab (WorkerReplicaControl.jsx) is where that decision lives. Adding a second +/- here would
+  // silently reopen a question the codebase already answered — this only adds visibility.
+  const externallyManaged = q?.runtime_mode === 'distributed' && q?.worker_tier_alive
+  const [replicas, setReplicas] = useState(null)
+  useEffect(() => {
+    if (!externallyManaged) return undefined
+    let live = true
+    getWorkerReplicas().then((d) => { if (live) setReplicas(d) }).catch(() => {})
+    return () => { live = false }
+  }, [externallyManaged])
+  const [capacity, setCapacity] = useState(null)
+  useEffect(() => {
+    if (!externallyManaged) return undefined
+    let live = true
+    const loadCapacity = () => getWorkerCapacity().then((d) => { if (live) setCapacity(d) }).catch(() => {})
+    loadCapacity()
+    const id = setInterval(loadCapacity, 30000)
+    return () => { live = false; clearInterval(id) }
+  }, [externallyManaged])
+
   // The file a worker is remediating right now (most recent running remediate job).
   const remJob = (q?.jobs || []).find((j) => j.status === 'running' && j.type === 'remediate_file')
   const remFile = remJob ? jobFile(remJob.payload) : null
@@ -195,6 +225,38 @@ export default function QueuePanel() {
         </p>
       )}
       {!q && err && <p className="muted" style={{ marginTop: 8, fontSize: 13 }}>Queue status unavailable: {err}</p>}
+
+      {/* Azure Container App visibility — Monitor previously showed nothing about the dedicated
+          worker service beyond "online"/"offline"; this is the same replica-config and
+          current-replica/CPU/memory evidence Discover's WorkerAvailability strip already shows
+          for a single scan, now available estate-wide. Read-only — adjust it from Settings →
+          Worker Configuration (see the comment above `replicas` state for why). */}
+      {externallyManaged && (
+        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {replicas?.configured ? (
+            <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+              Azure warm replicas: {replicas.min_replicas}
+              {replicas.max_replicas != null ? ` (max ${replicas.max_replicas})` : ''}
+            </p>
+          ) : (
+            <p className="muted" style={{ margin: 0, fontSize: 13, fontStyle: 'italic' }}>
+              Worker capacity is managed by your deployment administrator.
+            </p>
+          )}
+          {capacity?.configured
+           && (capacity.current_replicas != null || capacity.metrics_available) && (
+            <div className="muted" style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 8 }}>
+              {capacity.current_replicas != null && (
+                <span>
+                  {capacity.current_replicas} replica{capacity.current_replicas === 1 ? '' : 's'} running now
+                </span>
+              )}
+              {capacity.cpu_percent != null && <span>CPU {capacity.cpu_percent}%</span>}
+              {capacity.memory_percent != null && <span>Memory {capacity.memory_percent}%</span>}
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap', marginTop: 12 }}
            role="status" aria-live="polite">
