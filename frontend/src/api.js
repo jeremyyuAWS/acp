@@ -555,6 +555,32 @@ export const updateRubric = (body) => (SIM
 export const listScans = () => (SIM ? sim(simListScans()) : fetch(`${BASE}/scans`, { headers: headers() }).then(j))
 // In-flight scan (for reconnecting after a reload). Returns {} when nothing is running.
 export const getActiveScan = () => (SIM ? sim({}) : fetch(`${BASE}/scans/active`, { headers: headers() }).then(j))
+// GET /workspace/bootstrap (workspace-bootstrap redesign, Phase 1) — one request for
+// identity/permissions, the picked default scan's id/status and cached Overview snapshot, the
+// scan-picker list, and the active-job summary. App.jsx's initial-load effect uses this in place
+// of separately calling getMe (the permission fields only — display name/photo still come from
+// getMe itself, which the bootstrap endpoint deliberately omits), listScans, and getActiveScan.
+//
+// SIM has no server-computed snapshot or default-scan pick, so it composes an equivalent shape
+// from the existing SIM building blocks: simListScans()[0] IS the current, uncollapsed scan by
+// construction (see simListScans), so there is no need to run the collapse-detection logic SIM
+// never needs to exercise. `overview` only carries the fields App.jsx's loading screen actually
+// reads (estate.discovered, documents.certifiable) — not a full mirror of the real snapshot's
+// shape, which nothing in SIM mode consumes.
+export const getWorkspaceBootstrap = () => {
+  if (!SIM) return fetch(`${BASE}/workspace/bootstrap`, { headers: headers() }).then(j)
+  const scans = simListScans()
+  const cur = scans[0] || null
+  return sim({
+    me: simIdentity(),
+    scan_id: cur?.id ?? null,
+    scan_status: cur ? 'done' : null,
+    revision: 0,
+    overview: cur ? { estate: { discovered: cur.files ?? 0 }, documents: { certifiable: cur.certifiable ?? 0 } } : null,
+    scans,
+    active_job: {},
+  })
+}
 // ADR 0014: push a freshly-minted GIS token to a running scan so long scans keep Drive auth.
 export const refreshScanDriveToken = (scanId) => (SIM
   ? sim({ refreshed: true })
