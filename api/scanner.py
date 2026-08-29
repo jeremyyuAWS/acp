@@ -2063,6 +2063,37 @@ def _sp_locations(roots: list[str]) -> tuple[list[tuple[str, str]], str | None]:
     return locs, site
 
 
+def _sp_whole_library_target(folder: str | None,
+                             folders: list[str] | None) -> tuple[bool, str | None]:
+    """Is this SharePoint request narrow enough for delta reconstruction — a single, whole
+    Graph drive, no sub-folder narrowing? Two shapes qualify, both scoped to exactly one drive:
+
+      - no folder/folders at all: the signed-in user's whole OneDrive (drive_id=None, /me/drive)
+      - a single folder written "{driveId}/root" — Graph's "root" item-id alias for one whole
+        library, the same addressing the scheduled sweep's {drive_id}/root already uses (#961)
+
+    Anything else — a bare site id (walks every library on the site, no single drive to scope a
+    delta query to), a real sub-folder, or more than one location — returns (False, None):
+    sp_delta_since is scoped to exactly one Graph drive, so none of those requests are "the
+    whole of exactly one drive".
+
+    Returns (eligible, drive_id) — drive_id is None for the bare-OneDrive case, which
+    sp_delta_since/_sp_base already read as "the signed-in user's own drive"."""
+    # Same roots-building line _list() itself uses — "root" alone is Drive's own no-narrowing
+    # sentinel and is dropped here rather than being read as a (nonsensical) SharePoint site id.
+    roots = [f for f in (list(folders) if folders else ([folder] if folder else []))
+             if f and f != "root"]
+    if not roots:
+        return True, None
+    if len(roots) > 1:
+        return False, None
+    locs, site = _sp_locations(roots)
+    if site or not locs:
+        return False, None
+    [(drive_id, item_id)] = locs
+    return (True, drive_id) if item_id == "root" else (False, None)
+
+
 def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None = None,
           max_files: int | None = None, exclude_remediated: bool = False,
           scope_out: dict | None = None, scope_files: dict | None = None,

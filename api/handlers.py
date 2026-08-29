@@ -1566,26 +1566,32 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # (worker.py's own retry/backoff) still sees `init_scan_run` reset status to 'running' on
         # its next attempt — this is a between-attempts marker, not a terminal one.
         # PRD Phase 3, interactive scans: reconstruct the estate from a per-user delta cursor
-        # instead of walking the whole Drive — the same drive_delta seam #951 built for the
-        # scheduled sweep, now also available to a user-initiated scan. Deliberately narrow:
-        # only a whole-Drive request (no folder/folders — Drive's Changes API has no folder
-        # filter of its own, see core._interactive_drive_sync_plan), only Drive (SharePoint's
-        # interactive delta sync is a separate follow-up — its own unattended credential is
-        # tied to ONE configured library, not an arbitrary signed-in user's target), and only
-        # when the caller has not opted out via incremental=false (the same flag that already
-        # gates ADR 0011's cross-scan analysis reuse — one "let ACP skip redundant work" switch
-        # rather than a second one for a sibling concept).
+        # instead of walking the whole source — the same drive_delta seam #951 built for the
+        # scheduled sweep, now also available to a user-initiated scan (#978 for Drive). Both
+        # branches share the same two preconditions: a whole-source request (no folder/folders
+        # for Drive — Changes API has no folder filter of its own; for SharePoint, only the two
+        # whole-single-drive shapes scanner._sp_whole_library_target recognises — Graph's delta
+        # query is scoped to exactly one drive and has no folder filter either), and the caller
+        # not having opted out via incremental=false (the same flag that already gates ADR
+        # 0011's cross-scan analysis reuse — one "let ACP skip redundant work" switch rather
+        # than a second one for a sibling concept).
         drive_delta = None
-        if (source == "drive" and drive_token and not folder and not folders
-                and bool(payload.get("incremental", True)) and user):
-            drive_delta = core._interactive_drive_sync_plan(user, svc)
+        sp_delta = None
+        if bool(payload.get("incremental", True)) and user:
+            if source == "drive" and drive_token and not folder and not folders:
+                drive_delta = core._interactive_drive_sync_plan(user, svc)
+            elif source == "sharepoint" and sp_tok:
+                from scanner import _sp_whole_library_target
+                eligible, sp_drive_id = _sp_whole_library_target(folder, folders)
+                if eligible:
+                    sp_delta = core._interactive_sp_sync_plan(user, sp_tok, sp_drive_id)
         try:
             items = _list(source, svc, folder=effective_folder, sp_token=sp_tok,
                           max_files=FANOUT_MAX_FILES, **({"folders": folders} if folders else {}),
                           **({"exclude_folders": exclude_folders} if exclude_folders else {}),
                           exclude_remediated=bool(payload.get("exclude_remediated", False)),
                           scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory,
-                          progress_cb=_listing_progress, drive_delta=drive_delta)
+                          progress_cb=_listing_progress, drive_delta=drive_delta, sp_delta=sp_delta)
         except Exception as e:
             try:
                 core.store.set_scan_status(scan_id, "failed")

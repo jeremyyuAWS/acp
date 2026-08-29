@@ -328,6 +328,10 @@ def test_sp_token_from_payload_reaches_list(isolated_store, monkeypatch):
     fake_scanner.ACP = ROOT
     fake_scanner.FANOUT_MAX_FILES = 5000
     fake_scanner._scope_for_listing = lambda user: {}
+    # This test is about token forwarding, not delta-sync eligibility — opt out of the PRD
+    # Phase 3 interactive gate (scanner._sp_whole_library_target) so it never has to reason
+    # about a real core._interactive_sp_sync_plan call against a MagicMock scanner module.
+    fake_scanner._sp_whole_library_target = lambda folder, folders: (False, None)
 
     fake_rubric_mod = MagicMock()
     fake_rubric_mod.Rubric.load_active.return_value = _fake_rubric()
