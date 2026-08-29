@@ -176,6 +176,11 @@ def _sp_inventory_row(item: dict) -> dict:
     parent = (item.get("parentReference") or {}).get("path")
     return _inv_row(file=_safe_name(item.get("name", "") or ""), drive_file_id=item.get("id"),
                     mime=fmeta.get("mimeType"), size=item.get("size"),
+                    # quickXorHash — see the identical field on _sp_list's scannable `rec`. Set
+                    # here too for parity with _drive_inventory_row, even though a non-scannable
+                    # item is never analysed: the estate inventory should not look checksum-less
+                    # for SharePoint when the data was there all along.
+                    checksum=(fmeta.get("hashes") or {}).get("quickXorHash"),
                     created_at=item.get("createdDateTime"),
                     source_modified=item.get("lastModifiedDateTime"),
                     owner=owner, parent_folder=parent,
@@ -1565,6 +1570,23 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                            # Source metadata for the inventory row (see _scan_discover). None-safe:
                            # a Graph stub without these fields just yields None.
                            "source_mime": fmeta.get("mimeType"),
+                           # quickXorHash — OneDrive/SharePoint's own content hash, the Graph
+                           # analogue of Drive's md5Checksum (_normalize, above). It rides along
+                           # on the SAME `file` facet `_SP_ITEM_SELECT` already asks for (Graph
+                           # returns a facet whole-or-not-at-all; there is no narrower sub-select
+                           # for one of its properties), so no extra field or round trip is needed
+                           # to read it — it was always in the response, just never looked at.
+                           # None until SharePoint/OneDrive has finished computing it for a very
+                           # freshly-written file, same as md5Checksum's own gap for Drive.
+                           #
+                           # This is the ONE thing every checksum-gated reuse path downstream reads
+                           # off `item.get("checksum")` and has always found None for SharePoint —
+                           # ADR 0011 cross-scan analysis reuse (store.find_prior_analysis), within
+                           # -scan dedup (store.find_by_checksum), the ADR 0020 source-bytes cache
+                           # (scanner.read_cached_source/cache_source_bytes), and the ADR 0003
+                           # document identity layer (documents.resolve_doc_id). Populating it here
+                           # is the only change any of them needed.
+                           "checksum": (fmeta.get("hashes") or {}).get("quickXorHash"),
                            "size_kb": _inv_size_kb(item.get("size")),
                            "created_at": item.get("createdDateTime"),
                            "source_modified": item.get("lastModifiedDateTime"),
