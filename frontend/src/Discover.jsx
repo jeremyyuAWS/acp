@@ -224,7 +224,8 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
     const load = () => getJobs().then((d) => {
       if (!live) return
       setWorkerSnap({ workers: d.workers ?? 0, alive: !!d.worker_tier_alive,
-                      suggested: d.suggested_workers ?? 4, runtime_mode: d.runtime_mode ?? 'auto' })
+                      suggested: d.suggested_workers ?? 4, runtime_mode: d.runtime_mode ?? 'auto',
+                      oldestQueuedCreatedAt: d.oldest_queued?.created_at ?? null })
     }).catch(() => {})
     load()
     const id = setInterval(load, 10000)
