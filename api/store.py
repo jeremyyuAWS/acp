@@ -1515,7 +1515,13 @@ class Store:
             self._db.execute(cur, "SELECT status FROM scan_runs WHERE id=%s", (holder,))
             holder_row = self._db.fetchone(cur)
         holder_status = (holder_row or {}).get("status")
-        if holder_status and holder_status not in ("queued", "running"):
+        # 'paused' (ADR 0038) counts as genuinely live here, same as 'queued'/'running' — a
+        # paused run has, by design, no active workers, and without this a resume would find its
+        # own discovery slot already reclaimed by a second scan that started while it waited.
+        # Found by inspection while implementing pause/resume: this staleness check predates the
+        # ADR and reads any non-queued/non-running status as abandoned, which is correct for
+        # every terminal status but was never updated for the one live status pause introduces.
+        if holder_status and holder_status not in ("queued", "running", "paused"):
             stale = True
         else:
             try:
@@ -2764,6 +2770,64 @@ class Store:
             # had already finalized keeps its original stamp rather than being back-dated to the stop.
             self._stamp_assessed_if_ran(cur, sid)
         return True
+
+    def pause_scan(self, sid: str, owner: str | None = None) -> bool:
+        """ADR 0038 step 1 of 2 (step 2 is handlers.set_scan_paused_marker) — CAS
+        status: running -> paused. Owner-scoped like cancel_scan. False when the scan doesn't
+        exist, belongs to someone else, or isn't currently 'running' (a finished, cancelled, or
+        already-paused run cannot be paused again).
+
+        Deliberately NOT _end_running_scan: that helper kills outstanding jobs and stamps
+        completed_at, which is exactly cancel's terminal behaviour and exactly what pause must
+        NOT do. A paused run's jobs are left alone — one already claimed by a worker runs to
+        completion and persists its row (cooperative, never a mid-file kill); it is the pause
+        marker checked inside _scan_batch/_scan_file, not a killed job, that stops anything NEW
+        from being dispatched. completed_at stays unset so the run reads as legitimately open.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT owner_email, status FROM scan_runs WHERE id=%s", (sid,))
+            row = self._db.fetchone(cur)
+            if not row or (owner is not None and row.get("owner_email") != owner):
+                return False
+            if row.get("status") != "running":
+                return False
+            self._db.execute(cur, "UPDATE scan_runs SET status='paused' WHERE id=%s AND status='running'",
+                             (sid,))
+            return (getattr(cur, "rowcount", 0) or 0) > 0
+
+    def resume_scan(self, sid: str, owner: str | None = None) -> bool:
+        """ADR 0038 step 1 of 2 (step 2 is handlers.clear_scan_paused_marker, and the caller
+        re-dispatching undone_scan_items through _enqueue_analysis — the actual re-work is the
+        route layer's job, not this CAS). False when the scan doesn't exist, belongs to someone
+        else, or isn't currently 'paused'."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT owner_email, status FROM scan_runs WHERE id=%s", (sid,))
+            row = self._db.fetchone(cur)
+            if not row or (owner is not None and row.get("owner_email") != owner):
+                return False
+            if row.get("status") != "paused":
+                return False
+            self._db.execute(cur, "UPDATE scan_runs SET status='running' WHERE id=%s AND status='paused'",
+                             (sid,))
+            return (getattr(cur, "rowcount", 0) or 0) > 0
+
+    def undone_scan_items(self, scan_id: str) -> list[dict]:
+        """The run's in-scope files with no current file_records row (ADR 0038 §3) — what
+        resume re-dispatches through _enqueue_analysis. Shaped like list_inventory's rows so a
+        caller can pass them straight through unchanged; idempotent upsert on the receiving end
+        means this query may be (and is) conservative rather than exact under concurrent writes.
+
+        Same "done" definition as count_files_done: a row's mere EXISTENCE in file_records for
+        this scan_id, not any freshness check on it — resume never re-analyses a file that
+        already has a persisted result, current or not, matching what finalize already trusts.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT {self._INV_COLS} FROM scan_inventory si WHERE si.scan_id=%s "
+                "AND NOT EXISTS (SELECT 1 FROM file_records fr "
+                "                WHERE fr.scan_id=si.scan_id AND fr.file=si.file) "
+                "ORDER BY si.file", (scan_id,))
+            return self._db.fetchall(cur)
 
     def acknowledge_scan(self, scan_id: str, actor: str | None, owner: str | None = None) -> bool:
         """Record that the operator has reviewed lifecycle recommendations and approved this
