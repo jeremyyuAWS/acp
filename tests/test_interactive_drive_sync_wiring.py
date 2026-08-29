@@ -93,11 +93,16 @@ def test_a_non_drive_source_never_consults_the_gate(isolated_store, monkeypatch)
     assert plan_calls == []
 
 
-def test_incremental_false_opts_out_of_the_gate(isolated_store, monkeypatch):
+def test_incremental_false_still_reaches_the_gate(isolated_store, monkeypatch):
+    """incremental=false is the UI's actual default (App.jsx's ADR 0011 reuse toggle, off since
+    2026-08-19 — a real scan request never sends true). Discovery-level delta sync has no
+    ADR-0011-style invisible-skip risk (every reconstructed file still gets a fresh analysis), so
+    it must not be gated on that flag — a prior version tied the two together and made this
+    feature unreachable from the shipped app."""
     list_calls, plan_calls = _wire(monkeypatch, isolated_store)
     _discover("s-noinc-1", incremental=False)
-    assert plan_calls == [], "incremental=false must also opt out of discovery-level delta sync"
-    assert list_calls[-1]["drive_delta"] is None
+    assert len(plan_calls) == 1 and plan_calls[0][0] == OWNER
+    assert list_calls[-1]["drive_delta"] is _SENTINEL_DELTA
 
 
 def test_the_gates_own_none_falls_through_to_a_full_listing(isolated_store, monkeypatch):

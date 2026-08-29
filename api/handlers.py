@@ -1568,16 +1568,25 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # PRD Phase 3, interactive scans: reconstruct the estate from a per-user delta cursor
         # instead of walking the whole source — the same drive_delta seam #951 built for the
         # scheduled sweep, now also available to a user-initiated scan (#978 for Drive). Both
-        # branches share the same two preconditions: a whole-source request (no folder/folders
-        # for Drive — Changes API has no folder filter of its own; for SharePoint, only the two
+        # branches share one precondition: a whole-source request (no folder/folders for Drive —
+        # Changes API has no folder filter of its own; for SharePoint, only the two
         # whole-single-drive shapes scanner._sp_whole_library_target recognises — Graph's delta
-        # query is scoped to exactly one drive and has no folder filter either), and the caller
-        # not having opted out via incremental=false (the same flag that already gates ADR
-        # 0011's cross-scan analysis reuse — one "let ACP skip redundant work" switch rather
-        # than a second one for a sibling concept).
+        # query is scoped to exactly one drive and has no folder filter either).
+        #
+        # #978/#981 originally also required incremental=true, on the theory that it was the
+        # same "let ACP skip redundant work" switch as ADR 0011's cross-scan analysis reuse.
+        # It is not: ADR 0011's reuse is invisible in the result (a skipped file still reports a
+        # score, carried over from a prior run — why `incremental` defaults OFF in the UI,
+        # App.jsx's `incremental` useState, since 2026-08-19). Delta-sync reconstruction has no
+        # such risk — every file the reconstructed listing reports is verified against a
+        # drive-scoped baseline (core._sp_prior_inventory_for_drive) and still gets a fresh
+        # analysis; it only changes HOW the estate is enumerated, not what gets scored. Tying it
+        # to the same flag meant it could never fire for a real interactive scan: the UI that
+        # sets it removed its own toggle for this group the same day and never sends true. So
+        # eligibility here is the whole-source shape check alone, independent of `incremental`.
         drive_delta = None
         sp_delta = None
-        if bool(payload.get("incremental", True)) and user:
+        if user:
             if source == "drive" and drive_token and not folder and not folders:
                 drive_delta = core._interactive_drive_sync_plan(user, svc)
             elif source == "sharepoint" and sp_tok:
