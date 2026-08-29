@@ -1346,6 +1346,121 @@ def _sp_site_name(token: str, site_id: str) -> str | None:
         return None
 
 
+_SP_SCANNABLE_EXTS = {".docx", ".pptx", ".xlsx", ".pdf", ".html", ".htm"}
+
+
+def _sp_skip_folders(exclude_remediated: bool) -> set[str]:
+    """The library-relative folder names a SharePoint/OneDrive listing must never enter —
+    ACP's own output, so it is never re-ingested as a source document.
+
+    ACP's own output must never be re-ingested: a remediated copy re-discovered inflates the
+    file count and shows "remediated ✓" on a scan that remediated nothing (provenance.py).
+
+    THIS IS THE WEAKER OF THE TWO DEFENCES AND THAT IS A KNOWN GAP. Drive stamps the ARTIFACT
+    (properties.acpGenerated), which survives a rename or a move; provenance.py lists five ways
+    folder-based exclusion breaks and rejects it for Drive on exactly those grounds. Graph has
+    no equivalent of Drive's arbitrary `properties` — the nearest is a custom SharePoint column
+    on the library's listItem, which needs Sites.Manage.All and per-library provisioning. So
+    this ships folder-scoped, deliberately and with the limitation written down rather than
+    implied: rename the mirror on one side only, move a remediated file out of it, or create a
+    second folder of the same name, and re-ingestion comes back.
+
+    The archive is skipped UNCONDITIONALLY, unlike the mirror, and the difference is not an
+    oversight.
+
+    The mirror holds ACP's OUTPUT, so excluding it is about not reporting "remediated ✓" on a
+    scan that remediated nothing — a judgement an operator can reasonably switch off.
+    SP_ARCHIVE_FOLDER holds displaced ORIGINALS: byte-for-byte copies of documents that still
+    exist at their own paths, put there by ACP immediately before overwriting them. Counting
+    one is counting the same document twice, and reporting its failures is reporting failures
+    that the file at the real path no longer has. It also grows without bound — one more copy
+    per save — so a library saved back a few times reads as an estate that is mostly broken.
+
+    There is no scan for which including them is the right answer, so there is no flag."""
+    skip_folders = {SP_ARCHIVE_FOLDER}
+    if exclude_remediated:
+        try:
+            import core
+            mirror = core.store.get_drive_mirror_folder()
+        except Exception:      # noqa: BLE001 — no store (tests, tooling): fall back to the default
+            mirror = "Remediated"
+        if mirror:
+            skip_folders.add(mirror)
+    return skip_folders
+
+
+def _sp_classify_item(item: dict, *, drive_id: str | None, skip_folders: set[str],
+                      exts: set[str]) -> dict | None:
+    """Classify ONE Graph driveItem KNOWN to be a file (the caller has already checked
+    "file" in item and deduped it by (drive_id, id)) — skip-folder + OS-metadata exclusion,
+    then split into the whole-estate triage row, and either a scannable record or a
+    non-scannable inventory row. Shared VERBATIM by _sp_list's live paging loop and
+    sp_reconstructed_listing's replay over a merged prior+changed set, so a reconstruction
+    classifies each item byte-identically to a fresh listing — not a close approximation of
+    one. Returns None for an item neither listing should count (in a skip-folder, or OS
+    metadata like .DS_Store/Thumbs.db).
+
+    Return shape: {"est_row": ..., "scannable": {...} or None, "inventory_row": {...} or None}
+    — est_row is built for every kept file (scannable or not), the SharePoint analogue of
+    _search_drive's own est_files entries; exactly one of scannable/inventory_row is set,
+    matching a supported extension or not.
+    """
+    name = item.get("name", "")
+    # parentReference.path looks like "/drive/root:/Remediated/sub". Matched as PATH SEGMENTS,
+    # not substrings: a library called "Remediated Policies" is a different folder and must
+    # still be scanned.
+    parent = (item.get("parentReference") or {}).get("path", "")
+    segments = parent.split(":", 1)[-1].strip("/").split("/")
+    if skip_folders.intersection(segments):
+        return None
+    # OS metadata files (.DS_Store, Thumbs.db, …) are synced by cloud agents but are not user
+    # documents. Skip before the estate row so they do not appear in counts.
+    if estate_inventory.is_os_metadata(name):
+        return None
+    # The estate row for EVERY file (scannable or not), classified the same way the Drive
+    # inventory is. It also carries the triage fields estate_inventory._sample_meta reads off a
+    # Drive file object (owners[] / size / shared / modifiedTime), mapped from the Graph item's
+    # own field names — without them the estate drill-down's owner / biggest-first / shared
+    # lenses (the ones the Drive path populates) come back blank for SharePoint.
+    cb = (item.get("createdBy") or {}).get("user") or {}
+    lb = (item.get("lastModifiedBy") or {}).get("user") or {}
+    owner = (cb.get("displayName") or cb.get("email")
+             or lb.get("displayName") or lb.get("email"))
+    est_row = {"id": item.get("id"), "name": name,
+              "mimeType": (item.get("file") or {}).get("mimeType"),
+              "owners": ([{"displayName": owner}] if owner else []),
+              "size": item.get("size"), "shared": item.get("shared"),
+              "modifiedTime": item.get("lastModifiedDateTime")}
+    scannable = inventory_row = None
+    if Path(name).suffix.lower() in exts:
+        fmeta = item.get("file") or {}
+        scannable = {"name": _safe_name(name), "id": item.get("id"), "sp": True,
+                    # Source metadata for the inventory row (see _scan_discover). None-safe:
+                    # a Graph stub without these fields just yields None.
+                    "source_mime": fmeta.get("mimeType"),
+                    # quickXorHash — OneDrive/SharePoint's own content hash, the Graph analogue
+                    # of Drive's md5Checksum (_normalize, above). It rides along on the SAME
+                    # `file` facet _SP_ITEM_SELECT already asks for (Graph returns a facet
+                    # whole-or-not-at-all; there is no narrower sub-select for one of its
+                    # properties), so no extra field or round trip is needed to read it. This is
+                    # the ONE thing every checksum-gated reuse path downstream reads off
+                    # item.get("checksum") and has always found None for SharePoint — ADR 0011
+                    # cross-scan analysis reuse, within-scan dedup, the ADR 0020 source-bytes
+                    # cache, and the ADR 0003 document identity layer. Populating it here is the
+                    # only change any of them needed.
+                    "checksum": (fmeta.get("hashes") or {}).get("quickXorHash"),
+                    "size_kb": _inv_size_kb(item.get("size")),
+                    "created_at": item.get("createdDateTime"),
+                    "source_modified": item.get("lastModifiedDateTime"),
+                    "owner": owner,
+                    "parent_folder": (item.get("parentReference") or {}).get("path")}
+        if drive_id:
+            scannable["driveId"] = drive_id
+    else:
+        inventory_row = _sp_inventory_row(item)
+    return {"est_row": est_row, "scannable": scannable, "inventory_row": inventory_row}
+
+
 def _sp_list(token: str, max_files: int = 200, site: str | None = None,
              exclude_remediated: bool = False, inventory_out: list | None = None,
              scope_out: dict | None = None,
@@ -1375,40 +1490,8 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
     analysed a second time, and surfaces in the UI as "x2 copies". Each source is responsible
     for yielding unique IDENTITIES; _dedupe_names only disambiguates genuine NAME collisions
     between different items."""
-    exts = {".docx", ".pptx", ".xlsx", ".pdf", ".html", ".htm"}
-    # ACP's own output must never be re-ingested: a remediated copy re-discovered inflates the
-    # file count and shows "remediated ✓" on a scan that remediated nothing (provenance.py).
-    #
-    # THIS IS THE WEAKER OF THE TWO DEFENCES AND THAT IS A KNOWN GAP. Drive stamps the ARTIFACT
-    # (properties.acpGenerated), which survives a rename or a move; provenance.py lists five ways
-    # folder-based exclusion breaks and rejects it for Drive on exactly those grounds. Graph has
-    # no equivalent of Drive's arbitrary `properties` — the nearest is a custom SharePoint column
-    # on the library's listItem, which needs Sites.Manage.All and per-library provisioning. So
-    # this ships folder-scoped, deliberately and with the limitation written down rather than
-    # implied: rename the mirror on one side only, move a remediated file out of it, or create a
-    # second folder of the same name, and re-ingestion comes back.
-    mirror = ""
-    if exclude_remediated:
-        try:
-            import core
-            mirror = core.store.get_drive_mirror_folder()
-        except Exception:      # noqa: BLE001 — no store (tests, tooling): fall back to the default
-            mirror = "Remediated"
-    # The archive is skipped UNCONDITIONALLY, unlike the mirror, and the difference is not an
-    # oversight.
-    #
-    # The mirror holds ACP's OUTPUT, so excluding it is about not reporting "remediated ✓" on a
-    # scan that remediated nothing — a judgement an operator can reasonably switch off.
-    # SP_ARCHIVE_FOLDER holds displaced ORIGINALS: byte-for-byte copies of documents that still
-    # exist at their own paths, put there by ACP immediately before overwriting them. Counting
-    # one is counting the same document twice, and reporting its failures is reporting failures
-    # that the file at the real path no longer has. It also grows without bound — one more copy
-    # per save — so a library saved back a few times reads as an estate that is mostly broken.
-    #
-    # There is no scan for which including them is the right answer, so there is no flag.
-    skip_folders = {SP_ARCHIVE_FOLDER}
-    if mirror:
-        skip_folders.add(mirror)
+    exts = _SP_SCANNABLE_EXTS
+    skip_folders = _sp_skip_folders(exclude_remediated)
     files: list[dict] = []
     # Keyed by (drive, item) — an item id is unique only within its drive, so a bare id would
     # collapse two genuinely different documents from two libraries into one.
@@ -1536,68 +1619,16 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                         relisted += 1
                         continue
                     seen.add(key)
-                name = item.get("name", "")
-                # parentReference.path looks like "/drive/root:/Remediated/sub". Matched as PATH
-                # SEGMENTS, not substrings: a library called "Remediated Policies" is a different
-                # folder and must still be scanned.
-                parent = (item.get("parentReference") or {}).get("path", "")
-                segments = parent.split(":", 1)[-1].strip("/").split("/")
-                if skip_folders.intersection(segments):
+                classified = _sp_classify_item(item, drive_id=drive_id,
+                                               skip_folders=skip_folders, exts=exts)
+                if classified is None:
                     continue
-                # OS metadata files (.DS_Store, Thumbs.db, …) are synced by cloud agents but are
-                # not user documents. Skip before the estate row so they do not appear in counts.
-                if estate_inventory.is_os_metadata(name):
-                    continue
-                # The estate row for EVERY file (scannable or not), classified the same way the Drive
-                # inventory is. Placed after dedup + folder-skip so it counts exactly what a scan sees.
-                # It also carries the triage fields estate_inventory._sample_meta reads off a Drive file
-                # object (owners[] / size / shared / modifiedTime), mapped from the Graph item's own
-                # field names — without them the estate drill-down's owner / biggest-first / shared
-                # lenses (the ones the Drive path populates) come back blank for SharePoint.
-                cb = (item.get("createdBy") or {}).get("user") or {}
-                lb = (item.get("lastModifiedBy") or {}).get("user") or {}
-                owner = (cb.get("displayName") or cb.get("email")
-                         or lb.get("displayName") or lb.get("email"))
-                est_files.append({"id": item_id, "name": name,
-                                  "mimeType": (item.get("file") or {}).get("mimeType"),
-                                  "owners": ([{"displayName": owner}] if owner else []),
-                                  "size": item.get("size"),
-                                  "shared": item.get("shared"),
-                                  "modifiedTime": item.get("lastModifiedDateTime")})
-                if Path(name).suffix.lower() in exts:
-                    fmeta = item.get("file") or {}
-                    rec = {"name": _safe_name(name), "id": item_id, "sp": True,
-                           # Source metadata for the inventory row (see _scan_discover). None-safe:
-                           # a Graph stub without these fields just yields None.
-                           "source_mime": fmeta.get("mimeType"),
-                           # quickXorHash — OneDrive/SharePoint's own content hash, the Graph
-                           # analogue of Drive's md5Checksum (_normalize, above). It rides along
-                           # on the SAME `file` facet `_SP_ITEM_SELECT` already asks for (Graph
-                           # returns a facet whole-or-not-at-all; there is no narrower sub-select
-                           # for one of its properties), so no extra field or round trip is needed
-                           # to read it — it was always in the response, just never looked at.
-                           # None until SharePoint/OneDrive has finished computing it for a very
-                           # freshly-written file, same as md5Checksum's own gap for Drive.
-                           #
-                           # This is the ONE thing every checksum-gated reuse path downstream reads
-                           # off `item.get("checksum")` and has always found None for SharePoint —
-                           # ADR 0011 cross-scan analysis reuse (store.find_prior_analysis), within
-                           # -scan dedup (store.find_by_checksum), the ADR 0020 source-bytes cache
-                           # (scanner.read_cached_source/cache_source_bytes), and the ADR 0003
-                           # document identity layer (documents.resolve_doc_id). Populating it here
-                           # is the only change any of them needed.
-                           "checksum": (fmeta.get("hashes") or {}).get("quickXorHash"),
-                           "size_kb": _inv_size_kb(item.get("size")),
-                           "created_at": item.get("createdDateTime"),
-                           "source_modified": item.get("lastModifiedDateTime"),
-                           "owner": owner,
-                           "parent_folder": (item.get("parentReference") or {}).get("path")}
-                    if drive_id:
-                        rec["driveId"] = drive_id
-                    files.append(rec)
-                elif inventory_out is not None:
+                est_files.append(classified["est_row"])
+                if classified["scannable"] is not None:
+                    files.append(classified["scannable"])
+                elif inventory_out is not None and classified["inventory_row"] is not None:
                     # Non-scannable item — inventoried with metadata, never analysed.
-                    inventory_out.append(_sp_inventory_row(item))
+                    inventory_out.append(classified["inventory_row"])
         if len(files) >= max_files:
             # Truncated only if the cap left something unlisted: this library still has a batch
             # pending, or a later library was never reached. A page fully read is not truncation —
@@ -1684,6 +1715,112 @@ def sp_delta_since(token: str, drive_id: str | None, delta_link: str | None
         if "@odata.deltaLink" in data:
             new_delta_link = data["@odata.deltaLink"]
     return items, removed, new_delta_link
+
+
+# --- PRD Phase 3: reconstruct a SharePoint/OneDrive listing from a prior scan + a Graph delta -
+# The SharePoint mirror of _drive_file_from_inventory_row/apply_drive_delta/
+# drive_reconstructed_listing (#951). _sp_list has no _normalize()-equivalent shared tail of its
+# own (site/library iteration and budget tracking live inline in its loop), so this replays
+# _sp_classify_item — the same per-item classification _sp_list's live loop uses — over a
+# merged prior+changed set instead of sharing a finishing function the way the Drive path does.
+
+def _sp_file_from_inventory_row(row: dict) -> dict:
+    """The inverse of _sp_inventory_row/the scannable `rec` _sp_classify_item builds: reconstruct
+    a raw Graph-driveItem-shaped dict from one persisted scan_inventory row
+    (store.latest_scan_inventory_items), so a reconstructed listing can run the SAME
+    _sp_classify_item a fresh listing does. `size` is approximate (KB-rounded — scan_inventory
+    only ever stored that) — cosmetic only, never a compliance-relevant fact.
+
+    `content_type` (from _sp_enrich_content_types) can NEVER be reconstructed: it is never
+    persisted to scan_inventory — a carried-forward file simply has none, exactly as it always
+    would have without reconstruction touching it. sp_reconstructed_listing does not attempt
+    the live per-item Graph call that would be needed to recover it; doing so for every carried-
+    forward file would spend exactly the cost this whole feature exists to avoid.
+    """
+    size_kb = row.get("size_kb")
+    hashes = {"quickXorHash": row["checksum"]} if row.get("checksum") else {}
+    return {"id": row.get("drive_file_id"), "name": row.get("file"),
+           "file": {"mimeType": row.get("mime"), "hashes": hashes},
+           "createdDateTime": row.get("created_at"),
+           "lastModifiedDateTime": row.get("source_modified"),
+           "size": int(size_kb) * 1024 if size_kb is not None else None,
+           "createdBy": {"user": {"displayName": row["owner"]}} if row.get("owner") else {},
+           "parentReference": {"path": row.get("parent_folder"), "driveId": row.get("drive_id")}}
+
+
+def apply_sp_delta(prior_files: list[dict], changed_files: list[dict], removed_ids) -> list[dict]:
+    """Reconstruct 'the current known SharePoint/OneDrive estate' from `prior_files` (raw
+    Graph-item-shaped dicts — see _sp_file_from_inventory_row) with `changed_files` (fresh raw
+    items from sp_delta_since) overlaid and `removed_ids` dropped. Keyed by (driveId, item id) —
+    a Graph item id is unique only within its drive (see _sp_list) — matching sp_delta_since's
+    own (drive_id, id) keying for removed_ids and _SP_ITEM_SELECT's parentReference field for
+    changed_files. A changed id replaces its prior entry WHOLLY (fresh metadata wins, never
+    merged field-by-field); anything not mentioned by the delta carries forward untouched. A
+    changed id with no prior entry is a genuinely new file. Pure and side-effect free — the
+    same contract as apply_drive_delta, over the two-part identity SharePoint needs."""
+    removed_ids = set(removed_ids or ())
+
+    def _key(item):
+        return ((item.get("parentReference") or {}).get("driveId"), item.get("id"))
+
+    changed_by_key = {_key(f): f for f in changed_files if f.get("id")}
+    seen: set = set()
+    out = []
+    for f in prior_files:
+        k = _key(f)
+        if not k[1] or k in removed_ids:
+            continue
+        seen.add(k)
+        out.append(changed_by_key.get(k, f))
+    for k, f in changed_by_key.items():
+        if k not in seen and k not in removed_ids:
+            out.append(f)
+    return out
+
+
+def sp_reconstructed_listing(prior_files: list[dict], changed_files: list[dict], removed_ids, *,
+                             max_files: int = 200, exclude_remediated: bool = False,
+                             scope_out: dict | None = None,
+                             inventory_out: list | None = None) -> list[dict]:
+    """A SharePoint/OneDrive listing's worth of result, WITHOUT walking Graph — see
+    apply_sp_delta for how the estate is reconstructed. Classifies every merged item through
+    _sp_classify_item, the SAME function _sp_list's live loop uses, so a reconstruction is
+    indistinguishable downstream from a fresh listing: same skip-folder/OS-metadata filtering,
+    same scannable/inventory split, same whole-estate triage rows.
+
+    `scope_out['reconstructed'] = True` is the only difference from a fresh _sp_list call's
+    contract. `truncated` can still fire here (the merged set exceeding `max_files`) even though
+    there is no raw paging cap to hit — the same distinction _finish_drive_listing draws for
+    Drive's own reconstruction.
+    """
+    merged = apply_sp_delta(prior_files, changed_files, removed_ids)
+    skip_folders = _sp_skip_folders(exclude_remediated)
+    files: list[dict] = []
+    est_files: list[dict] = []
+    for item in merged:
+        if "file" not in item:
+            continue
+        drive_id = (item.get("parentReference") or {}).get("driveId")
+        classified = _sp_classify_item(item, drive_id=drive_id, skip_folders=skip_folders,
+                                       exts=_SP_SCANNABLE_EXTS)
+        if classified is None:
+            continue
+        est_files.append(classified["est_row"])
+        if classified["scannable"] is not None:
+            files.append(classified["scannable"])
+        elif inventory_out is not None and classified["inventory_row"] is not None:
+            inventory_out.append(classified["inventory_row"])
+    result = files[:max_files]
+    if scope_out is not None:
+        # _list()'s SharePoint tail reads scope_out["truncated"] straight off
+        # inventory["truncated"] (unlike Drive, which folds a separate max_files-overflow check
+        # in at its own top level) — so the overflow this reconstruction can hit (a merged set
+        # bigger than max_files, with no "pages remaining" of its own to signal it) belongs HERE,
+        # matching what a live _sp_list caller already reads.
+        scope_out["inventory"] = estate_inventory.summarize(
+            est_files, truncated=len(files) > max_files)
+        scope_out["reconstructed"] = True
+    return result
 
 
 def _sp_put(token: str, url: str, data: bytes, content_type: str):
@@ -1932,7 +2069,8 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
           inventory_out: list | None = None,
           folders: list[str] | None = None,
           exclude_folders: list[str] | None = None,
-          progress_cb=None, drive_delta: dict | None = None) -> list[dict]:
+          progress_cb=None, drive_delta: dict | None = None,
+          sp_delta: dict | None = None) -> list[dict]:
     """List the source. `scope_out`, when given, is filled in with WHAT WAS COVERED.
 
     `inventory_out`, when given, is filled with per-file inventory rows for the NON-scannable
@@ -2029,17 +2167,28 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         # scopeable at all — before this, "SharePoint" could only ever mean a whole site or the
         # whole of the signed-in user's OneDrive.
         sp_locs, site = _sp_locations(roots)
-        # `locations` is passed ONLY when folders were actually chosen, so a scan that does not
-        # use the new mode calls _sp_list with exactly the arguments it always did. Passing it
-        # unconditionally broke four existing tests whose stubs pin the old signature — and those
-        # stubs are right to: a caller that has not opted into a feature should not be able to
-        # tell it exists.
-        extra = {"locations": sp_locs} if sp_locs else {}
-        if excl:
-            extra["exclude_ids"] = excl
-        result = _sp_list(sp_token, max_files or 200, site=site,
-                          exclude_remediated=exclude_remediated, inventory_out=inventory_out,
-                          scope_out=scope_out, **extra)
+        if sp_delta is not None:
+            # PRD Phase 3: reconstruct the estate from the prior scan's inventory + a Graph
+            # delta instead of walking SharePoint — see core._sp_sync_plan for how `sp_delta`
+            # is built. Only ever populated for the scheduled sweep's whole-configured-library
+            # request ({drive_id}/root, PR #961/#978's scope), so it is honored unconditionally
+            # here — the same trust the Drive branch above places in `drive_delta`.
+            result = sp_reconstructed_listing(
+                sp_delta["prior_files"], sp_delta["changed"], sp_delta["removed_ids"],
+                max_files=max_files or 200, exclude_remediated=exclude_remediated,
+                scope_out=scope_out, inventory_out=inventory_out)
+        else:
+            # `locations` is passed ONLY when folders were actually chosen, so a scan that does not
+            # use the new mode calls _sp_list with exactly the arguments it always did. Passing it
+            # unconditionally broke four existing tests whose stubs pin the old signature — and those
+            # stubs are right to: a caller that has not opted into a feature should not be able to
+            # tell it exists.
+            extra = {"locations": sp_locs} if sp_locs else {}
+            if excl:
+                extra["exclude_ids"] = excl
+            result = _sp_list(sp_token, max_files or 200, site=site,
+                              exclude_remediated=exclude_remediated, inventory_out=inventory_out,
+                              scope_out=scope_out, **extra)
         if scope_out is not None:
             # `site_name` for the same reason `folder_name` exists on the Drive branch: a Graph
             # site id is `contoso.sharepoint.com,<guid>,<guid>`, and a boundary the reader cannot
@@ -3318,12 +3467,14 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
              exclude_remediated: bool = False, inventory_out: list | None = None,
              folders: list[str] | None = None,
              exclude_folders: list[str] | None = None,
-             drive_delta: dict | None = None) -> dict:
+             drive_delta: dict | None = None, sp_delta: dict | None = None) -> dict:
     # `drive_delta` — PRD Phase 3: {"prior_files", "changed", "removed_ids"}, produced by
     # core._drive_sync_plan for the scheduled sweep only. When given (whole-Drive scans only —
     # folder/folders narrows the scope in a way a delta reconstruction can't honor), `_list`
     # reconstructs the estate from the prior scan's inventory + this delta instead of walking
-    # Drive. None (every other caller) is today's unchanged behavior.
+    # Drive. None (every other caller) is today's unchanged behavior. `sp_delta` is the same
+    # seam for SharePoint (core._sp_sync_plan, the scheduled sweep's whole-configured-library
+    # request only).
     from store import RULE_CATALOG, _extract_sc  # import here to avoid circular at module load
     rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
@@ -3384,7 +3535,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                      **({"exclude_folders": exclude_folders} if exclude_folders else {}),
                      exclude_remediated=exclude_remediated, scope_out=scope,
                      scope_files=_scope_for_listing(user), inventory_out=inventory_out,
-                     drive_delta=drive_delta)
+                     drive_delta=drive_delta, sp_delta=sp_delta)
         n = len(items)
         # Metadata completeness: derivable from the listing itself before any download.
         exc_missing_optional = sum(

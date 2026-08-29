@@ -70,6 +70,7 @@ def core_mod(monkeypatch):
     def _scan(src, **kw):
         calls["scans"].append(src)
         calls.setdefault("drive_deltas", []).append(kw.get("drive_delta"))
+        calls.setdefault("sp_deltas", []).append(kw.get("sp_delta"))
         calls.setdefault("sp_tokens", []).append(kw.get("sp_token"))
         calls.setdefault("folders", []).append(kw.get("folder"))
         if src == "drive":
@@ -291,9 +292,10 @@ def test_a_non_drive_source_never_consults_the_gate(core_mod, monkeypatch):
 
 # ── 5. PRD Phase 3 — the SharePoint sync gate ─────────────────────────────────────────
 #
-# Mirrors section 4 above, but for Microsoft Graph: no checksum on a SharePoint item (see
-# api/sp_sync.py's module docstring), so there is no reconstruction step here, only gate-or-not —
-# the drive_delta=None fallback IS the only path for a real change, unlike Drive's dual path.
+# Mirrors section 4 above, for Microsoft Graph. Originally gate-or-not only (no checksum on a
+# SharePoint item, so no reconstruction was possible) — #963 added the checksum and this section
+# (item 10) added the reconstruction step itself, so _sp_sync_plan now has the SAME three-way
+# contract _drive_sync_plan does: skip, reconstruct, or fall back to a full listing.
 
 def test_an_unconfigured_sharepoint_sync_leaves_token_and_folder_none(core_mod, monkeypatch):
     """Zero behavior change until ACP_SP_SYNC_* is configured: the gate is never consulted,
@@ -306,7 +308,7 @@ def test_an_unconfigured_sharepoint_sync_leaves_token_and_folder_none(core_mod, 
 
     def _boom(*a, **k):
         raise AssertionError("the sharepoint sync gate must not run when unconfigured")
-    monkeypatch.setattr(core, "_sp_sync_gate", _boom)
+    monkeypatch.setattr(core, "_sp_sync_plan", _boom)
 
     core._do_scheduled_scan()
     assert calls["scans"] == ["sharepoint"]
@@ -390,6 +392,37 @@ def test_a_sharepoint_cursor_with_changes_triggers_a_full_scan_with_the_app_toke
     assert calls["sp_tokens"] == ["TOK1"], "the sync app's own token authenticates the scan"
     assert calls["folders"] == ["drv-1/root"], "the whole configured library, no site enumeration"
     assert store.sync_cursors["sharepoint"]["page_token"] == "tok-2"
+    assert calls["sp_deltas"] == [None], "no prior inventory to reconstruct from"
+
+
+def test_a_sharepoint_cursor_with_changes_and_a_prior_scan_reconstructs_instead_of_a_fresh_listing(
+        core_mod, monkeypatch):
+    import scanner
+    import sp_sync
+    core, store, calls = core_mod
+    store.schedule["source"] = "sharepoint"
+    store.sync_cursors["sharepoint"] = {"page_token": "tok-1"}
+    store.prior_inventory = [{"file": "unchanged.pptx", "drive_file_id": "F0",
+                             "mime": "application/vnd.openxmlformats-officedocument"
+                                    ".presentationml.presentation",
+                             "size_kb": 1, "checksum": "x", "created_at": None,
+                             "source_modified": None, "owner": None, "parent_folder": None,
+                             "drive_id": "drv-1"}]
+    monkeypatch.setattr(sp_sync, "sp_sync_configured", lambda: True)
+    monkeypatch.setattr(sp_sync, "sync_drive_id", lambda: "drv-1")
+    monkeypatch.setattr(sp_sync, "app_token", lambda: "TOK1")
+    changed_file = {"id": "I1", "name": "changed.pptx",
+                    "parentReference": {"driveId": "drv-1"}}
+    monkeypatch.setattr(scanner, "sp_delta_since",
+                        lambda token, drive_id, link: ([changed_file], set(), "tok-2"))
+
+    core._do_scheduled_scan()
+    assert calls["scans"] == ["sharepoint"]
+    [delta] = calls["sp_deltas"]
+    assert delta is not None, "a prior scan exists — must reconstruct, not fall back to a full listing"
+    assert delta["changed"] == [changed_file]
+    assert delta["removed_ids"] == set()
+    assert [f["id"] for f in delta["prior_files"]] == ["F0"]
 
 
 def test_a_sharepoint_cursor_with_removed_files_also_triggers_a_scan(core_mod, monkeypatch):
