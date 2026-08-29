@@ -70,6 +70,8 @@ def core_mod(monkeypatch):
     def _scan(src, **kw):
         calls["scans"].append(src)
         calls.setdefault("drive_deltas", []).append(kw.get("drive_delta"))
+        calls.setdefault("sp_tokens", []).append(kw.get("sp_token"))
+        calls.setdefault("folders", []).append(kw.get("folder"))
         if src == "drive":
             raise RuntimeError("HttpError 403 ... Request had insufficient authentication scopes.")
         return {"summary": {"files": 1}}
@@ -285,6 +287,144 @@ def test_a_non_drive_source_never_consults_the_gate(core_mod, monkeypatch):
     monkeypatch.setattr(scanner, "drive_start_page_token", _boom)
     core._do_scheduled_scan()
     assert calls["scans"] == ["local"]
+
+
+# ── 5. PRD Phase 3 — the SharePoint sync gate ─────────────────────────────────────────
+#
+# Mirrors section 4 above, but for Microsoft Graph: no checksum on a SharePoint item (see
+# api/sp_sync.py's module docstring), so there is no reconstruction step here, only gate-or-not —
+# the drive_delta=None fallback IS the only path for a real change, unlike Drive's dual path.
+
+def test_an_unconfigured_sharepoint_sync_leaves_token_and_folder_none(core_mod, monkeypatch):
+    """Zero behavior change until ACP_SP_SYNC_* is configured: the gate is never consulted,
+    sp_token/folder stay None, and the scan proceeds exactly as it always has (the same
+    PermissionError path it always had with no unattended SharePoint credential)."""
+    import sp_sync
+    core, store, calls = core_mod
+    store.schedule["source"] = "sharepoint"
+    monkeypatch.setattr(sp_sync, "sp_sync_configured", lambda: False)
+
+    def _boom(*a, **k):
+        raise AssertionError("the sharepoint sync gate must not run when unconfigured")
+    monkeypatch.setattr(core, "_sp_sync_gate", _boom)
+
+    core._do_scheduled_scan()
+    assert calls["scans"] == ["sharepoint"]
+    assert calls["sp_tokens"] == [None]
+    assert calls["folders"] == [None]
+
+
+def test_first_ever_sharepoint_sweep_seeds_a_cursor_and_does_not_skip(core_mod, monkeypatch):
+    import scanner
+    import sp_sync
+    core, store, calls = core_mod
+    store.schedule["source"] = "sharepoint"
+    monkeypatch.setattr(sp_sync, "sp_sync_configured", lambda: True)
+    monkeypatch.setattr(sp_sync, "sync_drive_id", lambda: "drv-1")
+    monkeypatch.setattr(sp_sync, "app_token", lambda: "TOK1")
+    monkeypatch.setattr(scanner, "sp_delta_since",
+                        lambda token, drive_id, link: ([], set(), "link-1"))
+
+    core._do_scheduled_scan()
+    assert calls["scans"] == ["sharepoint"], "no cursor yet — nothing to skip, so it must scan"
+    assert calls["sp_tokens"] == ["TOK1"]
+    assert calls["folders"] == ["drv-1/root"]
+    assert store.sync_cursors["sharepoint"]["page_token"] == "link-1"
+
+
+def test_a_sharepoint_cursor_with_no_changes_skips_the_scan_entirely(core_mod, monkeypatch):
+    import scanner
+    import sp_sync
+    core, store, calls = core_mod
+    store.schedule["source"] = "sharepoint"
+    store.sync_cursors["sharepoint"] = {"page_token": "tok-1"}
+    monkeypatch.setattr(sp_sync, "sp_sync_configured", lambda: True)
+    monkeypatch.setattr(sp_sync, "sync_drive_id", lambda: "drv-1")
+    monkeypatch.setattr(sp_sync, "app_token", lambda: "TOK1")
+    monkeypatch.setattr(scanner, "sp_delta_since",
+                        lambda token, drive_id, link: ([], set(), "tok-2"))
+
+    core._do_scheduled_scan()
+    assert calls["scans"] == [], "nothing changed — a full re-scan must not run"
+    assert calls["saved"] == 0
+    assert store.sync_cursors["sharepoint"]["page_token"] == "tok-2", "the cursor still advances"
+
+
+def test_a_skipped_sharepoint_sweep_is_recorded_distinctly_from_a_zero_file_scan(
+        core_mod, monkeypatch):
+    import scanner
+    import sp_sync
+    core, store, calls = core_mod
+    store.schedule["source"] = "sharepoint"
+    store.sync_cursors["sharepoint"] = {"page_token": "tok-1"}
+    monkeypatch.setattr(sp_sync, "sp_sync_configured", lambda: True)
+    monkeypatch.setattr(sp_sync, "sync_drive_id", lambda: "drv-1")
+    monkeypatch.setattr(sp_sync, "app_token", lambda: "TOK1")
+    monkeypatch.setattr(scanner, "sp_delta_since",
+                        lambda token, drive_id, link: ([], set(), "tok-2"))
+
+    core._do_scheduled_scan()
+    rec = store.sweeps[-1]
+    assert rec["ok"] is True
+    assert rec["skipped"] is True
+    assert rec.get("files") is None
+    assert rec.get("scan_id") is None
+
+
+def test_a_sharepoint_cursor_with_changes_triggers_a_full_scan_with_the_app_token(
+        core_mod, monkeypatch):
+    import scanner
+    import sp_sync
+    core, store, calls = core_mod
+    store.schedule["source"] = "sharepoint"
+    store.sync_cursors["sharepoint"] = {"page_token": "tok-1"}
+    monkeypatch.setattr(sp_sync, "sp_sync_configured", lambda: True)
+    monkeypatch.setattr(sp_sync, "sync_drive_id", lambda: "drv-1")
+    monkeypatch.setattr(sp_sync, "app_token", lambda: "TOK1")
+    changed_file = {"id": "I1", "name": "changed.pptx"}
+    monkeypatch.setattr(scanner, "sp_delta_since",
+                        lambda token, drive_id, link: ([changed_file], set(), "tok-2"))
+
+    core._do_scheduled_scan()
+    assert calls["scans"] == ["sharepoint"], "a real change must trigger a scan, not a skip"
+    assert calls["sp_tokens"] == ["TOK1"], "the sync app's own token authenticates the scan"
+    assert calls["folders"] == ["drv-1/root"], "the whole configured library, no site enumeration"
+    assert store.sync_cursors["sharepoint"]["page_token"] == "tok-2"
+
+
+def test_a_sharepoint_cursor_with_removed_files_also_triggers_a_scan(core_mod, monkeypatch):
+    import scanner
+    import sp_sync
+    core, store, calls = core_mod
+    store.schedule["source"] = "sharepoint"
+    store.sync_cursors["sharepoint"] = {"page_token": "tok-1"}
+    monkeypatch.setattr(sp_sync, "sp_sync_configured", lambda: True)
+    monkeypatch.setattr(sp_sync, "sync_drive_id", lambda: "drv-1")
+    monkeypatch.setattr(sp_sync, "app_token", lambda: "TOK1")
+    monkeypatch.setattr(scanner, "sp_delta_since",
+                        lambda token, drive_id, link: ([], {("drv-1", "I1")}, "tok-2"))
+
+    core._do_scheduled_scan()
+    assert calls["scans"] == ["sharepoint"], "a removal is still a change — must not be skipped"
+
+
+def test_a_failed_sharepoint_change_check_falls_back_to_a_full_scan_never_a_skip(
+        core_mod, monkeypatch):
+    import scanner
+    import sp_sync
+    core, store, calls = core_mod
+    store.schedule["source"] = "sharepoint"
+    store.sync_cursors["sharepoint"] = {"page_token": "tok-1"}
+    monkeypatch.setattr(sp_sync, "sp_sync_configured", lambda: True)
+    monkeypatch.setattr(sp_sync, "sync_drive_id", lambda: "drv-1")
+    monkeypatch.setattr(sp_sync, "app_token", lambda: "TOK1")
+
+    def _boom(token, drive_id, link):
+        raise RuntimeError("http 410")
+    monkeypatch.setattr(scanner, "sp_delta_since", _boom)
+
+    core._do_scheduled_scan()
+    assert calls["scans"] == ["sharepoint"], "an uncertain check must never cause a skip"
 
 
 # ── the happy path still works ────────────────────────────────────────────────────────

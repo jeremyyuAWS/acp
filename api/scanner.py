@@ -1621,6 +1621,49 @@ def _sp_base(drive_id: str | None) -> str:
     return f"{GRAPH}/drives/{drive_id}" if drive_id else f"{GRAPH}/me/drive"
 
 
+# --- PRD Phase 3: SharePoint incremental sync (Graph delta query) --------------------------
+# The mirror of drive_changes_since/drive_start_page_token, for the one connector-native change
+# feed Microsoft Graph offers. Unlike Drive's changes.list, Graph's delta has no free-standing
+# "give me a baseline token" call — the ONLY way to get a deltaLink is to walk the delta feed at
+# least once, and on a token-less first call that walk returns the ENTIRE current tree, not an
+# empty starting point. See core._sp_sync_gate for how a seed call's (large) first page is
+# discarded rather than processed, same as this cost being paid once ever, not once per skip.
+
+def sp_delta_since(token: str, drive_id: str | None, delta_link: str | None
+                   ) -> tuple[list[dict], set[tuple[str | None, str]], str]:
+    """Page through Microsoft Graph's delta query for one drive, from `delta_link` (a full
+    Graph @odata.deltaLink URL persisted from a prior call), or from a fresh baseline when
+    `delta_link` is None. Returns (changed_items — raw Graph driveItem resources, folders and OS
+    metadata already dropped — removed_keys — (drive_id, item id) pairs deleted since
+    `delta_link`, matching _sp_list's own (drive, item) identity keying — and the new deltaLink
+    to persist for next time).
+
+    Raises PermissionError (via _sp_get) on a missing Sites.Read.All grant, or the SDK's own
+    error on an invalidated delta link (Graph 410 Gone — a link expires after roughly 30 days
+    unused, or when the drive itself resets); the caller decides how to degrade
+    (core._sp_sync_gate always falls back to a full scan rather than trusting a failed check)."""
+    url = delta_link or f"{_sp_base(drive_id)}/root/delta?$select={_SP_ITEM_SELECT}"
+    items: list[dict] = []
+    removed: set[tuple[str | None, str]] = set()
+    new_delta_link = None
+    while url:
+        data = _sp_get(token, url)
+        for item in data.get("value", []):
+            if item.get("deleted"):
+                if item.get("id"):
+                    removed.add((drive_id, item["id"]))
+                continue
+            if "folder" in item:
+                continue   # a delta feed reports folder changes too; not user content
+            if estate_inventory.is_os_metadata(item.get("name", "") or ""):
+                continue
+            items.append(item)
+        url = data.get("@odata.nextLink")
+        if "@odata.deltaLink" in data:
+            new_delta_link = data["@odata.deltaLink"]
+    return items, removed, new_delta_link
+
+
 def _sp_put(token: str, url: str, data: bytes, content_type: str):
     import httpx
     r = httpx.put(url, headers={"Authorization": f"Bearer {token}", "Content-Type": content_type},
