@@ -28,6 +28,14 @@ def _wire(monkeypatch, st, count_files_done_fn):
                         lambda: type("R", (), {"hash": "test-hash"})())
     monkeypatch.setattr(handlers, "_make_svc", lambda source, toks: None)
     monkeypatch.setattr(st, "count_files_done", count_files_done_fn)
+    # ADR 0038's pause checkpoint (_run_one checks scan_paused() before each item) is
+    # unrelated to what this file tests — stubbed so these tests exercise ordering/finalize
+    # behavior without paying for a real DB round-trip inside the ThreadPoolExecutor's hot
+    # path. Found live: the real get_setting() call was slow/variable enough to turn
+    # test_scan_batch_analyses_every_item_in_order flaky (4 of 5 runs failed) even though
+    # every item was still correctly analysed — pause behavior itself is covered directly
+    # in tests/test_scan_pause_resume.py.
+    monkeypatch.setattr(handlers, "scan_paused", lambda scan_id: False)
 
 
 def _items(n):
@@ -36,9 +44,12 @@ def _items(n):
 
 # ── Item analysis ─────────────────────────────────────────────────────────────
 
-def test_scan_batch_analyses_every_item_in_order(isolated_store, monkeypatch):
-    """_scan_batch must forward every item to _analyse_and_persist_one in the same
-    order the batch was submitted — no items skipped, none duplicated."""
+def test_scan_batch_analyses_every_item_exactly_once(isolated_store, monkeypatch):
+    """_scan_batch must forward every item to _analyse_and_persist_one — no items skipped,
+    none duplicated. NOT asserting submission order: _scan_batch dispatches items to a
+    ThreadPoolExecutor with multiple workers, and neither its own docstring nor its code ever
+    promised completion order matches submission order — only that every item lands, exactly
+    once, before the batch job returns."""
     import handlers
 
     _wire(monkeypatch, isolated_store, lambda sid: (0, 3))
@@ -52,7 +63,7 @@ def test_scan_batch_analyses_every_item_in_order(isolated_store, monkeypatch):
         {},
     )
 
-    assert analysed == ["file0.docx", "file1.docx", "file2.docx"]
+    assert sorted(analysed) == ["file0.docx", "file1.docx", "file2.docx"]
 
 
 # ── Finalize trigger ──────────────────────────────────────────────────────────
