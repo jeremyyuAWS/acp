@@ -95,7 +95,10 @@ def admin_analytics_overview(
     except Exception:
         review_pending = None
 
-    # Recent scans — newest first, cap at 20 for the dashboard table
+    # Recent scans — newest first, cap at 20 for the dashboard table. `status` rides along so the
+    # UI can tell a real zero (assessed, nothing eligible) apart from a scan that never reached
+    # assessment at all (cancelled by the user, or interrupted mid-run) — both leave files/
+    # certifiable at 0/NULL, and without the status a viewer can't tell which happened.
     recent = [
         {
             "id": s.get("id"),
@@ -105,6 +108,7 @@ def admin_analytics_overview(
             "certifiable": s.get("certifiable"),
             "uncertain": s.get("uncertain"),
             "avg_score": s.get("avg_score"),
+            "status": s.get("status"),
             "owner_email": s.get("owner_email"),
         }
         for s in scans[:20]

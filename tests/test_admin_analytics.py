@@ -178,6 +178,45 @@ def test_recent_scans_includes_owner_email(open_client):
     assert body["recent_scans"][0]["owner_email"] == "alice@example.com"
 
 
+def test_recent_scans_includes_status(open_client):
+    """A normally completed scan surfaces status='done' alongside its counts."""
+    c, store = open_client
+    _seed(store, "s1", "alice@example.com", "2026-08-20T10:00:00+00:00", 80)
+    r = c.get("/admin/analytics/overview", params={"period": "all"})
+    body = r.json()
+    assert body["recent_scans"][0]["status"] == "done"
+
+
+def test_recent_scans_status_distinguishes_cancelled_scan_from_a_real_zero(open_client):
+    """A scan stopped before assessment ran must not read as a zero-finding result.
+
+    `_seed` (via store.save_scan) always produces a finalized status='done' row — it can't
+    represent a scan that never got that far. Build one the way cancel_scan actually leaves
+    it: init_scan_run + add_inventory (discovery only, no file_records) + cancel_scan — the
+    same state test_unfinalized_scan_aggregate.py exercises for the identical underlying bug
+    (NULL counters silently reading as zero). The two scans below land with an identical
+    certifiable=0, and only the `status` field tells them apart.
+    """
+    c, store = open_client
+    store.init_scan_run("s-cancelled", "drive", 40, "2026-08-20T09:00:00+00:00", "default",
+                         "h", owner="alice@example.com", status="running")
+    store.add_inventory("s-cancelled", [
+        {"file": f"doc-{i}.pdf", "doc_class": "pdf", "size_kb": 10} for i in range(40)
+    ])
+    assert store.cancel_scan("s-cancelled", owner="alice@example.com") is True
+    _seed(store, "s-real-zero", "alice@example.com", "2026-08-21T10:00:00+00:00", None,
+          files=5, certifiable=0)
+
+    r = c.get("/admin/analytics/overview", params={"period": "all"})
+    rows = {s["id"]: s for s in r.json()["recent_scans"]}
+
+    assert rows["s-cancelled"]["status"] == "cancelled"
+    assert rows["s-cancelled"]["certifiable"] == 0, "cancelled before assessment — nothing was assessed"
+
+    assert rows["s-real-zero"]["status"] == "done"
+    assert rows["s-real-zero"]["certifiable"] == 0, "assessed in full — genuinely nothing certifiable"
+
+
 def test_trend_is_present_and_correct(open_client):
     c, store = open_client
     _seed(store, "a", "alice@example.com", "2026-08-15T10:00:00+00:00", 70)
