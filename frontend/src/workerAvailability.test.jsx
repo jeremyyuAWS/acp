@@ -304,3 +304,50 @@ describe('WorkerAvailability revision health and draining replicas', () => {
     expect(c.textContent).not.toMatch(/draining/)
   })
 })
+
+// Revision traffic-split (2026-08-29) — a revision can be Healthy and running replicas while
+// still receiving 0% of ingress traffic (a real stuck-rollout incident on this app). A SEPARATE
+// question from revision_health, so it needs its own display, not folded into that badge.
+describe('WorkerAvailability revision traffic-split', () => {
+  const distributedSnap = { workers: 8, alive: true, runtime_mode: 'distributed' }
+
+  it('shows the active revision\'s traffic share', async () => {
+    const c = await mount({
+      snap: distributedSnap,
+      capacity: { configured: true, current_replicas: 3, cpu_percent: null, memory_percent: null,
+                  metrics_available: false, revision_health: 'Healthy', draining_replicas: 0,
+                  revision_traffic_percent: 80 },
+    })
+    expect(c.textContent).toMatch(/80% of traffic on the active revision/)
+  })
+
+  it('shows 0%, not nothing, for a stranded revision', async () => {
+    const c = await mount({
+      snap: distributedSnap,
+      capacity: { configured: true, current_replicas: 3, cpu_percent: null, memory_percent: null,
+                  metrics_available: false, revision_health: 'Healthy', draining_replicas: 0,
+                  revision_traffic_percent: 0 },
+    })
+    expect(c.textContent).toMatch(/0% of traffic on the active revision/)
+  })
+
+  it('omits the traffic line when the backend could not read it', async () => {
+    const c = await mount({
+      snap: distributedSnap,
+      capacity: { configured: true, current_replicas: 3, cpu_percent: null, memory_percent: null,
+                  metrics_available: false, revision_health: 'Healthy', draining_replicas: 0,
+                  revision_traffic_percent: null },
+    })
+    expect(c.textContent).not.toMatch(/of traffic/)
+  })
+
+  it('renders the capacity block for traffic data alone, even with nothing else to show', async () => {
+    const c = await mount({
+      snap: distributedSnap,
+      capacity: { configured: true, current_replicas: null, cpu_percent: null, memory_percent: null,
+                  metrics_available: false, revision_health: null, draining_replicas: null,
+                  revision_traffic_percent: 45 },
+    })
+    expect(c.textContent).toMatch(/45% of traffic on the active revision/)
+  })
+})

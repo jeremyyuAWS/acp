@@ -257,7 +257,8 @@ export default function QueuePanel() {
           )}
           {capacity?.configured
            && (capacity.current_replicas != null || capacity.metrics_available
-               || capacity.revision_health != null || capacity.draining_replicas) && (
+               || capacity.revision_health != null || capacity.draining_replicas
+               || capacity.revision_traffic_percent != null) && (
             <div className="muted" style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               {capacity.current_replicas != null && (
                 <span>
@@ -273,6 +274,9 @@ export default function QueuePanel() {
               )}
               {!!capacity.draining_replicas && (
                 <span>{capacity.draining_replicas} replica{capacity.draining_replicas === 1 ? '' : 's'} draining from an older revision</span>
+              )}
+              {capacity.revision_traffic_percent != null && (
+                <span>{capacity.revision_traffic_percent}% of traffic on the active revision</span>
               )}
             </div>
           )}

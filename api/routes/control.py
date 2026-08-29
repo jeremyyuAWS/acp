@@ -187,6 +187,7 @@ def _empty_capacity(configured: bool) -> dict:
         "max_replicas": None, "cpu_percent": None, "memory_percent": None,
         "metrics_available": False, "measured_at": None,
         "revision_health": None, "revision_provisioning_state": None, "draining_replicas": None,
+        "revision_traffic_percent": None,
     }
 
 
@@ -219,6 +220,15 @@ def get_capacity():
     revision's own Azure-reported state — "Healthy"/"Unhealthy"/"None" and "Provisioned"/
     "Provisioning"/"Failed"/etc.) and `draining_replicas` (replicas still up on OLD, non-active
     revisions — the practical signal that a rollout is mid-drain rather than done).
+
+    And `revision_traffic_percent`: the active revision's own share of ingress traffic
+    (`app.properties.configuration.ingress.traffic`, 0-100). This is a DIFFERENT question from
+    revision_health — a revision can be perfectly Healthy and Provisioned while still receiving
+    0% of traffic, which is exactly what a stuck blue-green rollout looks like (a real production
+    incident on this app: the new revision came up healthy but ingress was never repointed at it,
+    stranding it at 0% until someone noticed customer-facing requests were still hitting the old
+    one). `active` in list_revisions() and "receiving traffic" are independently-tracked Azure
+    states — this field is what closes that specific gap.
 
     Graceful at every step, matching the rest of this module: `configured: false` when Azure
     isn't set up; `current_replicas`/`cpu_percent`/`memory_percent`/`revision_health`/
@@ -287,14 +297,34 @@ def get_capacity():
         if rev_list is None:
             rev_list = list(revisions)
         draining = 0
+        active_revision_name = None
         for rev in rev_list:
             if _rev_field(rev, "active", False):
                 result["revision_health"] = _rev_field(rev, "health_state")
                 result["revision_provisioning_state"] = _rev_field(rev, "provisioning_state")
+                # "name" is a standard Azure Resource field (like id/type), not part of
+                # RevisionProperties — _rev_field's nested-first lookup correctly falls through
+                # to the flat rev.name here, same dual-path safety as the fields above.
+                active_revision_name = _rev_field(rev, "name")
             else:
                 draining += _rev_field(rev, "replicas", 0) or 0
         result["draining_replicas"] = draining
     except Exception:  # noqa: BLE001 — revision health stays None; everything gathered above
         pass           # is still returned rather than lost.
+        active_revision_name = None
+
+    try:
+        # Own try/except: a separate field on `app` (already fetched above), but independently
+        # absent-able — ingress can be null on a Container App with no external endpoint, and
+        # the active revision's name might not have resolved above if that block partially failed.
+        if active_revision_name:
+            ingress = app.properties.configuration.ingress
+            traffic = getattr(ingress, "traffic", None) or []
+            for t in traffic:
+                if getattr(t, "revision_name", None) == active_revision_name:
+                    result["revision_traffic_percent"] = getattr(t, "weight", None)
+                    break
+    except Exception:  # noqa: BLE001 — revision_traffic_percent stays None; everything gathered
+        pass           # above is still returned rather than lost.
 
     return result

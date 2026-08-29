@@ -79,6 +79,38 @@ describe('diagnoseWorkerHealth', () => {
     expect(d.message).toMatch(/keep 1 replica warm/)
   })
 
+  it('flags a healthy revision stranded at 0% traffic — the stuck-rollout case', () => {
+    const snap = { ...okSnap }
+    const capacity = { configured: true, revision_health: 'Healthy', revision_provisioning_state: 'Provisioned',
+                        current_replicas: 3, revision_traffic_percent: 0 }
+    const d = diagnoseWorkerHealth({ snap, capacity, nowMs: NOW })
+    expect(d.severity).toBe('critical')
+    expect(d.message).toMatch(/receiving 0% of ingress traffic/)
+  })
+
+  it('does not flag 0% traffic when there are also zero replicas — that is the other rule\'s case', () => {
+    const snap = { ...okSnap }
+    const capacity = { configured: true, revision_health: 'Healthy', current_replicas: 0,
+                        revision_traffic_percent: 0 }
+    const replicas = { configured: true, min_replicas: 2, max_replicas: 5 }
+    const d = diagnoseWorkerHealth({ snap, capacity, replicas, nowMs: NOW })
+    expect(d.message).toMatch(/none are currently running/)
+  })
+
+  it('does not flag a partial traffic split as stranded', () => {
+    const snap = { ...okSnap }
+    const capacity = { configured: true, revision_health: 'Healthy', current_replicas: 2,
+                        revision_traffic_percent: 20 }
+    expect(diagnoseWorkerHealth({ snap, capacity, nowMs: NOW })).toBeNull()
+  })
+
+  it('does not flag anything when traffic data is unavailable', () => {
+    const snap = { ...okSnap }
+    const capacity = { configured: true, revision_health: 'Healthy', current_replicas: 2,
+                        revision_traffic_percent: null }
+    expect(diagnoseWorkerHealth({ snap, capacity, nowMs: NOW })).toBeNull()
+  })
+
   it('warns when the heartbeat is aging toward the alive threshold', () => {
     const snap = { ...okSnap, workerHeartbeatAgeS: 75 }
     const d = diagnoseWorkerHealth({ snap, nowMs: NOW })
