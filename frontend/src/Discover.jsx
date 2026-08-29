@@ -28,6 +28,7 @@ import { discoveryFailureReason } from './discoveryFailureReason.js'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
 import { deriveDiscoverProcessingState } from './discoverProcessingState.js'
 import WorkerAvailability from './WorkerAvailability.jsx'
+import FolderActivity from './FolderActivity.jsx'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
@@ -676,6 +677,13 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         onRerun={() => onScan('all')}
         onViewMonitor={onViewMonitor}
       />
+
+      {/* Folder-level detail underneath the aggregate counts above (#929's backend slice) — which
+          folders the BFS is fetching right now, and the last few that finished. Renders nothing
+          on its own when there's nothing to show (the flat Drive-query path, a scan not yet
+          discovering) — see FolderActivity.jsx's own header comment for why this stops short of
+          the full tree view. */}
+      <FolderActivity active={progress?.active_folders} recent={progress?.recent_folders} />
 
       {/* Completion summary: immutable snapshot of what was found, with the "Continue" CTA.
           Appears only after discovery finishes — DiscoverRunProgress hides itself at that point. */}
