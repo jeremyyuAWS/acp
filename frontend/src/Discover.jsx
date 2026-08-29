@@ -112,7 +112,8 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 const DISCOVERY_JOB_TYPES = new Set(['scan_discover', 'scan_batch', 'scan_finalize', 'scan_file', 'scan'])
 
 export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, preflightDegraded = null, preflightCapacityState = null, scanPct = 0, scanId = null, jobId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
-  hasSPToken = false, runAt = null, run = null, scanList = null, rawFiles = null, onStop = null, onViewMonitor = null }) {
+  hasSPToken = false, runAt = null, run = null, scanList = null, rawFiles = null, onStop = null, onViewMonitor = null,
+  onOpenSource = null }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
   // component is given neither — Discover takes scanId and scope, not the run. The pieces it needs
   // are assembled here rather than threading the whole run object through a new prop; the resolver
@@ -767,6 +768,16 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           }}
           pendingActions={pendingActions}
           needsAck={needsAck}
+          /* Whether this run's own estate CHANGED since the last scan of this same source is a
+             question this card cannot honestly answer — see the "This run's writes" comment
+             inside DiscoverCompleteSummary.jsx for why. A real cross-scan diff already exists,
+             one tab over: Integrations' SourceDrawer (store.get_inventory_diff). Point there
+             instead of half-answering it here. `run?.source === 'all'` is a real, different
+             fact (a whole-Drive/multi-source scan, not one connector) that SourceDrawer's own
+             sourceKeys() matching cannot resolve to a single source card, so the link is
+             withheld rather than landing on a dead end. */
+          onViewSourceHistory={onOpenSource && run?.source && run.source !== 'all'
+            ? () => onOpenSource(run.source) : undefined}
         />
       )}
 
