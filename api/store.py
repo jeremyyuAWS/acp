@@ -633,6 +633,27 @@ _SCHEMA = [
       PRIMARY KEY (owner_email, source)
     )""",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_adg_scan ON active_discovery_guard(scan_id)",
+    # Bumped on every write that changes what the Overview snapshot would report
+    # (assessment finishing, remediation, a review decision, publishing — see
+    # bump_scan_revision). NULL/0 for a scan that has never been mutated since this column
+    # was added. Part of the overview_snapshots cache key so a stale snapshot is never served
+    # after one of those writes, without having to hunt down and delete the cached row itself.
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS revision INT",
+    # Server-generated Overview snapshot cache (workspace-bootstrap redesign, Phase 1). One row
+    # per (owner, scan, revision, rubric_hash) — owner is part of the key for tenant isolation,
+    # not just an access filter, so a lookup under the wrong owner is a cache MISS, never a
+    # cross-tenant read. revision+rubric_hash change whenever the underlying scan does, which is
+    # what makes the cache safe to keep forever instead of expiring it on a timer (scan history
+    # is immutable evidence unless a recorded mutation changes it).
+    """CREATE TABLE IF NOT EXISTS overview_snapshots (
+      owner_email TEXT NOT NULL,
+      scan_id TEXT NOT NULL,
+      scan_revision INT NOT NULL,
+      rubric_hash TEXT NOT NULL,
+      snapshot TEXT NOT NULL,
+      generated_at TEXT NOT NULL,
+      PRIMARY KEY (owner_email, scan_id, scan_revision, rubric_hash)
+    )""",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -1554,6 +1575,8 @@ class Store:
             self._db.execute(cur,
                 "UPDATE scan_runs SET published_at=%s WHERE id=%s AND published_at IS NULL",
                 (at, scan_id))
+            if cur.rowcount > 0:
+                self._bump_scan_revision(cur, scan_id)
             self._db.execute(cur, "SELECT published_at FROM scan_runs WHERE id=%s", (scan_id,))
             row = self._db.fetchone(cur)
         return (row or {}).get("published_at")
@@ -1991,6 +2014,7 @@ class Store:
                 "avg_score=(SELECT ROUND(AVG(score)) FROM file_records WHERE scan_id=%s AND score IS NOT NULL) "
                 "WHERE id=%s",
                 (completed_at, scan_id, scan_id, scan_id, scan_id, scan_id, scan_id))
+            self._bump_scan_revision(cur, scan_id)
             self._db.execute(cur,
                 "SELECT files,certifiable,uncertain,error,avg_score FROM scan_runs WHERE id=%s", (scan_id,))
             return self._db.fetchone(cur) or {}
@@ -2079,7 +2103,8 @@ class Store:
                          "ai_calls", "finding_comments",
                          "scan_inputs",  # Stage 1 item 3: per-scan enqueue snapshots are customer data
                          "active_discovery_guard",  # transient lock state — cleared on reset
-                         "sync_cursors"]  # connector sync position is customer-derived, not config
+                         "sync_cursors",  # connector sync position is customer-derived, not config
+                         "overview_snapshots"]  # derived from scan results — customer data, not config
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
@@ -2094,7 +2119,7 @@ class Store:
                                "file_stage_timings", "scan_file_manifests", "scan_inventory",
                                "file_tags", "pii_findings", "hitl_queue", "hitl_events",
                                "remediation_diff", "applied_fixes", "ai_calls", "finding_comments",
-                               "jobs"]
+                               "jobs", "overview_snapshots"]
     # Tables that key on doc_id (not scan_id), scoped via a documents.owner_email join.
     _RESET_USER_DOC_TABLES = ["disposition_audit", "remediation_state"]
 
@@ -2334,6 +2359,170 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur, "UPDATE scan_runs SET assessed_at=%s WHERE id=%s AND assessed_at IS NULL",
                              (when, scan_id))
+            if cur.rowcount > 0:
+                self._bump_scan_revision(cur, scan_id)
+
+    # ── Overview snapshot cache (workspace-bootstrap redesign, Phase 1) ──
+    #
+    # The last completed scan is an excellent cache candidate: it is effectively immutable
+    # until remediation, publishing, or a review decision changes it. `revision` on scan_runs
+    # counts those changes; every write path below that can alter what the Overview tab would
+    # show bumps it, which is what lets get_overview_snapshot() cache the (expensive, aggregate)
+    # snapshot forever instead of on a timer — scan history is immutable evidence unless a
+    # recorded mutation changes it.
+    def _bump_scan_revision(self, cur, scan_id: str) -> None:
+        """Advance scan_runs.revision, invalidating any cached overview_snapshots row for this
+        scan (the old (owner,scan,revision,rubric_hash) key simply stops being looked up —
+        nothing to delete). MUST be called on the same cursor/transaction as the write that
+        earns it, and only when that write actually changed a row (callers check
+        cur.rowcount first) — an invalidation for a write that changed nothing would cache-bust
+        every reader for no reason."""
+        self._db.execute(cur, "UPDATE scan_runs SET revision=COALESCE(revision,0)+1 WHERE id=%s",
+                         (scan_id,))
+
+    def get_overview_snapshot(self, scan_id: str, owner: str) -> dict | None:
+        """The compact Overview summary for one scan, cached and tenant-isolated.
+
+        Cache key is (owner, scan_id, scan_revision, rubric_hash) — owner is part of the KEY,
+        not just a post-hoc filter, so a lookup for the wrong owner is a cache miss, never a
+        cross-tenant read. Returns None only when the scan does not exist or does not belong to
+        `owner` (matches get_scan's contract).
+
+        A finished scan's snapshot is generated once and persisted; a scan still in progress
+        gets a freshly computed (unpersisted) snapshot every call, since there is no terminal
+        revision yet to cache it against — cheap relative to the full scan payload either way,
+        because it never reads file contents or issue detail, only aggregate counts.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id,owner_email,revision,rubric_hash,completed_at FROM scan_runs WHERE id=%s",
+                (scan_id,))
+            run = self._db.fetchone(cur)
+        if not run or run.get("owner_email") != owner:
+            return None
+        revision = int(run.get("revision") or 0)
+        rubric_hash = run.get("rubric_hash") or ""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT snapshot,generated_at FROM overview_snapshots "
+                "WHERE owner_email=%s AND scan_id=%s AND scan_revision=%s AND rubric_hash=%s",
+                (owner, scan_id, revision, rubric_hash))
+            cached = self._db.fetchone(cur)
+        if cached:
+            import json as _json
+            snap = _json.loads(cached["snapshot"])
+            snap["cached"] = True
+            return snap
+        snap = self._build_overview_snapshot(scan_id, owner, revision, rubric_hash)
+        if run.get("completed_at"):
+            import json as _json
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "INSERT INTO overview_snapshots"
+                    "(owner_email,scan_id,scan_revision,rubric_hash,snapshot,generated_at) "
+                    "VALUES(%s,%s,%s,%s,%s,%s) "
+                    "ON CONFLICT(owner_email,scan_id,scan_revision,rubric_hash) DO NOTHING",
+                    (owner, scan_id, revision, rubric_hash, _json.dumps(snap), snap["generated_at"]))
+        snap["cached"] = False
+        return snap
+
+    def _build_overview_snapshot(self, scan_id: str, owner: str, revision: int,
+                                 rubric_hash: str) -> dict:
+        """Compute the Overview snapshot from first principles — the expensive path
+        get_overview_snapshot only takes on a cache miss."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id,source,started_at,completed_at,discovered_at,assessed_at,published_at,"
+                "files,certifiable,uncertain,error,avg_score,status,scope "
+                "FROM scan_runs WHERE id=%s", (scan_id,))
+            run = self._db.fetchone(cur) or {}
+
+            self._db.execute(cur, "SELECT COUNT(*) AS n FROM scan_inventory WHERE scan_id=%s",
+                             (scan_id,))
+            estate_count = (self._db.fetchone(cur) or {}).get("n") or 0
+
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM scan_inventory WHERE scan_id=%s "
+                "AND exclusion_reason IS NOT NULL", (scan_id,))
+            excluded_count = (self._db.fetchone(cur) or {}).get("n") or 0
+
+            self._db.execute(cur,
+                "SELECT status, COUNT(*) AS n FROM file_records WHERE scan_id=%s GROUP BY status",
+                (scan_id,))
+            by_status = {r["status"]: r["n"] for r in self._db.fetchall(cur)}
+            assessed_count = sum(by_status.values())
+
+            self._db.execute(cur,
+                "SELECT engine, COUNT(*) AS n FROM file_records WHERE scan_id=%s GROUP BY engine",
+                (scan_id,))
+            file_type_distribution = {(r["engine"] or "unknown"): r["n"] for r in self._db.fetchall(cur)}
+
+            self._db.execute(cur,
+                "SELECT severity, COUNT(*) AS n FROM issue_records WHERE scan_id=%s GROUP BY severity",
+                (scan_id,))
+            severity_distribution = {(r["severity"] or "unknown"): r["n"] for r in self._db.fetchall(cur)}
+
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM file_records WHERE scan_id=%s AND remediated_at IS NOT NULL",
+                (scan_id,))
+            remediated_count = (self._db.fetchone(cur) or {}).get("n") or 0
+
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM file_records WHERE scan_id=%s AND published_at IS NOT NULL",
+                (scan_id,))
+            file_published_count = (self._db.fetchone(cur) or {}).get("n") or 0
+
+            self._db.execute(cur,
+                "SELECT kind, COUNT(*) AS n FROM scan_decisions WHERE scan_id=%s GROUP BY kind",
+                (scan_id,))
+            review_counts = {r["kind"]: r["n"] for r in self._db.fetchall(cur)}
+
+        assessable_count = estate_count - excluded_count if estate_count else assessed_count
+        unassessable_count = max(assessable_count - assessed_count, 0) if estate_count else 0
+        import json as _json
+        scope = run.get("scope")
+        if isinstance(scope, str):
+            try:
+                scope = _json.loads(scope)
+            except Exception:
+                scope = None
+        return {
+            "scan_id": scan_id,
+            "owner": owner,
+            "scan_revision": revision,
+            "rubric_hash": rubric_hash,
+            "generated_at": self._now(),
+            "estate": {
+                "discovered": estate_count,
+                "assessable": assessable_count,
+            },
+            "documents": {
+                "assessed": assessed_count,
+                "certifiable": run.get("certifiable") or 0,
+                "excluded": excluded_count,
+                "unassessable": unassessable_count,
+            },
+            "score": {
+                "avg": run.get("avg_score"),
+                "status_distribution": by_status,
+            },
+            "severity_distribution": severity_distribution,
+            "file_type_distribution": file_type_distribution,
+            "remediation": {
+                "remediated": remediated_count,
+                "published": file_published_count,
+                "review": review_counts,
+            },
+            "freshness": {
+                "started_at": run.get("started_at"),
+                "discovered_at": run.get("discovered_at"),
+                "assessed_at": run.get("assessed_at"),
+                "completed_at": run.get("completed_at"),
+                "published_at": run.get("published_at"),
+            },
+            "source": run.get("source"),
+            "scope_summary": scope,
+        }
 
     # ── Per-scan decision snapshots (PRD: time-travel) ──
     def get_decisions(self, scan_id: str, owner: str | None = None) -> dict:
@@ -2358,11 +2547,14 @@ class Store:
                 "VALUES(%s,%s,%s,%s,%s,%s) "
                 "ON CONFLICT(scan_id,file,kind) DO UPDATE SET value=EXCLUDED.value, updated_at=EXCLUDED.updated_at",
                 (scan_id, file, kind, value, owner, when))
+            self._bump_scan_revision(cur, scan_id)
 
     def delete_decision(self, scan_id: str, file: str, kind: str) -> None:
         with self._db.cursor() as cur:
             self._db.execute(cur, "DELETE FROM scan_decisions WHERE scan_id=%s AND file=%s AND kind=%s",
                              (scan_id, file, kind))
+            if cur.rowcount > 0:
+                self._bump_scan_revision(cur, scan_id)
 
     # Self-heal grace: a running scan younger than this is never auto-interrupted — its
     # discover job may not have enqueued the per-file jobs yet.
@@ -2639,6 +2831,8 @@ class Store:
             "WHERE id=%s AND assessed_at IS NULL "
             "AND EXISTS (SELECT 1 FROM file_records WHERE scan_id=%s)",
             (self._now(), sid, sid))
+        if cur.rowcount > 0:
+            self._bump_scan_revision(cur, sid)
 
     # The counters finalize_scan_run writes, as a single SELECT so a derived-at-read value and
     # a stored one are computed from one definition and cannot drift apart.
@@ -4117,6 +4311,8 @@ class Store:
                 "UPDATE file_records SET published_at=%s, published_url=COALESCE(%s, published_url) "
                 "WHERE scan_id=%s AND file=%s",
                 (now, published_url, scan_id, file))
+            if cur.rowcount > 0:
+                self._bump_scan_revision(cur, scan_id)
         return now
 
     def refresh_scan_aggregate(self, scan_id: str) -> dict:
@@ -4129,6 +4325,7 @@ class Store:
                 "avg_score=(SELECT ROUND(AVG(score)) FROM file_records WHERE scan_id=%s AND score IS NOT NULL) "
                 "WHERE id=%s",
                 (scan_id, scan_id, scan_id))
+            self._bump_scan_revision(cur, scan_id)
             self._db.execute(cur,
                 "SELECT files,certifiable,uncertain,error,avg_score FROM scan_runs WHERE id=%s", (scan_id,))
             return self._db.fetchone(cur) or {}
@@ -4159,6 +4356,8 @@ class Store:
                     "UPDATE file_records SET remediated_at=%s, drive_write_url=%s "
                     "WHERE scan_id=%s AND file=%s",
                     (now, drive_write_url, scan_id, file))
+            if cur.rowcount > 0:
+                self._bump_scan_revision(cur, scan_id)
         return now
 
     def get_remediation_urls(self, scan_id: str, file: str,
