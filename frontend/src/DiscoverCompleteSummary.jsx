@@ -6,7 +6,14 @@
 // screenshot this was built from read as an unstructured wall of numbers. Each label also carries
 // a Term glossary tooltip: "metadata-only" and "unsupported" are internal ACP classification
 // vocabulary, not terms a reader coming from a source drive already knows.
+//
+// The breakdown itself is collapsed behind a "Why aren't N assessable?" disclosure, not shown
+// open by default (design review): the card's job is to answer "can I move on to Assess", which
+// the two top-level numbers (assessable / not-assessable, with percentages) already do — the
+// five-way split of WHY only matters to a reader who is about to ask that question, and forcing
+// it onto everyone read as a wall of numbers ahead of the one decision the card exists to support.
 
+import { useState } from 'react'
 import Term from './Term.jsx'
 
 // Sub-breakdown label -> glossary key.
@@ -83,6 +90,7 @@ export default function DiscoverCompleteSummary({
   pendingActions = 0,
   needsAck = false,
 }) {
+  const [breakdownOpen, setBreakdownOpen] = useState(false)
   const elapsed = fmtDuration(startedAt, discoveredAt)
   const ctaDisabled = pendingActions > 0 || needsAck
   const hasLifecycleRules = lifecycleRulesCount != null && lifecycleRulesCount > 0
@@ -169,29 +177,42 @@ export default function DiscoverCompleteSummary({
             )}
           </div>
 
-          {/* Sub-breakdown indented under the not-assessable parent */}
+          {/* Sub-breakdown indented under the not-assessable parent, collapsed by default behind
+              a "Why aren't N assessable?" disclosure — see the file header comment. */}
           {subBreakdown.length > 0 && (
-            <ul style={{ paddingLeft: 'calc(4.2em + 8px + 1.1em)', marginTop: 5, marginBottom: 0,
-                         listStyle: 'disc', display: 'flex', flexDirection: 'column', gap: 2,
-                         fontSize: 12.5, color: 'var(--muted)' }}>
-              {subBreakdown.map(({ count, label }) => (
-                <li key={label} style={{ paddingLeft: 2 }}>
-                  {n(count)}{' '}
-                  {SUB_TERM_KEY[label]
-                    ? <Term k={SUB_TERM_KEY[label]}>{label}</Term>
-                    : label}
-                </li>
-              ))}
-              {hasExceptions && (
-                <li style={{ paddingLeft: 2, listStyle: 'none', marginLeft: '-1.1em' }}>
-                  {[
-                    hasExcInaccessible && `${n(excInaccessible)} inaccessible — skipped`,
-                    hasExcMetadata && `${n(excMetadataFailure)} unreadable`,
-                    hasExcDeleted && `${n(excDeleted)} deleted during scan`,
-                  ].filter(Boolean).join(' · ')}
-                </li>
+            <div style={{ paddingLeft: 'calc(4.2em + 8px)', marginTop: 5 }}>
+              <button type="button" className="linklike" aria-expanded={breakdownOpen}
+                      onClick={() => setBreakdownOpen((o) => !o)}
+                      style={{ fontSize: 12.5, fontWeight: 500, textDecoration: 'none',
+                               color: 'var(--muted)', display: 'inline-flex', alignItems: 'center',
+                               gap: 5 }}>
+                <span aria-hidden="true">{breakdownOpen ? '▾' : '▸'}</span>
+                Why aren&rsquo;t {n(notAssessableCount)} assessable?
+              </button>
+              {breakdownOpen && (
+                <ul style={{ paddingLeft: '1.1em', marginTop: 5, marginBottom: 0,
+                             listStyle: 'disc', display: 'flex', flexDirection: 'column', gap: 2,
+                             fontSize: 12.5, color: 'var(--muted)' }}>
+                  {subBreakdown.map(({ count, label }) => (
+                    <li key={label} style={{ paddingLeft: 2 }}>
+                      {n(count)}{' '}
+                      {SUB_TERM_KEY[label]
+                        ? <Term k={SUB_TERM_KEY[label]}>{label}</Term>
+                        : label}
+                    </li>
+                  ))}
+                  {hasExceptions && (
+                    <li style={{ paddingLeft: 2, listStyle: 'none', marginLeft: '-1.1em' }}>
+                      {[
+                        hasExcInaccessible && `${n(excInaccessible)} inaccessible — skipped`,
+                        hasExcMetadata && `${n(excMetadataFailure)} unreadable`,
+                        hasExcDeleted && `${n(excDeleted)} deleted during scan`,
+                      ].filter(Boolean).join(' · ')}
+                    </li>
+                  )}
+                </ul>
               )}
-            </ul>
+            </div>
           )}
         </div>
 
