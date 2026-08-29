@@ -1,8 +1,10 @@
 import { useEffect, useState, useRef } from 'react'
-import { getJobs, setWorkers, clearDeadJobs, getWorkerReplicas, getWorkerCapacity } from './api.js'
+import { getJobs, setWorkers, clearDeadJobs, getWorkerReplicas } from './api.js'
 import { TraceChip } from './Transparency.jsx'
 import { phaseLine, isStalled, STALLED_AFTER_S } from './jobPhase.js'
 import { diagnoseWorkerHealth } from './workerDiagnosis.js'
+import { useWorkerCapacity } from './workerCapacityStore.js'
+import UtilizationBar from './UtilizationBar.jsx'
 
 // Job-type → short human label for the recent-jobs cards.
 const JOBLABEL = {
@@ -119,15 +121,10 @@ export default function QueuePanel() {
     getWorkerReplicas().then((d) => { if (live) setReplicas(d) }).catch(() => {})
     return () => { live = false }
   }, [externallyManaged])
-  const [capacity, setCapacity] = useState(null)
-  useEffect(() => {
-    if (!externallyManaged) return undefined
-    let live = true
-    const loadCapacity = () => getWorkerCapacity().then((d) => { if (live) setCapacity(d) }).catch(() => {})
-    loadCapacity()
-    const id = setInterval(loadCapacity, 30000)
-    return () => { live = false; clearInterval(id) }
-  }, [externallyManaged])
+  // Shared with Discover.jsx's own capacity strip via workerCapacityStore.js — a single 30s
+  // poller reference-counted across every mounted consumer, rather than each maintaining its own
+  // independent setInterval and doubling the Azure Monitor API calls whenever both are mounted.
+  const capacity = useWorkerCapacity(externallyManaged)
 
   // Diagnosis layer (workerDiagnosis.js): Monitor is the estate-wide operational view — the one
   // place someone actually goes to ask "why", not just "what" — but until now had no interpretive
@@ -265,8 +262,8 @@ export default function QueuePanel() {
                   {capacity.current_replicas} replica{capacity.current_replicas === 1 ? '' : 's'} running now
                 </span>
               )}
-              {capacity.cpu_percent != null && <span>CPU {capacity.cpu_percent}%</span>}
-              {capacity.memory_percent != null && <span>Memory {capacity.memory_percent}%</span>}
+              <UtilizationBar label="CPU" percent={capacity.cpu_percent} />
+              <UtilizationBar label="Memory" percent={capacity.memory_percent} />
               {capacity.revision_health != null && (
                 <span style={{ color: capacity.revision_health === 'Healthy' ? '#1a7f37' : '#8A2A20', fontWeight: 600 }}>
                   Revision {capacity.revision_health.toLowerCase()}
