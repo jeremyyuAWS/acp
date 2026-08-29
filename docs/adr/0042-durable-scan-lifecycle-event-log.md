@@ -38,7 +38,7 @@ a lock, deliberately not in the store.
 |---|---|---|---|
 | `GET /scans/jobs/{job_id}/stream` | job_id | native `EventSource` (`App.jsx: pollScanJob`) | `state.done` → `event: done` |
 | `GET /scans/{scan_id}/discover/stream` | scan_id (re-resolves job_id each poll) | `fetch` + `ReadableStream` (`api.js: openDiscoverStream`) | `done`, or 4 missed polls → checkpoint frame + `event: error` |
-| `GET /scans/{sid}/events` | scan_id | native SSE auto-reconnect (`liveAssessment.js`) | snapshot not `available` or not `active` |
+| `GET /scans/{sid}/events` | scan_id | ~~native SSE auto-reconnect (`liveAssessment.js`)~~ — **corrected 2026-08-29 (ADR 0043): NO consumer.** The running screen polls `/scans/{sid}/live` every 2s via `useLiveSnapshot`; `liveAssessment.js` is that poll's normalizer, not a stream client. This endpoint is an orphan. | snapshot not `available` or not `active` |
 
 **The one durable thing that already exists.** `core._maybe_checkpoint` accumulates the same
 patches `update_job` receives and flushes them to `scan_runs.live_checkpoint` (a single JSON
