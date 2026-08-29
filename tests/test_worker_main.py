@@ -57,6 +57,39 @@ def test_defaults_workers_when_unset(monkeypatch):
     assert seen["workers"] == "12"   # a worker container defaults to 12 (safe range for 2vCPU)
 
 
+def test_the_acp_workers_default_is_set_before_core_is_imported():
+    """Regression for the live bug found 2026-08-29: core.py computes its module-level `WORKERS`
+    int from os.environ AT IMPORT TIME, and core.start_workers() spawns off that already-latched
+    value — it never re-reads the environment. `run()` used to `import core` first and only set
+    the ACP_WORKERS default afterward, so on a genuinely fresh worker container (no ACP_WORKERS in
+    its env) the default write landed too late: `core.WORKERS` was already 0. The container then
+    ran its heartbeat (so Monitor showed it "online") while spawning zero worker threads — nothing
+    ever claimed a queued job.
+
+    `test_defaults_workers_when_unset` above can't catch this: it mocks `core.start_workers`
+    entirely, so it only proves the env var is set by the time SOMETHING calls start_workers, not
+    that the REAL core.py (imported fresh, no ACP_WORKERS set) would have honored it. And a
+    behavioural re-import test is unreliable in-process — `core` is almost certainly already
+    cached in sys.modules from another test file's own `import core` by the time this one runs, so
+    a second `import core` here would be a no-op regardless of ordering. A source-order assertion
+    is the one check that actually pins the fix, the same reasoning frontend/src's App.jsx
+    source-shape tests use for logic that is impractical to exercise by literally re-running it.
+    """
+    import inspect
+    import re
+    import worker_main
+    src = inspect.getsource(worker_main.run)
+    default_idx = src.index('os.environ["ACP_WORKERS"] = "12"')
+    # Line-anchored so this matches only the real `import core` statement, not this file's own
+    # explanatory comment mentioning "import core" in prose (which sits earlier in the text).
+    m = re.search(r"^\s*import core\s*$", src, re.MULTILINE)
+    assert m, "run() should still contain a top-level `import core` statement"
+    assert default_idx < m.start(), (
+        "the ACP_WORKERS default must be written to os.environ BEFORE `import core` runs — "
+        "core.py reads it into a module-level int at import time and never looks again"
+    )
+
+
 def test_drain_error_still_exits(monkeypatch):
     import core
     monkeypatch.setattr(core, "get_store", lambda: None)
