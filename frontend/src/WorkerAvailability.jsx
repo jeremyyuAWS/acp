@@ -1,5 +1,6 @@
 import { isQueueStalled, queuedAgeSecs } from './workerStallSignal.js'
 import { diagnoseWorkerHealth } from './workerDiagnosis.js'
+import UtilizationBar from './UtilizationBar.jsx'
 
 // "How many workers are available to pick up scan jobs" — the same worker-count/alive signal
 // AssessRunner's worker strip already surfaces from GET /jobs, extracted so Discover can show it
@@ -140,8 +141,8 @@ export default function WorkerAvailability({ snap, busy, msg, onAdjust,
               {capacity.current_replicas} replica{capacity.current_replicas === 1 ? '' : 's'} running now
             </span>
           )}
-          {capacity.cpu_percent != null && <span>CPU {capacity.cpu_percent}%</span>}
-          {capacity.memory_percent != null && <span>Memory {capacity.memory_percent}%</span>}
+          <UtilizationBar label="CPU" percent={capacity.cpu_percent} />
+          <UtilizationBar label="Memory" percent={capacity.memory_percent} />
           {capacity.revision_health != null && (
             <span style={{ color: capacity.revision_health === 'Healthy' ? '#1a7f37' : '#8A2A20', fontWeight: 600 }}>
               Revision {capacity.revision_health.toLowerCase()}

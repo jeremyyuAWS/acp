@@ -24,7 +24,8 @@ import DiscoverCompleteSummary from './DiscoverCompleteSummary.jsx'
 import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
 import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation,
          acknowledgeScan, unacknowledgeScan, checkReadiness, getQueueJob, getJobs, setWorkers,
-         getSourceStatus, getWorkerReplicas, setWorkerReplicas, getWorkerCapacity } from './api.js'
+         getSourceStatus, getWorkerReplicas, setWorkerReplicas } from './api.js'
+import { useWorkerCapacity } from './workerCapacityStore.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
 import { discoveryFailureReason } from './discoveryFailureReason.js'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
@@ -334,19 +335,12 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   }
   // Azure capacity EVIDENCE (GET /control/workers/capacity) — current replica count and recent
   // CPU/memory, as opposed to `replicas` above's CONFIGURED min/max. Unlike that one-shot fetch,
-  // this genuinely changes over time (Azure scaling up/down, load shifting), so it's polled every
-  // 30s while externally managed — slow enough it can't meaningfully compete with workerSnap's
-  // own 10s poll for "is this worth showing right now", fast enough to not go stale on a page
-  // someone leaves open. Read-only, no admin gate anywhere (see WorkerAvailability.jsx).
-  const [capacity, setCapacity] = useState(null)
-  useEffect(() => {
-    if (!externallyManagedWorkers) return undefined
-    let live = true
-    const load = () => getWorkerCapacity().then((d) => { if (live) setCapacity(d) }).catch(() => {})
-    load()
-    const id = setInterval(load, 30000)
-    return () => { live = false; clearInterval(id) }
-  }, [externallyManagedWorkers])
+  // this genuinely changes over time (Azure scaling up/down, load shifting), so it stays fresh
+  // via a shared 30s poller (workerCapacityStore.js) — one poller reference-counted across every
+  // mounted consumer, including QueuePanel.jsx's own capacity strip, rather than each maintaining
+  // an independent setInterval and doubling the Azure Monitor API calls whenever both are
+  // mounted at once. Read-only, no admin gate anywhere (see WorkerAvailability.jsx).
+  const capacity = useWorkerCapacity(externallyManagedWorkers)
   const [inv, setInv] = useState(null)
   useEffect(() => {
     let live = true

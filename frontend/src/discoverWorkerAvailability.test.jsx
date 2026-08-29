@@ -47,11 +47,17 @@ beforeEach(() => {
   getWorkerCapacity.mockResolvedValue({ configured: false, current_replicas: null,
                                         cpu_percent: null, memory_percent: null, metrics_available: false })
 })
-afterEach(() => {
+afterEach(async () => {
   unmountAll()
   getJobs.mockReset(); setWorkers.mockReset()
   getWorkerReplicas.mockReset(); setWorkerReplicas.mockReset()
   getWorkerCapacity.mockReset()
+  // getWorkerCapacity now goes through workerCapacityStore.js's shared singleton (Discover.jsx
+  // and QueuePanel.jsx poll the same cache) — without this reset, a later test's fresh
+  // getWorkerCapacity.mockResolvedValue(...) can be masked by an earlier test's still-cached
+  // value, since unmountAll()'s cleanup effect runs asynchronously relative to this afterEach.
+  const { _resetForTests } = await import('./workerCapacityStore.js')
+  _resetForTests()
 })
 
 describe('Worker availability on Discover', () => {
