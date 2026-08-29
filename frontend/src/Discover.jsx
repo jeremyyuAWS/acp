@@ -15,6 +15,7 @@ import DiscoverInventoryExport from './DiscoverInventoryExport.jsx'
 import DiscoveryCompleteness from './DiscoveryCompleteness.jsx'
 import { snapshotTrust, snapshotTrustMessage } from './discoverySnapshotTrust.js'
 import { acknowledgementSummary } from './discoveryRecommendations.js'
+import { assessmentEligible } from './estateFunnel.js'
 import { hasClassificationData, NO_CLASSIFICATION_TITLE, NO_CLASSIFICATION_BODY,
          NO_CLASSIFICATION_WHY } from './classificationData.js'
 import { loadDiscoveryInventory, mergeLifecycle, inventoryOnlyRows } from './discoveryInventory.js'
@@ -722,7 +723,15 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       {!busy && (run?.discovered_at || run?.status === 'discovered') && (
         <DiscoverCompleteSummary
           discoveredCount={completionDiscoveredCount}
-          assessableCount={scope?.inventory?.by_status?.assessable
+          /* `assessmentEligible()` is the SAME helper DiscoveryResults' headline "Assessable" tile
+             calls (estateFunnel.js) — it prefers the direct `assessment_eligible` field over the
+             older `by_status.assessable` shape, which this line used to read on its own, skipping
+             that preference entirely. The two numbers sit on the same screen once discovery
+             completes; deriving them from two different rules is the exact "four-denominator"
+             defect estateFunnel.js's own header comment warns about, just not yet caught here.
+             The local subtraction survives as the last resort, for a scan whose scope.inventory
+             predates BOTH fields. */
+          assessableCount={assessmentEligible(scope?.inventory)
             ?? Math.max(0, completionDiscoveredCount - nonAssessable.length - lockedCount)}
           metadataOnlyCount={scope?.inventory?.by_status?.metadata_only ?? 0}
           unsupportedCount={scope?.inventory?.by_status?.unsupported ?? 0}
@@ -745,6 +754,12 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           startedAt={run?.started_at ?? null}
           discoveredAt={run?.discovered_at ?? null}
           publishedAt={run?.published_at ?? null}
+          /* Same `runAt` object DiscoveryResults renders a few hundred pixels below this card —
+             not a second call to inventorySnapshot(). Two independently-derived timestamps for
+             "when was this counted" can drift out of formatting sync (a locale change, a staleness
+             threshold edit) even when they resolve to the same instant; sharing the one App.jsx
+             already computed makes that structurally impossible instead of merely unlikely. */
+          runAt={runAt}
           onAdvance={onAdvance}
           onReviewInventory={() => {
             const el = document.getElementById('discover-inventory-table')

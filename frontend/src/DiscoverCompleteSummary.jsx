@@ -84,6 +84,7 @@ export default function DiscoverCompleteSummary({
   startedAt,
   discoveredAt,
   publishedAt,
+  runAt,
   onAdvance,
   onReviewInventory,
   pendingActions = 0,
@@ -146,10 +147,20 @@ export default function DiscoverCompleteSummary({
           )}
         </div>
 
-        {/* Total files */}
+        {/* Total files. The timestamp is the SAME `runAt` object DiscoveryResults renders below
+            this card (Discover.jsx threads its own prop through unchanged) — one resolved instant,
+            shown twice, rather than two components each guessing at "when" and risking a mismatch.
+            Absent (`runAt.recorded === false`) is rendered as nothing, same as DiscoveryResults —
+            a run that never recorded when discovery finished gets no timestamp, not an invented one. */}
         <div style={{ marginBottom: 12 }}>
           {n(discoveredCount)} files inventoried
           {(folderCount ?? 0) > 0 ? ` across ${n(folderCount)} folder${folderCount === 1 ? '' : 's'}` : ''}
+          {runAt && runAt.recorded && (
+            <span className="muted" style={{ fontSize: 12.5, marginLeft: 6 }} title={runAt.label}>
+              · as of {runAt.absolute}
+              {runAt.stale ? ' · this snapshot is over a day old' : ''}
+            </span>
+          )}
         </div>
 
         {/* Assessment eligibility */}
@@ -225,12 +236,23 @@ export default function DiscoverCompleteSummary({
           ) : (
             <div style={{ color: 'var(--muted)' }}>No lifecycle rules enabled</div>
           )}
-          {inventoryDelta && (inventoryDelta.new > 0 || inventoryDelta.updated > 0 || inventoryDelta.unchanged > 0) && (
+          {/* NOT a comparison against a previous scan, however the field name reads. `add_inventory`
+              (api/store.py) upserts scoped to THIS scan_id alone — "new" vs "updated" says whether
+              a row was written for the first time in this run's own attempt, or re-touched by a
+              checkpoint-resumed retry of the SAME run; "unchanged" is presently always 0 (the
+              upsert has no per-column comparison to detect it). On the overwhelmingly common case
+              — one clean attempt, no resume — every row reads "new", so a label reading "added"
+              there would just restate "N files inventoried" above under a header implying growth
+              since last time. A real cross-scan delta already exists (store.get_inventory_diff,
+              wired into SourceDrawer's own history view) — this is a different signal and must not
+              be read as that one. Rendered only when there is something a resume actually changed;
+              gated on `updated`/`unchanged` rather than `new` for exactly that reason. */}
+          {inventoryDelta && (inventoryDelta.updated > 0 || inventoryDelta.unchanged > 0) && (
             <div style={{ marginTop: 4 }}>
-              {'Inventory: '}
+              {'This run’s writes (including a checkpoint resume): '}
               {[
-                inventoryDelta.new > 0 && `${n(inventoryDelta.new)} added`,
-                inventoryDelta.updated > 0 && `${n(inventoryDelta.updated)} changed`,
+                inventoryDelta.new > 0 && `${n(inventoryDelta.new)} written`,
+                inventoryDelta.updated > 0 && `${n(inventoryDelta.updated)} re-written on resume`,
                 inventoryDelta.unchanged > 0 && `${n(inventoryDelta.unchanged)} unchanged`,
               ].filter(Boolean).join(' · ')}
             </div>

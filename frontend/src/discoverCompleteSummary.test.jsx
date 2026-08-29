@@ -145,23 +145,64 @@ describe('DiscoverCompleteSummary renders completion state', () => {
     expect(html).not.toMatch(/\d+m \d+s/)
   })
 
-  it('shows inventory delta when provided', () => {
+  // `runAt` is the same `inventorySnapshot()` object DiscoveryResults.jsx renders below this
+  // card — see Discover.jsx's own comment for why it is threaded through rather than re-derived.
+  // These tests exercise the component's own rendering of that shared object, not the derivation.
+  describe('the shared "as of" timestamp on the total', () => {
+    it('shows the absolute instant when runAt is recorded', () => {
+      const html = render({
+        ...BASE,
+        runAt: { recorded: true, absolute: 'Aug 26, 2026, 10:03 AM PDT', label: 'recorded when discovery finished', stale: false },
+      })
+      expect(html).toContain('as of Aug 26, 2026, 10:03 AM PDT')
+    })
+
+    it('calls out a stale (>1 day old) snapshot', () => {
+      const html = render({
+        ...BASE,
+        runAt: { recorded: true, absolute: 'Aug 1, 2026, 9:00 AM PDT', label: 'recorded when discovery finished', stale: true },
+      })
+      expect(html).toContain('this snapshot is over a day old')
+    })
+
+    it('shows nothing when runAt is unrecorded — no invented instant', () => {
+      const html = render({ ...BASE, runAt: { recorded: false, absolute: null, label: null, stale: false } })
+      expect(html).not.toContain('as of')
+    })
+
+    it('shows nothing when runAt is absent entirely', () => {
+      const html = render(BASE)
+      expect(html).not.toContain('as of')
+    })
+  })
+
+  it('shows inventory delta when a checkpoint resume actually touched rows', () => {
     const html = render({
       ...BASE,
       inventoryDelta: { new: 224, updated: 61, unchanged: 963 },
     })
-    expect(html).toContain('Inventory:')
+    expect(html).toContain('checkpoint resume')
     expect(html).toContain('224')
-    expect(html).toContain('added')
+    expect(html).toContain('written')
     expect(html).toContain('61')
-    expect(html).toContain('changed')
+    expect(html).toContain('re-written on resume')
     expect(html).toContain('963')
     expect(html).toContain('unchanged')
   })
 
   it('omits inventory delta section when not provided', () => {
     const html = render(BASE)
-    expect(html).not.toContain('Inventory:')
+    expect(html).not.toContain('checkpoint resume')
+  })
+
+  it('omits inventory delta section on a clean run with no resume — every row reads "new" '
+     + 'and restating that as "added" would misread as growth since last time', () => {
+    const html = render({
+      ...BASE,
+      inventoryDelta: { new: 224, updated: 0, unchanged: 0 },
+    })
+    expect(html).not.toContain('checkpoint resume')
+    expect(html).not.toContain('224')
   })
 })
 
