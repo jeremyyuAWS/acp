@@ -2963,6 +2963,19 @@ class Store:
             run[k] = int(run[k] or 0)
         return run
 
+    def get_scan_head(self, sid: str, owner: str | None = None) -> dict | None:
+        """Just {id, status, revision} for one scan — the cheap identity+status lookup
+        GET /workspace/bootstrap needs alongside the (separately cached) Overview
+        snapshot, without paying get_scan's file_records/issue_records join. Owner-scoped
+        like every other per-scan read; None for a missing or foreign scan."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT id,status,revision,owner_email FROM scan_runs WHERE id=%s",
+                             (sid,))
+            run = self._db.fetchone(cur)
+        if not run or (owner is not None and run.get("owner_email") != owner):
+            return None
+        return {"id": run["id"], "status": run.get("status"), "revision": int(run.get("revision") or 0)}
+
     def get_scan(self, sid: str, owner: str | None = None) -> dict | None:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT * FROM scan_runs WHERE id=%s", (sid,))
