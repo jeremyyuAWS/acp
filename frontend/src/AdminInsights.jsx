@@ -3,6 +3,32 @@ import { getAdminAnalytics } from './api.js'
 
 const SOURCE_COLOR = { drive: '#4285F4', sharepoint: '#0078D4', local: '#6E62C4', unknown: '#9a948f' }
 const SOURCE_LABEL = { drive: 'Google Drive', sharepoint: 'SharePoint', local: 'Local', unknown: 'Unknown' }
+// A scan lands in this table with completed_at set — but 'done' is not the only way to get
+// there. cancel_scan and the lost-worker sweeper both stamp completed_at on a scan that never
+// reached assessment, leaving files/certifiable at 0 for a reason that has nothing to do with
+// what was found. A 0 on one of those statuses renders as the status word itself, so "0 docs"
+// never has to be read as "assessed, found nothing."
+const SCAN_STATUS_LABEL = { cancelled: 'Cancelled', interrupted: 'Interrupted', failed: 'Failed' }
+const SCAN_STATUS_TITLE = {
+  cancelled: 'Stopped before assessment finished — this reflects only what ran before the stop.',
+  interrupted: 'The worker running this scan died mid-run — this reflects only what ran before it died.',
+  failed: 'This scan never completed — this is not a finished result.',
+}
+
+/** Docs/Certifiable read as a real zero on a normal completed scan, but on a scan that never
+ * reached assessment a 0 means something else entirely — swap in the status word itself rather
+ * than let both cases render identically. */
+function statusOrCount(status, value, render) {
+  const label = SCAN_STATUS_LABEL[status]
+  if (label && !value) {
+    return (
+      <span style={{ color: '#854F0B', fontStyle: 'italic', fontSize: 12.5 }} title={SCAN_STATUS_TITLE[status]}>
+        {label}
+      </span>
+    )
+  }
+  return render()
+}
 const PERIOD_OPTS = [
   ['today', 'Today'],
   ['7d',    'Last 7 days'],
@@ -398,9 +424,12 @@ export function AdminInsights({ me }) {
                           {SOURCE_LABEL[s.source] || s.source || '—'}
                         </span>
                       </td>
-                      <td style={{ padding: '7px 10px 7px 0', fontVariantNumeric: 'tabular-nums' }}>{fmt(s.files)}</td>
                       <td style={{ padding: '7px 10px 7px 0', fontVariantNumeric: 'tabular-nums' }}>
-                        {s.certifiable != null ? `${fmt(s.certifiable)} (${fmt(pct)}%)` : '—'}
+                        {statusOrCount(s.status, s.files, () => fmt(s.files))}
+                      </td>
+                      <td style={{ padding: '7px 10px 7px 0', fontVariantNumeric: 'tabular-nums' }}>
+                        {statusOrCount(s.status, s.certifiable,
+                          () => s.certifiable != null ? `${fmt(s.certifiable)} (${fmt(pct)}%)` : '—')}
                       </td>
                       <td style={{ padding: '7px 10px 7px 0', fontVariantNumeric: 'tabular-nums',
                                     color: scoreColor(s.avg_score) }}>

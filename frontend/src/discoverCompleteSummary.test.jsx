@@ -458,3 +458,50 @@ describe('the scannable-vs-total document count', () => {
     expect(html).toContain('Assessable')
   })
 })
+
+// Design review 2026-08-29: "bullet points in formatting of all the key stats" — every fact
+// line in the card is a real <li> inside a real <ul>, not a bare <div> row. Three separate
+// lists (headline counts, Assessment eligibility, Lifecycle rules), not one flat list, so the
+// existing grouping still tells a reader which numbers belong together.
+describe('key stats render as real bulleted lists', () => {
+  it('the headline stats (files inventoried, scannable) are <li> items in a <ul>', () => {
+    const html = render({ ...BASE, scannableCount: 173 })
+    const ulMatch = html.match(/<ul[^>]*>([\s\S]*?)<\/ul>/)
+    expect(ulMatch).toBeTruthy()
+    // The very first list in the card is the headline-stats one — files inventoried always
+    // renders, so its own <li> is the first list item of the first list.
+    expect(ulMatch[1]).toMatch(/<li[^>]*>[\s\S]*files inventoried/)
+  })
+
+  it('Assessable / Not-currently-assessable render as <li> items, not bare rows', () => {
+    const html = render(BASE)
+    // "Assessable" appears inside SOME <li>...</li> pair.
+    expect(html).toMatch(/<li[^>]*>(?:(?!<\/li>)[\s\S])*Assessable(?:(?!<\/li>)[\s\S])*<\/li>/)
+  })
+
+  it('the lifecycle-rules count renders as an <li> item', () => {
+    const html = render(BASE)
+    expect(html).toMatch(/<li[^>]*>(?:(?!<\/li>)[\s\S])*matched lifecycle rule(?:(?!<\/li>)[\s\S])*<\/li>/)
+  })
+
+  it('"No lifecycle rules enabled" is still a real list item when there are none', () => {
+    const html = render({ ...BASE, lifecycleRulesCount: 0 })
+    expect(html).toMatch(/<li[^>]*>(?:(?!<\/li>)[\s\S])*No lifecycle rules enabled(?:(?!<\/li>)[\s\S])*<\/li>/)
+  })
+
+  it('the SourceDrawer redirect link renders as its own <li> item', () => {
+    const html = render({ ...BASE, onViewSourceHistory: () => {} })
+    expect(html).toMatch(/<li[^>]*>(?:(?!<\/li>)[\s\S])*See what.*?s changed(?:(?!<\/li>)[\s\S])*<\/li>/)
+  })
+
+  it('"Enumeration verified complete" renders as its own <li> item', () => {
+    const html = render({ ...BASE, publishedAt: '2026-08-28T23:07:00Z' })
+    expect(html).toMatch(/<li[^>]*>(?:(?!<\/li>)[\s\S])*Enumeration verified complete(?:(?!<\/li>)[\s\S])*<\/li>/)
+  })
+
+  it('the card contains at least three separate <ul> groups — not one flat list', () => {
+    const html = render({ ...BASE, scannableCount: 173, publishedAt: '2026-08-28T23:07:00Z' })
+    const uls = html.match(/<ul[^>]*>/g) || []
+    expect(uls.length).toBeGreaterThanOrEqual(3)
+  })
+})

@@ -60,6 +60,22 @@ export default function EmptyState({ onGoToSource }) {
   )
 }
 
-export function Loading() {
-  return <div className="loadingbox"><span className="spinner" />Loading your workspace…</div>
+// What each stage of App.jsx's initial-load effect is doing right now, in plain language — a
+// static "Loading your workspace…" the whole way through gave no signal that anything was
+// actually happening, reported live 2026-08-29 as an unexplained hang. `null` (the default,
+// and every value once the load finishes) falls back to the original generic line, so a caller
+// that doesn't track stages — or hasn't started the chain yet — still gets a real message.
+const STAGE_TEXT = {
+  scans: 'Loading your scans…',
+  scan: 'Loading your latest scan…',
+  jobs: 'Checking for a scan already in progress…',
+}
+
+export function Loading({ stage = null } = {}) {
+  return (
+    <div className="loadingbox">
+      <span className="spinner" />
+      {STAGE_TEXT[stage] || 'Loading your workspace…'}
+    </div>
+  )
 }

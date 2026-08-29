@@ -24,7 +24,7 @@ import DiscoverCompleteSummary from './DiscoverCompleteSummary.jsx'
 import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
 import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation,
          acknowledgeScan, unacknowledgeScan, checkReadiness, getQueueJob, getJobs, setWorkers,
-         getSourceStatus } from './api.js'
+         getSourceStatus, getWorkerReplicas, setWorkerReplicas } from './api.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
 import { discoveryFailureReason } from './discoveryFailureReason.js'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
@@ -280,6 +280,48 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       .finally(() => {
         setWorkerBusy(false)
         workerMsgTimer.current = setTimeout(() => setWorkerMsg(null), 3500)
+      })
+  }
+  // Azure Container App warm-replica visibility (GET /control/workers/replicas) — fetched only
+  // once the worker tier reports 'distributed' (externally managed), since that's the only mode
+  // where this data means anything. Visible to every signed-in user (the endpoint is open, not
+  // admin-gated — see api/routes/control.py); only the adjust handler passed to
+  // WorkerAvailability is conditioned on me?.is_admin below, matching PATCH's own admin gate.
+  // A one-shot fetch on becoming externally-managed is enough — unlike workerSnap (workers
+  // picking up jobs right now), this rarely changes and isn't worth polling every few seconds.
+  const externallyManagedWorkers = workerSnap?.runtime_mode === 'distributed' && workerSnap?.alive
+  const [replicas, setReplicas] = useState(null)
+  const [replicasBusy, setReplicasBusy] = useState(false)
+  const [replicasMsg, setReplicasMsg] = useState(null)
+  const replicasMsgTimer = useRef(null)
+  useEffect(() => {
+    if (!externallyManagedWorkers) return undefined
+    let live = true
+    getWorkerReplicas().then((d) => { if (live) setReplicas(d) }).catch(() => {})
+    return () => { live = false }
+  }, [externallyManagedWorkers])
+  useEffect(() => () => clearTimeout(replicasMsgTimer.current), [])
+  const adjustReplicas = (delta) => {
+    if (!replicas?.configured || replicasBusy) return
+    const next = Math.max(1, Math.min(5, replicas.min_replicas + delta))
+    if (next === replicas.min_replicas) return
+    clearTimeout(replicasMsgTimer.current)
+    setReplicasMsg(next > replicas.min_replicas ? 'Requesting more warm replicas…' : 'Reducing warm replicas…')
+    setReplicasBusy(true)
+    const prev = replicas.min_replicas
+    setReplicas((r) => ({ ...r, min_replicas: next }))   // optimistic
+    setWorkerReplicas(next)
+      .then((d) => {
+        setReplicas(d)
+        setReplicasMsg(`Warm replicas set to ${d.min_replicas}`)
+      })
+      .catch(() => {
+        setReplicas((r) => ({ ...r, min_replicas: prev }))
+        setReplicasMsg('Failed to update — try again')
+      })
+      .finally(() => {
+        setReplicasBusy(false)
+        replicasMsgTimer.current = setTimeout(() => setReplicasMsg(null), 3500)
       })
   }
   const [inv, setInv] = useState(null)
@@ -708,7 +750,9 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       {/* "How many workers are available to pick up scan jobs" — answered directly, ambiently, not
           only inferred from a capacity banner mid-run. Polled the whole time this tab is mounted
           (see the effect above), so it also answers the question BEFORE a scan is even started. */}
-      <WorkerAvailability snap={workerSnap} busy={workerBusy} msg={workerMsg} onAdjust={adjustWorkers} />
+      <WorkerAvailability snap={workerSnap} busy={workerBusy} msg={workerMsg} onAdjust={adjustWorkers}
+                          replicas={replicas} replicasBusy={replicasBusy} replicasMsg={replicasMsg}
+                          onAdjustReplicas={me?.is_admin ? adjustReplicas : undefined} />
 
       {/* PRD "Processing status" — the Discover instance of the same panel Assess uses (#922),
           reusing the exact signals this tab already computes for its own terminal-status banners

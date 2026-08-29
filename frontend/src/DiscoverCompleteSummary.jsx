@@ -1,6 +1,10 @@
-// Shown after a discovery scan completes — structured-row summary of what was found, with a
-// prominent CTA to continue to Assess. Uses a parent-child layout for assessment eligibility
-// so the relationship between the aggregate (not-assessable total) and its breakdown is clear.
+// Shown after a discovery scan completes — a summary of what was found, with a prominent CTA to
+// continue to Assess. Every fact line is a real <li> in a real <ul> (design review 2026-08-29:
+// "bullet points in formatting of all the key stats") — three short bulleted lists (headline
+// counts, Assessment eligibility, Lifecycle rules), not one flat list, so the existing grouping
+// still tells a reader which numbers belong together without re-deriving it from position alone.
+// Uses a parent-child layout for assessment eligibility so the relationship between the aggregate
+// (not-assessable total) and its breakdown is clear.
 //
 // The sub-breakdown items are marked as a real list (bullets), not bare stacked divs — the
 // screenshot this was built from read as an unstructured wall of numbers. Each label also carries
@@ -149,51 +153,56 @@ export default function DiscoverCompleteSummary({
           )}
         </div>
 
-        {/* Total files. The timestamp is the SAME `runAt` object DiscoveryResults renders below
-            this card (Discover.jsx threads its own prop through unchanged) — one resolved instant,
-            shown twice, rather than two components each guessing at "when" and risking a mismatch.
-            Absent (`runAt.recorded === false`) is rendered as nothing, same as DiscoveryResults —
-            a run that never recorded when discovery finished gets no timestamp, not an invented one.
+        {/* Headline stats — bulleted (design review 2026-08-29: "bullet points in formatting of
+            all the key stats" — every fact line in this card is a real <li> now, not just the
+            eligibility sub-breakdown below). The timestamp is the SAME `runAt` object
+            DiscoveryResults renders below this card (Discover.jsx threads its own prop through
+            unchanged) — one resolved instant, shown twice, rather than two components each
+            guessing at "when" and risking a mismatch. Absent (`runAt.recorded === false`) is
+            rendered as nothing, same as DiscoveryResults — a run that never recorded when
+            discovery finished gets no timestamp, not an invented one.
 
-            The count and the timestamp are TWO SIBLING spans, not one text run — e2e/pipeline.spec.js
-            asserts `getByText('N files inventoried', { exact: true })` against a real (non-SIM)
-            backend, where `runAt.recorded` is genuinely true. Concatenating "· as of …" into the
-            same element broke that exact match on 2026-08-29 (PR #941's own first CI run) — the
-            span split keeps "N files inventoried" as its own exactly-matchable node regardless of
-            whether the timestamp renders beside it. */}
-        <div style={{ marginBottom: 12 }}>
-          <span>
-            {n(discoveredCount)} files inventoried
-            {(folderCount ?? 0) > 0 ? ` across ${n(folderCount)} folder${folderCount === 1 ? '' : 's'}` : ''}
-          </span>
-          {runAt && runAt.recorded && (
-            <span className="muted" style={{ fontSize: 12.5, marginLeft: 6 }} title={runAt.label}>
-              · as of {runAt.absolute}
-              {runAt.stale ? ' · this snapshot is over a day old' : ''}
+            The count and the timestamp stay TWO SIBLING spans inside the <li>, not one text run —
+            e2e/pipeline.spec.js asserts `getByText('N files inventoried', { exact: true })`
+            against a real (non-SIM) backend, where `runAt.recorded` is genuinely true.
+            Concatenating "· as of …" into the same element broke that exact match on 2026-08-29
+            (PR #941's own first CI run) — the span split keeps "N files inventoried" as its own
+            exactly-matchable node regardless of whether the timestamp renders beside it. */}
+        <ul style={{ listStyle: 'disc', paddingLeft: '1.2em', margin: '0 0 14px',
+                     display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <li>
+            <span>
+              {n(discoveredCount)} files inventoried
+              {(folderCount ?? 0) > 0 ? ` across ${n(folderCount)} folder${folderCount === 1 ? '' : 's'}` : ''}
             </span>
+            {runAt && runAt.recorded && (
+              <span className="muted" style={{ fontSize: 12.5, marginLeft: 6 }} title={runAt.label}>
+                · as of {runAt.absolute}
+                {runAt.stale ? ' · this snapshot is over a day old' : ''}
+              </span>
+            )}
+          </li>
+          {/* Scannable vs. whole estate — a THIRD population, not a restatement of the total
+              above. scanner.py's _search_drive/_search_folder/_list return only files whose MIME
+              type ACP can open (PDF, Office, Google-native, HTML) — filtered BEFORE the
+              whole-estate inventory above is even built — while `discoveredCount` counts every
+              file of every type. A Drive that is mostly photos and videos alongside a smaller set
+              of real documents produces a scannable count far below the total, correctly, every
+              time — not an error. Found live 2026-08-29: the top nav bar's own (unlabelled) count
+              of this same number read as a contradiction against this card's "files inventoried"
+              a few pixels away, because nothing said what it was counting.
+              "Scannable" ⊇ "Assessable" below (some scannable-type files are still excluded by
+              eligibility — locked, unreadable, …), so this stays a separate bullet rather than
+              folding into the Assessable / Not-currently-assessable partition, which keeps
+              summing cleanly to the total on its own. */}
+          {scannableCount != null && (
+            <li style={{ fontSize: 12.5, color: 'var(--muted)' }}>
+              {n(scannableCount)} of {n(discoveredCount)} are scannable document types
+              (PDF, Office, HTML) — everything else is excluded by file type before assessment
+              eligibility is even checked.
+            </li>
           )}
-        </div>
-
-        {/* Scannable vs. whole estate — a THIRD population, not a restatement of either number
-            below. scanner.py's _search_drive/_search_folder/_list return only files whose MIME
-            type ACP can open (PDF, Office, Google-native, HTML) — filtered BEFORE the whole-estate
-            inventory above is even built — while `discoveredCount` above counts every file of
-            every type. A Drive that is mostly photos and videos alongside a smaller set of real
-            documents produces a scannable count far below the total, correctly, every time — not
-            an error. Found live 2026-08-29: the top nav bar's own (unlabelled) count of this same
-            number read as a contradiction against this card's "files inventoried" a few pixels
-            away, because nothing said what it was counting.
-            "Scannable" ⊇ "Assessable" below (some scannable-type files are still excluded by
-            eligibility — locked, unreadable, …), so this is not one edge of the Assessable /
-            Not-currently-assessable partition; it stays a separate line so that partition keeps
-            summing cleanly to the total. */}
-        {scannableCount != null && (
-          <div style={{ marginBottom: 12, fontSize: 12.5, color: 'var(--muted)' }}>
-            {n(scannableCount)} of {n(discoveredCount)} are scannable document types
-            (PDF, Office, HTML) — everything else is excluded by file type before assessment
-            eligibility is even checked.
-          </div>
-        )}
+        </ul>
 
         {/* Assessment eligibility */}
         <div style={{ marginBottom: 14 }}>
@@ -201,51 +210,53 @@ export default function DiscoverCompleteSummary({
                         letterSpacing: '0.06em', color: 'var(--muted)', marginBottom: 6 }}>
             Assessment eligibility
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            <EligRow count={assessableCount} label="Assessable" pctValue={assessablePct} />
+          <ul style={{ listStyle: 'disc', paddingLeft: '1.2em', margin: 0,
+                       display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <li><EligRow count={assessableCount} label="Assessable" pctValue={assessablePct} /></li>
             {notAssessableCount > 0 && (
-              <EligRow count={notAssessableCount} label="Not currently assessable"
-                       muted pctValue={notAssessablePct} />
+              <li>
+                <EligRow count={notAssessableCount} label="Not currently assessable"
+                         muted pctValue={notAssessablePct} />
+                {/* Sub-breakdown, collapsed by default behind a "Why aren't N assessable?"
+                    disclosure — see the file header comment. */}
+                {subBreakdown.length > 0 && (
+                  <div style={{ marginTop: 5 }}>
+                    <button type="button" className="linklike" aria-expanded={breakdownOpen}
+                            onClick={() => setBreakdownOpen((o) => !o)}
+                            style={{ fontSize: 12.5, fontWeight: 500, textDecoration: 'none',
+                                     color: 'var(--muted)', display: 'inline-flex',
+                                     alignItems: 'center', gap: 5 }}>
+                      <span aria-hidden="true">{breakdownOpen ? '▾' : '▸'}</span>
+                      Why aren&rsquo;t {n(notAssessableCount)} assessable?
+                    </button>
+                    {breakdownOpen && (
+                      <ul style={{ paddingLeft: '1.1em', marginTop: 5, marginBottom: 0,
+                                   listStyle: 'disc', display: 'flex', flexDirection: 'column',
+                                   gap: 2, fontSize: 12.5, color: 'var(--muted)' }}>
+                        {subBreakdown.map(({ count, label }) => (
+                          <li key={label} style={{ paddingLeft: 2 }}>
+                            {n(count)}{' '}
+                            {SUB_TERM_KEY[label]
+                              ? <Term k={SUB_TERM_KEY[label]}>{label}</Term>
+                              : label}
+                          </li>
+                        ))}
+                        {hasExceptions && (
+                          <li style={{ paddingLeft: 2, listStyle: 'none', marginLeft: '-1.1em' }}>
+                            {[
+                              hasExcInaccessible && `${n(excInaccessible)} inaccessible — skipped`,
+                              hasExcMetadata && `${n(excMetadataFailure)} unreadable`,
+                              hasExcDeleted && `${n(excDeleted)} deleted during scan`,
+                            ].filter(Boolean).join(' · ')}
+                          </li>
+                        )}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </li>
             )}
-          </div>
-
-          {/* Sub-breakdown indented under the not-assessable parent, collapsed by default behind
-              a "Why aren't N assessable?" disclosure — see the file header comment. */}
-          {subBreakdown.length > 0 && (
-            <div style={{ paddingLeft: 'calc(4.2em + 8px)', marginTop: 5 }}>
-              <button type="button" className="linklike" aria-expanded={breakdownOpen}
-                      onClick={() => setBreakdownOpen((o) => !o)}
-                      style={{ fontSize: 12.5, fontWeight: 500, textDecoration: 'none',
-                               color: 'var(--muted)', display: 'inline-flex', alignItems: 'center',
-                               gap: 5 }}>
-                <span aria-hidden="true">{breakdownOpen ? '▾' : '▸'}</span>
-                Why aren&rsquo;t {n(notAssessableCount)} assessable?
-              </button>
-              {breakdownOpen && (
-                <ul style={{ paddingLeft: '1.1em', marginTop: 5, marginBottom: 0,
-                             listStyle: 'disc', display: 'flex', flexDirection: 'column', gap: 2,
-                             fontSize: 12.5, color: 'var(--muted)' }}>
-                  {subBreakdown.map(({ count, label }) => (
-                    <li key={label} style={{ paddingLeft: 2 }}>
-                      {n(count)}{' '}
-                      {SUB_TERM_KEY[label]
-                        ? <Term k={SUB_TERM_KEY[label]}>{label}</Term>
-                        : label}
-                    </li>
-                  ))}
-                  {hasExceptions && (
-                    <li style={{ paddingLeft: 2, listStyle: 'none', marginLeft: '-1.1em' }}>
-                      {[
-                        hasExcInaccessible && `${n(excInaccessible)} inaccessible — skipped`,
-                        hasExcMetadata && `${n(excMetadataFailure)} unreadable`,
-                        hasExcDeleted && `${n(excDeleted)} deleted during scan`,
-                      ].filter(Boolean).join(' · ')}
-                    </li>
-                  )}
-                </ul>
-              )}
-            </div>
-          )}
+          </ul>
         </div>
 
         {/* Lifecycle rules */}
@@ -254,62 +265,65 @@ export default function DiscoverCompleteSummary({
                         letterSpacing: '0.06em', color: 'var(--muted)', marginBottom: 6 }}>
             Lifecycle rules
           </div>
-          {hasLifecycleRules ? (
-            <>
-              <div>
+          <ul style={{ listStyle: 'disc', paddingLeft: '1.2em', margin: 0,
+                       display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {hasLifecycleRules ? (
+              <li>
                 {n(lifecycleRulesCount)} matched lifecycle rule{lifecycleRulesCount === 1 ? '' : 's'}
-              </div>
-              {lifecycleBreakdown.length > 0 && (
-                <div style={{ color: 'var(--muted)', fontSize: 12.5, marginTop: 3 }}>
-                  {lifecycleBreakdown.join(' · ')}
-                </div>
-              )}
-            </>
-          ) : (
-            <div style={{ color: 'var(--muted)' }}>No lifecycle rules enabled</div>
-          )}
-          {/* NOT a comparison against a previous scan, however the field name reads. `add_inventory`
-              (api/store.py) upserts scoped to THIS scan_id alone — "new" vs "updated" says whether
-              a row was written for the first time in this run's own attempt, or re-touched by a
-              checkpoint-resumed retry of the SAME run; "unchanged" is presently always 0 (the
-              upsert has no per-column comparison to detect it). On the overwhelmingly common case
-              — one clean attempt, no resume — every row reads "new", so a label reading "added"
-              there would just restate "N files inventoried" above under a header implying growth
-              since last time. A real cross-scan delta already exists (store.get_inventory_diff,
-              wired into SourceDrawer's own history view) — this is a different signal and must not
-              be read as that one. Rendered only when there is something a resume actually changed;
-              gated on `updated`/`unchanged` rather than `new` for exactly that reason. */}
-          {inventoryDelta && (inventoryDelta.updated > 0 || inventoryDelta.unchanged > 0) && (
-            <div style={{ marginTop: 4 }}>
-              {'This run’s writes (including a checkpoint resume): '}
-              {[
-                inventoryDelta.new > 0 && `${n(inventoryDelta.new)} written`,
-                inventoryDelta.updated > 0 && `${n(inventoryDelta.updated)} re-written on resume`,
-                inventoryDelta.unchanged > 0 && `${n(inventoryDelta.unchanged)} unchanged`,
-              ].filter(Boolean).join(' · ')}
-            </div>
-          )}
-          {/* THE redirect, not a second attempt at the answer. Product decision 2026-08-29: this
-              card keeps the narrow, honest "This run's writes" line above (still accurate for
-              what it measures — see its own comment) rather than growing a real cross-scan diff
-              of its own. A reader who actually wants "has this estate changed since I last
-              scanned it" gets sent to the place that can already answer it correctly —
-              SourceDrawer's Activity tab, backed by the real store.get_inventory_diff — instead
-              of a second, differently-scoped number competing with the first on this same card. */}
-          {onViewSourceHistory && (
-            <div style={{ marginTop: 4 }}>
-              <button type="button" className="linklike" style={{ fontSize: 12.5 }}
-                      onClick={onViewSourceHistory}>
-                See what's changed since your last scan of this source →
-              </button>
-            </div>
-          )}
-          {publishedAt && (
-            <div style={{ marginTop: 4 }}>
-              Enumeration verified complete —{' '}
-              {new Date(publishedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
-            </div>
-          )}
+                {lifecycleBreakdown.length > 0 && (
+                  <div style={{ color: 'var(--muted)', fontSize: 12.5, marginTop: 3 }}>
+                    {lifecycleBreakdown.join(' · ')}
+                  </div>
+                )}
+              </li>
+            ) : (
+              <li style={{ color: 'var(--muted)' }}>No lifecycle rules enabled</li>
+            )}
+            {/* NOT a comparison against a previous scan, however the field name reads.
+                `add_inventory` (api/store.py) upserts scoped to THIS scan_id alone — "new" vs
+                "updated" says whether a row was written for the first time in this run's own
+                attempt, or re-touched by a checkpoint-resumed retry of the SAME run; "unchanged"
+                is presently always 0 (the upsert has no per-column comparison to detect it). On
+                the overwhelmingly common case — one clean attempt, no resume — every row reads
+                "new", so a label reading "added" there would just restate "N files inventoried"
+                above under a header implying growth since last time. A real cross-scan delta
+                already exists (store.get_inventory_diff, wired into SourceDrawer's own history
+                view) — this is a different signal and must not be read as that one. Rendered
+                only when there is something a resume actually changed; gated on
+                `updated`/`unchanged` rather than `new` for exactly that reason. */}
+            {inventoryDelta && (inventoryDelta.updated > 0 || inventoryDelta.unchanged > 0) && (
+              <li>
+                {'This run’s writes (including a checkpoint resume): '}
+                {[
+                  inventoryDelta.new > 0 && `${n(inventoryDelta.new)} written`,
+                  inventoryDelta.updated > 0 && `${n(inventoryDelta.updated)} re-written on resume`,
+                  inventoryDelta.unchanged > 0 && `${n(inventoryDelta.unchanged)} unchanged`,
+                ].filter(Boolean).join(' · ')}
+              </li>
+            )}
+            {/* THE redirect, not a second attempt at the answer. Product decision 2026-08-29:
+                this card keeps the narrow, honest "This run's writes" line above (still accurate
+                for what it measures — see its own comment) rather than growing a real cross-scan
+                diff of its own. A reader who actually wants "has this estate changed since I last
+                scanned it" gets sent to the place that can already answer it correctly —
+                SourceDrawer's Activity tab, backed by the real store.get_inventory_diff — instead
+                of a second, differently-scoped number competing with the first on this same
+                card. */}
+            {onViewSourceHistory && (
+              <li>
+                <button type="button" className="linklike" style={{ fontSize: 12.5 }}
+                        onClick={onViewSourceHistory}>
+                  See what's changed since your last scan of this source →
+                </button>
+              </li>
+            )}
+            {publishedAt && (
+              <li>
+                Enumeration verified complete —{' '}
+                {new Date(publishedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+              </li>
+            )}
+          </ul>
         </div>
 
         {/* Safety disclaimer — tinted info footer */}

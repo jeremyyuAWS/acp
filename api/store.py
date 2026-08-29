@@ -2239,7 +2239,7 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT id,completed_at,source,rubric_hash,files,certifiable,uncertain,error,"
-                "avg_score,assessed_at,scope,owner_email "
+                "avg_score,assessed_at,scope,status,owner_email "
                 "FROM scan_runs WHERE completed_at IS NOT NULL AND status != 'superseded' "
                 "ORDER BY completed_at DESC", ())
             rows = self._db.fetchall(cur)
