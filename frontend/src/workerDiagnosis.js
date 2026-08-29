@@ -102,5 +102,14 @@ export function diagnoseWorkerHealth({ snap, capacity, replicas, nowMs = Date.no
       message: `Running at the configured max (${replicas.max_replicas}) replicas with ${pct}% utilization — consider raising max replicas or the per-replica size.` }
   }
 
+  // 7. Low-priority/informational only: CPU/Memory metrics are missing specifically because the
+  //    Monitor Reader call was denied, not because there's simply no data yet (which is normal
+  //    right after a cold start) or a transient error. Deliberately not raised for those other two
+  //    reasons — this is the one case that won't self-resolve without an RBAC change.
+  if (capacity?.configured && capacity.metrics_unavailable_reason === 'permission') {
+    return { severity: 'warning',
+      message: 'Azure Monitor metrics are unavailable — the app identity may be missing the Monitoring Reader role on the Container App.' }
+  }
+
   return null
 }
