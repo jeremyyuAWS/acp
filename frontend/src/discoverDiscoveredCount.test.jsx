@@ -139,3 +139,36 @@ describe('the live banner for a queued run this tab is not tracking (busy false)
     expect(t).not.toMatch(/documents discovered/i)
   })
 })
+
+// The completion card's "Assessable" tile used to read scope.inventory.by_status.assessable
+// directly, on its own — skipping estateFunnel.js's `assessmentEligible()`, which prefers the
+// newer, direct `assessment_eligible` field and treats `by_status.assessable` as the older
+// fallback shape only. DiscoveryResults' own headline "Assessable" stat tile (a few hundred
+// pixels below this card, same screen, same scan) already calls `assessmentEligible()` — so a
+// scan whose two fields disagreed would show two different "assessable" counts on one screen,
+// the exact "four-denominator" defect estateFunnel.js's own header comment warns against.
+describe('the completion card\'s "Assessable" count agrees with DiscoveryResults\' below it', () => {
+  const doneRun = (extra = {}) => ({ id: 's9', status: 'discovered', discovered_at: '2026-08-29T04:00:00Z', ...extra })
+
+  it('prefers assessment_eligible over a stale by_status.assessable', async () => {
+    const files = Array.from({ length: 200 }, (_, i) => ({ file: `f${i}.pdf`, status: 'discovered' }))
+    const c = await mount({
+      files, run: doneRun(),
+      scope: {
+        kind: 'drive',
+        inventory: { discovered: 200, assessment_eligible: 170, by_status: { assessable: 40 } },
+      },
+    })
+    expect(c).toMatch(/\b170\b/)
+    expect(c).not.toMatch(/\b40\b assessable/i)
+  })
+
+  it('falls back to by_status.assessable when assessment_eligible is absent', async () => {
+    const files = Array.from({ length: 200 }, (_, i) => ({ file: `f${i}.pdf`, status: 'discovered' }))
+    const c = await mount({
+      files, run: doneRun(),
+      scope: { kind: 'drive', inventory: { discovered: 200, by_status: { assessable: 170 } } },
+    })
+    expect(c).toMatch(/\b170\b/)
+  })
+})
