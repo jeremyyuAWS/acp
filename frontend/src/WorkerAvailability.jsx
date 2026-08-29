@@ -1,4 +1,5 @@
 import { isQueueStalled, queuedAgeSecs } from './workerStallSignal.js'
+import { diagnoseWorkerHealth } from './workerDiagnosis.js'
 
 // "How many workers are available to pick up scan jobs" — the same worker-count/alive signal
 // AssessRunner's worker strip already surfaces from GET /jobs, extracted so Discover can show it
@@ -39,6 +40,12 @@ export default function WorkerAvailability({ snap, busy, msg, onAdjust,
   const externallyManaged = snap.runtime_mode === 'distributed' && snap.alive
   const stalled = isQueueStalled(snap.alive, snap.oldestQueuedCreatedAt)
   const stalledAge = stalled ? queuedAgeSecs(snap.oldestQueuedCreatedAt) : null
+  // diagnoseWorkerHealth (workerDiagnosis.js) covers strictly more ground than the stall check
+  // above (offline reasons, revision health, capacity ceiling) but its own queue-stall rule
+  // would otherwise just restate the block below in different words — suppressed here so a
+  // stalled queue with nothing else wrong shows exactly one alert, not two saying the same thing.
+  const diagnosis = diagnoseWorkerHealth({ snap, capacity, replicas })
+  const showDiagnosis = diagnosis && !diagnosis.message.includes('may not be actually claiming work')
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, margin: '6px 0 10px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, flexWrap: 'wrap' }}>
@@ -114,6 +121,13 @@ export default function WorkerAvailability({ snap, busy, msg, onAdjust,
             Worker service reports online, but a queued job has been waiting {stalledAge}s —
             it may not be actually claiming work. Check Monitor.
           </span>
+        </div>
+      )}
+      {showDiagnosis && (
+        <div role="alert" style={{ fontSize: 12, color: diagnosis.severity === 'critical' ? '#8A2A20' : '#854F0B',
+                                    display: 'flex', alignItems: 'baseline', gap: 5 }}>
+          <span aria-hidden="true">⚠</span>
+          <span>{diagnosis.message}</span>
         </div>
       )}
       {externallyManaged && capacity?.configured
