@@ -1,0 +1,189 @@
+"""PRD Phase 3, interactive scans — core._interactive_drive_sync_plan.
+
+Brings the delta-sync mechanism built for the scheduled sweep (core._drive_sync_plan, #933/#951)
+to a user-initiated Drive scan: reconstruct the estate from a stored per-user cursor + Drive's
+Changes API instead of always walking the whole Drive. Three things make this genuinely
+different from the sweep, not just a copy of it, and all three are pinned here:
+
+  1. NO SKIP. The sweep's "nothing changed" means "do nothing" — nobody is watching a background
+     sweep. An interactive scan is watched: the caller who clicked "scan" is owed a completed
+     scan every time, so "nothing changed" here still returns a drive_delta (an empty one), never
+     a signal to do nothing.
+  2. PER-OWNER CURSOR. The sweep is one service-account identity with one shared cursor; an
+     interactive scan can be any signed-in user, so two different users' Drive accounts must
+     never share or clobber each other's delta position.
+  3. REUSES THE CALLER'S OWN Drive SERVICE. Unlike the sweep (which has nothing built yet and
+     builds its own ADC service), an interactive caller already built one from its own request's
+     token before ever reaching this gate — building a second one here would be wasted work (and,
+     in a caller that asserts _drive_service was called exactly once, a real regression, caught
+     live while building this: see git history for why _drive_delta_check takes a `build_svc`
+     callable rather than a token).
+
+Hermetic: no real Drive access. scanner._drive_service/drive_start_page_token/drive_changes_since
+are monkeypatched, and a minimal store double stands in for get_sync_cursor/save_sync_cursor/
+latest_scan_inventory_items.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
+
+SVC_ALICE = object()
+SVC_BOB = object()
+
+
+@pytest.fixture()
+def core_mod(monkeypatch):
+    import core
+    import scanner
+
+    class _Store:
+        def __init__(self):
+            self.sync_cursors: dict = {}       # cursor_key -> {"page_token": ...}
+            self.prior_inventory: dict = {}     # owner -> inventory rows, or absent = None
+
+        def get_sync_cursor(self, cursor_key):
+            return dict(self.sync_cursors[cursor_key]) if cursor_key in self.sync_cursors else None
+
+        def save_sync_cursor(self, cursor_key, owner_email, page_token):
+            self.sync_cursors[cursor_key] = {"cursor_key": cursor_key,
+                                             "owner_email": owner_email,
+                                             "page_token": page_token}
+
+        def latest_scan_inventory_items(self, owner, source):
+            return self.prior_inventory.get(owner)
+
+    store = _Store()
+    monkeypatch.setattr(core, "get_store", lambda: store)
+
+    # Spy on scanner._drive_service — the scheduled sweep still calls it (ADC); an interactive
+    # plan must NOT, since it is handed an already-built svc directly.
+    calls = {"drive_service_calls": [], "changes_calls": []}
+
+    def _fake_drive_service(token=None):
+        calls["drive_service_calls"].append(token)
+        return object()
+
+    def _fake_drive_changes_since(svc, page_token):
+        calls["changes_calls"].append(svc)
+        return [], set(), "next-token"
+
+    monkeypatch.setattr(scanner, "_drive_service", _fake_drive_service)
+    monkeypatch.setattr(scanner, "drive_start_page_token", lambda svc: "seed-token")
+    monkeypatch.setattr(scanner, "drive_changes_since", _fake_drive_changes_since)
+    return core, store, calls
+
+
+PRIOR_ROW = {"file": "unchanged.pdf", "drive_file_id": "F0", "mime": "application/pdf",
+            "size_kb": 1, "checksum": "x", "created_at": None, "source_modified": None,
+            "owner": None, "parent_folder": None}
+
+
+def test_first_ever_interactive_scan_has_nothing_to_reconstruct_and_seeds_a_cursor(core_mod):
+    core, store, calls = core_mod
+    result = core._interactive_drive_sync_plan("alice@x.com", SVC_ALICE)
+    assert result is None, "no cursor yet — nothing to reconstruct from, fall back to a full listing"
+    assert store.sync_cursors["drive:alice@x.com"]["page_token"] == "seed-token"
+    assert calls["drive_service_calls"] == [], (
+        "an interactive plan must reuse the caller's svc, never build its own")
+
+
+def test_no_changes_still_returns_a_delta_never_a_skip(core_mod, monkeypatch):
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive:alice@x.com"] = {"page_token": "tok-1"}
+    store.prior_inventory["alice@x.com"] = [PRIOR_ROW]
+    monkeypatch.setattr(scanner, "drive_changes_since", lambda svc, tok: ([], set(), "tok-2"))
+
+    result = core._interactive_drive_sync_plan("alice@x.com", SVC_ALICE)
+    assert result is not None, "an interactive scan must never be told to do nothing"
+    assert result["changed"] == [] and result["removed_ids"] == set()
+    assert [f["id"] for f in result["prior_files"]] == ["F0"]
+    assert store.sync_cursors["drive:alice@x.com"]["page_token"] == "tok-2"
+
+
+def test_real_changes_are_reconstructed(core_mod, monkeypatch):
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive:alice@x.com"] = {"page_token": "tok-1"}
+    store.prior_inventory["alice@x.com"] = [PRIOR_ROW]
+    changed_file = {"id": "F1", "name": "changed.pdf", "mimeType": "application/pdf"}
+    monkeypatch.setattr(scanner, "drive_changes_since",
+                        lambda svc, tok: ([changed_file], {"F2"}, "tok-2"))
+
+    result = core._interactive_drive_sync_plan("alice@x.com", SVC_ALICE)
+    assert result["changed"] == [changed_file]
+    assert result["removed_ids"] == {"F2"}
+
+
+def test_a_cursor_with_no_prior_scan_falls_back_to_a_full_listing(core_mod, monkeypatch):
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive:alice@x.com"] = {"page_token": "tok-1"}
+    # No entry in store.prior_inventory for alice — every prior interactive scan since the
+    # cursor was seeded failed before saving, or this is the account's first-ever whole-Drive
+    # scan under this cursor.
+    monkeypatch.setattr(scanner, "drive_changes_since", lambda svc, tok: ([], set(), "tok-2"))
+
+    result = core._interactive_drive_sync_plan("alice@x.com", SVC_ALICE)
+    assert result is None
+
+
+def test_a_failed_change_check_falls_back_to_a_full_listing(core_mod, monkeypatch):
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive:alice@x.com"] = {"page_token": "tok-1"}
+    store.prior_inventory["alice@x.com"] = [PRIOR_ROW]
+
+    def _boom(svc, tok):
+        raise RuntimeError("HttpError 404 — expired page token")
+    monkeypatch.setattr(scanner, "drive_changes_since", _boom)
+
+    result = core._interactive_drive_sync_plan("alice@x.com", SVC_ALICE)
+    assert result is None
+
+
+def test_two_different_users_never_share_or_clobber_each_others_cursor(core_mod, monkeypatch):
+    import scanner
+    core, store, calls = core_mod
+    store.prior_inventory["alice@x.com"] = [PRIOR_ROW]
+    store.prior_inventory["bob@y.com"] = [PRIOR_ROW]
+
+    # Alice's first-ever check seeds HER cursor only.
+    core._interactive_drive_sync_plan("alice@x.com", SVC_ALICE)
+    assert "drive:alice@x.com" in store.sync_cursors
+    assert "drive:bob@y.com" not in store.sync_cursors
+
+    # Bob's first-ever check must ALSO see "no cursor yet" — Alice's seed must not leak to him.
+    result = core._interactive_drive_sync_plan("bob@y.com", SVC_BOB)
+    assert result is None, "bob has no cursor of his own yet — Alice's must not answer for him"
+
+    # Both cursors now exist, independently. A real change-check now distinguishes them by svc.
+    monkeypatch.setattr(scanner, "drive_changes_since",
+                        lambda svc, tok: ([{"id": "ONLY_ALICES", "name": "a.pdf"}], set(), "a-2")
+                        if svc is SVC_ALICE else ([], set(), "b-2"))
+    alice_result = core._interactive_drive_sync_plan("alice@x.com", SVC_ALICE)
+    assert alice_result["changed"] == [{"id": "ONLY_ALICES", "name": "a.pdf"}]
+    # Bob's own cursor is untouched by Alice's check just now.
+    assert store.sync_cursors["drive:bob@y.com"]["page_token"] == "seed-token"
+
+
+def test_the_scheduled_sweeps_own_cursor_is_a_completely_separate_key(core_mod):
+    """Sanity check on the shared _drive_delta_check helper: the sweep's fixed "drive" key and
+    an interactive user's "drive:{owner}" key can never collide, however the owner is named."""
+    core, store, calls = core_mod
+    # A scheduled-sweep-style call (core._drive_sync_plan) uses cursor_key "drive" verbatim and
+    # builds its OWN ADC service — never namespaced per owner, unlike the interactive plan.
+    core._drive_sync_plan(None)
+    assert "drive" in store.sync_cursors
+    assert calls["drive_service_calls"] == [None], "the sweep must build its own ADC service"
+
+    core._interactive_drive_sync_plan("alice@x.com", SVC_ALICE)
+    assert "drive:alice@x.com" in store.sync_cursors
+    assert set(store.sync_cursors) == {"drive", "drive:alice@x.com"}
+    # The interactive call must still never have built its own service.
+    assert calls["drive_service_calls"] == [None]
