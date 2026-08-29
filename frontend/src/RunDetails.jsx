@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import CoverageScorecard from './CoverageScorecard.jsx'
+import ScanHistory from './ScanHistory.jsx'
 import { TraceChip } from './Transparency.jsx'
 import { assessMetrics } from './assessMetrics.js'
 
@@ -185,6 +186,11 @@ export default function RunDetails({ scanId, files, cap, assessment, onBack }) {
         </p>
         <CoverageScorecard files={files} />
       </section>
+
+      {/* ADR 0042 · the run's own durable lifecycle log. Belongs here for the same reason scan
+          traces do (reason 3 in this file's header): operator diagnostics behind a secondary
+          action, not on the results page. Collapsed by default and fetched only on expand. */}
+      <ScanHistory scanId={scanId} />
 
       <ScanTraces scanId={scanId} rows={m.rows} />
     </div>

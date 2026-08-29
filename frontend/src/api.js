@@ -508,6 +508,28 @@ export const getDocumentTimeline = (scanId, file) => {
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/timeline?file=${encodeURIComponent(file)}`,
                { headers: headers() }).then(j)
 }
+
+// ADR 0042 — this RUN's durable lifecycle history (queued/claimed/listing/saved/discovered, plus
+// retries and failures). The run-level sibling of getDocumentTimeline above.
+//
+// Same deliberate error contract as that one, for the same reason: the endpoint is always-200 and
+// degrades to {available:false} for an unknown or foreign scan, so a rejected promise here means
+// the REQUEST failed, never that the run has no history. "This run has no recorded history" and
+// "we could not reach the server" are different sentences and only the caller can tell which it is
+// in. Callers must carry a .catch — ScanHistory does.
+//
+// `afterSeq` is exclusive: pass the highest seq already held to fetch only what was missed. Not
+// used by the first caller (which renders the whole run), and present because it is the endpoint's
+// point — a client reconnecting after a gap asks "what did I miss", not "what is the state now".
+export const getScanHistory = (scanId, { afterSeq = null, limit = null } = {}) => {
+  if (SIM || !scanId) return sim({ available: false, events: [] })
+  const qs = new URLSearchParams()
+  if (afterSeq != null) qs.set('after_seq', String(afterSeq))
+  if (limit != null) qs.set('limit', String(limit))
+  const tail = qs.toString() ? `?${qs}` : ''
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/history${tail}`,
+               { headers: headers() }).then(j)
+}
 // R18 · Comments on a finding — the human discussion thread anchored to one finding
 // (scan × file × criterion × instance). SIM has no backend, so it keeps the thread in memory for
 // the length of the demo session; real mode reads/writes the owner-scoped store. Oldest first.
