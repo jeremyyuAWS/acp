@@ -525,6 +525,74 @@ async def stream_job_state(job_id: str):
     )
 
 
+def _discover_fallback_frame(checkpoint: dict | None, checkpoint_at, events: list[dict]) -> dict | None:
+    """The ONE not-live frame `stream_discover_state` emits after 4 missed polls (ADR 0042 PR 4).
+
+    PURE — the load-bearing bit, unit-tested with plain dicts, so the generator around it stays
+    the shape it has been through four bug fixes.
+
+    WHAT CHANGED, AND WHAT DID NOT. Before this, the frame was the Postgres checkpoint alone
+    (`scan_runs.live_checkpoint`) and was emitted ONLY when that column was non-NULL. A job that
+    died before its first phase transition never got a checkpoint written — `_maybe_checkpoint`
+    flushes on phase/done/error or every 20s, so a run killed inside its first seconds has
+    nothing — and the client got the error frame with no preceding data at all: an empty panel,
+    which is the exact gap this PR closes. `scan_events` has rows for that run (scan.queued,
+    scan.claimed), so there is something honest to say.
+
+    Still ONE frame, still `live: False`, still followed by the same `event: error` and the same
+    close. No new terminal state and no new frame type — see the route's own comment.
+
+    THE CHECKPOINT WINS WHEREVER IT SPEAKS. Events only FILL fields the checkpoint does not
+    carry; they never overwrite one. The checkpoint is the accumulated job state, which is
+    strictly richer than the handful of columns an event row holds, and a merge that let the
+    coarser source win would make the frame worse than it was.
+
+    THREE FIELDS ARE NEVER SYNTHESIZED, each for a specific reason:
+      * `seq` — frontend/src/liveJobStateGuard.js drops a frame whose seq is lower than the one
+        it already holds, and prefers a higher one. A seq invented here is not comparable with
+        the Redis HINCRBY counter those frames carry, so it would either suppress this frame or
+        suppress a real later one. Absent, the guard falls through to accepting — pinned by
+        liveJobStateGuard.test.js's "accepts when seq is missing on either side" case — which is
+        right here: this frame is built only after four consecutive Redis misses, so there is no
+        newer truth left to protect.
+      * `done` — a frame claiming the run finished would end the client's progress UI on a run
+        that may simply have lost its replica. Not knowing is not the same as being done.
+      * `error` — the terminal `event: error` that follows already says the stream ended; putting
+        an error INTO the data frame would make a recoverable gap read as a failed scan.
+
+    `attempt` IS carried through when an event has it, because it is a real durable counter
+    (jobs.attempts) and it is the other half of the guard's staleness check.
+    """
+    frame: dict = dict(checkpoint) if isinstance(checkpoint, dict) else {}
+    had_checkpoint = bool(frame)
+
+    # Newest first — the most recent event is the best answer to "how far did it get".
+    for e in reversed(events or []):
+        if frame.get("phase") is None and e.get("phase"):
+            frame["phase"] = e["phase"]
+        if frame.get("attempt") is None and isinstance(e.get("attempt"), int):
+            frame["attempt"] = e["attempt"]
+        if frame.get("files_found") is None:
+            # Only from an event that actually counted files. `detail` is per-kind narration, so
+            # a key that is absent means the event never knew the number — not zero.
+            d = e.get("detail")
+            if isinstance(d, dict) and isinstance(d.get("files_found"), int):
+                frame["files_found"] = d["files_found"]
+
+    if not frame:
+        return None                      # no checkpoint and no events — nothing honest to say
+
+    frame["live"] = False
+    # WHEN this state was true. The checkpoint's own stamp when we have one; otherwise the last
+    # event's timestamp, because that is what the frame was actually built from. Either way the
+    # client's "last known state, Ns ago" is measuring the right instant.
+    if had_checkpoint:
+        frame["checkpoint_at"] = checkpoint_at
+    else:
+        frame["checkpoint_at"] = (events[-1].get("occurred_at") if events else None)
+    return frame
+
+
 @router.get("/scans/{scan_id}/discover/stream")
 async def stream_discover_state(scan_id: str, request: Request):
     """SSE stream for Discovery scan progress, anchored to scan_id.
@@ -572,8 +640,28 @@ async def stream_discover_state(scan_id: str, request: Request):
                     row = await asyncio.to_thread(core.store.get_scan, scan_id, _owner(request))
                     checkpoint = (row or {}).get("run", {}).get("live_checkpoint")
                     checkpoint_at = (row or {}).get("run", {}).get("live_checkpoint_at")
-                    if checkpoint:
-                        yield f"data: {_j.dumps({**checkpoint, 'live': False, 'checkpoint_at': checkpoint_at})}\n\n"
+                    # ADR 0042 PR 4 — fill the frame's gaps from the durable lifecycle log when
+                    # the checkpoint is missing or thin. NO `owner=` on this read: the ownership
+                    # gate is get_scan, above, and a run's earliest events carry owner_email=NULL
+                    # (the thread path mints a scan_id before it knows the user), so filtering
+                    # again here would drop exactly the queued/claimed rows that explain a scan
+                    # that died before it ever started. Best-effort: a log read must not be able
+                    # to cost the client the checkpoint frame it would have had without it.
+                    # The default limit (500) takes the OLDEST rows, and this wants the newest —
+                    # a mismatch that only bites above 500 events for one run, ~17x the 15-30
+                    # ADR 0042 sizes a run at. Left as-is rather than adding a newest-first
+                    # store parameter for it, because the degradation runs the safe way: a run
+                    # that somehow exceeded 500 would fill from EARLIER events and understate
+                    # how far it got. Overstating progress on a run that died is the failure
+                    # that would matter.
+                    try:
+                        events = await asyncio.to_thread(
+                            core.store.list_scan_events, scan_id)
+                    except Exception:
+                        events = []
+                    frame = _discover_fallback_frame(checkpoint, checkpoint_at, events)
+                    if frame:
+                        yield f"data: {_j.dumps(frame)}\n\n"
                     yield "event: error\ndata: {\"error\": \"no active job for this scan\"}\n\n"
                     return
                 await asyncio.sleep(0.25)
