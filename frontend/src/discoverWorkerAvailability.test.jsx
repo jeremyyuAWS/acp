@@ -12,6 +12,8 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 const getJobs = vi.fn()
 const setWorkers = vi.fn()
+const getWorkerReplicas = vi.fn()
+const setWorkerReplicas = vi.fn()
 vi.mock('./api.js', () => ({
   checkReadiness: vi.fn(() => Promise.resolve(null)),
   getScanInventory: vi.fn(() => Promise.resolve(null)),
@@ -21,6 +23,8 @@ vi.mock('./api.js', () => ({
   unacknowledgeScan: vi.fn(),
   getJobs: (...a) => getJobs(...a),
   setWorkers: (...a) => setWorkers(...a),
+  getWorkerReplicas: (...a) => getWorkerReplicas(...a),
+  setWorkerReplicas: (...a) => setWorkerReplicas(...a),
 }))
 
 const { default: Discover } = await import('./Discover.jsx')
@@ -34,7 +38,11 @@ const mount = async (props) => {
   return container
 }
 const settle = async (n = 4) => { for (let k = 0; k < n; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
-afterEach(() => { unmountAll(); getJobs.mockReset(); setWorkers.mockReset() })
+afterEach(() => {
+  unmountAll()
+  getJobs.mockReset(); setWorkers.mockReset()
+  getWorkerReplicas.mockReset(); setWorkerReplicas.mockReset()
+})
 
 describe('Worker availability on Discover', () => {
   it('shows the live worker count and online status from getJobs(), even with no scan running', async () => {
@@ -88,5 +96,52 @@ describe('Worker availability on Discover', () => {
     const c = await mount({})
     await settle()
     expect(c.textContent).not.toMatch(/may not be actually claiming work/i)
+  })
+})
+
+// GET /control/workers/replicas is open to any signed-in user — Discover must fetch and show it
+// for everyone once the tier reports 'distributed', but only pass the adjust handler down to
+// WorkerAvailability for me?.is_admin, matching the endpoint's own PATCH-only admin gate.
+describe('Azure replica visibility/control wiring on Discover', () => {
+  const distributed = { workers: 8, worker_tier_alive: true, suggested_workers: 4, runtime_mode: 'distributed' }
+
+  it('does not call getWorkerReplicas at all in the ordinary in-process (auto) runtime mode', async () => {
+    getJobs.mockResolvedValue({ workers: 3, worker_tier_alive: true, suggested_workers: 4, runtime_mode: 'auto' })
+    const c = await mount({})
+    await settle()
+    expect(getWorkerReplicas).not.toHaveBeenCalled()
+    void c
+  })
+
+  it('fetches and shows the Azure replica count for a non-admin once the tier is distributed', async () => {
+    getJobs.mockResolvedValue(distributed)
+    getWorkerReplicas.mockResolvedValue({ configured: true, min_replicas: 2, max_replicas: 5 })
+    const c = await mount({ me: { email: 'a@b.com', is_admin: false } })
+    await settle()
+    expect(getWorkerReplicas).toHaveBeenCalled()
+    expect(c.textContent).toMatch(/Azure warm replicas: 2 \(max 5\)/)
+    expect(c.querySelector('button[aria-label="Add a warm replica"]')).toBeFalsy()
+  })
+
+  it('gives an admin +/- controls that call setWorkerReplicas and reflect the result', async () => {
+    getJobs.mockResolvedValue(distributed)
+    getWorkerReplicas.mockResolvedValue({ configured: true, min_replicas: 2, max_replicas: 5 })
+    setWorkerReplicas.mockResolvedValue({ configured: true, min_replicas: 3, max_replicas: 5 })
+    const c = await mount({ me: { email: 'admin@b.com', is_admin: true } })
+    await settle()
+    const plus = c.querySelector('button[aria-label="Add a warm replica"]')
+    expect(plus).toBeTruthy()
+    await act(async () => { plus.click() })
+    await settle()
+    expect(setWorkerReplicas).toHaveBeenCalledWith(3)
+    expect(c.textContent).toMatch(/Azure warm replicas: 3 \(max 5\)/)
+  })
+
+  it('a non-admin sees the generic "managed by" line, never the count, while replicas has not resolved', async () => {
+    getJobs.mockResolvedValue(distributed)
+    getWorkerReplicas.mockReturnValue(new Promise(() => {}))
+    const c = await mount({ me: { email: 'a@b.com', is_admin: false } })
+    await settle()
+    expect(c.textContent).toMatch(/managed by your deployment administrator/i)
   })
 })
