@@ -34,7 +34,15 @@ describe('WorkerAvailability', () => {
   it('shows offline when the worker tier has no live heartbeat', async () => {
     const c = await mount({ snap: { workers: 0, alive: false } })
     expect(c.textContent).toMatch(/offline/i)
-    expect(c.textContent).toMatch(/0 workers available to pick up jobs/i)
+    expect(c.textContent).toMatch(/processing capacity is off/i)
+  })
+
+  it('does not say "online" and "0 workers available" in the same breath — that reads as a '
+     + 'contradiction (found live 2026-08-29); zero capacity is said as one fact instead', async () => {
+    const c = await mount({ snap: { workers: 0, alive: true } })
+    expect(c.textContent).toMatch(/online/i)
+    expect(c.textContent).toMatch(/processing capacity is off/i)
+    expect(c.textContent).not.toMatch(/0 workers available/i)
   })
 
   it('singularizes "worker" for a count of one', async () => {

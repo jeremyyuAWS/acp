@@ -37,7 +37,7 @@ describe('a failed scan clears the stale preflight capacity notice', () => {
     // The catch that sets the "scan failed: ..." err message must also null out
     // preflightCapacityState — order matters only in that both must be in the same catch, not
     // split across catch/finally where a race could leave one stale.
-    expect(doScan[0]).toMatch(/catch \(e\) \{\s*setPreflightCapacityState\(null\)\s*setErr\(`scan failed: \$\{e\?\.message \?\? e\}`\)/)
+    expect(doScan[0]).toMatch(/catch \(e\) \{\s*setPreflightCapacityState\(null\)\s*setErr\(`scan failed: \$\{scanFailureDetail\(e\?\.message \?\? e\)\}`\)/)
   })
 
   it('preflightCapacityState is reset at the start of a new attempt too — belt and suspenders', () => {

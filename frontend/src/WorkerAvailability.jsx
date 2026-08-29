@@ -3,6 +3,12 @@
 // too without duplicating the polling+adjust wiring, and so Remediate can be a third adopter
 // later without a rewrite (same reuse story as ProcessingStatusPanel, #922-#924). Each caller
 // keeps its own polling effect and adjustWorkers() — this component is purely presentational.
+//
+// `snap.workers` is the CONFIGURED pool size (Discover.jsx's adjustWorkers moves it 0..16), not a
+// live busy/idle gauge — there is no "N busy" signal in this data to show instead. So "online" +
+// "0 workers available to pick up jobs" isn't a transient busy state, it's the service reporting
+// it is reachable while explicitly configured to run nothing — and worded as two separate facts
+// it read as a contradiction. Said as one fact ("processing capacity is off") instead.
 export default function WorkerAvailability({ snap, busy, msg, onAdjust }) {
   if (!snap) return null
   const externallyManaged = snap.runtime_mode === 'distributed' && snap.alive
@@ -14,7 +20,9 @@ export default function WorkerAvailability({ snap, busy, msg, onAdjust }) {
       </span>
       <span className="muted">·</span>
       <span className="muted">
-        {snap.workers} worker{snap.workers === 1 ? '' : 's'} available to pick up jobs
+        {snap.workers === 0
+          ? 'Processing capacity is off — no worker will pick up new jobs'
+          : `${snap.workers} worker${snap.workers === 1 ? '' : 's'} available to pick up jobs`}
       </span>
       {externallyManaged ? (
         <span className="muted" style={{ marginLeft: 4, fontStyle: 'italic' }}>
