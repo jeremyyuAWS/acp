@@ -33,10 +33,14 @@ const mount = async () => {
 }
 const settle = async (n = 4) => { for (let k = 0; k < n; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
 
-afterEach(() => {
+afterEach(async () => {
   unmountAll()
   getJobs.mockReset(); setWorkers.mockReset(); clearDeadJobs.mockReset()
   getWorkerReplicas.mockReset(); getWorkerCapacity.mockReset()
+  // getWorkerCapacity now goes through workerCapacityStore.js's shared singleton (also polled by
+  // Discover.jsx) — reset so a later test's fresh mock isn't masked by an earlier test's cache.
+  const { _resetForTests } = await import('./workerCapacityStore.js')
+  _resetForTests()
 })
 
 const baseJobs = { workers: 4, worker_tier_alive: true, runtime_mode: 'auto', stats: { done: 0 },

@@ -66,16 +66,33 @@ export default function EmptyState({ onGoToSource }) {
 // and every value once the load finishes) falls back to the original generic line, so a caller
 // that doesn't track stages — or hasn't started the chain yet — still gets a real message.
 const STAGE_TEXT = {
-  scans: 'Loading your scans…',
+  bootstrap: 'Loading your workspace…',
   scan: 'Loading your latest scan…',
-  jobs: 'Checking for a scan already in progress…',
 }
 
-export function Loading({ stage = null } = {}) {
+// A one-line preview of the previous load's headline numbers, shown under the spinner once
+// GET /workspace/bootstrap's cached Overview snapshot has arrived but the full scan payload
+// (files, findings) hasn't yet — the "meaningful Overview shell" the workspace-bootstrap
+// redesign asks for, scoped to the one place safe to add without changing what gates `loaded`
+// for every other tab. `overview` is the bootstrap response's `overview` field (or null before
+// it arrives, or for a workspace with no scan yet) — see api.js getWorkspaceBootstrap.
+export function overviewPreviewLine(overview) {
+  const discovered = overview?.estate?.discovered
+  if (!discovered) return null
+  const certifiable = overview?.documents?.certifiable
+  const pct = Number.isFinite(certifiable) ? Math.round((100 * certifiable) / discovered) : null
+  return pct == null ? `${discovered} documents` : `${discovered} documents · ${pct}% certifiable`
+}
+
+export function Loading({ stage = null, preview = null } = {}) {
+  const line = overviewPreviewLine(preview)
   return (
     <div className="loadingbox">
       <span className="spinner" />
-      {STAGE_TEXT[stage] || 'Loading your workspace…'}
+      <span className="loadingbox-text">
+        {STAGE_TEXT[stage] || 'Loading your workspace…'}
+        {line && <div className="loadingbox-preview">{line}</div>}
+      </span>
     </div>
   )
 }

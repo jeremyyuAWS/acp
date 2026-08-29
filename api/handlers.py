@@ -1056,6 +1056,30 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
             "lifecycle_errors": lc_errors}
 
 
+def scan_event(scan_id: str | None, kind: str, **kw) -> None:
+    """Best-effort append to the durable lifecycle log (ADR 0042). NEVER raises.
+
+    Swallows EVERYTHING, including the ValueError `append_scan_event` raises for an unknown
+    `kind`. That looks like it defeats the store's own guard, and the trade is deliberate: the
+    ADR's rule is absolute — "an append must never be able to fail the work it describes" — and a
+    typo'd kind string on a rarely-taken branch (a discovery conflict, a listing failure) would
+    otherwise crash a real scan in production over a telemetry line. The guard is not lost, only
+    moved: `test_scan_events_emitted.py` extracts every kind literal passed to this function
+    across the emit sites and asserts each is in `Store.SCAN_EVENT_KINDS`, so a typo fails CI on
+    every branch — including the ones no test happens to execute.
+
+    Exported (no leading underscore) because routes/scans.py and worker.py emit through it too;
+    one wrapper, so the never-raises contract cannot be honoured at one call site and forgotten
+    at the next.
+    """
+    if not scan_id:
+        return                     # nothing to anchor the event to — see the thread-path comment
+    try:
+        core.store.append_scan_event(scan_id, kind, **kw)
+    except Exception:              # noqa: BLE001 — see the docstring; this is the whole point
+        logger.debug("scan_event(%s, %s) failed", scan_id, kind, exc_info=True)
+
+
 def _mark_discovered(scan_id: str) -> None:
     """Record the run-level discovery-completion instant, and never fail discovery over it.
 
@@ -1115,14 +1139,38 @@ def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, acto
     from scanner import _dedupe_inventory_files
     _dedupe_inventory_files(inv)
     outcome = core.store.add_inventory(scan_id, inv) if inv else {"new": 0, "updated": 0, "unchanged": 0, "failed": 0}
+    # ADR 0042. Emitted HERE rather than at this function's three call sites because this is the
+    # shared post-discovery step every non-fanout path routes through (routes/scans.py's sync and
+    # thread branches, and _assess_discover) — the same reason the function itself exists. The
+    # fan-out path (_scan_discover) inlines its own add_inventory/lifecycle/stamp and emits its
+    # own events there; it does NOT call this, so nothing is double-counted.
+    scan_event(scan_id, "scan.inventory_saved", phase="saving", owner_email=actor,
+               detail={"new": outcome.get("new"), "updated": outcome.get("updated"),
+                       "unchanged": outcome.get("unchanged"), "failed": outcome.get("failed")})
     lifecycle_stats = _evaluate_discover_lifecycle_rules(scan_id, source, actor,
                                                          progress_cb=progress_cb)
+    scan_event(scan_id, "scan.lifecycle_applied", phase="lifecycle", owner_email=actor,
+               detail={"rules_enabled": lifecycle_stats.get("rules_enabled", 0),
+                       "files_evaluated": lifecycle_stats.get("files_evaluated", 0),
+                       "matches": lifecycle_stats.get("lifecycle_matches", 0),
+                       "archive": lifecycle_stats.get("lifecycle_archive", 0),
+                       "delete": lifecycle_stats.get("lifecycle_delete", 0),
+                       "tagged": lifecycle_stats.get("lifecycle_tagged", 0)})
     class_stats = _count_inventory_classes(scan_id)
     # The discovery phase is over: the inventory is persisted and the lifecycle rules have run.
     # Stamp WHEN, because every count taken from this inventory is only true as of this instant
     # and nothing else on scan_runs records it — completed_at is the end of ASSESS. Stamped after
     # the writes above so it dates an inventory that exists rather than one that was attempted.
     _mark_discovered(scan_id)
+    # After the stamp, for the same reason the stamp comes after the writes. NOTE this function is
+    # documented idempotent — a re-delivered job runs it again, add_inventory de-dupes and
+    # mark_discovery_complete is set-once — so a redelivery DOES append a second scan.discovered.
+    # That is the append-only contract working as intended, not a bug to suppress: the job really
+    # did run twice, and ADR 0042 has readers take the FIRST terminal event by seq. Suppressing it
+    # would need a read-before-write, which is the mutable-cell pattern this log exists to replace.
+    scan_event(scan_id, "scan.discovered", phase="done", owner_email=actor,
+               detail={"files": class_stats.get("assessable"),
+                       "source": source})
     return {**outcome, **lifecycle_stats, **class_stats}
 
 
@@ -1347,6 +1395,16 @@ def _scan_discover(payload: dict, job: dict) -> None:
     if job.get("id") and scan_id:
         core.update_job(job["id"], {"scan_id": scan_id, "attempt": job.get("attempts", 1)})
     source = payload.get("source", "drive")
+    # ADR 0042: the claim is already durable before this handler body runs — claim_job stamped
+    # jobs.locked_at/locked_by and bumped attempts — so appending here records a fact, not an
+    # intention. Emitted on EVERY attempt, including a checkpoint-resume retry, which is the
+    # point: a run reclaimed after a lease expiry shows two scan.claimed rows with different
+    # worker_id/attempt, and that disagreement stays visible instead of being flattened into one
+    # overwritten cell (the zombie-writer case test_job_completion_race.py exists for).
+    scan_event(scan_id, "scan.claimed", phase="queued", job_id=job.get("id"),
+               worker_id=job.get("locked_by"), attempt=job.get("attempts", 1),
+               owner_email=payload.get("user"),
+               detail={"source": payload.get("source", "drive")})
     ai = bool(payload.get("ai", True)) and core.store.get_ai_enabled()
     pii = bool(payload.get("pii", False))
     user = payload.get("user")
@@ -1421,6 +1479,12 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 if _cjid:
                     core.update_job(_cjid, {"phase": "error", "done": True,
                                             "error": _conflict_msg})
+                # After set_scan_status('failed') above, never before it — the ADR's ordering
+                # rule (test_discover_completion_race's lesson): an event a reader can act on
+                # must not out-run the durable state it claims.
+                scan_event(scan_id, "scan.failed", phase="error", job_id=_cjid,
+                           attempt=job.get("attempts", 1), owner_email=user,
+                           detail={"reason": "discovery_conflict", "holder": _holder})
                 return
 
     if _checkpoint_resume:
@@ -1435,6 +1499,14 @@ def _scan_discover(payload: dict, job: dict) -> None:
             core.update_job(_jid, {"files_found": _existing_inv_count,
                                    "phase": "lifecycle"})
     else:
+        # ADR 0042. Deliberately NOT emitted on the _checkpoint_resume branch above: that path
+        # skips the Drive listing entirely (the inventory is already persisted), so claiming a
+        # listing started there would be a false statement about the estate having been re-read.
+        # Its scan.claimed row plus the absent listing pair is already the honest record of a
+        # resumed attempt.
+        scan_event(scan_id, "scan.listing_started", phase="discovering", job_id=job.get("id"),
+                   attempt=job.get("attempts", 1), owner_email=user,
+                   detail={"source": source})
         # scope_files gates what is READ, not what is scored. This is the PRODUCTION listing path
         # (ADR 0007 fan-out); run_scan's is the local one, and wiring only that would leave a
         # hospital's PDFs being downloaded and OCR'd in the deployment that matters.
@@ -1509,6 +1581,13 @@ def _scan_discover(payload: dict, job: dict) -> None:
                     core.store.release_discovery_guard(scan_id)
             except Exception:
                 pass
+            # Inside the same best-effort block's shadow but outside its try, so a failure here
+            # cannot swallow the re-raise below: scan_event never raises, and the original
+            # exception must still propagate to the worker's retry policy.
+            scan_event(scan_id, "scan.failed", phase="error", job_id=job.get("id"),
+                       attempt=job.get("attempts", 1), owner_email=user,
+                       detail={"reason": "listing_failed", "source": source,
+                               "message": str(e)[:200]})
             raise
     # shadow_candidate (a file sharing a logical name with another — possibly ACP's own output
     # shadowing its source) is computed inside _enqueue_analysis from the item list, so the same
@@ -1690,6 +1769,18 @@ def _scan_discover(payload: dict, job: dict) -> None:
 
         core.store.set_scan_files(scan_id, len(items))
         core.store.merge_scan_scope(scan_id, scope)
+        # ADR 0042, ordered AFTER both durable writes above rather than after _list() returned:
+        # the count and the enumeration evidence are what this event asserts, so it must not be
+        # readable before they are. `truncated` rides along because "listed 5,000 files" and
+        # "listed the first 5,000 of an unknown number" are different facts about the estate, and
+        # the log is the one place that distinction survives the run.
+        _enum = scope.get("enumeration") or {}
+        scan_event(scan_id, "scan.listing_complete", phase="discovering", job_id=job.get("id"),
+                   attempt=job.get("attempts", 1), owner_email=user,
+                   detail={"files_found": len(items),
+                           "folders_visited": _enum.get("folders_visited"),
+                           "truncated": bool(_enum.get("truncated")),
+                           "complete": bool(_enum.get("complete"))})
         norm = [{"file": it["name"], "drive_file_id": it.get("id"), "mime": it.get("mime"),
                  "path": it.get("path"), "checksum": it.get("checksum"),
                  "drive_id": it.get("driveId"),
@@ -1746,6 +1837,17 @@ def _scan_discover(payload: dict, job: dict) -> None:
                         "save_unchanged": _inv_outcome.get("unchanged"),
                         "save_failed": _inv_outcome.get("failed"),
                     })
+                # ADR 0042. THIS is the site test_discover_completion_race.py is about: the rows
+                # are in scan_inventory before anything says so. #934's bug was a status flip
+                # that raced this same write, and an event is read exactly like a status — so it
+                # is appended after add_inventory returns, never beside the "saving" phase write
+                # that precedes it.
+                scan_event(scan_id, "scan.inventory_saved", phase="saving", job_id=_job_id,
+                           attempt=job.get("attempts", 1), owner_email=user,
+                           detail={"new": _inv_outcome.get("new"),
+                                   "updated": _inv_outcome.get("updated"),
+                                   "unchanged": _inv_outcome.get("unchanged"),
+                                   "failed": _inv_outcome.get("failed")})
         # Phase B4 — with the inventory persisted, run enabled disposition rules against it and
         # record candidate lifecycle outcomes (never executing the Drive move/delete here). Runs
         # before the no-assessable-items short-circuit below because a rule may match a
@@ -1776,6 +1878,18 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 pass
         _lc_stats = _evaluate_discover_lifecycle_rules(
             scan_id, source, user, progress_cb=_lc_progress, tick_every=_tick_every)
+        # ADR 0042 — after the evaluator has written its outcomes, not beside the "lifecycle"
+        # phase tick that opened the window. One event for the whole pass: the per-file ticks
+        # (~100 of them) are exactly the high-frequency progress this log does not carry.
+        scan_event(scan_id, "scan.lifecycle_applied", phase="lifecycle", job_id=_jid,
+                   attempt=job.get("attempts", 1), owner_email=user,
+                   detail={"rules_enabled": _lc_stats.get("rules_enabled", 0),
+                           "files_evaluated": _lc_stats.get("files_evaluated", 0),
+                           "matches": _lc_stats.get("lifecycle_matches", 0),
+                           "archive": _lc_stats.get("lifecycle_archive", 0),
+                           "delete": _lc_stats.get("lifecycle_delete", 0),
+                           "tagged": _lc_stats.get("lifecycle_tagged", 0),
+                           "unevaluable": _lc_stats.get("lifecycle_errors", 0)})
         # Final tick with true totals so the KPI reflects the last batch before the phase ends.
         if _jid and _lifecycle_total > 0:
             try:
@@ -1825,6 +1939,9 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # count rendered from that inventory is a snapshot with no date. Set-once (see the store),
         # so a re-delivered discover job does not move it.
         _mark_discovered(scan_id)
+        scan_event(scan_id, "scan.discovered", phase="done", job_id=_jid,
+                   attempt=job.get("attempts", 1), owner_email=user,
+                   detail={"files_found": len(items), "source": source})
         # Publish the snapshot only when enumeration was verifiably complete. A truncated
         # listing (FANOUT_MAX_FILES hit) is an incomplete snapshot; a suspicious zero would
         # have raised above and never reached this line. Published scans are preferred by

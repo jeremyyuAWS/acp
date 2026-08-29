@@ -654,6 +654,8 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .setupsummary-grid > span { white-space: nowrap; }
 .setupsummary-grid .muted { margin-right: 5px; }
 .loadingbox { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); font-size: 14px; padding: 60px 0; }
+.loadingbox-text { display: flex; flex-direction: column; gap: 2px; }
+.loadingbox-preview { font-size: 12px; opacity: 0.8; }
 
 /* word cloud (top WCAG violations) */
 .wordcloud { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 14px; padding: 14px 6px; min-height: 150px; line-height: 1.05; }
