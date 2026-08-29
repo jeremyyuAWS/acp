@@ -112,6 +112,10 @@ describe('no redesign component ships unreachable', () => {
     'AssertionScope', 'NextStep', 'RunDetails',
     'RemediationWork', 'RemediationApprovals', 'ManualWork', 'RemediationVerify',
     'DeliveryPanel', 'CloseoutPanel', 'FixOutcomes', 'RemediationDocProgress', 'DocumentAudit',
+    // ADR 0042's run-level history panel. On this list for exactly the reason the list exists:
+    // it renders nothing until expanded and returns null without a scanId, so an unmounted copy
+    // and a mounted-but-never-opened one look identical on screen and in a passing suite.
+    'ScanHistory',
   ]
 
   const screens = readdirSync(here).filter((f) => f.endsWith('.jsx') && !f.includes('.test.'))

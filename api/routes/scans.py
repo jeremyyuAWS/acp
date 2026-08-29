@@ -1241,6 +1241,41 @@ def scan_traces(sid: str, request: Request, file: str | None = None):
     return core.store.get_scan_traces(sid, file=file)
 
 
+@router.get("/scans/{sid}/history")
+def scan_history(sid: str, request: Request, after_seq: int | None = Query(None, ge=0),
+                 limit: int = Query(500, ge=1, le=2000)):
+    """ADR 0042 PR 3 — this RUN's durable lifecycle history: queued → claimed → listing →
+    inventory saved → lifecycle applied → discovered, plus any retry or failure along the way.
+
+    The run-level counterpart to /scans/{sid}/timeline, which answers the same question about one
+    DOCUMENT. Until this endpoint, "what happened to this run?" had no answer that outlived Redis:
+    the job record TTLs out after an hour, and `scan_runs.live_checkpoint` is a single overwritten
+    cell holding last-known-state, not history. Everything here survives a container restart, an
+    ACA revision rollout, and the Redis TTL, because it is ordinary Postgres rows.
+
+    `after_seq` is exclusive — pass the highest `seq` you have and get only what you missed. That
+    is the question a reconnecting client actually has, and the reason `seq` exists.
+
+    ALWAYS 200, degrading to {"available": false} like /live and /status rather than raising: this
+    is a supplementary narration panel, and a run-detail screen must not break because its history
+    could not be read.
+
+    OWNER-SCOPING IS THE get_scan GATE, deliberately NOT list_scan_events' own `owner` filter.
+    Events written before an owner was known carry owner_email=NULL (the thread path assigns a
+    scan_id before it has a user), so passing `owner=` here would silently drop the earliest
+    events of a run the caller legitimately owns — hiding exactly the queued/claimed rows that
+    explain a stuck scan. The store's docstring says as much; this is that warning obeyed.
+    """
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        return {"available": False, "reason": "scan_not_found"}
+    events = core.store.list_scan_events(sid, after_seq=after_seq, limit=limit)
+    return {"available": True, "scan_id": sid, "events": events, "count": len(events),
+            # The cursor for the next call. None on an empty page rather than 0 — 0 is a real
+            # `after_seq` meaning "from the start", and returning it for "nothing here" would make
+            # a caught-up client re-request the whole history on every poll.
+            "latest_seq": events[-1]["seq"] if events else None}
+
+
 @router.get("/scans/{sid}/timeline")
 def scan_timeline(sid: str, request: Request, file: str = Query(...)):
     """Audit trail (maturity Phase 4): the chronological provenance of one document in this
