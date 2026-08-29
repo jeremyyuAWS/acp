@@ -64,6 +64,15 @@ export function diagnoseWorkerHealth({ snap, capacity, replicas, nowMs = Date.no
       return { severity: 'critical',
         message: `Azure is configured to keep ${replicas.min_replicas} replica${replicas.min_replicas === 1 ? '' : 's'} warm, but none are currently running — the container app may be failing to start. Check Container App logs and the identity's Azure permissions.` }
     }
+    // A revision can be perfectly Healthy, Provisioned, and running replicas while still
+    // receiving 0% of ingress traffic — a real incident on this app: a stuck blue-green rollout
+    // left the new revision healthy but unreachable, and nothing surfaced it until customer
+    // requests kept hitting the old one. current_replicas > 0 distinguishes "genuinely stranded"
+    // from the zero-replicas case above, which is a different, already-caught problem.
+    if (capacity.revision_traffic_percent === 0 && (capacity.current_replicas ?? 0) > 0) {
+      return { severity: 'critical',
+        message: 'The active revision is running but receiving 0% of ingress traffic — check whether a rollout is stuck mid-cutover in the Azure portal.' }
+    }
   }
 
   // 4. Heartbeat aging toward the alive threshold — an early warning before it flips offline.
