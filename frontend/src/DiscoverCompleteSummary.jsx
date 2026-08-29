@@ -151,10 +151,19 @@ export default function DiscoverCompleteSummary({
             this card (Discover.jsx threads its own prop through unchanged) — one resolved instant,
             shown twice, rather than two components each guessing at "when" and risking a mismatch.
             Absent (`runAt.recorded === false`) is rendered as nothing, same as DiscoveryResults —
-            a run that never recorded when discovery finished gets no timestamp, not an invented one. */}
+            a run that never recorded when discovery finished gets no timestamp, not an invented one.
+
+            The count and the timestamp are TWO SIBLING spans, not one text run — e2e/pipeline.spec.js
+            asserts `getByText('N files inventoried', { exact: true })` against a real (non-SIM)
+            backend, where `runAt.recorded` is genuinely true. Concatenating "· as of …" into the
+            same element broke that exact match on 2026-08-29 (PR #941's own first CI run) — the
+            span split keeps "N files inventoried" as its own exactly-matchable node regardless of
+            whether the timestamp renders beside it. */}
         <div style={{ marginBottom: 12 }}>
-          {n(discoveredCount)} files inventoried
-          {(folderCount ?? 0) > 0 ? ` across ${n(folderCount)} folder${folderCount === 1 ? '' : 's'}` : ''}
+          <span>
+            {n(discoveredCount)} files inventoried
+            {(folderCount ?? 0) > 0 ? ` across ${n(folderCount)} folder${folderCount === 1 ? '' : 's'}` : ''}
+          </span>
           {runAt && runAt.recorded && (
             <span className="muted" style={{ fontSize: 12.5, marginLeft: 6 }} title={runAt.label}>
               · as of {runAt.absolute}
