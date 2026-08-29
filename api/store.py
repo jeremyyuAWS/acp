@@ -654,6 +654,54 @@ _SCHEMA = [
       generated_at TEXT NOT NULL,
       PRIMARY KEY (owner_email, scan_id, scan_revision, rubric_hash)
     )""",
+    # Durable scan-lifecycle event log (ADR 0042). Append-only: rows are never updated, and
+    # deleted only when the scan they describe is (delete_scan / reset_user_data / reset_analytics
+    # — scan_events is in _RESET_USER_SCAN_TABLES, so it inherits all three).
+    #
+    # WHAT GOES IN HERE, and why the line is drawn where it is. Run-level TRANSITIONS only —
+    # queued, claimed, listing started/complete, inventory saved, lifecycle applied, retrying,
+    # cancelled, completed, failed. NOT activity.py's headline (up to 5 writes/second), and NOT
+    # per-file completion (file_records already persists that with timestamps, and
+    # document_timeline already reads it). That scope rule is doing three jobs at once:
+    #   * ~15-30 rows per scan makes "never delete" affordable (~225 MB/yr at 100 scans/day)
+    #     rather than the ~60 GB/yr per-file events would cost — at which point this would need
+    #     partitioning or a retention window instead. A later ADR admitting per-file events must
+    #     ship a retention decision with them.
+    #   * it keeps the seq assignment below effectively uncontended: run-level transitions come
+    #     from one job's thread at a time, not from the 8-way assessment fan-out.
+    #   * it keeps the Postgres write volume orders of magnitude below the cadence
+    #     core._maybe_checkpoint was throttled to after the 2026-08-26 connection exhaustion.
+    #     This table is emphatically not a live feed; Redis stays the live current-state cell.
+    #
+    # ORDERING is (scan_id, seq), and the UNIQUE index below is what makes that a constraint
+    # rather than a convention. seq is assigned by the INSERT itself (see append_scan_event) —
+    # NOT a BIGSERIAL/AUTOINCREMENT column, since this schema is shared with SQLite and no table
+    # in this file uses one, and NOT an occurred_at cursor: events for one scan can be written
+    # from two replicas at once (a reclaimed job's second worker, see test_job_completion_race),
+    # so a wall-clock cursor would silently SKIP a late event stamped before the reader's
+    # position. occurred_at is for humans and auditors; seq is the sort key and resume cursor.
+    #
+    # owner_email is denormalized from scan_runs so a read scopes without a join, matching how
+    # live_snapshot gates. detail is a small JSON object (per-kind narration — a file count, an
+    # error class); it is never a second source of truth for a number scan_runs already holds.
+    """CREATE TABLE IF NOT EXISTS scan_events (
+      event_id TEXT PRIMARY KEY,
+      scan_id TEXT NOT NULL,
+      seq INT NOT NULL,
+      occurred_at TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      phase TEXT,
+      job_id TEXT,
+      worker_id TEXT,
+      attempt INT,
+      detail TEXT,
+      owner_email TEXT
+    )""",
+    # Serves BOTH jobs — it is the uniqueness constraint that makes seq an ordering guarantee,
+    # and the index every read below uses (WHERE scan_id=? [AND seq>?] ORDER BY seq). ADR 0042
+    # named a second, non-unique index on the same two columns in the same order; it would be
+    # pure dead weight beside this one, so only this ships.
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_events_seq ON scan_events(scan_id, seq)",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -2110,7 +2158,8 @@ class Store:
                          "scan_inputs",  # Stage 1 item 3: per-scan enqueue snapshots are customer data
                          "active_discovery_guard",  # transient lock state — cleared on reset
                          "sync_cursors",  # connector sync position is customer-derived, not config
-                         "overview_snapshots"]  # derived from scan results — customer data, not config
+                         "overview_snapshots",  # derived from scan results — customer data, not config
+                         "scan_events"]  # ADR 0042 lifecycle log — a record OF customer scans
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
@@ -2125,7 +2174,7 @@ class Store:
                                "file_stage_timings", "scan_file_manifests", "scan_inventory",
                                "file_tags", "pii_findings", "hitl_queue", "hitl_events",
                                "remediation_diff", "applied_fixes", "ai_calls", "finding_comments",
-                               "jobs", "overview_snapshots"]
+                               "jobs", "overview_snapshots", "scan_events"]
     # Tables that key on doc_id (not scan_id), scoped via a documents.owner_email join.
     _RESET_USER_DOC_TABLES = ["disposition_audit", "remediation_state"]
 
@@ -5757,6 +5806,133 @@ class Store:
                 self._db.execute(cur,
                     "SELECT * FROM decision_log ORDER BY ts DESC LIMIT %s", (limit,))
             return self._db.fetchall(cur)
+
+    # ── Durable scan-lifecycle event log (ADR 0042) ───────────────────────────
+    #
+    # NO CALLER YET, deliberately: this is PR 1 of the ADR's four, which lands the table and its
+    # two accessors with zero behaviour change so the emit sites (PR 2) and the read surface
+    # (PR 3) can be reviewed on their own. See the schema comment on scan_events for what may be
+    # written here and — more importantly — what may not.
+
+    # The closed set of lifecycle transitions. Closed on purpose: a reader (PR 3's history view)
+    # renders per-kind, so a typo'd or ad-hoc kind is a row nothing knows how to display. Extend
+    # it by ADR amendment, not in passing.
+    SCAN_EVENT_KINDS = frozenset({
+        "scan.queued", "scan.claimed", "scan.listing_started", "scan.listing_complete",
+        "scan.inventory_saved", "scan.lifecycle_applied", "scan.discovered",
+        "scan.assess_started", "scan.retrying", "scan.paused", "scan.resumed",
+        "scan.cancelled", "scan.completed", "scan.failed", "scan.interrupted",
+    })
+
+    _SCAN_EVENT_SEQ_ATTEMPTS = 4
+
+    def append_scan_event(self, scan_id: str, kind: str, *, phase: str | None = None,
+                          job_id: str | None = None, worker_id: str | None = None,
+                          attempt: int | None = None, detail: dict | None = None,
+                          owner_email: str | None = None,
+                          occurred_at: str | None = None) -> int | None:
+        """Append one lifecycle event and return its per-scan `seq` (None if it was not written).
+
+        RAISES on a bad `kind` or a missing `scan_id`, and only on those — they are programming
+        errors a test must catch, not runtime conditions. Every other failure is swallowed and
+        returns None: PR 2's call sites wrap this anyway, but the contract belongs here, next to
+        the write, exactly as activity.py holds it ("a progress line must never be able to fail
+        the work it describes"). A missing row is a gap in narration; it is never a wrong
+        statement, because nothing is ever overwritten.
+
+        `seq` IS ASSIGNED BY THE INSERT, in one statement:
+
+            INSERT INTO scan_events (...) SELECT %s, ..., COALESCE(MAX(seq),0)+1, ...
+              FROM scan_events WHERE scan_id = %s
+
+        One statement because there is no transaction to hold a read and a write together — the
+        SQLite adapter opens a fresh connection per cursor() — and because an aggregate with no
+        GROUP BY returns exactly one row even over an empty table, so the first event of a scan
+        gets seq=1 without a special case. Two writers racing produce the same seq and the UNIQUE
+        index rejects the loser, which is the point: the loser retries and gets the next number,
+        instead of the event being silently dropped. Measured on a 12-thread race against a real
+        store: this design landed 12/12 with a gap-free sequence, while SELECT-then-INSERT landed
+        2/12 and lost the other ten (see test_scan_events_store.py). Retries are bounded — a
+        contended write is not worth blocking a scan thread on, and by design this path is barely
+        contended (run-level transitions come one at a time per job).
+
+        `detail` is a dict, stored as JSON. Keep it small and narrative.
+        """
+        if not scan_id:
+            raise ValueError("append_scan_event requires a scan_id")
+        if kind not in self.SCAN_EVENT_KINDS:
+            raise ValueError(
+                f"unknown scan event kind {kind!r} — add it to Store.SCAN_EVENT_KINDS "
+                f"(and to ADR 0042's vocabulary) before emitting it")
+        import json as _json
+        now = occurred_at or self._now()
+        payload = None
+        if detail is not None:
+            try:
+                payload = _json.dumps(detail)
+            except (TypeError, ValueError):
+                payload = None      # unserializable detail loses the detail, never the event
+        sql = ("INSERT INTO scan_events"
+               "(event_id,scan_id,seq,occurred_at,kind,phase,job_id,worker_id,attempt,detail,owner_email) "
+               "SELECT %s,%s,COALESCE(MAX(seq),0)+1,%s,%s,%s,%s,%s,%s,%s,%s "
+               "FROM scan_events WHERE scan_id=%s")
+        for _ in range(self._SCAN_EVENT_SEQ_ATTEMPTS):
+            event_id = uuid.uuid4().hex
+            try:
+                with self._db.cursor() as cur:
+                    self._db.execute(cur, sql, (
+                        event_id, scan_id, now, kind, phase, job_id, worker_id, attempt,
+                        payload, owner_email, scan_id))
+                # Read back rather than recomputing MAX: another writer may have appended in the
+                # gap, and reporting ITS seq as this event's would be a quietly wrong return value.
+                with self._db.cursor() as cur:
+                    self._db.execute(cur,
+                        "SELECT seq FROM scan_events WHERE event_id=%s", (event_id,))
+                    row = self._db.fetchone(cur)
+                return int(row["seq"]) if row else None
+            except Exception:
+                continue            # lost the seq race (or the store is unavailable) — try again
+        return None
+
+    def list_scan_events(self, scan_id: str, *, after_seq: int | None = None,
+                         owner: str | None = None, limit: int = 500) -> list[dict]:
+        """This scan's lifecycle events in `seq` order, oldest first. Never raises — an unknown
+        scan, a foreign one, or an unavailable store all read as [].
+
+        ASCENDING and after_seq-able because the consumer is "what happened, and what did I miss
+        since seq N" — the opposite of list_decisions' newest-first audit browse. `owner` scopes
+        on the denormalized owner_email; pass it whenever a request context has one. Note that
+        events written before an owner was known carry owner_email=NULL and are therefore NOT
+        returned by an owner-scoped read: the route must gate on get_scan(owner=...) first, the
+        same way every other per-scan endpoint already does, rather than treating this filter as
+        the access check.
+
+        `detail` comes back as the dict it was written as (or None), never as a raw JSON string.
+        """
+        import json as _json
+        where, params = "scan_id=%s", [scan_id]
+        if after_seq is not None:
+            where += " AND seq>%s"; params.append(int(after_seq))
+        if owner:
+            where += " AND owner_email=%s"; params.append(owner)
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    f"SELECT * FROM scan_events WHERE {where} ORDER BY seq LIMIT %s",
+                    tuple(params + [limit]))
+                rows = self._db.fetchall(cur)
+        except Exception:
+            return []
+        for r in rows:
+            raw = r.get("detail")
+            if raw:
+                try:
+                    r["detail"] = _json.loads(raw)
+                except (TypeError, ValueError):
+                    r["detail"] = None
+            else:
+                r["detail"] = None
+        return rows
 
     # ── Audit trail (maturity Phase 4) ────────────────────────────────────────
     def document_timeline(self, scan_id: str, file: str, limit: int = 300) -> list[dict]:

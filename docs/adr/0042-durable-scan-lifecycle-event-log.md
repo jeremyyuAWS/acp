@@ -1,6 +1,6 @@
 # ADR 0042 — A durable scan-lifecycle event log (Postgres), with SSE kept as the live transport
 
-**Status:** Proposed — **design only, no behaviour change in this PR**
+**Status:** Accepted — open questions resolved by the owner 2026-08-29; implementation under way (PR 1 of 4: the table, unused)
 **Date:** 2026-08-29
 **Related:** ADR 0004 (Postgres job queue), ADR 0013 (worker durability hardening / finalize by
 count), ADR 0020 (Discover/Assess phase separation), ADR 0038 (pausable-resumable scans),
@@ -378,7 +378,21 @@ resume cursor now even though nothing resumes on it yet.
 
 ---
 
-## Open questions — the calls that deserve a human before implementation starts
+## Open questions — RESOLVED 2026-08-29 by the owner
+
+**All three were signed off as recommended.** They are kept below as written, with the decision
+recorded against each, because the reasoning is what a later reader needs — an ADR that silently
+deletes the question it answered leaves the answer looking arbitrary.
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Coexist vs. replace | **Coexist**, as recommended. Redis stays the live cell; Postgres becomes the history. Revisit only if the horizon moves from the current pilot to customer-production (ADR 0039) — that is a new ADR, not a refactor of this one. |
+| 2 | Per-file events in or out | **Out**, as recommended. Run-level transitions only. |
+| 3 | Does PR 4 ship | **Decide on production evidence**, as recommended — PRs 1–3 first; PR 4 is judged once the history read surface has run against real scans. Not cancelled, not pre-approved. |
+
+The original framing follows.
+
+---
 
 These are close enough that a reasonable engineer could pick differently. **PR 1 is safe to start
 regardless of how they land** (an unused, append-only table with no caller is the same table under
