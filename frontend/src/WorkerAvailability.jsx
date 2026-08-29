@@ -117,8 +117,9 @@ export default function WorkerAvailability({ snap, busy, msg, onAdjust,
         </div>
       )}
       {externallyManaged && capacity?.configured
-       && (capacity.current_replicas != null || capacity.metrics_available) && (
-        <div className="muted" style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 8 }}>
+       && (capacity.current_replicas != null || capacity.metrics_available
+           || capacity.revision_health != null || capacity.draining_replicas) && (
+        <div className="muted" style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {capacity.current_replicas != null && (
             <span>
               {capacity.current_replicas} replica{capacity.current_replicas === 1 ? '' : 's'} running now
@@ -126,6 +127,14 @@ export default function WorkerAvailability({ snap, busy, msg, onAdjust,
           )}
           {capacity.cpu_percent != null && <span>CPU {capacity.cpu_percent}%</span>}
           {capacity.memory_percent != null && <span>Memory {capacity.memory_percent}%</span>}
+          {capacity.revision_health != null && (
+            <span style={{ color: capacity.revision_health === 'Healthy' ? '#1a7f37' : '#8A2A20', fontWeight: 600 }}>
+              Revision {capacity.revision_health.toLowerCase()}
+            </span>
+          )}
+          {!!capacity.draining_replicas && (
+            <span>{capacity.draining_replicas} replica{capacity.draining_replicas === 1 ? '' : 's'} draining from an older revision</span>
+          )}
         </div>
       )}
     </div>

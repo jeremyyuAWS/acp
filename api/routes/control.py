@@ -186,7 +186,23 @@ def _empty_capacity(configured: bool) -> dict:
         "configured": configured, "current_replicas": None, "min_replicas": None,
         "max_replicas": None, "cpu_percent": None, "memory_percent": None,
         "metrics_available": False, "measured_at": None,
+        "revision_health": None, "revision_provisioning_state": None, "draining_replicas": None,
     }
+
+
+def _rev_field(rev, name, default=None):
+    """The published azure-mgmt-appcontainers docs describe Revision's fields (active, replicas,
+    health_state, provisioning_state, ...) as living under a nested `.properties`, matching the
+    `app.properties.template.scale` shape _az_client() callers already use elsewhere in this file
+    — but a WebFetch of the SDK source to confirm that nesting definitively was inconclusive
+    (truncated before the relevant class). Rather than guess and risk a silent AttributeError
+    swallowed by the try/except below turning into an all-None response, try nested first and
+    fall back to a flattened top-level attribute — costs nothing, and whichever shape Azure
+    actually returns, this finds it."""
+    props = getattr(rev, "properties", None)
+    if props is not None and hasattr(props, name):
+        return getattr(props, name)
+    return getattr(rev, name, default)
 
 
 @router.get("/control/workers/capacity")
@@ -199,16 +215,21 @@ def get_capacity():
     Open to any authenticated user, same reasoning as GET /control/workers/replicas (#950) —
     this is read-only visibility, not a control action, and costs nothing to expose.
 
+    Also reports revision health: `revision_health`/`revision_provisioning_state` (the active
+    revision's own Azure-reported state — "Healthy"/"Unhealthy"/"None" and "Provisioned"/
+    "Provisioning"/"Failed"/etc.) and `draining_replicas` (replicas still up on OLD, non-active
+    revisions — the practical signal that a rollout is mid-drain rather than done).
+
     Graceful at every step, matching the rest of this module: `configured: false` when Azure
-    isn't set up; `current_replicas`/`cpu_percent`/`memory_percent` individually stay None (never
-    a fabricated 0) if their specific Azure call fails — a missing Monitoring Reader grant on
-    this identity, CpuPercentage/MemoryPercentage being unavailable (both are Microsoft Preview
-    metrics as of 2026 and can be withdrawn or renamed), or any other partial failure degrades
-    that one field rather than 502ing the whole response and hiding the min/max data that DID
-    come back. UNVERIFIED against a live Azure account as of this PR — the Azure SDK response
-    shapes here are built from current published documentation, not exercised against a real
-    Container App; treat the first real deployment as this endpoint's actual proof, not this
-    code review.
+    isn't set up; `current_replicas`/`cpu_percent`/`memory_percent`/`revision_health`/
+    `draining_replicas` individually stay None (never a fabricated 0) if their specific Azure
+    call fails — a missing Monitoring Reader grant on this identity, CpuPercentage/
+    MemoryPercentage being unavailable (both are Microsoft Preview metrics as of 2026 and can be
+    withdrawn or renamed), or any other partial failure degrades that one field rather than
+    502ing the whole response and hiding the min/max data that DID come back. UNVERIFIED against
+    a live Azure account as of this PR — the Azure SDK response shapes here are built from
+    current published documentation, not exercised against a real Container App; treat the first
+    real deployment as this endpoint's actual proof, not this code review.
     """
     if not _AZ_CONFIGURED:
         return _empty_capacity(False)
@@ -259,5 +280,21 @@ def get_capacity():
         result["metrics_available"] = result["cpu_percent"] is not None or result["memory_percent"] is not None
     except Exception:  # noqa: BLE001 — metrics_available stays False; min/max/current_replicas
         pass           # (already gathered above) are still returned rather than lost.
+
+    try:
+        revisions = client.container_apps_revisions.list_revisions(_AZ_RG, _AZ_APP)
+        rev_list = getattr(revisions, "value", None)
+        if rev_list is None:
+            rev_list = list(revisions)
+        draining = 0
+        for rev in rev_list:
+            if _rev_field(rev, "active", False):
+                result["revision_health"] = _rev_field(rev, "health_state")
+                result["revision_provisioning_state"] = _rev_field(rev, "provisioning_state")
+            else:
+                draining += _rev_field(rev, "replicas", 0) or 0
+        result["draining_replicas"] = draining
+    except Exception:  # noqa: BLE001 — revision health stays None; everything gathered above
+        pass           # is still returned rather than lost.
 
     return result

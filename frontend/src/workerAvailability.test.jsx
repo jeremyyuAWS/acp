@@ -242,3 +242,65 @@ describe('WorkerAvailability capacity evidence (current replicas, CPU/memory)', 
     expect(c.textContent).not.toMatch(/running now/)
   })
 })
+
+// Revision health + draining replicas (2026-08-29) — the practical "is a rollout mid-drain"
+// signal, a THIRD independent Azure call alongside min/max and current_replicas/metrics above,
+// so it degrades to null on its own rather than hiding data the other two calls already got.
+describe('WorkerAvailability revision health and draining replicas', () => {
+  const distributedSnap = { workers: 8, alive: true, runtime_mode: 'distributed' }
+
+  it('shows a healthy active revision and how many replicas are draining off an old one', async () => {
+    const c = await mount({
+      snap: distributedSnap,
+      capacity: { configured: true, current_replicas: 3, cpu_percent: null, memory_percent: null,
+                  metrics_available: false, revision_health: 'Healthy',
+                  revision_provisioning_state: 'Provisioned', draining_replicas: 2 },
+    })
+    expect(c.textContent).toMatch(/Revision healthy/)
+    expect(c.textContent).toMatch(/2 replicas draining from an older revision/)
+  })
+
+  it('singularizes the draining count', async () => {
+    const c = await mount({
+      snap: distributedSnap,
+      capacity: { configured: true, current_replicas: 3, cpu_percent: null, memory_percent: null,
+                  metrics_available: false, revision_health: 'Healthy',
+                  revision_provisioning_state: 'Provisioned', draining_replicas: 1 },
+    })
+    expect(c.textContent).toMatch(/1 replica draining/)
+    expect(c.textContent).not.toMatch(/1 replicas draining/)
+  })
+
+  it('flags an unhealthy revision distinctly from a healthy one', async () => {
+    const c = await mount({
+      snap: distributedSnap,
+      capacity: { configured: true, current_replicas: 3, cpu_percent: null, memory_percent: null,
+                  metrics_available: false, revision_health: 'Unhealthy',
+                  revision_provisioning_state: 'Failed', draining_replicas: 0 },
+    })
+    expect(c.textContent).toMatch(/Revision unhealthy/)
+  })
+
+  it('omits the draining line when nothing is draining, without hiding revision health', async () => {
+    const c = await mount({
+      snap: distributedSnap,
+      capacity: { configured: true, current_replicas: 3, cpu_percent: null, memory_percent: null,
+                  metrics_available: false, revision_health: 'Healthy',
+                  revision_provisioning_state: 'Provisioned', draining_replicas: 0 },
+    })
+    expect(c.textContent).toMatch(/Revision healthy/)
+    expect(c.textContent).not.toMatch(/draining/)
+  })
+
+  it('omits revision health entirely when the backend could not read it, without losing replica count', async () => {
+    const c = await mount({
+      snap: distributedSnap,
+      capacity: { configured: true, current_replicas: 3, cpu_percent: null, memory_percent: null,
+                  metrics_available: false, revision_health: null,
+                  revision_provisioning_state: null, draining_replicas: null },
+    })
+    expect(c.textContent).toMatch(/3 replicas running now/)
+    expect(c.textContent).not.toMatch(/Revision/)
+    expect(c.textContent).not.toMatch(/draining/)
+  })
+})
