@@ -317,6 +317,10 @@ export default function App() {
   const [deltaKey, setDeltaKey] = useState(0)
   const [progress, setProgress] = useState(null)
   const [loaded, setLoaded] = useState(false)
+  // Which step of the initial-load chain is in flight, so the loading screen can say something
+  // more specific than a static "Loading your workspace…" the whole way through — see the
+  // effect below and Loading()'s own comment (EmptyState.jsx) for what each value means.
+  const [loadStage, setLoadStage] = useState(null)
   // Externally-certified documents, read by Publish. NOTHING WRITES THIS ANY MORE: its only writer
   // was the ad-hoc single-file upload panel on Discover, removed on request — and that was the
   // app's only mount of Upload, so there is no other route to it.
@@ -565,22 +569,45 @@ export default function App() {
     if (!me) return
     getRubric().then(setRubric).catch(() => {})
     getSources().then(setSources).catch(() => {})
+    setLoadStage('scans')
     listScans()
       .then(async (l) => {
         // Default to the newest NON-collapsed scan, not blindly the newest: a degenerate small
         // scan on top would otherwise make every view show a shrunken estate (see defaultScan.js).
-        setScanList(l); const d = pickDefaultScan(l); if (d) setScan(await getScan(d.id))
+        setScanList(l)
+        const d = pickDefaultScan(l)
         // If a scan is still running (e.g. user reloaded mid-scan), resume tracking it. The
         // default-path job is checked FIRST: it can be mid-crawl with no scan_runs row at all
         // (see ACTIVE_JOB_KEY above), a window getActiveScan() cannot see into, so a pending job
         // and an active scan_runs row are never both real at once — no double-reconnect risk.
         const pendingJobId = sessionStorage.getItem(ACTIVE_JOB_KEY)
-        if (pendingJobId) { reconnectJob(pendingJobId) } else {
-          try { const a = await getActiveScan(); if (a && a.id) reconnectScan(a.id, a.job_id) } catch { /* ignore */ }
+        setLoadStage(d ? 'scan' : 'jobs')
+        if (pendingJobId) {
+          // reconnectJob owns its OWN busy/progress UI (setBusy/setProgress) and can run for as
+          // long as the reconnected job takes to settle — it must stay fire-and-forget, exactly
+          // as before, never awaited into the chain that flips `loaded`. getActiveScan is
+          // skipped in this branch on purpose (see the comment above): a pending job and an
+          // active scan_runs row are never both real at once, so there is nothing for it to
+          // find here — only getScan is left to actually wait on.
+          reconnectJob(pendingJobId)
+          if (d) await getScan(d.id).then(setScan)
+        } else {
+          // getScan(d.id) — which can be a genuinely heavy query on a large estate: file_records
+          // joined against scan_inventory, shadow-file reconciliation, counter aggregation — and
+          // the active-job check have no data dependency on each other, so they no longer wait
+          // in a line: running them together removes one full network round-trip from the
+          // loading screen's critical path. reconnectScan, like reconnectJob above, stays
+          // fire-and-forget once getActiveScan resolves. Found live 2026-08-29: "Loading your
+          // workspace…" with no further detail, reported as hanging with nothing to show for it
+          // — a fully sequential three-call chain with a single static message the whole way.
+          await Promise.all([
+            d ? getScan(d.id).then(setScan) : Promise.resolve(),
+            getActiveScan().then((a) => { if (a && a.id) reconnectScan(a.id, a.job_id) }).catch(() => {}),
+          ])
         }
       })
       .catch(() => {})
-      .finally(() => setLoaded(true))
+      .finally(() => { setLoaded(true); setLoadStage(null) })
   }, [me])
 
   // Annotate the corpus with the published business ontology (adds `.ont`: label,
@@ -1272,7 +1299,7 @@ export default function App() {
   // where the eligible-file count can be shown against them.
   const placeholder = loaded
     ? <EmptyState onGoToSource={() => { setView('integrations'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
-    : <Loading />
+    : <Loading stage={loadStage} />
   // The scan panel renders inside whichever view is open, so scope its narration to that view
   // when the view is a pipeline step that owns scan phases. The view ids ARE the step names in
   // PHASE_STEP ('discover', 'assess'); anything else is a non-step view and narrates the job.
