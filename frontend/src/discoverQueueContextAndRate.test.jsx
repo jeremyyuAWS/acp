@@ -44,7 +44,16 @@ const settle = async (n = 4) => { for (let k = 0; k < n; k++) await act(async ()
 // Discover also mounts an UNCONDITIONAL worker-availability poll (WorkerAvailability, #925) that
 // calls this same getJobs() on every render regardless of busy/phase — give it a default so a
 // test that isn't exercising that strip doesn't hit a bare, unresolved vi.fn().
-beforeEach(() => { getJobs.mockResolvedValue({ workers: 0, worker_tier_alive: false, jobs: [] }) })
+//
+// getQueueJob() gets the same treatment for the same reason, since discoverJobInfo's own poll
+// (Discover.jsx) now runs for the WHOLE busy window rather than stopping once progress.phase
+// leaves 'queued' — QueueJobDetails.jsx's "Processing details" row needs attempts/max_attempts
+// past that point, which is exactly what used to get wiped. A test that isn't exercising THAT
+// row still needs a resolved value here or it hits the same bare, unresolved vi.fn().
+beforeEach(() => {
+  getJobs.mockResolvedValue({ workers: 0, worker_tier_alive: false, jobs: [] })
+  getQueueJob.mockResolvedValue({ id: 'j1', status: 'running', attempts: 0, max_attempts: 5 })
+})
 afterEach(() => { unmountAll(); getQueueJob.mockReset(); getJobs.mockReset() })
 
 // ProcessingStatusPanel renders each fact as a [label-div, value-div] pair — find the value next

@@ -19,7 +19,7 @@ vi.mock('./api.js', () => ({
   acknowledgeScan: vi.fn(),
   unacknowledgeScan: vi.fn(),
   getQueueJob: (...a) => getQueueJob(...a),
-  // Stubbed so the richer-queued-card poll (mounted alongside the claim poll whenever
+  // Stubbed so the richer-queued-card poll (mounted alongside the claim poll while
   // busy && phase === 'queued') doesn't throw — its own behavior is covered in
   // discoverQueueContextAndRate.test.jsx, out of scope for this file.
   getJobs: vi.fn(() => Promise.resolve({ jobs: [] })),
@@ -62,14 +62,20 @@ describe('Worker-assignment signal on Discover', () => {
     expect(c.textContent).not.toMatch(/worker assigned/i)
   })
 
-  it('does not poll GET /jobs/{id} once real listing progress has started', async () => {
-    getQueueJob.mockResolvedValue({ id: 'j1', status: 'running', locked_at: new Date().toISOString() })
-    await mount({
+  it('keeps polling GET /jobs/{id} once real listing progress has started — QueueJobDetails.jsx '
+     + 'needs attempts/max_attempts for the whole busy window, not just the pre-listing wait', async () => {
+    getQueueJob.mockResolvedValue({ id: 'j1', status: 'running', locked_at: new Date().toISOString(),
+                                    attempts: 0, max_attempts: 5 })
+    const c = await mount({
       scope: null, run: { id: 's3', status: 'running' }, busy: true, jobId: 'j1',
-      progress: { phase: 'discovering', elapsed: 5 },
+      progress: { phase: 'discovering', elapsed: 5, files_found: 10 },
     })
     await settle()
-    expect(getQueueJob).not.toHaveBeenCalled()
+    expect(getQueueJob).toHaveBeenCalledWith('j1')
+    // The claim signal ITSELF simply isn't read here any more: deriveDiscoverProcessingState's
+    // 'assigned' branch only ever fires inside its own `phase === 'queued'` check, so "Worker
+    // assigned" correctly stops appearing even though the poll that would feed it keeps running.
+    expect(c.textContent).not.toMatch(/worker assigned/i)
   })
 
   it('does not poll when there is no jobId to ask about', async () => {

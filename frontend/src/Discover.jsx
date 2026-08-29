@@ -29,6 +29,7 @@ import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
 import { deriveDiscoverProcessingState } from './discoverProcessingState.js'
 import WorkerAvailability from './WorkerAvailability.jsx'
 import FolderActivity from './FolderActivity.jsx'
+import QueueJobDetails from './QueueJobDetails.jsx'
 import DiscoveryQueuedPlaceholder from './DiscoveryQueuedPlaceholder.jsx'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
@@ -173,21 +174,26 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   }, [busy])
   // Worker-assignment signal (PRD "Live Discover Journey", Phase 1): GET /jobs/{id} carries a
   // real claim timestamp (jobs.locked_at) — the same one AssessRunner already polls for its own
-  // job — that nothing on Discover read before. Polled only for the pre-listing window (job
-  // queued, nothing found yet); once a real listing tick lands, progress.phase leaves 'queued'
-  // and this stops — nothing past that point needs it, since the busy/discovering state already
-  // implies a worker is active.
+  // job — that nothing on Discover read before.
+  //
+  // Originally polled only for the pre-listing window (job queued, nothing found yet), stopping
+  // the instant progress.phase left 'queued' — correct for jobClaimed/assignedSecsAgo below,
+  // which deriveDiscoverProcessingState only ever reads inside its `phase === 'queued'` branch.
+  // But the "Processing details" expandable row (QueueJobDetails.jsx, stakeholder review) reads
+  // the SAME job's attempts/max_attempts/id for as long as this scan is busy, not just before the
+  // first listing tick — so gating the whole effect on phase silently wiped that data the moment
+  // discovery actually started, which is exactly when someone would go looking for it. Polls for
+  // the entire busy window instead; the two now-stale-during-'discovering' fields simply go
+  // unused past that point, same as before, since their one reader never looks past 'queued'.
   const [discoverJobInfo, setDiscoverJobInfo] = useState(null)
   useEffect(() => {
-    setDiscoverJobInfo(null)
-    const phase = progress?.phase ?? null
-    if (!busy || !jobId || (phase && phase !== 'queued')) return undefined
+    if (!busy || !jobId) { setDiscoverJobInfo(null); return undefined }
     let live = true
     const load = () => getQueueJob(jobId).then((d) => { if (live) setDiscoverJobInfo(d) }).catch(() => {})
     load()
     const id = setInterval(load, 3000)
     return () => { live = false; clearInterval(id) }
-  }, [busy, jobId, progress?.phase])
+  }, [busy, jobId])
   // Queue-context facts for the same pre-listing window (stakeholder review, 2026-08-28): "N
   // compatible jobs ahead" and worker-pool size, the same GET /jobs data WorkerAvailability
   // polls elsewhere, read here too since this effect needs it merged with the job-specific claim
@@ -694,6 +700,15 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         onRerun={() => onScan('all')}
         onViewMonitor={onViewMonitor}
       />
+
+      {/* "Processing details" expandable row (stakeholder review): attempt count against its real
+          ceiling, and a truncated job id, for the whole busy window — not just the pre-listing
+          queued phase discoverJobInfo originally stopped polling after (see that effect's own
+          comment above for why it now keeps going). Renders nothing on its own when there's
+          nothing real to show yet (jobId not assigned, or attempts/max_attempts genuinely absent
+          — SIM mode's getQueueJob fixture doesn't track them). */}
+      {busy && <QueueJobDetails jobId={jobId} attempts={discoverJobInfo?.attempts ?? null}
+                                maxAttempts={discoverJobInfo?.max_attempts ?? null} />}
 
       {/* Folder-level detail underneath the aggregate counts above (#929's backend slice) — which
           folders the BFS is fetching right now, and the last few that finished. Renders nothing

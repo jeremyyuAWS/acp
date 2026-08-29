@@ -88,3 +88,25 @@ def test_a_dead_job_still_reports_its_error_alongside_the_new_fields(client):
     assert body["error"]
     # New fields present on every response shape, not just the happy path.
     assert "phase" in body and "locked_at" in body
+
+
+def test_reports_max_attempts_alongside_attempts_for_the_expandable_details_row(client):
+    """The "Processing details" expandable row (stakeholder review) shows "Attempt N of M" --
+    the store already tracks max_attempts (jobs.max_attempts, default 5) alongside attempts, but
+    this route only ever returned attempts. Without the ceiling, "attempt 2" alone doesn't say
+    whether that is early or nearly exhausted."""
+    c, st = client
+    jid = _seed_scan_and_job(st, status="queued")
+    body = c.get(f"/jobs/{jid}").json()
+    assert body["attempts"] == 0
+    assert body["max_attempts"] == 5
+
+
+def test_a_retried_job_reports_its_incremented_attempts_with_the_same_ceiling(client):
+    c, st = client
+    jid = _seed_scan_and_job(st, status="queued")
+    st.claim_job("worker-1")
+    st.fail_job(jid, "transient", backoff_seconds=0)
+    body = c.get(f"/jobs/{jid}").json()
+    assert body["attempts"] == 1
+    assert body["max_attempts"] == 5
