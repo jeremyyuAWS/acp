@@ -106,11 +106,17 @@ def test_a_non_sharepoint_source_never_consults_the_sharepoint_gate(isolated_sto
     assert plan_calls == []
 
 
-def test_incremental_false_opts_out_of_the_gate(isolated_store, monkeypatch):
+def test_incremental_false_still_reaches_the_gate(isolated_store, monkeypatch):
+    """incremental=false is the UI's actual default (App.jsx's ADR 0011 reuse toggle, off since
+    2026-08-19 — a real scan request never sends true). Discovery-level delta sync has no
+    ADR-0011-style invisible-skip risk (every reconstructed file still gets a fresh analysis, and
+    the baseline itself is drive-scoped and verified — core._sp_prior_inventory_for_drive), so it
+    must not be gated on that flag — a prior version tied the two together and made this feature
+    unreachable from the shipped app."""
     list_calls, plan_calls = _wire(monkeypatch, isolated_store)
     _discover("s-noinc-1", incremental=False)
-    assert plan_calls == [], "incremental=false must also opt out of discovery-level delta sync"
-    assert list_calls[-1]["sp_delta"] is None
+    assert plan_calls == [(OWNER, "alice-sp-token", None)]
+    assert list_calls[-1]["sp_delta"] is _SENTINEL_DELTA
 
 
 def test_no_sp_token_never_consults_the_gate(isolated_store, monkeypatch):
