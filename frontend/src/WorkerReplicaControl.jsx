@@ -12,9 +12,19 @@ import { getWorkerReplicas, setWorkerReplicas } from './api.js'
 // need an assessment already running to find the knob. AssessRunner still mounts this in the
 // same conditional position it always rendered its own inline version in (inside its
 // `workerSnap &&` block), so the effective gating is unchanged.
-export default function WorkerReplicaControl({ leadingSeparator = false } = {}) {
+//
+// `me`/admin gating: GET /control/workers/replicas is open to every signed-in user (visibility
+// for everyone), but PATCH is admin-only (#950) — changing warm capacity spends real Azure
+// money. Found live 2026-08-29: this component rendered the +/- buttons for EVERY caller with
+// no admin check at all, unlike WorkerAvailability.jsx's identical control (which only renders
+// its buttons when the caller passed an admin-gated onAdjustReplicas). A non-admin clicking +
+// got a silent optimistic bump that reverted with no message once the PATCH 403'd. Mirrors that
+// same pattern here: the count is always shown (view is for everyone), the buttons only when
+// `me?.is_admin` — the exact value the backend's _require_admin checks.
+export default function WorkerReplicaControl({ leadingSeparator = false, me = null } = {}) {
   const [snap, setSnap] = useState(null)
   const [busy, setBusy] = useState(false)
+  const isAdmin = !!me?.is_admin
 
   useEffect(() => {
     let on = true
@@ -23,7 +33,7 @@ export default function WorkerReplicaControl({ leadingSeparator = false } = {}) 
   }, [])
 
   const adjust = (delta) => {
-    if (!snap || busy) return
+    if (!snap || busy || !isAdmin) return
     const next = Math.max(1, Math.min(snap.max_replicas ?? 5, snap.min_replicas + delta))
     if (next === snap.min_replicas) return
     const prev = snap.min_replicas
@@ -40,17 +50,21 @@ export default function WorkerReplicaControl({ leadingSeparator = false } = {}) 
     <>
     {leadingSeparator && <span className="muted">·</span>}
     <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-      <button onClick={() => adjust(-1)} disabled={busy || snap.min_replicas <= 1}
-              aria-label="Remove a Container App replica"
-              style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
-                       background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
-                       cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>−</button>
+      {isAdmin && (
+        <button onClick={() => adjust(-1)} disabled={busy || snap.min_replicas <= 1}
+                aria-label="Remove a Container App replica"
+                style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
+                         background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
+                         cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>−</button>
+      )}
       <span style={{ fontSize: 13, fontWeight: 600, minWidth: 14, textAlign: 'center' }}>{snap.min_replicas}</span>
-      <button onClick={() => adjust(+1)} disabled={busy || snap.min_replicas >= (snap.max_replicas ?? 5)}
-              aria-label="Add a Container App replica"
-              style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
-                       background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
-                       cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>+</button>
+      {isAdmin && (
+        <button onClick={() => adjust(+1)} disabled={busy || snap.min_replicas >= (snap.max_replicas ?? 5)}
+                aria-label="Add a Container App replica"
+                style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
+                         background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
+                         cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>+</button>
+      )}
       <span className="muted" style={{ fontSize: 11 }}>Azure replicas (max {snap.max_replicas})</span>
     </span>
     </>

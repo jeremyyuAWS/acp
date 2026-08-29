@@ -775,6 +775,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
             ? (Date.now() - Date.parse(progress.started_at)) / 1000 : null,
           foldersFound: progress?.folders_found ?? null,
           filesPerSec, inventoryChangedSecsAgo,
+          hasFolderActivity: !!(progress?.active_folders?.length || progress?.recent_folders?.length),
         })}
         onRerun={() => onScan('all')}
         onViewMonitor={onViewMonitor}

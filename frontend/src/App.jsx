@@ -1797,7 +1797,7 @@ export default function App() {
               <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy}
                             controlled onReady={registerAssessStart}
                             onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase}
-                            onViewMonitor={() => setView('monitor')} />
+                            onViewMonitor={() => setView('monitor')} me={me} />
             )}
             {/* Gated on assessPhase === 'done', not just `assessed` — `assessed` flips true the
                 instant Assess is clicked (before AssessRunner's own progress animation even
@@ -1909,7 +1909,7 @@ export default function App() {
       {/* onOntologyChange / onPrivilegeChange are gone with the Business ontology and Permissions
           panels. The ontology DATA path below is untouched — App still annotates the corpus from
           whatever was last published; only its editor left Settings. */}
-      {settingsOpen && me.allow?.includes('settings') && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onDelegationChange={setDelegations} onFileTypeChange={(cfg) => setFileTypeConfig(cfg)} />}
+      {settingsOpen && me.allow?.includes('settings') && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onDelegationChange={setDelegations} onFileTypeChange={(cfg) => setFileTypeConfig(cfg)} me={me} />}
 
       {/* The universal scan gate. Opened by `requestScan` from every entry point; the wizard's
           "Start scan" confirm is the only thing that dispatches `doScan`. The behavior toggles are

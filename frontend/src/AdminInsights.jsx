@@ -8,11 +8,17 @@ const SOURCE_LABEL = { drive: 'Google Drive', sharepoint: 'SharePoint', local: '
 // reached assessment, leaving files/certifiable at 0 for a reason that has nothing to do with
 // what was found. A 0 on one of those statuses renders as the status word itself, so "0 docs"
 // never has to be read as "assessed, found nothing."
-const SCAN_STATUS_LABEL = { cancelled: 'Cancelled', interrupted: 'Interrupted', failed: 'Failed' }
+// 'failed' is deliberately absent here, even though it's a real scan_runs status: every path
+// that sets it (api/store.py's set_scan_status, the dead-letter sweep) touches status only,
+// never completed_at, and this table's query (list_scans_admin -> list_scans) requires
+// completed_at IS NOT NULL. A failed scan can therefore never reach this row-rendering code at
+// all — an entry here would be a label that can never actually show, implying a case is handled
+// that isn't. Making failed scans visible in Recent Scans is a real, separate product decision
+// (stamping completed_at on failure, or a broader admin query) — not a rendering fix.
+const SCAN_STATUS_LABEL = { cancelled: 'Cancelled', interrupted: 'Interrupted' }
 const SCAN_STATUS_TITLE = {
   cancelled: 'Stopped before assessment finished — this reflects only what ran before the stop.',
   interrupted: 'The worker running this scan died mid-run — this reflects only what ran before it died.',
-  failed: 'This scan never completed — this is not a finished result.',
 }
 
 /** Docs/Certifiable read as a real zero on a normal completed scan, but on a scan that never

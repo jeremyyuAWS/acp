@@ -152,6 +152,22 @@ describe('deriveDiscoverProcessingState', () => {
     expect(d.comingSoon).toMatch(/isn't tracked yet/i)
   })
 
+  // Found live 2026-08-29: this "not tracked yet" note kept rendering directly above
+  // FolderActivity.jsx (#929/#930, shipped later the same night) actively showing real folder
+  // names — a direct on-screen contradiction. hasFolderActivity lets Discover.jsx say "something
+  // else on this page already covers that."
+  it('withholds comingSoon once FolderActivity has real folder detail to show instead', () => {
+    const d = deriveDiscoverProcessingState({ busy: true, phase: 'discovering', discoveredCount: 5,
+                                              hasFolderActivity: true })
+    expect(d.comingSoon).toBeFalsy()
+  })
+
+  it('still names folder detail as not-yet-tracked on a flat scan with no folder activity at all', () => {
+    const d = deriveDiscoverProcessingState({ busy: true, phase: 'discovering', discoveredCount: 5,
+                                              hasFolderActivity: false })
+    expect(d.comingSoon).toMatch(/isn't tracked yet/i)
+  })
+
   it('formats a sub-10 files/sec rate with one decimal, and rounds a faster one', () => {
     const slow = deriveDiscoverProcessingState({ busy: true, phase: 'discovering', filesPerSec: 3.14 })
     expect(slow.facts.find((f) => f.label === 'Recent discovery rate').value).toBe('3.1 files/sec')

@@ -175,8 +175,19 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
     if (!openSourceKey) return
     const key = String(openSourceKey).toLowerCase()
     const match = (sources || []).find((s) => sourceKeys(s).includes(key))
-    if (match) { setSelSrcInitialTab('Activity'); setSelSrc(match) }
-    onOpenSourceHandled?.()
+    // Found live 2026-08-29: onOpenSourceHandled used to fire unconditionally, so a key that
+    // matched nothing (sources not loaded yet when this ran, or the connector was
+    // disconnected/reconfigured since the scan that redirected here) got silently marked
+    // "handled" — clearing App.jsx's pendingSourceOpen with the drawer never opening and no
+    // way to tell the click did anything. Only clear it on an actual match; leaving it pending
+    // on a miss means a later mount of this component (sources having since loaded) gets one
+    // more real chance, and a fresh onOpenSource() call for a different key still overwrites
+    // it regardless, so a permanent miss can never block a future valid redirect.
+    if (match) {
+      setSelSrcInitialTab('Activity')
+      setSelSrc(match)
+      onOpenSourceHandled?.()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openSourceKey])
   // Every OTHER way of opening the drawer (Manage / View files / Details, below) is a direct

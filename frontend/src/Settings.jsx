@@ -806,7 +806,7 @@ function CopyToken() {
 // (QueuePanel) belongs in Monitor → Workers & Queue instead, where every other live operational
 // view already lives (Source drift, Scheduled re-scans, the Audit trail). This tab is deliberately
 // just the one thing that IS configuration: the Azure Container Apps replica floor.
-function WorkerConfiguration() {
+function WorkerConfiguration({ me }) {
   return (
     <div style={{ maxWidth: 560 }}>
       <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
@@ -819,12 +819,12 @@ function WorkerConfiguration() {
           replicas (max N)" text self-describes what the control is when it does render — an
           external label here would dangle with nothing beside it in the common case where
           it's unconfigured (local dev, most demo deployments). */}
-      <WorkerReplicaControl />
+      <WorkerReplicaControl me={me} />
     </div>
   )
 }
 
-export default function Settings({ onClose, files = [], onDelegationChange }) {
+export default function Settings({ onClose, files = [], onDelegationChange, me = null }) {
   const [tab, setTab] = useState('users')
   const panelRef = useRef(null)
   useDialog(panelRef, onClose)
@@ -855,7 +855,7 @@ export default function Settings({ onClose, files = [], onDelegationChange }) {
           {tab === 'users' && <AllowList />}
           {tab === 'mydata' && <><ResetMyData /><CopyToken /></>}
           {tab === 'myscope' && <MyScanScope />}
-          {tab === 'workers' && <WorkerConfiguration />}
+          {tab === 'workers' && <WorkerConfiguration me={me} />}
         </div>
       </div>
     </div>

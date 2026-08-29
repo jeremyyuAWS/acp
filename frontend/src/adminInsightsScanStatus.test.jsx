@@ -90,12 +90,17 @@ describe('the recent-scans table', () => {
     expect(certifiable.textContent).toBe('Interrupted')
   })
 
-  it('shows "Failed" in Docs/Certifiable instead of a bare 0', async () => {
+  // 'failed' is deliberately NOT in SCAN_STATUS_LABEL — every backend path that sets it
+  // (set_scan_status, the dead-letter sweep) never stamps completed_at, and this table's own
+  // query requires completed_at IS NOT NULL, so a real 'failed' row can never actually reach
+  // this component. A label here would be dead code implying a case that can't fire. This test
+  // exists so a future re-add doesn't slip back in unnoticed.
+  it('renders a plain 0 for a (backend-unreachable) failed-status row, not a status word', async () => {
     const c = await mount()
     const row = rowFor(c, 's-failed')
     const [, , docs, certifiable] = row.cells
-    expect(docs.textContent).toBe('Failed')
-    expect(certifiable.textContent).toBe('Failed')
+    expect(docs.textContent).toBe('0')
+    expect(certifiable.textContent).toBe('0 (—%)')
   })
 
   it('leaves a real, fully-assessed zero as an actual 0 — status is done', async () => {

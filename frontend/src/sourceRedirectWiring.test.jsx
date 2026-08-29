@@ -75,11 +75,13 @@ describe('a source-history redirect into Integrations', () => {
     expect(active.getAttribute('aria-selected')).toBe('true')
   })
 
-  it('does nothing when the key matches no source — never opens the wrong drawer', async () => {
+  it('does nothing when the key matches no source — never opens the wrong drawer, and does '
+     + 'not mark the redirect handled (found live 2026-08-29: a miss used to clear '
+     + 'pendingSourceOpen anyway, silently swallowing the click with no retry and no error)', async () => {
     const onHandled = vi.fn()
     const c = await mount({ openSourceKey: 'all', onOpenSourceHandled: onHandled })
     expect(c.querySelector('[role="tab"]')).toBeNull()
-    expect(onHandled).toHaveBeenCalledTimes(1)
+    expect(onHandled).not.toHaveBeenCalled()
   })
 
   it('is a no-op when no redirect is pending', async () => {
