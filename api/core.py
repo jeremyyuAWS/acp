@@ -225,6 +225,11 @@ DRIVE_SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/drive.file",
 ]
+# Same knob and same reasoning as scanner._DRIVE_HTTP_TIMEOUT_S — shared here rather than
+# imported from scanner because core.py must not depend on it (scanner already imports core-
+# adjacent modules; core stays the lower layer). Kept as one env var name across both so a
+# deploy-time override covers both call sites with a single setting.
+_DRIVE_HTTP_TIMEOUT_S = int(os.environ.get("ACP_DRIVE_HTTP_TIMEOUT_S", "60"))
 HITL_WEBHOOK = os.environ.get("HITL_WEBHOOK_URL", "")
 
 # ── Shared singletons ─────────────────────────────────────────────────────────
@@ -524,7 +529,15 @@ def drive_service(request=None):
     else:
         import google.auth
         creds, _ = google.auth.default(scopes=DRIVE_SCOPES)
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
+    # See scanner._drive_service's identical fix (found live 2026-08-29) for why this can't stay
+    # `credentials=creds`: that shortcut builds its own AuthorizedHttp with no way to bound its
+    # socket, so a stalled connection (not just a slow one — one that never returns data or an
+    # error) blocks this request thread forever. build() refuses `http=` and `credentials=`
+    # together, so the AuthorizedHttp has to be constructed here instead.
+    import httplib2
+    from google_auth_httplib2 import AuthorizedHttp
+    http = AuthorizedHttp(creds, http=httplib2.Http(timeout=_DRIVE_HTTP_TIMEOUT_S))
+    return build("drive", "v3", http=http, cache_discovery=False)
 
 
 # ── HITL webhook ──────────────────────────────────────────────────────────────

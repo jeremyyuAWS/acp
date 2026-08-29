@@ -20,6 +20,18 @@ _SCAN_WORKERS = min(8, (os.cpu_count() or 2) * 2)
 # at ~300ms/call, 6 workers saturate it without reliably tripping secondary rate limits.
 # Raise ACP_DISCOVERY_WORKERS if your estate has very deep folder hierarchies.
 _DISCOVERY_WORKERS = int(os.environ.get("ACP_DISCOVERY_WORKERS", "6"))
+# Per-request socket timeout for the Drive HTTP client. `build("drive", "v3", credentials=…)`
+# has NO timeout by default — httplib2's underlying socket blocks with whatever the platform
+# default is (effectively forever) until data arrives or the connection is torn down at a lower
+# layer. `.execute(num_retries=5)` retries on an HTTP error or an httplib2/socket exception, but a
+# TRULY STALLED connection (a network blip that neither returns data nor errors) raises neither,
+# so it never gets the chance to retry — the call just never returns. Found live 2026-08-29: a
+# discovery job sat "Build document inventory" for 250+ seconds with the queue worker reporting
+# online and the job itself 'running' — exactly the failure mode worker.py's own
+# max_unverified_lease_s() docstring warns about ("blocked on a socket with no timeout... the
+# queue showing 'N active · 0 waiting' and draining nothing"). Bounded here so a stalled call
+# becomes a caught exception num_retries can act on, instead of an unbounded hang.
+_DRIVE_HTTP_TIMEOUT_S = int(os.environ.get("ACP_DRIVE_HTTP_TIMEOUT_S", "60"))
 
 ACP = Path(__file__).resolve().parent.parent
 # Engine + corpus locations default to the local dev layout but are env-overridable
@@ -244,7 +256,14 @@ def _drive_service(drive_token: str | None = None):
             flush=True,
         )
         creds, _ = google.auth.default(scopes=SCOPES)
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
+    # `credentials=` (rather than `http=`) is the shortcut build() uses to construct its own
+    # AuthorizedHttp — with no way to pass a timeout through it. build() also refuses `http=` and
+    # `credentials=` together, so getting a bounded socket means constructing the AuthorizedHttp
+    # ourselves. See _DRIVE_HTTP_TIMEOUT_S above for why this matters.
+    import httplib2
+    from google_auth_httplib2 import AuthorizedHttp
+    http = AuthorizedHttp(creds, http=httplib2.Http(timeout=_DRIVE_HTTP_TIMEOUT_S))
+    return build("drive", "v3", http=http, cache_discovery=False)
 
 
 def _normalize(files: list[dict]) -> list[dict]:

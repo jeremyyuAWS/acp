@@ -34,12 +34,21 @@ def _handle_term(signum, _frame):
 def run(poll_seconds: float = 2.0, _install_signals: bool = True) -> None:
     """Boot store + scheduler + worker pool, block until SIGTERM/SIGINT, then drain. Returns
     after a clean drain. `_install_signals=False` is for tests (signals need the main thread)."""
-    import core
-
     # A worker container with ACP_WORKERS=0 would boot and do nothing — almost certainly a
     # misconfig — so default the pool to a sensible size here rather than idle silently.
+    #
+    # MUST run before `import core`: core.py reads ACP_WORKERS into a module-level `WORKERS`
+    # int AT IMPORT TIME (core.py's own top-level `WORKERS = int(os.environ.get("ACP_WORKERS",
+    # …))`), and core.start_workers() spawns off that already-latched value — it never re-reads
+    # the environment. Setting the env var after `import core` edits os.environ but not the int
+    # core already computed, so this container boots with a live heartbeat (worker_tier_alive)
+    # and ZERO worker threads: it looks online and claims nothing. Found live 2026-08-29 — a
+    # worker container with no ACP_WORKERS set at deploy time silently ran no workers despite
+    # this exact fallback intending to prevent that.
     if not os.environ.get("ACP_WORKERS"):
         os.environ["ACP_WORKERS"] = "12"
+
+    import core
 
     if _install_signals:
         signal.signal(signal.SIGTERM, _handle_term)
