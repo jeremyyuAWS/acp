@@ -898,7 +898,7 @@ def queue_job(job_id: str, request: Request):
     if j is None or not j.get("scan_id") or core.store.get_scan(j["scan_id"], owner=owner) is None:
         raise HTTPException(404, "job not found")
     return {"id": j["id"], "type": j["type"], "status": j["status"],
-            "attempts": j.get("attempts"), "error": j.get("last_error"),
+            "attempts": j.get("attempts"), "max_attempts": j.get("max_attempts"), "error": j.get("last_error"),
             "scan_id": j.get("scan_id"), "phase": j.get("phase"), "locked_at": j.get("locked_at")}
 
 
