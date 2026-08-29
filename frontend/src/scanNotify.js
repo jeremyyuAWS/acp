@@ -43,3 +43,25 @@ export function notifyScanComplete({ assessed = 0, total = 0, review = 0 } = {})
     return false
   }
 }
+
+// "Notify me when complete" arms for BOTH outcomes, not just success — a user who opted in to
+// walk away wants to know the scan failed just as much as that it finished, and App.jsx's own
+// arming flag already resets identically either way (one arm per run, cleared in doScan's
+// `finally`). Found live 2026-08-29 auditing the Discover card PRD's own notification list
+// (queued / assigned / retry / completed / failed): completed was the only one that ever fired.
+// Failure is the highest-value of the missing ones — it's the one outcome a returning user is
+// most likely to otherwise miss entirely, unlike "assigned" (fires within seconds, while the
+// tab is almost certainly still open) or "retrying" (stays visible on-screen for as long as it
+// lasts, so a returning user sees it regardless of a notification).
+export function notifyScanFailed(reason) {
+  if (notifyPermission() !== 'granted') return false
+  try {
+    new window.Notification('ACP scan failed', {
+      body: reason || 'The scan could not finish. See Discover for details.',
+      tag: 'acp-scan-complete',   // same tag as success — a run has exactly one outcome notice
+    })
+    return true
+  } catch {
+    return false
+  }
+}

@@ -2,7 +2,7 @@
 // environment where notifications are unavailable or denied — a completing scan must never fail because
 // a notification could not be posted — and that it only ever fires when the user actually granted it.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { notificationsSupported, notifyPermission, armNotifyOnComplete, notifyScanComplete } from './scanNotify.js'
+import { notificationsSupported, notifyPermission, armNotifyOnComplete, notifyScanComplete, notifyScanFailed } from './scanNotify.js'
 
 function mockNotification({ permission = 'default', request = 'granted' } = {}) {
   const instances = []
@@ -62,5 +62,36 @@ describe('scanNotify', () => {
     // Even a throwing constructor must not propagate.
     window.Notification = Object.assign(vi.fn(() => { throw new Error('blocked') }), { permission: 'granted' })
     expect(notifyScanComplete({ assessed: 1, total: 1 })).toBe(false)
+  })
+
+  // Found live 2026-08-29 auditing the Discover card PRD's notification list: only "completed"
+  // ever fired. Failure is the outcome a returning user is most likely to otherwise miss.
+  it('fires a failure notification only when granted, with the reason in the body', () => {
+    mockNotification({ permission: 'default' })
+    expect(notifyScanFailed('Google Drive rate limit')).toBe(false)   // not granted → nothing
+
+    const { instances } = mockNotification({ permission: 'granted' })
+    expect(notifyScanFailed('Google Drive rate limit')).toBe(true)
+    expect(instances).toHaveLength(1)
+    expect(instances[0].title).toBe('ACP scan failed')
+    expect(instances[0].opts.body).toBe('Google Drive rate limit')
+  })
+
+  it('uses the same tag as the completion notice — a run has exactly one outcome notification', () => {
+    const { instances } = mockNotification({ permission: 'granted' })
+    notifyScanFailed('some reason')
+    expect(instances[0].opts.tag).toBe('acp-scan-complete')
+  })
+
+  it('falls back to a generic reason when none is given', () => {
+    const { instances } = mockNotification({ permission: 'granted' })
+    notifyScanFailed(undefined)
+    expect(instances[0].opts.body).toMatch(/could not finish/i)
+  })
+
+  it('is a safe no-op for a failure notification when Notification is unavailable', () => {
+    expect(notifyScanFailed('reason')).toBe(false)
+    window.Notification = Object.assign(vi.fn(() => { throw new Error('blocked') }), { permission: 'granted' })
+    expect(notifyScanFailed('reason')).toBe(false)
   })
 })
