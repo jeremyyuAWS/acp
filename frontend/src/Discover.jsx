@@ -29,6 +29,7 @@ import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
 import { deriveDiscoverProcessingState } from './discoverProcessingState.js'
 import WorkerAvailability from './WorkerAvailability.jsx'
 import FolderActivity from './FolderActivity.jsx'
+import DiscoveryQueuedPlaceholder from './DiscoveryQueuedPlaceholder.jsx'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
@@ -119,6 +120,13 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   const [sel, setSel] = useState(null)
   const [estOnlyFile, setEstOnlyFile] = useState(null)
   const [showSites, setShowSites] = useState(false)     // SharePoint site picker modal
+  // The queued-placeholder's own reveal toggle (stakeholder screenshot review): "View previous
+  // run" un-hides the still-loaded previous scan's results rather than hiding them outright.
+  // Reset whenever a new scan starts (`busy` flips true) — NOT keyed to `scanId`, which (like
+  // `scope`/`files`) does not change to the new scan's id until it settles, same staleness this
+  // whole placeholder exists to name rather than hide.
+  const [showPreviousResults, setShowPreviousResults] = useState(false)
+  useEffect(() => { if (busy) setShowPreviousResults(false) }, [busy])
   const [open, setOpen] = useState(() => new Set())
   const toggle = (d) => setOpen((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n })
   // Cross-department search + facet filters — a match auto-expands ITS department
@@ -350,6 +358,14 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // correctly said 170). Falls back to files.length so a scan predating scope.inventory — nothing
   // recorded the estate size any other way — still shows its historical count instead of 0.
   const discoveredCount = scope?.inventory?.discovered ?? files.length
+  // The queued-placeholder condition (stakeholder screenshot review): a NEW scan whose results
+  // have not started arriving yet, either because this tab is tracking it pre-listing, or
+  // because it knows the displayed run is queued without tracking it live (the same two cases
+  // the "Queued — not started yet" / "Waiting for a worker" ProcessingStatusPanel states cover).
+  // Deliberately does NOT extend into 'discovering' — once real listing progress exists, the
+  // live progress card already carries the truth for that period.
+  const showQueuedPlaceholder = (busy && (!progress?.phase || progress.phase === 'queued'))
+    || (!busy && run?.status === 'queued')
   // Stated against the raw discovered count — the estate line describes discovery, which the
   // location view filter never restricts.
   const scopeLine = scopeSentence(scope, discoveredCount)
@@ -977,6 +993,16 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       <DiscoveryCompleteness run={run} scanList={scanList}
                              onRelist={() => onScan && onScan(run?.source === 'sharepoint' ? 'sharepoint' : 'drive')} />
 
+      {/* Queued placeholder (stakeholder screenshot review, 2026-08-29): while a NEW scan is
+          queued or tracked pre-listing, `scope`/`files`/`run` below are still the PREVIOUS scan's
+          — App.jsx only replaces them once the new run settles — so the results table would show
+          old numbers with nothing saying so. Scoped narrowly to the queued window: once real
+          listing progress starts (phase leaves 'queued'), the live progress card above already
+          carries the truth for that period, and this stops gating the table again. */}
+      {showQueuedPlaceholder && !showPreviousResults ? (
+        <DiscoveryQueuedPlaceholder previousCount={discoveredCount} previousAt={runAt}
+                                    onShowPrevious={() => setShowPreviousResults(true)} />
+      ) : (
       <div id="discover-inventory-table">
       <DiscoveryResults files={estateFiles} inventory={scope?.inventory || null} invRows={inv?.rows ?? null} scopeLine={scopeLine} runAt={runAt}
                         reasonOf={why ? why.reasonOf : undefined}
@@ -1004,6 +1030,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       <DiscoverInventoryExport scanId={scanId} run={runForExport}
                                inventory={scope?.inventory || null} rows={inv?.rows ?? null} />
       </div>
+      )}
 
       {files.length === 0 ? (
         <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Sources.</p>
