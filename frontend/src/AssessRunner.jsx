@@ -80,7 +80,7 @@ const SKEY = (id) => `acp-assess-${id || 'none'}`
 const loadSaved = (id) => { try { return JSON.parse(sessionStorage.getItem(SKEY(id)) || 'null') } catch { return null } }
 
 export default function AssessRunner({ files = [], runId, scanBusy = false, onAssessed, onPhase,
-                                       controlled = false, onReady, onViewMonitor }) {
+                                       controlled = false, onReady, onViewMonitor, me = null }) {
   const saved = loadSaved(runId)
   // Derived from the selected scope, not a picker — see deriveLevel above.
   const level = DERIVED_LEVEL
@@ -673,7 +673,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                       {workerMsg && <span style={{ fontSize: 11, color: workerMsg.startsWith('Failed') ? '#8A2A20' : '#1a7f37',
                                                   fontWeight: 600, marginLeft: 2 }}>{workerMsg}</span>}
                     </span>}
-                <WorkerReplicaControl leadingSeparator />
+                <WorkerReplicaControl leadingSeparator me={me} />
               </div>
             )
           })()}

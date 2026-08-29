@@ -71,6 +71,14 @@ export function deriveDiscoverProcessingState({
   // explored* needs backend work (folder id→path tracking, per-folder events) not built yet —
   // this only shows what a real counter can back.
   foldersFound = null, filesPerSec = null, inventoryChangedSecsAgo = null,
+  // Whether Discover.jsx's separate FolderActivity component (progress.active_folders /
+  // recent_folders, #929/#930 — shipped the night after the comingSoon copy below was written)
+  // has real folder-level detail to show. Found live 2026-08-29: on a folder-BFS scan this
+  // panel's "isn't tracked yet" note rendered directly above FolderActivity actively showing
+  // folder names — the two contradicted each other on the same screen at the same time. Only
+  // withhold comingSoon once there is actually something else on the page saying otherwise; a
+  // flat Drive-query scan (no folder concept at all) still gets the honest "not tracked" note.
+  hasFolderActivity = false,
 } = {}) {
   if (!busy && runStatus === 'failed') {
     return {
@@ -177,9 +185,11 @@ export function deriveDiscoverProcessingState({
       // Not a value the UI is missing by accident — the backend genuinely has no per-folder or
       // per-file signal today (a thread-pool BFS walks several folders at once and reports one
       // aggregate total). Says so, rather than a "Now scanning: —" that would look like a real
-      // field waiting to populate.
-      comingSoon: 'Folder- and file-level detail (which folder or file is being read right now) '
-        + "isn't tracked yet — this section will show it once that backend signal ships.",
+      // field waiting to populate. Withheld when FolderActivity (below, on the same screen) is
+      // already showing real folder names — see hasFolderActivity above.
+      comingSoon: hasFolderActivity ? null
+        : 'Folder- and file-level detail (which folder or file is being read right now) '
+          + "isn't tracked yet — this section will show it once that backend signal ships.",
     }
   }
   return { state: 'idle', headline: null, detail: null, recommendedAction: null, severity: 'info' }
