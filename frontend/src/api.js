@@ -1018,6 +1018,14 @@ export const getWorkerCapacity = () => (SIM
   ? sim({ configured: false, current_replicas: null, min_replicas: null, max_replicas: null,
           cpu_percent: null, memory_percent: null, metrics_available: false, measured_at: null })
   : fetch(`${BASE}/control/workers/capacity`, { headers: headers() }).then(j))
+// The FULL deploy/revision history for the acp-worker Container App — every revision, not just
+// the active one getWorkerCapacity() extracts a handful of fields from. Read-only, open to any
+// signed-in user, same reasoning as getWorkerCapacity/getWorkerReplicas. Revisions change only
+// on deploy, not continuously, so unlike getWorkerCapacity there is no polling store for this —
+// callers fetch on demand (mount + manual refresh).
+export const getWorkerRevisions = () => (SIM
+  ? sim({ configured: false, revisions: [] })
+  : fetch(`${BASE}/control/workers/revisions`, { headers: headers() }).then(j))
 // Reset demo data — clears scan results (Grafana) and/or Langfuse traces. Keeps settings.
 export const resetDemoData = (scope = 'all') => (SIM
   ? sim({ scope, cleared_tables: [], langfuse_traces_deleted: 0 })

@@ -353,3 +353,91 @@ def get_capacity():
         pass           # above is still returned rather than lost.
 
     return result
+
+
+def _iso(v):
+    """`created_time` on a Revision is documented as a datetime by the Container Apps REST API
+    schema, but this module's own `_rev_field` docstring above already flags that the SDK's exact
+    attribute shapes here are unverified against a live account — so accept either a datetime
+    (call .isoformat()) or something already string-shaped, rather than assume one and let an
+    AttributeError turn a working field into a silently-empty one."""
+    if v is None:
+        return None
+    isoformat = getattr(v, "isoformat", None)
+    return isoformat() if callable(isoformat) else str(v)
+
+
+@router.get("/control/workers/revisions")
+def get_revisions():
+    """The FULL revision history for the acp-worker Container App — every revision
+    list_revisions() returns, not just the active one GET /control/workers/capacity extracts a
+    handful of fields from. Answers "what got deployed, when, and is it healthy" — currently
+    invisible anywhere in the app; an operator has to open the Azure portal to see it.
+
+    Open to any authenticated user, same reasoning as the other /control/workers/* endpoints —
+    read-only visibility, not a control action.
+
+    Each entry in `revisions`: `name`, `active` (bool — is this the one new traffic defaults to),
+    `health_state`/`provisioning_state`/`running_state` (Azure's own per-revision status strings),
+    `replicas` (how many are up on THIS revision specifically — draining old revisions show a
+    nonzero count here after a rollout, the same signal `draining_replicas` on the capacity
+    endpoint sums across all of them), `traffic_percent` (this revision's own share of ingress,
+    from the SAME `app.properties.configuration.ingress.traffic` list GET /control/workers/
+    capacity reads — but matched against every revision here, not just the active one, since a
+    canary or blue-green rollout can split traffic across two revisions at once and that split is
+    exactly what this view exists to show), and `created_time` (ISO 8601, or null if the SDK
+    field is absent — see _iso() above).
+
+    Sorted newest-first by created_time; revisions Azure returns with no created_time (should not
+    happen in practice, but nothing here assumes it can't) sort last rather than crash the sort.
+
+    Graceful at every step, matching the rest of this module: `configured: false` when Azure
+    isn't set up; an empty `revisions: []` (never a fabricated entry) if the Container App or the
+    revision list itself can't be reached; a per-revision `traffic_percent` of null if ingress
+    data is unavailable, rather than losing the whole revision. UNVERIFIED against a live Azure
+    account, same caveat as GET /control/workers/capacity — treat the first real deployment as
+    this endpoint's actual proof.
+    """
+    if not _AZ_CONFIGURED:
+        return {"configured": False, "revisions": []}
+
+    try:
+        client = _az_client()
+        app = client.container_apps.get(_AZ_RG, _AZ_APP)
+    except Exception:  # noqa: BLE001 — can't even reach the Container App; nothing else to try
+        return {"configured": True, "revisions": []}
+
+    traffic_by_revision = {}
+    try:
+        ingress = app.properties.configuration.ingress
+        for t in (getattr(ingress, "traffic", None) or []):
+            name = getattr(t, "revision_name", None)
+            if name:
+                traffic_by_revision[name] = getattr(t, "weight", None)
+    except Exception:  # noqa: BLE001 — every revision's traffic_percent stays None below;
+        pass           # the revision list itself is unaffected.
+
+    try:
+        revisions = client.container_apps_revisions.list_revisions(_AZ_RG, _AZ_APP)
+        rev_list = getattr(revisions, "value", None)
+        if rev_list is None:
+            rev_list = list(revisions)
+    except Exception:  # noqa: BLE001 — no revision list to report; configured stays true so the
+        return {"configured": True, "revisions": []}  # caller can tell "asked, got nothing" from
+                                                        # "never asked" (same as capacity's fields).
+
+    out = []
+    for rev in rev_list:
+        name = _rev_field(rev, "name")
+        out.append({
+            "name": name,
+            "active": bool(_rev_field(rev, "active", False)),
+            "health_state": _rev_field(rev, "health_state"),
+            "provisioning_state": _rev_field(rev, "provisioning_state"),
+            "running_state": _rev_field(rev, "running_state"),
+            "replicas": _rev_field(rev, "replicas"),
+            "traffic_percent": traffic_by_revision.get(name),
+            "created_time": _iso(_rev_field(rev, "created_time")),
+        })
+    out.sort(key=lambda r: r["created_time"] or "", reverse=True)
+    return {"configured": True, "revisions": out}
