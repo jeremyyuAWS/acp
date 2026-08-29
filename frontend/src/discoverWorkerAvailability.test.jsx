@@ -14,6 +14,7 @@ const getJobs = vi.fn()
 const setWorkers = vi.fn()
 const getWorkerReplicas = vi.fn()
 const setWorkerReplicas = vi.fn()
+const getWorkerCapacity = vi.fn()
 vi.mock('./api.js', () => ({
   checkReadiness: vi.fn(() => Promise.resolve(null)),
   getScanInventory: vi.fn(() => Promise.resolve(null)),
@@ -25,6 +26,7 @@ vi.mock('./api.js', () => ({
   setWorkers: (...a) => setWorkers(...a),
   getWorkerReplicas: (...a) => getWorkerReplicas(...a),
   setWorkerReplicas: (...a) => setWorkerReplicas(...a),
+  getWorkerCapacity: (...a) => getWorkerCapacity(...a),
 }))
 
 const { default: Discover } = await import('./Discover.jsx')
@@ -38,10 +40,18 @@ const mount = async (props) => {
   return container
 }
 const settle = async (n = 4) => { for (let k = 0; k < n; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
+// getWorkerCapacity defaults to a safe "not configured" response so every existing test in this
+// file — none of which know or care about capacity evidence — keeps working unchanged; only the
+// capacity-specific describe block below overrides it per test.
+beforeEach(() => {
+  getWorkerCapacity.mockResolvedValue({ configured: false, current_replicas: null,
+                                        cpu_percent: null, memory_percent: null, metrics_available: false })
+})
 afterEach(() => {
   unmountAll()
   getJobs.mockReset(); setWorkers.mockReset()
   getWorkerReplicas.mockReset(); setWorkerReplicas.mockReset()
+  getWorkerCapacity.mockReset()
 })
 
 describe('Worker availability on Discover', () => {
@@ -143,5 +153,54 @@ describe('Azure replica visibility/control wiring on Discover', () => {
     const c = await mount({ me: { email: 'a@b.com', is_admin: false } })
     await settle()
     expect(c.textContent).toMatch(/managed by your deployment administrator/i)
+  })
+})
+
+// GET /control/workers/capacity is a SEPARATE fetch from GET /control/workers/replicas — current
+// replica count and CPU/memory, not the configured min/max. Same visibility rule: open to
+// everyone, only fetched once the tier reports 'distributed', no admin gate at all (there's
+// nothing to mutate here, unlike replicas).
+describe('Azure capacity-evidence wiring on Discover', () => {
+  const distributed = { workers: 8, worker_tier_alive: true, suggested_workers: 4, runtime_mode: 'distributed' }
+
+  it('does not call getWorkerCapacity in the ordinary in-process (auto) runtime mode', async () => {
+    getJobs.mockResolvedValue({ workers: 3, worker_tier_alive: true, suggested_workers: 4, runtime_mode: 'auto' })
+    const c = await mount({})
+    await settle()
+    expect(getWorkerCapacity).not.toHaveBeenCalled()
+    void c
+  })
+
+  it('fetches and shows current replicas + CPU/memory once the tier is distributed, for a non-admin too', async () => {
+    getJobs.mockResolvedValue(distributed)
+    getWorkerReplicas.mockResolvedValue({ configured: true, min_replicas: 2, max_replicas: 5 })
+    getWorkerCapacity.mockResolvedValue({ configured: true, current_replicas: 2, cpu_percent: 18,
+                                          memory_percent: 33, metrics_available: true })
+    const c = await mount({ me: { email: 'a@b.com', is_admin: false } })
+    await settle()
+    expect(getWorkerCapacity).toHaveBeenCalled()
+    expect(c.textContent).toMatch(/2 replicas running now/)
+    expect(c.textContent).toMatch(/CPU 18%/)
+    expect(c.textContent).toMatch(/Memory 33%/)
+  })
+
+  it('shows nothing extra while capacity has not resolved yet, without blocking the replicas line', async () => {
+    getJobs.mockResolvedValue(distributed)
+    getWorkerReplicas.mockResolvedValue({ configured: true, min_replicas: 2, max_replicas: 5 })
+    getWorkerCapacity.mockReturnValue(new Promise(() => {}))
+    const c = await mount({ me: { email: 'a@b.com', is_admin: false } })
+    await settle()
+    expect(c.textContent).toMatch(/Azure warm replicas: 2 \(max 5\)/)
+    expect(c.textContent).not.toMatch(/running now/)
+  })
+
+  it('a network failure leaves capacity silently unset rather than crashing the tab', async () => {
+    getJobs.mockResolvedValue(distributed)
+    getWorkerReplicas.mockResolvedValue({ configured: true, min_replicas: 2, max_replicas: 5 })
+    getWorkerCapacity.mockRejectedValue(new Error('network error'))
+    const c = await mount({ me: { email: 'a@b.com', is_admin: false } })
+    await settle()
+    expect(c.textContent).toMatch(/Azure warm replicas: 2 \(max 5\)/)
+    expect(c.textContent).not.toMatch(/running now/)
   })
 })

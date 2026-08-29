@@ -24,8 +24,17 @@ import { isQueueStalled, queuedAgeSecs } from './workerStallSignal.js'
 // the PRESENCE of `onAdjustReplicas` (Discover.jsx only passes it for `me?.is_admin`) —
 // mirrors exactly how the in-process `onAdjust` controls below are gated by prop presence,
 // not by a role check inside this (deliberately dumb, presentational) component.
+//
+// `capacity` (GET /control/workers/capacity): a SEPARATE question from `replicas` above —
+// that's the CONFIGURED warm floor/ceiling; this is what Azure has actually provisioned right
+// now and how loaded it is. Read-only for everyone, same as `replicas`, no adjust action at
+// all. Individual fields can be null even when capacity.configured is true (the backend
+// degrades per-field on a partial Azure/Monitor failure) — rendered as omitted, never as a
+// fabricated 0, matching this component's existing "processing capacity is off" vs "0 workers"
+// distinction above.
 export default function WorkerAvailability({ snap, busy, msg, onAdjust,
-                                              replicas, replicasBusy, replicasMsg, onAdjustReplicas }) {
+                                              replicas, replicasBusy, replicasMsg, onAdjustReplicas,
+                                              capacity }) {
   if (!snap) return null
   const externallyManaged = snap.runtime_mode === 'distributed' && snap.alive
   const stalled = isQueueStalled(snap.alive, snap.oldestQueuedCreatedAt)
@@ -105,6 +114,18 @@ export default function WorkerAvailability({ snap, busy, msg, onAdjust,
             Worker service reports online, but a queued job has been waiting {stalledAge}s —
             it may not be actually claiming work. Check Monitor.
           </span>
+        </div>
+      )}
+      {externallyManaged && capacity?.configured
+       && (capacity.current_replicas != null || capacity.metrics_available) && (
+        <div className="muted" style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 8 }}>
+          {capacity.current_replicas != null && (
+            <span>
+              {capacity.current_replicas} replica{capacity.current_replicas === 1 ? '' : 's'} running now
+            </span>
+          )}
+          {capacity.cpu_percent != null && <span>CPU {capacity.cpu_percent}%</span>}
+          {capacity.memory_percent != null && <span>Memory {capacity.memory_percent}%</span>}
         </div>
       )}
     </div>

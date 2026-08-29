@@ -18,6 +18,7 @@ document nobody sees is recoverable, a document the wrong customer sees is not.
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -38,6 +39,20 @@ def _az_client():
     from azure.identity import DefaultAzureCredential
     from azure.mgmt.appcontainers import ContainerAppsAPIClient
     return ContainerAppsAPIClient(DefaultAzureCredential(), _AZ_SUB)
+
+
+def _monitor_client():
+    """A second Azure management client, alongside _az_client() above — Azure Monitor metrics
+    are a genuinely separate API surface from the Container Apps control plane, requiring a
+    separate RBAC grant (the built-in "Monitoring Reader" role on the acp-worker resource or its
+    resource group) on top of the Contributor grant _az_client() already needs. Deliberately
+    azure-mgmt-monitor, not azure-monitor-query: that package's MetricsQueryClient was removed
+    entirely in its 2.0.0 (2025-07-30) and split across two successor packages — this one predates
+    that churn and follows the exact same DefaultAzureCredential + subscription_id constructor
+    shape _az_client() already uses, so it's the more stable, more consistent choice."""
+    from azure.identity import DefaultAzureCredential
+    from azure.mgmt.monitor import MonitorManagementClient
+    return MonitorManagementClient(DefaultAzureCredential(), _AZ_SUB)
 
 router = APIRouter()
 
@@ -153,3 +168,96 @@ def set_replicas(body: ReplicaBody, request: Request):
         raise
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"could not update replica config: {e}") from e
+
+
+# ---------------------------------------------------------------------------
+# Worker capacity evidence — what's actually happening on Azure right now, as
+# distinct from the CONFIGURED min/max scale rule above. GET /control/workers/
+# replicas answers "what is the warm floor set to"; this answers "how many
+# replicas are actually up, and how loaded are they" — two different questions
+# that this table's own PRD review (2026-08-29) found conflated in every
+# existing surface. Needs the SAME Contributor grant as replica control, plus
+# a SEPARATE "Monitoring Reader" role (or equivalent Microsoft.Insights/
+# metrics/read permission) on the acp-worker resource for the metrics half.
+# ---------------------------------------------------------------------------
+
+def _empty_capacity(configured: bool) -> dict:
+    return {
+        "configured": configured, "current_replicas": None, "min_replicas": None,
+        "max_replicas": None, "cpu_percent": None, "memory_percent": None,
+        "metrics_available": False, "measured_at": None,
+    }
+
+
+@router.get("/control/workers/capacity")
+def get_capacity():
+    """Azure-side capacity evidence for the acp-worker Container App: how many replicas are
+    actually running right now, and recent CPU/memory utilization — as opposed to
+    GET /control/workers/replicas' CONFIGURED min/max scale rule, which says nothing about
+    whether Azure has actually provisioned that many, or how loaded they are.
+
+    Open to any authenticated user, same reasoning as GET /control/workers/replicas (#950) —
+    this is read-only visibility, not a control action, and costs nothing to expose.
+
+    Graceful at every step, matching the rest of this module: `configured: false` when Azure
+    isn't set up; `current_replicas`/`cpu_percent`/`memory_percent` individually stay None (never
+    a fabricated 0) if their specific Azure call fails — a missing Monitoring Reader grant on
+    this identity, CpuPercentage/MemoryPercentage being unavailable (both are Microsoft Preview
+    metrics as of 2026 and can be withdrawn or renamed), or any other partial failure degrades
+    that one field rather than 502ing the whole response and hiding the min/max data that DID
+    come back. UNVERIFIED against a live Azure account as of this PR — the Azure SDK response
+    shapes here are built from current published documentation, not exercised against a real
+    Container App; treat the first real deployment as this endpoint's actual proof, not this
+    code review.
+    """
+    if not _AZ_CONFIGURED:
+        return _empty_capacity(False)
+
+    now = datetime.now(timezone.utc)
+    result = _empty_capacity(True)
+    result["measured_at"] = now.isoformat()
+
+    try:
+        client = _az_client()
+        app = client.container_apps.get(_AZ_RG, _AZ_APP)
+        scale = app.properties.template.scale
+        result["min_replicas"] = scale.min_replicas
+        result["max_replicas"] = scale.max_replicas
+    except Exception:  # noqa: BLE001 — can't even reach the Container App; nothing else to try
+        return result
+
+    try:
+        revision = app.properties.latest_ready_revision_name
+        replicas = client.container_apps_revision_replicas.list_replicas(_AZ_RG, _AZ_APP, revision)
+        # Defensive about the exact collection shape: an OData-style `.value` list is the norm
+        # for this SDK generation, but falling back to treating the result as directly iterable
+        # costs nothing and avoids a shape mismatch turning into a silent None where a real count
+        # was available.
+        replica_list = getattr(replicas, "value", None)
+        if replica_list is None:
+            replica_list = list(replicas)
+        result["current_replicas"] = len(replica_list)
+    except Exception:  # noqa: BLE001 — current_replicas stays None: an honest "couldn't measure"
+        pass           # rather than a fabricated 0, same rule this codebase applies everywhere.
+
+    try:
+        metrics = _monitor_client().metrics.list(
+            app.id, metricnames="CpuPercentage,MemoryPercentage", aggregation="Average",
+            timespan=f"{(now - timedelta(minutes=5)).isoformat()}/{now.isoformat()}",
+            interval="PT1M")
+        for m in metrics.value:
+            points = [dp.average for ts in (m.timeseries or []) for dp in ts.data
+                      if dp.average is not None]
+            if not points:
+                continue
+            avg = round(sum(points) / len(points), 1)
+            metric_name = getattr(m.name, "value", None)
+            if metric_name == "CpuPercentage":
+                result["cpu_percent"] = avg
+            elif metric_name == "MemoryPercentage":
+                result["memory_percent"] = avg
+        result["metrics_available"] = result["cpu_percent"] is not None or result["memory_percent"] is not None
+    except Exception:  # noqa: BLE001 — metrics_available stays False; min/max/current_replicas
+        pass           # (already gathered above) are still returned rather than lost.
+
+    return result
