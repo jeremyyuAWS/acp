@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { getJobs, setWorkers, clearDeadJobs, getWorkerReplicas, getWorkerCapacity } from './api.js'
 import { TraceChip } from './Transparency.jsx'
 import { phaseLine, isStalled, STALLED_AFTER_S } from './jobPhase.js'
+import { diagnoseWorkerHealth } from './workerDiagnosis.js'
 
 // Job-type → short human label for the recent-jobs cards.
 const JOBLABEL = {
@@ -127,6 +128,17 @@ export default function QueuePanel() {
     const id = setInterval(loadCapacity, 30000)
     return () => { live = false; clearInterval(id) }
   }, [externallyManaged])
+
+  // Diagnosis layer (workerDiagnosis.js): Monitor is the estate-wide operational view — the one
+  // place someone actually goes to ask "why", not just "what" — but until now had no interpretive
+  // text at all, not even a queue-stall check. Runs in every runtime mode, not just distributed:
+  // the offline/heartbeat-aging/queue-stall rules apply to the in-process worker pool too.
+  const diagnosis = q ? diagnoseWorkerHealth({
+    snap: { workers: q.workers, alive: q.worker_tier_alive, runtime_mode: q.runtime_mode,
+            oldestQueuedCreatedAt: q.oldest_queued?.created_at ?? null,
+            workerHeartbeatAgeS: q.worker_heartbeat_age_s ?? null },
+    capacity, replicas,
+  }) : null
 
   // The file a worker is remediating right now (most recent running remediate job).
   const remJob = (q?.jobs || []).find((j) => j.status === 'running' && j.type === 'remediate_file')
@@ -264,6 +276,14 @@ export default function QueuePanel() {
               )}
             </div>
           )}
+        </div>
+      )}
+      {diagnosis && (
+        <div role="alert" style={{ marginTop: 8, fontSize: 12,
+                                    color: diagnosis.severity === 'critical' ? '#8A2A20' : '#854F0B',
+                                    display: 'flex', alignItems: 'baseline', gap: 5 }}>
+          <span aria-hidden="true">⚠</span>
+          <span>{diagnosis.message}</span>
         </div>
       )}
 
