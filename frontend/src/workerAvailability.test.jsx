@@ -85,3 +85,35 @@ describe('WorkerAvailability', () => {
     expect(c.querySelector('button[aria-label="Add a worker"]')).toBeFalsy()
   })
 })
+
+// "online, but nothing is actually draining the queue" — the gap both #935 and #936 found live
+// 2026-08-29 (a worker pool silently booted at zero threads; a Drive client with no socket
+// timeout that could hang a claimed job forever). Both looked identical to "online" from the
+// heartbeat alone; this is what makes that gap visible on screen instead of only in code.
+describe('WorkerAvailability queue-stall warning', () => {
+  it('is silent when alive and nothing is queued', async () => {
+    const c = await mount({ snap: { workers: 4, alive: true, oldestQueuedCreatedAt: null } })
+    expect(c.textContent).not.toMatch(/may not be actually claiming work/i)
+  })
+
+  it('is silent when alive and the oldest queued job is recent', async () => {
+    const recent = new Date(Date.now() - 5_000).toISOString()
+    const c = await mount({ snap: { workers: 4, alive: true, oldestQueuedCreatedAt: recent } })
+    expect(c.textContent).not.toMatch(/may not be actually claiming work/i)
+  })
+
+  it('warns when alive but a queued job has waited past the stall threshold', async () => {
+    const stale = new Date(Date.now() - 120_000).toISOString()
+    const c = await mount({ snap: { workers: 4, alive: true, oldestQueuedCreatedAt: stale } })
+    expect(c.textContent).toMatch(/reports online, but a queued job has been waiting 120s/i)
+    expect(c.textContent).toMatch(/may not be actually claiming work/i)
+    expect(c.querySelector('[role="alert"]')).toBeTruthy()
+  })
+
+  it('does not warn when offline — that is already a separate, visible problem', async () => {
+    const stale = new Date(Date.now() - 120_000).toISOString()
+    const c = await mount({ snap: { workers: 0, alive: false, oldestQueuedCreatedAt: stale } })
+    expect(c.textContent).toMatch(/offline/i)
+    expect(c.textContent).not.toMatch(/may not be actually claiming work/i)
+  })
+})

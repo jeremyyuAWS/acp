@@ -91,6 +91,55 @@ def test_job_stats(store):
     assert stats.get("queued", 0) + stats.get("done", 0) >= 1
 
 
+def test_oldest_queued_job_is_none_on_an_empty_queue(store):
+    assert store.oldest_queued_job() is None
+
+
+def test_oldest_queued_job_returns_the_longest_waiting_one(store):
+    first = store.enqueue_job("scan_discover", {})
+    store.enqueue_job("scan_discover", {})            # a second, newer job
+    oldest = store.oldest_queued_job()
+    assert oldest["id"] == first
+
+
+def test_oldest_queued_job_ignores_claimed_and_done_jobs(store):
+    jid = store.enqueue_job("t", {})
+    store.claim_job("w1")                              # now 'running', not 'queued'
+    assert store.oldest_queued_job() is None
+    store.complete_job(jid)
+    assert store.oldest_queued_job() is None
+
+
+def test_oldest_queued_job_ignores_a_job_still_in_backoff(store):
+    """A job whose run_after hasn't arrived yet is not eligible for claim_job() either — it must
+    not count as evidence the worker tier is stalled, the same run_after<=now() gate claim_job()
+    itself uses."""
+    jid = store.enqueue_job("t", {})
+    store.claim_job("w1")
+    store.fail_job(jid, "transient", backoff_seconds=3600)   # run_after far in the future
+    assert store.oldest_queued_job() is None
+
+
+def test_oldest_queued_job_can_be_scoped_to_an_owner(store):
+    st = store
+    st.save_scan({"_scan_id": "mine", "started_at": "2026-08-29T00:00:00+00:00",
+                  "completed_at": "2026-08-29T00:01:00+00:00", "source": "drive",
+                  "owner": "me@example.com", "rubric": {"name": "r", "hash": "h"},
+                  "summary": {"files": 0, "certifiable": 0, "uncertain": 0, "error": 0, "avg_score": 0},
+                  "files": []})
+    st.save_scan({"_scan_id": "theirs", "started_at": "2026-08-29T00:00:00+00:00",
+                  "completed_at": "2026-08-29T00:01:00+00:00", "source": "drive",
+                  "owner": "someone-else@example.com", "rubric": {"name": "r", "hash": "h"},
+                  "summary": {"files": 0, "certifiable": 0, "uncertain": 0, "error": 0, "avg_score": 0},
+                  "files": []})
+    st.enqueue_job("scan_discover", {}, scan_id="theirs")
+    mine = st.enqueue_job("scan_discover", {}, scan_id="mine")
+
+    # Global (owner=None, the shape GET /jobs actually calls) sees whichever queued first —
+    # scoping is opt-in via the owner argument, not the route's default.
+    assert st.oldest_queued_job(owner="me@example.com")["id"] == mine
+
+
 def test_worker_runs_handler(store):
     import worker
     seen = []

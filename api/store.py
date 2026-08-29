@@ -6022,6 +6022,29 @@ class Store:
                              (owner,) if owner else ())
             return {r["status"]: r["n"] for r in self._db.fetchall(cur)}
 
+    def oldest_queued_job(self, owner: str | None = None) -> dict | None:
+        """The single longest-waiting eligible job (status='queued', run_after already due), or
+        None when nothing is waiting.
+
+        Exists to answer a question `job_stats`/`worker_tier_alive` cannot: a fresh heartbeat
+        proves the worker CONTAINER is up, not that anything is actually claiming work (see
+        worker.py's own max_unverified_lease_s docstring — a hung handler or, found live
+        2026-08-29, a worker pool that silently booted at zero threads both look identical to
+        "online" from the heartbeat alone). A queued job's own age is a fact the worker tier
+        cannot fake by merely existing: if it has been waiting past a normal claim latency while
+        the tier reports alive, something between "online" and "actually draining the queue" is
+        broken, whatever that turns out to be this time.
+
+        A job stuck behind a future run_after (retry backoff) is not eligible and must not count
+        as evidence of a stall — same run_after<=now() gate claim_job() itself uses."""
+        scope = " AND scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)" if owner else ""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id, type, created_at FROM jobs WHERE status='queued' AND run_after<=%s" + scope +
+                " ORDER BY created_at ASC LIMIT 1",
+                (self._now(), owner) if owner else (self._now(),))
+            return self._db.fetchone(cur)
+
     def list_jobs(self, status: str | None = None, limit: int = 200, owner: str | None = None) -> list[dict]:
         clauses, params = [], []
         if status:
