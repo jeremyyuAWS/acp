@@ -93,6 +93,12 @@ class ReplicaBody(BaseModel):
 def get_replicas():
     """Current min/max replica settings for the acp-worker Container App.
 
+    Open to any authenticated user, deliberately — this is visibility into
+    shared worker capacity (the "how many can pick up jobs" question every
+    scan owner already sees a coarser version of via WorkerAvailability.jsx),
+    not a control action. Only PATCH, below, is admin-gated: reading the
+    replica count costs nothing and changing it spends real Azure money.
+
     Returns `configured: false` when AZURE_SUBSCRIPTION_ID is absent so the
     frontend can hide the control rather than showing a broken state.
     """
@@ -112,13 +118,20 @@ def get_replicas():
 
 
 @router.patch("/control/workers/replicas")
-def set_replicas(body: ReplicaBody):
+def set_replicas(body: ReplicaBody, request: Request):
     """Set the minimum warm replicas for the acp-worker Container App.
+
+    Admin-only and audited, matching PUT /workers' exact pattern (routes/system.py)
+    — unlike GET above, this changes real Azure spend, the same class of action
+    settings.worker_count already logs. Was unguarded until 2026-08-29: any
+    authenticated user, not just an admin, could change the Azure replica count.
 
     Adjusts minReplicas only; maxReplicas stays at its current value so
     Azure's autoscaler ceiling is not affected. A higher min keeps workers
     warm before a large assessment; lower min reduces idle-container cost.
     """
+    from .system import _require_admin
+    _require_admin(request)
     if not _AZ_CONFIGURED:
         raise HTTPException(503, "AZURE_SUBSCRIPTION_ID not set — replica control is not available")
     try:
@@ -128,6 +141,8 @@ def set_replicas(body: ReplicaBody):
         poller = client.container_apps.begin_create_or_update(_AZ_RG, _AZ_APP, app)
         updated = poller.result()
         scale = updated.properties.template.scale
+        core.store.log_decision("admin", "settings.worker_replicas",
+                                detail=f"Azure worker replicas (min) set to {scale.min_replicas}")
         return {
             "configured": True,
             "min_replicas": scale.min_replicas,

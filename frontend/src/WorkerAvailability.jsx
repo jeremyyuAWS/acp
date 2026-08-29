@@ -16,7 +16,16 @@ import { isQueueStalled, queuedAgeSecs } from './workerStallSignal.js'
 // not proof anything is actually being claimed — see that module's docstring for the two live
 // bugs (#935/#936) that produced exactly this gap on 2026-08-29, both invisible from `alive`
 // alone. This is what makes the SAME gap visible next time, whatever causes it.
-export default function WorkerAvailability({ snap, busy, msg, onAdjust }) {
+//
+// `replicas` (GET /control/workers/replicas — Azure Container App min/max warm replicas):
+// visible to EVERY signed-in user when externally managed, not just admins — this is the
+// "how many can pick up jobs" question every caller already sees a coarser version of via
+// `snap`, and reading it costs nothing. Only the +/- adjust controls are admin-gated, via
+// the PRESENCE of `onAdjustReplicas` (Discover.jsx only passes it for `me?.is_admin`) —
+// mirrors exactly how the in-process `onAdjust` controls below are gated by prop presence,
+// not by a role check inside this (deliberately dumb, presentational) component.
+export default function WorkerAvailability({ snap, busy, msg, onAdjust,
+                                              replicas, replicasBusy, replicasMsg, onAdjustReplicas }) {
   if (!snap) return null
   const externallyManaged = snap.runtime_mode === 'distributed' && snap.alive
   const stalled = isQueueStalled(snap.alive, snap.oldestQueuedCreatedAt)
@@ -34,9 +43,39 @@ export default function WorkerAvailability({ snap, busy, msg, onAdjust }) {
             : `${snap.workers} worker${snap.workers === 1 ? '' : 's'} available to pick up jobs`}
         </span>
         {externallyManaged ? (
-          <span className="muted" style={{ marginLeft: 4, fontStyle: 'italic' }}>
-            Worker capacity is managed by your deployment administrator.
-          </span>
+          replicas?.configured ? (
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 4 }}>
+              <span className="muted" style={{ fontSize: 11 }}>
+                Azure warm replicas: {replicas.min_replicas}
+                {replicas.max_replicas != null ? ` (max ${replicas.max_replicas})` : ''}
+              </span>
+              {onAdjustReplicas && (
+                <>
+                  <button onClick={() => onAdjustReplicas(-1)}
+                          disabled={replicasBusy || replicas.min_replicas <= 1}
+                          aria-label="Remove a warm replica"
+                          style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
+                                   background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
+                                   cursor: 'pointer', display: 'inline-flex', alignItems: 'center',
+                                   justifyContent: 'center', padding: 0 }}>−</button>
+                  <button onClick={() => onAdjustReplicas(1)}
+                          disabled={replicasBusy || replicas.min_replicas >= 5}
+                          aria-label="Add a warm replica"
+                          style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
+                                   background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
+                                   cursor: 'pointer', display: 'inline-flex', alignItems: 'center',
+                                   justifyContent: 'center', padding: 0 }}>+</button>
+                </>
+              )}
+              {replicasMsg && <span style={{ fontSize: 11,
+                                              color: replicasMsg.startsWith('Failed') ? '#8A2A20' : '#1a7f37',
+                                              fontWeight: 600, marginLeft: 2 }}>{replicasMsg}</span>}
+            </span>
+          ) : (
+            <span className="muted" style={{ marginLeft: 4, fontStyle: 'italic' }}>
+              Worker capacity is managed by your deployment administrator.
+            </span>
+          )
         ) : onAdjust && (
           <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 4 }}>
             <span className="muted" style={{ fontSize: 11 }}>Worker concurrency:</span>

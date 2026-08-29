@@ -86,6 +86,68 @@ describe('WorkerAvailability', () => {
   })
 })
 
+// GET /control/workers/replicas is open to every signed-in user (not admin-gated) — visibility
+// is for everyone, only the +/- adjust action is admin-only. This component never checks a role
+// itself; it goes purely by whether onAdjustReplicas was passed, mirroring onAdjust above.
+describe('WorkerAvailability Azure replica visibility (externally-managed tier)', () => {
+  const distributedSnap = { workers: 8, alive: true, runtime_mode: 'distributed' }
+
+  it('shows the Azure warm-replica count instead of the generic "managed by" line once loaded', async () => {
+    const c = await mount({ snap: distributedSnap,
+                             replicas: { configured: true, min_replicas: 2, max_replicas: 5 } })
+    expect(c.textContent).toMatch(/Azure warm replicas: 2 \(max 5\)/)
+    expect(c.textContent).not.toMatch(/managed by your deployment administrator/i)
+  })
+
+  it('falls back to the generic "managed by" line before replicas has loaded', async () => {
+    const c = await mount({ snap: distributedSnap, replicas: null })
+    expect(c.textContent).toMatch(/managed by your deployment administrator/i)
+  })
+
+  it('falls back to the generic line when Azure is not configured on the backend', async () => {
+    const c = await mount({ snap: distributedSnap,
+                             replicas: { configured: false, min_replicas: null, max_replicas: null } })
+    expect(c.textContent).toMatch(/managed by your deployment administrator/i)
+  })
+
+  it('a non-admin (no onAdjustReplicas) sees the count but no adjust buttons', async () => {
+    const c = await mount({ snap: distributedSnap,
+                             replicas: { configured: true, min_replicas: 2, max_replicas: 5 } })
+    expect(c.textContent).toMatch(/Azure warm replicas: 2/)
+    expect(c.querySelector('button[aria-label="Add a warm replica"]')).toBeFalsy()
+    expect(c.querySelector('button[aria-label="Remove a warm replica"]')).toBeFalsy()
+  })
+
+  it('an admin (onAdjustReplicas given) gets +/- buttons that call it, bounded to 1–5', async () => {
+    const onAdjustReplicas = vi.fn()
+    const c = await mount({ snap: distributedSnap, onAdjustReplicas,
+                             replicas: { configured: true, min_replicas: 1, max_replicas: 5 } })
+    const minus = c.querySelector('button[aria-label="Remove a warm replica"]')
+    const plus = c.querySelector('button[aria-label="Add a warm replica"]')
+    expect(minus.disabled).toBe(true)    // already at the floor
+    expect(plus.disabled).toBe(false)
+    await act(async () => { plus.click() })
+    expect(onAdjustReplicas).toHaveBeenCalledWith(1)
+  })
+
+  it('disables both replica buttons at the ceiling and while an adjustment is in flight', async () => {
+    const c = await mount({ snap: distributedSnap, onAdjustReplicas: vi.fn(), replicasBusy: false,
+                             replicas: { configured: true, min_replicas: 5, max_replicas: 5 } })
+    expect(c.querySelector('button[aria-label="Add a warm replica"]').disabled).toBe(true)
+    const busy = await mount({ snap: distributedSnap, onAdjustReplicas: vi.fn(), replicasBusy: true,
+                                replicas: { configured: true, min_replicas: 2, max_replicas: 5 } })
+    expect(busy.querySelector('button[aria-label="Add a warm replica"]').disabled).toBe(true)
+    expect(busy.querySelector('button[aria-label="Remove a warm replica"]').disabled).toBe(true)
+  })
+
+  it('shows the transient replicasMsg feedback when set', async () => {
+    const c = await mount({ snap: distributedSnap, onAdjustReplicas: vi.fn(),
+                             replicasMsg: 'Warm replicas set to 3',
+                             replicas: { configured: true, min_replicas: 3, max_replicas: 5 } })
+    expect(c.textContent).toMatch(/Warm replicas set to 3/)
+  })
+})
+
 // "online, but nothing is actually draining the queue" — the gap both #935 and #936 found live
 // 2026-08-29 (a worker pool silently booted at zero threads; a Drive client with no socket
 // timeout that could hang a claimed job forever). Both looked identical to "online" from the
