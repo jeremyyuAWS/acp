@@ -188,6 +188,15 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
             idempotency_key=idempotency_key,
             inputs=_scan_inputs)
         core.register_scan_tokens(scan_id, drive=token, sp=sp_token)  # in-memory only
+        # ADR 0042 — the run's first event, and the only one emitted from a request thread rather
+        # than from the worker. After enqueue_scan, because that is the durable write that makes
+        # the scan real: before it there is no job row and no scan_id worth anchoring to. This is
+        # the ONLY path that produces a genuine "queued" state — the in-process thread path below
+        # starts work immediately, so claiming it was queued there would be fiction.
+        from handlers import scan_event
+        scan_event(scan_id, "scan.queued", phase="queued", job_id=job_id, owner_email=user,
+                   detail={"source": source, "job_type": jtype, "batch": batch,
+                           "fanout": fanout})
         return {"scan_id": scan_id, "job_id": job_id, "queued": True,
                 "fanout": fanout, "batch": batch, "workers": core.WORKERS,
                 # Split topology (#113): the API runs ACP_WORKERS=0 and a standalone worker
@@ -258,6 +267,9 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
             core.update_job(job_id, {})
 
     def work():
+        # Bound before the try so the failure path below can tell "we crashed before a scan_id
+        # existed" from "we crashed after" without inspecting locals(). See its comment.
+        sid = None
         try:
             from handlers import _defer_analysis_to_assess
             if _defer_analysis_to_assess():
@@ -326,8 +338,30 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                                      "unsupported": save_outcome.get("unsupported"),
                                      "eligibility_unknown": save_outcome.get("eligibility_unknown"),
                                      "excluded": save_outcome.get("excluded")})
+            # ADR 0042. persist_discovery_inventory (above) already emitted this run's
+            # inventory_saved / lifecycle_applied / discovered; this is the extra fact only the
+            # legacy full-download branch has — the analysis finished and the run finalized.
+            from handlers import scan_event
+            scan_event(sid, "scan.completed", phase="done", job_id=job_id, owner_email=user,
+                       detail={"files": done.get("files_found", 0), "source": source})
         except Exception as e:
             core.update_job(job_id, {"phase": "error", "done": True, "error": str(e)})
+            # `sid` exists only once save_scan has returned (or the deferred branch minted one),
+            # and scan_event no-ops on a falsy scan_id — so a crash during the crawl itself is
+            # deliberately NOT logged here. There is no scan row to anchor it to yet: the log is
+            # scan-anchored, and inventing an anchor for a run that never got one would be worse
+            # than the gap. The job record (phase=error above) plus core._job_is_stale remain the
+            # record for that window, exactly as before this ADR.
+            #
+            # On the deferred branch this CAN double up: _scan_discover logs its own scan.failed
+            # for a listing failure and then re-raises into here. Both rows are kept rather than
+            # deduped — they are two true statements from two frames, with different `detail`,
+            # and suppressing the second would need a read-before-write, which is precisely the
+            # mutable-cell pattern this log replaces. ADR 0042 has readers take the FIRST
+            # terminal event by seq, which resolves it without a write-side check.
+            from handlers import scan_event
+            scan_event(sid, "scan.failed", phase="error", job_id=job_id,
+                       owner_email=user, detail={"message": str(e)[:200], "source": source})
         finally:
             _stop_heartbeat.set()
 
