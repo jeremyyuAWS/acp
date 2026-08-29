@@ -82,6 +82,22 @@ describe('DiscoverCompleteSummary renders completion state', () => {
     expect(html).toContain('No lifecycle rules enabled')
   })
 
+  it('renders the sub-breakdown as a real bulleted list, not bare stacked rows', () => {
+    const html = render(BASE)
+    // metadata-only (10) and unsupported (10) and locked (5) are all > 0 in BASE.
+    expect(html).toMatch(/<ul[^>]*>[\s\S]*<li[^>]*>[\s\S]*<\/li>[\s\S]*<\/ul>/)
+  })
+
+  it('wraps each sub-breakdown label with its glossary definition, hoverable via Term', () => {
+    const html = render(BASE)
+    // Term renders a "terminfo" button beside the label — one per glossary-backed sub-row
+    // (metadata-only, unsupported, could not be opened) present in BASE.
+    const termButtons = html.match(/class="terminfo"/g) || []
+    expect(termButtons.length).toBe(3)
+    expect(html).toContain('What does &quot;Unsupported&quot; mean?')
+    expect(html).toContain('What does &quot;Metadata-only&quot; mean?')
+  })
+
   it('shows "No lifecycle rules enabled" when count is null', () => {
     const html = render({ ...BASE, lifecycleRulesCount: null })
     expect(html).toContain('No lifecycle rules enabled')

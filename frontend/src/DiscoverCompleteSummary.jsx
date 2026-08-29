@@ -1,6 +1,22 @@
 // Shown after a discovery scan completes — structured-row summary of what was found, with a
 // prominent CTA to continue to Assess. Uses a parent-child layout for assessment eligibility
 // so the relationship between the aggregate (not-assessable total) and its breakdown is clear.
+//
+// The sub-breakdown items are marked as a real list (bullets), not bare stacked divs — the
+// screenshot this was built from read as an unstructured wall of numbers. Each label also carries
+// a Term glossary tooltip: "metadata-only" and "unsupported" are internal ACP classification
+// vocabulary, not terms a reader coming from a source drive already knows.
+
+import Term from './Term.jsx'
+
+// Sub-breakdown label -> glossary key.
+const SUB_TERM_KEY = {
+  unsupported: 'unsupported_format',
+  'metadata-only': 'metadata_only_format',
+  'eligibility unknown': 'eligibility_unknown',
+  excluded: 'excluded_from_scope',
+  'could not be opened': 'could_not_be_opened',
+}
 
 function fmtDuration(startedAt, discoveredAt) {
   if (!startedAt || !discoveredAt) return null
@@ -144,22 +160,27 @@ export default function DiscoverCompleteSummary({
 
           {/* Sub-breakdown indented under the not-assessable parent */}
           {subBreakdown.length > 0 && (
-            <div style={{ paddingLeft: 'calc(4.2em + 8px)', marginTop: 5,
-                          display: 'flex', flexDirection: 'column', gap: 2,
-                          fontSize: 12.5, color: 'var(--muted)' }}>
+            <ul style={{ paddingLeft: 'calc(4.2em + 8px + 1.1em)', marginTop: 5, marginBottom: 0,
+                         listStyle: 'disc', display: 'flex', flexDirection: 'column', gap: 2,
+                         fontSize: 12.5, color: 'var(--muted)' }}>
               {subBreakdown.map(({ count, label }) => (
-                <div key={label}>{n(count)} {label}</div>
+                <li key={label} style={{ paddingLeft: 2 }}>
+                  {n(count)}{' '}
+                  {SUB_TERM_KEY[label]
+                    ? <Term k={SUB_TERM_KEY[label]}>{label}</Term>
+                    : label}
+                </li>
               ))}
               {hasExceptions && (
-                <div>
+                <li style={{ paddingLeft: 2, listStyle: 'none', marginLeft: '-1.1em' }}>
                   {[
                     hasExcInaccessible && `${n(excInaccessible)} inaccessible — skipped`,
                     hasExcMetadata && `${n(excMetadataFailure)} unreadable`,
                     hasExcDeleted && `${n(excDeleted)} deleted during scan`,
                   ].filter(Boolean).join(' · ')}
-                </div>
+                </li>
               )}
-            </div>
+            </ul>
           )}
         </div>
 

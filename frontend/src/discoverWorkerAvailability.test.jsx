@@ -50,7 +50,7 @@ describe('Worker availability on Discover', () => {
     const c = await mount({})
     await settle()
     expect(c.textContent).toMatch(/offline/i)
-    expect(c.textContent).toMatch(/0 workers available to pick up jobs/i)
+    expect(c.textContent).toMatch(/processing capacity is off/i)
   })
 
   it('starting workers from zero calls setWorkers with the suggested count and reflects the result', async () => {
