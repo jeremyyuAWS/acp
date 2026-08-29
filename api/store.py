@@ -1620,6 +1620,31 @@ class Store:
                 "ORDER BY file LIMIT %s OFFSET %s", (scan_id, int(limit), int(offset)))
             return self._db.fetchall(cur)
 
+    def latest_scan_inventory_items(self, owner: str, source: str) -> list[dict] | None:
+        """The full scan_inventory of the most recent COMPLETED scan for (owner, source) —
+        PRD Phase 3's reconstruction seam: scanner.apply_drive_delta rebuilds 'the current known
+        Drive estate' from these rows plus a Changes API delta, without a fresh Drive listing.
+        None when there is no prior completed scan to reconstruct from (the first-ever
+        incremental sweep) — the caller falls back to a full listing in that case, same as
+        core._drive_sync_gate already does for a missing cursor.
+
+        Rows with no drive_file_id are dropped (a local/non-Drive row, or one from a scan old
+        enough to predate that column) — they carry nothing a Drive delta could ever reconcile
+        against."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id FROM scan_runs WHERE owner_email=%s AND source=%s "
+                "AND completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1",
+                (owner, source))
+            row = self._db.fetchone(cur)
+            if not row:
+                return None
+            self._db.execute(cur,
+                "SELECT file, drive_file_id, mime, size_kb, checksum, created_at, "
+                "source_modified, owner, parent_folder FROM scan_inventory WHERE scan_id=%s",
+                (row["id"],))
+            return [r for r in self._db.fetchall(cur) if r.get("drive_file_id")]
+
     # ── Lifecycle status (Discover-completeness PRD §4.3 / §4.5) ─────────────────
     # The 7 statuses a discovered file can hold. Active is the default; a rule run or a manual
     # action moves it. Kept here (not an enum type) so the sqlite/postgres split needs no DDL.

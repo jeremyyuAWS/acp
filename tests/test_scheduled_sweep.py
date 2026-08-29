@@ -38,6 +38,7 @@ def core_mod(monkeypatch):
                              "owner_email": "a@b.c", "source": "drive"}
             self.sweeps = []
             self.sync_cursors: dict = {}   # source -> {"page_token": ..., "owner_email": ...}
+            self.prior_inventory = None    # None = no prior completed scan to reconstruct from
         def get_schedule(self): return dict(self.schedule)
         def get_ai_enabled(self): return False
         def save_scan(self, report): calls["saved"] += 1; return "sid-1"
@@ -47,13 +48,19 @@ def core_mod(monkeypatch):
         def record_sweep_outcome(self, **kw): self.sweeps.append(kw)
         # PRD Phase 3: mirrors Store.get_sync_cursor/save_sync_cursor. A fresh instance starts
         # with no cursor, so every pre-existing test below (none of which pre-seeds one) takes
-        # _drive_sync_gate's "no baseline yet — seed one, never skip" branch and runs exactly as
+        # _drive_sync_plan's "no baseline yet — seed one, never skip" branch and runs exactly as
         # before this feature existed.
         def get_sync_cursor(self, source):
             return dict(self.sync_cursors[source]) if source in self.sync_cursors else None
         def save_sync_cursor(self, source, owner_email, page_token):
             self.sync_cursors[source] = {"source": source, "owner_email": owner_email,
                                          "page_token": page_token}
+        # Mirrors Store.latest_scan_inventory_items. None by default, so a test that only wants
+        # to prove "a real change triggers a full scan" (not exercise reconstruction itself —
+        # see test_drive_changes_sync.py for that) gets exactly today's fallback: no prior scan
+        # to reconstruct from, so _drive_sync_plan returns drive_delta=None.
+        def latest_scan_inventory_items(self, owner, source):
+            return self.prior_inventory
 
     store = _Store()
     monkeypatch.setattr(core, "get_store", lambda: store)
@@ -62,19 +69,21 @@ def core_mod(monkeypatch):
 
     def _scan(src, **kw):
         calls["scans"].append(src)
+        calls.setdefault("drive_deltas", []).append(kw.get("drive_delta"))
         if src == "drive":
             raise RuntimeError("HttpError 403 ... Request had insufficient authentication scopes.")
         return {"summary": {"files": 1}}
 
     monkeypatch.setattr(core, "run_scan", _scan)
 
-    # Hermetic doubles for _drive_sync_gate's own calls (it imports these from `scanner` at
+    # Hermetic doubles for _drive_sync_plan's own calls (it imports these from `scanner` at
     # call time) — no real Drive API access from this test module. Default: seeding a fresh
-    # cursor returns "seed-token", and a check against an existing cursor finds no changes;
-    # individual tests override drive_changes_since to exercise the other branches.
+    # cursor returns "seed-token", and a check against an existing cursor finds no changes
+    # (empty list, empty set); individual tests override drive_changes_since to exercise the
+    # other branches.
     monkeypatch.setattr(scanner, "_drive_service", lambda token=None: object())
     monkeypatch.setattr(scanner, "drive_start_page_token", lambda svc: "seed-token")
-    monkeypatch.setattr(scanner, "drive_changes_since", lambda svc, token: ([], 0, "next-token"))
+    monkeypatch.setattr(scanner, "drive_changes_since", lambda svc, token: ([], set(), "next-token"))
     return core, store, calls
 
 
@@ -185,7 +194,7 @@ def test_a_cursor_with_no_changes_skips_the_scan_entirely(core_mod, monkeypatch)
     import scanner
     core, store, calls = core_mod
     store.sync_cursors["drive"] = {"page_token": "tok-1"}
-    monkeypatch.setattr(scanner, "drive_changes_since", lambda svc, token: ([], 0, "tok-2"))
+    monkeypatch.setattr(scanner, "drive_changes_since", lambda svc, token: ([], set(), "tok-2"))
     core._do_scheduled_scan()
     assert calls["scans"] == [], "nothing changed — a full re-scan must not run"
     assert calls["saved"] == 0
@@ -198,7 +207,7 @@ def test_a_skipped_sweep_is_recorded_distinctly_from_a_zero_file_scan(core_mod, 
     import scanner
     core, store, calls = core_mod
     store.sync_cursors["drive"] = {"page_token": "tok-1"}
-    monkeypatch.setattr(scanner, "drive_changes_since", lambda svc, token: ([], 0, "tok-2"))
+    monkeypatch.setattr(scanner, "drive_changes_since", lambda svc, token: ([], set(), "tok-2"))
     core._do_scheduled_scan()
     rec = store.sweeps[-1]
     assert rec["ok"] is True
@@ -207,22 +216,48 @@ def test_a_skipped_sweep_is_recorded_distinctly_from_a_zero_file_scan(core_mod, 
     assert rec.get("scan_id") is None
 
 
-def test_a_cursor_with_changes_runs_the_full_scan(core_mod, monkeypatch):
+def test_a_cursor_with_changes_but_no_prior_scan_runs_a_full_fresh_scan(core_mod, monkeypatch):
+    """A cursor exists (so a change-check was possible) but latest_scan_inventory_items is None
+    — every prior sweep since the cursor was seeded must have failed before saving. Nothing to
+    reconstruct FROM, so this falls back to today's full listing (drive_delta=None), not a
+    reconstruction built on nothing."""
     import scanner
     core, store, calls = core_mod
     store.sync_cursors["drive"] = {"page_token": "tok-1"}
     monkeypatch.setattr(scanner, "drive_changes_since",
-                        lambda svc, token: ([{"name": "changed.pdf"}], 0, "tok-2"))
+                        lambda svc, token: ([{"id": "F1", "name": "changed.pdf"}], set(), "tok-2"))
     core._do_scheduled_scan()
-    assert calls["scans"] == ["drive"], "a real change must trigger the full re-scan, not a skip"
+    assert calls["scans"] == ["drive"], "a real change must trigger a scan, not a skip"
+    assert calls["drive_deltas"] == [None], "no prior inventory to reconstruct from"
     assert store.sync_cursors["drive"]["page_token"] == "tok-2"
 
 
-def test_a_cursor_with_removed_files_also_runs_the_full_scan(core_mod, monkeypatch):
+def test_a_cursor_with_changes_and_a_prior_scan_reconstructs_instead_of_a_fresh_listing(
+        core_mod, monkeypatch):
     import scanner
     core, store, calls = core_mod
     store.sync_cursors["drive"] = {"page_token": "tok-1"}
-    monkeypatch.setattr(scanner, "drive_changes_since", lambda svc, token: ([], 3, "tok-2"))
+    store.prior_inventory = [{"file": "unchanged.pdf", "drive_file_id": "F0", "mime": "application/pdf",
+                             "size_kb": 1, "checksum": "x", "created_at": None,
+                             "source_modified": None, "owner": None, "parent_folder": None}]
+    changed_file = {"id": "F1", "name": "changed.pdf", "mimeType": "application/pdf"}
+    monkeypatch.setattr(scanner, "drive_changes_since",
+                        lambda svc, token: ([changed_file], set(), "tok-2"))
+    core._do_scheduled_scan()
+    assert calls["scans"] == ["drive"]
+    [delta] = calls["drive_deltas"]
+    assert delta is not None, "a prior scan exists — must reconstruct, not fall back to a full listing"
+    assert delta["changed"] == [changed_file]
+    assert delta["removed_ids"] == set()
+    assert [f["id"] for f in delta["prior_files"]] == ["F0"]
+
+
+def test_a_cursor_with_removed_files_also_triggers_a_scan(core_mod, monkeypatch):
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive"] = {"page_token": "tok-1"}
+    monkeypatch.setattr(scanner, "drive_changes_since",
+                        lambda svc, token: ([], {"F1", "F2", "F3"}, "tok-2"))
     core._do_scheduled_scan()
     assert calls["scans"] == ["drive"], "a removal is still a change — must not be skipped"
 
