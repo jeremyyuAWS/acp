@@ -1072,8 +1072,16 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
             workspace as brand new. `pendingScanLoad` (App.jsx: `!run && !!overviewPreview` — the
             SAME bootstrap snapshot OverviewPreviewCard/AssessPreviewCard already render from, so
             this needed no new fetch) is the one signal that distinguishes the two: bootstrap found
-            a real scan, its full payload just hasn't arrived. */}
-        {pendingScanLoad && (
+            a real scan, its full payload just hasn't arrived.
+
+            `&& !busy` (stakeholder UX review, 2026-08-30): pendingScanLoad and a freshly-started
+            scan are not mutually exclusive — clicking "Re-scan" sets `busy` true and starts
+            polling `progress` well before App.jsx's own `run` re-fetch resolves, so both this
+            placeholder AND the ProcessingStatusPanel queued card below could render at once,
+            contradicting each other ("loading" next to "waiting for a worker" for a job nothing
+            has started on). The queued card already answers the question this placeholder exists
+            to answer for that window, so it takes over instead of doubling it. */}
+        {pendingScanLoad && !busy && (
           <div className="muted">Loading your inventory…</div>
         )}
         {!pendingScanLoad && (busy || !(run?.discovered_at || run?.status === 'discovered'))
@@ -1126,7 +1134,18 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               Choose SharePoint site…
             </button>
           )}
-          <button disabled={busy} onClick={() => onScan('all')}>{busy ? 'scanning…' : 'Re-scan all sources'}</button>
+          {/* "scanning…" while genuinely queued (nothing has been claimed yet) claimed active work
+              this button is not doing — the same "loading"/"scanning" language the queued card
+              above was found saying at once with "waiting for a worker" (stakeholder UX review,
+              2026-08-30). Same claimed signal ProcessingStatusPanel's own derivation already
+              reads (jobs.locked_at via discoverJobInfo), so the two can't disagree. */}
+          <button disabled={busy} onClick={() => onScan('all')}>
+            {busy
+              ? (progress?.phase === 'queued'
+                  && !(discoverJobInfo && discoverJobInfo.status && discoverJobInfo.status !== 'queued')
+                  ? 'Queued' : 'scanning…')
+              : 'Re-scan all sources'}
+          </button>
         </div>
       </div>
 

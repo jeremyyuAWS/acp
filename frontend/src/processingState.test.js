@@ -18,6 +18,16 @@ describe('deriveProcessingState', () => {
     expect(d.recommendedAction).toBe('start_workers')
     expect(d.severity).toBe('blocked')
     expect(d.pickupUnavailable).toBe(true)
+    expect(d.noWorkerAvailable).toBe(true)
+  })
+
+  it('also sets noWorkerAvailable in the waiting branch when the queue-estimate route reports it', () => {
+    const d = deriveProcessingState({
+      phase: 'running', completedCount: 0, totalCount: 12, processingCount: 0, waitingCount: 12,
+      pickupEstimate: { available: true, state: 'no_worker_available' },
+    })
+    expect(d.state).toBe('waiting')
+    expect(d.noWorkerAvailable).toBe(true)
   })
 
   it('reports stalled distinctly from no_capacity, even when noCapacity would also be checked', () => {

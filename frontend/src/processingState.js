@@ -37,6 +37,7 @@ export function deriveProcessingState({
       recommendedAction: 'start_workers',
       severity: 'blocked',
       pickupUnavailable: true,
+      noWorkerAvailable: true,
     }
   }
   if (stalled) {
@@ -84,5 +85,9 @@ export function deriveProcessingState({
     recommendedAction: null,
     severity: 'waiting',
     pickupUnavailable: !pickupRange,
+    // The backend queue-estimate route's own independent capacity check — can catch capacity
+    // dropping to zero after this branch was reached (the `noCapacity` branch above only ever
+    // sees the workerSnap poll's LAST value, not a change mid-queue).
+    noWorkerAvailable: pickupEstimate?.state === 'no_worker_available',
   }
 }

@@ -43,6 +43,15 @@ describe('Discover while the scan payload is still loading (pendingScanLoad)', (
     expect(text()).not.toMatch(/\bdocuments\b\s*discovered across/)
   })
 
+  it('suppresses "Loading your inventory…" once a freshly-started scan is already busy — the queued card covers that window instead', async () => {
+    // Live 2026-08-30: clicking "Re-scan" sets busy true and starts polling `progress` well before
+    // App.jsx's own `run` re-fetch resolves, so pendingScanLoad and a freshly-started scan are NOT
+    // mutually exclusive. Without this the placeholder and the queued ProcessingStatusPanel below
+    // rendered at once, contradicting each other ("loading" beside "waiting for a worker").
+    const c = await render({ pendingScanLoad: true, busy: true })
+    expect(text()).not.toContain('Loading your inventory…')
+  })
+
   it('does not render DISCOVERY RESULTS or its zero-valued tiles when pendingScanLoad is true', async () => {
     const c = await render({ pendingScanLoad: true })
     expect(c.querySelector('#discover-inventory-table')).toBeFalsy()

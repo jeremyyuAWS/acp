@@ -22,7 +22,7 @@ const SEVERITY_COLORS = {
 
 export default function ProcessingStatusPanel({ derived, onStartWorkers, onRerun, onViewMonitor }) {
   const { state, headline, detail, recommendedAction, severity, pickupUnavailable, live,
-          facts, next, comingSoon } = derived || {}
+          facts, next, comingSoon, noWorkerAvailable } = derived || {}
   if (!state || state === 'idle') return null
   const c = SEVERITY_COLORS[severity] || SEVERITY_COLORS.info
 
@@ -104,9 +104,17 @@ export default function ProcessingStatusPanel({ derived, onStartWorkers, onRerun
       {/* Driven by the derivation, not a hardcoded state-name list here: a THIRD caller
           (Remediate) will have its own state vocabulary, and this component should not need to
           know it. Each deriveXState() sets this explicitly on the states where it applies. */}
+      {/* Two genuinely different reasons pickup is unavailable, worth saying apart rather than
+          folding into one caveat (stakeholder UX review, 2026-08-30): no capacity exists to pick
+          the job up at all, versus capacity exists but there isn't yet enough recent-completion
+          history to trust a range. A caller sets noWorkerAvailable explicitly (derived from the
+          same signal that drives its own "no worker"/"waiting for a worker" branch) — absent that,
+          this defaults to the history-gap wording, matching every current caller's actual case. */}
       {pickupUnavailable && (
         <div className="muted" style={{ marginTop: 4, fontSize: 11.5, fontStyle: 'italic' }}>
-          Pickup time not available — not enough completed-job history is tracked yet to estimate one.
+          {noWorkerAvailable
+            ? 'Pickup estimate unavailable. No compatible worker is currently ready.'
+            : 'Pickup estimate is still being calculated. ACP needs more recent history before it can provide a reliable range.'}
         </div>
       )}
     </div>

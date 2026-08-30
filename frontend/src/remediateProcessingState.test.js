@@ -47,6 +47,14 @@ describe('deriveRemediateProcessingState', () => {
     expect(d.pickupUnavailable).toBe(false)
   })
 
+  it('sets noWorkerAvailable when the queue-estimate route reports no_worker_available', () => {
+    const d = deriveRemediateProcessingState({
+      remBusy: true, remProg: { total: 5, done: 0, latest: null, failed: 0 },
+      pickupEstimate: { available: true, state: 'no_worker_available' },
+    })
+    expect(d.noWorkerAvailable).toBe(true)
+  })
+
   it('stays pickupUnavailable for insufficient_history — no confident-looking guess from thin data', () => {
     const d = deriveRemediateProcessingState({
       remBusy: true, remProg: { total: 5, done: 0, latest: null, failed: 0 },
