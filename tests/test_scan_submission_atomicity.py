@@ -87,15 +87,19 @@ def test_a_failed_submission_leaves_the_running_scan_alone(gated_client, isolate
     before = {r["id"] for r in isolated_store.list_scans_including_discovered(owner=OWNER)}
     r = gated_client(OWNER).post("/scans?source=local&queue=true&fanout=true")
 
-    # #1045's handler turns PoolError into this contract. Its body promises "No changes were
-    # made", and its own docstring names the single case it could not honour: "a handler that
-    # already committed an earlier, separate cursor() call before a LATER one hits this". The
-    # supersede-then-enqueue ordering WAS that case, on the most consequential route there is,
-    # which is why this assertion and the one below belong in the same test — the 503 is only
-    # honest because the write that used to precede it no longer does.
+    # #1045's handler turns PoolError into this contract, and this PR's ordering fix is what
+    # makes the OUTCOME below true: the caller's running scan survives a rejected submission.
+    #
+    # The body deliberately does NOT claim "No changes were made" here, and this assertion
+    # changed when that was scoped (tests/test_overload_message_scope.py). The handler cannot
+    # know whether an earlier cursor() in the same request already committed — on this very
+    # route, scan_event() writes AFTER enqueue_scan commits — so on a mutating request the
+    # honest answer is that the outcome is unknown. The client half agrees: submitIntent's
+    # outcomeIsUncertain() treats a 503 as uncertain and retains the idempotency key, so a retry
+    # resolves to any job that does exist rather than creating a second one.
     assert r.status_code == 503, f"expected the pool-exhaustion contract, got {r.status_code}"
     assert r.json()["detail"] == "database_busy"
-    assert "No changes were made" in r.json()["message"]
+    assert r.json()["changes"] == "unknown"
 
     # The point of the whole test: the user's run is still theirs.
     assert isolated_store.get_scan(s1, owner=OWNER)["run"]["status"] == "running", (
