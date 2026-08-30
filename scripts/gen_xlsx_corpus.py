@@ -76,6 +76,54 @@ def _say(ws, ref: str, text: str, *, colour: str = INK, fill: str = PAPER):
     ws[ref].fill = PatternFill("solid", fgColor=fill)
 
 
+# A 1x1 PNG, inline. Keeps a binary asset out of the repo — the fixture needs an image to embed,
+# not a picture of anything, and a file whose provenance a reviewer has to take on trust is
+# exactly what a generated corpus avoids.
+_PNG_1PX = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000d49444154789c6360f8cf0000010101001b0b8b5c0000000049454e44ae426082")
+
+
+def _inject(path: Path, parts: dict[str, str]) -> None:
+    """Rewrite the saved workbook with extra zip parts.
+
+    openpyxl cannot author a DrawingML shape or a form-control part, and both are what their
+    detectors read. Post-processing the zip is the honest way to reach them — the .docx generator
+    already does the same thing for its own unreachable case (`_strip_title`). The alternative is
+    leaving those criteria uncovered because a library lacks a setter, which is a fact about
+    openpyxl rather than about ACP.
+    """
+    import shutil
+    import tempfile
+    import zipfile
+    tmp = Path(tempfile.mkdtemp()) / path.name
+    with zipfile.ZipFile(path) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            zout.writestr(item, zin.read(item.filename))
+        for name, body in parts.items():
+            zout.writestr(name, body)
+    shutil.move(str(tmp), str(path))
+
+
+def _shape_drawing(outline: str, fill: str) -> str:
+    """One DrawingML shape: a solid `outline` on a solid `fill`. xlsx_nontext_contrast_checks
+    reports the WORST outline-on-fill ratio under 3:1 across the drawing parts."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"'
+        ' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+        "<xdr:twoCellAnchor><xdr:sp><xdr:spPr>"
+        f'<a:solidFill><a:srgbClr val="{fill}"/></a:solidFill>'
+        f'<a:ln w="12700"><a:solidFill><a:srgbClr val="{outline}"/></a:solidFill></a:ln>'
+        "</xdr:spPr></xdr:sp></xdr:twoCellAnchor></xdr:wsDr>")
+
+
+_CTRL_PROPS = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    '<formControlPr xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"'
+    ' objectType="Drop" dropStyle="combo" dx="16" fmlaLink="$B$1" sel="0" val="0"/>')
+
+
 # ── 1.4.3 Contrast (Minimum) ─────────────────────────────────────────────────────
 
 def f_contrast_fail(wb, ws):
@@ -166,6 +214,68 @@ def f_icon_set_ok(wb, ws):
     return {"1.4.1": "REVIEW"}, "an iconSet — colour PLUS a shape, must not be flagged (adversarial)"
 
 
+# ── 1.1.1 Non-text Content ───────────────────────────────────────────────────────
+
+def f_image_no_alt(wb, ws):
+    import tempfile
+    from openpyxl.drawing.image import Image as XLImage
+    ws.title = "Chart"
+    _say(ws, "A1", "Revenue by region")
+    png = Path(tempfile.mkdtemp()) / "px.png"
+    png.write_bytes(_PNG_1PX)
+    ws.add_image(XLImage(str(png)), "C3")
+    return {"1.1.1": "REVIEW"}, "an embedded image with no descr — nothing for a screen reader"
+
+
+def f_no_image_ok(wb, ws):
+    ws.title = "Chart"
+    _say(ws, "A1", "Revenue by region")
+    _say(ws, "A2", "North 412  ·  South 388  ·  East 501")
+    # A sheet with no non-text content at all must not produce a 1.1.1 finding. The obvious
+    # adversarial case, and the one a "flag every sheet" regression would trip.
+    return {"1.1.1": "REVIEW"}, "no images at all — must not be flagged (adversarial)"
+
+
+# ── 1.4.11 Non-text Contrast ─────────────────────────────────────────────────────
+
+def f_shape_faint_outline(wb, ws):
+    ws.title = "Diagram"
+    _say(ws, "A1", "Process overview")
+    # #C8C8C8 on #FFFFFF ≈ 1.8:1, under the 3:1 a meaningful boundary needs.
+    return ({"1.4.11": "REVIEW"}, "a shape outline #C8C8C8 on white ≈ 1.8:1, under 3:1",
+            {"xl/drawings/drawing1.xml": _shape_drawing("C8C8C8", "FFFFFF")})
+
+
+def f_shape_strong_outline_ok(wb, ws):
+    ws.title = "Diagram"
+    _say(ws, "A1", "Process overview")
+    # #1A1F26 on white ≈ 15:1 — the same shape, drawn visibly. Holds the detector to reporting
+    # only outlines that are actually too faint, rather than every shape it can find.
+    return ({"1.4.11": "REVIEW"}, "the same shape at ≈15:1 — must not be flagged (adversarial)",
+            {"xl/drawings/drawing1.xml": _shape_drawing("1A1F26", "FFFFFF")})
+
+
+# ── 4.1.2 Name, Role, Value / 2.1.2 No Keyboard Trap ─────────────────────────────
+
+def f_form_control(wb, ws):
+    ws.title = "Form"
+    _say(ws, "A1", "Department")
+    # ONE fixture, TWO criteria: an embedded control is evidence for both the accessible-name
+    # question (4.1.2) and the keyboard-trap question (2.1.2), and the detector reports both.
+    # Neither can be settled from the file alone, which is why both are review-lane.
+    return ({"4.1.2": "REVIEW", "2.1.2": "REVIEW"},
+            "an xlsx form control — name/role and keyboard behaviour both need a human",
+            {"xl/ctrlProps/ctrlProp1.xml": _CTRL_PROPS})
+
+
+def f_no_controls_ok(wb, ws):
+    ws.title = "Form"
+    _say(ws, "A1", "Department")
+    _say(ws, "A2", "Finance")
+    return ({"4.1.2": "REVIEW", "2.1.2": "REVIEW"},
+            "a static sheet with no controls — must not be flagged (adversarial)")
+
+
 FIXTURES = [
     ("contrast-fail",        f_contrast_fail,          "violation"),
     ("contrast-ok",          f_contrast_ok,            "clean"),
@@ -176,11 +286,17 @@ FIXTURES = [
     ("sheet-tabs-named-ok",  f_named_tabs_ok,          "adversarial"),
     ("colour-scale-only",    f_colour_scale,           "violation"),
     ("colour-icon-set-ok",   f_icon_set_ok,            "adversarial"),
+    ("image-no-alt",         f_image_no_alt,           "violation"),
+    ("no-image-ok",          f_no_image_ok,            "adversarial"),
+    ("shape-faint-outline",  f_shape_faint_outline,    "violation"),
+    ("shape-strong-outline-ok", f_shape_strong_outline_ok, "adversarial"),
+    ("form-control",         f_form_control,           "violation"),
+    ("no-controls-ok",       f_no_controls_ok,         "adversarial"),
 ]
 
 # The criteria this corpus declares. Kept explicit so gen_fixture_coverage and the tests agree
 # with the generator about what it claims, rather than each deriving it separately.
-DECLARED = ("1.4.1", "1.4.3", "2.4.4", "2.4.6")
+DECLARED = ("1.1.1", "1.4.1", "1.4.11", "1.4.3", "2.1.2", "2.4.4", "2.4.6", "4.1.2")
 
 
 def _validate(name: str, expectations: dict[str, str]) -> list[str]:
@@ -204,9 +320,16 @@ def build_all(docs: Path) -> tuple[list[dict], list[str]]:
     manifest, problems = [], []
     for name, build, kind in FIXTURES:
         wb, ws = _wb()
-        expectations, note = build(wb, ws)
+        # A builder returns (expectations, note) or, when the case needs a zip part openpyxl
+        # cannot author, (expectations, note, parts). Unpacked by length rather than by a flag
+        # so a builder reads the same either way.
+        built = build(wb, ws)
+        expectations, note = built[0], built[1]
+        parts = built[2] if len(built) > 2 else None
         path = docs / f"{name}.xlsx"
         wb.save(path)
+        if parts:
+            _inject(path, parts)
         problems += _validate(name, expectations)
         manifest.append({"file": f"docs/{name}.xlsx", "name": name, "kind": kind,
                          "format": FMT, "expect": expectations, "note": note})

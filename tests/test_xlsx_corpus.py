@@ -93,6 +93,10 @@ def test_no_review_lane_fixture_claims_pass(corpus):
     ("link-vague", "2.4.4"),
     ("sheet-tabs-default", "2.4.6"),
     ("colour-scale-only", "1.4.1"),
+    ("image-no-alt", "1.1.1"),
+    ("shape-faint-outline", "1.4.11"),
+    ("form-control", "4.1.2"),
+    ("form-control", "2.1.2"),
 ])
 def test_each_violation_fixture_is_actually_detected(corpus, name, sc):
     """Without this, a declaration is a hope. Coverage is counted from declarations, so an
@@ -110,6 +114,10 @@ def test_each_violation_fixture_is_actually_detected(corpus, name, sc):
     ("sheet-tabs-named-ok", "2.4.6"),
     ("colour-icon-set-ok", "1.4.1"),
     ("contrast-ok", "1.4.3"),
+    ("no-image-ok", "1.1.1"),
+    ("shape-strong-outline-ok", "1.4.11"),
+    ("no-controls-ok", "4.1.2"),
+    ("no-controls-ok", "2.1.2"),
 ])
 def test_each_adversarial_fixture_stays_silent(corpus, name, sc):
     """The half that separates a detector from a regex. A false positive is cheap to ship and
@@ -119,6 +127,25 @@ def test_each_adversarial_fixture_stays_silent(corpus, name, sc):
     assert sc not in got, (
         f"{name} is a false positive on {sc} — it is the case the detector is supposed to let "
         f"through. Detected: {sorted(got)}")
+
+
+def test_one_control_answers_for_both_its_criteria(corpus):
+    """An embedded control is evidence for the accessible-name question AND the keyboard-trap
+    question, and the detector reports both — so one fixture legitimately covers two pairs.
+    Asserted together because a change that dropped either would still pass the other's
+    parametrised case above and look fine."""
+    out, _rows = corpus
+    got = _wcags(out / "docs" / "form-control.xlsx")
+    assert {"4.1.2", "2.1.2"} <= got, f"the control fired only {sorted(got)}"
+
+
+def test_the_faint_outline_is_measured_not_assumed(corpus):
+    """Both shape fixtures carry the SAME shape; only the outline colour differs. If the detector
+    ever started reporting on the presence of a shape rather than on its measured ratio, the
+    adversarial case would fire too — which is the whole distinction 1.4.11 turns on."""
+    out, _rows = corpus
+    assert "1.4.11" in _wcags(out / "docs" / "shape-faint-outline.xlsx")
+    assert "1.4.11" not in _wcags(out / "docs" / "shape-strong-outline-ok.xlsx")
 
 
 def test_the_lone_default_tab_is_the_edge_case_it_claims_to_be(corpus):
