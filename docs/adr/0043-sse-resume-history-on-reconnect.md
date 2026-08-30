@@ -194,7 +194,7 @@ meaning.
 post-reconnect state, and it is theoretical because the next snapshot arrives on the stream's own
 250 ms/1 s cadence regardless.
 
-**Left open, and worth acting on separately: the orphan endpoint.** `GET /scans/{sid}/events` is
+**RESOLVED 2026-08-30 — the orphan endpoint.** `GET /scans/{sid}/events` is
 live, owner-scoped, tested (`tests/test_live_events.py`) and consumed by nothing. Per CLAUDE.md's
 standing convention — *keep retired features in the tree, but write down that they are retired,
 because an orphan you do not write down becomes a lie* — it should either be wired to the Assess
@@ -203,6 +203,23 @@ or explicitly recorded as unmounted, with a test asserting the absence the way
 `discoverUploadRemoved.test.jsx` does for `Upload`. Right now it reads as shipped live-streaming on
 any status list, and it streams to nobody. **That is a separate decision from this one** and is not
 proposed here; it is named because this ADR's research is what surfaced it.
+
+The owner delegated this call and it was made: **option (b), left unmounted with a guard test**
+(`frontend/src/liveEventsStreamUnused.test.js`), because wiring it is not the clear improvement the
+choice was conditioned on. The deciding fact is a cost inversion: the stream's generator calls
+`build_snapshot` — real DB work — every `_STREAM_INTERVAL_S` (**1.0s**) per connected client against
+the poll's **2.0s**, so it is *more* Postgres read load per viewer, plus a held socket and coroutine
+each, in exchange for one second of latency. In a repo that throttled `_maybe_checkpoint` to one
+write per 20s after the 2026-08-26 connection exhaustion, that is the wrong direction. Three further
+costs stack on it: no browser `EventSource` can carry this app's bearer header (so a client means a
+second hand-rolled `fetch`+`ReadableStream` reader), `_MAX_STREAM_ITERS` means a long run outlives
+its own stream and needs reconnect logic the poll does not, and `useLiveSnapshot`'s three documented
+guarantees — sequence guard, fail-soft, refocus-fresh — would each need rebuilding on the stream
+path. This ADR's own finding is the fifth: a snapshot-REPLACE stream buys little over a poll.
+
+The endpoint is kept, not deleted. If the interval is reconciled, the auth-header problem is solved,
+or a genuinely event-sourced stream replaces the snapshot one, wiring becomes live again — and the
+guard test failing is the reminder to delete the test, not a regression.
 
 **Explicitly not decided here.** Whether the Assess running screen should stream rather than poll;
 whether `scan_events` should ever carry per-file rows; and anything about the three streams'
