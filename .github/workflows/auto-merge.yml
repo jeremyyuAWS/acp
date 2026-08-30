@@ -2,11 +2,19 @@ name: Auto-merge on CI green
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, synchronize]
+    types: [opened, reopened, ready_for_review, synchronize, labeled, unlabeled]
 
 jobs:
   enable-auto-merge:
-    if: github.event.pull_request.draft == false
+    # The `hold` label is the escape hatch this workflow didn't have: until now, EVERY non-draft
+    # PR got auto-merge enabled unconditionally, with no way to exempt one short of disabling it
+    # by hand after the fact and racing this workflow's next trigger (synchronize fires on every
+    # push, re-enabling it). Found live 2026-08-30 on #1039/#1040 — both new CI/schema PRs whose
+    # own bodies explicitly asked to be held for human review had auto-merge silently re-armed by
+    # this workflow anyway, because a PR body is not something this workflow reads. A label is:
+    # visible in the PR list, settable by anyone with write access, and — via the `disable-auto-
+    # merge-while-held` job below — actively enforced rather than merely consulted once at open.
+    if: github.event.pull_request.draft == false && !contains(github.event.pull_request.labels.*.name, 'hold')
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -42,3 +50,28 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: gh pr merge --squash --auto "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}"
+
+  disable-auto-merge-while-held:
+    # The other half of the `hold` label: applying it to a PR that ALREADY has auto-merge enabled
+    # (the common case — the label goes on after someone notices, not before the PR is opened)
+    # must actively turn it off, not just skip re-enabling it next time. Fires on `labeled` too,
+    # so this runs the moment the label is added rather than waiting for the next push.
+    if: contains(github.event.pull_request.labels.*.name, 'hold')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: write
+    steps:
+      - name: Generate a token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.AUTOMERGE_APP_ID }}
+          private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
+      - name: Disable squash auto-merge
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        # A PR that never had auto-merge on (or already had it turned off) makes this a documented
+        # no-op (`gh` exits non-zero saying so) — that is success for a "make sure it's off" step,
+        # not a failure to surface.
+        run: gh pr merge "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --disable-auto || true
