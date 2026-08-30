@@ -1148,6 +1148,10 @@ class Store:
         # Reuse the scan_id generated in run_scan() so the Langfuse trace ID
         # and the DB scan_id are the same — enables join in Langfuse by scan_id.
         sid = report.pop("_scan_id", None) or uuid.uuid4().hex[:12]
+        # run_scan()'s hint for populating scan_inventory below (see there) — not part of the
+        # report's public shape, and absent on a report built by hand (most tests), in which
+        # case that step is simply skipped, same as today.
+        _inventory_items = report.pop("_inventory_items", None)
         s = report["summary"]
         # The level this scan was run for. A criterion above it is not assessed (see in_target).
         target = parse_target((report.get("rubric") or {}).get("target") or config_target())
@@ -1252,6 +1256,36 @@ class Store:
                                      classify=f.get("classify"), size_kb=f.get("size_kb"))
         except Exception:
             pass
+        # PRD Phase 3: this MONOLITHIC path (core._do_scheduled_scan, and routes/scans.py's
+        # sync/thread branches when ACP_DEFER_ANALYSIS_TO_ASSESS=0) never wrote scan_inventory
+        # before this — only ADR 0020's deferred discovery path did (handlers._scan_discover's
+        # own `norm`/`inv` construction, which this mirrors over the same raw `_list()` items).
+        # See latest_scan_inventory_items's docstring for what that silently broke: a delta-sync
+        # reconstruction baseline read as a real (empty) prior scan rather than a missing one,
+        # discarding almost the whole estate. Skipped, not just empty, when run_scan gave us
+        # nothing to work with — a report built by hand (most tests) or an empty scan.
+        # Defensively wrapped like the documents-table block above: never fail the scan save
+        # over a secondary write.
+        if _inventory_items:
+            try:
+                import classify as _cls
+                inv_rows = [{"file": it["name"], "drive_file_id": it.get("id"),
+                            "mime": it.get("source_mime"), "path": it.get("path"),
+                            "checksum": it.get("checksum"),
+                            "doc_class": _cls.classify_from_metadata(
+                                it["name"], it.get("source_mime"))["doc_class"],
+                            "created_at": it.get("created_at"),
+                            "source_modified": it.get("source_modified"),
+                            "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
+                            "drive_id": it.get("driveId"),
+                            "drive_account_id": it.get("drive_account_id"),
+                            "size_kb": it.get("size_kb"),
+                            "content_type": it.get("content_type")}
+                           for it in _inventory_items]
+                self.add_inventory(sid, inv_rows)
+            except Exception:
+                logger.warning("save_scan: failed to persist scan_inventory for %s", sid,
+                               exc_info=True)
         return sid
 
     # ── Fan-out scan pipeline (ADR 0007) ──────────────────────────────────────
@@ -1710,12 +1744,30 @@ class Store:
             return self._db.fetchall(cur)
 
     def latest_scan_inventory_items(self, owner: str, source: str) -> list[dict] | None:
-        """The full scan_inventory of the most recent COMPLETED scan for (owner, source) —
-        PRD Phase 3's reconstruction seam: scanner.apply_drive_delta / apply_sp_delta rebuild
-        'the current known estate' from these rows plus a Changes API / Graph delta, without a
-        fresh listing. None when there is no prior completed scan to reconstruct from (the
-        first-ever incremental sweep) — the caller falls back to a full listing in that case,
-        same as core._drive_sync_plan already does for a missing cursor.
+        """The full scan_inventory of the most recent COMPLETED scan for (owner, source) that
+        actually HAS scan_inventory rows — PRD Phase 3's reconstruction seam:
+        scanner.apply_drive_delta / apply_sp_delta rebuild 'the current known estate' from these
+        rows plus a Changes API / Graph delta, without a fresh listing. None when there is no
+        such prior scan to reconstruct from (the first-ever incremental sweep, or every
+        candidate scan_run has no usable inventory) — the caller falls back to a full listing in
+        that case, same as core._drive_sync_plan already does for a missing cursor.
+
+        The EXISTS clause is load-bearing, not an optimization: a scan_runs row with
+        completed_at set does NOT guarantee scan_inventory rows exist for it. The monolithic
+        scan path (core._do_scheduled_scan, and routes/scans.py's sync/thread branches when
+        ACP_DEFER_ANALYSIS_TO_ASSESS=0) persists to file_records via save_scan, which — before
+        this — never wrote scan_inventory at all. Without this clause, the plain 'most recent
+        completed scan' query would return such a scan_run's id, and the second query below
+        would then return `[]` (a REAL empty list, not None) — which every caller here
+        distinguishes from 'no prior scan' and would happily use as a real, if empty, baseline.
+        Found live: this silently discarded almost the whole reconstructed estate on the very
+        first scheduled sweep to run after a prior one had populated no inventory — a
+        near-total, silent undercount, not a crash. Skipping inventory-less scan_runs here means
+        an OLDER scan that did leave usable rows is used instead when one exists, rather than
+        treating a real prior estate as unusable just because the newest run of it produced no
+        inventory. save_scan now also writes scan_inventory (see there), so this should be a
+        non-issue going forward; the guard stays as defense against any scan_runs row already in
+        a database from before that change, and against paths that reach save_scan without it.
 
         `drive_id` is the Graph DRIVE a SharePoint/OneDrive row was listed from (see
         scanner._inv_row) — None for Drive (which has no such concept) and for a OneDrive row
@@ -1735,8 +1787,11 @@ class Store:
         against."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT id FROM scan_runs WHERE owner_email=%s AND source=%s "
-                "AND completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1",
+                "SELECT sr.id FROM scan_runs sr WHERE sr.owner_email=%s AND sr.source=%s "
+                "AND sr.completed_at IS NOT NULL AND EXISTS ("
+                "  SELECT 1 FROM scan_inventory si "
+                "  WHERE si.scan_id = sr.id AND si.drive_file_id IS NOT NULL"
+                ") ORDER BY sr.completed_at DESC LIMIT 1",
                 (owner, source))
             row = self._db.fetchone(cur)
             if not row:
