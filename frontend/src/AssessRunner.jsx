@@ -608,19 +608,36 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                       : assessStartedAt && <span className="muted">Running · {fmtElapsed(nowTick - assessStartedAt)}</span>}
               </div>
             )}
-            {/* Zero-workers warning: only for local pool management, not externally-managed tiers */}
+            {/* Zero-workers warning — LOCAL POOL ONLY, and gated on TOPOLOGY, not health.
+                `workerSnap.workers` is this API container's own in-process pool, which in the
+                split topology (#113) is 0 BY DESIGN — production's readyz reports
+                `pool_size: 12, local_pool: 0`. So that half of the test is permanently true in
+                every real deployment, and the banner used to be held back by nothing but
+                `alive`.
+                Pairing it with `runtime_mode === 'distributed' && alive` conflated TOPOLOGY (is
+                there a separate worker tier?) with HEALTH (is it heartbeating this instant?) —
+                the same defect fixed in Discover.jsx and QueuePanel.jsx. One stale heartbeat poll
+                flipped `alive`, lifted the suppression, and rendered "nothing is processing them"
+                directly beneath the line reporting the job claimed by a worker that was in fact
+                running it. Reproduced in assessStatusContradiction.test.jsx.
+                A distributed tier's health is not this banner's subject: when one exists, the
+                local pool being 0 says nothing about whether work is progressing, so the banner
+                simply does not apply. */}
             {workerSnap && workerSnap.workers === 0 && !workersDown
-              && !(workerSnap.runtime_mode === 'distributed' && workerSnap.alive) && (
+              && workerSnap.runtime_mode !== 'distributed' && (
               <div role="alert" style={{ margin: '8px 0', padding: '10px 14px', borderRadius: 8,
                    fontSize: 13, background: '#FBE9E7', border: '1px solid #E7B4AC', color: '#8A2A20',
                    display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                 <span>⛔ <b>No local workers active</b> — {(liveTotal || docs.length).toLocaleString()} documents are queued but nothing is processing them.</span>
-                <button onClick={() => adjustWorkers(+1)} disabled={workerBusy}
-                        style={{ padding: '4px 12px', borderRadius: 5, border: '1px solid #C0392B',
-                                 background: '#C0392B', color: '#fff', fontSize: 12, fontWeight: 600,
-                                 cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                  Start {workerSnap.suggested ?? 4} workers
-                </button>
+                {/* The inline "Start N workers" button is deliberately gone. Choosing worker
+                    concurrency is an infrastructure decision, and the worker-provisioning PRD is
+                    explicit that no ordinary-user surface should expose one. The remedy is not
+                    removed, only moved to where an operator already manages it — adjustWorkers()
+                    and setWorkers stay in this file for Settings' own control, so restoring this
+                    button is one line if that decision is reversed. */}
+                <span className="muted" style={{ fontSize: 12 }}>
+                  Worker capacity is managed in Settings → Worker Configuration.
+                </span>
               </div>
             )}
             {workerSnap && workerSnap.workers > 0 && assessStartedAt && (() => {
