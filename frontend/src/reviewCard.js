@@ -285,7 +285,10 @@ export function buildEvidenceCard(item, diffs = []) {
     // The proposals themselves + their rationale, so the card can show WHY, not just what.
     proposal,
     // { track: auto|assisted|human, action: 'Approve & Apply'|…, badge } — the primary CTA.
-    track: remediationTrack({ sc }),
+    // `fmt` was already computed above and was NOT being passed — so the badge and primary
+    // action were decided without knowing the file's format, for a question whose answer
+    // differs by format on eleven criteria.
+    track: remediationTrack({ sc, fmt }),
     // { level: {key,label,rank}, basis } — the WHY, never a fabricated %. A proposal awaiting
     // approval is never High: nothing an AI proposed is trusted until a human accepts it.
     confidence: confidenceForFinding({ sc, proposal }),
