@@ -507,6 +507,72 @@ def f_image_of_text_logo_ok(path: Path):
             "so a finding here is a false positive")
 
 
+
+# ── 3.1.2 Language of Parts — decided by the prose, like 1.3.3 ──────────────────
+# textchecks.detect_language_parts reads EXTRACTED TEXT: it needs at least two segments of
+# >= _MIN_SEG_WORDS (12) real words, in at least two confidently-detected languages, and it
+# reports the passages whose language the document never identifies. The words are the fixture
+# and the page is the container, so the wording is identical across the .xlsx, .pptx and
+# .pdf corpora — see tests/test_language_parts_corpus.py.
+#
+# THE CONTROL IS MONOLINGUAL, NOT "THE SAME DOCUMENT WITH THE FRENCH MARKED", and on two of the
+# three formats that is forced rather than chosen. office_structure.language_marked_spans returns
+# {} for .xlsx and .pdf: SpreadsheetML's rich-text run properties have no language element at
+# all, and PDF's /Lang structure-tree walk is not built. Marking is therefore unrepresentable
+# there, and a "marked" fixture would fail 3.1.2 exactly like the violation — measured, not
+# assumed. .pptx CAN carry the mark, so it gets a third fixture proving that a write clears the
+# criterion; the other two would be asserting a capability the format does not have.
+LANG_EN_BODY = (
+    "The benefits office publishes a summary of every plan option before the enrollment window opens.",
+    "Employees may change their elections at any point during the month without providing a reason.",
+    "Questions about eligibility should be directed to the benefits office rather than to a manager.",
+)
+LANG_FR_PASSAGE = ("Le bureau des avantages sociaux publie chaque annee un resume complet de "
+                   "toutes les options offertes aux employes de la region.")
+# Same length and register as the French passage, so the control differs by LANGUAGE and nothing
+# else — a shorter filler would fall under the 12-word floor and be skipped rather than judged.
+LANG_EN_TAIL = ("Enrollment closes at the end of the month for every employee in every "
+                "participating region.")
+
+
+def _lang_page(path: Path, lines) -> None:
+    from reportlab.lib.colors import HexColor
+    from reportlab.pdfgen import canvas
+    c = canvas.Canvas(str(path), pagesize=(560, 400))
+    c.setFillColor(HexColor(PAPER))
+    c.rect(0, 0, 560, 400, stroke=0, fill=1)
+    c.setFillColor(HexColor(INK))
+    c.setFont("Helvetica", 9)
+    y = 370
+    for line in lines:
+        words, buf = line.split(), ""
+        for w in words:
+            if len(buf) + len(w) > 85:
+                c.drawString(30, y, buf)
+                y -= 14
+                buf = w
+            else:
+                buf = (buf + " " + w).strip()
+        c.drawString(30, y, buf)
+        y -= 22
+    c.save()
+
+
+def f_language_parts(path: Path):
+    _lang_page(path, list(LANG_EN_BODY) + [LANG_FR_PASSAGE])
+    return ({"3.1.2": "FAIL"},
+            "an English page with an unmarked French paragraph — a screen reader pronounces it "
+            "with English phonetics and it is unintelligible")
+
+
+def f_language_parts_ok(path: Path):
+    _lang_page(path, list(LANG_EN_BODY) + [LANG_EN_TAIL])
+    return ({"3.1.2": "REVIEW"},
+            "the same page entirely in one language (adversarial). Monolingual rather than "
+            "marked because PDF's /Lang structure-tree walk is not built, so there is nowhere "
+            "a mark could be read from")
+
+
 FIXTURES = [
     ("untagged-document",       f_untagged_document,       "violation"),
     ("tagged-document-ok",      f_tagged_document_ok,      "adversarial"),
@@ -519,6 +585,8 @@ FIXTURES = [
     ("figure-no-alt",           f_figure_no_alt,           "violation"),
     ("image-of-text",           f_image_of_text,           "violation"),
     ("image-of-text-logo-ok",   f_image_of_text_logo_ok,   "adversarial"),
+    ("language-parts",          f_language_parts,          "violation"),
+    ("language-parts-ok",       f_language_parts_ok,       "adversarial"),
     ("figure-with-alt-ok",      f_figure_with_alt_ok,      "adversarial"),
     ("link-colour-only",        f_link_colour_only,        "violation"),
     ("link-underlined-ok",      f_link_underlined_ok,      "adversarial"),
@@ -537,7 +605,7 @@ FIXTURES = [
 ]
 
 DECLARED = ("1.1.1", "1.3.1", "1.3.3", "1.4.1", "1.4.11", "1.4.3", "1.4.5", "2.4.2",
-            "2.4.3", "2.4.4", "2.4.6", "3.1.1", "4.1.2")
+            "2.4.3", "2.4.4", "2.4.6", "3.1.1", "3.1.2", "4.1.2")
 
 
 def _stamp(path: Path, title: str | None, lang: str | None,

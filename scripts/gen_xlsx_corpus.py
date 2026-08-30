@@ -461,6 +461,54 @@ def f_image_of_text_logo_ok(wb, ws):
             "finding here is a false positive")
 
 
+
+# ── 3.1.2 Language of Parts — decided by the prose, like 1.3.3 ──────────────────
+# textchecks.detect_language_parts reads EXTRACTED TEXT: it needs at least two segments of
+# >= _MIN_SEG_WORDS (12) real words, in at least two confidently-detected languages, and it
+# reports the passages whose language the document never identifies. The words are the fixture
+# and the sheet is the container, so the wording is identical across the .xlsx, .pptx and
+# .pdf corpora — see tests/test_language_parts_corpus.py.
+#
+# THE CONTROL IS MONOLINGUAL, NOT "THE SAME DOCUMENT WITH THE FRENCH MARKED", and on two of the
+# three formats that is forced rather than chosen. office_structure.language_marked_spans returns
+# {} for .xlsx and .pdf: SpreadsheetML's rich-text run properties have no language element at
+# all, and PDF's /Lang structure-tree walk is not built. Marking is therefore unrepresentable
+# there, and a "marked" fixture would fail 3.1.2 exactly like the violation — measured, not
+# assumed. .pptx CAN carry the mark, so it gets a third fixture proving that a write clears the
+# criterion; the other two would be asserting a capability the format does not have.
+LANG_EN_BODY = (
+    "The benefits office publishes a summary of every plan option before the enrollment window opens.",
+    "Employees may change their elections at any point during the month without providing a reason.",
+    "Questions about eligibility should be directed to the benefits office rather than to a manager.",
+)
+LANG_FR_PASSAGE = ("Le bureau des avantages sociaux publie chaque annee un resume complet de "
+                   "toutes les options offertes aux employes de la region.")
+# Same length and register as the French passage, so the control differs by LANGUAGE and nothing
+# else — a shorter filler would fall under the 12-word floor and be skipped rather than judged.
+LANG_EN_TAIL = ("Enrollment closes at the end of the month for every employee in every "
+                "participating region.")
+
+
+def _lang_sheet(ws, lines):
+    ws.title = "Notice"
+    for i, line in enumerate(lines, start=1):
+        _say(ws, f"A{i}", line)
+
+
+def f_language_parts(wb, ws):
+    _lang_sheet(ws, list(LANG_EN_BODY) + [LANG_FR_PASSAGE])
+    return ({"3.1.2": "FAIL"},
+            "an English notice with an unmarked French paragraph — a screen reader pronounces it "
+            "with English phonetics and it is unintelligible")
+
+
+def f_language_parts_ok(wb, ws):
+    _lang_sheet(ws, list(LANG_EN_BODY) + [LANG_EN_TAIL])
+    return ({"3.1.2": "REVIEW"},
+            "the same notice entirely in one language (adversarial). Monolingual rather than "
+            "marked because SpreadsheetML has no per-run language element to mark WITH")
+
+
 FIXTURES = [
     ("sensory-instruction",  f_sensory_instruction,    "violation"),
     ("sensory-instruction-ok", f_sensory_instruction_ok, "adversarial"),
@@ -480,6 +528,8 @@ FIXTURES = [
     ("image-no-alt",         f_image_no_alt,           "violation"),
     ("image-of-text",        f_image_of_text,          "violation"),
     ("image-of-text-logo-ok", f_image_of_text_logo_ok, "adversarial"),
+    ("language-parts",        f_language_parts,         "violation"),
+    ("language-parts-ok",     f_language_parts_ok,      "adversarial"),
     ("no-image-ok",          f_no_image_ok,            "adversarial"),
     ("shape-faint-outline",  f_shape_faint_outline,    "violation"),
     ("shape-strong-outline-ok", f_shape_strong_outline_ok, "adversarial"),
@@ -490,7 +540,7 @@ FIXTURES = [
 # The criteria this corpus declares. Kept explicit so gen_fixture_coverage and the tests agree
 # with the generator about what it claims, rather than each deriving it separately.
 DECLARED = ("1.1.1", "1.3.3", "1.4.1", "1.4.11", "1.4.3", "1.4.5", "2.1.2", "2.4.4",
-            "2.4.6", "4.1.2")
+            "2.4.6", "3.1.2", "4.1.2")
 
 # Declared, but confirmed only where the .NET Office analyser is built — CI, not a bare
 # container. Kept in a SEPARATE tuple rather than folded into DECLARED so one number keeps one
