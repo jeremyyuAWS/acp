@@ -417,6 +417,96 @@ def f_tagged_document_ok(path: Path):
             "is a judgement no detector makes (ADR 0016)")
 
 
+
+# ── 1.4.5 Images of Text — decided by OCR, not by the container ─────────────────
+# Like 1.3.3, this criterion reads the DOCUMENT'S PIXELS rather than its structure: ocr.py runs
+# tesseract over each embedded raster and flags any carrying >= ocr._MIN_WORDS (10) real words.
+# The image is the fixture and the page is the container, so the wording is identical across
+# the .xlsx, .pptx and .pdf corpora — see tests/test_images_of_text_corpus.py, which asserts that
+# sameness so one detector change reads as one result in three places.
+#
+# THE ALT IS CORRECT ON PURPOSE, and that is what keeps the fixture single-criterion. 1.4.5 is
+# alt-agnostic — `images_of_text` never looks at a descr — so an image of prose fails 1.4.5
+# whether or not it is described. Leaving the alt off would fail 1.1.1 as well and the fixture
+# would measure two things at once. (The .docx corpus's equivalent DOES declare both, which is
+# correct there: gen_sc_corpus is scored by score_assessment rather than by the single-criterion
+# sweep these three corpora use.)
+#
+# THE WORD FLOOR IS THE TRAP. _MIN_WORDS counts OCR'd TOKENS, not what was drawn — dates and
+# phone numbers are not words. The .docx corpus hit this: three short lines recovered six words,
+# so 1.4.9 (floor 3) fired and 1.4.5 (floor 10) did not, and the fixture read as an engine bug.
+# Hence prose, and enough of it: this image OCRs to 29 words, with room for the odd merge
+# ("begins on" comes back as "beginson").
+IMAGE_OF_TEXT_PROSE = ("Open enrollment for the coming plan year",
+                       "begins on the first of March and closes",
+                       "on the last day of the same month. Call",
+                       "the benefits office to change your plan.")
+IMAGE_OF_TEXT_ALT = ("Open enrollment runs from 1 March to 31 March; call the benefits office "
+                     "to change plan.")
+# WCAG 1.4.5 exempts logotypes, and ocr._MIN_WORDS is what encodes that exemption here: two words
+# is under the floor, so the control is clean for the same reason a real logo would be.
+LOGO_TEXT = ("UT Health",)
+
+
+def _text_png(lines, size=(900, 360)) -> bytes:
+    """A PNG with real, OCR-legible text baked into it.
+
+    Scaled up AFTER drawing because PIL's default bitmap font is too small for tesseract to read
+    reliably at native size. An unreadable image-of-text fixture silently becomes a no-text
+    fixture, and 1.4.5 then stops firing for a reason that has nothing to do with the detector —
+    which is the failure mode a ground-truth corpus exists to make impossible."""
+    import io
+    from PIL import Image, ImageDraw
+    im = Image.new("RGB", size, "white")
+    d = ImageDraw.Draw(im)
+    y = 20
+    for line in lines:
+        d.text((20, y), line, fill="black")
+        y += 70
+    im = im.resize((size[0] * 2, size[1] * 2), Image.LANCZOS)
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _text_png_file(lines, size=(900, 360)):
+    import tempfile
+    png = Path(tempfile.mkdtemp()) / "image-of-text.png"
+    png.write_bytes(_text_png(lines, size))
+    return png
+
+
+def _page_with_image(path: Path, lines, size, heading: str) -> None:
+    from reportlab.lib.colors import HexColor
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+    c = canvas.Canvas(str(path), pagesize=(520, 400))
+    c.setFillColor(HexColor(PAPER))
+    c.rect(0, 0, 520, 400, stroke=0, fill=1)
+    c.setFillColor(HexColor(INK))
+    c.setFont("Helvetica", 12)
+    c.drawString(30, 370, heading)
+    w, h = size
+    draw_w = 460.0
+    c.drawImage(ImageReader(str(_text_png_file(lines, size))), 30, 120,
+                width=draw_w, height=draw_w * h / w)
+    c.save()
+
+
+def f_image_of_text(path: Path):
+    _page_with_image(path, IMAGE_OF_TEXT_PROSE, (900, 360), "Enrollment notice")
+    return ({"1.4.5": "FAIL"},
+            "a page whose body is a picture of prose rather than real text — selectable by "
+            "nobody, resizable by nobody, and searchable by nobody")
+
+
+def f_image_of_text_logo_ok(path: Path):
+    _page_with_image(path, LOGO_TEXT, (300, 100), "Enrollment notice")
+    return ({"1.4.5": "REVIEW"},
+            "a logotype on an otherwise ordinary page (adversarial). WCAG 1.4.5 exempts logos, "
+            "so a finding here is a false positive")
+
+
 FIXTURES = [
     ("untagged-document",       f_untagged_document,       "violation"),
     ("tagged-document-ok",      f_tagged_document_ok,      "adversarial"),
@@ -427,6 +517,8 @@ FIXTURES = [
     ("no-document-language",    f_no_document_language,    "violation"),
     ("document-language-ok",    f_document_language_ok,    "adversarial"),
     ("figure-no-alt",           f_figure_no_alt,           "violation"),
+    ("image-of-text",           f_image_of_text,           "violation"),
+    ("image-of-text-logo-ok",   f_image_of_text_logo_ok,   "adversarial"),
     ("figure-with-alt-ok",      f_figure_with_alt_ok,      "adversarial"),
     ("link-colour-only",        f_link_colour_only,        "violation"),
     ("link-underlined-ok",      f_link_underlined_ok,      "adversarial"),
@@ -444,8 +536,8 @@ FIXTURES = [
     ("field-named-ok",          f_field_named_ok,          "adversarial"),
 ]
 
-DECLARED = ("1.1.1", "1.3.1", "1.3.3", "1.4.1", "1.4.11", "1.4.3", "2.4.2", "2.4.3", "2.4.4",
-            "2.4.6", "3.1.1", "4.1.2")
+DECLARED = ("1.1.1", "1.3.1", "1.3.3", "1.4.1", "1.4.11", "1.4.3", "1.4.5", "2.4.2",
+            "2.4.3", "2.4.4", "2.4.6", "3.1.1", "4.1.2")
 
 
 def _stamp(path: Path, title: str | None, lang: str | None,

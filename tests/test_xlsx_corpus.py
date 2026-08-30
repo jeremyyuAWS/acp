@@ -33,6 +33,7 @@ sys.path.insert(0, str(ROOT / "api"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import office_structure as osx  # noqa: E402
+import ocr as _ocr  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
     "gen_xlsx_corpus", ROOT / "scripts" / "gen_xlsx_corpus.py")
@@ -55,10 +56,26 @@ def corpus(tmp_path_factory):
     return out, {row["name"]: row for row in manifest}
 
 
-def _wcags(path: Path) -> set[str]:
-    """Criteria the FIRST-PARTY xlsx checks report — pure Python, no external engine."""
-    return {(f.get("wcag") or "").split()[0] for f in osx.checks_for(path, ".xlsx")
+def _ocr_wcags(path: Path, ext: str) -> set[str]:
+    """Criteria the OCR lane reports — 1.4.5, read out of the document's PIXELS rather than its
+    structure. A real scan runs this pass alongside the structural one, so `_wcags` is their
+    union; checking only the structural lane would make every 1.4.5 fixture invisible and every
+    "this fixture is single-criterion" assertion below weaker than it reads.
+
+    Empty when tesseract is unavailable, which is why the 1.4.5 rows below cannot fail a bare
+    checkout. Both CI pipelines run scripts/install_tesseract.sh, so that is a fallback and not
+    the normal state — see test_ocr_is_present_in_ci."""
+    return {(f.get("wcag") or "").split()[0] for f in _ocr.images_of_text(path, ext)
             if f.get("wcag")}
+
+
+def _wcags(path: Path) -> set[str]:
+    """Every criterion a real scan of this file reports, across BOTH lanes: the first-party xlsx
+    structure checks (pure Python, no external engine) and the OCR pass over its embedded images.
+    The union is what makes the single-criterion assertions below mean anything."""
+    structural = {(f.get("wcag") or "").split()[0] for f in osx.checks_for(path, ".xlsx")
+                  if f.get("wcag")}
+    return structural | _ocr_wcags(path, ".xlsx")
 
 
 # ── the labels are legal for their lane ──────────────────────────────────────────
@@ -95,6 +112,7 @@ def test_no_review_lane_fixture_claims_pass(corpus):
     ("sheet-tabs-default", "2.4.6"),
     ("colour-scale-only", "1.4.1"),
     ("image-no-alt", "1.1.1"),
+    ("image-of-text", "1.4.5"),
     ("shape-faint-outline", "1.4.11"),
     ("form-control", "4.1.2"),
     ("form-control", "2.1.2"),
@@ -116,6 +134,7 @@ def test_each_violation_fixture_is_actually_detected(corpus, name, sc):
     ("colour-icon-set-ok", "1.4.1"),
     ("contrast-ok", "1.4.3"),
     ("no-image-ok", "1.1.1"),
+    ("image-of-text-logo-ok", "1.4.5"),
     ("shape-strong-outline-ok", "1.4.11"),
     ("no-controls-ok", "4.1.2"),
     ("no-controls-ok", "2.1.2"),
@@ -291,3 +310,21 @@ def test_the_engine_confirms_the_declared_pairs(corpus, name, sc, fires):
         f"{name} also raised {other} — the base workbook has stopped stamping "
         f"{'a language' if other == '3.1.1' else 'a title'}, so every fixture in this corpus is "
         f"now carrying an undeclared finding")
+
+
+# ── 1.4.5 is read out of the pixels, so it needs its own lane and its own guard ──
+
+def test_ocr_is_present_in_ci():
+    """The environment-conditional skip on the 1.4.5 rows must be a FALLBACK, never the normal
+    state. Both ci.yml and azure-pipelines.yml run scripts/install_tesseract.sh, and the .docx
+    gate makes the same assertion for the same reason: a skip nobody notices is one edit away
+    from being how a criterion stops being covered.
+
+    Skipped OFF CI so a bare developer checkout is not failed for a dependency it never claimed
+    to have."""
+    import os
+    if not (os.environ.get("CI") or os.environ.get("TF_BUILD")):
+        pytest.skip("not CI — tesseract is optional on a developer checkout")
+    assert _ocr.is_available(), (
+        "tesseract is unavailable in CI, so 1.4.5 was NOT exercised — the corpus would report "
+        "the pair as covered while proving nothing about it")
