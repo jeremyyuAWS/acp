@@ -8,10 +8,22 @@ Also implements PRD §9's upload flow — POST .../documents/upload-session (iss
 short-lived direct-to-Blob upload authorization via workspace_blob.generate_upload_authorization)
 and POST .../documents/{document_id}/complete (verify the upload actually landed — size checked
 server-side against workspace_blob.get_uploaded_blob_properties, never trusted from the client —
-then create the content_workspace_document_version row). Deliberately NOT yet wired in: PRD
-§13's security/quarantine pipeline (extension allow-lists, magic-byte sniffing, malware
-scanning) and §12's duplicate-handling UX (reuse/new-version/cancel) — both later PRs; this PR
-always creates a brand-new document per upload session.
+then create the content_workspace_document_version row).
+
+Also implements the part of PRD §13's security/quarantine pipeline that's decidable without a
+real malware scanner: an extension allow-list at session-creation time (reusing
+scanner.OFFICE/HTML_EXTS — the exact set PRD §8 already commits to supporting, not a second
+list to keep in sync) and a magic-byte signature check at completion time, via
+workspace_blob.download_document_prefix's ranged read. A signature mismatch does not fail the
+request — PRD §8 lists "Quarantined" alongside "Ready for Discovery" as a normal terminal
+upload state, not an error condition — it creates the version row with lifecycle_state
+"quarantined" and leaves the document there for a human/later workflow to resolve, rather than
+enqueueing Discovery. `malware_status` is stamped "not_scanned" on every version: there is no
+real AV integration behind it (yet), and claiming "clean" without one would be worse than
+omitting the field. Deeper archive-structure inspection, encrypted-file detection, and ZIP
+path-traversal prevention are explicitly OUT of scope here — later work, once a real scanning
+dependency is chosen. PRD §12's duplicate-handling UX (reuse/new-version/cancel) is also a
+later PR; this PR always creates a brand-new document per upload session.
 
 Owner-scoped throughout: `owner_email` is the tenant boundary this whole app already uses
 (ADR 0044). `GET /content-workspaces/{id}` 404s — never 403 — for a foreign id, matching
@@ -28,16 +40,34 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 import core
+import scanner
 import workspace_blob
 
 router = APIRouter()
 
 # PRD §9: "ACP validates user, workspace, type, size, and quota" before issuing upload
-# authorization. This is the "size" half only — type/quota (extension allow-lists, malware
-# scanning, per-workspace quota) are PRD §13's security/quarantine pipeline, a separate,
-# later PR (this session's item 20). 500 MiB is an arbitrary-but-reasonable placeholder
-# ceiling for a single file, configurable per deployment.
+# authorization. Quota (per-workspace limits) remains out of scope. 500 MiB is an
+# arbitrary-but-reasonable placeholder ceiling for a single file, configurable per deployment.
 _MAX_UPLOAD_BYTES = int(os.environ.get("ACP_WORKSPACE_MAX_UPLOAD_BYTES", str(500 * 1024 * 1024)))
+
+# PRD §8's supported-format list, reusing scanner.py's own constants rather than a second list
+# that could drift from what the scan engines actually accept.
+_ALLOWED_EXTENSIONS = scanner.OFFICE + (".pdf",) + scanner.HTML_EXTS
+
+# PRD §13: magic-byte / file-signature verification at completion time. HTML has no reliable
+# leading signature (it can start with whitespace, a doctype in any case, a BOM, ...), so it is
+# in the allow-list above but deliberately absent here — every other supported extension has an
+# unambiguous magic number and IS enforced.
+_SIGNATURES: dict[str, bytes] = {
+    ".pdf": b"%PDF-",
+    ".docx": b"PK\x03\x04",
+    ".pptx": b"PK\x03\x04",
+    ".xlsx": b"PK\x03\x04",
+}
+
+
+def _extension(filename: str) -> str:
+    return "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
 
 def _owner(request: Request) -> str:
@@ -133,6 +163,9 @@ def create_upload_session(workspace_id: str, body: UploadSessionCreate, request:
     _require_workspace(workspace_id, owner)
     if not body.filename.strip():
         raise HTTPException(422, "filename is required")
+    if _extension(body.filename.strip()) not in _ALLOWED_EXTENSIONS:
+        raise HTTPException(422, f"unsupported file type — accepted types are "
+                             f"{', '.join(_ALLOWED_EXTENSIONS)}")
     if body.size_bytes <= 0:
         raise HTTPException(422, "size_bytes must be positive")
     if body.size_bytes > _MAX_UPLOAD_BYTES:
@@ -184,16 +217,32 @@ def complete_upload(workspace_id: str, document_id: str, body: UploadComplete, r
         raise HTTPException(422, f"declared size {body.size_bytes} does not match the "
                              f"uploaded blob's actual size {props['size']}")
 
+    # PRD §13: verify the bytes that actually landed match what the extension claims, via a
+    # cheap ranged read (workspace_blob.download_document_prefix) rather than downloading the
+    # whole file server-side. A mismatch is a normal terminal state (PRD §8's "Quarantined"),
+    # not a request error — the version row is still created so the upload isn't silently
+    # dropped, just routed away from Discovery for a human/later workflow to resolve.
+    ext = _extension(doc.get("display_name") or "")
+    expected_sig = _SIGNATURES.get(ext)
+    quarantined = False
+    if expected_sig is not None:
+        prefix = workspace_blob.download_document_prefix(owner, workspace_id, document_id,
+                                                          body.version_id, n=len(expected_sig))
+        quarantined = prefix is None or not prefix.startswith(expected_sig)
+
     version_seq = core.store.next_content_workspace_document_version_seq(document_id)
     path = workspace_blob.blob_path(owner, workspace_id, document_id, body.version_id)
+    lifecycle_state = "quarantined" if quarantined else "ready"
     core.store.create_content_workspace_document_version(
         body.version_id, document_id=document_id, version_seq=version_seq,
         content_hash=body.content_hash, mime_type=body.mime_type, size_bytes=body.size_bytes,
         blob_path=path, original_filename=doc.get("display_name"), uploaded_by=owner,
-        lifecycle_state="ready")
-    core.store.update_content_workspace_document_status(document_id, "ready")
-    core.store.log_decision(owner, "content_workspace.upload_completed",
-                            detail=f"{workspace_id}/{document_id}/{body.version_id}")
+        lifecycle_state=lifecycle_state, malware_status="not_scanned")
+    core.store.update_content_workspace_document_status(document_id, lifecycle_state)
+    core.store.log_decision(
+        owner, "content_workspace.upload_quarantined" if quarantined
+        else "content_workspace.upload_completed",
+        detail=f"{workspace_id}/{document_id}/{body.version_id}")
     return get_content_workspace_document(workspace_id, document_id, request)
 
 
