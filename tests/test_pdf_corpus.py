@@ -7,10 +7,16 @@ fixture would raise the number gen_fixture_coverage reports without raising what
 
 PDF IS THE ONE FORMAT WHOSE ENGINE IS ALWAYS PRESENT. The analyser is vendored in-tree (ADR
 0029), so unlike the .NET Office analyser these tests exercise real detection everywhere the
-suite runs rather than skipping in a bare container. That is why this file drives
-`office_structure.checks_for(path, ".pdf")` — the real dispatch, all twelve pdf detectors —
-rather than calling each detector directly: it tests what a scan actually does, and it is what
-catches a fixture that trips a criterion it did not mean to.
+suite runs rather than skipping in a bare container.
+
+THAT ONLY HELPS IF THE TESTS RUN WHAT THE PRODUCT RUNS, and for a while they did not. A .pdf
+scan has two lanes — `office_structure.checks_for` for the first-party contrast, link, tab-order,
+heading and form checks, and `scanner._analyse_pdf` for the vendored analyser — and `_wcags`
+below is their union because that union is what a user's scan reports. It reaches the second lane
+through `scanner._analyse_pdf` itself rather than through a list of rule classes named here; the
+list version shipped, named two of the analyser's eight rules, and is what let 22 fixtures carry
+an undeclared 2.4.2 and 18 an undeclared 1.3.1 without a single test going red. See
+`_analyser_wcags` for what that cost.
 
 EVERY FIXTURE IS SINGLE-CRITERION, and on PDF that took deliberate work rather than being free:
 
@@ -40,6 +46,7 @@ sys.path.insert(0, str(ROOT / "api"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import office_structure as osx  # noqa: E402
+import scanner  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
     "gen_pdf_corpus", ROOT / "scripts" / "gen_pdf_corpus.py")
@@ -58,38 +65,51 @@ def corpus(tmp_path_factory):
     return out, {row["name"]: row for row in manifest}
 
 
-_ENGINE = ROOT / "engine" / "pdf-analyser"
-if str(_ENGINE) not in sys.path:
-    sys.path.insert(0, str(_ENGINE))
+# No sys.path insert for the engine here on purpose: scanner._analyse_pdf resolves it from
+# ACP_PDF_ENGINE (defaulting to engine/pdf-analyser) and inserts it itself. Doing it twice, in
+# two places that could disagree, is how a test ends up exercising a different engine than the
+# product does.
 
-def _catalog_wcags(path: Path) -> set[str]:
-    """The criteria the VENDORED analyser's catalog rules report — 2.4.2 and 3.1.1, which do not
-    go through office_structure.checks_for. Kept separate from the import above so that a
-    truncated checkout fails this file loudly rather than silently reporting a clean scan."""
-    import pdfplumber
-    import pikepdf
-    from analysers.rules.pdf.document_language import DocumentLanguageRule
-    from analysers.rules.pdf.document_title import DocumentTitleRule
+def _analyser_wcags(path: Path) -> set[str]:
+    """Every criterion the VENDORED analyser reports, obtained by running the analyser the way
+    the PRODUCT runs it — `scanner._analyse_pdf`, which is what a real scan calls (scanner.py's
+    PDF branch). Not a list of rules assembled here.
 
-    found: set[str] = set()
-    with pikepdf.open(str(path)) as pk, pdfplumber.open(str(path)) as pl:
-        for rule in (DocumentTitleRule(), DocumentLanguageRule()):
-            for issue in rule.check(pk, pl):
-                name = issue.wcag_criterion.name           # e.g. "SC_2_4_2"
-                found.add(".".join(name.removeprefix("SC_").split("_")))
-    return found
+    THIS FUNCTION USED TO NAME TWO RULES, AND THAT COST A FALSE LABEL. It imported
+    DocumentTitleRule and DocumentLanguageRule directly, on the reasoning that 2.4.2 and 3.1.1
+    were the criteria `checks_for` missed. The analyser has EIGHT rules. The other six ran on
+    every real scan and on nothing here, so what they reported was invisible: all 22 fixtures
+    raised an undeclared 2.4.2 from `pdf.display-doc-title`, and 18 raised an undeclared 1.3.1
+    from `pdf.tagged`. `document-title-ok` — the 2.4.2 control, whose entire purpose is to stay
+    silent on 2.4.2 — was among them. The corpus said "adversarial counterpart confirmed to stay
+    silent" about a file that did not.
+
+    A hand-picked list cannot fail this way once; it fails this way every time a rule is added,
+    quietly, and the corpus keeps reporting the coverage it had before. Calling the product's
+    entry point is the version with no list to forget to update.
+
+    A truncated checkout must fail loudly rather than report a clean scan, so an unsuccessful
+    analysis raises here instead of returning an empty set — `_analyse_pdf` reports a missing
+    engine as `succeeded: False` with the reason, and that reason is what gets raised."""
+    result = scanner._analyse_pdf(path)
+    assert result["succeeded"], (
+        f"the vendored PDF analyser did not run on {path.name}, so a clean result here would "
+        f"mean nothing: {result['errors']}")
+    return {".".join((i["wcag"] or "").removeprefix("SC_").split("_"))
+            for i in result["issues"] if i.get("wcag")}
 
 
 def _wcags(path: Path) -> set[str]:
     """Every criterion a real scan of this file reports, across BOTH pdf code paths.
 
-    The union is what makes the single-criterion assertions below mean anything. Checking only
-    `checks_for` would miss 2.4.2 and 3.1.1 — which every fixture would otherwise raise, since a
-    freshly authored PDF carries neither /Title nor /Lang. The generator stamps both onto every
-    fixture that is not testing their absence, and this union is what proves it did."""
+    The union is what makes the single-criterion assertions below mean anything, and the two
+    halves are genuinely disjoint sources rather than one wrapping the other: the vendored
+    analyser supplies 1.1.1, 1.3.1, 1.3.2, 2.4.2 and 3.1.1, while `office_structure.checks_for`
+    supplies the first-party contrast, link, tab-order, heading and form-label checks. Neither
+    alone is what a user's scan reports."""
     structural = {(f.get("wcag") or "").split()[0] for f in osx.checks_for(path, ".pdf")
                   if f.get("wcag")}
-    return structural | _catalog_wcags(path)
+    return structural | _analyser_wcags(path)
 
 
 def _path(corpus, name: str) -> Path:
@@ -347,3 +367,64 @@ def test_the_corpus_is_reachable_without_the_dotnet_engine():
     spec.loader.exec_module(mod)
     missing = mod.check(["pdf"])
     assert not missing, f"the pdf engine is unavailable here: {missing}"
+
+
+# ── the guard runs the product's lane, not a list somebody has to maintain ───────
+
+def test_the_analyser_lane_reaches_rules_beyond_the_two_it_used_to_name(corpus):
+    """The regression this file was blind to, pinned from the inside. `pdf.tagged` (1.3.1) is one
+    of the six analyser rules the old hand-picked pair did not include, so seeing 1.3.1 here at
+    all is the proof that the lane is the product's and not a two-item list."""
+    fired = _analyser_wcags(_path(corpus, "untagged-document"))
+    assert "1.3.1" in fired, (
+        "the analyser lane no longer reports 1.3.1 — if it went back to naming rules by hand, "
+        "every criterion it does not name is invisible again")
+
+
+def test_withholding_display_doc_title_is_visible_to_the_guard(corpus, tmp_path):
+    """The bite check. `pdf.display-doc-title` is the rule that fired on all 22 fixtures unseen,
+    including the 2.4.2 control, so breaking it deliberately must turn a clean fixture dirty. If
+    this fixture came back clean, `_wcags` would be blind in exactly the way it was before and
+    every "adversarial fixture stays silent" assertion below would be worth nothing.
+
+    Note what is asserted: a PDF with a /Title but no ViewerPreferences opt-in still FAILS 2.4.2,
+    because a viewer shows the filename. /Title alone was never enough, which is why the control
+    needed fixing rather than the rule."""
+    victim = tmp_path / "display-title-withheld.pdf"
+    gen.f_document_title_ok(victim)
+    gen._stamp(victim, gen.DOC_TITLE, gen.DOC_LANG, display_title=False)
+    assert "2.4.2" in _wcags(victim), (
+        "a fixture with no /ViewerPreferences /DisplayDocTitle came back clean on 2.4.2 — the "
+        "guard is not running pdf.display-doc-title, so the 2.4.2 control's silence proves "
+        "nothing")
+
+    # And the shipped control, with the stamp applied, is genuinely clean on the same rule.
+    assert "2.4.2" not in _wcags(_path(corpus, "document-title-ok")), (
+        "the 2.4.2 control is dirty again")
+
+
+def test_untagging_is_visible_to_the_guard(corpus, tmp_path):
+    """The same bite check for `pdf.tagged`, the other rule that fired unseen on 18 fixtures.
+    Stamped normally the fixture is clean on 1.3.1; with tagging withheld it fails — so the
+    single-criterion assertions above are reading a real signal."""
+    victim = tmp_path / "tagging-withheld.pdf"
+    gen.f_document_title_ok(victim)
+    gen._stamp(victim, gen.DOC_TITLE, gen.DOC_LANG, tagged=False)
+    assert "1.3.1" in _wcags(victim)
+    assert "1.3.1" not in _wcags(_path(corpus, "document-title-ok"))
+
+
+def test_the_two_tagging_fixtures_differ_only_in_the_tag_tree(corpus):
+    """Both carry the same prose, title, language and DisplayDocTitle. If the violation had
+    different words in it, 1.3.1 would not be the only thing separating the pair and the FAIL
+    would not be attributable to the tagging."""
+    import pikepdf
+    bad, ok = _path(corpus, "untagged-document"), _path(corpus, "tagged-document-ok")
+    with pikepdf.open(str(bad)) as b, pikepdf.open(str(ok)) as g:
+        assert "/StructTreeRoot" not in b.Root and "/MarkInfo" not in b.Root
+        assert "/StructTreeRoot" in g.Root and bool(g.Root.MarkInfo.Marked)
+        assert str(b.docinfo.get("/Title")) == str(g.docinfo.get("/Title"))
+        assert str(b.Root.Lang) == str(g.Root.Lang)
+    import pii
+    assert (pii.extract_text(bad) or "").strip() == (pii.extract_text(ok) or "").strip(), (
+        "the tagging pair's page text has diverged — the pair no longer isolates 1.3.1")
