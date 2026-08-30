@@ -215,6 +215,15 @@ jobs:
         # docs/TODO.md carries generated coverage facts beside its authored backlog. They went
         # 387 commits stale because nothing checked them, and read as current the whole time.
 
+      - name: Corpus guard — ground-truth fixture coverage has not regressed
+        if: ${{ matrix.group == 1 }}
+        run: python scripts/gen_fixture_coverage.py --check
+        # A RATCHET, not a threshold: fails on a DROP, not on falling short of 100%. Coverage is
+        # 15 of 62 pairs today (.docx complete; xlsx/pptx/pdf have no labelled corpus at all), so
+        # a guard demanding full coverage would be red on every commit — and a red that is always
+        # red stops being read, which is exactly how the docs/TODO.md block above went 387 commits
+        # stale. This one can merge today and still refuses to let a fixture quietly disappear.
+
       - name: Matrix guard — rule changes declare their matrix impact
         if: ${{ matrix.group == 1 }}
         run: |
