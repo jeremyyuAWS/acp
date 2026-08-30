@@ -498,18 +498,27 @@ export default function App() {
     return () => { cancelled = true; clearInterval(t) }
   }, [])
 
+  // Adopt the scope the SERVER is gating on. activeScope.js ships a fallback preset so the first
+  // paint is never blank, but the bundle's copy is a guess until this lands — the backend's
+  // `scan_scope` setting is the only authority. `scopeTick` exists solely to re-render after the
+  // module's live bindings change: React cannot observe a module variable, so without it the UI
+  // would keep rendering the fallback's arithmetic and the fetch would be pointless. Bumped only
+  // when something actually changed.
+  //
+  // Called from two places: the boot effect below, AND AssessSetup's onSaved (after PUT
+  // /settings writes a new scan_scope). Without the second call site, an operator who edits and
+  // saves a new assessment scope keeps seeing the PREVIOUS scope's "N of 20 in scope" arithmetic
+  // across Overview/ScopeBanner/AssessmentScopeCard/etc. until a full page reload — the exact bug
+  // class applyScopeConfig itself was built to fix (see activeScope.js's own doc comment), just
+  // recurring after a live edit instead of at build time.
+  const adoptScopeConfig = (c) => { if (applyScopeConfig(c)) setScopeTick((n) => n + 1) }
+
   // Pull the authoritative CalVer once (works pre-auth — /config is public) so the build
   // stamp + header show the full version with the daily counter, not the date-only bundle tag.
   useEffect(() => {
     getConfig().then((c) => {
       if (c?.version) setPlatformVersion(c.version)
-      // Adopt the scope the SERVER is gating on. activeScope.js ships a fallback preset so the
-      // first paint is never blank, but the bundle's copy is a guess until this lands — the
-      // backend's `scan_scope` setting is the only authority. `scopeTick` exists solely to
-      // re-render after the module's live bindings change: React cannot observe a module
-      // variable, so without it the UI would keep rendering the fallback's arithmetic and the
-      // fetch would be pointless. Bumped only when something actually changed.
-      if (applyScopeConfig(c)) setScopeTick((n) => n + 1)
+      adoptScopeConfig(c)
       // Ownership of the owner-only `scan_scope` setting. Only trust an explicit boolean; a build
       // whose backend predates this field leaves `scopeOwner` null → scope editing stays enabled.
       if (typeof c?.is_scope_owner === 'boolean') setScopeOwner(c.is_scope_owner)
@@ -1839,7 +1848,8 @@ export default function App() {
                 than invent" contract — so the `|| null` this used to carry is redundant. */}
             {!busy && assessPhase === 'idle' && !assessed && (
               <AssessSetup discoveredAt={fmtStamp(run?.completed_at)} busy={busy}
-                           onRun={(decided) => assessStart.current?.(decided)} />
+                           onRun={(decided) => assessStart.current?.(decided)}
+                           onSaved={() => { getConfig().then(adoptScopeConfig).catch(() => {}) }} />
             )}
             {!(busy && !run?.completed_at) && (
               <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy}
