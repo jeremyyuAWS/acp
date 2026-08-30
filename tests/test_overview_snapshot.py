@@ -22,14 +22,14 @@ import store as store_mod
 
 
 def _seed_scan(s: store_mod.Store, scan_id: str, owner: str, *, completed_at: str | None,
-               rubric_hash: str = "rh1") -> None:
+               discovered_at: str | None = "2026-08-01T00:01:00", rubric_hash: str = "rh1") -> None:
     with s._db.cursor() as cur:
         s._db.execute(cur,
             "INSERT INTO scan_runs (id, owner_email, source, rubric_hash, completed_at, "
             "started_at, discovered_at, assessed_at, certifiable, uncertain, error, avg_score) "
             "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (scan_id, owner, "drive", rubric_hash, completed_at,
-             "2026-08-01T00:00:00", "2026-08-01T00:01:00",
+             "2026-08-01T00:00:00", discovered_at,
              "2026-08-01T00:02:00" if completed_at else None, 1, 0, 0, 90))
         # A three-document estate: one assessed+compliant, one assessed+failing, one
         # excluded at discovery (never reaches file_records).
@@ -108,7 +108,9 @@ def test_terminal_scan_snapshot_is_persisted_and_served_from_cache(isolated_stor
 
 
 def test_in_progress_scan_is_not_cached(isolated_store):
-    _seed_scan(isolated_store, "s1", "alice@example.com", completed_at=None)
+    """Neither completed_at NOR discovered_at set — a scan genuinely still running, with no
+    terminal state of either kind reached yet."""
+    _seed_scan(isolated_store, "s1", "alice@example.com", completed_at=None, discovered_at=None)
     snap = isolated_store.get_overview_snapshot("s1", "alice@example.com")
     assert snap["cached"] is False
     assert _snapshot_row_count(isolated_store, "s1") == 0
@@ -117,6 +119,22 @@ def test_in_progress_scan_is_not_cached(isolated_store):
     snap2 = isolated_store.get_overview_snapshot("s1", "alice@example.com")
     assert snap2["cached"] is False
     assert _snapshot_row_count(isolated_store, "s1") == 0
+
+
+def test_discover_only_scan_snapshot_is_cached(isolated_store):
+    """ADR 0020 Discover-only scans reach discovered_at but never completed_at (unless a later
+    Assess run finalizes them) — list_finished_scans already treats discovered_at as equally
+    terminal, and per several comments in store.py this is now the common case, not the
+    exception. The snapshot cache must fire for it too, not just for an assessed scan."""
+    _seed_scan(isolated_store, "s1", "alice@example.com", completed_at=None,
+              discovered_at="2026-08-01T00:01:00")
+    first = isolated_store.get_overview_snapshot("s1", "alice@example.com")
+    assert first["cached"] is False
+    assert _snapshot_row_count(isolated_store, "s1") == 1
+
+    second = isolated_store.get_overview_snapshot("s1", "alice@example.com")
+    assert second["cached"] is True
+    assert _snapshot_row_count(isolated_store, "s1") == 1
 
 
 # ── invalidation ──────────────────────────────────────────────────────────
@@ -181,6 +199,36 @@ def test_finalize_scan_run_bumps_revision(isolated_store):
     snap = isolated_store.get_overview_snapshot("s1", "alice@example.com")
     assert snap["cached"] is False
     assert _snapshot_row_count(isolated_store, "s1") == 1
+
+
+def test_end_running_scan_bumps_revision_on_a_drifted_already_terminal_scan(isolated_store):
+    """cancel_scan/supersede_scan share _end_running_scan, whose completed_at UPDATE has
+    deliberately NO status='running' guard — it exists specifically to handle scan_runs.status
+    having drifted out of sync with the jobs table (see its own comment). That means it can
+    rewrite completed_at on a scan that reads as already terminal (status != 'running') as long
+    as a stray active job row is still around — including a scan whose Overview snapshot is
+    already cached. The stale freshness.completed_at in that cache must not survive."""
+    _seed_scan(isolated_store, "s1", "alice@example.com", completed_at="2026-08-01T01:00:00")
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, "UPDATE scan_runs SET status=%s WHERE id=%s",
+                                   ("done", "s1"))
+        # A stray active job left behind despite the scan already reading terminal — the exact
+        # drift _end_running_scan's own comment describes.
+        isolated_store._db.execute(cur,
+            "INSERT INTO jobs (id, scan_id, type, status) VALUES (%s,%s,%s,%s)",
+            ("j1", "s1", "scan_file", "queued"))
+
+    first = isolated_store.get_overview_snapshot("s1", "alice@example.com")
+    assert first["freshness"]["completed_at"] == "2026-08-01T01:00:00"
+    assert _snapshot_row_count(isolated_store, "s1") == 1
+    rev_before = _revision(isolated_store, "s1")
+
+    assert isolated_store.cancel_scan("s1", "alice@example.com") is True
+    assert _revision(isolated_store, "s1") == rev_before + 1
+
+    second = isolated_store.get_overview_snapshot("s1", "alice@example.com")
+    assert second["cached"] is False
+    assert second["freshness"]["completed_at"] != "2026-08-01T01:00:00"
 
 
 def test_rubric_change_produces_new_cache_key(isolated_store):

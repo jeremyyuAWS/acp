@@ -2455,10 +2455,21 @@ class Store:
         gets a freshly computed (unpersisted) snapshot every call, since there is no terminal
         revision yet to cache it against — cheap relative to the full scan payload either way,
         because it never reads file contents or issue detail, only aggregate counts.
+
+        "Finished" here matches list_finished_scans' own definition, not just completed_at:
+        an ADR 0020 Discover-only run reaches its OWN terminal state at discovered_at with
+        completed_at left NULL forever (it is never assessed unless a later Assess run
+        finalizes it), and per several comments elsewhere in this file that is now the common
+        case, not the exception. Caching only on completed_at silently never cached those scans
+        at all — always correct, just never getting the benefit the cache exists for, for most
+        scans. Both are equally safe to persist under: the existing invalidation hooks
+        (mark_assessed et al.) bump revision the moment anything about a Discover-only scan
+        actually changes, same as they do for an assessed one.
         """
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT id,owner_email,revision,rubric_hash,completed_at FROM scan_runs WHERE id=%s",
+                "SELECT id,owner_email,revision,rubric_hash,completed_at,discovered_at "
+                "FROM scan_runs WHERE id=%s",
                 (scan_id,))
             run = self._db.fetchone(cur)
         if not run or run.get("owner_email") != owner:
@@ -2477,7 +2488,7 @@ class Store:
             snap["cached"] = True
             return snap
         snap = self._build_overview_snapshot(scan_id, owner, revision, rubric_hash)
-        if run.get("completed_at"):
+        if run.get("completed_at") or run.get("discovered_at"):
             import json as _json
             with self._db.cursor() as cur:
                 self._db.execute(cur,
@@ -2816,9 +2827,16 @@ class Store:
             # No status guard on this UPDATE: the jobs check above already established there was
             # genuinely something to stop, and gating on scan_runs.status=='running' here would
             # silently no-op the transition for the exact drifted-status case this fix exists for.
+            # That drift is also why this can reach a scan whose status was NOT 'running' (a
+            # stray active job left over on an already-terminal, possibly already-cached run) —
+            # so completed_at can change here even when _stamp_assessed_if_ran below is a no-op
+            # (assessed_at already set). Bump unconditionally rather than piggyback on that call:
+            # a cached overview_snapshots row's freshness.completed_at must never silently
+            # disagree with the value this UPDATE just wrote.
             self._db.execute(cur,
                 "UPDATE scan_runs SET status=%s, completed_at=%s WHERE id=%s",
                 (terminal_status, self._now(), sid))
+            self._bump_scan_revision(cur, sid)
             # A cancelled/superseded ASSESS fan-out has already assessed some documents (their
             # file_records exist); stamp assessed_at so the run's PARTIAL results are reachable —
             # the results views gate on assessed_at, and without this a stopped run showed nothing
