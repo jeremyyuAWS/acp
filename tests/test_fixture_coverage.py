@@ -3,8 +3,9 @@
 WHY A COVERAGE REPORT AT ALL. The Phase-1 acceptance criterion is "all applicable pairs have
 explicit fixture coverage or a documented human-only rationale". Nothing computed that, so the
 size of the remaining job was unknown — and an unknown denominator is how "we have a corpus"
-becomes a claim nobody can check. The answer today is 15 of 62 (24%): .docx complete, and no
-labelled corpus at all for xlsx, pptx or pdf.
+becomes a claim nobody can check. The answer today is 40 of 62 (65%): .docx complete, and a
+partial labelled corpus for each of xlsx, pptx and pdf. It started at 15 of 62 (24%), with
+.docx the only format that had one at all.
 
 COUNTING DECLARATIONS, NOT FILES. A fixture that happens to be a .docx says nothing about 1.4.3
 unless it declares an expectation for 1.4.3. Counting files in a format would report coverage
@@ -55,15 +56,16 @@ def test_every_format_is_accounted_for():
 
 # ── coverage is counted from declarations ────────────────────────────────────────
 
-def test_coverage_is_complete_for_docx_partial_for_xlsx_and_absent_elsewhere():
+def test_coverage_is_complete_for_docx_and_partial_for_the_other_three():
     """The honest state. gen_sc_corpus.py declares an expectation for every .docx pair in the
-    preset; gen_xlsx_corpus.py declares eight of fifteen .xlsx pairs — deliberately partial,
-    because only those eight have a first-party detector that can be confirmed to fire without
-    the .NET engine (see tests/test_xlsx_corpus.py). Nothing declares anything for pptx or pdf.
+    preset; the other three corpora are deliberately partial, declaring only the pairs whose
+    first-party detector was confirmed to fire against the fixture (see tests/test_xlsx_corpus.py,
+    test_pptx_corpus.py, test_pdf_corpus.py). Every format now has a labelled corpus; none but
+    .docx is complete, and the missing pairs are named by the report rather than rounded away.
 
-    This assertion FAILED when the xlsx corpus landed, which is the guard working: it names the
-    two things a new corpus has to do — join GENERATORS and raise its BASELINE — and refuses to
-    pass until both are done and this line is updated to the new truth."""
+    This assertion FAILED when each corpus landed, which is the guard working: it names the two
+    things a new corpus has to do — join GENERATORS and raise its BASELINE — and refuses to pass
+    until both are done and this line is updated to the new truth."""
     cov = gfc.coverage()
     assert cov["docx"]["missing"] == [], (
         f"a .docx pair lost its fixture: {cov['docx']['missing']}")
@@ -79,18 +81,39 @@ def test_coverage_is_complete_for_docx_partial_for_xlsx_and_absent_elsewhere():
         f"the pptx corpus now declares {len(cov['pptx']['covered'])} pairs — raise "
         f"BASELINE['pptx'] and this count together, in the commit that adds the fixtures")
 
-    assert cov["pdf"]["has_generator"] is False, (
-        "pdf has a generator now — add it to GENERATORS and raise BASELINE['pdf']")
-    assert cov["pdf"]["covered"] == []
+    assert cov["pdf"]["has_generator"] is True
+    assert len(cov["pdf"]["covered"]) == 8, (
+        f"the pdf corpus now declares {len(cov['pdf']['covered'])} pairs — raise "
+        f"BASELINE['pdf'] and this count together, in the commit that adds the fixtures")
 
 
-def test_a_format_with_no_generator_is_distinguished_from_one_that_found_nothing():
+def test_every_format_now_has_a_labelled_corpus():
+    """The state this report was written to make measurable, and the thing that changed: at 15
+    of 62 only .docx had a generator at all. Asserted separately from the counts above so that
+    losing a whole corpus reads as its own failure rather than as a number moving."""
+    cov = gfc.coverage()
+    for fmt in gfc.FORMATS:
+        assert cov[fmt]["has_generator"] is True, f"{fmt} no longer has a labelled corpus"
+
+
+def test_a_format_with_no_generator_is_distinguished_from_one_that_found_nothing(monkeypatch):
     """"Nobody has written a corpus" and "the corpus declares nothing" are different states, and
     only the first is answered by writing fixtures. Mapping an absent generator to an empty set
-    would collapse them."""
+    would collapse them.
+
+    Every format has a generator now, so this can no longer be shown with a real gap — it is
+    shown by removing one, which is the same comparison and keeps the distinction tested rather
+    than retired along with the last empty format."""
     cov = gfc.coverage()
-    assert cov["pdf"]["has_generator"] is False
-    assert cov["docx"]["has_generator"] is True
+    assert cov["pdf"]["has_generator"] is True
+    assert cov["pdf"]["covered"] != []
+
+    monkeypatch.delitem(gfc.GENERATORS, "pdf")
+    gone = gfc.coverage()
+    assert gone["pdf"]["has_generator"] is False
+    assert gone["pdf"]["covered"] == []
+    # The applicable list is unchanged — losing a corpus must not shrink the denominator too.
+    assert gone["pdf"]["applicable"] == cov["pdf"]["applicable"]
 
 
 def test_coverage_counts_declarations_not_files():
