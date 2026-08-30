@@ -1,29 +1,18 @@
 name: Auto-merge on CI green
 
-# Opt-in, not opt-out. Earlier versions of this file enabled squash auto-merge unconditionally on
-# every non-draft PR, then tried to carve out exemptions after the fact (first a hand-disable that
-# the next push silently undid via `synchronize`, then a `hold` label that only PREVENTED
-# re-enabling — it did nothing about the window between a PR opening and the label landing on it).
-# Both shapes have the same flaw: the default is ON, so a PR is unprotected from the instant it
-# opens until someone notices and acts. Found live 2026-08-30 on #1039/#1040 — both PRs whose own
-# bodies explicitly asked to be held for human review (one introduces a new CI workflow with Azure
-# OIDC credential access, the other a new database schema) had auto-merge silently re-armed by
-# this workflow before anyone could react.
-#
-# The fix is to invert which state is the default. Auto-merge now requires the `automerge` label
-# to be present — no label, no merge, full stop. `hold-for-review` is kept as a second, stronger
-# override (checked first, wins even if `automerge` is also present) for a PR that needs to come
-# back off automerge after being on it. Precedence, checked in this order:
-#   1. hold-for-review present  -> never enable; disable if already enabled
-#   2. draft                    -> never enable
-#   3. automerge absent         -> never enable (disable if already enabled — label was removed)
-#   4. automerge present        -> enable
+# Opt-in only. hold-for-review always takes precedence.
+# Keep the workflow disabled until its policy has been reviewed.
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, synchronize, labeled, unlabeled]
+    types:
+      - opened
+      - reopened
+      - ready_for_review
+      - converted_to_draft
+      - synchronize
+      - labeled
+      - unlabeled
 
-# One evaluation in flight per PR at a time — two label changes seconds apart (add automerge,
-# then add hold-for-review) must not race each other into contradictory mutations.
 concurrency:
   group: automerge-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -34,27 +23,8 @@ jobs:
     permissions:
       pull-requests: write
       contents: write
+
     steps:
-      # GH_TOKEN must NOT be secrets.GITHUB_TOKEN. GitHub does not run other workflows off
-      # anything the default token does (merges included) — it exists specifically to stop a
-      # workflow from recursively triggering itself. Enabling auto-merge with it worked fine (the
-      # PR shows "auto-merge enabled"), but the SQUASH ITSELF, performed later by GitHub's platform
-      # once required checks pass, inherits that same non-triggering identity. Every push it
-      # produces to main is invisible to `on: push` — ci.yml, matrix-progress-log.yml, and by
-      # extension deploy.yml (which only fires off ci.yml's own `workflow_run` completion) all go
-      # silent. Found live 2026-08-28: two consecutive real merges landed with zero push-triggered
-      # CI runs for either — production sat 11+ hours behind main before anyone noticed, and the
-      # only reason it surfaced was a manual review of the deploy history, not an alert.
-      #
-      # A personal PAT was the first fix here and it is directionally right (a merge performed
-      # with one is a normal push again, not GITHUB_TOKEN-flavored) — but it shares its owner's
-      # OWN GraphQL rate-limit bucket with everything else that account does anywhere: this repo's
-      # own manual API checks, any other automation under that login, anything. It failed on its
-      # very first real run with "GraphQL: API rate limit already exceeded", for reasons entirely
-      # unrelated to this workflow. A GitHub App installation token draws from the App's own
-      # separate pool instead, so nothing outside this workflow can ever starve it. Minted fresh
-      # each run (it expires in ~1h, unlike a PAT) from AUTOMERGE_APP_ID / AUTOMERGE_APP_PRIVATE_KEY
-      # — the App needs only Contents: RW and Pull requests: RW, installed on this repo alone.
       - name: Generate a token
         id: app-token
         uses: actions/create-github-app-token@v2
@@ -62,37 +32,46 @@ jobs:
           app-id: ${{ secrets.AUTOMERGE_APP_ID }}
           private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
 
-      # Re-read labels/draft/auto-merge state fresh from the API rather than trusting the event
-      # payload, which can be stale by the time this runs (two label changes in quick succession,
-      # or a synchronize that raced a labeled event landing a moment earlier).
       - name: Fetch current PR state
         id: pr
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          data=$(gh pr view "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" \
+          data=$(gh pr view "$PR_NUMBER" \
             --json labels,isDraft,autoMergeRequest)
-          echo "labels=$(echo "$data" | jq -c '[.labels[].name]')" >> "$GITHUB_OUTPUT"
-          echo "draft=$(echo "$data" | jq -r '.isDraft')" >> "$GITHUB_OUTPUT"
+          echo "labels=$(jq -c '[.labels[].name]' <<< "$data")" >> "$GITHUB_OUTPUT"
+          echo "draft=$(jq -r '.isDraft' <<< "$data")" >> "$GITHUB_OUTPUT"
+          echo "armed=$(jq -r '.autoMergeRequest != null' <<< "$data")" >> "$GITHUB_OUTPUT"
 
-      - name: Disable if held, no longer authorized, or draft
+      - name: Disable unauthorized auto-merge
         if: >-
-          contains(fromJSON(steps.pr.outputs.labels), 'hold-for-review')
-          || !contains(fromJSON(steps.pr.outputs.labels), 'automerge')
-          || steps.pr.outputs.draft == 'true'
+          steps.pr.outputs.armed == 'true'
+          && (
+            contains(fromJSON(steps.pr.outputs.labels), 'hold-for-review')
+            || !contains(fromJSON(steps.pr.outputs.labels), 'automerge')
+            || steps.pr.outputs.draft == 'true'
+          )
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        # A PR that never had auto-merge on (or already had it turned off) makes this a documented
-        # no-op (`gh` exits non-zero saying so) — that is success for a "make sure it's off" step,
-        # not a failure to surface.
-        run: gh pr merge "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --disable-auto || true
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR_NUMBER" --disable-auto
 
-      - name: Enable squash auto-merge
+      - name: Enable squash auto-merge when explicitly authorized
         if: >-
           !contains(fromJSON(steps.pr.outputs.labels), 'hold-for-review')
           && contains(fromJSON(steps.pr.outputs.labels), 'automerge')
           && steps.pr.outputs.draft == 'false'
+          && steps.pr.outputs.armed == 'false'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: gh pr merge --squash --auto "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}"
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR_NUMBER" --auto --squash
