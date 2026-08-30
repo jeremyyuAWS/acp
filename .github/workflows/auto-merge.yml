@@ -1,24 +1,29 @@
 name: Auto-merge on CI green
 
-# TEMPORARY STOPGAP — see commit message. This intentionally does NOT auto-enable merge on
-# anything. It only disables an already-armed auto-merge when hold-for-review is present, using
-# the App-token identity (separate rate-limit pool from any individual account). Replace this
-# file with #1041's reviewed content (or merge #1041, which does that) — do not extend this one.
-
+# Opt-in only. hold-for-review always takes precedence.
+# Keep the workflow disabled until its policy has been reviewed.
 on:
   pull_request:
-    types: [labeled, synchronize]
+    types:
+      - opened
+      - reopened
+      - ready_for_review
+      - converted_to_draft
+      - synchronize
+      - labeled
+      - unlabeled
 
 concurrency:
   group: automerge-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  disable-if-held:
+  auto-merge:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
       contents: write
+
     steps:
       - name: Generate a token
         id: app-token
@@ -27,18 +32,46 @@ jobs:
           app-id: ${{ secrets.AUTOMERGE_APP_ID }}
           private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
 
-      - name: Fetch current PR labels
+      - name: Fetch current PR state
         id: pr
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          data=$(gh pr view "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" \
-            --json labels)
-          echo "labels=$(echo "$data" | jq -c '[.labels[].name]')" >> "$GITHUB_OUTPUT"
+          data=$(gh pr view "$PR_NUMBER" \
+            --json labels,isDraft,autoMergeRequest)
+          echo "labels=$(jq -c '[.labels[].name]' <<< "$data")" >> "$GITHUB_OUTPUT"
+          echo "draft=$(jq -r '.isDraft' <<< "$data")" >> "$GITHUB_OUTPUT"
+          echo "armed=$(jq -r '.autoMergeRequest != null' <<< "$data")" >> "$GITHUB_OUTPUT"
 
-      - name: Disable auto-merge if hold-for-review is present
-        if: contains(fromJSON(steps.pr.outputs.labels), 'hold-for-review')
+      - name: Disable unauthorized auto-merge
+        if: >-
+          steps.pr.outputs.armed == 'true'
+          && (
+            contains(fromJSON(steps.pr.outputs.labels), 'hold-for-review')
+            || !contains(fromJSON(steps.pr.outputs.labels), 'automerge')
+            || steps.pr.outputs.draft == 'true'
+          )
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: gh pr merge "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --disable-auto || true
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR_NUMBER" --disable-auto
+
+      - name: Enable squash auto-merge when explicitly authorized
+        if: >-
+          !contains(fromJSON(steps.pr.outputs.labels), 'hold-for-review')
+          && contains(fromJSON(steps.pr.outputs.labels), 'automerge')
+          && steps.pr.outputs.draft == 'false'
+          && steps.pr.outputs.armed == 'false'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR_NUMBER" --auto --squash
