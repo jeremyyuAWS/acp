@@ -249,3 +249,38 @@ def test_delete_document_version_returns_false_on_failure(monkeypatch):
     monkeypatch.setattr(workspace_blob, "_service_client", lambda: svc)
 
     assert workspace_blob.delete_document_version("alice@x.com", "ws1", "doc1", "v1") is False
+
+
+# ── download_document_prefix ─────────────────────────────────────────────────
+
+def test_download_document_prefix_returns_none_when_not_configured():
+    import workspace_blob
+    assert workspace_blob.download_document_prefix("a@b.c", "ws1", "doc1", "v1") is None
+
+
+def test_download_document_prefix_requests_a_ranged_read(monkeypatch):
+    import workspace_blob
+
+    downloader = MagicMock()
+    downloader.readall.return_value = b"%PDF-1.7"
+    blob_client = MagicMock()
+    blob_client.download_blob.return_value = downloader
+    svc = MagicMock()
+    svc.get_blob_client.return_value = blob_client
+    monkeypatch.setattr(workspace_blob, "_service_client", lambda: svc)
+
+    result = workspace_blob.download_document_prefix("alice@x.com", "ws1", "doc1", "v1", n=8)
+    assert result == b"%PDF-1.7"
+    blob_client.download_blob.assert_called_once_with(offset=0, length=8)
+
+
+def test_download_document_prefix_returns_none_on_failure(monkeypatch):
+    import workspace_blob
+
+    blob_client = MagicMock()
+    blob_client.download_blob.side_effect = Exception("range not satisfiable")
+    svc = MagicMock()
+    svc.get_blob_client.return_value = blob_client
+    monkeypatch.setattr(workspace_blob, "_service_client", lambda: svc)
+
+    assert workspace_blob.download_document_prefix("alice@x.com", "ws1", "doc1", "v1") is None
