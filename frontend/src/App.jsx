@@ -12,7 +12,7 @@ import { armNotifyOnComplete, notifyScanComplete, notifyScanFailed, notification
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, getActiveScan, getWorkspaceBootstrap, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
+import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -1909,7 +1909,7 @@ export default function App() {
           </>
         ) : (overviewPreview ? <AssessPreviewCard preview={overviewPreview} /> : placeholder))}
 
-        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} assignees={assignees} setAssignees={setAssignees} myEmail={me?.email} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id).then(setScan).catch(() => {})} onHitlCount={setHitlCount} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /> : placeholder)}
+        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} assignees={assignees} setAssignees={setAssignees} myEmail={me?.email} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id, run?.revision).then((r) => { if (r !== NOT_MODIFIED) setScan(r) }).catch(() => {})} onHitlCount={setHitlCount} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /> : placeholder)}
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
 
