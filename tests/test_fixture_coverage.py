@@ -55,14 +55,26 @@ def test_every_format_is_accounted_for():
 
 # ── coverage is counted from declarations ────────────────────────────────────────
 
-def test_docx_coverage_is_complete_and_the_others_have_no_corpus():
-    """The honest state as of 2026-08-30. gen_sc_corpus.py declares an expectation for every
-    .docx pair in the preset; nothing declares one for xlsx, pptx or pdf."""
+def test_coverage_is_complete_for_docx_partial_for_xlsx_and_absent_elsewhere():
+    """The honest state. gen_sc_corpus.py declares an expectation for every .docx pair in the
+    preset; gen_xlsx_corpus.py declares four of fifteen .xlsx pairs — deliberately partial,
+    because only those four have a first-party detector that can be confirmed to fire without
+    the .NET engine (see tests/test_xlsx_corpus.py). Nothing declares anything for pptx or pdf.
+
+    This assertion FAILED when the xlsx corpus landed, which is the guard working: it names the
+    two things a new corpus has to do — join GENERATORS and raise its BASELINE — and refuses to
+    pass until both are done and this line is updated to the new truth."""
     cov = gfc.coverage()
     assert cov["docx"]["missing"] == [], (
         f"a .docx pair lost its fixture: {cov['docx']['missing']}")
     assert cov["docx"]["has_generator"] is True
-    for fmt in ("xlsx", "pptx", "pdf"):
+
+    assert cov["xlsx"]["has_generator"] is True
+    assert len(cov["xlsx"]["covered"]) == 4, (
+        f"the xlsx corpus now declares {len(cov['xlsx']['covered'])} pairs — raise "
+        f"BASELINE['xlsx'] and this count together, in the commit that adds the fixtures")
+
+    for fmt in ("pptx", "pdf"):
         assert cov[fmt]["has_generator"] is False, (
             f"{fmt} has a generator now — add it to GENERATORS and raise BASELINE[{fmt!r}]")
         assert cov[fmt]["covered"] == []
