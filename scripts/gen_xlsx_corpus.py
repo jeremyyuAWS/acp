@@ -1,22 +1,38 @@
 #!/usr/bin/env python3
 """A LABELLED .xlsx corpus — the second format to get ground truth, after .docx.
 
-WHY THIS EXISTS. `scripts/gen_fixture_coverage.py` reports 15 of 62 applicable (criterion,
-format) pairs covered: .docx complete, and xlsx / pptx / pdf at zero, because no labelled corpus
-existed for any of them. This is the start of the xlsx half.
+WHY THIS EXISTS. `scripts/gen_fixture_coverage.py` reports coverage per (criterion, format) pair.
+When this corpus was written .docx was complete and xlsx / pptx / pdf were at zero; this was the
+start of the xlsx half, and it now declares TEN of fifteen.
 
-IT IS DELIBERATELY PARTIAL, AND THE LIMIT IS VERIFICATION, NOT EFFORT. Every fixture here seeds a
-violation that a FIRST-PARTY detector — pure Python in `api/office_structure.py`, no external
-engine — is confirmed to fire on, and every adversarial fixture is confirmed to leave it silent.
-The other eleven xlsx pairs are not here because their detection runs through the .NET Office
-analyser (or, for 3.1.2, through langdetect), and a fixture whose seeded violation nobody can
-confirm is caught would inflate the very coverage number this corpus exists to report honestly.
-Adding them is incremental work on a machine with the engine built; the shape is set.
+IT IS DELIBERATELY PARTIAL, AND THE LIMIT IS VERIFICATION, NOT EFFORT. Every fixture seeds a
+violation a detector is confirmed to fire on, with an adversarial counterpart confirmed to leave
+it silent. A fixture whose seeded violation nobody can confirm is caught would inflate the very
+coverage number this corpus exists to report honestly.
 
+    1.1.1   an image with no descr                       office_non_text_content_checks
     1.4.1   colour-scale conditional formatting          office_color_only_checks
     1.4.3   text/fill contrast under 4.5:1               xlsx_contrast_checks
+    1.4.11  a faint shape outline on its fill            xlsx_nontext_contrast_checks
+    2.1.2   an embedded form control                     office_control_review_checks
     2.4.4   vague or raw-URL hyperlink labels            xlsx_structure_checks
     2.4.6   default SheetN tabs / ColumnN headers        xlsx_structure_checks
+    4.1.2   an embedded form control (same fixture)      office_control_review_checks
+    ----    confirmed only where the .NET analyser is built (DECLARED_ENGINE) ----
+    2.4.2   no dc:title in the core properties           XLSX-TITLE-001
+    3.1.1   no dc:language in the core properties        XLSX-LANG-001
+
+WHERE THE CONFIRMATION HAPPENS is the one asymmetry, and it is recorded rather than smoothed
+over. The first eight are proven wherever the suite runs. The last two have NO first-party Python
+detector on any Office format, so they are proven by the .NET analyser and skipped on a bare
+checkout — see DECLARED_ENGINE. They earn that exception by being certifying pairs: 2.4.2 and
+3.1.1 are two of the seventeen (criterion, format) pairs in the whole preset that can return a
+PASS, so before these fixtures a clean scan certified a spreadsheet against criteria nothing in
+the suite checked.
+
+The five still missing (1.3.1, 1.3.2, 1.3.3, 1.4.5, 3.1.2) need the analyser too, but their
+fixtures are structural rather than one property — and unlike a title or a language, a fixture
+whose shape cannot be checked here is not worth writing blind.
 
 THE VOCABULARY IS NOT PASS/FAIL, and assuming it is would invalidate the labels. ACP answers four
 things, and which are reachable is a property of the pair. On .xlsx only FIVE of the fifteen
@@ -58,12 +74,27 @@ INK = "FF1A1F26"
 PAPER = "FFFFFFFF"
 
 
-def _wb(title: str = "Q3 Benefits Summary"):
+DOC_TITLE = "Q3 Benefits Summary"
+DOC_LANG = "en-GB"          # PackageProperties.Language — what XLSX-LANG-001 actually reads
+
+
+def _wb(title: str | None = DOC_TITLE, language: str | None = DOC_LANG):
     """A workbook clean on everything the corpus is not deliberately breaking: a named sheet (so
-    2.4.6's default-tab rule stays quiet), a document title, and legible text."""
+    2.4.6's default-tab rule stays quiet), a document title, a declared language, and legible text.
+
+    THE LANGUAGE IS NOT DECORATION, and its absence was a real defect in this corpus. openpyxl
+    leaves `properties.language` at None, and XLSX-LANG-001 reports 3.1.1 for exactly that — so
+    before this every fixture here ALSO carried a 3.1.1 finding, and the corpus's single-criterion
+    labels were true only because the .NET engine is absent from a bare container. In CI, where
+    the engine IS built, each one was mislabelled: a fixture declared as "1.4.3 FAIL and nothing
+    else" produced two findings, which is precisely the error a ground-truth corpus exists to make
+    impossible. Nothing caught it because the first-party tests read `checks_for`, and the engine
+    reports through a different path.
+    """
     from openpyxl import Workbook
     wb = Workbook()
     wb.properties.title = title
+    wb.properties.language = language
     ws = wb.active
     ws.title = "Summary"
     return wb, ws
@@ -276,7 +307,51 @@ def f_no_controls_ok(wb, ws):
             "a static sheet with no controls — must not be flagged (adversarial)")
 
 
+# ── 2.4.2 Page Titled and 3.1.1 Language of Page — the ENGINE-VERIFIED pairs ─────
+# These two differ from everything above: no first-party Python detector exists for either on
+# any Office format, so they are confirmed by the .NET analyser (XLSX-TITLE-001, XLSX-LANG-001)
+# and only where it is built. That makes them the first pairs in this corpus whose label is
+# proven in CI rather than on any machine — see DECLARED_ENGINE, which keeps them countable
+# without letting them dilute what DECLARED means.
+#
+# Both are worth the asymmetry: 2.4.2 and 3.1.1 are two of the seventeen (criterion, format)
+# pairs in the whole preset that can return a PASS, so a false clean result here is a
+# certification, not an advisory. They were among the eight such pairs with no ground truth at all.
+#
+# BUILT FROM THE VENDORED RULE SOURCE, NOT THE CATALOG. config/rule-catalog.json describes
+# XLSX-LANG-001 as "the workbook must declare a language in its styles.xml"; the rule itself
+# (engine/office-analysers/.../Xlsx/Rules/DocumentLanguageRule.cs) reads
+# `document.PackageProperties.Language` — the core-property dc:language, nowhere near styles.xml.
+# A fixture written from the description would have injected a styles.xml part and detected
+# nothing, which is the failure this corpus exists to prevent, arriving through the catalog.
+
+def f_no_document_title(wb, ws):
+    wb.properties.title = None
+    _say(ws, "A1", "Quarterly revenue summary for the finance committee")
+    return {"2.4.2": "FAIL"}, "no dc:title in the core properties — nothing identifies the file"
+
+
+def f_document_title_ok(wb, ws):
+    _say(ws, "A1", "Quarterly revenue summary for the finance committee")
+    return {"2.4.2": "PASS"}, f"dc:title set to {DOC_TITLE!r} (adversarial)"
+
+
+def f_no_document_language(wb, ws):
+    wb.properties.language = None
+    _say(ws, "A1", "Quarterly revenue summary for the finance committee")
+    return {"3.1.1": "FAIL"}, "no language in the core properties — no pronunciation rules"
+
+
+def f_document_language_ok(wb, ws):
+    _say(ws, "A1", "Quarterly revenue summary for the finance committee")
+    return {"3.1.1": "PASS"}, f"language set to {DOC_LANG!r} (adversarial)"
+
+
 FIXTURES = [
+    ("no-document-title",    f_no_document_title,      "violation"),
+    ("document-title-ok",    f_document_title_ok,      "adversarial"),
+    ("no-document-language", f_no_document_language,   "violation"),
+    ("document-language-ok", f_document_language_ok,   "adversarial"),
     ("contrast-fail",        f_contrast_fail,          "violation"),
     ("contrast-ok",          f_contrast_ok,            "clean"),
     ("link-vague",           f_link_vague,             "violation"),
@@ -297,6 +372,13 @@ FIXTURES = [
 # The criteria this corpus declares. Kept explicit so gen_fixture_coverage and the tests agree
 # with the generator about what it claims, rather than each deriving it separately.
 DECLARED = ("1.1.1", "1.4.1", "1.4.11", "1.4.3", "2.1.2", "2.4.4", "2.4.6", "4.1.2")
+
+# Declared, but confirmed only where the .NET Office analyser is built — CI, not a bare
+# container. Kept in a SEPARATE tuple rather than folded into DECLARED so one number keeps one
+# meaning: DECLARED is "a detector was driven against this fixture anywhere the suite runs",
+# and merging the two would quietly make the coverage column mean two different things in the
+# same row. gen_fixture_coverage counts both and reports the split.
+DECLARED_ENGINE = ("2.4.2", "3.1.1")
 
 
 def _validate(name: str, expectations: dict[str, str]) -> list[str]:
