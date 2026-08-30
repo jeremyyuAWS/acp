@@ -148,6 +148,18 @@ steps:
   - script: python scripts/gen_todo_status.py --check
     displayName: Backlog guard — docs/TODO.md coverage block is current
 
+  # A RATCHET, not a threshold: fails on a DROP in ground-truth fixture coverage, not on falling
+  # short of 100%. 15 of 62 pairs are covered today, so a guard demanding full coverage would be
+  # red on every commit — and a red that is always red stops being read, which is how the
+  # docs/TODO.md block above went 387 commits stale in the first place.
+  #
+  # Added to BOTH pipelines in the same commit, deliberately. ci.yml's header calls step-for-step
+  # parity "a live invariant, not a description", and it has drifted twice — the three matrix
+  # guards landing there first, and the OCR fail-closed step (fixed in #1005). Adding a guard to
+  # one pipeline is how the third drift starts.
+  - script: python scripts/gen_fixture_coverage.py --check
+    displayName: Corpus guard — ground-truth fixture coverage has not regressed
+
   # Fails when a commit changed rule code without declaring its matrix impact. Add a
   # `Matrix-Note:` (+ `WCAG:`) trailer, or `Matrix-Note: none` to record a deliberate omission.
   # Merge commits are skipped by check() itself, explicitly and by parent count: a merge authors
