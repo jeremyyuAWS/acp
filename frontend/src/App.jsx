@@ -13,6 +13,7 @@ import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
 import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
+import { beginOrResumeIntent, completeIntent, abandonIntent, outcomeIsUncertain } from './submitIntent'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -1121,7 +1122,25 @@ export default function App() {
           if (degradedReasons.length) setPreflightDegraded(degradedReasons)
         }
         // Durable path: enqueue a scan job, then poll until the scan is persisted.
-        const { scan_id, job_id, workers, worker_tier_alive } = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded)
+        //
+        // One idempotency key per submit intent (submitIntent.js). A retry after an UNCERTAIN
+        // failure — a timeout, a dropped connection, the pool-exhaustion 503 — reuses the key, so
+        // if the first request committed before its response was lost the server hands back that
+        // same job instead of enqueuing a second scan. The key is only released once the outcome
+        // is known: accepted here, or provably rejected in the catch below.
+        const submitKey = beginOrResumeIntent('scan')
+        let accepted
+        try {
+          accepted = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded, submitKey)
+        } catch (err) {
+          // Hold the key when we cannot tell whether the scan was created; drop it when the
+          // server proved it was not, so the user's next, corrected attempt is a fresh intent
+          // rather than one that resolves to nothing.
+          if (!outcomeIsUncertain(err?.status)) abandonIntent('scan')
+          throw err
+        }
+        completeIntent('scan')
+        const { scan_id, job_id, workers, worker_tier_alive } = accepted
         // Split topology (#113): the API's local pool is 0 by design — the standalone worker
         // container's heartbeat is what proves the queue is manned.
         if (!SIM && !workers && !worker_tier_alive) throw new Error('no workers available — the worker service looks down; check Monitor')
