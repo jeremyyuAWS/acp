@@ -13,6 +13,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 const assessScan = vi.fn()
 const getScan = vi.fn()
 const getJobs = vi.fn()
+const getQueueEstimate = vi.fn(() => Promise.resolve({ available: false }))
 vi.mock('./api.js', () => ({
   assessScan: (...a) => assessScan(...a),
   getScan: (...a) => getScan(...a),
@@ -25,6 +26,7 @@ vi.mock('./api.js', () => ({
   setWorkers: vi.fn(() => Promise.resolve({ workers: 0 })),
   getWorkerReplicas: vi.fn(() => Promise.resolve({ configured: false })),
   setWorkerReplicas: vi.fn(() => Promise.resolve({ configured: false })),
+  getQueueEstimate: (...a) => getQueueEstimate(...a),
 }))
 
 const { default: AssessRunner } = await import('./AssessRunner.jsx')
@@ -52,6 +54,7 @@ const NOTHING_SCORED = {
 
 beforeEach(() => {
   assessScan.mockReset(); getScan.mockReset(); getJobs.mockReset()
+  getQueueEstimate.mockReset(); getQueueEstimate.mockResolvedValue({ available: false })
 })
 afterEach(unmountAll)
 
@@ -66,6 +69,24 @@ describe('ProcessingStatusPanel wired into AssessRunner from live getJobs() sign
 
     expect(text()).toMatch(/waiting for a worker/i)
     expect(text()).toMatch(/pickup time not available/i)
+  })
+
+  it('shows a real "Estimated pickup" range once getQueueEstimate resolves one, while waiting', async () => {
+    const now = Date.now()
+    assessScan.mockResolvedValue({ deferred: true, job_id: 'j1', workers: 1, worker_tier_alive: true })
+    getScan.mockResolvedValue(NOTHING_SCORED)
+    getJobs.mockResolvedValue({ workers: 1, stats: { running: 1, queued: 2 }, worker_tier_alive: true, runtime_mode: 'auto' })
+    getQueueEstimate.mockResolvedValue({
+      available: true, state: 'estimated',
+      earliest_at: new Date(now + 60000).toISOString(), latest_at: new Date(now + 3 * 60000).toISOString(),
+    })
+    await mount([{ file: 'a.docx', status: 'discovered' }])
+    await clickText('Assess')
+    await settle()
+
+    expect(getQueueEstimate).toHaveBeenCalledWith('s1', 'assess')
+    expect(text()).toMatch(/estimated pickup: 1–3 min/i)
+    expect(text()).not.toMatch(/pickup time not available/i)
   })
 
   it('offers a "View in Monitor" link that calls the onViewMonitor prop', async () => {

@@ -29,6 +29,7 @@ vi.mock('./api.js', () => ({
   setWorkers: vi.fn(() => Promise.resolve({ workers: 0 })),
   getWorkerReplicas: vi.fn(() => Promise.resolve({ configured: false })),
   setWorkerReplicas: vi.fn(() => Promise.resolve({ configured: false })),
+  getQueueEstimate: vi.fn(() => Promise.resolve({ available: false })),
 }))
 
 const { default: AssessRunner } = await import('./AssessRunner.jsx')

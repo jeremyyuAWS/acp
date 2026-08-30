@@ -11,9 +11,18 @@
 // states this component can actually substantiate today: idle, no_capacity, stalled, completed,
 // assessing, waiting.
 
+import { fmtPickupRange } from './pickupEstimateFmt.js'
+
 export function deriveProcessingState({
   phase, noCapacity, stalled, completedCount = 0, totalCount = 0, processingCount = 0,
   waitingCount = 0, lastActivityMins = null, currentFile = null, currentPhase = null,
+  // GET /scans/{id}/queue-estimate?kind=assess's own result (AssessRunner.jsx's pickupEstimate
+  // state) — see discoverProcessingState.js's identical param for the full reasoning. Only
+  // meaningful in the `waiting` branch below: `no_capacity` already means no worker exists to
+  // estimate against, which is exactly what the backend's own no_worker_available state would
+  // say too, so that branch is left alone rather than asking the estimate to repeat the same
+  // fact a second way.
+  pickupEstimate = null,
 } = {}) {
   if (phase !== 'running') {
     return { state: 'idle', headline: null, detail: null, recommendedAction: null, severity: 'info' }
@@ -64,13 +73,16 @@ export function deriveProcessingState({
       severity: 'active',
     }
   }
+  const pickupRange = pickupEstimate?.state === 'estimated' && pickupEstimate.earliest_at && pickupEstimate.latest_at
+    ? fmtPickupRange(pickupEstimate.earliest_at, pickupEstimate.latest_at) : null
   return {
     state: 'waiting',
     headline: 'Waiting for a worker to pick this up',
     detail: `${waitingCount} document${waitingCount === 1 ? '' : 's'} ahead in the queue.`
-      + (lastActivityMins != null ? ` Last activity ${lastActivityMins} min ago.` : ''),
+      + (lastActivityMins != null ? ` Last activity ${lastActivityMins} min ago.` : '')
+      + (pickupRange ? ` Estimated pickup: ${pickupRange}.` : ''),
     recommendedAction: null,
     severity: 'waiting',
-    pickupUnavailable: true,
+    pickupUnavailable: !pickupRange,
   }
 }
