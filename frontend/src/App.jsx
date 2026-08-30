@@ -53,6 +53,7 @@ import EmptyState, { Loading } from './EmptyState.jsx'
 import OverviewPreviewCard from './OverviewPreviewCard.jsx'
 import AssessPreviewCard from './AssessPreviewCard.jsx'
 import { markLoad, logLoadSummary } from './loadPerf.js'
+import MonitorPreviewCard from './MonitorPreviewCard.jsx'
 import ScanReviewModal from './ScanReviewModal.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
 import { applyScopeConfig } from './activeScope.js'
@@ -1904,7 +1905,7 @@ export default function App() {
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
 
-        {view === 'monitor' && (run ? (assessed ? <Monitor me={me} run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} /> : assessGate) : placeholder)}
+        {view === 'monitor' && (run ? (assessed ? <Monitor me={me} run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} /> : assessGate) : (overviewPreview ? <MonitorPreviewCard preview={overviewPreview} /> : placeholder))}
 
 
         {/* Standalone Knowledge Graph — was nested inside Assess (findable only after
