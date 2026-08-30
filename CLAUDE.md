@@ -187,6 +187,26 @@ be *shipping damage* — its fixer assumed a white page and rewrote compliant da
 21:1 down to 3.66:1, an AA failure it created, unattended. No amount of reading the diff would
 have surfaced that. One fixture surfaced it on the first run.
 
+**A bite check that does not bite is a finding about your CLAIM, not a test that passed.** Break
+the thing your fixture depends on and watch the suite go red; if it stays green, the dependency
+you documented is not real.
+
+**Why.** On 2026-08-30 the .pdf ground-truth corpus shipped with a comment saying 1.4.3 needs an
+explicit background rect, because pptx's contrast detector abstains on a shape with no fill and
+the same trap was assumed to transfer. Deleting the rect left all 34 tests passing.
+`_pdf_char_background` falls through to `_PDF_DEFAULT_BG` ("FFFFFF"), so a bare page IS measured,
+against white — PDF's real abstentions are a glyph over an image and one straddling a fill's edge.
+The comment was confident, plausible, reasoned by analogy from a real trap in another format, and
+wrong. Nothing but the failed bite check would have caught it.
+
+Two more of that day's claims died the same way. `2.4.2` and `3.1.1` on pdf were recorded as
+unreachable — "tag-tree semantics or langdetect" — and each is one `pikepdf` dictionary lookup in
+a tree vendored since ADR 0029; the source was a stale header in `tests/engines.py` saying the PDF
+engine "lives outside this repo entirely", false for months and contradicted by its own code
+twelve lines below. And "build the Office analyser in CI" was written into a gap analysis as the
+top recommendation when `ci.yml:125` and `azure-pipelines.yml:86` have both been building it all
+along. Three claims, one root cause: a comment was read where a command should have been run.
+
 **A pipeline hides whether the command ran at all**, and reports the failure as a pass. Read the
 exit status of the command itself, not of a pipeline, and address the repo explicitly:
 
@@ -317,6 +337,28 @@ with urllib.request.urlopen(req) as r:
 
 Once that call succeeds, the PR merges itself when CI goes green — no further action needed. You
 can still subscribe to PR activity and notify the user when it merges, but do not poll for CI.
+
+**Auto-merge means minutes, so a follow-up commit needs its OWN PR from the start.** Once
+`/automerge` is armed, the squash lands as soon as the required checks pass — routinely inside
+five minutes on this repo. A second commit pushed to that branch after the merge goes nowhere: the
+branch still exists, the push succeeds, and the work is simply not on `main`.
+
+**Why.** On 2026-08-30 this happened three times in one session — #1012, #1014 and #1018 — each
+time to a commit held back for a local full-suite run that took longer than the merge did. #1018
+is the instructive one: its squash on `main` is titled "8 pairs, 32 -> 40 (65%)", the first commit
+only, while the branch carried a second commit correcting a factual error in the first. Nothing
+warned. The PR read as merged, the branch read as pushed, and the correction was on neither.
+
+Two habits follow. **Push and let CI verify** rather than holding a commit for a local suite —
+the local run is not the CI job anyway (see above), and holding costs the merge window. And when
+a PR you own has merged, **check by CONTENT that what you think landed actually did**:
+
+```
+git fetch -q origin main && git show origin/main:<path> | grep -n "<the line you changed>"
+```
+
+A squash title names the first commit, not the branch. Reading the title is how a missing
+correction stays missing.
 
 ## Don't exhaust the shared GitHub API budget — stop polling
 
