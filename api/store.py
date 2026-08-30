@@ -3445,6 +3445,29 @@ class Store:
                 run["discovered_at"] = (self._db.fetchone(cur) or {}).get("at")
             return {"run": run, "files": files}
 
+    def scan_owned_by(self, sid: str, owner: str | None) -> bool:
+        """Whether `owner` may read scan `sid` — the SAME ownership rule `get_scan` enforces
+        (a legacy/None-owner row is invisible to everyone once isolation is on; `owner=None`
+        means the check is skipped, matching get_scan's own admin/no-isolation escape hatch),
+        but as one narrow `scan_runs` lookup instead of the full aggregate `get_scan` builds
+        (file_records LEFT JOIN scan_inventory, every issue_record, the not-started/scope/
+        discovered_at follow-ups). Built for a hot per-page read path — GET /scans/{id}/inventory
+        used to call `get_scan` on every one of a 30k-file estate's 30 pages just to answer
+        "does this owner own this scan_id", the same aggregate DiscoveryResults' single
+        whole-estate read (loadDiscoveryInventory) also pays for once per scan.
+
+        Returns False for both "no such scan" and "someone else's scan" — never distinguishing
+        them to the caller, same as get_scan's own `is None` — so a guess at another owner's
+        scan_id cannot be used to learn whether the id exists."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT owner_email FROM scan_runs WHERE id=%s", (sid,))
+            row = self._db.fetchone(cur)
+        if not row:
+            return False
+        if owner is not None and row.get("owner_email") != owner:
+            return False
+        return True
+
     def get_scan_scope(self, scan_id: str) -> dict[str, frozenset[str]] | None:
         """The criterion→formats scope this scan was FROZEN to at scan-start, rehydrated to
         {sc: frozenset(fmts)}, or None for NO RESTRICTION.

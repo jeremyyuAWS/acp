@@ -1342,8 +1342,15 @@ def scan_inventory_list(sid: str, request: Request,
     owner-scoped. This is the full list the capped 200/status dashboard sample could not provide
     (ADR 0020): `total` is the real count, page through it with offset/limit. Export via the
     `.csv` sibling. NB: the estate `status` is derived per row, so filtering by it is a client
-    concern for now — a server-side status filter needs the classification persisted (follow-up)."""
-    if core.store.get_scan(sid, owner=_owner(request)) is None:
+    concern for now — a server-side status filter needs the classification persisted (follow-up).
+
+    Authorization is a single narrow `scan_owned_by` lookup, not `get_scan` — this route is
+    called once per PAGE of a paginated read (up to 30 times for a 30k-file estate per H-09),
+    and `get_scan` assembles the full scan aggregate (every file_record, every issue_record,
+    the not-started/scope/discovered_at follow-ups) just to answer an owner-match question that
+    needs one column from one row. Same ownership rule, same 404-either-way behavior for "no
+    such scan" and "someone else's scan" — see `Store.scan_owned_by`."""
+    if not core.store.scan_owned_by(sid, owner=_owner(request)):
         raise HTTPException(404, "scan not found")
     rows = core.store.list_inventory_page(sid, limit=limit, offset=offset)
     return {"scan_id": sid, "total": core.store.count_inventory(sid),
