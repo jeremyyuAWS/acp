@@ -1087,14 +1087,38 @@ def _canonical_rule_id(rule_id: str) -> str:
 def db_max_conn(env: dict | None = None) -> int:
     """How many Postgres connections this replica may hold.
 
-    Sized from the concurrency that actually exists: every scan/remediate worker thread can
-    hold a connection while it works, and every in-flight HTTP handler needs one on top of
-    that. The old fixed 5, against ACP_WORKERS=4, meant a dashboard poll landing while the
-    workers were busy raised `PoolError: connection pool exhausted` — /hitl/auto-queue 500'd
-    and the reviewer saw an empty review queue while items were waiting to be queued.
+    Two INDEPENDENT terms, added together — conflating them was the 2026-08-30 production bug
+    (`psycopg2.pool.PoolError: connection pool exhausted` from POST /discovery/preflight and
+    POST /scans, 16-64 times per revision across 5 revisions):
 
-    Still bounded well under Azure Postgres' max_connections (~50 on small SKUs); override
-    with ACP_DB_MAX_CONN if the worker count or replica count grows.
+    - `workers` — in-process worker THREADS (ACP_WORKERS, api/worker_main.py). Each one holds a
+      connection while it runs a job. Real concurrency for the WORKER container, which defaults
+      ACP_WORKERS>0; correctly 0 for the API container, which runs ACP_WORKERS=0 by design (the
+      split topology, ADR 0013/#113) and has no local worker threads at all.
+    - `_API_HEADROOM_CONN` — concurrent DB-touching HTTP handlers. This is NOT scaled by
+      `workers`: the API container serves however many requests land on it regardless of its own
+      (deliberately zero) worker-thread count. Inventory pagination, /jobs polling,
+      queue-estimate, HITL and decision reads all land on the SAME api container simultaneously
+      whether or not it runs any local workers.
+
+    The old formula was `max(2, workers) + _API_HEADROOM_CONN`: with ACP_WORKERS="0" (a
+    non-empty string, so it survives the `or 4` fallback below) that collapsed to
+    `max(2, 0) + 8 == 10` — the API replica's own pool floored at 10 connections while serving
+    real concurrent HTTP traffic that routinely exceeded that. `workers` is no longer routed
+    through `max(2, ...)` for exactly that reason: 0 is a legitimate value for a serve-only
+    replica, not a degenerate one to be floored away. The overall `max(2, ...)` below stays only
+    as a final sanity floor (moot at any headroom this repo has ever configured; kept for a
+    hypothetical near-zero override).
+
+    Sized against the two constraints that actually bound it in production: Postgres's own
+    max_connections (150, confirmed live) and the API/worker container replica counts
+    (deploy/public/deploy.sh — API is `--min-replicas 1 --max-replicas 1`, ALWAYS exactly one
+    replica; the worker tier is `--min-replicas 1 --max-replicas 3` at `ACP_WORKER_COUNT:-2`
+    workers/replica by default). See the PR body for the full arithmetic — this is deliberately
+    not a bigger magic number picked without that check.
+
+    Override with ACP_DB_MAX_CONN if the worker count, replica count, or Postgres tier changes
+    enough to invalidate that arithmetic.
     """
     e = os.environ if env is None else env
     explicit = e.get("ACP_DB_MAX_CONN")
@@ -1104,12 +1128,34 @@ def db_max_conn(env: dict | None = None) -> int:
         workers = int(e.get("ACP_WORKERS") or 4)
     except ValueError:
         workers = 4
-    return max(2, workers) + _API_HEADROOM_CONN
+    workers = max(0, workers)  # a bad/negative override must not go on to STARVE the headroom term
+    return max(2, workers + _API_HEADROOM_CONN)
 
 
-# Concurrent HTTP handlers that may need a connection while every worker holds one.
-# The dashboard alone polls /jobs, /hitl/queue and /scans/{id}/remediation-status together.
-_API_HEADROOM_CONN = 8
+# Concurrent DB-touching HTTP handlers this replica may need to serve at once, independent of
+# ACP_WORKERS entirely (see db_max_conn's docstring for why the two must not be conflated).
+#
+# Raised from 8 to 16 after the 2026-08-30 incident — deliberately NOT raised further, and this
+# is a considered stopping point, not a shortfall of nerve. Two separate resource dimensions are
+# in play, and only one of them is this constant's business:
+#   - CONNECTION COUNT: the incident's own read was "comfortably more than 10 concurrent
+#     DB-touching HTTP handlers" (inventory pagination + /jobs polling + queue-estimate + HITL +
+#     decision reads, simultaneously) against the old formula's 10-connection floor. 8 of pure
+#     headroom was already short of that before the ACP_WORKERS=0 conflation bug shaved it down
+#     further; 16 clears the documented traffic with real margin, checked against the deployed
+#     fleet's real replica counts in db_max_conn's docstring and tests/test_db_pool.py.
+#   - CPU: a separate, parallel incident-review thread (not independently verified from this
+#     PR — see the PR body) reported the production Postgres server near-continuously
+#     CPU-saturated (~98% mean, ~24h). Connection-slot headroom and CPU headroom are ORTHOGONAL —
+#     a server can have free connection slots while being fully CPU-bound — and more concurrent
+#     connections against an already CPU-saturated server can worsen contention rather than help.
+#     This constant cannot see that dimension at all, so it deliberately stops at "clearly enough
+#     to fix the incident's own documented connection-count shortfall" rather than reaching for
+#     a larger number the connection arithmetic alone would also technically clear (this repo's
+#     replica counts leave room past 16 — see the docstring). Raising it further than this is an
+#     operational capacity decision that needs BOTH dimensions checked, not a code default a
+#     formula fix should make unilaterally — use ACP_DB_MAX_CONN for that, once made.
+_API_HEADROOM_CONN = 16
 
 
 class _PgAdapter:

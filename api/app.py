@@ -21,7 +21,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 import core
 from routes import ROUTERS
@@ -29,6 +29,42 @@ from routes import ROUTERS
 app = FastAPI(title="acp — accessibility compliance API", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
                    allow_methods=["*"], allow_headers=["*"])
+
+# Not every environment has the Postgres driver installed (store.py's SQLite path doesn't need
+# it, and some dev boxes never install it) — guard the import so this module still loads there.
+# When it IS present (every real deploy: api/requirements.txt pins psycopg2-binary), register a
+# handler for the exact failure mode of the 2026-08-30 incident.
+try:
+    import psycopg2.pool as _pg_pool
+except ImportError:  # pragma: no cover — SQLite-only dev environment, no Postgres driver at all
+    _pg_pool = None
+
+if _pg_pool is not None:
+    @app.exception_handler(_pg_pool.PoolError)
+    async def _db_pool_exhausted(request, exc):
+        """store.py's _getconn() retries a burst for a few seconds (api/store.py ~line 1156)
+        but still raises psycopg2.pool.PoolError once that window elapses — previously an
+        unhandled 500 with no distinguishable body, which is what POST /discovery/preflight and
+        POST /scans both did during the 2026-08-30 pool-exhaustion incident. _getconn() fails
+        BEFORE acquiring a connection, i.e. before any query in THIS cursor() call runs — so for
+        the common case (pool exhaustion on the first DB touch of a request) nothing from this
+        request was written. A handler that already committed an earlier, separate cursor() call
+        before a LATER one hits this is the one case that statement doesn't cover; the response
+        is intentionally still framed as advice ("try again"), not a hard guarantee, for exactly
+        that reason.
+
+        Response shape is a stable contract a separate frontend fix (tracked, not yet built)
+        needs to detect and replace the current generic "scan failed: 500" copy with something
+        legible. See the PR body for the exact shape and the reasoning behind it."""
+        return JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "5"},
+            content={
+                "detail": "database_busy",
+                "message": ("ACP's database was temporarily at capacity. No changes were made. "
+                            "Try again shortly."),
+            },
+        )
 
 
 @app.middleware("http")
