@@ -404,3 +404,126 @@ def test_remediate_file_non_html_deferred(store, monkeypatch):
     assert store.get_job(jid)["status"] == "done"   # completes, but defers
     assert any(d["action"] == "remediate.deferred"
                for d in store.list_decisions(scan_id=sid))
+
+
+# ── dead_letter_breakdown: incident-shaped aggregation ───────────────────────────────
+
+def _dead_job(store, *, scan_id, error, jtype="scan_file", attempts=1,
+              created_at="2026-08-30T00:00:00+00:00", updated_at="2026-08-30T00:00:00+00:00",
+              max_attempts=5):
+    """Seed a single dead-lettered job row with fully-controlled attempts/timestamps.
+
+    Goes straight to a 'dead' row via direct UPDATE rather than driving fail_job through
+    real retries — the timing tests need created_at/updated_at values the store's own
+    _now() can't produce deterministically, and the aggregation tests need attempts values
+    independent of how many times this particular row actually failed."""
+    jid = store.enqueue_job(jtype, {}, scan_id=scan_id, max_attempts=max_attempts)
+    with store._db.cursor() as cur:
+        store._db.execute(cur,
+            "UPDATE jobs SET status='dead', last_error=%s, attempts=%s, "
+            "created_at=%s, updated_at=%s WHERE id=%s",
+            (error, attempts, created_at, updated_at, jid))
+    return jid
+
+
+def test_dead_letter_breakdown_shape_is_additive(store):
+    """type/error/n keep their existing meaning and are joined by the new fields —
+    other readers of top_errors[0].error (e.g. QueuePanel's deadReason) must not break."""
+    _dead_job(store, scan_id="s1", error="boom", attempts=2)
+    out = store.dead_letter_breakdown()
+    row = out["top_errors"][0]
+    assert row["type"] == "scan_file"
+    assert row["error"] == "boom"
+    assert row["n"] == 1
+    assert set(row) == {"type", "error", "n", "affected_runs", "total_attempts",
+                        "first_seen", "last_seen"}
+
+
+def test_affected_runs_counts_distinct_scans_not_job_rows(store):
+    """A scan whose per-file jobs dead-letter under the SAME reason contributes ONE to
+    affected_runs but MANY to n — e.g. a scan's fan-out into several scan_file jobs where
+    three files all hit the same drive error (grouping is by type+error, so this stays
+    within a single group only when the type is held constant). A second scan hitting the
+    same reason adds one more run."""
+    _dead_job(store, scan_id="scan-a", error="drive quota exceeded", jtype="scan_file")
+    _dead_job(store, scan_id="scan-a", error="drive quota exceeded", jtype="scan_file")
+    _dead_job(store, scan_id="scan-a", error="drive quota exceeded", jtype="scan_file")
+    _dead_job(store, scan_id="scan-b", error="drive quota exceeded", jtype="scan_file")
+
+    out = store.dead_letter_breakdown()
+    row = next(r for r in out["top_errors"] if r["error"] == "drive quota exceeded")
+    assert row["n"] == 4                 # four dead job rows
+    assert row["affected_runs"] == 2     # but only two distinct scans
+
+
+def test_total_attempts_sums_across_the_group(store):
+    """total_attempts is the SUM of each job's own attempts (claim_job increments the same
+    row on every retry — see fail_job/claim_job), not just a per-job or per-row count."""
+    _dead_job(store, scan_id="s1", error="timeout", attempts=1)
+    _dead_job(store, scan_id="s2", error="timeout", attempts=5)
+    _dead_job(store, scan_id="s3", error="timeout", attempts=3)
+
+    out = store.dead_letter_breakdown()
+    row = next(r for r in out["top_errors"] if r["error"] == "timeout")
+    assert row["n"] == 3
+    assert row["total_attempts"] == 9
+
+
+def test_first_seen_and_last_seen_are_the_true_min_and_max(store):
+    """first_seen/last_seen must reflect the earliest created_at and latest updated_at
+    across the WHOLE group, not whichever row SQLite happens to return first or last —
+    seed them out of both creation order and alphabetical order to catch that."""
+    _dead_job(store, scan_id="s1", error="flaky", jtype="scan_file",
+              created_at="2026-08-30T09:00:00+00:00", updated_at="2026-08-30T09:05:00+00:00")
+    _dead_job(store, scan_id="s2", error="flaky", jtype="scan_file",
+              created_at="2026-08-30T06:00:00+00:00",   # earliest created_at
+              updated_at="2026-08-30T09:50:00+00:00")   # latest updated_at
+    _dead_job(store, scan_id="s3", error="flaky", jtype="scan_file",
+              created_at="2026-08-30T08:00:00+00:00", updated_at="2026-08-30T07:00:00+00:00")
+
+    out = store.dead_letter_breakdown()
+    row = next(r for r in out["top_errors"] if r["error"] == "flaky")
+    assert row["first_seen"] == "2026-08-30T06:00:00+00:00"
+    assert row["last_seen"] == "2026-08-30T09:50:00+00:00"
+
+
+def test_owner_scoping_excludes_another_tenants_incident_fields(store):
+    """purge/breakdown scoping (owner=) must exclude another tenant's dead jobs from EVERY
+    new field, not just n — error text can name a file, and affected_runs/total_attempts/
+    first_seen/last_seen are all derived from the same potentially-leaking rows."""
+    st = store
+    st.save_scan({"_scan_id": "mine", "started_at": "2026-08-29T00:00:00+00:00",
+                  "completed_at": "2026-08-29T00:01:00+00:00", "source": "drive",
+                  "owner": "me@example.com", "rubric": {"name": "r", "hash": "h"},
+                  "summary": {"files": 0, "certifiable": 0, "uncertain": 0, "error": 0, "avg_score": 0},
+                  "files": []})
+    st.save_scan({"_scan_id": "theirs", "started_at": "2026-08-29T00:00:00+00:00",
+                  "completed_at": "2026-08-29T00:01:00+00:00", "source": "drive",
+                  "owner": "someone-else@example.com", "rubric": {"name": "r", "hash": "h"},
+                  "summary": {"files": 0, "certifiable": 0, "uncertain": 0, "error": 0, "avg_score": 0},
+                  "files": []})
+    # Same error text on both tenants' scans so the two groups would MERGE into one row
+    # if the owner scope were missing from the new aggregates.
+    _dead_job(st, scan_id="mine", error="shared reason", attempts=2,
+              created_at="2026-08-30T01:00:00+00:00", updated_at="2026-08-30T01:00:00+00:00")
+    _dead_job(st, scan_id="theirs", error="shared reason", attempts=9,
+              created_at="2026-08-30T02:00:00+00:00", updated_at="2026-08-30T23:00:00+00:00")
+    _dead_job(st, scan_id="theirs", error="shared reason", attempts=9,
+              created_at="2026-08-30T02:00:00+00:00", updated_at="2026-08-30T23:00:00+00:00")
+
+    mine_only = st.dead_letter_breakdown(owner="me@example.com")
+    row = next(r for r in mine_only["top_errors"] if r["error"] == "shared reason")
+    assert row["n"] == 1
+    assert row["affected_runs"] == 1
+    assert row["total_attempts"] == 2                       # not 2 + 9 + 9
+    assert row["first_seen"] == "2026-08-30T01:00:00+00:00"  # not "theirs" earlier/later stamps
+    assert row["last_seen"] == "2026-08-30T01:00:00+00:00"
+
+    # Unscoped (owner=None — the shape GET /jobs actually calls when unset) sees both
+    # tenants combined, which is what proves the scoped result above was really filtering
+    # and not just coincidentally matching.
+    everyone = st.dead_letter_breakdown()
+    row_all = next(r for r in everyone["top_errors"] if r["error"] == "shared reason")
+    assert row_all["n"] == 3
+    assert row_all["affected_runs"] == 2
+    assert row_all["total_attempts"] == 20
