@@ -430,3 +430,173 @@ def test_quarantine_is_logged_distinctly_from_a_normal_completion(gated_client, 
 
     decisions = isolated_store.list_decisions()
     assert any(d["action"] == "content_workspace.upload_quarantined" for d in decisions)
+
+
+# ── duplicate detection (PRD §12) ────────────────────────────────────────────
+
+def _complete(gated_client, ws, doc_id, version_id, *, content_hash="h1", size_bytes=1024):
+    return gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                                    json={"version_id": version_id, "content_hash": content_hash,
+                                          "size_bytes": size_bytes})
+
+
+def test_complete_flags_a_duplicate_against_a_different_document(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc1, v1 = _start_upload(gated_client, ws, filename="a.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    r1 = _complete(gated_client, ws, doc1, v1, content_hash="same-hash")
+    assert r1.json()["status"] == "ready"
+
+    doc2, _ = _start_upload(gated_client, ws, filename="b.pdf")
+    r2 = _complete(gated_client, ws, doc2, "v-002", content_hash="same-hash")
+    assert r2.status_code == 200, r2.text
+    body = r2.json()
+    assert body["status"] == "duplicate"
+    assert body["versions"][0]["lifecycle_state"] == "duplicate"
+    assert body["duplicate_of"] == {"document_id": doc1, "version_id": v1}
+
+
+def test_reuploading_the_same_document_with_the_same_hash_is_not_a_duplicate(gated_client, monkeypatch):
+    """A match against THIS SAME document (item 19's 'second completion is version 2' case) is
+    an ordinary re-upload, not PRD §12 duplicate handling — that UX is about content
+    reappearing under a DIFFERENT document."""
+    ws = _make_workspace(gated_client)
+    doc_id, v1 = _start_upload(gated_client, ws, filename="a.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws, doc_id, v1, content_hash="same-hash")
+
+    r2 = _complete(gated_client, ws, doc_id, "v-002", content_hash="same-hash")
+    assert r2.json()["status"] == "ready"
+    assert "duplicate_of" not in r2.json()
+
+
+def test_quarantine_takes_precedence_over_duplicate_detection(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc1, v1 = _start_upload(gated_client, ws, filename="a.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws, doc1, v1, content_hash="same-hash")
+
+    doc2, _ = _start_upload(gated_client, ws, filename="b.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"not a pdf")  # bad signature
+    r2 = _complete(gated_client, ws, doc2, "v-002", content_hash="same-hash")
+    body = r2.json()
+    assert body["status"] == "quarantined"
+    assert "duplicate_of" not in body
+
+
+def test_duplicate_is_logged_distinctly(gated_client, monkeypatch, isolated_store):
+    ws = _make_workspace(gated_client)
+    doc1, v1 = _start_upload(gated_client, ws, filename="a.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws, doc1, v1, content_hash="same-hash")
+
+    doc2, _ = _start_upload(gated_client, ws, filename="b.pdf")
+    _complete(gated_client, ws, doc2, "v-002", content_hash="same-hash")
+
+    decisions = isolated_store.list_decisions()
+    assert any(d["action"] == "content_workspace.upload_duplicate" for d in decisions)
+
+
+def test_duplicate_detection_is_scoped_to_the_workspace(gated_client, monkeypatch):
+    """The same content in a DIFFERENT workspace is not a duplicate — PRD §12 scopes detection
+    to 'anywhere in this workspace', not across the whole account."""
+    ws1 = _make_workspace(gated_client)
+    ws2 = _make_workspace(gated_client)
+    doc1, v1 = _start_upload(gated_client, ws1, filename="a.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws1, doc1, v1, content_hash="same-hash")
+
+    doc2, _ = _start_upload(gated_client, ws2, filename="b.pdf")
+    r2 = _complete(gated_client, ws2, doc2, "v-002", content_hash="same-hash")
+    assert r2.json()["status"] == "ready"
+
+
+# ── resolve-duplicate (PRD §12) ───────────────────────────────────────────────
+
+def _make_duplicate(gated_client, monkeypatch, ws):
+    doc1, v1 = _start_upload(gated_client, ws, filename="a.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws, doc1, v1, content_hash="same-hash")
+    doc2, _ = _start_upload(gated_client, ws, filename="b.pdf")
+    _complete(gated_client, ws, doc2, "v-002", content_hash="same-hash")
+    return doc2, "v-002"
+
+
+def test_resolve_duplicate_rejects_an_unknown_action(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc2, _ = _make_duplicate(gated_client, monkeypatch, ws)
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc2}/resolve-duplicate",
+                                 json={"action": "explode"})
+    assert r.status_code == 422
+
+
+def test_resolve_duplicate_404s_for_a_nonexistent_document(gated_client):
+    ws = _make_workspace(gated_client)
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/does-not-exist/resolve-duplicate",
+                                 json={"action": "cancel"})
+    assert r.status_code == 404
+
+
+def test_resolve_duplicate_409s_when_not_flagged_as_a_duplicate(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc_id, v1 = _start_upload(gated_client, ws)
+    _mock_uploaded(monkeypatch)
+    _complete(gated_client, ws, doc_id, v1)  # ordinary, non-duplicate completion
+
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/resolve-duplicate",
+                                 json={"action": "cancel"})
+    assert r.status_code == 409
+
+
+def test_resolve_duplicate_keep_as_new_clears_the_flag(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc2, v2 = _make_duplicate(gated_client, monkeypatch, ws)
+
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc2}/resolve-duplicate",
+                                 json={"action": "keep_as_new"})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "ready"
+    assert r.json()["versions"][0]["lifecycle_state"] == "ready"
+
+    # still there afterwards, as an ordinary document
+    r2 = gated_client(OWNER).get(f"/content-workspaces/{ws}/documents/{doc2}")
+    assert r2.status_code == 200
+    assert r2.json()["status"] == "ready"
+
+
+def test_resolve_duplicate_reuse_existing_deletes_the_document(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc2, _ = _make_duplicate(gated_client, monkeypatch, ws)
+
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc2}/resolve-duplicate",
+                                 json={"action": "reuse_existing"})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"document_id": doc2, "status": "deleted", "action": "reuse_existing"}
+
+    r2 = gated_client(OWNER).get(f"/content-workspaces/{ws}/documents/{doc2}")
+    assert r2.status_code == 404
+
+
+def test_resolve_duplicate_cancel_deletes_the_document_and_is_logged_distinctly(
+        gated_client, monkeypatch, isolated_store):
+    ws = _make_workspace(gated_client)
+    doc2, _ = _make_duplicate(gated_client, monkeypatch, ws)
+
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc2}/resolve-duplicate",
+                                 json={"action": "cancel"})
+    assert r.status_code == 200, r.text
+
+    r2 = gated_client(OWNER).get(f"/content-workspaces/{ws}/documents/{doc2}")
+    assert r2.status_code == 404
+
+    decisions = isolated_store.list_decisions()
+    assert any(d["action"] == "content_workspace.duplicate_cancel" for d in decisions)
+    assert not any(d["action"] == "content_workspace.duplicate_reuse_existing" for d in decisions)
+
+
+def test_resolve_duplicate_404s_for_a_foreign_owner(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client, owner=OWNER)
+    doc2, _ = _make_duplicate(gated_client, monkeypatch, ws)
+    r = gated_client(OTHER).post(f"/content-workspaces/{ws}/documents/{doc2}/resolve-duplicate",
+                                 json={"action": "cancel"})
+    assert r.status_code == 404
