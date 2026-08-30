@@ -1568,6 +1568,7 @@ def start_workers() -> int:
     def _sweep():
         import time as _t
         import sweeper as _sweeper
+        import content_workspace_retention as _retention
         ticks = 0
         while True:
             try:
@@ -1577,6 +1578,11 @@ def start_workers() -> int:
                 # window for orphaned-scan detection uses sweeper.py's own env-driven
                 # default (ACP_SWEEP_GRACE_S, 600s) — no prior production value to match.
                 _sweeper.run_sweep(get_store(), lease_seconds=1800)
+                # ADR 0044 / PRD §28: same thread, same "wire it in or it never runs in
+                # production" lesson this loop's own history already taught (see the comment
+                # above this function) — a separate, untested-in-production thread is exactly
+                # how a capability sits fully built and never actually fires.
+                _retention.run_content_workspace_retention_sweep(get_store())
                 ticks += 1
                 if ticks % 60 == 0:      # ~hourly: trim old completed jobs so the jobs
                     d = get_store().purge_done_jobs(older_than_hours=24)   # table + claim index don't bloat (audit P2)
