@@ -54,7 +54,7 @@ PRESET = "acp-core-17"
 
 # Coverage floor, by format. Update ONLY upward, and only alongside the fixtures that earned it.
 # Written down rather than computed so a drop is a diff someone has to justify in review.
-BASELINE = {"docx": 15, "xlsx": 0, "pptx": 0, "pdf": 0}
+BASELINE = {"docx": 15, "xlsx": 4, "pptx": 0, "pdf": 0}
 
 
 def applicable_pairs() -> dict[str, list[str]]:
@@ -92,10 +92,22 @@ def _docx_declared() -> set[str]:
     return declared
 
 
+def _xlsx_declared() -> set[str]:
+    """Criteria the .xlsx corpus declares an expectation for.
+
+    Cheaper than the .docx path: `gen_xlsx_corpus` keeps its declared set in a constant, because
+    its fixtures were built after the .docx ones and could be written to expose it. The constant
+    is held honest against the fixtures themselves by tests/test_xlsx_corpus.py, so reading it
+    here is not taking a claim on trust.
+    """
+    import gen_xlsx_corpus
+    return set(gen_xlsx_corpus.DECLARED)
+
+
 # One entry per format. A format with no generator is absent here rather than mapped to a stub
 # that returns an empty set: "nobody has written one" and "the generator found nothing" are
 # different states, and the report distinguishes them.
-GENERATORS = {"docx": _docx_declared}
+GENERATORS = {"docx": _docx_declared, "xlsx": _xlsx_declared}
 
 
 def coverage() -> dict:
