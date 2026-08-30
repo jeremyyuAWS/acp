@@ -454,6 +454,30 @@ def test_scoped_by_owner_and_source(isolated_store):
     assert [i["file"] for i in items] == ["alices.pptx"]
 
 
+def test_a_completed_scan_with_no_inventory_rows_is_never_the_source(isolated_store):
+    """The gap this closes: before core.store.save_scan also wrote scan_inventory, the
+    MONOLITHIC scan path (core._do_scheduled_scan, and routes/scans.py when
+    ACP_DEFER_ANALYSIS_TO_ASSESS=0) left a completed scan_runs row with ZERO scan_inventory
+    rows. The plain 'most recent completed scan' query would return that scan_id, and the
+    second query would come back `[]` — a REAL empty list, not None — which every caller here
+    (core._drive_sync_plan and friends) distinguishes from 'no prior scan' and would use as a
+    genuine, if empty, baseline: a delta reconstruction that discards almost the whole estate.
+    A scan_runs row with no matching scan_inventory rows must be skipped entirely, the same as
+    if the scan never happened."""
+    _seed_completed_scan(isolated_store, "s1", "a@b.c", "drive", "2026-01-01T00:00:00Z", [])
+    assert isolated_store.latest_scan_inventory_items("a@b.c", "drive") is None
+
+
+def test_an_older_scan_with_inventory_is_used_when_the_newest_one_has_none(isolated_store):
+    """Not just 'give up' — an OLDER real baseline is still usable when the newest completed
+    scan happens to be one that left no inventory behind."""
+    _seed_completed_scan(isolated_store, "s1", "a@b.c", "drive", "2026-01-01T00:00:00Z",
+                         [{"file": "old.pptx", "drive_file_id": "F1"}])
+    _seed_completed_scan(isolated_store, "s2", "a@b.c", "drive", "2026-02-01T00:00:00Z", [])
+    items = isolated_store.latest_scan_inventory_items("a@b.c", "drive")
+    assert [i["file"] for i in items] == ["old.pptx"]
+
+
 # ── /monitor/estate: last_skipped is distinct from a zero-file sweep ─────────────
 
 _MONITOR_KEY = "m0nitor-k3y"

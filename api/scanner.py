@@ -3816,6 +3816,11 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
 
         return {
             "_scan_id": scan_id,   # hint to save_scan so it reuses the same ID → trace joins
+            # Hint to save_scan so the MONOLITHIC path also populates scan_inventory (see there
+            # for why this matters) — the same raw `_list()` items ADR 0020's deferred discovery
+            # path already turns into scan_inventory rows in handlers._scan_discover's `norm`.
+            # Not part of the report's public shape: popped before anything else reads `report`.
+            "_inventory_items": items,
             "rubric": {"name": rb.name, "version": rb.version, "hash": rb.hash},
             "summary": summary,
             "started_at": started,
