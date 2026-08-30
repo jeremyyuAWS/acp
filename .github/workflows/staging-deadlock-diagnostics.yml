@@ -1,0 +1,258 @@
+# READ-ONLY diagnostic evidence retrieval. Zero configuration changes — no `az ... create/update/
+# delete` call appears anywhere in this workflow, only `show`/`list`/`query`.
+#
+# WHY THIS EXISTS: the 30 Aug 2026 incident review root-caused `psycopg2.pool.PoolError:
+# connection pool exhausted` recurring across 5 production revisions (16 API + 38 worker terminal
+# `DeadlockDetected` lines) to `Store -> init_schema -> cur.execute(stmt)` — AccessExclusive vs.
+# AccessShare lock contention during schema init — but the review could not retrieve the EXACT
+# conflicting SQL statements and relation names. This workflow retrieves that evidence. It does
+# NOT fix anything: the single-run migration structural fix to api/store.py's schema-init path is
+# separate, later, tracked work. See the final step of this workflow and its own report output,
+# both of which say so explicitly.
+#
+# TWO SOURCES, BOTH VIA KQL (not a direct Postgres connection to staging — see below):
+#   1. Production's EXISTING Log Analytics workspace (3e4c5202-f541-41ea-ab71-a677d91cf38e, per
+#      the incident review). READ-ONLY: the user explicitly authorized reading production
+#      diagnostics, never writing or changing anything there. Queried the same way the incident
+#      review's own evidence bundle did — KQL against `ContainerAppConsoleLogs_CL`.
+#   2. Staging's PostgreSQL flexible server logs, via the DEDICATED staging Log Analytics
+#      workspace that configure-staging-diagnostics.yml (workflow 1) applies diagnostic settings
+#      into. Queried via `az monitor log-analytics query` against the classic `AzureDiagnostics`
+#      table, category `PostgreSQLLogs`.
+#
+# WHY KQL FOR STAGING TOO, RATHER THAN A DIRECT `pg_stat_activity`/`pg_locks` CONNECTION: this
+# workflow extends validate-staging-azure.yml's exact pattern, which is explicit about "zero new
+# secrets" — reusing only the existing OIDC AZURE_CLIENT_ID/AZURE_TENANT_ID/AZURE_SUBSCRIPTION_ID.
+# A live `pg_stat_activity`/`pg_locks` query needs a Postgres connection string, which is a NEW
+# secret this workflow would have to introduce. Querying staging's own Postgres logs through the
+# Log Analytics workspace workflow 1 already routes them into avoids that entirely, at the cost of
+# only seeing what Postgres chose to LOG (not live lock-wait state) — acceptable for retrieving a
+# deadlock pattern that Postgres's own deadlock detector already logs by default.
+#
+# IF WORKFLOW 1 HASN'T RUN YET: the staging workspace won't exist. This workflow checks for it
+# explicitly and reports that clearly (not a failure) rather than erroring confusingly deep inside
+# a query step — see "Check staging workspace exists" below.
+#
+# Same safety pattern as validate-staging-azure.yml: workflow_dispatch only, zero new secrets,
+# staging-name check before any staging Azure call, redaction (reusing
+# scripts/validate_staging_azure.py's redact()/--redact-file) before the report is written to
+# disk, short-lived (7-day) artifact retention.
+
+name: staging-deadlock-diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      log_analytics_workspace:
+        description: "Name of the staging Log Analytics workspace (must match what configure-staging-diagnostics.yml created/used)."
+        required: false
+        type: string
+        default: "acp-staging-logs"
+      production_workspace_id:
+        description: "Production's Log Analytics workspace id (customer id, used for KQL queries) — READ-ONLY. Defaults to the id named in the 30 Aug 2026 incident review."
+        required: false
+        type: string
+        default: "3e4c5202-f541-41ea-ab71-a677d91cf38e"
+      lookback_hours:
+        description: "How many hours back to query on both sides."
+        required: false
+        type: string
+        default: "168"
+
+permissions:
+  id-token: write     # OIDC federation to Azure — no stored client secret, same as deploy-staging.yml
+  contents: read
+
+jobs:
+  retrieve:
+    runs-on: ubuntu-latest
+    # Dormant like the sibling staging workflows until staging exists.
+    if: vars.STAGING_FQDN != ''
+    env:
+      STAGING_RG: ${{ vars.STAGING_RG || 'mdk-accessibility' }}
+      LAW_NAME: ${{ inputs.log_analytics_workspace }}
+      PROD_WORKSPACE_ID: ${{ inputs.production_workspace_id }}
+      LOOKBACK_HOURS: ${{ inputs.lookback_hours }}
+      SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Azure SDK deps
+        run: python -m pip install --quiet -r api/requirements.txt
+
+      - name: Staging-name safety check (before any Azure call)
+        run: |
+          set -euo pipefail
+          case "$(echo "$LAW_NAME" | tr '[:upper:]' '[:lower:]')" in
+            *staging*) ;;
+            *) echo "::error::REFUSING to run: log_analytics_workspace '$LAW_NAME' does not look like a dedicated staging workspace (must contain 'staging')."; exit 1 ;;
+          esac
+          echo "OK: reading from staging workspace '$LAW_NAME' and production workspace id (read-only) '$PROD_WORKSPACE_ID'"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure the log-analytics query CLI surface is available
+        run: az extension add -n log-analytics -y 2>/dev/null || echo "log-analytics query already built in to this az CLI version — continuing."
+
+      - name: Check staging workspace exists (workflow 1 must have run first)
+        id: staging_ws
+        run: |
+          set -euo pipefail
+          STAGING_WS_ID=$(az monitor log-analytics workspace show \
+            --subscription "$SUBSCRIPTION" -g "$STAGING_RG" -n "$LAW_NAME" \
+            --query customerId -o tsv 2>/dev/null || echo "")
+          if [ -z "$STAGING_WS_ID" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Staging workspace '$LAW_NAME' does not exist yet. Run configure-staging-diagnostics.yml first, then re-run this workflow once it has had a few minutes to start collecting logs. This run will still attempt to retrieve production-side evidence."
+          else
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "staging_ws_id=$STAGING_WS_ID" >> "$GITHUB_OUTPUT"
+            echo "Staging workspace found: customerId=$STAGING_WS_ID"
+          fi
+
+      - name: Start report
+        run: |
+          set -euo pipefail
+          {
+            echo "# Staging + production deadlock diagnostic evidence"
+            echo
+            echo "**This is diagnostic evidence only. It does not claim the deadlock root cause is"
+            echo "resolved. The single-run migration structural fix to api/store.py's schema-init"
+            echo "path is separate, later, tracked work.**"
+            echo
+            echo "- generated at: $(date -u +%FT%TZ)"
+            echo "- lookback window: ${LOOKBACK_HOURS}h"
+            echo "- staging workspace: \`$LAW_NAME\` (found: ${{ steps.staging_ws.outputs.found }})"
+            echo "- production workspace id (read-only): \`<prod-workspace-id>\`"
+            echo
+          } >> report.md
+
+      - name: Query production — ContainerAppConsoleLogs_CL for DeadlockDetected / Store->init_schema pattern
+        run: |
+          set -euo pipefail
+          # Same table style the incident review's own evidence bundle used. Two queries:
+          # (a) a count/summary of DeadlockDetected terminal lines by app (api vs worker), to
+          #     confirm the review's own "16 API + 38 worker" figure is still the shape;
+          # (b) the actual log lines mentioning "DeadlockDetected" together with "init_schema" or
+          #     "Store", which is where the exact conflicting SQL/relation names live if Postgres
+          #     logged them into the container's own stdout/stderr (psycopg2/asyncpg error text
+          #     typically includes the conflicting relation name directly).
+          SUMMARY_KQL='ContainerAppConsoleLogs_CL
+            | where TimeGenerated > ago('"${LOOKBACK_HOURS}"'h)
+            | where Log_s has "DeadlockDetected"
+            | summarize count() by ContainerAppName_s, bin(TimeGenerated, 1h)
+            | order by TimeGenerated desc'
+
+          DETAIL_KQL='ContainerAppConsoleLogs_CL
+            | where TimeGenerated > ago('"${LOOKBACK_HOURS}"'h)
+            | where Log_s has "DeadlockDetected" or (Log_s has "init_schema" and Log_s has_any ("deadlock", "lock", "conflict"))
+            | project TimeGenerated, ContainerAppName_s, RevisionName_s, Log_s
+            | order by TimeGenerated desc
+            | take 200'
+
+          echo "## Production — DeadlockDetected summary (last ${LOOKBACK_HOURS}h)" >> report.md
+          echo '```' >> report.md
+          az monitor log-analytics query --subscription "$SUBSCRIPTION" \
+            -w "$PROD_WORKSPACE_ID" --analytics-query "$SUMMARY_KQL" -o table >> report.md 2>&1 || \
+            echo "(query failed or returned no rows — see workflow log for the exact error)" >> report.md
+          echo '```' >> report.md
+          echo >> report.md
+
+          echo "## Production — DeadlockDetected / Store->init_schema detail lines (last ${LOOKBACK_HOURS}h, up to 200)" >> report.md
+          echo '```' >> report.md
+          az monitor log-analytics query --subscription "$SUBSCRIPTION" \
+            -w "$PROD_WORKSPACE_ID" --analytics-query "$DETAIL_KQL" -o json >> report.md 2>&1 || \
+            echo "(query failed or returned no rows — see workflow log for the exact error)" >> report.md
+          echo '```' >> report.md
+          echo >> report.md
+
+      - name: Query staging — Postgres deadlock / lock-wait log entries
+        if: steps.staging_ws.outputs.found == 'true'
+        env:
+          STAGING_WS_ID: ${{ steps.staging_ws.outputs.staging_ws_id }}
+        run: |
+          set -euo pipefail
+          # AzureDiagnostics is the classic diagnostic-settings table (what
+          # configure-staging-diagnostics.yml's `az monitor diagnostic-settings create --logs`
+          # writes into, absent an explicit resource-specific-table opt-in). Category
+          # "PostgreSQLLogs" carries Postgres's own server log lines, which include its deadlock
+          # detector's output by default ("deadlock detected", "Process N waits for ... blocked
+          # by process M", conflicting relation names) whenever a deadlock actually occurs.
+          STAGING_KQL='AzureDiagnostics
+            | where TimeGenerated > ago('"${LOOKBACK_HOURS}"'h)
+            | where Category == "PostgreSQLLogs"
+            | where Message has_any ("deadlock", "lock", "conflict", "AccessExclusiveLock", "AccessShareLock")
+            | project TimeGenerated, Resource, Message
+            | order by TimeGenerated desc
+            | take 200'
+
+          echo "## Staging — Postgres deadlock / lock-wait log entries (last ${LOOKBACK_HOURS}h, up to 200)" >> report.md
+          echo '```' >> report.md
+          az monitor log-analytics query --subscription "$SUBSCRIPTION" \
+            -w "$STAGING_WS_ID" --analytics-query "$STAGING_KQL" -o json >> report.md 2>&1 || \
+            echo "(query failed, or returned no rows — expected if staging has not yet reproduced a deadlock, or if logs have not started flowing yet since configure-staging-diagnostics.yml last ran)" >> report.md
+          echo '```' >> report.md
+          echo >> report.md
+
+      - name: Note absent staging evidence
+        if: steps.staging_ws.outputs.found != 'true'
+        run: |
+          set -euo pipefail
+          {
+            echo "## Staging — Postgres deadlock / lock-wait log entries"
+            echo
+            echo "SKIPPED: staging workspace '$LAW_NAME' does not exist yet. Run"
+            echo "configure-staging-diagnostics.yml (workflow 1) first, then re-run this workflow."
+            echo "Staging currently has no retained diagnostic logs at all until that workflow"
+            echo "has run at least once — this is the exact gap the incident review flagged."
+            echo
+          } >> report.md
+
+      - name: Closing note
+        run: |
+          set -euo pipefail
+          {
+            echo "## What this is, and is not"
+            echo
+            echo "This report is diagnostic evidence only. It does not fix, mitigate, or claim to"
+            echo "resolve the connection-pool-exhaustion / deadlock incident. The structural fix"
+            echo "(making Store's schema-init path single-run rather than racing across API +"
+            echo "worker revisions) is a code change to api/store.py, tracked as separate, later"
+            echo "work — not part of this workflow or this PR."
+          } >> report.md
+
+      - name: Redact the report before upload
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_staging_azure.py --redact-file report.md \
+            --secret "<subscription>=$SUBSCRIPTION" \
+            --secret "<prod-workspace-id>=$PROD_WORKSPACE_ID" \
+            --secret "<staging-workspace-id>=${{ steps.staging_ws.outputs.staging_ws_id }}"
+
+      - name: Upload redacted report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-deadlock-diagnostics-report
+          path: report.md
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Staging + production deadlock diagnostics — read-only"
+            echo
+            echo "Diagnostic evidence only; the single-run migration structural fix is separate,"
+            echo "tracked work. See the uploaded report artifact for the actual query results."
+          } >> "$GITHUB_STEP_SUMMARY"
