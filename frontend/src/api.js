@@ -615,7 +615,16 @@ export const refreshScanSPToken = (scanId) => (SIM
 export const clearScanTokens = (scanId) => (SIM
   ? sim({ cleared: true })
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/tokens`, { method: 'DELETE', headers: headers() }).then(j))
-export const getScan = (id) => (SIM ? sim(simGetScan(id)) : fetch(`${BASE}/scans/${id}`, { headers: headers() }).then(j))
+// A caller already holding `run.revision` can pass it as `knownRevision` to send
+// `If-None-Match` — the backend bumps scan_runs.revision on every write that would change this
+// response (Discover/Assess/Remediate/Publish), so a match means "nothing changed" and the
+// backend skips recomputing/reshipping the full file_records+issue_records join. A 304 resolves
+// to NOT_MODIFIED rather than throwing, so callers opt in by checking the return value — nothing
+// about the plain `getScan(id)` call (no second argument, no If-None-Match header) changes.
+export const NOT_MODIFIED = Symbol('scan-not-modified')
+export const getScan = (id, knownRevision = null) => (SIM ? sim(simGetScan(id)) : fetch(`${BASE}/scans/${id}`, {
+  headers: headers(knownRevision != null ? { 'If-None-Match': `W/"${knownRevision}"` } : {}),
+}).then((r) => (r.status === 304 ? NOT_MODIFIED : j(r))))
 // The merged live-assessment snapshot (KPIs + funnel + worker/queue block) for the running screen.
 // SIM has no live pipeline → available:false (the panel renders nothing).
 export const getScanLive = (id) => (SIM ? sim({ available: false }) : fetch(`${BASE}/scans/${id}/live`, { headers: headers() }).then(j))

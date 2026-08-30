@@ -715,11 +715,32 @@ def active_scan(request: Request):
 
 
 @router.get("/scans/{sid}")
-def scan(sid: str, request: Request):
-    res = core.store.get_scan(sid, owner=_owner(request))
+def scan(sid: str, request: Request, response: Response):
+    """The full per-file payload (file_records, issue_records) — the one genuinely heavy read
+    in the app (get_scan's own docstring covers the query shape). Conditional-fetch support
+    (ETag / If-None-Match) so a caller re-fetching a scan it already has doesn't pay that cost
+    when nothing changed: `scan_runs.revision` is bumped on every write that would change this
+    response (Discover/Assess/Remediate/Publish all go through the same bump_revision path), so
+    it is exactly the freshness key an ETag needs. get_scan_head() is the SAME cheap
+    id/status/revision-only lookup GET /workspace/bootstrap already uses for this — one indexed
+    row read, none of get_scan's joins — so a matched ETag costs almost nothing, in contrast to
+    the query this whole mechanism exists to let a caller skip.
+
+    Weak (`W/`) because equality here is semantic (same revision), not a byte-identical response
+    — the freshness enrichment below is computed fresh every call regardless.
+    """
+    owner = _owner(request)
+    head = core.store.get_scan_head(sid, owner=owner)
+    if head is None:
+        raise HTTPException(404, "scan not found")
+    etag = f'W/"{head["revision"]}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304)
+    res = core.store.get_scan(sid, owner=owner)
     if res is None:
         raise HTTPException(404, "scan not found")
     res["run"]["freshness"] = _scan_freshness(sid, res["run"])
+    response.headers["ETag"] = etag
     return res
 
 
