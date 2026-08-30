@@ -2760,6 +2760,30 @@ def _analyse_office(dest: Path) -> dict:
         # logged below once we know, rather than guessed at here.
         aborted = f"timed out after {timeout_s}s"
         print(f"[scan] office CLI timed out after {timeout_s}s on {dest}", flush=True)
+    except OSError as e:
+        # The CLI could not be LAUNCHED at all — no dotnet on PATH, DOTNET pointing at nothing,
+        # the dll absent, the binary not executable. Every other CLI failure above is already
+        # handled as a result rather than an exception, and `analyse_and_assess`'s docstring
+        # states the contract in terms: "Engines catch their own errors and return an error
+        # result rather than raising." This branch was the one path that broke it.
+        #
+        # It is not a theoretical gap, and its blast radius is not the scan it kills. The
+        # residual re-scan that decides whether a reviewer-approved value may be CREDITED
+        # (proposals.verify_residual_scs) wraps its whole body in `except Exception: return
+        # None`, and `_apply_one_value_kind` reads None as "cleared" so an infra hiccup never
+        # penalises remediation. Chain those two and a host with no analyser credits every
+        # approved value and certifies the file, on a re-scan that never ran — the file is
+        # published as fixed having been checked by nothing.
+        #
+        # Degrading here restores what the surrounding code already does for a crash, an abort
+        # and unparseable output: `res` stays {}, the caller substitutes "no engine result", and
+        # the files bucket as engine-error. The first-party lanes in analyse_and_assess run
+        # AFTER this call, each in its own try/except, so they still report — which is why a
+        # 2.4.4 finding (office_structure, pure Python) survives a missing .NET runtime and can
+        # be verified on a host that has none.
+        aborted = f"could not be launched ({type(e).__name__}: {e})"
+        print(f"[scan] office CLI could not be launched on {dest}: {type(e).__name__}: {e} — "
+              f"files will be recorded as engine-error", flush=True)
     res = {}
     if out.exists():
         # A truncated write is the other half of the same crash, and json.loads raises on it.

@@ -77,10 +77,24 @@ _LANE_CONSTS = ("_LINK_SCS_BY_EXT", "_SENSORY_EXTS", "_LANGUAGE_EXTS", "_STRUCTU
 
 # A lane is remediation-VERIFIED only when a test writes an approved value and then checks the
 # saved document through the real path — not when the applier returns without raising, and not
-# when a re-scan is simulated. No lane meets that bar today: the existing apply tests drive
-# handlers._apply_approved_values with residual=set(), supplying the re-scan result rather than
-# performing it. Populate this as lanes earn it; each entry must name the test.
-REMEDIATION_VERIFIED: dict[tuple[str, str], str] = {}
+# when a re-scan is simulated. Every OTHER apply test drives handlers._apply_approved_values with
+# residual=set(), supplying the re-scan result rather than performing one, which is why this was
+# empty when the report shipped. Populate it as lanes earn it; each entry must name its test.
+#
+# What an entry claims, exactly: ACP's own criterion stops firing on a document ACP changed, and
+# the document survived the change. It is NOT a claim that the result conforms — a detector
+# keying on link text alone approximates "Link Purpose (In Context)" in both directions, and no
+# automated check can confirm a screen reader announces the new text usefully.
+REMEDIATION_VERIFIED: dict[tuple[str, str], str] = {
+    ("2.4.4", "docx"): (
+        "tests/test_remediation_verified_docx_link.py — a real assessment reports 2.4.4, the "
+        "proposer offers a value, a reviewer approves it, handlers._apply_approved_values writes "
+        "it with the re-scan UNPATCHED, and the saved package is re-opened: the visible text "
+        "changed, the href, the other hyperlink, the emphasised runs and the table did not, the "
+        "file still opens, and a second real assessment no longer reports 2.4.4. Negative "
+        "controls: an approved value that is itself vague is written but never credited, and an "
+        "already-descriptive document is left byte-identical"),
+}
 
 
 def _load(name: str, path: Path):

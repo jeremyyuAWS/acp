@@ -115,20 +115,56 @@ def test_every_disproven_cell_names_a_test_file_that_exists():
 
 # ── remediation-verified means the document was checked, not the applier ─────────
 
-def test_no_lane_is_remediation_verified_yet_and_the_bar_is_written_down():
-    """Today's honest answer is zero, and the reason is worth keeping visible: the existing apply
-    tests supply the re-scan result (`residual=set()`) rather than performing one, so no test has
-    checked a written document through the real path.
-
-    When a lane earns it this fails, and the fix is to add the entry — the assertion is the
-    reminder, not a requirement that the count stay zero."""
+def test_every_verified_lane_names_a_test_that_exists():
+    """The count is only worth reading if each entry cites something. An escape hatch citing
+    nothing is just an assertion, so the file it names has to be on disk."""
     d = gcl.levels()["remediation_verified"]
     assert d["count"] == len(gcl.REMEDIATION_VERIFIED)
-    assert d["count"] == 0, (
-        f"a lane is now claimed remediation-verified ({sorted(gcl.REMEDIATION_VERIFIED)}) — check "
-        f"it names a test that writes an approved value AND re-opens the saved document through "
-        f"the real path, then update this assertion")
     assert d["of"] == len(gcl.write_lanes()) and d["of"] > 0
+    for (sc, fmt), why in gcl.REMEDIATION_VERIFIED.items():
+        named = [w for w in why.split() if w.startswith("tests/") and w.endswith(".py")]
+        assert named, f"{sc} {fmt} claims remediation-verified without naming a test: {why!r}"
+        for path in named:
+            assert (ROOT / path).exists(), f"{sc} {fmt} names {path}, which does not exist"
+
+
+def test_a_verified_lane_may_not_rest_on_a_simulated_rescan():
+    """THE bar, made mechanical rather than promised.
+
+    The distinction this level exists to draw is between "the applier returned without raising"
+    and "the saved document was re-opened and the criterion was gone". Every apply test in the
+    repo except the ones cited here patches `_verify_residual_scs` and hands the lane its answer
+    (`residual=set()`), which asserts what the lane does GIVEN a clean re-scan and says nothing
+    about whether a re-scan of those bytes would be clean.
+
+    So a cited test that patches the re-scan is not evidence of what it is being cited for, and
+    this fails rather than trusting the entry's prose. Written as a check on the CITED file
+    specifically: patching it elsewhere is normal and fine.
+
+    Parsed, not grepped, and the difference was not hypothetical — the first version scanned raw
+    lines and failed immediately on the cited file, because that file's own docstring QUOTES the
+    `monkeypatch.setattr(handlers, "_verify_residual_scs", …)` line from
+    tests/test_apply_approved_values.py to explain what it is doing differently. A guard that
+    cannot tell a patch from a description of one would be answered by deleting the explanation,
+    which is the opposite of what should happen."""
+    import ast
+
+    for (sc, fmt), why in gcl.REMEDIATION_VERIFIED.items():
+        for path in [w for w in why.split() if w.startswith("tests/") and w.endswith(".py")]:
+            tree = ast.parse((ROOT / path).read_text(), filename=path)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                fn = node.func
+                if not (isinstance(fn, ast.Attribute) and fn.attr in ("setattr", "setitem")):
+                    continue
+                names = {a.value for a in ast.walk(node) if isinstance(a, ast.Constant)
+                         and isinstance(a.value, str)}
+                names |= {a.attr for a in ast.walk(node) if isinstance(a, ast.Attribute)}
+                if "_verify_residual_scs" in names or "verify_residual_scs" in names:
+                    raise AssertionError(
+                        f"{sc} {fmt} is claimed remediation-verified on {path}, but that file "
+                        f"patches the re-scan it is cited for, at {path}:{node.lineno}")
 
 
 def test_the_write_lanes_come_from_handlers_not_from_a_list_here():
