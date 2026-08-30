@@ -448,9 +448,33 @@ The other direction has its own guard: `lastTwoWiring.test.jsx` sweeps every com
 the approved design boards and fails if any is not rendered by some screen. Retired features are
 not on that list; components that are supposed to be live are.
 
-**Currently retired and mounted nowhere** (frontend/src): `AssessScope`, `ConfidenceDashboard`,
-`ControlPlane`, `Disposition`, `FileTypeConfig`, `RiskScore`, `RolePrivilege`, `Rubric`,
-`ScanScope`, `ScopeRules`, `ScreenReaderDemo`, `Upload`. Do not delete these, and do not "wire them
-back in" because they look unfinished — several were removed on purpose, and one
-(`RemediationFixPreview`, since deleted) shipped live in exactly that way after a session read
-*unmounted* as *unfinished*. Check the git history and the issues before assuming a gap.
+**Currently retired or unmounted, and mounted nowhere** (frontend/src): `AssessScope`,
+`ConfidenceDashboard`, `ControlPlane`, `Dashboard`, `Disposition`, `FileTypeConfig`,
+`LiveAssessment`, `ProcessingDetails`, `RiskScore`, `RolePrivilege`, `Rubric`, `ScanScope`,
+`ScanSetup`, `ScopeFunnel`, `ScopeRules`, `ScreenReaderDemo`, `Upload`.
+
+Do not delete these, and do not "wire them back in" because they look unfinished — several were
+removed on purpose, and one (`RemediationFixPreview`, since deleted) shipped live in exactly that
+way after a session read *unmounted* as *unfinished*. Check the git history and the issues before
+assuming a gap.
+
+**This list is enforced, not maintained by hand.** `unmountedComponents.test.jsx` derives the set
+and asserts it matches this paragraph exactly, in both directions — a component that stops being
+rendered fails until it is added here, and a listed one that gets mounted fails until it is removed.
+Update the two together; they are the same fact.
+
+**Why it is enforced now.** It was hand-maintained and it drifted. A 2026-08-30 audit found
+**17** unmounted components against the **12** listed — and two of the five missing ones
+(`ScopeFunnel`, `ProcessingDetails`) were additionally *imported* by `App.jsx` without ever being
+rendered, so the tree read as wired to anyone who grepped. `ScopeFunnel` was worse: `live_snapshot.py`
+cited it twice as the authority for the eligible-count figure — a backend docstring grounding a
+number's honesty in a surface no user has ever seen. Both imports and both citations are now gone.
+
+Four of these (`Dashboard`, `ProcessingDetails`, `ScanSetup`, `ScopeFunnel`) were **never mounted at
+any point in this repo's history** — verified with `git log -S`. They are unbuilt, not retired, which
+is a different thing and worth knowing before treating one as a feature someone removed.
+
+Note what is deliberately NOT on the list: `Transparency.jsx` and `charts.jsx` have no default export
+and exist only for their named ones (`TraceChip`, `RuleBreakdown`, `Donut`, `Bars`), which are
+imported and used throughout. A module with no component to mount is not an orphan; an earlier pass
+of the audit flagged both, and that was the false positive.

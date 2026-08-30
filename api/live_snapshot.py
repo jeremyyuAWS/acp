@@ -13,8 +13,8 @@ The fixed mapping is theirs, not a new one: `certifiable → passed`, `uncertain
 `error → couldn't be assessed`, `processing = files − completed`. Deriving KPIs from a different path
 (e.g. re-tallying `scan_rule_traces`) is exactly the divergence this reuses the source to avoid.
 
-Honest by construction (ADR 0016): the canonical denominator is the assessment-eligible count — the
-same figure `ScopeFunnel` shows via `estate_inventory.funnel_facts` — and the three denominators
+Honest by construction (ADR 0016): the canonical denominator is the assessment-eligible count, read
+from `estate_inventory.funnel_facts` — and the three denominators
 (`discovered ≥ eligible ≥ completed`) are kept separate, never blended into one moving percentage.
 KPIs that need live job-queue introspection (the leased/queued split, per-worker activity, pool
 throughput) or a separate trace pass (a per-finding count) are NOT invented here — they are named in
@@ -39,9 +39,14 @@ def _pos_int(v) -> int:
 
 def _eligible_denominator(run: dict, total_files: int) -> tuple[int, int]:
     """(discovered, eligible). Eligible is the assessment-eligible count from the scan's OWN recorded
-    estate funnel — the same figure ScopeFunnel uses — falling back to the scan's queued file count
+    estate funnel (`estate_inventory.funnel_facts`), falling back to the scan's queued file count
     when no inventory was recorded (older / local scans); the two reconcile, since the scan queues the
-    assessable files. Never raises: a malformed scope degrades to the queued count."""
+    assessable files. Never raises: a malformed scope degrades to the queued count.
+
+    Both citations here used to read "the same figure `ScopeFunnel` shows", grounding this number's
+    honesty in a UI surface — and `ScopeFunnel.jsx` has never been rendered by any screen in this
+    repo's history (2026-08-30 audit). The figure's authority is `funnel_facts`, which is real; the
+    component was never the corroboration it was cited as."""
     scope = run.get("scope")
     inv = scope.get("inventory") if isinstance(scope, dict) else None
     if inv:
