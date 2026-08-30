@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { getJobs, listScanDecisions, remediateScan } from './api.js'
+import { listScanDecisions, remediateScan } from './api.js'
+import { subscribeJobs } from './jobsFeed.js'
 import { outcomeFor, OUTCOMES, autoLaneSize } from './fixOutcome.js'
 
 // R8 · If a fix fails — what a person sees, and can do, when remediation of a document does not
@@ -137,12 +138,17 @@ export default function FixOutcomes({ scanId, files, cap = null,
   useEffect(() => {
     onRef.current = true
     if (!scanId) return undefined
-    const load = () => Promise.all([listScanDecisions(scanId), getJobs()])
-      .then(([d, j]) => { if (onRef.current) { setDecisions(d || []); setJobs(j?.jobs || []); setErr('') } })
+    // Two independent reads that used to share one timer: the decisions list is per-scan and
+    // stays a private poll, while /jobs rides the shared subscription every other consumer uses.
+    const load = () => listScanDecisions(scanId)
+      .then((d) => { if (onRef.current) { setDecisions(d || []); setErr('') } })
       .catch((e) => { if (onRef.current) setErr(e?.message || 'unavailable') })
     load()
     const t = setInterval(load, 6000)
-    return () => { onRef.current = false; clearInterval(t) }
+    const stop = subscribeJobs(null, (j) => { setJobs(j?.jobs || []) },
+                               { intervalMs: 6000,
+                                 onError: (e) => setErr(e?.message || 'unavailable') })
+    return () => { onRef.current = false; clearInterval(t); stop() }
   }, [scanId])
 
   const retry = (r) => {

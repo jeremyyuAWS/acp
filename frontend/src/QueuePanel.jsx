@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { getJobs, setWorkers, clearDeadJobs, getWorkerReplicas } from './api.js'
+import { subscribeJobs } from './jobsFeed.js'
 import { TraceChip } from './Transparency.jsx'
 import { phaseLine, isStalled, STALLED_AFTER_S } from './jobPhase.js'
 import { diagnoseWorkerHealth } from './workerDiagnosis.js'
@@ -82,27 +83,29 @@ export default function QueuePanel({ focusScanId = null, onClearFocus = null }) 
   const [throughput, setThroughput] = useState(null)   // jobs/min, or null until 2+ samples
 
   useEffect(() => {
-    let on = true
-    const load = () => getJobs()
-      .then((d) => {
-        if (!on) return
-        setQ(d); setErr('')
-        const now = Date.now()
-        const done = d?.stats?.done ?? 0
-        const hist = [...historyRef.current, { t: now, done }].filter((s) => now - s.t <= 5 * 60 * 1000)
-        historyRef.current = hist
-        if (hist.length >= 2) {
-          const first = hist[0]
-          const elapsedMin = (now - first.t) / 60000
-          setThroughput(elapsedMin > 0 ? Math.max(0, (done - first.done) / elapsedMin) : null)
-        }
-      })
-      .catch((e) => { if (on) setErr(e.message || 'unavailable') })
-    load()
-    // 2s poll so the worker queue animates in near-real-time (running → done ticks,
-    // throughput, recent-job list) while a batch is churning — still light on the API.
-    const t = setInterval(load, 2000)
-    return () => { on = false; clearInterval(t) }
+    // Shared subscription (jobsFeed.js) — QueuePanel, Discover, AssessRunner, FailureLane and
+    // FixOutcomes all want this same unfiltered response, and each private timer cost another
+    // 5 connection-pool acquisitions per tick.
+    const onData = (d) => {
+      setQ(d); setErr('')
+      const now = Date.now()
+      const done = d?.stats?.done ?? 0
+      const hist = [...historyRef.current, { t: now, done }].filter((s) => now - s.t <= 5 * 60 * 1000)
+      historyRef.current = hist
+      if (hist.length >= 2) {
+        const first = hist[0]
+        const elapsedMin = (now - first.t) / 60000
+        setThroughput(elapsedMin > 0 ? Math.max(0, (done - first.done) / elapsedMin) : null)
+      }
+    }
+    // 2s so the worker queue animates in near-real-time (running → done ticks, throughput,
+    // recent-job list) while a batch is churning. The feed polls at the SHORTEST interval any
+    // subscriber asks for, so this stays 2s here while Discover's 10s worker strip rides the
+    // same request rather than adding a second one.
+    return subscribeJobs(null, onData, {
+      intervalMs: 2000,
+      onError: (e) => setErr(e.message || 'unavailable'),
+    })
   }, [])
 
   // Azure Container App replica config + capacity evidence — the SAME /control/workers/replicas

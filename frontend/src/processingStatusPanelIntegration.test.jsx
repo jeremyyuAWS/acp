@@ -29,6 +29,16 @@ vi.mock('./api.js', () => ({
   getQueueEstimate: (...a) => getQueueEstimate(...a),
 }))
 
+// jobsFeed.js shares ONE GET /jobs subscription across every component that wants it, and keeps
+// its cached payload across unmount on purpose: a remount seconds later should draw immediately,
+// and the payload carries its real fetchedAt plus a `stale` flag so it cannot pass as fresh.
+// Within a test file that means one test's cache would otherwise answer the next test's mock.
+// Reset it explicitly here — the module's production behaviour is deliberate and is covered in
+// jobsFeed.test.js; it is this file that needs a cold start, not the cache that needs weakening.
+import { resetJobsFeed } from './jobsFeed.js'
+beforeEach(() => { resetJobsFeed() })
+
+
 const { default: AssessRunner } = await import('./AssessRunner.jsx')
 
 let container, root

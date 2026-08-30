@@ -3,6 +3,7 @@ import { CAPABILITY_FALLBACK } from './capability.js'
 import { SCOPE_UNIVERSE } from './scopePresets.js'
 import { TRACKED_17 } from './ruleDetails.js'
 
+import { noteAuthChange } from './apiIdentity.js'
 const BASE = import.meta.env.VITE_API ?? 'http://localhost:8077'
 
 // Per-user tokens (real mode only). In SIM mode nothing touches a real Drive / OneDrive.
@@ -10,11 +11,18 @@ let driveToken = null
 let spToken = null
 let googleToken = null  // GIS Bearer token (auth mode = "gis")
 let msToken = null      // Microsoft (Entra) access token — the API Bearer for a Microsoft sign-in
+// Identity changes are recorded in apiIdentity.js — see that module for why it is separate.
+// Anything caching per-user data keys on it, so a response fetched for one account can never be
+// handed to the next.
 export const setDriveToken = (t) => { driveToken = t }
 export const setSPToken = (t) => { spToken = t }
-export const setGoogleToken = (t) => { googleToken = t }
-export const setMsToken = (t) => { msToken = t }
-export const clearAllTokens = () => { googleToken = null; msToken = null; driveToken = null; spToken = null }
+export const setGoogleToken = (t) => { const w = googleToken; googleToken = t; noteAuthChange(w, t) }
+export const setMsToken = (t) => { const w = msToken; msToken = t; noteAuthChange(w, t) }
+export const clearAllTokens = () => {
+  const had = googleToken || msToken
+  googleToken = null; msToken = null; driveToken = null; spToken = null
+  noteAuthChange(had, null)
+}
 export const getToken = () => googleToken || msToken || null
 // The Authorization bearer is Google's token when present, else the Microsoft one — tagged with
 // X-Auth-Provider so the backend verifies it against the right issuer (Graph, not Google's
@@ -74,15 +82,23 @@ const j = async (r) => {
     // Microsoft user with no Google Drive bounced the whole session to "expired".
     if (r.headers.get('X-Acp-Auth') === 'session') {
       googleToken = null; msToken = null
+      noteAuthChange(1, 0)   // same identity change as clearAllTokens; caches must not survive it
       window.dispatchEvent(new CustomEvent('acp:session-expired', { detail: { reason: SESSION_EXPIRED } }))
       throw new Error(SESSION_EXPIRED)
     }
   }
   if (!r.ok) {
     let detail = `${r.status} ${r.statusText}`
+    let payload = null
     try {
       const body = await r.json()
-      if (body?.detail) detail = body.detail
+      payload = body
+      // `message` is the human sentence when the server wrote one; `detail` is the machine tag.
+      // Preferring detail put strings like "database_busy" in front of users — the overload 503
+      // carries a written explanation precisely so it does not have to. Fall back to detail for
+      // every endpoint that only sends that.
+      if (body?.message) detail = body.message
+      else if (body?.detail) detail = body.detail
     } catch (_) { /* body wasn't JSON */ }
     if (r.status === 404 && SCAN_NOT_FOUND_DETAIL.test(String(detail).trim())) {
       const m = SCAN_URL_RE.exec(r.url || '')
@@ -97,6 +113,23 @@ const j = async (r) => {
       throw e
     }
     const e = new Error(detail)
+    // Carry the HTTP status on the error. Callers that must distinguish "the server proved it
+    // did nothing" from "we have no idea what happened" cannot do it from the message text —
+    // submitIntent.outcomeIsUncertain() is the first, and it decides whether a retry reuses its
+    // idempotency key or mints a new one. Without this the check reads `undefined` every time
+    // and silently answers "uncertain" for everything, which is the safe direction but is not a
+    // check.
+    e.status = r.status
+    // Machine-readable fields alongside the sentence, so a caller can branch without parsing
+    // prose: `code` (e.g. DB_CAPACITY_BUSY), `changes` ("none" | "unknown" — whether the server
+    // can prove nothing was written), and the ids needed to correlate or reconcile.
+    if (payload) {
+      if (payload.code) e.code = payload.code
+      if (payload.detail) e.detail = payload.detail
+      if (payload.changes) e.changes = payload.changes
+      if (payload.request_id) e.requestId = payload.request_id
+      if (payload.occurred_at) e.occurredAt = payload.occurred_at
+    }
     // A capability failure, not a transient one: every other card in the inbox would hit the
     // same missing model, so the auto-draft gate stops rather than asking N more times.
     if (r.status === 503 && AI_MODEL_NOT_PULLED_DETAIL.test(String(detail))) e.aiModelNotPulled = true
@@ -662,9 +695,14 @@ export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/sca
 
 // ── Durable async queue (ADR 0004/0005) ───────────────────────────────────────
 // Queued scan: runs in the worker pool, survives restarts, shows in /jobs + Grafana.
-export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null, exclude = null) => (SIM
+// `idempotencyKey` comes from submitIntent.js — one key per submit intent, the SAME key on a
+// retry of that intent. enqueue_scan looks it up owner-scoped and returns the original
+// (scan_id, job_id) rather than inserting, so a response lost after the commit resolves to the
+// job that already exists instead of creating a second scan. Optional so every existing caller
+// and test keeps working unchanged; without it the server behaves exactly as before.
+export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null, exclude = null, idempotencyKey = null) => (SIM
   ? sim({ scan_id: 'sim-scan', job_id: 'sim-job', queued: true, workers: 4 })
-  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}${excludeQ(exclude)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}&queue=true&fanout=true`, { method: 'POST', headers: headers() }).then(j))
+  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}${excludeQ(exclude)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}&queue=true&fanout=true`, { method: 'POST', headers: headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) }).then(j))
 // Read-only check on the SPECIFIC source + folders about to be scanned — run right before
 // doScan actually starts one, so a bad credential, a deleted folder, or a dead worker tier is
 // caught before a scan row exists rather than surfacing as "0 documents" after the fact.
