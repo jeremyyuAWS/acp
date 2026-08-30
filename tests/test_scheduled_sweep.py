@@ -300,6 +300,28 @@ def test_a_failed_change_check_falls_back_to_a_full_scan_never_a_skip(core_mod, 
     assert store.sweeps[-1]["ok"] is False
 
 
+class _FakePanic(BaseException):
+    """Stands in for pyo3_runtime.PanicException — a broken native cryptography/_cffi_backend
+    build surfaces as a BaseException subclass, deliberately NOT an Exception subclass, so
+    `except Exception` would let it propagate uncaught. core._drive_delta_check's docstring
+    justifies its wider `except BaseException` specifically for this case; this test is what
+    makes that justification checked rather than asserted in a comment nobody re-verifies."""
+
+
+def test_a_baseexception_from_the_change_check_still_falls_back_to_a_full_scan(
+        core_mod, monkeypatch):
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive"] = {"page_token": "tok-1"}
+    monkeypatch.setattr(scanner, "drive_changes_since",
+                        lambda svc, token: (_ for _ in ()).throw(_FakePanic("ABI mismatch")))
+    core._do_scheduled_scan()
+    assert calls["scans"] == ["drive"], (
+        "a BaseException (not just Exception) from the change check must still degrade to a "
+        "full scan, not propagate and crash the sweep — plain `except Exception` would not "
+        "catch this")
+
+
 def test_a_non_drive_source_never_consults_the_gate(core_mod, monkeypatch):
     import scanner
     core, store, calls = core_mod
@@ -481,6 +503,31 @@ def test_a_failed_sharepoint_change_check_falls_back_to_a_full_scan_never_a_skip
 
     core._do_scheduled_scan()
     assert calls["scans"] == ["sharepoint"], "an uncertain check must never cause a skip"
+
+
+def test_a_sharepoint_baseexception_from_the_change_check_still_falls_back_to_a_full_scan(
+        core_mod, monkeypatch):
+    """The SharePoint mirror of test_a_baseexception_from_the_change_check_still_falls_back_to_a_
+    full_scan above — core._sp_delta_check makes the identical `except BaseException` claim in
+    its own docstring."""
+    import scanner
+    import sp_sync
+    core, store, calls = core_mod
+    store.schedule["source"] = "sharepoint"
+    store.sync_cursors["sharepoint"] = {"page_token": "tok-1"}
+    monkeypatch.setattr(sp_sync, "sp_sync_configured", lambda: True)
+    monkeypatch.setattr(sp_sync, "sync_drive_id", lambda: "drv-1")
+    monkeypatch.setattr(sp_sync, "app_token", lambda: "TOK1")
+
+    def _panic(token, drive_id, link):
+        raise _FakePanic("ABI mismatch")
+    monkeypatch.setattr(scanner, "sp_delta_since", _panic)
+
+    core._do_scheduled_scan()
+    assert calls["scans"] == ["sharepoint"], (
+        "a BaseException (not just Exception) from the change check must still degrade to a "
+        "full scan, not propagate and crash the sweep — plain `except Exception` would not "
+        "catch this")
 
 
 # ── the happy path still works ────────────────────────────────────────────────────────

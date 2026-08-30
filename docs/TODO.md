@@ -364,6 +364,36 @@ quoting any of it.
 
 ---
 
+## P1e — PRD Phase 3 incremental sync: content_type is lost on every delta-sync reconstruction
+
+**Not fixed, tracked here (2026-08-30).** SharePoint's per-item Content Type
+(`scanner._sp_enrich_content_types`, a best-effort per-item Graph call) is genuinely persisted to
+`scan_inventory.content_type` by `store.add_inventory` — but is lost by the time a delta-sync
+reconstruction (`core._sp_sync_plan` / `_interactive_sp_sync_plan`) would need it, for two
+independent reasons, not one:
+
+1. `store.latest_scan_inventory_items` — the query that reads back a prior scan's inventory as a
+   reconstruction baseline — does not `SELECT content_type` at all. An easy, low-risk oversight:
+   the column is already in the table and already populated; the SELECT list just never grew to
+   include it.
+2. Even fixing (1), `scanner._sp_file_from_inventory_row` (which turns a persisted row back into
+   a raw-item shape) and `sp_reconstructed_listing`'s call into `_sp_classify_item` have nowhere
+   to put a carried-forward `content_type` back onto the reconstructed, classified item —
+   `_sp_enrich_content_types` is a live-listing-only post-processing step, and
+   `sp_reconstructed_listing` deliberately never makes the live per-item Graph call that feeds
+   it (see `_sp_file_from_inventory_row`'s own docstring) — doing so for every carried-forward
+   file would spend exactly the cost delta-sync exists to avoid.
+
+So the real fix is (1) plus threading the OLD content_type value through for files NOT in the
+delta's `changed` set (a genuinely unchanged file's content type is still valid) — (2) alone,
+without (1), is not fixable. Left as a known gap rather than fixed here because it touches the
+reconstruction pipeline's shape (`apply_sp_delta` / `_sp_classify_item`'s call site), which is
+more than this pass's scope. Low severity: unaffected are Drive (no content-type concept),
+every fresh (non-reconstructed) SharePoint listing, and every rule that doesn't key off
+Content Type.
+
+---
+
 ## LOE — remaining work to full functionality
 
 Principle (owner's call): anything not auto-remediable by a deterministic or AI

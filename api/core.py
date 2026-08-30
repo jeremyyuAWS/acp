@@ -887,15 +887,34 @@ def _sp_sync_plan(owner: str | None, token: str) -> tuple[bool, dict | None]:
     return False, {"prior_files": prior_files, "changed": changed, "removed_ids": removed_ids}
 
 
+def _sp_interactive_cursor_key(owner: str | None, drive_id: str | None) -> str:
+    """The per-(owner, drive) cursor key for an interactive SharePoint scan — JSON-encoded, not
+    an f-string colon-join. `drive_id` comes from scanner._sp_locations, which parses it off a
+    CLIENT-supplied `folder` request value with no format validation (`r.partition("/")`):
+    a folder like "a:b/root" yields drive_id="a:b". A naive f"sharepoint:{owner}:{drive_id}"
+    key made two different (owner, drive_id) pairs collide on the identical string whenever one
+    of them happened to contain a literal colon — e.g. owner="x", drive_id="y:z" produced the
+    same key as owner="x:y", drive_id="z". `owner` itself is a trusted authenticated email, but
+    `drive_id` is not, so the delimiter can't be trusted to never appear in it.
+
+    Practical impact of a collision was always bounded (_sp_prior_inventory_for_drive still
+    verifies drive_id per row before trusting any reconstruction), so this was cursor-row
+    corruption risk, not a data-leakage one — but json.dumps of the pair is unambiguous by
+    construction and costs nothing to get right, so there is no reason to keep relying on hoping
+    ":" never collides."""
+    import json
+    return f"sharepoint:{json.dumps([owner, drive_id])}"
+
+
 def _interactive_sp_sync_plan(owner: str, token: str, drive_id: str | None) -> dict | None:
     """PRD Phase 3, interactive SharePoint scans: the same delta reconstruction _sp_sync_plan
     gives the scheduled sweep, but for a user-initiated whole-library (or whole OneDrive,
-    drive_id=None) SharePoint scan — keyed per (SIGNED-IN USER, DRIVE):
-    f"sharepoint:{owner}:{drive_id}". Unlike Drive (one account, one drive, always the same)
-    and unlike the scheduled sweep (always the one configured drive), a SharePoint user can
-    interactively scan a DIFFERENT library from one scan to the next, so there is no single
-    fixed cursor or baseline to assume — both are keyed (and, for the baseline, VERIFIED via
-    _sp_prior_inventory_for_drive) per drive, not just per user.
+    drive_id=None) SharePoint scan — keyed per (SIGNED-IN USER, DRIVE) via
+    _sp_interactive_cursor_key(owner, drive_id). Unlike Drive (one account, one drive, always
+    the same) and unlike the scheduled sweep (always the one configured drive), a SharePoint
+    user can interactively scan a DIFFERENT library from one scan to the next, so there is no
+    single fixed cursor or baseline to assume — both are keyed (and, for the baseline, VERIFIED
+    via _sp_prior_inventory_for_drive) per drive, not just per user.
 
     Returns the SAME sp_delta dict shape scanner.sp_reconstructed_listing already knows how to
     build from, or None to fall back to a normal full listing.
@@ -909,7 +928,7 @@ def _interactive_sp_sync_plan(owner: str, token: str, drive_id: str | None) -> d
     filter of its own, so it cannot honor a sub-folder narrowing, and it is scoped to exactly
     one drive, so it cannot answer for a multi-library site scan either. `token` is the
     signed-in user's own Graph token, never the scheduled sweep's dedicated sync app token."""
-    result = _sp_delta_check(f"sharepoint:{owner}:{drive_id}", owner, token, drive_id)
+    result = _sp_delta_check(_sp_interactive_cursor_key(owner, drive_id), owner, token, drive_id)
     if result is None:
         return None
     changed, removed_ids = result
