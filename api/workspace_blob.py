@@ -164,6 +164,26 @@ def download_document_bytes(owner: str | None, workspace_id: str, document_id: s
         return None
 
 
+def download_document_prefix(owner: str | None, workspace_id: str, document_id: str,
+                             version_id: str, *, kind: str = "source",
+                             n: int = 8) -> bytes | None:
+    """The first `n` bytes only, via an Azure ranged read — enough for magic-byte/file-
+    signature sniffing (PRD §13) without downloading the whole file, which would spend exactly
+    the transfer cost direct-to-blob upload (PRD §9) exists to avoid paying server-side. None
+    if not configured, not found, or the blob is shorter than `n` bytes and Azure raises on the
+    out-of-range request (callers already treat None as 'can't verify', the same as every
+    other read in this module)."""
+    svc = _service_client()
+    if svc is None:
+        return None
+    path = blob_path(owner, workspace_id, document_id, version_id, kind=kind)
+    blob = svc.get_blob_client(container=_CONTAINER, blob=path)
+    try:
+        return blob.download_blob(offset=0, length=n).readall()
+    except Exception:
+        return None
+
+
 def delete_document_version(owner: str | None, workspace_id: str, document_id: str,
                             version_id: str, *, kind: str = "source") -> bool:
     """PRD §28 retention/deletion. Best-effort: returns True only on a confirmed delete, False

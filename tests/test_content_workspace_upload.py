@@ -157,10 +157,14 @@ def _start_upload(gated_client, ws, *, filename="report.pdf", size_bytes=1024):
     return r.json()["document_id"], r.json()["version_id"]
 
 
-def _mock_uploaded(monkeypatch, *, size=1024):
+def _mock_uploaded(monkeypatch, *, size=1024, prefix=b"%PDF-1.7"):
+    """Defaults to a valid PDF signature so existing tests exercise the happy (non-quarantine)
+    path without each needing to know about magic-byte verification; tests that care about
+    quarantine behavior override `prefix` explicitly."""
     import workspace_blob
     monkeypatch.setattr(workspace_blob, "get_uploaded_blob_properties",
                         lambda *a, **kw: {"size": size, "content_md5": None})
+    monkeypatch.setattr(workspace_blob, "download_document_prefix", lambda *a, **kw: prefix)
 
 
 def test_complete_happy_path(gated_client, monkeypatch):
@@ -300,3 +304,129 @@ def test_get_document_404s_for_a_foreign_owner(gated_client, monkeypatch):
     doc_id, version_id = _start_upload(gated_client, ws)
     r = gated_client(OTHER).get(f"/content-workspaces/{ws}/documents/{doc_id}")
     assert r.status_code == 404
+
+
+# ── extension allow-list (PRD §13) ───────────────────────────────────────────
+
+def test_upload_session_rejects_an_unsupported_extension(gated_client):
+    ws = _make_workspace(gated_client)
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/upload-session",
+                                 json={"filename": "malware.exe", "size_bytes": 1024})
+    assert r.status_code == 422
+
+
+def test_upload_session_rejects_a_filename_with_no_extension(gated_client):
+    ws = _make_workspace(gated_client)
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/upload-session",
+                                 json={"filename": "noextension", "size_bytes": 1024})
+    assert r.status_code == 422
+
+
+@pytest.mark.parametrize("filename", ["report.pdf", "brief.docx", "deck.pptx", "sheet.xlsx",
+                                      "page.html", "page.htm", "Report.PDF"])
+def test_upload_session_accepts_every_prd_supported_extension(gated_client, filename):
+    ws = _make_workspace(gated_client)
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/upload-session",
+                                 json={"filename": filename, "size_bytes": 1024})
+    assert r.status_code == 200, r.text
+
+
+# ── magic-byte / quarantine flow (PRD §13, §8) ───────────────────────────────
+
+def test_complete_quarantines_a_pdf_with_the_wrong_signature(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws, filename="report.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"not a pdf")
+
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                                 json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "quarantined"
+    assert body["versions"][0]["lifecycle_state"] == "quarantined"
+
+
+def test_complete_quarantines_when_the_prefix_read_fails(gated_client, monkeypatch):
+    """download_document_prefix returning None (blob missing, ranged read failed, ...) is
+    treated the same as an outright mismatch — 'can't verify' is not 'verified clean'."""
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws, filename="report.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=None)
+
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                                 json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "quarantined"
+
+
+def test_complete_accepts_a_matching_pdf_signature(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws, filename="report.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                                 json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "ready"
+
+
+def test_complete_accepts_a_matching_office_zip_signature(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws, filename="brief.docx")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"PK\x03\x04\x14\x00\x06\x00")
+
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                                 json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "ready"
+
+
+def test_complete_does_not_signature_check_html(gated_client, monkeypatch):
+    """HTML has no reliable leading signature — allow-listed at session creation, but not
+    enforced at completion time (see _SIGNATURES' docstring)."""
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws, filename="page.html")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"<!doctype html>")
+
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                                 json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "ready"
+
+
+def test_quarantined_version_still_gets_a_row_and_is_not_dropped(gated_client, monkeypatch, isolated_store):
+    """A signature mismatch is a normal terminal state (PRD §8), not a dropped upload — the
+    version row is still created so the bytes and their fate are recorded."""
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws, filename="report.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"not a pdf")
+    gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                             json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+
+    versions = isolated_store.list_content_workspace_document_versions(doc_id)
+    assert len(versions) == 1
+    assert versions[0]["lifecycle_state"] == "quarantined"
+
+
+def test_every_new_version_is_stamped_not_scanned(gated_client, monkeypatch, isolated_store):
+    """No real malware scanner is wired up (yet) — the field says so honestly rather than
+    fabricating a 'clean' result."""
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws)
+    _mock_uploaded(monkeypatch)
+    gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                             json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+
+    versions = isolated_store.list_content_workspace_document_versions(doc_id)
+    assert versions[0]["malware_status"] == "not_scanned"
+
+
+def test_quarantine_is_logged_distinctly_from_a_normal_completion(gated_client, monkeypatch, isolated_store):
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws, filename="report.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"not a pdf")
+    gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                             json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+
+    decisions = isolated_store.list_decisions()
+    assert any(d["action"] == "content_workspace.upload_quarantined" for d in decisions)
