@@ -6439,7 +6439,17 @@ class Store:
     def dead_letter_breakdown(self, owner: str | None = None) -> dict:
         """Diagnostic: dead-lettered jobs grouped by type + the most common errors.
         owner scopes to the caller's own jobs so error text (which can name a file)
-        never leaks across tenants."""
+        never leaks across tenants.
+
+        Each `top_errors` group also carries incident-shaped context for the UI (Monitor's
+        dead-letter banner): a scan (run) fans out into many jobs — scan_file/scan_batch/
+        scan_folder per file or chunk — so several dead job ROWS sharing one error can all
+        belong to the SAME run. `n` (unchanged) counts those job rows; `affected_runs` counts
+        the distinct scans they came from, which is the number a human means by "runs" and can
+        be smaller than `n`. Separately, `claim_job` increments a job's own `attempts` on
+        every retry of that SAME row (fail_job requeues in place, it does not insert a new
+        row) — so `total_attempts`, the SUM of `attempts` across the group, captures retry
+        volume that `n` alone (one row per job, however many times it was retried) cannot."""
         scope = " AND scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)" if owner else ""
         sp = (owner,) if owner else ()
         out: dict = {}
@@ -6447,9 +6457,14 @@ class Store:
             self._db.execute(cur, "SELECT type, COUNT(*) AS n FROM jobs WHERE status='dead'" + scope + " GROUP BY type", sp)
             out["by_type"] = {r["type"]: r["n"] for r in self._db.fetchall(cur)}
             self._db.execute(cur,
-                "SELECT type, SUBSTR(last_error,1,200) AS err, COUNT(*) AS n FROM jobs "
+                "SELECT type, SUBSTR(last_error,1,200) AS err, COUNT(*) AS n, "
+                "COUNT(DISTINCT scan_id) AS affected_runs, SUM(attempts) AS total_attempts, "
+                "MIN(created_at) AS first_seen, MAX(updated_at) AS last_seen FROM jobs "
                 "WHERE status='dead'" + scope + " GROUP BY type, SUBSTR(last_error,1,200) ORDER BY n DESC LIMIT 15", sp)
-            out["top_errors"] = [{"type": r["type"], "n": r["n"], "error": r["err"]}
+            out["top_errors"] = [{"type": r["type"], "n": r["n"], "error": r["err"],
+                                  "affected_runs": r["affected_runs"],
+                                  "total_attempts": r["total_attempts"],
+                                  "first_seen": r["first_seen"], "last_seen": r["last_seen"]}
                                  for r in self._db.fetchall(cur)]
         return out
 
