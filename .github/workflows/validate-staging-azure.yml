@@ -32,6 +32,26 @@ jobs:
     # Same dormancy pattern as deploy-staging.yml/smoke-staging.yml: inert until staging exists,
     # so this file changes nothing on its own until STAGING_FQDN is set.
     if: vars.STAGING_FQDN != ''
+    # REQUIRED FOR OIDC, not for secrets. The header above says this workflow reuses
+    # deploy-staging.yml's AZURE_* credentials unchanged, and that was true of the SECRETS and
+    # beside the point: workload-identity federation matches on the token's SUBJECT, not on the
+    # client id. A job with no `environment:` presents `repo:<org>/<repo>:ref:refs/heads/main`,
+    # while deploy-staging.yml — which declares `environment: staging` — presents
+    # `repo:<org>/<repo>:environment:staging`, and it is the latter the federated credential in
+    # Entra is registered against.
+    #
+    # So the first run of this workflow (2026-08-30, dispatched manually) failed at azure/login
+    # with AADSTS700213 "No matching federated identity record found for presented assertion
+    # subject 'repo:jeremyyuAWS/acp:ref:refs/heads/main'" — same client id, same tenant, same
+    # subscription, wrong subject. It could never have authenticated as written, which is
+    # consistent with it having zero runs until someone tried.
+    #
+    # Declaring the same environment fixes it with no Azure-side change and no new credential.
+    # It carries no approval gate: deploy-staging.yml's own comment records that `staging` has no
+    # required reviewers deliberately, so this stays manually-triggered-and-then-immediate.
+    environment:
+      name: staging
+      url: https://${{ vars.STAGING_FQDN }}
     steps:
       - uses: actions/checkout@v4
 

@@ -312,17 +312,30 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // WorkerAvailability is conditioned on me?.is_admin below, matching PATCH's own admin gate.
   // A one-shot fetch on becoming externally-managed is enough — unlike workerSnap (workers
   // picking up jobs right now), this rarely changes and isn't worth polling every few seconds.
-  const externallyManagedWorkers = workerSnap?.runtime_mode === 'distributed' && workerSnap?.alive
+  // TOPOLOGY, not health. `runtime_mode === 'distributed'` answers "does this deployment run a
+  // separate worker tier that Azure manages?" — a configuration fact that does not change when
+  // workers fall over. `alive` answers "is that tier heartbeating right now?" — a health fact.
+  //
+  // These were one condition, and the `&& alive` made Azure observation switch off exactly when
+  // it was most needed: workers absent, starting, or unhealthy is precisely when a user needs to
+  // know whether Azure has replicas provisioned, how many are draining, and what the revision
+  // health is. Gating the evidence on the thing the evidence is meant to explain leaves the UI
+  // silent in the one situation it exists for.
+  //
+  // Azure reads are read-only and permission-gated server-side (see WorkerAvailability.jsx), so
+  // nothing here depends on the worker tier being reachable. `alive` stays available for the
+  // signals that genuinely are about health — it just no longer decides whether we LOOK.
+  const workerTierIsExternal = workerSnap?.runtime_mode === 'distributed'
   const [replicas, setReplicas] = useState(null)
   const [replicasBusy, setReplicasBusy] = useState(false)
   const [replicasMsg, setReplicasMsg] = useState(null)
   const replicasMsgTimer = useRef(null)
   useEffect(() => {
-    if (!externallyManagedWorkers) return undefined
+    if (!workerTierIsExternal) return undefined
     let live = true
     getWorkerReplicas().then((d) => { if (live) setReplicas(d) }).catch(() => {})
     return () => { live = false }
-  }, [externallyManagedWorkers])
+  }, [workerTierIsExternal])
   useEffect(() => () => clearTimeout(replicasMsgTimer.current), [])
   const adjustReplicas = (delta) => {
     if (!replicas?.configured || replicasBusy) return
@@ -354,7 +367,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // mounted consumer, including QueuePanel.jsx's own capacity strip, rather than each maintaining
   // an independent setInterval and doubling the Azure Monitor API calls whenever both are
   // mounted at once. Read-only, no admin gate anywhere (see WorkerAvailability.jsx).
-  const capacity = useWorkerCapacity(externallyManagedWorkers)
+  const capacity = useWorkerCapacity(workerTierIsExternal)
   const [inv, setInv] = useState(null)
   useEffect(() => {
     let live = true
