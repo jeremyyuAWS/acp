@@ -1,0 +1,216 @@
+# A REAL scale change on the staging worker, and a guaranteed restore. Separate from, and NOT
+# run automatically after, validate-staging-azure.yml (workflow 1, read-only). This one is
+# read-only for its first half and WRITES for its second: it bumps acp-worker-staging's minimum
+# replica floor by exactly 1, records how long Azure and ACP each take to notice, and restores
+# the original floor in a step that runs even if everything before it failed.
+#
+# Manually triggered ONLY, and gated on an explicit `confirm_scale_test` input — the dispatch
+# defaults it to false, and the job's `if:` refuses to touch anything unless it was explicitly
+# flipped true. Mirrors deploy-staging.yml's `skip_ci_gate` input: a dispatch boolean the job
+# checks before acting, not a default-on behavior.
+#
+# Zero new secrets: the SAME AZURE_CLIENT_ID/AZURE_TENANT_ID/AZURE_SUBSCRIPTION_ID (OIDC) and
+# ACP_E2E_KEY as validate-staging-azure.yml and deploy-staging.yml.
+#
+# BEFORE DISPATCHING THIS: confirm someone is comfortable with a real, momentary replica-count
+# change on staging (real Azure spend for the extra replica's uptime, real capacity churn on the
+# worker tier). It restores the original floor unconditionally, but that is a guarantee about the
+# END state, not about the window while the test runs.
+
+name: validate-staging-scale-test
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_scale_test:
+        description: "I understand this will scale acp-worker-staging's minimum replicas up by 1, then restore it. Must be true to do anything."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write     # OIDC federation to Azure — no stored client secret, same as deploy-staging.yml
+  contents: read
+
+jobs:
+  scale-test:
+    runs-on: ubuntu-latest
+    # Dormant like the sibling workflows until staging exists, AND requires the explicit
+    # confirmation input — unconfirmed, this job does not run at all (no Azure login, no calls).
+    if: vars.STAGING_FQDN != '' && inputs.confirm_scale_test
+    environment:
+      name: staging
+    env:
+      ACP_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      STAGING_RG: ${{ vars.STAGING_RG || 'mdk-accessibility' }}
+      STAGING_WORKER: ${{ vars.STAGING_WORKER || 'acp-worker-staging' }}
+      STAGING_FQDN: ${{ vars.STAGING_FQDN }}
+      ACP_E2E_KEY: ${{ secrets.ACP_E2E_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Staging-name safety check (before any Azure call)
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_staging_azure.py --check-staging-only \
+            --az-resource-group "$STAGING_RG" --az-app "$STAGING_WORKER"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Record current minimum-replica floor
+        id: before
+        run: |
+          set -euo pipefail
+          MIN=$(az containerapp show --subscription "$ACP_SUBSCRIPTION" \
+            -g "$STAGING_RG" -n "$STAGING_WORKER" \
+            --query properties.template.scale.minReplicas -o tsv)
+          echo "original_min=$MIN" >> "$GITHUB_OUTPUT"
+          echo "Current minReplicas: $MIN"
+          {
+            echo "# Staging scale-test report"
+            echo
+            echo "- app: \`$STAGING_WORKER\`"
+            echo "- resource group: \`$STAGING_RG\`"
+            echo "- original min_replicas: $MIN"
+            echo "- target min_replicas: $((MIN + 1))"
+            echo
+            echo "## Timeline"
+            echo
+          } >> scale-test-report.md
+
+      - name: Bump minimum replicas by exactly 1
+        run: |
+          set -euo pipefail
+          ORIGINAL="${{ steps.before.outputs.original_min }}"
+          NEW=$((ORIGINAL + 1))
+          echo "Setting minReplicas: $ORIGINAL -> $NEW"
+          # min-replicas only, matching api/routes/control.py's set_replicas() — maxReplicas is
+          # left at whatever Azure already has it set to, same reasoning that endpoint documents.
+          az containerapp update --subscription "$ACP_SUBSCRIPTION" \
+            -g "$STAGING_RG" -n "$STAGING_WORKER" --min-replicas "$NEW"
+          echo "- $(date -u +%FT%TZ)  requested minReplicas=$NEW" >> scale-test-report.md
+
+      - name: Poll Azure and ACP for the new capacity, and watch for a claimed job (best-effort)
+        env:
+          ORIGINAL_MIN: ${{ steps.before.outputs.original_min }}
+        run: |
+          set -euo pipefail
+          NEW=$((ORIGINAL_MIN + 1))
+          AZURE_PROVISIONED=""
+          AZURE_RUNNING=""
+          ACP_SAW_POOL=""
+          JOB_CLAIM_NOTE="no queued job was observed during the poll window (best-effort — none was manufactured)"
+
+          BEFORE_QUEUED=$(curl -fsS --max-time 15 -H "x-e2e-key: $ACP_E2E_KEY" \
+            "https://$STAGING_FQDN/jobs" | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("oldest_queued") or {}).get("id",""))' || echo "")
+
+          for i in $(seq 1 30); do
+            sleep 10
+
+            REV=$(az containerapp revision list --subscription "$ACP_SUBSCRIPTION" \
+              -g "$STAGING_RG" -n "$STAGING_WORKER" --query "[?properties.active].name" -o tsv | head -1 || echo "")
+            STATE=$(az containerapp revision show --subscription "$ACP_SUBSCRIPTION" \
+              -g "$STAGING_RG" -n "$STAGING_WORKER" --revision "$REV" \
+              --query properties.provisioningState -o tsv 2>/dev/null || echo "Unknown")
+            REPLICAS=$(az containerapp replica list --subscription "$ACP_SUBSCRIPTION" \
+              -g "$STAGING_RG" -n "$STAGING_WORKER" --revision "$REV" \
+              --query "length(@)" -o tsv 2>/dev/null || echo "0")
+
+            if [ -z "$AZURE_PROVISIONED" ] && [ "$STATE" = "Provisioning" -o "$STATE" = "Provisioned" ]; then
+              AZURE_PROVISIONED="$(date -u +%FT%TZ)"
+              echo "- $AZURE_PROVISIONED  Azure reports revision provisioning (state=$STATE)" >> scale-test-report.md
+            fi
+            if [ -z "$AZURE_RUNNING" ] && [ "$REPLICAS" -ge "$NEW" ] 2>/dev/null; then
+              AZURE_RUNNING="$(date -u +%FT%TZ)"
+              echo "- $AZURE_RUNNING  Azure reports $REPLICAS replica(s) running (>= target $NEW)" >> scale-test-report.md
+            fi
+
+            if [ -z "$ACP_SAW_POOL" ]; then
+              POOL=$(curl -fsS --max-time 15 -H "x-e2e-key: $ACP_E2E_KEY" \
+                "https://$STAGING_FQDN/jobs" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("worker_tier_pool_size") or "")' || echo "")
+              if [ -n "$POOL" ] && [ "$POOL" -ge "$NEW" ] 2>/dev/null; then
+                ACP_SAW_POOL="$(date -u +%FT%TZ)"
+                echo "- $ACP_SAW_POOL  ACP's worker_tier_pool_size reports $POOL (>= target $NEW)" >> scale-test-report.md
+              fi
+            fi
+
+            if [ -n "$BEFORE_QUEUED" ]; then
+              AFTER_QUEUED=$(curl -fsS --max-time 15 -H "x-e2e-key: $ACP_E2E_KEY" \
+                "https://$STAGING_FQDN/jobs" | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("oldest_queued") or {}).get("id",""))' || echo "")
+              if [ "$AFTER_QUEUED" != "$BEFORE_QUEUED" ]; then
+                JOB_CLAIM_NOTE="a previously-queued job ($BEFORE_QUEUED) was no longer the oldest queued job as of $(date -u +%FT%TZ) — best-effort signal, not a guarantee the new replica claimed it"
+              fi
+            fi
+
+            if [ -n "$AZURE_PROVISIONED" ] && [ -n "$AZURE_RUNNING" ] && [ -n "$ACP_SAW_POOL" ]; then
+              break
+            fi
+          done
+
+          {
+            echo
+            echo "## Result"
+            echo
+            echo "- Azure provisioning observed: ${AZURE_PROVISIONED:-not observed within the poll window}"
+            echo "- Azure running (>= target replicas) observed: ${AZURE_RUNNING:-not observed within the poll window}"
+            echo "- ACP worker_tier_pool_size reflected new capacity: ${ACP_SAW_POOL:-not observed within the poll window}"
+            echo "- job-claim (best-effort): $JOB_CLAIM_NOTE"
+          } >> scale-test-report.md
+
+      - name: Restore the original minimum-replica floor
+        # Runs even if any earlier step failed — the guarantee this workflow exists to make.
+        # Matches this repo's "must run on the failure path too" mindset for drain/cleanup steps
+        # (see worker_main.py's SIGTERM drain handler, and its `while not _stop.is_set()` — the
+        # mechanism there is different, but the requirement is the same one enforced here with
+        # `if: always()`).
+        if: always() && steps.before.outputs.original_min != ''
+        env:
+          ORIGINAL_MIN: ${{ steps.before.outputs.original_min }}
+        run: |
+          set -euo pipefail
+          echo "Restoring minReplicas to $ORIGINAL_MIN"
+          az containerapp update --subscription "$ACP_SUBSCRIPTION" \
+            -g "$STAGING_RG" -n "$STAGING_WORKER" --min-replicas "$ORIGINAL_MIN"
+          RESTORED=$(az containerapp show --subscription "$ACP_SUBSCRIPTION" \
+            -g "$STAGING_RG" -n "$STAGING_WORKER" \
+            --query properties.template.scale.minReplicas -o tsv)
+          {
+            echo
+            echo "## Restore"
+            echo
+            echo "- requested restore to: $ORIGINAL_MIN"
+            echo "- Azure now reports minReplicas: $RESTORED"
+          } >> scale-test-report.md
+          if [ "$RESTORED" != "$ORIGINAL_MIN" ]; then
+            echo "::error::restore did not take — minReplicas is $RESTORED, expected $ORIGINAL_MIN"
+            exit 1
+          fi
+          echo "Restore verified."
+
+      - name: Redact the report before upload
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f scale-test-report.md ]; then
+            python3 scripts/validate_staging_azure.py --redact-file scale-test-report.md \
+              --secret "<subscription>=$ACP_SUBSCRIPTION" \
+              --secret "<fqdn>=$STAGING_FQDN"
+          fi
+
+      - name: Upload redacted report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validate-staging-scale-test-report
+          path: scale-test-report.md
+          retention-days: 7
+          if-no-files-found: ignore

@@ -1,0 +1,82 @@
+# Read-only cross-check between ACP's own Azure-facing worker endpoints and Azure ground truth.
+#
+# WHY THIS EXISTS: the sandbox this workflow was authored in cannot reach Azure's management
+# endpoints at all — a hard organization egress policy, confirmed by direct testing, not a
+# credentials problem. This workflow is the substitute: it runs the SAME comparison inside a
+# GitHub Actions runner, which does have egress, using the SAME OIDC credentials
+# deploy-staging.yml already holds.
+#
+# Manually triggered ONLY — no push/schedule trigger. It reads and compares; it never writes.
+# Every Azure call is a `get`/`list`/`show`; every ACP call is a plain GET. See
+# scripts/validate_staging_azure.py, which does the actual work, for the full explanation.
+#
+# This is workflow 1 of 2. Workflow 2 (validate-staging-scale-test.yml) is a SEPARATE,
+# also-manually-triggered, explicit-opt-in workflow that actually changes replica count (and
+# restores it). This workflow never runs it and never scales anything itself.
+#
+# Zero new secrets: reuses deploy-staging.yml's AZURE_CLIENT_ID/AZURE_TENANT_ID/
+# AZURE_SUBSCRIPTION_ID (OIDC) and smoke-staging.yml's ACP_E2E_KEY, unchanged.
+
+name: validate-staging-azure
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write     # OIDC federation to Azure — no stored client secret, same as deploy-staging.yml
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    # Same dormancy pattern as deploy-staging.yml/smoke-staging.yml: inert until staging exists,
+    # so this file changes nothing on its own until STAGING_FQDN is set.
+    if: vars.STAGING_FQDN != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Azure SDK deps
+        run: python -m pip install --quiet -r api/requirements.txt
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Compare ACP's own worker view against Azure
+        env:
+          STAGING_FQDN: ${{ vars.STAGING_FQDN }}
+          ACP_E2E_KEY: ${{ secrets.ACP_E2E_KEY }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          # Same fallback defaults deploy-staging.yml sets on ACP_RG/ACP_WORKER — mirrored here
+          # under the STAGING_ prefix that workflow already uses for its own repo-variable
+          # overrides, so a repo provisioned under non-default names stays consistent everywhere.
+          STAGING_RG: ${{ vars.STAGING_RG || 'mdk-accessibility' }}
+          STAGING_WORKER: ${{ vars.STAGING_WORKER || 'acp-worker-staging' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_staging_azure.py \
+            --acp-url "https://$STAGING_FQDN" \
+            --e2e-key "$ACP_E2E_KEY" \
+            --az-subscription "$AZURE_SUBSCRIPTION_ID" \
+            --az-tenant "$AZURE_TENANT_ID" \
+            --az-client-id "$AZURE_CLIENT_ID" \
+            --az-resource-group "$STAGING_RG" \
+            --az-app "$STAGING_WORKER" \
+            --timeout 30 \
+            --out validate-staging-azure-report.md
+
+      - name: Upload redacted report
+        uses: actions/upload-artifact@v4
+        with:
+          name: validate-staging-azure-report
+          path: validate-staging-azure-report.md
+          retention-days: 7

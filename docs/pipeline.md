@@ -175,6 +175,47 @@ app pointed at the production `DATABASE_URL` would write to production data. The
 OIDC federation are shared with prod — the service principal's Contributor on `mdk-accessibility`
 already covers the staging apps in that same group, so no new credential is needed.
 
+### Chain B — staging Azure validation (read-only, plus a separate gated scale test)
+
+Two more `workflow_dispatch`-only workflows sit beside `deploy-staging.yml`, for the same reason
+this whole page exists to be read rather than trusted: they exist because the sandbox that
+authors changes here cannot reach Azure's management endpoints at all (a hard organization
+egress policy, not a credentials problem), so verifying that ACP's own `/control/workers/*`
+answers actually match Azure has to happen on a runner instead. Neither runs automatically, and
+neither adds a secret — both reuse the OIDC credentials and `ACP_E2E_KEY` already described
+above.
+
+**`.github/workflows/validate-staging-azure.yml`** — read-only. Calls Azure directly (via
+`azure.mgmt.appcontainers`/`azure.mgmt.monitor`, the same SDK clients `api/routes/control.py`
+uses) and ACP's own `GET /control/workers/replicas` / `/capacity` / `/revisions` on staging (via
+`x-e2e-key`, same mechanism `smoke-staging.yml` uses), then compares them field by field —
+replica min/max, running replicas, active revision, revision health/provisioning state, traffic
+split, CPU, memory. Every call is a `get`/`list`/`show`; nothing here can mutate either side. The
+comparison logic lives in `scripts/validate_staging_azure.py` (unit-tested in
+`tests/test_validate_staging_azure.py`), not embedded in the workflow YAML. Before writing
+anything, the script redacts subscription/tenant/client ids and hostnames to stable placeholders
+(`<subscription>`, `<hostname>`, …) — see `redact()` in that script. The report uploads as a
+`retention-days: 7` artifact, not the default 90. Gated on `vars.STAGING_FQDN != ''` like its
+siblings, and on the same worker-app-name safety check described next.
+
+**`.github/workflows/validate-staging-scale-test.yml`** — the one workflow in this pair that
+writes. Fully separate from the read-only workflow above; it does **not** run automatically after
+it, and requires its own explicit `confirm_scale_test` dispatch input (default `false`) before the
+job does anything at all — mirroring `deploy-staging.yml`'s `skip_ci_gate` input pattern. When
+confirmed, it records `acp-worker-staging`'s current minimum-replica floor, raises it by exactly
+1, polls Azure and ACP's own `GET /jobs` (`worker_tier_pool_size`, added in #1035) for when each
+side notices, and reports (best-effort, without manufacturing one) whether the new capacity
+claimed a queued job. **The original floor is restored in a step that runs even if an earlier
+step failed** (`if: always()`), and that restoration is itself verified and logged — never assumed.
+
+**Safety guarantees common to both:** a hard-fail check — before any Azure call, in either
+workflow — that the resolved worker app name ends in `-staging` (`assert_staging_target()` in
+`scripts/validate_staging_azure.py`, reused by both workflows via `--check-staging-only` so the
+check can't drift between them). Both are `workflow_dispatch`-only with no automatic trigger.
+Both upload short-lived, redacted artifacts only. Neither introduces a new secret or a new Azure
+role grant — they reuse `deploy-staging.yml`'s existing Contributor-on-`mdk-accessibility`
+service principal, read-only in the first workflow's case.
+
 ### Deploying locally
 
 Every image in the registry before this was built from a laptop (`runType: QuickRun`,
