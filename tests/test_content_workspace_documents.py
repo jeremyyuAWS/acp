@@ -69,6 +69,15 @@ def test_update_status(isolated_store, ws):
     assert isolated_store.get_content_workspace_document(doc_id, owner_email=OWNER)["status"] == "ready"
 
 
+def test_update_display_name(isolated_store, ws):
+    doc_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document(
+        doc_id, workspace_id=ws, owner_email=OWNER, display_name="report.pdf")
+    isolated_store.update_content_workspace_document_display_name(doc_id, "report_v2.docx")
+    assert isolated_store.get_content_workspace_document(
+        doc_id, owner_email=OWNER)["display_name"] == "report_v2.docx"
+
+
 def test_first_version_is_seq_1(isolated_store, ws):
     doc_id = uuid.uuid4().hex[:12]
     isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)

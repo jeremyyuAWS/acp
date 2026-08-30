@@ -7544,6 +7544,18 @@ class Store:
                 "UPDATE content_workspace_documents SET status=%s, updated_at=%s WHERE id=%s",
                 (status, self._now(), document_id))
 
+    def update_content_workspace_document_display_name(self, document_id: str, display_name: str) -> None:
+        """Called when a NEW VERSION is uploaded under a different filename than the document's
+        current one (e.g. 'report.pdf' replaced by 'report_v2.docx'). complete_upload derives
+        the extension it uses for magic-byte verification, and the new version's own
+        original_filename, from this column — so it must reflect the most recently attempted
+        upload's name, not whatever the document was originally created with, or a version's
+        real extension and its verified-against signature would silently disagree."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE content_workspace_documents SET display_name=%s, updated_at=%s WHERE id=%s",
+                (display_name, self._now(), document_id))
+
     def next_content_workspace_document_version_seq(self, document_id: str) -> int:
         """1-based (PRD §12): the first version of a document is version_seq=1, not 0."""
         with self._db.cursor() as cur:

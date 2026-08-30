@@ -201,6 +201,122 @@ def test_session_creation_is_logged(gated_client, isolated_store):
     assert any(d["action"] == "content_workspace.upload_session_created" for d in decisions)
 
 
+# ── new-version upload-session (a document-scoped variant) ──────────────────
+
+def _new_version_session(gated_client, ws, doc_id, *, owner=OWNER, filename="report_v2.pdf",
+                         size_bytes=1024):
+    return gated_client(owner).post(
+        f"/content-workspaces/{ws}/documents/{doc_id}/versions/upload-session",
+        json={"filename": filename, "size_bytes": size_bytes})
+
+
+def test_new_version_session_happy_path(gated_client, monkeypatch):
+    """`_new_version_session`'s version_id is whatever workspace_blob.generate_upload_
+    authorization mints — a fresh uuid in production; this fixture always returns the fixed
+    "v-001" regardless of call, so the check here is on the fields that don't depend on that
+    (the endpoint returning the SAME document_id it was called with, and 200), not on
+    uniqueness the fixture can't simulate."""
+    ws = _make_workspace(gated_client)
+    doc_id, v1 = _start_upload(gated_client, ws, filename="report.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws, doc_id, v1, content_hash="h1")
+
+    r = _new_version_session(gated_client, ws, doc_id)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["document_id"] == doc_id
+    assert body["version_id"]
+
+
+def test_new_version_session_404s_for_a_nonexistent_document(gated_client):
+    ws = _make_workspace(gated_client)
+    r = _new_version_session(gated_client, ws, "does-not-exist")
+    assert r.status_code == 404
+
+
+def test_new_version_session_404s_for_a_foreign_owner(gated_client):
+    ws = _make_workspace(gated_client, owner=OWNER)
+    doc_id, _ = _start_upload(gated_client, ws)
+    r = _new_version_session(gated_client, ws, doc_id, owner=OTHER)
+    assert r.status_code == 404
+
+
+def test_new_version_session_rejects_an_unsupported_extension(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc_id, v1 = _start_upload(gated_client, ws, filename="report.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws, doc_id, v1, content_hash="h1")
+
+    r = _new_version_session(gated_client, ws, doc_id, filename="malware.exe")
+    assert r.status_code == 422
+
+
+def test_new_version_session_respects_the_workspace_quota(gated_client, monkeypatch):
+    import routes.content_workspaces as cw
+    monkeypatch.setattr(cw, "_WORKSPACE_QUOTA_BYTES", 1000)
+    ws = _make_workspace(gated_client)
+    doc_id, v1 = _start_upload(gated_client, ws, filename="a.pdf", size_bytes=900)
+    _mock_uploaded(monkeypatch, size=900, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws, doc_id, v1, content_hash="h1", size_bytes=900)
+
+    r = _new_version_session(gated_client, ws, doc_id, size_bytes=200)
+    assert r.status_code == 413
+
+
+def test_new_version_session_updates_the_document_display_name(gated_client, monkeypatch, isolated_store):
+    """So complete_upload's magic-byte check and the version's own original_filename track the
+    upload actually in flight, not whatever the document was originally created with — see
+    store.update_content_workspace_document_display_name's docstring."""
+    ws = _make_workspace(gated_client)
+    doc_id, v1 = _start_upload(gated_client, ws, filename="report.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws, doc_id, v1, content_hash="h1")
+
+    _new_version_session(gated_client, ws, doc_id, filename="report_renamed.docx")
+    doc = isolated_store.get_content_workspace_document(doc_id, owner_email=OWNER)
+    assert doc["display_name"] == "report_renamed.docx"
+
+
+def test_new_version_session_sets_status_back_to_uploading(gated_client, monkeypatch, isolated_store):
+    ws = _make_workspace(gated_client)
+    doc_id, v1 = _start_upload(gated_client, ws, filename="report.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws, doc_id, v1, content_hash="h1")
+
+    _new_version_session(gated_client, ws, doc_id)
+    doc = isolated_store.get_content_workspace_document(doc_id, owner_email=OWNER)
+    assert doc["status"] == "uploading"
+
+
+def test_new_version_session_is_logged(gated_client, monkeypatch, isolated_store):
+    ws = _make_workspace(gated_client)
+    doc_id, v1 = _start_upload(gated_client, ws, filename="report.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws, doc_id, v1, content_hash="h1")
+
+    _new_version_session(gated_client, ws, doc_id)
+    decisions = isolated_store.list_decisions()
+    assert any(d["action"] == "content_workspace.new_version_upload_session_created"
+              for d in decisions)
+
+
+def test_completing_a_new_version_session_with_a_different_extension_verifies_the_right_signature(
+        gated_client, monkeypatch):
+    """The regression this whole feature exists to prevent: a document's magic-byte check must
+    track the NEW version's actual extension, not the extension of whatever the document was
+    first created with."""
+    ws = _make_workspace(gated_client)
+    doc_id, v1 = _start_upload(gated_client, ws, filename="report.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws, doc_id, v1, content_hash="h1")
+
+    _new_version_session(gated_client, ws, doc_id, filename="report.docx")
+    _mock_uploaded(monkeypatch, size=2048, prefix=b"PK\x03\x04\x14\x00\x06\x00")  # real docx magic
+    r = _complete(gated_client, ws, doc_id, "v-002", content_hash="h2", size_bytes=2048)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "ready"   # would wrongly quarantine if still checking %PDF-
+
+
 # ── complete_upload ───────────────────────────────────────────────────────────
 
 def _start_upload(gated_client, ws, *, filename="report.pdf", size_bytes=1024):
