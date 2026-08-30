@@ -885,6 +885,14 @@ def jobs(request: Request, status: str | None = None, limit: int = 100):
             "worker_tier_alive": _wt["alive"],
             "worker_heartbeat_at": _wt["heartbeat_at"],
             "worker_heartbeat_age_s": _wt["age_s"],
+            # The worker container's own core.WORKERS (its real concurrency, carried in the
+            # heartbeat's JSON envelope) — None for an old bare-ISO beat or one that never
+            # carried it. This is real "ACP-ready worker slots" capacity, unlike `workers`
+            # above, which is this API container's OWN pool (0 in the split topology). Busy
+            # vs. available within that slot count is NOT tracked here — it needs
+            # instrumentation inside worker.py's pool itself — but a caller can already
+            # approximate "busy" for free from `stats.running` below once this is non-None.
+            "worker_tier_pool_size": _wt.get("pool_size"),
             # Conservative starting recommendation. Local AI workloads are memory- and
             # GPU-constrained, not CPU-constrained; 4 is a safe floor the user can raise.
             "suggested_workers": 4,

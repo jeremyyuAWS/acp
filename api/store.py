@@ -37,6 +37,35 @@ _PII_SEV_RANK = {"critical": 3, "moderate": 2, "low": 1}
 _ISSUE_SEV_RANK = {"CRITICAL": 4, "SERIOUS": 3, "MODERATE": 2, "MINOR": 1}
 
 
+def _parse_worker_tier_heartbeat(raw: str) -> tuple[str, int | None]:
+    """Split a `worker_tier_heartbeat` setting value into (iso_timestamp, pool_size).
+
+    Two formats have to coexist across a rolling deploy: the OLD bare ISO string
+    (`worker_main.py` before this change, or any value written before it) and the NEW JSON
+    envelope `{"at": "<iso>", "pool_size": <int>}` (worker_main.py's own `core.WORKERS` at
+    process start). Either a pre-rollout API reading a post-rollout worker's beat, or the
+    reverse, must keep working — so this tries JSON first and falls back to treating `raw`
+    itself as the bare timestamp whenever it isn't a `{"at": ...}` dict. `pool_size` is None
+    for the old format, and for a JSON envelope that omits or mistypes it — never a crash.
+
+    A module-level function, not a method: test_readiness.py's FakeStore borrows
+    `worker_tier_status`/`worker_tier_alive` straight off the real class without instantiating
+    it as a full Store, so this must not depend on `self`.
+    """
+    pool_size: int | None = None
+    iso = raw
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        obj = None
+    if isinstance(obj, dict) and "at" in obj:
+        iso = obj["at"]
+        ps = obj.get("pool_size")
+        if isinstance(ps, int) and not isinstance(ps, bool):
+            pool_size = ps
+    return iso, pool_size
+
+
 def _issue_location(i: dict) -> str | None:
     """Where a finding is, from either of the two keys detectors use for it.
 
@@ -5753,18 +5782,27 @@ class Store:
         Age is None when no worker has EVER beaten — a fresh deploy that never started its
         worker tier, which is a different failure from one that stopped, and reads differently
         in an alert.
+
+        `pool_size` is the worker container's own `core.WORKERS` at process start, carried in
+        the heartbeat's JSON envelope (see `_parse_worker_tier_heartbeat`). It's None when the
+        beat is old-format (bare ISO string) or never carried one — never a crash either way.
         """
         from datetime import datetime, timezone
         raw = self.get_setting("worker_tier_heartbeat")
         out = {"alive": False, "heartbeat_at": raw or None, "age_s": None,
-               "window_s": window_s, "ever_seen": bool(raw)}
+               "window_s": window_s, "ever_seen": bool(raw), "pool_size": None}
         if not raw:
             return out
+        iso, pool_size = _parse_worker_tier_heartbeat(raw)
+        out["pool_size"] = pool_size
+        out["heartbeat_at"] = iso or None
         try:
-            beat = datetime.fromisoformat(raw)
-        except ValueError:
+            beat = datetime.fromisoformat(iso)
+        except (ValueError, TypeError):
             # A malformed timestamp is a real fault, not "no heartbeat" — say so rather than
-            # letting it read identically to a tier that never started.
+            # letting it read identically to a tier that never started. Report against the
+            # ORIGINAL raw value, not the JSON-unwrapped `iso`, so a garbage JSON envelope
+            # (or garbage bare string) shows the actual stored value in the error.
             out["heartbeat_at"] = f"unparseable: {raw!r}"
             return out
         if beat.tzinfo is None:
@@ -5785,9 +5823,10 @@ class Store:
         raw = self.get_setting("worker_tier_heartbeat")
         if not raw:
             return False
+        iso, _pool_size = _parse_worker_tier_heartbeat(raw)
         try:
-            beat = datetime.fromisoformat(raw)
-        except ValueError:
+            beat = datetime.fromisoformat(iso)
+        except (ValueError, TypeError):
             return False
         if beat.tzinfo is None:
             beat = beat.replace(tzinfo=timezone.utc)

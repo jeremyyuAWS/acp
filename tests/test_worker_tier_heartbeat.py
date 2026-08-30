@@ -6,9 +6,16 @@ fix: worker_main beats a timestamp into the shared store; store.worker_tier_aliv
 freshness; scan routes report it; the client guard accepts either an in-process pool OR a
 live worker tier. Liveness is a real heartbeat, never a config flag — a dead worker goes
 stale and the guard correctly refuses again.
+
+The heartbeat also carries the worker container's own `core.WORKERS` pool size — a JSON
+envelope `{"at": iso, "pool_size": int}` — so "ACP-ready worker slots" can be reported
+honestly instead of the API tier's own (0-in-split-topology) pool. That has to round-trip
+across a rolling deploy: an OLD worker_main (bare-ISO writer) talking to NEW store.py, or a
+NEW worker_main talking to OLD store.py mid-rollout, must both keep working.
 """
 from __future__ import annotations
 
+import json
 import sys
 import threading
 import time
@@ -20,6 +27,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
 def _stamp(delta_s: float) -> str:
     return (datetime.now(timezone.utc) - timedelta(seconds=delta_s)).isoformat()
+
+
+def _envelope(delta_s: float, pool_size: int | None = 12) -> str:
+    body = {"at": _stamp(delta_s)}
+    if pool_size is not None:
+        body["pool_size"] = pool_size
+    return json.dumps(body)
 
 
 def test_alive_when_beat_is_fresh(isolated_store):
@@ -50,8 +64,58 @@ def test_naive_timestamp_treated_as_utc(isolated_store):
     assert s.worker_tier_alive() is True
 
 
+def test_json_envelope_heartbeat_round_trips_pool_size(isolated_store):
+    """The new format: worker_tier_status() unwraps the JSON envelope and reports pool_size,
+    and worker_tier_alive() still reads the freshness out of it correctly."""
+    s = isolated_store
+    s.set_setting("worker_tier_heartbeat", _envelope(5, pool_size=12))
+    status = s.worker_tier_status()
+    assert status["alive"] is True
+    assert status["pool_size"] == 12
+    assert status["ever_seen"] is True
+    assert 4 <= status["age_s"] <= 6
+    assert s.worker_tier_alive() is True
+
+
+def test_old_bare_timestamp_heartbeat_still_works_with_pool_size_none(isolated_store):
+    """Rolling-deploy compatibility: an old worker_main container (bare-ISO writer) hasn't
+    redeployed yet, or the value predates this change. Must read as alive, with pool_size
+    None rather than a crash or a false 'not alive'."""
+    s = isolated_store
+    s.set_setting("worker_tier_heartbeat", _stamp(5))
+    status = s.worker_tier_status()
+    assert status["alive"] is True
+    assert status["pool_size"] is None
+    assert s.worker_tier_alive() is True
+
+
+def test_json_envelope_missing_pool_size_reads_as_none(isolated_store):
+    # A JSON envelope that never carried pool_size (partial rollout, older new-format writer)
+    # must not crash and must not fabricate a number.
+    s = isolated_store
+    s.set_setting("worker_tier_heartbeat", _envelope(5, pool_size=None))
+    status = s.worker_tier_status()
+    assert status["alive"] is True
+    assert status["pool_size"] is None
+
+
+def test_garbage_heartbeat_still_handled_the_same_way_with_json_parsing_added(isolated_store):
+    """The pre-existing garbage-timestamp branch (worker_tier_status's 'unparseable: ...'
+    report) must not regress now that JSON parsing sits in front of it — garbage is neither
+    valid JSON nor a valid ISO timestamp, so it falls through both and is reported, not
+    swallowed."""
+    s = isolated_store
+    s.set_setting("worker_tier_heartbeat", "not-a-timestamp")
+    status = s.worker_tier_status()
+    assert status["alive"] is False
+    assert status["pool_size"] is None
+    assert "unparseable" in status["heartbeat_at"]
+    assert s.worker_tier_alive() is False
+
+
 def test_worker_main_loop_beats(monkeypatch, isolated_store):
-    # The real loop writes the heartbeat (first beat immediately on entry).
+    # The real loop writes the heartbeat (first beat immediately on entry), now as a JSON
+    # envelope carrying the worker container's own pool size.
     import core
     import worker_main
     monkeypatch.setattr(core, "get_store", lambda: isolated_store)
@@ -60,6 +124,7 @@ def test_worker_main_loop_beats(monkeypatch, isolated_store):
     monkeypatch.setattr(core, "start_workers", lambda: 2)
     monkeypatch.setattr(core, "stop_workers", lambda: None)
     monkeypatch.setattr(core, "stop_scheduler", lambda: None)
+    monkeypatch.setattr(core, "WORKERS", 12)
 
     worker_main._stop.clear()
     t = threading.Thread(target=lambda: worker_main.run(poll_seconds=0.02, _install_signals=False))
@@ -69,6 +134,7 @@ def test_worker_main_loop_beats(monkeypatch, isolated_store):
     t.join(timeout=2)
     assert not t.is_alive()
     assert isolated_store.worker_tier_alive() is True
+    assert isolated_store.worker_tier_status()["pool_size"] == 12
 
 
 def test_routes_report_tier_and_client_guard_accepts_it():
