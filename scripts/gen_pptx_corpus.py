@@ -366,6 +366,70 @@ def f_image_of_text_logo_ok(prs, slide):
             "finding here is a false positive")
 
 
+
+# ── 3.1.2 Language of Parts — decided by the prose, like 1.3.3 ──────────────────
+# textchecks.detect_language_parts reads EXTRACTED TEXT: it needs at least two segments of
+# >= _MIN_SEG_WORDS (12) real words, in at least two confidently-detected languages, and it
+# reports the passages whose language the document never identifies. The words are the fixture
+# and the deck is the container, so the wording is identical across the .xlsx, .pptx and
+# .pdf corpora — see tests/test_language_parts_corpus.py.
+#
+# THE CONTROL IS MONOLINGUAL, NOT "THE SAME DOCUMENT WITH THE FRENCH MARKED", and on two of the
+# three formats that is forced rather than chosen. office_structure.language_marked_spans returns
+# {} for .xlsx and .pdf: SpreadsheetML's rich-text run properties have no language element at
+# all, and PDF's /Lang structure-tree walk is not built. Marking is therefore unrepresentable
+# there, and a "marked" fixture would fail 3.1.2 exactly like the violation — measured, not
+# assumed. .pptx CAN carry the mark, so it gets a third fixture proving that a write clears the
+# criterion; the other two would be asserting a capability the format does not have.
+LANG_EN_BODY = (
+    "The benefits office publishes a summary of every plan option before the enrollment window opens.",
+    "Employees may change their elections at any point during the month without providing a reason.",
+    "Questions about eligibility should be directed to the benefits office rather than to a manager.",
+)
+LANG_FR_PASSAGE = ("Le bureau des avantages sociaux publie chaque annee un resume complet de "
+                   "toutes les options offertes aux employes de la region.")
+# Same length and register as the French passage, so the control differs by LANGUAGE and nothing
+# else — a shorter filler would fall under the 12-word floor and be skipped rather than judged.
+LANG_EN_TAIL = ("Enrollment closes at the end of the month for every employee in every "
+                "participating region.")
+
+
+def _lang_slide(slide, lines, mark_fr=False):
+    from pptx.util import Inches, Pt
+    box = slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(9), Inches(6))
+    tf = box.text_frame
+    tf.word_wrap = True
+    for i, line in enumerate(lines):
+        para = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        run = para.add_run()
+        run.text = line
+        run.font.size = Pt(12)
+        if mark_fr and line == LANG_FR_PASSAGE:
+            run.font._rPr.set("lang", "fr-FR")
+
+
+def f_language_parts(prs, slide):
+    _lang_slide(slide, list(LANG_EN_BODY) + [LANG_FR_PASSAGE])
+    return ({"3.1.2": "FAIL"},
+            "an English deck with an unmarked French paragraph — a screen reader pronounces it "
+            "with English phonetics and it is unintelligible")
+
+
+def f_language_parts_ok(prs, slide):
+    _lang_slide(slide, list(LANG_EN_BODY) + [LANG_EN_TAIL])
+    return ({"3.1.2": "REVIEW"},
+            "the same deck entirely in one language (adversarial)")
+
+
+def f_language_parts_marked_ok(prs, slide):
+    _lang_slide(slide, list(LANG_EN_BODY) + [LANG_FR_PASSAGE], mark_fr=True)
+    return ({"3.1.2": "REVIEW"},
+            "the SAME mixed-language deck with the French run marked lang=\"fr-FR\" "
+            "(adversarial). The pair above proves the detector fires; this one proves a WRITE "
+            "can clear it — the property that makes 3.1.2 remediable on .pptx and not on .xlsx "
+            "or .pdf, neither of which has anywhere to record the mark")
+
+
 FIXTURES = [
     ("sensory-instruction",     f_sensory_instruction,     "violation"),
     ("sensory-instruction-ok",  f_sensory_instruction_ok,  "adversarial"),
@@ -386,11 +450,14 @@ FIXTURES = [
     ("picture-no-alt",          f_picture_no_alt,          "violation"),
     ("image-of-text",           f_image_of_text,           "violation"),
     ("image-of-text-logo-ok",   f_image_of_text_logo_ok,   "adversarial"),
+    ("language-parts",          f_language_parts,          "violation"),
+    ("language-parts-ok",       f_language_parts_ok,       "adversarial"),
+    ("language-parts-marked-ok", f_language_parts_marked_ok, "adversarial"),
     ("no-picture-ok",           f_no_picture_ok,           "adversarial"),
 ]
 
 DECLARED = ("1.1.1", "1.3.3", "1.4.1", "1.4.11", "1.4.3", "1.4.5", "2.1.2", "2.4.3",
-            "2.4.4", "2.4.6", "4.1.2")
+            "2.4.4", "2.4.6", "3.1.2", "4.1.2")
 
 
 def _validate(name: str, expectations: dict[str, str]) -> list[str]:

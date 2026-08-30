@@ -34,6 +34,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import office_structure as osx  # noqa: E402
 import ocr as _ocr  # noqa: E402
+import pii as _pii  # noqa: E402
+import textchecks as _tc  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
     "gen_xlsx_corpus", ROOT / "scripts" / "gen_xlsx_corpus.py")
@@ -69,13 +71,28 @@ def _ocr_wcags(path: Path, ext: str) -> set[str]:
             if f.get("wcag")}
 
 
+def _text_wcags(path: Path, ext: str) -> set[str]:
+    """Criteria the TEXT lane reports — 1.3.3 and 3.1.2, decided by the document's PROSE rather
+    than its structure or its pixels. These two calls are what scanner.py makes (scanner.py:3483):
+    extract the text, read the document's own language marks, then judge.
+
+    `language_marked_spans` is passed rather than omitted because 3.1.2 asks whether a foreign
+    passage's language is IDENTIFIED, and dropping the marks would make a correctly-marked
+    document indistinguishable from an unmarked one — the detector would fire on both and no
+    control could ever be clean."""
+    text = _pii.extract_text(path) or ""
+    return {(f.get("wcag") or "").split()[0]
+            for f in _tc.content_findings(text, osx.language_marked_spans(path, ext))
+            if f.get("wcag")}
+
+
 def _wcags(path: Path) -> set[str]:
     """Every criterion a real scan of this file reports, across BOTH lanes: the first-party xlsx
     structure checks (pure Python, no external engine) and the OCR pass over its embedded images.
     The union is what makes the single-criterion assertions below mean anything."""
     structural = {(f.get("wcag") or "").split()[0] for f in osx.checks_for(path, ".xlsx")
                   if f.get("wcag")}
-    return structural | _ocr_wcags(path, ".xlsx")
+    return structural | _ocr_wcags(path, ".xlsx") | _text_wcags(path, ".xlsx")
 
 
 # ── the labels are legal for their lane ──────────────────────────────────────────
@@ -113,6 +130,8 @@ def test_no_review_lane_fixture_claims_pass(corpus):
     ("colour-scale-only", "1.4.1"),
     ("image-no-alt", "1.1.1"),
     ("image-of-text", "1.4.5"),
+    ("sensory-instruction", "1.3.3"),
+    ("language-parts", "3.1.2"),
     ("shape-faint-outline", "1.4.11"),
     ("form-control", "4.1.2"),
     ("form-control", "2.1.2"),
@@ -135,6 +154,8 @@ def test_each_violation_fixture_is_actually_detected(corpus, name, sc):
     ("contrast-ok", "1.4.3"),
     ("no-image-ok", "1.1.1"),
     ("image-of-text-logo-ok", "1.4.5"),
+    ("sensory-instruction-ok", "1.3.3"),
+    ("language-parts-ok", "3.1.2"),
     ("shape-strong-outline-ok", "1.4.11"),
     ("no-controls-ok", "4.1.2"),
     ("no-controls-ok", "2.1.2"),

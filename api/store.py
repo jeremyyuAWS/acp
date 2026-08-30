@@ -814,6 +814,90 @@ _SCHEMA = [
     # a join through content_workspace_documents, since the hash column itself has no
     # workspace_id of its own.
     "CREATE INDEX IF NOT EXISTS idx_cw_versions_hash ON content_workspace_document_versions(content_hash)",
+    # ── Operational event stream (orchestration_events / worker_instances) — PR 1 of a 5-PR
+    # delivery plan, schema + store methods ONLY, zero callers, zero behaviour change. Modeled
+    # deliberately on scan_events (ADR 0042, directly above) but is NOT that table and does not
+    # replace it:
+    #   scan_events          — the CUSTOMER-FACING scan-lifecycle narrative. Always scan-anchored.
+    #   orchestration_events — the broader OPERATIONAL layer: job attempts, worker identity and
+    #                          readiness, Azure capacity transitions, dependency health. Many rows
+    #                          have NO scan_id at all — a worker becoming ready or a replica being
+    #                          provisioned isn't about any one scan.
+    #
+    # ORDERING is deliberately (occurred_at, event_id), NOT scan_events' per-scan `seq`. `seq`
+    # exists specifically because scan_events is a resume cursor for a LIVE SSE stream (ADR
+    # 0042's own reasoning) — orchestration_events' read APIs (a later PR) are plain paginated
+    # REST reads, not a stream, and most event kinds here have no scan_id to scope a per-scan
+    # counter against anyway, so there is no natural "one counter" for a monotonic sequence to
+    # attach to. Instead this follows decision_log's already-reviewed pattern immediately above
+    # in this file: order by (occurred_at, event_id), a timestamp with a stable uuid tiebreak,
+    # no monotonic sequence needed. This is a deliberate choice matching an existing pattern, not
+    # an oversight — see append_orchestration_event's docstring for the concurrency argument that
+    # makes it safe here (unlike scan_events, there is no shared per-key counter to race over).
+    #
+    # detail_json — WHAT MAY GO IN HERE, matching the house redaction contract api/routes/
+    # system.py already enforces for secret-shaped values ("a secret REFERENCE is an
+    # environment-variable name... never a key value"): this column may hold small, narrative
+    # facts about an operational transition (a file count, a retry attempt, an error class, a
+    # capacity delta) and MUST NEVER hold document contents, access tokens, prompts, model
+    # responses, PHI, or credentials of any kind — a reference (an env var name, a job id, a
+    # worker id) is fine, a value never is. It is capped at a fixed size (see
+    # append_orchestration_event) and truncated with an explicit marker rather than cut mid-JSON,
+    # matching SUBSTR(last_error,1,200)'s spirit of bounding free text elsewhere in this file.
+    #
+    # owner_email is required on every row (append_orchestration_event raises without it) so a
+    # read scopes without a join, matching scan_events/live_snapshot's convention — including for
+    # scan_id-less rows, which is why it is NOT relied on as a join key the way scan_events' is.
+    """CREATE TABLE IF NOT EXISTS orchestration_events (
+      event_id TEXT PRIMARY KEY,
+      occurred_at TEXT NOT NULL,
+      owner_email TEXT NOT NULL,
+      scan_id TEXT,
+      job_id TEXT,
+      job_type TEXT,
+      attempt INT,
+      workflow TEXT,
+      stage TEXT,
+      kind TEXT NOT NULL,
+      severity TEXT,
+      worker_id TEXT,
+      replica_id TEXT,
+      revision_name TEXT,
+      correlation_id TEXT,
+      provider TEXT,
+      error_class TEXT,
+      duration_ms INT,
+      detail_json TEXT,
+      schema_version INT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_orch_events_owner ON orchestration_events(owner_email, occurred_at)",
+    "CREATE INDEX IF NOT EXISTS idx_orch_events_scan ON orchestration_events(scan_id, occurred_at)",
+    "CREATE INDEX IF NOT EXISTS idx_orch_events_job ON orchestration_events(job_id, attempt, occurred_at)",
+    "CREATE INDEX IF NOT EXISTS idx_orch_events_worker ON orchestration_events(worker_id, occurred_at)",
+    "CREATE INDEX IF NOT EXISTS idx_orch_events_kind ON orchestration_events(kind, occurred_at)",
+    "CREATE INDEX IF NOT EXISTS idx_orch_events_error_class ON orchestration_events(error_class, occurred_at)",
+    # Current-state worker registry — one row PER WORKER, upserted, NOT append-only (unlike
+    # orchestration_events above). Answers "what workers exist and what state are they in right
+    # now", the same current-state-cell shape store.worker_tier_status already holds for the
+    # tier as a whole (a single app_settings heartbeat), but per-instance: replica identity,
+    # concurrency, and the individual worker's lifecycle state. No owner_email — a worker isn't
+    # scoped to a tenant, so this table is deliberately absent from the per-owner reset paths
+    # below (see upsert_worker_instance / _RESET_USER_SCAN_TABLES comment).
+    """CREATE TABLE IF NOT EXISTS worker_instances (
+      worker_id TEXT PRIMARY KEY,
+      replica_id TEXT,
+      revision_name TEXT,
+      started_at TEXT,
+      last_heartbeat_at TEXT,
+      supported_job_types TEXT,
+      concurrency_limit INT,
+      active_job_count INT,
+      available_slots INT,
+      state TEXT,
+      last_claimed_job_id TEXT,
+      software_version TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_worker_instances_state ON worker_instances(state)",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -2428,7 +2512,12 @@ class Store:
                          "overview_snapshots",  # derived from scan results — customer data, not config
                          "scan_events",  # ADR 0042 lifecycle log — a record OF customer scans
                          "content_workspaces",  # ADR 0044 — a customer's own workspace, not config
-                         "content_workspace_documents", "content_workspace_document_versions"]
+                         "content_workspace_documents", "content_workspace_document_versions",
+                         "orchestration_events",  # operational log — carries owner_email, customer data
+                         "worker_instances"]  # not customer data, but not genuine config either (no
+                         # owner_email, nothing a customer authors) — a fresh worker re-registers
+                         # itself on the next heartbeat, same reasoning as active_discovery_guard's
+                         # "transient lock state — cleared on reset" above.
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
@@ -2439,11 +2528,17 @@ class Store:
         return list(self._ANALYTICS_TABLES)
 
     # Tables in _ANALYTICS_TABLES that key on scan_id, scoped via a scan_runs.owner_email join.
+    # orchestration_events is here too (delete_scan's scan_id=%s pass picks up its scan-anchored
+    # rows for free), but UNLIKE every other table in this list it also carries owner_email
+    # directly and many of its rows have scan_id=NULL (a worker becoming ready, a capacity event
+    # — nothing to do with any scan). The scan_id-IN-subquery reset_user_data runs against this
+    # list cannot reach those NULL-scan_id rows, so reset_user_data ALSO deletes
+    # orchestration_events by owner_email directly, after this loop — see its body.
     _RESET_USER_SCAN_TABLES = ["file_records", "issue_records", "scan_rule_traces",
                                "file_stage_timings", "scan_file_manifests", "scan_inventory",
                                "file_tags", "pii_findings", "hitl_queue", "hitl_events",
                                "remediation_diff", "applied_fixes", "ai_calls", "finding_comments",
-                               "jobs", "overview_snapshots", "scan_events"]
+                               "jobs", "overview_snapshots", "scan_events", "orchestration_events"]
     # Tables that key on doc_id (not scan_id), scoped via a documents.owner_email join.
     _RESET_USER_DOC_TABLES = ["disposition_audit", "remediation_state"]
 
@@ -2465,6 +2560,16 @@ class Store:
             content_workspace_documents WHERE owner_email=%s), deleted BEFORE its parent
             documents for the same "no real FK, but tidy child-before-parent order" reason
             _RESET_USER_DOC_TABLES's rows are deleted before `documents` below.
+
+        orchestration_events is a FIFTH shape, unique to it in this method: it's in
+        _RESET_USER_SCAN_TABLES (so the scan_id-IN-subquery pass above catches every event
+        anchored to one of this owner's scans), but it ALSO carries owner_email directly, and
+        many of its rows have scan_id=NULL — a worker becoming ready or a capacity event isn't
+        about any scan, so the subquery can never reach them. An explicit second pass, scoped by
+        owner_email directly, runs right after the loop to catch those too. worker_instances is
+        NOT touched here at all: it has no owner_email and no scan_id — a worker isn't scoped to
+        a tenant, so per-user reset has nothing to key a deletion on (it IS cleared by the global
+        reset_analytics(), see _ANALYTICS_TABLES).
 
         Deliberately excluded, unlike reset_analytics():
           - `inventory` — a global path-dedup index with no owner concept; nothing to scope it by.
@@ -2490,6 +2595,11 @@ class Store:
                     f"DELETE FROM {t} WHERE scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)",
                     (owner_email,))
                 cleared.append(t)
+            # orchestration_events' scan_id-less rows (worker/capacity/dependency events with no
+            # scan involved) are invisible to the scan_id-IN-subquery pass above — this second
+            # pass, scoped by the column the table carries directly, is what actually makes this
+            # owner's log fully gone. Safe to re-run over rows the loop above already deleted.
+            self._db.execute(cur, "DELETE FROM orchestration_events WHERE owner_email=%s", (owner_email,))
             for t in self._RESET_USER_DOC_TABLES:
                 self._db.execute(cur,
                     f"DELETE FROM {t} WHERE doc_id IN (SELECT doc_id FROM documents WHERE owner_email=%s)",
@@ -6278,6 +6388,264 @@ class Store:
             else:
                 r["detail"] = None
         return rows
+
+    # ── Operational event stream (orchestration_events / worker_instances) ────
+    #
+    # PR 1 of a 5-PR delivery plan modeled on ADR 0042's scan_events (the CUSTOMER-FACING
+    # scan-lifecycle narrative — always scan-anchored). This is the broader OPERATIONAL layer:
+    # job attempts, worker identity/readiness, Azure capacity transitions, dependency health —
+    # including events with NO scan_id at all. Coexisting, additive infrastructure; scan_events,
+    # append_scan_event and its emit sites are untouched.
+    #
+    # NO CALLER YET, deliberately, exactly like scan_events' own PR 1: this lands the tables and
+    # their store methods with ZERO behaviour change so the emit sites (a later PR, touching
+    # worker.py's claim/reclaim/zombie-write-suppression paths) can be reviewed on their own, with
+    # explicit human review — that PR is materially riskier than this one and is not started here.
+
+    # Closed set of operational transitions. Closed for the same reason SCAN_EVENT_KINDS is: a
+    # future reader renders per-kind, so a typo'd or ad-hoc kind is a row nothing knows how to
+    # display. Extend by design amendment, not in passing.
+    ORCHESTRATION_EVENT_KINDS = frozenset({
+        "job.submitted", "job.eligible", "job.claimed", "job.stage_started", "job.stage_completed",
+        "job.completed", "job.cancel_requested", "job.cancelled", "job.failed",
+        "job.retry_scheduled", "job.retry_started", "job.lease_expired", "job.reclaimed",
+        "job.dead_lettered", "job.zombie_write_suppressed",
+        "worker.starting", "worker.ready", "worker.busy", "worker.draining", "worker.unhealthy",
+        "worker.offline",
+        "capacity.shortage_detected", "capacity.provisioning_observed", "capacity.replica_running",
+        "capacity.worker_ready", "capacity.scale_in_observed",
+        "dependency.throttled", "dependency.authentication_failed", "dependency.unavailable",
+        "dependency.recovered",
+    })
+
+    # Closed set for the `error_class` field. Used by a later PR's classification logic; validated
+    # now (when a caller happens to supply one) so a bad value can never reach the table and be
+    # discovered only when someone tries to render/aggregate by it.
+    ERROR_CLASS_VOCABULARY = frozenset({
+        "capacity", "worker_startup", "worker_crash", "lease_expired", "source_authentication",
+        "source_authorization", "source_rate_limit", "source_unavailable", "storage", "database",
+        "model_rate_limit", "model_safety", "model_unavailable", "invalid_document",
+        "unsupported_document", "timeout", "cancelled", "unknown",
+    })
+
+    # Closed set for worker_instances.state.
+    WORKER_INSTANCE_STATES = frozenset({
+        "starting", "ready", "busy", "draining", "unhealthy", "offline",
+    })
+
+    _ORCH_EVENT_SCHEMA_VERSION = 1
+    # 2KB, matching SUBSTR(last_error,1,200)'s spirit of bounding free text elsewhere in this
+    # file — detail_json is narration (a file count, a retry attempt, an error class), never a
+    # second source of truth, so there is no correctness reason for it to be large.
+    _ORCH_DETAIL_MAX_BYTES = 2048
+
+    def append_orchestration_event(self, *, owner_email: str, kind: str,
+                                   occurred_at: str | None = None, scan_id: str | None = None,
+                                   job_id: str | None = None, job_type: str | None = None,
+                                   attempt: int | None = None, workflow: str | None = None,
+                                   stage: str | None = None, severity: str | None = None,
+                                   worker_id: str | None = None, replica_id: str | None = None,
+                                   revision_name: str | None = None,
+                                   correlation_id: str | None = None, provider: str | None = None,
+                                   error_class: str | None = None, duration_ms: int | None = None,
+                                   detail: dict | None = None) -> str | None:
+        """Append one operational event and return its event_id (None if it was not written).
+
+        RAISES on a bad `kind`, a bad `error_class` (when one is supplied), or a missing
+        `owner_email` — these are programming errors a test must catch, not runtime conditions.
+        Every OTHER failure (the store being unavailable, mid-outage) is swallowed and returns
+        None: this deliberately mirrors append_scan_event's contract, which itself mirrors
+        activity.py's — "a progress line must never be able to fail the work it describes". A
+        future emit-site PR will wrap every call site anyway, but the guarantee belongs here, next
+        to the write, not re-derived at every caller. A missing row is a gap in narration; it is
+        never a wrong statement, because nothing in this table is ever overwritten.
+
+        No `seq`/MAX+1 dance like append_scan_event: there is no shared per-key counter to race
+        over here in the first place. scan_events' seq is a per-SCAN counter contended by however
+        many writers touch that one scan_id at once; this table's ordering key is
+        (occurred_at, event_id), and event_id is a fresh uuid4 per call — two concurrent writers
+        never contend for the same identity, so there is nothing to retry. (scan_events could not
+        make the same simplification: it needed a per-scan monotonic position, which is exactly
+        the thing concurrent writers collide on.)
+
+        `detail` is a dict, stored as JSON, capped at `_ORCH_DETAIL_MAX_BYTES`. An oversized or
+        unserializable `detail` never costs the event itself:
+          - unserializable → detail_json is dropped to NULL (event still written).
+          - serializable but over the cap → replaced with {"truncated": true, "original_size": N}
+            rather than cut mid-JSON, which would emit invalid JSON no reader could parse.
+        detail_json must NEVER contain document contents, access tokens, prompts, model responses,
+        PHI, or credentials — see the schema comment on orchestration_events for the full
+        redaction contract. This method enforces size, not content: a caller passing a credential
+        in `detail` is a bug at the call site, not something this method can detect.
+        """
+        if not owner_email:
+            raise ValueError("append_orchestration_event requires an owner_email")
+        if kind not in self.ORCHESTRATION_EVENT_KINDS:
+            raise ValueError(
+                f"unknown orchestration event kind {kind!r} — add it to "
+                f"Store.ORCHESTRATION_EVENT_KINDS before emitting it")
+        if error_class is not None and error_class not in self.ERROR_CLASS_VOCABULARY:
+            raise ValueError(
+                f"unknown error_class {error_class!r} — add it to "
+                f"Store.ERROR_CLASS_VOCABULARY before emitting it")
+        import json as _json
+        now = occurred_at or self._now()
+        payload = None
+        if detail is not None:
+            try:
+                raw = _json.dumps(detail)
+            except (TypeError, ValueError):
+                raw = None          # unserializable detail loses the detail, never the event
+            if raw is not None:
+                if len(raw.encode("utf-8")) > self._ORCH_DETAIL_MAX_BYTES:
+                    raw = _json.dumps({"truncated": True, "original_size": len(raw.encode("utf-8"))})
+                payload = raw
+        event_id = uuid.uuid4().hex
+        sql = ("INSERT INTO orchestration_events "
+               "(event_id,occurred_at,owner_email,scan_id,job_id,job_type,attempt,workflow,stage,"
+               "kind,severity,worker_id,replica_id,revision_name,correlation_id,provider,"
+               "error_class,duration_ms,detail_json,schema_version) "
+               "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)")
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur, sql, (
+                    event_id, now, owner_email, scan_id, job_id, job_type, attempt, workflow,
+                    stage, kind, severity, worker_id, replica_id, revision_name, correlation_id,
+                    provider, error_class, duration_ms, payload,
+                    self._ORCH_EVENT_SCHEMA_VERSION))
+            return event_id
+        except Exception:
+            return None
+
+    def list_orchestration_events(self, *, owner_email: str | None = None,
+                                  scan_id: str | None = None, job_id: str | None = None,
+                                  worker_id: str | None = None, kind: str | None = None,
+                                  after: tuple | list | None = None,
+                                  limit: int = 500) -> list[dict]:
+        """Operational events in `(occurred_at, event_id)` order, oldest first. Never raises — an
+        unavailable store, or filters that match nothing, both read as [].
+
+        `owner_email` scopes to one tenant's events when given; omit it for a global/admin read
+        (matching job_stats'/dead_letter_breakdown's own owner-optional pattern) — there is no
+        implicit access check here, so a caller with a request-scoped owner must always pass it.
+        Every other filter narrows further and is independent — pass any subset.
+
+        `after` is a `(occurred_at, event_id)` keyset cursor (the last row's own two fields from a
+        previous page), not a bare timestamp: ordering here has a TIEBREAK specifically because
+        `occurred_at` alone is not a safe total order (two events can share a timestamp), so a
+        cursor over `occurred_at` alone could silently skip or repeat a same-timestamp neighbour
+        depending on where it falls relative to the page boundary. Comparing the full tuple —
+        `(occurred_at, event_id) > (%s, %s)` — is what keeps "what did I miss since my last page"
+        correct across ties, the same reasoning list_scan_events' `after_seq` exists for, adapted
+        to a key that has no single monotonic column to lean on.
+
+        `detail` comes back as the dict it was written as (or None), never as a raw JSON string.
+        """
+        import json as _json
+        where, params = ["1=1"], []
+        if owner_email:
+            where.append("owner_email=%s"); params.append(owner_email)
+        if scan_id:
+            where.append("scan_id=%s"); params.append(scan_id)
+        if job_id:
+            where.append("job_id=%s"); params.append(job_id)
+        if worker_id:
+            where.append("worker_id=%s"); params.append(worker_id)
+        if kind:
+            where.append("kind=%s"); params.append(kind)
+        if after is not None:
+            after_occurred_at, after_event_id = after
+            where.append("(occurred_at,event_id)>(%s,%s)")
+            params.extend([after_occurred_at, after_event_id])
+        sql = (f"SELECT * FROM orchestration_events WHERE {' AND '.join(where)} "
+               "ORDER BY occurred_at, event_id LIMIT %s")
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur, sql, tuple(params + [limit]))
+                rows = self._db.fetchall(cur)
+        except Exception:
+            return []
+        for r in rows:
+            raw = r.get("detail_json")
+            if raw:
+                try:
+                    r["detail"] = _json.loads(raw)
+                except (TypeError, ValueError):
+                    r["detail"] = None
+            else:
+                r["detail"] = None
+            r.pop("detail_json", None)
+        return rows
+
+    # Columns upsert_worker_instance may write. A whitelist, not the caller's kwarg names taken
+    # on faith — **fields feeds directly into a dynamically-built SQL column list, and this is
+    # what keeps that safe.
+    _WORKER_INSTANCE_FIELDS = frozenset({
+        "replica_id", "revision_name", "started_at", "last_heartbeat_at", "supported_job_types",
+        "concurrency_limit", "active_job_count", "available_slots", "state",
+        "last_claimed_job_id", "software_version",
+    })
+
+    def upsert_worker_instance(self, worker_id: str, **fields) -> None:
+        """Create or update ONE worker's current-state row. Current-state, NOT append-only —
+        a second call for the same worker_id UPDATES that row in place; it never inserts a
+        second one. Partial: only the columns actually passed are written/overwritten, so a
+        heartbeat that only wants to bump `last_heartbeat_at` and `active_job_count` does not
+        clobber `supported_job_types`/`concurrency_limit` set by an earlier, fuller call.
+
+        `state`, if passed, must be one of WORKER_INSTANCE_STATES — raises ValueError otherwise,
+        same closed-set contract as append_orchestration_event's `kind`.
+
+        `supported_job_types`, if passed as a list/tuple, is JSON-encoded to match the column's
+        TEXT storage; passed as a string it is stored as-is (assumed already-encoded).
+
+        Unlike append_orchestration_event, this does NOT swallow store failures — a worker
+        registering its own readiness is not "telemetry about a customer job in flight" (the
+        contract that clause protects), and a caller (the future heartbeat loop) needs to know if
+        its own state write failed rather than believe a stale row.
+        """
+        if not worker_id:
+            raise ValueError("upsert_worker_instance requires a worker_id")
+        unknown = set(fields) - self._WORKER_INSTANCE_FIELDS
+        if unknown:
+            raise ValueError(f"unknown worker_instances field(s): {sorted(unknown)}")
+        if "state" in fields and fields["state"] not in self.WORKER_INSTANCE_STATES:
+            raise ValueError(
+                f"unknown worker state {fields['state']!r} — must be one of "
+                f"Store.WORKER_INSTANCE_STATES")
+        if "supported_job_types" in fields and isinstance(fields["supported_job_types"], (list, tuple)):
+            import json as _json
+            fields = dict(fields)
+            fields["supported_job_types"] = _json.dumps(list(fields["supported_job_types"]))
+
+        cols = ["worker_id"] + list(fields.keys())
+        placeholders = ",".join(["%s"] * len(cols))
+        col_list = ",".join(cols)
+        if fields:
+            update_clause = ",".join(f"{c}=EXCLUDED.{c}" for c in fields)
+            sql = (f"INSERT INTO worker_instances ({col_list}) VALUES ({placeholders}) "
+                   f"ON CONFLICT(worker_id) DO UPDATE SET {update_clause}")
+        else:
+            # Nothing to update — just make sure the row exists.
+            sql = (f"INSERT INTO worker_instances ({col_list}) VALUES ({placeholders}) "
+                   f"ON CONFLICT(worker_id) DO NOTHING")
+        with self._db.cursor() as cur:
+            self._db.execute(cur, sql, tuple([worker_id] + list(fields.values())))
+
+    def list_worker_instances(self, *, state: str | None = None) -> list[dict]:
+        """The worker registry's current state, ordered by worker_id for a stable read. Never
+        raises — an unavailable store reads as []."""
+        where, params = "1=1", []
+        if state:
+            where = "state=%s"; params = [state]
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    f"SELECT * FROM worker_instances WHERE {where} ORDER BY worker_id",
+                    tuple(params))
+                return self._db.fetchall(cur)
+        except Exception:
+            return []
 
     # ── Audit trail (maturity Phase 4) ────────────────────────────────────────
     def document_timeline(self, scan_id: str, file: str, limit: int = 300) -> list[dict]:

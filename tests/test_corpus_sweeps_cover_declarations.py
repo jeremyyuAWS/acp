@@ -46,11 +46,15 @@ CORPORA = {
 
 # A declared pair whose proof lives outside its corpus's own two sweeps. Each entry names WHERE,
 # so the claim is checkable rather than merely excused.
+#
+# 1.3.3 USED TO BE HERE, for all three formats, and it should not have been. It was excused on the
+# grounds that the shared tests/test_sensory_corpus.py proves it — which is true, and which was
+# not the reason it was absent from the sweeps. The real reason is that `_wcags` did not include
+# the TEXT lane, so the sweeps could not see a 1.3.3 finding whatever list it was named in. That
+# is a hole to close, not an exemption to grant: an escape hatch used for a missing lane hides the
+# missing lane, and would have hidden 3.1.2's too. The lane is in `_wcags` now and both criteria
+# are swept like everything else.
 PROVEN_ELSEWHERE = {
-    ("xlsx", "1.3.3"): "tests/test_sensory_corpus.py — one shared file for all three formats, "
-                       "because 1.3.3 is decided by the prose rather than the container",
-    ("pptx", "1.3.3"): "tests/test_sensory_corpus.py — same shared file",
-    ("pdf", "1.3.3"): "tests/test_sensory_corpus.py — same shared file",
     ("xlsx", "2.4.2"): "DECLARED_ENGINE — proven by the .NET analyser in "
                        "test_the_engine_confirms_the_declared_pairs, skipped on a bare checkout",
     ("xlsx", "3.1.1"): "DECLARED_ENGINE — same .NET-gated sweep",

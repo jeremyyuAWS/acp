@@ -47,6 +47,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import office_structure as osx  # noqa: E402
 import ocr as _ocr  # noqa: E402
+import pii as _pii  # noqa: E402
+import textchecks as _tc  # noqa: E402
 import scanner  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
@@ -109,6 +111,21 @@ def _ocr_wcags(path: Path) -> set[str]:
             if f.get("wcag")}
 
 
+def _text_wcags(path: Path, ext: str) -> set[str]:
+    """Criteria the TEXT lane reports — 1.3.3 and 3.1.2, decided by the document's PROSE rather
+    than its structure or its pixels. These two calls are what scanner.py makes (scanner.py:3483):
+    extract the text, read the document's own language marks, then judge.
+
+    `language_marked_spans` is passed rather than omitted because 3.1.2 asks whether a foreign
+    passage's language is IDENTIFIED, and dropping the marks would make a correctly-marked
+    document indistinguishable from an unmarked one — the detector would fire on both and no
+    control could ever be clean."""
+    text = _pii.extract_text(path) or ""
+    return {(f.get("wcag") or "").split()[0]
+            for f in _tc.content_findings(text, osx.language_marked_spans(path, ext))
+            if f.get("wcag")}
+
+
 def _wcags(path: Path) -> set[str]:
     """Every criterion a real scan of this file reports, across BOTH pdf code paths.
 
@@ -124,7 +141,8 @@ def _wcags(path: Path) -> set[str]:
     corpus rather than after it."""
     structural = {(f.get("wcag") or "").split()[0] for f in osx.checks_for(path, ".pdf")
                   if f.get("wcag")}
-    return structural | _analyser_wcags(path) | _ocr_wcags(path)
+    return (structural | _analyser_wcags(path) | _ocr_wcags(path)
+            | _text_wcags(path, ".pdf"))
 
 
 def _path(corpus, name: str) -> Path:
@@ -170,6 +188,8 @@ def test_only_the_certifiable_pairs_claim_pass(corpus):
     ("link-colour-only", "1.4.1"),
     ("contrast-fail", "1.4.3"),
     ("image-of-text", "1.4.5"),
+    ("sensory-instruction", "1.3.3"),
+    ("language-parts", "3.1.2"),
     ("rect-faint-outline", "1.4.11"),
     ("no-document-title", "2.4.2"),
     ("no-tabs-structure", "2.4.3"),
@@ -193,6 +213,8 @@ def test_each_violation_fixture_is_actually_detected(corpus, name, sc):
     ("link-underlined-ok", "1.4.1"),
     ("contrast-ok", "1.4.3"),
     ("image-of-text-logo-ok", "1.4.5"),
+    ("sensory-instruction-ok", "1.3.3"),
+    ("language-parts-ok", "3.1.2"),
     ("rect-strong-outline-ok", "1.4.11"),
     ("document-title-ok", "2.4.2"),
     ("tabs-structure-ok", "2.4.3"),
