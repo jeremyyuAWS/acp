@@ -37,8 +37,17 @@ different code emitting the same criterion, so there is no sound static link bet
 found these was building a document that should trip the criterion and running both lanes on it.
 That is the ground-truth corpus's method, applied to criteria the corpus does not yet cover.
 
-IF THIS FILE STARTS FAILING, the detectors have been wired in. That is good news and the right
-response is to delete this file and give each pair a corpus fixture — not to adjust the test.
+HOW TO READ THIS FILE. Every assertion states the behaviour ACP should have. The one that does not
+hold yet carries xfail(strict=True) with the limitation named in its reason, so the gap shows in
+test output as XFAIL instead of being asserted as correct. Nothing here requires the defect to
+persist: wiring a detector produces an XPASS whose message says to delete the marker and keep the
+assertion, which is already the positive test.
+
+WIRING THEM IS NOT A COVERAGE DECISION. These are HEURISTIC/LOW registrations — the docx 1.3.5 one
+predicts in its own words that "organisational forms (company address, billing contact) will
+false-positive". Turning them on would raise the count of criteria a scan reports without raising
+what ACP can stand behind, which is the opposite of what this file is for. The point is to make
+the unsupported behaviour explicit, not to enable it.
 """
 from __future__ import annotations
 
@@ -172,11 +181,17 @@ def test_the_detector_returns_a_finding_when_called_directly(
 
 @pytest.mark.parametrize("label,sc,ext,build,detect,rule_id", ORPHANS,
                          ids=[o[0] for o in ORPHANS])
-def test_a_real_scan_never_reports_the_criterion(
+@pytest.mark.xfail(strict=True, reason=(
+    "KNOWN GAP: office_structure.checks_for — the first-party scan path (scanner.py:3495, :3766) "
+    "— composes a fixed list of functions that does not include these detectors, and nothing in "
+    "the scan path calls rule_registry.evaluate. The detector runs only when called directly. "
+    "When this XPASSes the pair is wired: delete this marker, keep the assertion, and give the "
+    "pair a ground-truth corpus fixture — a criterion that fires with nothing proving what it "
+    "fires ON is the next problem, not the fix."))
+def test_a_real_scan_reports_the_criterion(
         tmp_path, label, sc, ext, build, detect, rule_id):
-    """The other half, and the defect. `checks_for` is the first-party scan path — scanner.py
-    calls it at :3495 and :3766 — and it composes a fixed list of office_structure functions that
-    does not include these detectors.
+    """What should happen: a document that trips a registered detector has that criterion reported
+    by a real scan. Today it does not, for these three pairs.
 
     Asserted on the SAME document the test above proves the detector fires on, so the two results
     cannot be explained by a bad fixture."""
@@ -184,10 +199,9 @@ def test_a_real_scan_never_reports_the_criterion(
     build(path)
     assert detect(path), "the trigger stopped working — see the test above"
     fired = _scan_wcags(path, ext)
-    assert sc not in fired, (
-        f"{label} now reaches a real scan (reported: {sorted(fired)}). If that was deliberate, "
-        f"DELETE this file and give the pair a ground-truth corpus fixture — a criterion that "
-        f"fires with no fixture proving what it fires ON is the next problem, not the fix")
+    assert sc in fired, (
+        f"{label}: the detector reports {sc} when called directly, but a real scan reported "
+        f"{sorted(fired) or 'nothing'} — the registration is not connected to the scan path")
 
 
 def test_nothing_in_the_scan_path_executes_the_registry():
