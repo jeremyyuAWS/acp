@@ -817,6 +817,30 @@ def get_scan_accessibility_status(sid: str, request: Request, prefix: str | None
     return _status.scan_status(core.store, sid, path_prefix=prefix or None)
 
 
+_QUEUE_ESTIMATE_KINDS = ("discover", "assess", "remediate")
+
+
+@router.get("/scans/{sid}/queue-estimate")
+def get_queue_estimate(sid: str, request: Request, kind: str = Query(...)):
+    """"When will my work actually begin?" for the Discover/Assess/Remediate queue-status panel —
+    Store.queue_estimate's docstring covers the math. Always 200, degrading to
+    {"available": false} for an unknown/foreign scan (get_scan_head is the owner gate — same cheap
+    id/status/revision-only lookup GET /workspace/bootstrap and the ETag route already use) or a
+    scan with no live job of the requested `kind`."""
+    if kind not in _QUEUE_ESTIMATE_KINDS:
+        raise HTTPException(422, f"kind must be one of {_QUEUE_ESTIMATE_KINDS}")
+    owner = _owner(request)
+    if core.store.get_scan_head(sid, owner=owner) is None:
+        return {"available": False, "reason": "scan_not_found"}
+    # No API exposes the standalone worker tier's exact concurrent-replica count (#113 split
+    # topology), so a live tier with zero in-process workers is floored at 1 ready worker rather
+    # than reported as 0 — the same "online, capacity unknown" distinction WorkerAvailability.jsx
+    # draws, not a real measurement. It plays no part in the wait math (see queue_estimate's
+    # docstring); it is display-only.
+    ready_workers = core.WORKERS if core.WORKERS > 0 else (1 if core.store.worker_tier_alive() else 0)
+    return core.store.queue_estimate(sid, kind, owner=owner, ready_workers=ready_workers)
+
+
 @router.get("/scans/{sid}/live")
 def get_live_snapshot(sid: str, request: Request):
     """The authoritative live-run snapshot for the Assess running screen (Live Assessment Experience
