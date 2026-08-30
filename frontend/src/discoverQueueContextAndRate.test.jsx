@@ -63,6 +63,13 @@ const factValue = (c, label) => {
   const labelEl = [...c.querySelectorAll('div')].find((d) => d.textContent === label)
   return labelEl?.nextElementSibling?.textContent ?? null
 }
+// DiscoverQueueCard (the consolidated queued card, 2026-08-30) renders each row as a single flex
+// div with a [label-span, value-span] pair, not two sibling divs — a different shape from
+// ProcessingStatusPanel's `facts` above, so this needs its own lookup.
+const cardRowValue = (c, label) => {
+  const labelEl = [...c.querySelectorAll('span')].find((s) => s.textContent === label)
+  return labelEl?.nextElementSibling?.textContent ?? null
+}
 
 describe('the richer queued card', () => {
   it('shows compatible-jobs-ahead, worker-pool and submitted facts from GET /jobs', async () => {
@@ -83,12 +90,12 @@ describe('the richer queued card', () => {
     await settle()
     expect(getJobs).toHaveBeenCalledWith('queued')
     // j2 + j3 (compatible, queued, not self); j1 excluded as self, j4 excluded as the wrong lane.
-    expect(factValue(c, 'Compatible jobs ahead')).toBe('2')
-    expect(factValue(c, 'Worker pool')).toBe('4 online')
-    expect(factValue(c, 'Submitted')).toBe('2m ago')
+    expect(cardRowValue(c, 'Compatible jobs ahead')).toBe('2')
+    expect(cardRowValue(c, 'ACP ready')).toBe('4 workers')
+    expect(cardRowValue(c, 'Submitted')).toBe('2m ago')
   })
 
-  it('shows the worker pool as offline when the tier has no heartbeat', async () => {
+  it('shows ACP readiness as offline when the tier has no heartbeat', async () => {
     getQueueJob.mockResolvedValue({ id: 'j1', status: 'queued', locked_at: null })
     getJobs.mockResolvedValue({ workers: 0, worker_tier_alive: false, jobs: [] })
     const c = await mount({
@@ -96,7 +103,7 @@ describe('the richer queued card', () => {
       progress: { phase: 'queued' },
     })
     await settle()
-    expect(factValue(c, 'Worker pool')).toBe('offline')
+    expect(cardRowValue(c, 'ACP ready')).toBe('offline')
   })
 
   it('stops asking for queue context once real listing progress has started', async () => {

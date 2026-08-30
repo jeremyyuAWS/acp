@@ -29,6 +29,7 @@ import { useWorkerCapacity } from './workerCapacityStore.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
 import { discoveryFailureReason } from './discoveryFailureReason.js'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
+import DiscoverQueueCard from './DiscoverQueueCard.jsx'
 import { deriveDiscoverProcessingState } from './discoverProcessingState.js'
 import WorkerAvailability from './WorkerAvailability.jsx'
 import FolderActivity from './FolderActivity.jsx'
@@ -233,7 +234,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       if (!live) return
       const ahead = (d.jobs || []).filter((j) => DISCOVERY_JOB_TYPES.has(j.type) && j.id !== jobId).length
       setQueueSnap({ compatibleJobsAhead: ahead, workersTotal: d.workers ?? null,
-                     workersOnline: !!d.worker_tier_alive })
+                     workersOnline: !!d.worker_tier_alive, polledAt: Date.now() })
     }).catch(() => {})
     load()
     const id = setInterval(load, 5000)
@@ -784,42 +785,74 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           can be the PREVIOUS scan's terminal value until this one settles. */}
       <DiscoverRunProgress progress={progress} busy={busy} onStop={onStop} onContinue={onAdvance} sources={sources} inv={inv} preflightDegraded={preflightDegraded} freshness={progress?.freshness ?? run?.freshness ?? null} />
 
-      {/* "How many workers are available to pick up scan jobs" — answered directly, ambiently, not
-          only inferred from a capacity banner mid-run. Polled the whole time this tab is mounted
-          (see the effect above), so it also answers the question BEFORE a scan is even started. */}
-      <WorkerAvailability snap={workerSnap} busy={workerBusy} msg={workerMsg} onAdjust={adjustWorkers}
-                          replicas={replicas} replicasBusy={replicasBusy} replicasMsg={replicasMsg}
-                          onAdjustReplicas={me?.is_admin ? adjustReplicas : undefined}
-                          capacity={capacity} />
+      {(() => {
+        const jobClaimed = !!(discoverJobInfo && discoverJobInfo.status && discoverJobInfo.status !== 'queued')
+        const queuedNotClaimed = busy && progress?.phase === 'queued' && !jobClaimed
+        // The consolidated "DISCOVERY · Queued" card (stakeholder UX review, 2026-08-30) replaces
+        // WorkerAvailability + ProcessingStatusPanel for JUST this one window — the three separate,
+        // sometimes-contradicting pieces they used to show here ("Loading…"/"Waiting for a
+        // worker"/a plain worker strip, fixed individually in #988/#993/#1027) are now one card.
+        // Every OTHER state (claimed, actively discovering, idle) still renders through the
+        // existing two components below, unchanged — this card has nothing to add once a worker
+        // has actually claimed the job and Discover's own live counts/folder activity take over.
+        if (queuedNotClaimed) {
+          return (
+            <DiscoverQueueCard
+              compatibleJobsAhead={queueSnap?.compatibleJobsAhead ?? null}
+              workersTotal={queueSnap?.workersTotal ?? null}
+              workersOnline={queueSnap?.workersOnline ?? null}
+              queueUpdatedSecsAgo={queueSnap?.polledAt ? (Date.now() - queueSnap.polledAt) / 1000 : null}
+              submittedSecsAgo={progress?.started_at ? (Date.now() - Date.parse(progress.started_at)) / 1000 : null}
+              pickupEstimate={pickupEstimate}
+              capacity={capacity}
+              replicas={replicas}
+              onStop={onStop}
+              onViewMonitor={onViewMonitor}
+            />
+          )
+        }
+        return (
+          <>
+            {/* "How many workers are available to pick up scan jobs" — answered directly,
+                ambiently, not only inferred from a capacity banner mid-run. Polled the whole time
+                this tab is mounted (see the effect above), so it also answers the question
+                BEFORE a scan is even started. */}
+            <WorkerAvailability snap={workerSnap} busy={workerBusy} msg={workerMsg} onAdjust={adjustWorkers}
+                                replicas={replicas} replicasBusy={replicasBusy} replicasMsg={replicasMsg}
+                                onAdjustReplicas={me?.is_admin ? adjustReplicas : undefined}
+                                capacity={capacity} />
 
-      {/* PRD "Processing status" — the Discover instance of the same panel Assess uses (#922),
-          reusing the exact signals this tab already computes for its own terminal-status banners
-          below (failureReason from #919, the same capacity signal the "Preparing Discovery
-          capacity" notice reads) rather than a second, possibly-diverging notion of the same
-          thing. Additive, not a replacement for those banners yet — same rollout shape as Assess's
-          own panel. */}
-      <ProcessingStatusPanel
-        derived={deriveDiscoverProcessingState({
-          busy, phase: progress?.phase ?? null, freshness: progress?.freshness ?? run?.freshness ?? null,
-          runStatus: run?.status ?? null, failureReason, capacityState: preflightCapacityState,
-          discoveredCount: liveDiscoveredCount, elapsedSecs: progress?.elapsed ?? null,
-          jobClaimed: !!(discoverJobInfo && discoverJobInfo.status && discoverJobInfo.status !== 'queued'),
-          assignedSecsAgo: discoverJobInfo?.locked_at
-            ? (Date.now() - Date.parse(discoverJobInfo.locked_at)) / 1000 : null,
-          compatibleJobsAhead: queueSnap?.compatibleJobsAhead ?? null,
-          workersTotal: queueSnap?.workersTotal ?? null,
-          workersOnline: queueSnap?.workersOnline ?? null,
-          pickupEstimate,
-          submittedSecsAgo: progress?.started_at
-            ? (Date.now() - Date.parse(progress.started_at)) / 1000 : null,
-          foldersFound: progress?.folders_found ?? null,
-          filesPerSec, inventoryChangedSecsAgo,
-          hasFolderActivity: !!(progress?.active_folders?.length || progress?.recent_folders?.length),
-          workerHeartbeatAgeS: workerSnap?.workerHeartbeatAgeS ?? null,
-        })}
-        onRerun={() => onScan('all')}
-        onViewMonitor={onViewMonitor}
-      />
+            {/* PRD "Processing status" — the Discover instance of the same panel Assess uses
+                (#922), reusing the exact signals this tab already computes for its own
+                terminal-status banners below (failureReason from #919, the same capacity signal
+                the "Preparing Discovery capacity" notice reads) rather than a second, possibly-
+                diverging notion of the same thing. Additive, not a replacement for those banners
+                yet — same rollout shape as Assess's own panel. */}
+            <ProcessingStatusPanel
+              derived={deriveDiscoverProcessingState({
+                busy, phase: progress?.phase ?? null, freshness: progress?.freshness ?? run?.freshness ?? null,
+                runStatus: run?.status ?? null, failureReason, capacityState: preflightCapacityState,
+                discoveredCount: liveDiscoveredCount, elapsedSecs: progress?.elapsed ?? null,
+                jobClaimed,
+                assignedSecsAgo: discoverJobInfo?.locked_at
+                  ? (Date.now() - Date.parse(discoverJobInfo.locked_at)) / 1000 : null,
+                compatibleJobsAhead: queueSnap?.compatibleJobsAhead ?? null,
+                workersTotal: queueSnap?.workersTotal ?? null,
+                workersOnline: queueSnap?.workersOnline ?? null,
+                pickupEstimate,
+                submittedSecsAgo: progress?.started_at
+                  ? (Date.now() - Date.parse(progress.started_at)) / 1000 : null,
+                foldersFound: progress?.folders_found ?? null,
+                filesPerSec, inventoryChangedSecsAgo,
+                hasFolderActivity: !!(progress?.active_folders?.length || progress?.recent_folders?.length),
+                workerHeartbeatAgeS: workerSnap?.workerHeartbeatAgeS ?? null,
+              })}
+              onRerun={() => onScan('all')}
+              onViewMonitor={onViewMonitor}
+            />
+          </>
+        )
+      })()}
 
       {/* "Processing details" expandable row (stakeholder review): attempt count against its real
           ceiling, and a truncated job id, for the whole busy window — not just the pre-listing
