@@ -3,6 +3,7 @@ import { CAPABILITY_FALLBACK } from './capability.js'
 import { SCOPE_UNIVERSE } from './scopePresets.js'
 import { TRACKED_17 } from './ruleDetails.js'
 
+import { noteAuthChange } from './apiIdentity.js'
 const BASE = import.meta.env.VITE_API ?? 'http://localhost:8077'
 
 // Per-user tokens (real mode only). In SIM mode nothing touches a real Drive / OneDrive.
@@ -10,11 +11,18 @@ let driveToken = null
 let spToken = null
 let googleToken = null  // GIS Bearer token (auth mode = "gis")
 let msToken = null      // Microsoft (Entra) access token — the API Bearer for a Microsoft sign-in
+// Identity changes are recorded in apiIdentity.js — see that module for why it is separate.
+// Anything caching per-user data keys on it, so a response fetched for one account can never be
+// handed to the next.
 export const setDriveToken = (t) => { driveToken = t }
 export const setSPToken = (t) => { spToken = t }
-export const setGoogleToken = (t) => { googleToken = t }
-export const setMsToken = (t) => { msToken = t }
-export const clearAllTokens = () => { googleToken = null; msToken = null; driveToken = null; spToken = null }
+export const setGoogleToken = (t) => { const w = googleToken; googleToken = t; noteAuthChange(w, t) }
+export const setMsToken = (t) => { const w = msToken; msToken = t; noteAuthChange(w, t) }
+export const clearAllTokens = () => {
+  const had = googleToken || msToken
+  googleToken = null; msToken = null; driveToken = null; spToken = null
+  noteAuthChange(had, null)
+}
 export const getToken = () => googleToken || msToken || null
 // The Authorization bearer is Google's token when present, else the Microsoft one — tagged with
 // X-Auth-Provider so the backend verifies it against the right issuer (Graph, not Google's
@@ -74,6 +82,7 @@ const j = async (r) => {
     // Microsoft user with no Google Drive bounced the whole session to "expired".
     if (r.headers.get('X-Acp-Auth') === 'session') {
       googleToken = null; msToken = null
+      noteAuthChange(1, 0)   // same identity change as clearAllTokens; caches must not survive it
       window.dispatchEvent(new CustomEvent('acp:session-expired', { detail: { reason: SESSION_EXPIRED } }))
       throw new Error(SESSION_EXPIRED)
     }
