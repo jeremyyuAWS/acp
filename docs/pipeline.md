@@ -216,6 +216,53 @@ Both upload short-lived, redacted artifacts only. Neither introduces a new secre
 role grant — they reuse `deploy-staging.yml`'s existing Contributor-on-`mdk-accessibility`
 service principal, read-only in the first workflow's case.
 
+### Chain B — staging diagnostic logging, and read-only deadlock evidence retrieval
+
+Two more `workflow_dispatch`-only workflows, added for the 30 Aug 2026 production incident
+(`psycopg2.pool.PoolError: connection pool exhausted` recurring across 5 production revisions).
+The incident review found two gaps neither `validate-staging-azure.yml` nor
+`validate-staging-scale-test.yml` touches: staging retained **no logs at all** ("no destination;
+no environment diagnostic settings"), so staging's historical error rate is unknown, not zero —
+and production's own root cause (`Store -> init_schema -> cur.execute(stmt)`, 16 API + 38 worker
+terminal `DeadlockDetected` lines) never had its exact conflicting SQL/relation names retrieved.
+
+**`.github/workflows/configure-staging-diagnostics.yml`** — applies (not just proposes) real
+Azure diagnostic settings on `acp-app-staging`, `acp-worker-staging`, and staging's PostgreSQL
+flexible server, routing all three to a **dedicated staging** Log Analytics workspace
+(`acp-staging-logs` by default) with 30-day retention on every log category
+`az monitor diagnostic-settings categories list` reports for that resource — none hardcoded, same
+"ask Azure, don't guess" discipline `validate_staging_azure.py` already follows for field names.
+Deliberately a **separate** workspace from production's
+(`3e4c5202-f541-41ea-ab71-a677d91cf38e`), for the same reason staging gets a separate
+`DATABASE_URL` above: staging activity — including deadlocks this pair of workflows exists to
+provoke and observe — must not mix into production's own retained signal or query results.
+Idempotent (checks for an existing diagnostic setting by name before creating), and applies the
+same staging-name hard-fail check as its siblings before any Azure call — the Postgres server name
+isn't derivable from anything in this repo (`redeploy.sh`/`deploy.sh` only know the two Container
+Apps by name; Postgres is reached purely via an opaque `DATABASE_URL`), so it's a required
+`workflow_dispatch` input, checked for a `-staging` suffix the same way. **RBAC note:** it runs
+under the existing broad Contributor grant on `mdk-accessibility` — narrower `Monitoring
+Contributor` + `Log Analytics Contributor` would be better practice; narrowing the identity itself
+is a separate, human-executed step, not something this workflow attempts.
+
+**`.github/workflows/staging-deadlock-diagnostics.yml`** — READ-ONLY, zero configuration changes.
+Retrieves deadlock/lock-wait evidence from **both** sides via KQL: production's existing workspace
+(read-only — explicitly authorized for reading, never writing) using the same
+`ContainerAppConsoleLogs_CL` table style the incident review's own evidence bundle used, and
+staging's Postgres logs via the workspace the workflow above populates. KQL rather than a direct
+`pg_stat_activity`/`pg_locks` connection to staging **on purpose**: a live connection needs a new
+Postgres credential secret, and this pair of workflows extends `validate-staging-azure.yml`'s
+"zero new secrets" pattern exactly — reusing only the existing OIDC identity. Checks whether the
+staging workspace exists yet and reports that plainly rather than failing confusingly deep inside
+a query if `configure-staging-diagnostics.yml` hasn't run. **Says explicitly, in its own report
+and step summary, that this is diagnostic evidence only** — the single-run migration fix to
+`api/store.py`'s schema-init path is separate, later work, not claimed here.
+
+Both share the common safety guarantees the pair above does: `workflow_dispatch`-only, gated on
+`vars.STAGING_FQDN != ''`, redaction (`scripts/validate_staging_azure.py`'s `redact()` /
+`--redact-file`) before anything is written to disk, and short-lived (`retention-days: 7`)
+artifacts.
+
 ### Deploying locally
 
 Every image in the registry before this was built from a laptop (`runType: QuickRun`,
