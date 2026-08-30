@@ -74,10 +74,14 @@ def test_coverage_is_complete_for_docx_partial_for_xlsx_and_absent_elsewhere():
         f"the xlsx corpus now declares {len(cov['xlsx']['covered'])} pairs — raise "
         f"BASELINE['xlsx'] and this count together, in the commit that adds the fixtures")
 
-    for fmt in ("pptx", "pdf"):
-        assert cov[fmt]["has_generator"] is False, (
-            f"{fmt} has a generator now — add it to GENERATORS and raise BASELINE[{fmt!r}]")
-        assert cov[fmt]["covered"] == []
+    assert cov["pptx"]["has_generator"] is True
+    assert len(cov["pptx"]["covered"]) == 9, (
+        f"the pptx corpus now declares {len(cov['pptx']['covered'])} pairs — raise "
+        f"BASELINE['pptx'] and this count together, in the commit that adds the fixtures")
+
+    assert cov["pdf"]["has_generator"] is False, (
+        "pdf has a generator now — add it to GENERATORS and raise BASELINE['pdf']")
+    assert cov["pdf"]["covered"] == []
 
 
 def test_a_format_with_no_generator_is_distinguished_from_one_that_found_nothing():
@@ -85,7 +89,7 @@ def test_a_format_with_no_generator_is_distinguished_from_one_that_found_nothing
     only the first is answered by writing fixtures. Mapping an absent generator to an empty set
     would collapse them."""
     cov = gfc.coverage()
-    assert cov["pptx"]["has_generator"] is False
+    assert cov["pdf"]["has_generator"] is False
     assert cov["docx"]["has_generator"] is True
 
 
