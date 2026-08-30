@@ -82,6 +82,14 @@ FORMATS = ("html", "docx", "xlsx", "pptx", "pdf")
 # Paths whose change implies a capability change worth declaring. Used by --check only.
 RULE_PATHS = (
     "engine/office-analysers/",
+    # The PDF analyser is vendored too (ADR 0029) and was NOT here, so a capability change to it
+    # was never asked for a Matrix-Note — the one class of change this guard exists to catch. The
+    # asymmetry was invisible because the two engines are named differently ("office-analysers"
+    # plural, "pdf-analyser" singular), so a prefix that looks like it covers "engine/" covers
+    # only half of it. Found on 2026-08-30 while establishing that pdf.reading-order cannot fire:
+    # fixing that rule would change what ACP claims about (1.3.2, .pdf) and would have merged
+    # with no declaration at all.
+    "engine/pdf-analyser/",
     "api/formats/",             # per-format detectors behind the capability registry
     "api/rule_registry.py",     # a coverage change IS a capability change worth declaring
     "api/capabilities.py",
