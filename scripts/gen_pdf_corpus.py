@@ -2,7 +2,7 @@
 """A LABELLED .pdf corpus — the fourth and last format to get ground truth.
 
 WHY THIS EXISTS. `scripts/gen_fixture_coverage.py` reports coverage per (criterion, format)
-pair; pdf sat at 0 of 15 because no labelled corpus existed. This declares TEN of them, and
+pair; pdf sat at 0 of 15 because no labelled corpus existed. This declares ELEVEN of them, and
 completes the sweep begun with .docx: every format ACP scans now has ground truth.
 
 THE RULE THAT MAKES THE NUMBER MEAN SOMETHING: a pair is declared only when a detector that
@@ -20,6 +20,7 @@ raising what the number measures.
     2.4.4   a vague link label ("Click here")        pdf_link_purpose_check
     2.4.6   a tagged 6-page file with no heading     pdf_headings_labels_check
     3.1.1   no /Lang in the document catalog         analysers…pdf.document_language
+    1.3.3   a sensory-only instruction, as prose     textchecks.detect_sensory
     4.1.2   an AcroForm field with no /TU            pdf_form_field_checks
 
 TWO CODE PATHS, ONE AVAILABILITY STORY. The first eight run through
@@ -36,8 +37,10 @@ Those two are also the most valuable pairs here: both sit in the ASSESSMENT AUTO
 ceiling C, so a clean result CERTIFIES the document. They were two of the ten
 certification-capable pairs in the whole preset with nothing verifying them.
 
-The five not here (1.3.1, 1.3.2, 1.3.3, 1.4.5, 3.1.2) need tag-tree semantics no detector
-reads yet, or OCR (1.4.5).
+The four not here: 1.4.5 needs tesseract, 3.1.2 needs langdetect, and 1.3.1/1.3.2 have
+vendored rules (pdf.tagged, pdf.table-headers, pdf.reading-order) that are reachable and
+simply not yet fixtured. 1.3.3 WAS on this list and is now declared: it is a text predicate
+with no engine behind it, which reading the list rather than testing it had obscured.
 
 THREE DETECTOR SUBTLETIES, each of which would silently cover nothing if a fixture ignored it:
 
@@ -347,7 +350,52 @@ def f_document_language_ok(path: Path):
     return {"3.1.1": "PASS"}, f"/Lang set to {DOC_LANG!r} (adversarial)", {}
 
 
+# ── 1.3.3 Sensory Characteristics — a TEXT criterion, not a structural one ──────
+# Every other pair in this corpus is decided by reading the file's structure. 1.3.3 is decided by
+# reading its PROSE: textchecks.detect_sensory looks for an instruction that identifies a control
+# only by shape, colour or position. That makes it the one criterion here whose fixture is the
+# same on all four formats — the words are the fixture, and the container is incidental.
+#
+# It also makes it reachable everywhere, which is why it is in DECLARED and not DECLARED_ENGINE:
+# no analyser, no OCR, no langdetect. `content_findings` guards each sub-check separately, so
+# 3.1.2 going quiet on a box without langdetect does not take 1.3.3 with it.
+
+SENSORY_BAD = ("To continue, click the round green button on the right. "
+               "See the box below for the payment terms.")
+SENSORY_OK = ("To continue, choose Submit under Payment options. "
+              "The payment terms are in the Payment terms section.")
+
+
+def _prose(path: Path, body: str) -> None:
+    from reportlab.lib.colors import HexColor
+    from reportlab.pdfgen import canvas
+    c = canvas.Canvas(str(path), pagesize=(520, 200))
+    c.setFillColor(HexColor(PAPER))
+    c.rect(0, 0, 520, 200, stroke=0, fill=1)
+    c.setFillColor(HexColor(INK))
+    c.setFont("Helvetica", 11)
+    # Split so the line box stays inside the page — extraction joins them back with a space.
+    for i, chunk in enumerate(body.split(". ")):
+        c.drawString(30, 140 - i * 20, chunk.strip().rstrip(".") + ".")
+    c.save()
+
+
+def f_sensory_instruction(path: Path):
+    _prose(path, SENSORY_BAD)
+    return ({"1.3.3": "FAIL"},
+            "an instruction identifying a control only by shape, colour and position — "
+            "unusable to a screen-reader or low-vision reader")
+
+
+def f_sensory_instruction_ok(path: Path):
+    _prose(path, SENSORY_OK)
+    return ({"1.3.3": "REVIEW"},
+            "the same instruction naming the control and the section (adversarial)")
+
+
 FIXTURES = [
+    ("sensory-instruction",     f_sensory_instruction,     "violation"),
+    ("sensory-instruction-ok",  f_sensory_instruction_ok,  "adversarial"),
     ("no-document-title",       f_no_document_title,       "violation"),
     ("document-title-ok",       f_document_title_ok,       "adversarial"),
     ("no-document-language",    f_no_document_language,    "violation"),
@@ -370,7 +418,7 @@ FIXTURES = [
     ("field-named-ok",          f_field_named_ok,          "adversarial"),
 ]
 
-DECLARED = ("1.1.1", "1.4.1", "1.4.11", "1.4.3", "2.4.2", "2.4.3", "2.4.4", "2.4.6",
+DECLARED = ("1.1.1", "1.3.3", "1.4.1", "1.4.11", "1.4.3", "2.4.2", "2.4.3", "2.4.4", "2.4.6",
             "3.1.1", "4.1.2")
 
 

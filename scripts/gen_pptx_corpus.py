@@ -2,7 +2,7 @@
 """A LABELLED .pptx corpus — the third format to get ground truth, after .docx and .xlsx.
 
 WHY THIS EXISTS. `scripts/gen_fixture_coverage.py` reports coverage per (criterion, format) pair;
-pptx sat at 0 of 17 because no labelled corpus existed. This declares NINE of them.
+pptx sat at 0 of 17 because no labelled corpus existed. This declares TEN of them.
 
 SAME RULE AS THE XLSX CORPUS: a pair is only declared when a FIRST-PARTY detector — pure Python
 in `api/office_structure.py`, no .NET engine — was driven against the fixture and confirmed to
@@ -18,10 +18,13 @@ number without raising what the number measures.
     2.4.3   title placeholder not first in order   pptx_focus_order_checks
     2.4.4   a vague hyperlink label                pptx_checks
     2.4.6   an empty title placeholder             pptx_checks
+    1.3.3   a sensory-only instruction in a box    textchecks.detect_sensory
     4.1.2   an embedded control (same fixture)     office_control_review_checks
 
-The eight not here (1.3.1, 1.3.2, 1.3.3, 1.4.5, 2.1.1, 2.4.2, 3.1.1, 3.1.2) run through the .NET
-analyser, langdetect, or — for 2.1.1 — are human-only on pptx by registration.
+The seven not here (1.3.1, 1.3.2, 1.4.5, 2.1.1, 2.4.2, 3.1.1, 3.1.2) run through the .NET
+analyser, tesseract, langdetect, or — for 2.1.1 — are human-only on pptx by registration.
+1.3.3 was on that list until it was checked: it is a TEXT predicate with no engine, and is
+declared below. A criterion's neighbours are not evidence of its reachability.
 
 TWO DETECTOR SUBTLETIES WORTH KNOWING, because a fixture that ignores them silently covers
 nothing:
@@ -257,7 +260,33 @@ def f_no_picture_ok(prs, slide):
     return {"1.1.1": "REVIEW"}, "no non-text content at all — must not be flagged (adversarial)"
 
 
+# ── 1.3.3 Sensory Characteristics — decided by the prose, not the deck ──────────
+# The one criterion here that reads no slide structure at all: textchecks.detect_sensory reads the
+# EXTRACTED TEXT for an instruction identifying a control only by shape, colour or position. The
+# words are the fixture and the deck is the container — which is why the wording is identical to
+# the .xlsx and .pdf corpora. A detector change then shows up as the same result in three places
+# instead of three arguments about three different sentences.
+SENSORY_BAD = ("To continue, click the round green button on the right. "
+               "See the box below for the payment terms.")
+SENSORY_OK = ("To continue, choose Submit under Payment options. "
+              "The payment terms are in the Payment terms section.")
+
+
+def f_sensory_instruction(prs, slide):
+    _textbox(slide, SENSORY_BAD)
+    return ({"1.3.3": "FAIL"},
+            "an instruction identifying a control only by shape, colour and position")
+
+
+def f_sensory_instruction_ok(prs, slide):
+    _textbox(slide, SENSORY_OK)
+    return ({"1.3.3": "REVIEW"},
+            "the same instruction naming the control and the section (adversarial)")
+
+
 FIXTURES = [
+    ("sensory-instruction",     f_sensory_instruction,     "violation"),
+    ("sensory-instruction-ok",  f_sensory_instruction_ok,  "adversarial"),
     ("title-empty",             f_title_empty,             "violation"),
     ("title-ok",                f_title_ok,                "adversarial"),
     ("link-vague",              f_link_vague,              "violation"),
@@ -276,7 +305,8 @@ FIXTURES = [
     ("no-picture-ok",           f_no_picture_ok,           "adversarial"),
 ]
 
-DECLARED = ("1.1.1", "1.4.1", "1.4.11", "1.4.3", "2.1.2", "2.4.3", "2.4.4", "2.4.6", "4.1.2")
+DECLARED = ("1.1.1", "1.3.3", "1.4.1", "1.4.11", "1.4.3", "2.1.2", "2.4.3", "2.4.4",
+            "2.4.6", "4.1.2")
 
 
 def _validate(name: str, expectations: dict[str, str]) -> list[str]:

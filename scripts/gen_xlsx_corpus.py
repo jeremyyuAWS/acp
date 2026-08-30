@@ -3,7 +3,7 @@
 
 WHY THIS EXISTS. `scripts/gen_fixture_coverage.py` reports coverage per (criterion, format) pair.
 When this corpus was written .docx was complete and xlsx / pptx / pdf were at zero; this was the
-start of the xlsx half, and it now declares TEN of fifteen.
+start of the xlsx half, and it now declares ELEVEN of fifteen.
 
 IT IS DELIBERATELY PARTIAL, AND THE LIMIT IS VERIFICATION, NOT EFFORT. Every fixture seeds a
 violation a detector is confirmed to fire on, with an adversarial counterpart confirmed to leave
@@ -17,6 +17,7 @@ coverage number this corpus exists to report honestly.
     2.1.2   an embedded form control                     office_control_review_checks
     2.4.4   vague or raw-URL hyperlink labels            xlsx_structure_checks
     2.4.6   default SheetN tabs / ColumnN headers        xlsx_structure_checks
+    1.3.3   a sensory-only instruction, in a cell        textchecks.detect_sensory
     4.1.2   an embedded form control (same fixture)      office_control_review_checks
     ----    confirmed only where the .NET analyser is built (DECLARED_ENGINE) ----
     2.4.2   no dc:title in the core properties           XLSX-TITLE-001
@@ -30,9 +31,10 @@ checkout — see DECLARED_ENGINE. They earn that exception by being certifying p
 PASS, so before these fixtures a clean scan certified a spreadsheet against criteria nothing in
 the suite checked.
 
-The five still missing (1.3.1, 1.3.2, 1.3.3, 1.4.5, 3.1.2) need the analyser too, but their
-fixtures are structural rather than one property — and unlike a title or a language, a fixture
-whose shape cannot be checked here is not worth writing blind.
+The four still missing need something this box does not have: 1.3.1 and 1.3.2 the .NET
+analyser, 1.4.5 tesseract, 3.1.2 langdetect. 1.3.3 was in that list until it was checked —
+it is a TEXT predicate (textchecks.detect_sensory) with no engine behind it at all, and it is
+declared above. Reachability is worth testing rather than inferring from a neighbour.
 
 THE VOCABULARY IS NOT PASS/FAIL, and assuming it is would invalidate the labels. ACP answers four
 things, and which are reachable is a property of the pair. On .xlsx only FIVE of the fifteen
@@ -347,7 +349,37 @@ def f_document_language_ok(wb, ws):
     return {"3.1.1": "PASS"}, f"language set to {DOC_LANG!r} (adversarial)"
 
 
+# ── 1.3.3 Sensory Characteristics — decided by the prose, not the workbook ──────
+# The one criterion in this corpus that does not read the file's structure at all:
+# textchecks.detect_sensory reads the EXTRACTED TEXT for an instruction that identifies a control
+# only by shape, colour or position. The words are the fixture; the spreadsheet is the container.
+# Deliberately identical wording to the .pptx and .pdf corpora, so a change in detector behaviour
+# shows up as the same result in three places rather than three arguments about three sentences.
+SENSORY_BAD = ("To continue, click the round green button on the right. "
+               "See the box below for the payment terms.")
+SENSORY_OK = ("To continue, choose Submit under Payment options. "
+              "The payment terms are in the Payment terms section.")
+
+
+def f_sensory_instruction(wb, ws):
+    ws.title = "Payments"
+    _say(ws, "A1", "Payment instructions")
+    _say(ws, "A2", SENSORY_BAD)
+    return ({"1.3.3": "FAIL"},
+            "an instruction identifying a control only by shape, colour and position")
+
+
+def f_sensory_instruction_ok(wb, ws):
+    ws.title = "Payments"
+    _say(ws, "A1", "Payment instructions")
+    _say(ws, "A2", SENSORY_OK)
+    return ({"1.3.3": "REVIEW"},
+            "the same instruction naming the control and the section (adversarial)")
+
+
 FIXTURES = [
+    ("sensory-instruction",  f_sensory_instruction,    "violation"),
+    ("sensory-instruction-ok", f_sensory_instruction_ok, "adversarial"),
     ("no-document-title",    f_no_document_title,      "violation"),
     ("document-title-ok",    f_document_title_ok,      "adversarial"),
     ("no-document-language", f_no_document_language,   "violation"),
@@ -371,7 +403,7 @@ FIXTURES = [
 
 # The criteria this corpus declares. Kept explicit so gen_fixture_coverage and the tests agree
 # with the generator about what it claims, rather than each deriving it separately.
-DECLARED = ("1.1.1", "1.4.1", "1.4.11", "1.4.3", "2.1.2", "2.4.4", "2.4.6", "4.1.2")
+DECLARED = ("1.1.1", "1.3.3", "1.4.1", "1.4.11", "1.4.3", "2.1.2", "2.4.4", "2.4.6", "4.1.2")
 
 # Declared, but confirmed only where the .NET Office analyser is built — CI, not a bare
 # container. Kept in a SEPARATE tuple rather than folded into DECLARED so one number keeps one
