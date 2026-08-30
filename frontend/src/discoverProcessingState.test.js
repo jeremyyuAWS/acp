@@ -106,6 +106,36 @@ describe('deriveDiscoverProcessingState', () => {
   it('omits queue facts entirely when the caller has none yet, rather than a placeholder', () => {
     const d = deriveDiscoverProcessingState({ busy: true, phase: 'queued' })
     expect(d.facts).toEqual([])
+    expect(d.pickupUnavailable).toBe(true)
+  })
+
+  it('adds an "Estimated pickup" fact and clears pickupUnavailable from a real queue-estimate', () => {
+    const now = Date.now()
+    const d = deriveDiscoverProcessingState({
+      busy: true, phase: 'queued', compatibleJobsAhead: 2,
+      pickupEstimate: {
+        available: true, state: 'estimated',
+        earliest_at: new Date(now + 2 * 60000).toISOString(),
+        latest_at: new Date(now + 4 * 60000).toISOString(),
+        confidence: 'medium',
+      },
+    })
+    expect(d.facts).toContainEqual({ label: 'Estimated pickup', value: '2–4 min' })
+    expect(d.pickupUnavailable).toBe(false)
+  })
+
+  it('stays pickupUnavailable for insufficient_history — no confident-looking guess from thin data', () => {
+    const d = deriveDiscoverProcessingState({
+      busy: true, phase: 'queued',
+      pickupEstimate: { available: true, state: 'insufficient_history', earliest_at: null, latest_at: null },
+    })
+    expect(d.facts.find((f) => f.label === 'Estimated pickup')).toBeUndefined()
+    expect(d.pickupUnavailable).toBe(true)
+  })
+
+  it('stays pickupUnavailable when the queue-estimate fetch has not resolved yet', () => {
+    const d = deriveDiscoverProcessingState({ busy: true, phase: 'queued', pickupEstimate: null })
+    expect(d.pickupUnavailable).toBe(true)
   })
 
   it('escalates severity to blocked when capacity is unavailable', () => {
