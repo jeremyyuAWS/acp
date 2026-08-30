@@ -30,6 +30,7 @@ const KnowledgeGraph = lazy(() => import('./KnowledgeGraph.jsx'))
 import SignIn from './SignIn.jsx'
 import Settings from './Settings.jsx'
 import Monitor from './Monitor.jsx'
+import QueuePanel from './QueuePanel.jsx'
 import Publish from './Publish.jsx'
 import Overview from './Overview.jsx'
 import AssessRunner from './AssessRunner.jsx'
@@ -1913,7 +1914,17 @@ export default function App() {
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
 
-        {view === 'monitor' && (run ? (assessed ? <Monitor me={me} run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} /> : assessGate) : (overviewPreview ? <MonitorPreviewCard preview={overviewPreview} /> : placeholder))}
+        {/* QueuePanel needs no assessment data at all — it's job-queue/worker/Azure-capacity
+            status, not a compliance view — so it renders even behind the assessGate below.
+            Found live 2026-08-30: Discover's queued-scan card links "View in Monitor →" for
+            exactly the moment a user wants to check queue/worker state, and every click landed
+            on a bare "Run the assessment to see results" screen instead — Monitor's WHOLE
+            content, QueuePanel included, was nested inside `assessed ?`, gating information
+            that has nothing to do with assessment behind a requirement Discovery-stage users
+            can't have met yet. QueuePanel is deliberately still not rendered once `<Monitor>`
+            itself mounts (assessed) — Monitor already includes it once, at line ~535 of
+            Monitor.jsx; rendering it here too on top of `<Monitor>` would just show two. */}
+        {view === 'monitor' && (run ? (assessed ? <Monitor me={me} run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} /> : <><QueuePanel />{assessGate}</>) : (overviewPreview ? <MonitorPreviewCard preview={overviewPreview} /> : placeholder))}
 
 
         {/* Standalone Knowledge Graph — was nested inside Assess (findable only after
