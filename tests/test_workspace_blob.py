@@ -57,24 +57,24 @@ def test_delete_document_version_returns_false_when_not_configured():
     assert workspace_blob.delete_document_version("a@b.c", "ws1", "doc1", "v1") is False
 
 
-# ── _blob_path: ADR 0044's layout, exactly ───────────────────────────────────
+# ── blob_path: ADR 0044's layout, exactly ───────────────────────────────────
 
-def test_blob_path_matches_the_adr_layout():
+def testblob_path_matches_the_adr_layout():
     import workspace_blob
-    path = workspace_blob._blob_path("alice@x.com", "ws1", "doc1", "v1")
+    path = workspace_blob.blob_path("alice@x.com", "ws1", "doc1", "v1")
     assert path == "workspace/alice@x.com/ws1/doc1/source/v1/original"
 
 
-def test_blob_path_supports_other_kinds():
+def testblob_path_supports_other_kinds():
     import workspace_blob
-    path = workspace_blob._blob_path("alice@x.com", "ws1", "doc1", "v1", kind="remediated",
+    path = workspace_blob.blob_path("alice@x.com", "ws1", "doc1", "v1", kind="remediated",
                                      leaf="artifact")
     assert path == "workspace/alice@x.com/ws1/doc1/remediated/v1/artifact"
 
 
-def test_blob_path_falls_back_to_demo_for_no_owner():
+def testblob_path_falls_back_to_demo_for_no_owner():
     import workspace_blob
-    path = workspace_blob._blob_path(None, "ws1", "doc1", "v1")
+    path = workspace_blob.blob_path(None, "ws1", "doc1", "v1")
     assert path.startswith("workspace/demo/")
 
 

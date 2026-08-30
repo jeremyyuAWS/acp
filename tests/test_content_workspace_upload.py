@@ -1,0 +1,302 @@
+"""ACP Managed Content Workspace (ADR 0044, PRD §9) — the upload-session and
+completion endpoints.
+
+Hermetic: workspace_blob's public functions are monkeypatched directly (no need for the
+sys.modules azure-faking dance test_workspace_blob.py uses — that module's own tests already
+cover its real internals; these tests are about the ROUTE's logic: validation, ownership,
+server-side size verification, and document/version bookkeeping).
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
+
+OWNER = "alice@x.com"
+OTHER = "bob@y.com"
+
+_FAKE_AUTH = {"version_id": "v-001", "blob_path": "workspace/alice@x.com/ws1/doc1/source/v-001/original",
+              "upload_url": "https://fake.blob.core.windows.net/workspace-content/...", "expires_at": "2026-08-30T00:00:00+00:00"}
+
+
+@pytest.fixture()
+def gated_client(monkeypatch, isolated_store):
+    """Mirrors tests/test_content_workspaces.py's fixture exactly."""
+    import core
+    from fastapi.testclient import TestClient
+    from app import app
+
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setattr(core, "ACCESS_CODE", "", raising=False)
+    monkeypatch.setattr(core, "GOOGLE_CLIENT_ID", "test-client-id", raising=False)
+    monkeypatch.setattr(core, "E2E_KEY", None, raising=False)
+    monkeypatch.setattr(core, "OWNER_EMAIL", OWNER, raising=False)
+    monkeypatch.setattr(core, "verify_gis_token", lambda tok: tok or None)
+    monkeypatch.setattr(core, "email_allowed", lambda e: e in (OWNER, OTHER))
+
+    client = TestClient(app)
+
+    def as_user(email):
+        client.headers.update({"Authorization": f"Bearer {email}"})
+        return client
+
+    return as_user
+
+
+@pytest.fixture(autouse=True)
+def _blob_enabled(monkeypatch):
+    """Default: workspace_blob acts configured, generate_upload_authorization succeeds. Tests
+    that want the unconfigured/failure paths override these explicitly."""
+    import workspace_blob
+    monkeypatch.setattr(workspace_blob, "enabled", lambda: True)
+    monkeypatch.setattr(workspace_blob, "generate_upload_authorization",
+                        lambda owner, ws, doc, **kw: dict(_FAKE_AUTH))
+
+
+def _make_workspace(gated_client, owner=OWNER):
+    return gated_client(owner).post("/content-workspaces", json={"name": "Uploads"}).json()["id"]
+
+
+# ── create_upload_session ────────────────────────────────────────────────────
+
+def test_happy_path_returns_document_id_and_authorization(gated_client):
+    ws = _make_workspace(gated_client)
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/upload-session",
+                                 json={"filename": "report.pdf", "size_bytes": 1024})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["document_id"]
+    assert body["version_id"] == "v-001"
+    assert body["upload_url"] == _FAKE_AUTH["upload_url"]
+
+
+def test_session_creates_a_document_row_in_uploading_state(gated_client, isolated_store):
+    ws = _make_workspace(gated_client)
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/upload-session",
+                                 json={"filename": "report.pdf", "size_bytes": 1024,
+                                       "relative_path": "Legal/report.pdf"})
+    doc_id = r.json()["document_id"]
+    doc = isolated_store.get_content_workspace_document(doc_id, owner_email=OWNER)
+    assert doc["status"] == "uploading"
+    assert doc["display_name"] == "report.pdf"
+    assert doc["relative_path"] == "Legal/report.pdf"
+
+
+def test_404_for_a_foreign_workspace(gated_client):
+    ws = _make_workspace(gated_client, owner=OWNER)
+    r = gated_client(OTHER).post(f"/content-workspaces/{ws}/documents/upload-session",
+                                 json={"filename": "x.pdf", "size_bytes": 1})
+    assert r.status_code == 404
+
+
+def test_404_for_a_nonexistent_workspace(gated_client):
+    r = gated_client(OWNER).post("/content-workspaces/does-not-exist/documents/upload-session",
+                                 json={"filename": "x.pdf", "size_bytes": 1})
+    assert r.status_code == 404
+
+
+def test_empty_filename_is_rejected(gated_client):
+    ws = _make_workspace(gated_client)
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/upload-session",
+                                 json={"filename": "   ", "size_bytes": 1})
+    assert r.status_code == 422
+
+
+def test_non_positive_size_is_rejected(gated_client):
+    ws = _make_workspace(gated_client)
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/upload-session",
+                                 json={"filename": "x.pdf", "size_bytes": 0})
+    assert r.status_code == 422
+
+
+def test_oversized_upload_is_rejected(gated_client, monkeypatch):
+    import routes.content_workspaces as cw
+    monkeypatch.setattr(cw, "_MAX_UPLOAD_BYTES", 100)
+    ws = _make_workspace(gated_client)
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/upload-session",
+                                 json={"filename": "huge.pdf", "size_bytes": 101})
+    assert r.status_code == 413
+
+
+def test_503_when_workspace_blob_is_not_configured(gated_client, monkeypatch):
+    import workspace_blob
+    monkeypatch.setattr(workspace_blob, "enabled", lambda: False)
+    ws = _make_workspace(gated_client)
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/upload-session",
+                                 json={"filename": "x.pdf", "size_bytes": 1})
+    assert r.status_code == 503
+
+
+def test_document_marked_failed_when_authorization_issuance_fails(gated_client, monkeypatch, isolated_store):
+    import workspace_blob
+    monkeypatch.setattr(workspace_blob, "generate_upload_authorization", lambda *a, **kw: None)
+    ws = _make_workspace(gated_client)
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/upload-session",
+                                 json={"filename": "x.pdf", "size_bytes": 1})
+    assert r.status_code == 503
+    docs = isolated_store.list_content_workspace_documents(ws, owner_email=OWNER)
+    assert docs[0]["status"] == "failed"
+
+
+def test_session_creation_is_logged(gated_client, isolated_store):
+    ws = _make_workspace(gated_client)
+    gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/upload-session",
+                             json={"filename": "x.pdf", "size_bytes": 1})
+    decisions = isolated_store.list_decisions()
+    assert any(d["action"] == "content_workspace.upload_session_created" for d in decisions)
+
+
+# ── complete_upload ───────────────────────────────────────────────────────────
+
+def _start_upload(gated_client, ws, *, filename="report.pdf", size_bytes=1024):
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/upload-session",
+                                 json={"filename": filename, "size_bytes": size_bytes})
+    return r.json()["document_id"], r.json()["version_id"]
+
+
+def _mock_uploaded(monkeypatch, *, size=1024):
+    import workspace_blob
+    monkeypatch.setattr(workspace_blob, "get_uploaded_blob_properties",
+                        lambda *a, **kw: {"size": size, "content_md5": None})
+
+
+def test_complete_happy_path(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws)
+    _mock_uploaded(monkeypatch, size=1024)
+
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                                 json={"version_id": version_id, "content_hash": "h1",
+                                       "size_bytes": 1024, "mime_type": "application/pdf"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "ready"
+    assert len(body["versions"]) == 1
+    assert body["versions"][0]["content_hash"] == "h1"
+    assert body["versions"][0]["version_seq"] == 1
+
+
+def test_complete_updates_document_status_to_ready(gated_client, monkeypatch, isolated_store):
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws)
+    _mock_uploaded(monkeypatch, size=1024)
+    gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                             json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+    assert isolated_store.get_content_workspace_document(doc_id, owner_email=OWNER)["status"] == "ready"
+
+
+def test_complete_404_for_a_foreign_workspace(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client, owner=OWNER)
+    doc_id, version_id = _start_upload(gated_client, ws)
+    _mock_uploaded(monkeypatch)
+    r = gated_client(OTHER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                                 json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+    assert r.status_code == 404
+
+
+def test_complete_404_for_a_nonexistent_document(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    _mock_uploaded(monkeypatch)
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/does-not-exist/complete",
+                                 json={"version_id": "v1", "content_hash": "h1", "size_bytes": 1024})
+    assert r.status_code == 404
+
+
+def test_complete_409_when_the_blob_was_never_uploaded(gated_client, monkeypatch):
+    import workspace_blob
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws)
+    monkeypatch.setattr(workspace_blob, "get_uploaded_blob_properties", lambda *a, **kw: None)
+
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                                 json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+    assert r.status_code == 409
+
+
+def test_complete_422_on_a_size_mismatch(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws)
+    _mock_uploaded(monkeypatch, size=999)  # actual blob size differs from the client's claim
+
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                                 json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+    assert r.status_code == 422
+
+
+def test_complete_never_trusts_a_client_supplied_blob_path(gated_client, monkeypatch):
+    """The request model has no blob_path field at all — the server always recomputes it via
+    workspace_blob.blob_path from (owner, workspace_id, document_id, version_id), so there is
+    no way for a client to point a version at someone else's blob."""
+    import workspace_blob
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws)
+    _mock_uploaded(monkeypatch, size=1024)
+
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                                 json={"version_id": version_id, "content_hash": "h1",
+                                       "size_bytes": 1024, "blob_path": "workspace/someone-else/x/y/source/z/original"})
+    assert r.status_code == 200
+    expected = workspace_blob.blob_path(OWNER, ws, doc_id, version_id)
+    assert r.json()["versions"][0]["blob_path"] == expected
+
+
+def test_completing_a_second_upload_against_the_same_document_is_version_2(gated_client, monkeypatch):
+    """create_upload_session always mints a brand-new document (item 21 will add proper
+    reuse/new-version UX) — but complete_upload itself has no opinion on whether a document
+    already has a version, so two completions against the SAME document_id (as item 21's
+    'upload as a new version' flow will eventually drive) already produce seq 1 then 2."""
+    ws = _make_workspace(gated_client)
+    doc_id, v1 = _start_upload(gated_client, ws)
+    _mock_uploaded(monkeypatch, size=1024)
+    gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                             json={"version_id": v1, "content_hash": "h1", "size_bytes": 1024})
+
+    gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                             json={"version_id": "v-002", "content_hash": "h2", "size_bytes": 1024})
+
+    doc = gated_client(OWNER).get(f"/content-workspaces/{ws}/documents/{doc_id}").json()
+    seqs = sorted(v["version_seq"] for v in doc["versions"])
+    assert seqs == [1, 2]
+
+
+# ── list / get documents ──────────────────────────────────────────────────────
+
+def test_list_documents_in_a_workspace(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws, filename="a.pdf")
+    _mock_uploaded(monkeypatch)
+    gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                             json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+
+    r = gated_client(OWNER).get(f"/content-workspaces/{ws}/documents")
+    assert r.status_code == 200
+    names = [d["display_name"] for d in r.json()["documents"]]
+    assert names == ["a.pdf"]
+
+
+def test_list_documents_404s_for_a_foreign_workspace(gated_client):
+    ws = _make_workspace(gated_client, owner=OWNER)
+    r = gated_client(OTHER).get(f"/content-workspaces/{ws}/documents")
+    assert r.status_code == 404
+
+
+def test_get_document_includes_its_versions(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws)
+    _mock_uploaded(monkeypatch)
+    gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
+                             json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+
+    r = gated_client(OWNER).get(f"/content-workspaces/{ws}/documents/{doc_id}")
+    assert r.status_code == 200
+    assert len(r.json()["versions"]) == 1
+
+
+def test_get_document_404s_for_a_foreign_owner(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client, owner=OWNER)
+    doc_id, version_id = _start_upload(gated_client, ws)
+    r = gated_client(OTHER).get(f"/content-workspaces/{ws}/documents/{doc_id}")
+    assert r.status_code == 404
