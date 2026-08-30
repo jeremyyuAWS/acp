@@ -1,5 +1,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { createElement, act } from 'react'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import { createTestRoot, unmountAll } from './testRoots.js'
 
 // Proves Discover actually wires its own live signals into the shared ProcessingStatusPanel
@@ -95,5 +98,23 @@ describe('the Processing status panel on Discover', () => {
       scope: { kind: 'drive', inventory: { discovered: 5 } }, run: { id: 's7', status: 'discovered' }, busy: false,
     })
     expect(c.querySelector('[aria-label="Processing status"]')).toBeFalsy()
+  })
+})
+
+describe('the queue-estimate poll is wired through to the panel', () => {
+  // SOURCE-level, not DOM: exercising the real fetch through a full non-SIM Discover mount would
+  // mean stubbing every other endpoint this tab calls on mount just to reach this one poll —
+  // this codebase's own established split for exactly that tradeoff (see this file's own header
+  // comment, and scanUnavailable.test.js's `code()` helper for the same pattern elsewhere).
+  const here = dirname(fileURLToPath(import.meta.url))
+  const src = readFileSync(join(here, 'Discover.jsx'), 'utf8')
+
+  it('polls getQueueEstimate(scanId, "discover") only in the same pre-listing window as queueSnap', () => {
+    expect(src).toMatch(/getQueueEstimate\(scanId, 'discover'\)/)
+    expect(src).toMatch(/if \(!busy \|\| \(phase && phase !== 'queued'\) \|\| !scanId\) return undefined/)
+  })
+
+  it('threads the result into deriveDiscoverProcessingState as pickupEstimate', () => {
+    expect(src).toMatch(/pickupEstimate,\n/)
   })
 })

@@ -1037,6 +1037,13 @@ export const getJobs = (status = null) => (SIM
     { id: 'j1a5', type: 'scan_batch', status: 'queued', scan_id: 'sim-all', payload: '{"items":[]}', created_at: '2026-06-29T17:05:05Z', updated_at: '2026-06-29T17:05:05Z' },
   ] })
   : fetch(`${BASE}/jobs${status ? `?status=${status}` : ''}`, { headers: headers() }).then(j))
+// "When will my work actually begin?" for one scan's Discover/Assess/Remediate job — backs the
+// pickup-estimate line in each tab's Processing status panel. `kind` is 'discover'|'assess'|
+// 'remediate'. Always resolves (never throws for a missing/foreign scan or one with no live job
+// of this kind — the route degrades to {available:false}, same shape as getScanLive), so callers
+// can treat the result as "is there something to show" without a .catch.
+export const getQueueEstimate = (scanId, kind) => (SIM ? sim({ available: false })
+  : fetch(`${BASE}/scans/${scanId}/queue-estimate?kind=${kind}`, { headers: headers() }).then(j))
 // Delete unrecoverable dead-lettered jobs (signed-in admins only).
 export const clearDeadJobs = () => (SIM
   ? sim({ purged: 0 })

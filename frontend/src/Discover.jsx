@@ -24,7 +24,7 @@ import DiscoverCompleteSummary from './DiscoverCompleteSummary.jsx'
 import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
 import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation,
          acknowledgeScan, unacknowledgeScan, checkReadiness, getQueueJob, getJobs, setWorkers,
-         getSourceStatus, getWorkerReplicas, setWorkerReplicas } from './api.js'
+         getSourceStatus, getWorkerReplicas, setWorkerReplicas, getQueueEstimate } from './api.js'
 import { useWorkerCapacity } from './workerCapacityStore.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
 import { discoveryFailureReason } from './discoveryFailureReason.js'
@@ -239,6 +239,26 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
     const id = setInterval(load, 5000)
     return () => { live = false; clearInterval(id) }
   }, [busy, jobId, progress?.phase])
+  // The actual "estimated pickup: X–Y minutes" range (GET /scans/{id}/queue-estimate), on top of
+  // queueSnap's own compatibleJobsAhead/workersTotal facts above — same pre-listing window, same
+  // gating. Scoped by kind server-side (Store.queue_estimate groups job types into discover/
+  // assess/remediate), so this never confuses a queued Assess or Remediate job elsewhere for a
+  // Discover one. Omitted (stays null) until there is enough recent-completion history for an
+  // honest range — deriveDiscoverProcessingState reads that absence as pickupUnavailable, same
+  // as before this existed, rather than showing a guess.
+  const [pickupEstimate, setPickupEstimate] = useState(null)
+  useEffect(() => {
+    setPickupEstimate(null)
+    const phase = progress?.phase ?? null
+    if (!busy || (phase && phase !== 'queued') || !scanId) return undefined
+    let live = true
+    const load = () => getQueueEstimate(scanId, 'discover').then((d) => {
+      if (live) setPickupEstimate(d)
+    }).catch(() => {})
+    load()
+    const id = setInterval(load, 10000)
+    return () => { live = false; clearInterval(id) }
+  }, [busy, scanId, progress?.phase])
   // "How many workers are available to pick up scan jobs" — the same GET /jobs signal
   // AssessRunner's worker strip already polls (workers/alive/suggested), shown here so this
   // question is answered directly on Discover instead of only inside a "Preparing capacity"
@@ -789,6 +809,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           compatibleJobsAhead: queueSnap?.compatibleJobsAhead ?? null,
           workersTotal: queueSnap?.workersTotal ?? null,
           workersOnline: queueSnap?.workersOnline ?? null,
+          pickupEstimate,
           submittedSecsAgo: progress?.started_at
             ? (Date.now() - Date.parse(progress.started_at)) / 1000 : null,
           foldersFound: progress?.folders_found ?? null,

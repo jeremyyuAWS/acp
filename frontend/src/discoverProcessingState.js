@@ -36,6 +36,17 @@ function fmtAgo(secs) {
   return s < 60 ? `${s}s ago` : `${Math.round(s / 60)}m ago`
 }
 
+// "2–4 min" from the queue-estimate route's earliest_at/latest_at (ISO timestamps, absolute —
+// so this stays correct across however long the fact sits on screen before its next poll,
+// unlike a range computed once at fetch time and left to go stale).
+function fmtPickupRange(earliestAt, latestAt) {
+  const now = Date.now()
+  const lo = Math.max(0, Math.round((Date.parse(earliestAt) - now) / 60000))
+  const hi = Math.max(lo, Math.round((Date.parse(latestAt) - now) / 60000))
+  if (hi === 0) return 'under a minute'
+  return lo === hi ? `about ${hi} min` : `${lo}–${hi} min`
+}
+
 export function deriveDiscoverProcessingState({
   busy, phase, freshness, runStatus, failureReason, capacityState, discoveredCount = null,
   elapsedSecs = null,
@@ -53,6 +64,12 @@ export function deriveDiscoverProcessingState({
   // this account only ever sees its own job counts (owner-scoped), never a true system-wide
   // busy/idle split, so the card says what is actually knowable instead of implying more.
   compatibleJobsAhead = null, workersTotal = null, workersOnline = null, submittedSecsAgo = null,
+  // GET /scans/{id}/queue-estimate's own result (Discover.jsx's pickupEstimate state) — real
+  // recent-throughput math, not a guess. Only its "estimated" shape (earliest_at/latest_at) turns
+  // into a fact here; every other state (no live job yet, insufficient_history,
+  // no_worker_available, or the fetch simply hasn't resolved) leaves pickupUnavailable at its
+  // existing true default rather than rendering a placeholder range.
+  pickupEstimate = null,
   // Live-activity facts for the discovering/lifecycle stage. foldersFound is the real
   // folders_found counter — api/scanner.py's _search_folder counts a folder the instant it is
   // DISCOVERED (added to seen_folders), not once its own listing completes, so this is honestly
@@ -139,6 +156,9 @@ export function deriveDiscoverProcessingState({
       }
     }
     const degraded = capacityState && capacityState !== 'ready'
+    const pickupFact = pickupEstimate?.state === 'estimated' && pickupEstimate.earliest_at && pickupEstimate.latest_at
+      ? { label: 'Estimated pickup', value: fmtPickupRange(pickupEstimate.earliest_at, pickupEstimate.latest_at) }
+      : null
     // Every fact is independently optional — a caller that cannot supply one (no scan-scoped
     // queue read, a `GET /jobs` poll that hasn't resolved yet) simply omits it rather than
     // rendering a placeholder. See ProcessingStatusPanel's own comment on this array.
@@ -148,6 +168,7 @@ export function deriveDiscoverProcessingState({
       workersTotal != null
         ? { label: 'Worker pool', value: workersOnline ? `${workersTotal} online` : 'offline' } : null,
       submittedSecsAgo != null ? { label: 'Submitted', value: fmtAgo(submittedSecsAgo) } : null,
+      pickupFact,
     ].filter(Boolean)
     return {
       state: 'queued',
@@ -156,7 +177,7 @@ export function deriveDiscoverProcessingState({
         : 'Your Discovery request is safely queued and will start automatically.',
       recommendedAction: null,
       severity: degraded && capacityState === 'unavailable' ? 'blocked' : 'waiting',
-      pickupUnavailable: true,
+      pickupUnavailable: !pickupFact,
       facts,
       next: 'A worker will connect to the source and begin discovering documents.',
     }
