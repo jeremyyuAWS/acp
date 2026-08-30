@@ -35,9 +35,10 @@ paths for a flagged document: `keep_as_new` (clear the flag, treat it as an ordi
 document), `reuse_existing` or `cancel` (both delete this document/version and its blob — the
 former because the existing document already has the content, the latter because the upload
 was a mistake; they differ only in which decision gets logged). The fourth path, "attach as a
-new version of the existing document", needs a document-scoped upload-session variant that
-does not exist yet (`create_upload_session` always mints a brand-new document) — explicitly
-deferred rather than half-built here.
+new version of the existing document", needs to MOVE the already-uploaded blob from the
+duplicate document over to the existing one (not merely issue a fresh upload-session — see this
+module's later docstring on the document-scoped upload-session variant, which is a different
+operation) — explicitly deferred rather than half-built here.
 
 Also implements PRD's "download original": `GET .../documents/{document_id}/versions/
 {version_id}/download` streams the version's bytes back through the server (the SAME
@@ -49,6 +50,19 @@ quota": `create_upload_session` checks the workspace's current storage usage
 (store.get_content_workspace_storage_bytes) plus this upload's declared size against
 _WORKSPACE_QUOTA_BYTES before issuing an authorization, the same way it already checks a
 single file against _MAX_UPLOAD_BYTES.
+
+Also implements the document-scoped upload-session variant named as deferred by every prior PR
+in this series: `POST .../documents/{document_id}/versions/upload-session` adds a new version
+to an EXISTING document (unlike `create_upload_session`, which always mints a brand-new one).
+Shares all the same validation (`_validate_new_upload`) and updates the document's
+`display_name` to the new upload's filename at session-creation time, so `complete_upload`'s
+magic-byte check and the new version's `original_filename` stay correct even when a version's
+filename (and therefore extension) differs from the document's previous one. This is general
+document-versioning UX, not specific to duplicate resolution — PRD §12's fourth
+duplicate-resolution path ("attach this content as a new version of the OTHER, already-existing
+document it duplicates") still isn't implemented: that needs moving/copying an already-uploaded
+blob between documents, a different operation from this one, which is always a fresh
+client-driven upload.
 
 Owner-scoped throughout: `owner_email` is the tenant boundary this whole app already uses
 (ADR 0044). `GET /content-workspaces/{id}` 404s — never 403 — for a foreign id, matching
@@ -208,29 +222,44 @@ def _require_workspace(workspace_id: str, owner: str) -> dict:
     return ws
 
 
-@router.post("/content-workspaces/{workspace_id}/documents/upload-session")
-def create_upload_session(workspace_id: str, body: UploadSessionCreate, request: Request):
-    """PRD §9: browser requests a session → ACP validates → issues constrained upload
-    authorization → browser uploads directly to Blob. Always creates a NEW document (see this
-    module's docstring: duplicate-handling/reuse is a later PR, item 21)."""
-    owner = _owner(request)
-    _require_workspace(workspace_id, owner)
-    if not body.filename.strip():
+def _require_document(workspace_id: str, document_id: str, owner: str) -> dict:
+    doc = core.store.get_content_workspace_document(document_id, owner_email=owner)
+    if doc is None or doc["workspace_id"] != workspace_id:
+        raise HTTPException(404, "document not found")
+    return doc
+
+
+def _validate_new_upload(workspace_id: str, owner: str, filename: str, size_bytes: int) -> None:
+    """Shared by both upload-session routes (new document, new version of an existing one):
+    PRD §9's "ACP validates ... type, size, and quota" — everything except the "user" and
+    "workspace" halves, which differ by caller (a brand-new document has no owning document to
+    check; a new version does) and so stay in each route itself."""
+    if not filename.strip():
         raise HTTPException(422, "filename is required")
-    if _extension(body.filename.strip()) not in _ALLOWED_EXTENSIONS:
+    if _extension(filename.strip()) not in _ALLOWED_EXTENSIONS:
         raise HTTPException(422, f"unsupported file type — accepted types are "
                              f"{', '.join(_ALLOWED_EXTENSIONS)}")
-    if body.size_bytes <= 0:
+    if size_bytes <= 0:
         raise HTTPException(422, "size_bytes must be positive")
-    if body.size_bytes > _MAX_UPLOAD_BYTES:
+    if size_bytes > _MAX_UPLOAD_BYTES:
         raise HTTPException(413, f"file exceeds the {_MAX_UPLOAD_BYTES}-byte workspace upload limit")
     used = core.store.get_content_workspace_storage_bytes(workspace_id, owner_email=owner)
-    if used + body.size_bytes > _WORKSPACE_QUOTA_BYTES:
+    if used + size_bytes > _WORKSPACE_QUOTA_BYTES:
         raise HTTPException(413, f"this upload would exceed the workspace's "
                              f"{_WORKSPACE_QUOTA_BYTES}-byte storage quota "
                              f"({used} bytes already used)")
     if not workspace_blob.enabled():
         raise HTTPException(503, "workspace uploads are not configured on this deployment")
+
+
+@router.post("/content-workspaces/{workspace_id}/documents/upload-session")
+def create_upload_session(workspace_id: str, body: UploadSessionCreate, request: Request):
+    """PRD §9: browser requests a session → ACP validates → issues constrained upload
+    authorization → browser uploads directly to Blob. Always creates a NEW document — for
+    adding a version to an EXISTING one, see create_new_version_upload_session below."""
+    owner = _owner(request)
+    _require_workspace(workspace_id, owner)
+    _validate_new_upload(workspace_id, owner, body.filename, body.size_bytes)
 
     document_id = uuid.uuid4().hex[:12]
     core.store.create_content_workspace_document(
@@ -245,6 +274,42 @@ def create_upload_session(workspace_id: str, body: UploadSessionCreate, request:
         raise HTTPException(503, "could not obtain an upload authorization")
 
     core.store.log_decision(owner, "content_workspace.upload_session_created",
+                            detail=f"{workspace_id}/{document_id}: {body.filename.strip()}")
+    return {"document_id": document_id, **auth}
+
+
+class NewVersionUploadSessionCreate(BaseModel):
+    filename: str
+    size_bytes: int
+    mime_type: str | None = None
+
+
+@router.post("/content-workspaces/{workspace_id}/documents/{document_id}/versions/upload-session")
+def create_new_version_upload_session(workspace_id: str, document_id: str,
+                                      body: NewVersionUploadSessionCreate, request: Request):
+    """The document-scoped upload-session variant every prior PR in this series (#1010's
+    module docstring, #1015's duplicate-resolution docstring) named as deferred: adds a new
+    version to an EXISTING document rather than minting a new one. Same validation as
+    create_upload_session (_validate_new_upload) plus checking the document itself exists and
+    is owned by this caller. No `relative_path` field — that's the document's own location,
+    unchanged by uploading a new version of it, not a per-version property."""
+    owner = _owner(request)
+    _require_workspace(workspace_id, owner)
+    _require_document(workspace_id, document_id, owner)
+    _validate_new_upload(workspace_id, owner, body.filename, body.size_bytes)
+
+    auth = workspace_blob.generate_upload_authorization(owner, workspace_id, document_id)
+    if auth is None:
+        raise HTTPException(503, "could not obtain an upload authorization")
+
+    # See update_content_workspace_document_display_name's own docstring: complete_upload
+    # derives both the magic-byte signature to verify against and the new version's
+    # original_filename from this column, so it must track the filename of the upload actually
+    # in flight — updated here, at session-creation time, not deferred to completion (the
+    # completion request carries no filename of its own; see UploadComplete).
+    core.store.update_content_workspace_document_display_name(document_id, body.filename.strip())
+    core.store.update_content_workspace_document_status(document_id, "uploading")
+    core.store.log_decision(owner, "content_workspace.new_version_upload_session_created",
                             detail=f"{workspace_id}/{document_id}: {body.filename.strip()}")
     return {"document_id": document_id, **auth}
 
