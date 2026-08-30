@@ -1,13 +1,22 @@
-"""Known gaps in the .xlsx 2.4.4 remediation lane, written as the behaviour we WANT.
+"""The .xlsx 2.4.4 remediation lane — two gaps, now CLOSED, kept as the record of what they were.
 
-HOW TO READ THIS FILE. Every assertion below states the behaviour ACP should have. The ones that
-do not hold yet carry `xfail(strict=True)` with the limitation named in the reason, so the gap is
-visible in test output instead of being asserted as correct. Nothing here requires a defect to
-persist: when a gap is closed the test XPASSes, CI says so, and the fix is to delete one marker —
-the assertion underneath is already the positive test.
+STATUS: both gaps below are fixed. The assertions here were written as the behaviour ACP should
+have and carried `xfail(strict=True)` until it did; when the fix landed they XPASSed, and per
+their own instructions the markers were deleted and the assertions kept. They are ordinary
+regression tests now, and this header is history rather than a warning — worth keeping because
+the SHAPE of the defect (two halves of one feature disagreeing, each defensible alone) is the
+thing likely to recur.
+
+One test was deleted rather than converted: `test_acp_credits_the_criterion_while_its_own
+_extraction_disagrees` asserted the internal inconsistency as evidence, and its own docstring said
+to remove it once the positive assertion in `test_the_written_file_carries_the_approved_text`
+could stand in its place. It can, and it does.
+
+The end-to-end proof of the fixed lane — shared-string integrity, formulas, styles, refusals —
+lives in tests/test_remediation_verified_xlsx_link.py.
 
 ────────────────────────────────────────────────────────────────────────────────
-GAP 1 — EXISTING USER-FACING LIMITATION (live today, not latent)
+GAP 1 — EXISTING USER-FACING LIMITATION (live until fixed; never latent)
 
 A reviewer looking at a spreadsheet whose vague hyperlink carries no display= attribute sees a
 2.4.4 finding and is offered nothing to approve. The finding is real, the lane is declared in
@@ -28,29 +37,30 @@ If gap 1 were closed on its own, the write that followed would be apply_link_tex
 which ADDS display="<approved>" and never touches the cell. The detector then prefers display=,
 sees a descriptive label, and the criterion clears.
 
-WHAT IS ESTABLISHED: after that write, ACP credits 2.4.4 as resolved while ACP's own
-pii.extract_text still reports the original label. That is an internal inconsistency between what
-this system credits and what this system reads, and it is asserted below on exactly those terms.
+WHAT WAS ESTABLISHED: after that write, ACP credited 2.4.4 as resolved while ACP's own
+pii.extract_text still reported the original label — an internal inconsistency between what this
+system credited and what this system read.
 
-WHAT IS NOT ESTABLISHED, and must not be claimed from this file: whether a user or a screen reader
-would still encounter the vague label. That depends on how Excel and assistive technology resolve
-a hyperlink's accessible name from display= versus the cell value, which nothing available here
-can determine. This file therefore says "suspected false credit", never "false credit".
+WHAT WAS NEVER ESTABLISHED, and is still not claimed: whether a user or a screen reader would have
+encountered the vague label. That depends on how Excel and assistive technology resolve a
+hyperlink's accessible name from display= versus the cell value, which nothing available here can
+determine. The fix sidesteps the question rather than answering it — the writer now moves the CELL
+VALUE, which is the text a sighted reader sees either way, and keeps display= in step with it.
 
-It is latent because it is unreachable: handlers.py is the only producer of link values and cannot
-produce one for a display-less link, so no approval and no write occur today. Asserted below
-rather than assumed.
+It was latent because it was unreachable: handlers.py is the only producer of link values and
+could not produce one for a display-less link, so no approval and no write occurred. Closing gap 1
+made it reachable, which is exactly why the two had to be fixed together. The producer count is
+still asserted below, now as a guard: a second producer would change this reasoning.
 
 ────────────────────────────────────────────────────────────────────────────────
 WHY BOTH HALVES ARE ONE CHANGE
 
-Teaching extract_office_links the fallback the detector already has would make the lane reachable
-and take the suspected path with it. The fix is extraction, proposal, writer and verification
-together: the proposer learns the fallback, the writer writes the CELL VALUE (as _apply_docx and
-_apply_pptx already write <w:t> and <a:t> — asserted below as the control), the saved file is
-re-opened through the real path, and hyperlink targets, formatting, formulas and shared-string
-integrity are all shown intact. Until the visible/accessibility behaviour is verified rather than
-inferred, the lane should not be claimed as remediation-verified.
+Teaching extract_office_links the fallback the detector already has made the lane reachable and
+would have taken the suspected path with it. So the fix was extraction, proposal, writer and
+verification together: the proposer learned the fallback, the writer now writes the CELL VALUE (as
+_apply_docx and _apply_pptx already write <w:t> and <a:t> — asserted below as the control), the
+saved file is re-opened through the real path, and hyperlink targets, formatting, formulas and
+shared-string integrity are shown intact.
 
 WHY NOTHING CAUGHT THIS. The existing apply tests drive handlers._apply_approved_values with
 residual=set() — the re-scan result is supplied rather than performed, so no test has run a real
@@ -80,9 +90,6 @@ from apply_link_text import apply_link_text  # noqa: E402
 HREF = "https://example.com/fy26-travel-policy.pdf"
 APPROVED = "Read the FY26 travel policy"
 VAGUE = "click here"
-
-_XFAIL_NOTE = ("When this XPASSes the gap is closed: delete this marker and keep the assertion, "
-               "which is already the positive test.")
 
 
 @pytest.fixture(scope="module")
@@ -158,10 +165,6 @@ def test_the_docx_writer_changes_the_text_a_reader_sees(tmp_path):
 
 # ── gap 1: a live limitation, stated as the behaviour we want ────────────────────
 
-@pytest.mark.xfail(strict=True, reason=(
-    "GAP 1, user-facing today: proposals.extract_office_links requires a display= attribute, so a "
-    "vague hyperlink written without one (openpyxl's default) gets no proposal and the reviewer "
-    "has nothing to approve. " + _XFAIL_NOTE))
 def test_a_vague_link_gets_a_proposal_a_reviewer_can_act_on(vague_link_xlsx):
     """What should happen: a document the detector flags for 2.4.4 offers the reviewer something
     to approve. Today it does not, for any spreadsheet whose hyperlink has no display=.
@@ -189,11 +192,6 @@ def test_the_write_is_unreachable_because_nothing_produces_the_value(vague_link_
         f"path below is still unreachable")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "GAP 2, suspected and latent: apply_link_text._apply_xlsx adds display= and never writes the "
-    "cell, so the approved text does not reach the document's extracted text. Whether a user or "
-    "screen reader still meets the vague label depends on how Excel and AT resolve a hyperlink's "
-    "accessible name, which is NOT established here. " + _XFAIL_NOTE))
 def test_the_written_file_carries_the_approved_text(vague_link_xlsx, tmp_path):
     """What should happen: after an approved value is written, the document ACP reads back
     contains the approved text and no longer contains the vague one.
@@ -211,27 +209,3 @@ def test_the_written_file_carries_the_approved_text(vague_link_xlsx, tmp_path):
     assert APPROVED.lower() in after.lower(), (
         "the approved text is absent from the written document's extracted text")
     assert VAGUE not in after.lower(), "the vague label survives in the written document"
-
-
-def test_acp_credits_the_criterion_while_its_own_extraction_disagrees(vague_link_xlsx, tmp_path):
-    """The evidence for gap 2, asserted as an INTERNAL INCONSISTENCY and nothing more.
-
-    After the write ACP reports 2.4.4 as resolved, while ACP's own text extraction still returns
-    the original label. Two parts of one system disagree about the same document. That is worth
-    recording on its own terms — it is not, and is not asserted as, proof of how Excel or
-    assistive technology behaves.
-
-    This test passes today and describes current behaviour. When gap 2 is closed it will fail,
-    and the correct response is to delete it along with the xfail above: the positive assertion in
-    `test_the_written_file_carries_the_approved_text` replaces it."""
-    written, _applied, _unresolved = apply_link_text(
-        vague_link_xlsx.read_bytes(), "xlsx", {HREF: APPROVED})
-    out = tmp_path / "written.xlsx"
-    out.write_bytes(written)
-
-    credited = "2.4.4" not in _wcags(out)
-    extraction_unchanged = VAGUE in _text(out).lower()
-    assert credited and extraction_unchanged, (
-        f"the inconsistency no longer reproduces (credited={credited}, "
-        f"extraction_unchanged={extraction_unchanged}) — if the lane was fixed, delete this test "
-        f"and the xfail above; the positive tests are the record now")
