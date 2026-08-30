@@ -826,9 +826,33 @@ async def stream_live_events(sid: str, request: Request):
     tails the run's persisted state; a `data:` frame is emitted only when the snapshot's content
     changes (generated_at aside), a comment frame keeps the connection warm between changes, and the
     stream sends a final frame then closes when the run reaches a terminal state (or the client
-    disconnects, or the safety ceiling trips). Owner-scoped. Reconnect is free: SSE auto-reconnects and
-    the first frame is the current snapshot, carrying the same `sequence` the client dedupes on. No
-    worker changes — reconciles with /live by construction (same builder)."""
+    disconnects, or the safety ceiling trips). Owner-scoped. No worker changes — reconciles with
+    /live by construction (same builder).
+
+    NOTHING CONSUMES THIS TODAY, and that is a decision, not an oversight (2026-08-30). The Assess
+    running screen POLLS `GET /scans/{sid}/live` every 2s via `useLiveSnapshot`. Written down here
+    because an endpoint that is live, owner-scoped and tested reads as shipped live-streaming on
+    every status list — and this one streams to nobody. Surfaced by ADR 0043's research, which also
+    corrected ADR 0042's table for crediting it a client it never had.
+
+    Switching the running screen to it was considered and rejected on four counts, the first being
+    the one that decides it: the generator below calls `build_snapshot` — real DB work — every
+    `_STREAM_INTERVAL_S` (1.0s) per connected client, against the poll's 2.0s, so it is MORE
+    Postgres read load per viewer, not less, plus a held socket and coroutine each. Then: the
+    browser's EventSource cannot send the bearer header this app authenticates with (a token in the
+    URL would reach proxy logs — see api.js's openDiscoverStream for the same constraint), so a
+    client means hand-rolling a second fetch+ReadableStream reader; `_MAX_STREAM_ITERS` means a long
+    run outlives its own stream and needs reconnect logic the poll does not; and ADR 0043 settles
+    the general case — these are snapshot-REPLACE streams, so the first frame after any reconnect
+    already IS current state.
+
+    NOT deleted, per CLAUDE.md's instruction to keep retired features so restoring one is a single
+    commit. The absence of a client is asserted by frontend/src/liveEventsStreamUnused.test.js; that
+    test failing is the signal a client arrived, and the reminder to delete the test.
+
+    The "reconnect is free" line this docstring used to carry has been removed rather than reworded:
+    it described `EventSource`'s automatic reconnect, which requires a browser EventSource that, per
+    the above, cannot exist for this endpoint as authenticated."""
     import asyncio
     import datetime as _dt
     import json as _json
