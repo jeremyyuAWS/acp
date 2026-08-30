@@ -169,6 +169,11 @@ export function deriveDiscoverProcessingState({
       recommendedAction: null,
       severity: degraded && capacityState === 'unavailable' ? 'blocked' : 'waiting',
       pickupUnavailable: !pickupFact,
+      // Either signal says the same thing — capacityState is this tab's own pre-existing capacity
+      // read; pickupEstimate.state==='no_worker_available' is the backend queue-estimate route's
+      // OWN independent capacity check (ready_workers<=0), which can catch capacity dropping to
+      // zero mid-queue after capacityState was last read. Either one is enough.
+      noWorkerAvailable: (degraded && capacityState === 'unavailable') || pickupEstimate?.state === 'no_worker_available',
       facts,
       next: 'A worker will connect to the source and begin discovering documents.',
     }

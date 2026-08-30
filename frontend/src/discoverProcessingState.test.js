@@ -142,6 +142,22 @@ describe('deriveDiscoverProcessingState', () => {
     const d = deriveDiscoverProcessingState({ busy: true, phase: 'queued', capacityState: 'unavailable' })
     expect(d.severity).toBe('blocked')
     expect(d.detail).toMatch(/no compatible worker is online/i)
+    expect(d.noWorkerAvailable).toBe(true)
+  })
+
+  it('also sets noWorkerAvailable from the backend queue-estimate route\'s own capacity check', () => {
+    // A capability check independent of capacityState — can catch capacity dropping to zero after
+    // capacityState was last read, since it comes from a live poll of its own.
+    const d = deriveDiscoverProcessingState({
+      busy: true, phase: 'queued',
+      pickupEstimate: { available: true, state: 'no_worker_available' },
+    })
+    expect(d.noWorkerAvailable).toBe(true)
+  })
+
+  it('does not set noWorkerAvailable when capacity is merely degraded, not unavailable', () => {
+    const d = deriveDiscoverProcessingState({ busy: true, phase: 'queued', capacityState: 'busy' })
+    expect(d.noWorkerAvailable).toBeFalsy()
   })
 
   it('reports the active discovery stage with counts and elapsed time', () => {

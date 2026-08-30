@@ -68,7 +68,8 @@ describe('ProcessingStatusPanel wired into AssessRunner from live getJobs() sign
     await settle()
 
     expect(text()).toMatch(/waiting for a worker/i)
-    expect(text()).toMatch(/pickup time not available/i)
+    expect(text()).toMatch(/pickup estimate unavailable/i)
+    expect(text()).toMatch(/no compatible worker is currently ready/i)
   })
 
   it('shows a real "Estimated pickup" range once getQueueEstimate resolves one, while waiting', async () => {
@@ -86,7 +87,7 @@ describe('ProcessingStatusPanel wired into AssessRunner from live getJobs() sign
 
     expect(getQueueEstimate).toHaveBeenCalledWith('s1', 'assess')
     expect(text()).toMatch(/estimated pickup: 1–3 min/i)
-    expect(text()).not.toMatch(/pickup time not available/i)
+    expect(text()).not.toMatch(/pickup estimate is still being calculated|pickup estimate unavailable/i)
   })
 
   it('offers a "View in Monitor" link that calls the onViewMonitor prop', async () => {

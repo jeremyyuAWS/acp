@@ -34,5 +34,9 @@ export function deriveRemediateProcessingState({
     recommendedAction: null,
     severity: 'waiting',
     pickupUnavailable: !pickupRange,
+    // The backend queue-estimate route's own capacity check — Remediate.jsx's own no-capacity
+    // early return only ever runs once, at the initial enqueue; this can catch capacity dropping
+    // to zero after that, while still queued.
+    noWorkerAvailable: pickupEstimate?.state === 'no_worker_available',
   }
 }

@@ -38,7 +38,7 @@ describe('the Processing status panel on Discover', () => {
   it('shows a queued explanation with no pickup estimate when this tab is not tracking the scan', async () => {
     const c = await mount({ scope: null, run: { id: 's2', status: 'queued' }, busy: false })
     expect(c.textContent).toMatch(/queued.{0,10}not started yet/i)
-    expect(c.textContent).toMatch(/pickup time not available/i)
+    expect(c.textContent).toMatch(/pickup estimate is still being calculated/i)
   })
 
   it('shows "waiting for a worker" while this tab is tracking a freshly queued scan', async () => {

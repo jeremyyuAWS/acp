@@ -72,21 +72,34 @@ describe('ProcessingStatusPanel', () => {
     expect(c.textContent).toMatch(/check that the worker service is reachable/i)
   })
 
-  it('says pickup time is not available when derived sets pickupUnavailable', async () => {
+  it('says the pickup estimate is still being calculated when derived sets pickupUnavailable alone', async () => {
     // Driven by the flag, not a hardcoded state-name list — a caller with its own state
     // vocabulary (Discover, Remediate) sets this explicitly rather than the component guessing
     // from a name it may not recognize. See processingState.js for the Assess states that set it.
     const c = await mount({
       derived: { state: 'waiting', headline: 'h', detail: '', recommendedAction: null, severity: 'waiting', pickupUnavailable: true },
     })
-    expect(c.textContent).toMatch(/pickup time not available/i)
+    expect(c.textContent).toMatch(/pickup estimate is still being calculated/i)
+    expect(c.textContent).not.toMatch(/no compatible worker/i)
   })
 
-  it('does not say pickup time is unavailable when the flag is absent', async () => {
+  it('says no compatible worker is ready when derived also sets noWorkerAvailable — a different reason, different words', async () => {
+    const c = await mount({
+      derived: {
+        state: 'waiting', headline: 'h', detail: '', recommendedAction: null, severity: 'blocked',
+        pickupUnavailable: true, noWorkerAvailable: true,
+      },
+    })
+    expect(c.textContent).toMatch(/pickup estimate unavailable/i)
+    expect(c.textContent).toMatch(/no compatible worker is currently ready/i)
+    expect(c.textContent).not.toMatch(/still being calculated/i)
+  })
+
+  it('does not say anything about pickup when the flag is absent', async () => {
     const c = await mount({
       derived: { state: 'assessing', headline: 'h', detail: '', recommendedAction: null, severity: 'active' },
     })
-    expect(c.textContent).not.toMatch(/pickup time not available/i)
+    expect(c.textContent).not.toMatch(/pickup estimate/i)
   })
 
   it('renders a "View in Monitor" link that calls onViewMonitor', async () => {
