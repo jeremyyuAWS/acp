@@ -366,6 +366,32 @@ quoting any of it.
 
 ## P1e — PRD Phase 3 incremental sync: content_type is lost on every delta-sync reconstruction
 
+**FIXED 2026-08-30**, same day it was tracked. Both halves landed:
+
+1. `store.latest_scan_inventory_items` now selects `content_type`.
+2. `scanner._sp_file_from_inventory_row` puts the stored value on the reconstructed raw item
+   under `_acp_content_type`, and `_sp_classify_item` restamps it onto the scannable record.
+   The private, `_acp_`-prefixed key keeps the dict readable as a faithful raw driveItem —
+   a Graph-shaped name would leave a reader unable to tell which fields Graph sent. A live
+   Graph item never carries it, so a fresh listing classifies byte-identically, which
+   `_sp_classify_item`'s "shared VERBATIM" contract requires.
+
+A file the delta reports as CHANGED still has none, and that is correct rather than a
+remaining gap: `apply_sp_delta` replaces a changed id wholly with its fresh raw item, and the
+delta's metadata is the authority for a file it says changed. `tests/test_sp_delta_content_type.py`
+pins that alongside the carry-forward, so it is not later "fixed" by merging field-by-field.
+
+One correction to the analysis below, worth keeping because it is the reason this survived:
+`_sp_file_from_inventory_row`'s docstring asserted that `content_type` "can NEVER be
+reconstructed: it is never persisted to scan_inventory". That premise was false — the column
+is real and `add_inventory` populates it. The symptom (absent from the baseline) had been read
+as its cause (never stored), and the note then made the loss look designed. Only item (1) was
+ever actually missing; the cost argument in that note was right and still holds.
+
+The original entry follows.
+
+---
+
 **Not fixed, tracked here (2026-08-30).** SharePoint's per-item Content Type
 (`scanner._sp_enrich_content_types`, a best-effort per-item Graph call) is genuinely persisted to
 `scan_inventory.content_type` by `store.add_inventory` — but is lost by the time a delta-sync

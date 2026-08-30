@@ -1476,6 +1476,13 @@ def _sp_classify_item(item: dict, *, drive_id: str | None, skip_folders: set[str
                     "parent_folder": (item.get("parentReference") or {}).get("path")}
         if drive_id:
             scannable["driveId"] = drive_id
+        # A Content Type carried forward from a prior scan's inventory
+        # (_sp_file_from_inventory_row). Live Graph items never carry this key, so a fresh
+        # listing classifies byte-identically to before — the property this function's
+        # docstring is built on — and _sp_enrich_content_types, which only ever runs on a live
+        # listing, is the sole writer of the same field there.
+        if item.get("_acp_content_type"):
+            scannable["content_type"] = item["_acp_content_type"]
     else:
         inventory_row = _sp_inventory_row(item)
     return {"est_row": est_row, "scannable": scannable, "inventory_row": inventory_row}
@@ -1751,21 +1758,41 @@ def _sp_file_from_inventory_row(row: dict) -> dict:
     _sp_classify_item a fresh listing does. `size` is approximate (KB-rounded — scan_inventory
     only ever stored that) — cosmetic only, never a compliance-relevant fact.
 
-    `content_type` (from _sp_enrich_content_types) can NEVER be reconstructed: it is never
-    persisted to scan_inventory — a carried-forward file simply has none, exactly as it always
-    would have without reconstruction touching it. sp_reconstructed_listing does not attempt
-    the live per-item Graph call that would be needed to recover it; doing so for every carried-
-    forward file would spend exactly the cost this whole feature exists to avoid.
+    `content_type` (from _sp_enrich_content_types) IS carried forward, on the private
+    `_acp_content_type` key that _sp_classify_item restamps onto the scannable record.
+
+    This docstring used to say the opposite — "can NEVER be reconstructed: it is never persisted
+    to scan_inventory" — and that premise was simply false. `scan_inventory.content_type` is a
+    real column and `store.add_inventory` populates it. What was actually missing was one name in
+    one SELECT list: `store.latest_scan_inventory_items` did not read the column back, so the
+    reconstruction baseline arrived without it and the conclusion "it is never persisted" was
+    drawn from the symptom. Every carried-forward SharePoint file lost its Content Type on every
+    delta sync as a result.
+
+    The cost argument in the old note was right and still holds: recovering it live is a per-item
+    Graph call, and paying it for every carried-forward file would spend exactly the saving this
+    feature exists for. But nothing had to be recovered — it was already stored.
+
+    A `_acp_`-prefixed key, not a Graph-shaped one: this dict is otherwise a faithful raw
+    driveItem, and a reader must be able to tell at a glance which fields came from Graph and
+    which are ACP's own. Live items never carry it, so _sp_classify_item's behaviour on a fresh
+    listing is byte-identical — which its own docstring requires.
     """
     size_kb = row.get("size_kb")
     hashes = {"quickXorHash": row["checksum"]} if row.get("checksum") else {}
-    return {"id": row.get("drive_file_id"), "name": row.get("file"),
+    out = {"id": row.get("drive_file_id"), "name": row.get("file"),
            "file": {"mimeType": row.get("mime"), "hashes": hashes},
            "createdDateTime": row.get("created_at"),
            "lastModifiedDateTime": row.get("source_modified"),
            "size": int(size_kb) * 1024 if size_kb is not None else None,
            "createdBy": {"user": {"displayName": row["owner"]}} if row.get("owner") else {},
            "parentReference": {"path": row.get("parent_folder"), "driveId": row.get("drive_id")}}
+    # Only when the stored row actually has one: a None here would be indistinguishable from
+    # "absent" downstream anyway, and omitting the key keeps a contentless row's reconstructed
+    # shape exactly what it was before this.
+    if row.get("content_type"):
+        out["_acp_content_type"] = row["content_type"]
+    return out
 
 
 def apply_sp_delta(prior_files: list[dict], changed_files: list[dict], removed_ids) -> list[dict]:
