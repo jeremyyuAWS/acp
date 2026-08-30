@@ -738,6 +738,53 @@ _SCHEMA = [
       updated_at TEXT
     )""",
     "CREATE INDEX IF NOT EXISTS idx_content_workspaces_owner ON content_workspaces(owner_email)",
+    # ADR 0044 — the document/version tables the workspace model was built to attach to.
+    # `workspace_id`/`document_id` are app-level references, not DB foreign keys — matching
+    # this codebase's existing convention (scan_inventory.scan_id, campaign_batch.campaign_id,
+    # ...) of enforcing referential integrity in the store layer rather than the schema.
+    # `owner_email` is denormalized onto BOTH tables (not just looked up via a join to
+    # content_workspaces) for the same reason scan_inventory/documents already denormalize it:
+    # every isolation check reads it directly, with no join, the same way
+    # get_content_workspace already does for the workspace row itself.
+    """CREATE TABLE IF NOT EXISTS content_workspace_documents (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      owner_email TEXT NOT NULL,
+      display_name TEXT,
+      relative_path TEXT,
+      status TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_cw_documents_workspace ON content_workspace_documents(workspace_id)",
+    # `version_seq` is 1-based per document (PRD §12's "upload as a new version"); `content_hash`
+    # is NOT NULL because every version is bytes that were actually uploaded and verified (PRD
+    # §9) — a version row is only ever created after the hash is known, never speculatively.
+    """CREATE TABLE IF NOT EXISTS content_workspace_document_versions (
+      id TEXT PRIMARY KEY,
+      document_id TEXT NOT NULL,
+      version_seq INT NOT NULL,
+      content_hash TEXT NOT NULL,
+      mime_type TEXT,
+      size_bytes INT,
+      blob_path TEXT,
+      original_filename TEXT,
+      uploaded_at TEXT,
+      uploaded_by TEXT,
+      malware_status TEXT,
+      lifecycle_state TEXT,
+      assessment_status TEXT,
+      source_version_id TEXT,
+      remediated_from_version_id TEXT,
+      release_status TEXT,
+      retention_date TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_cw_versions_document ON content_workspace_document_versions(document_id)",
+    # Duplicate detection (PRD §12) is a per-document-set, cross-document lookup by hash — this
+    # is the index that query needs; scoped further to (workspace, hash) at the query layer via
+    # a join through content_workspace_documents, since the hash column itself has no
+    # workspace_id of its own.
+    "CREATE INDEX IF NOT EXISTS idx_cw_versions_hash ON content_workspace_document_versions(content_hash)",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -2266,7 +2313,8 @@ class Store:
                          "sync_cursors",  # connector sync position is customer-derived, not config
                          "overview_snapshots",  # derived from scan results — customer data, not config
                          "scan_events",  # ADR 0042 lifecycle log — a record OF customer scans
-                         "content_workspaces"]  # ADR 0044 — a customer's own workspace, not config
+                         "content_workspaces",  # ADR 0044 — a customer's own workspace, not config
+                         "content_workspace_documents", "content_workspace_document_versions"]
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
@@ -2294,9 +2342,15 @@ class Store:
             owner_email=%s).
           - doc_id-keyed (_RESET_USER_DOC_TABLES): doc_id IN (SELECT doc_id FROM documents WHERE
             owner_email=%s) — disposition_audit/remediation_state key on doc_id, not scan_id.
-          - owns owner_email directly: scan_decisions, documents, scan_runs, content_workspaces
-            (ADR 0044 — WHERE owner_email=%s); org_memory (WHERE org=%s — every call site sets
-            `org` to the signed-in user's own email, so it is already per-user despite the name).
+          - owns owner_email directly: scan_decisions, documents, scan_runs, content_workspaces,
+            content_workspace_documents (ADR 0044 — WHERE owner_email=%s); org_memory
+            (WHERE org=%s — every call site sets `org` to the signed-in user's own email, so it
+            is already per-user despite the name).
+          - content_workspace_document_versions carries no owner_email of its own (see its
+            migration comment) — scoped via document_id IN (SELECT id FROM
+            content_workspace_documents WHERE owner_email=%s), deleted BEFORE its parent
+            documents for the same "no real FK, but tidy child-before-parent order" reason
+            _RESET_USER_DOC_TABLES's rows are deleted before `documents` below.
 
         Deliberately excluded, unlike reset_analytics():
           - `inventory` — a global path-dedup index with no owner concept; nothing to scope it by.
@@ -2333,6 +2387,13 @@ class Store:
             cleared.append("documents")
             self._db.execute(cur, "DELETE FROM org_memory WHERE org=%s", (owner_email,))
             cleared.append("org_memory")
+            self._db.execute(cur,
+                "DELETE FROM content_workspace_document_versions WHERE document_id IN "
+                "(SELECT id FROM content_workspace_documents WHERE owner_email=%s)", (owner_email,))
+            cleared.append("content_workspace_document_versions")
+            self._db.execute(cur,
+                "DELETE FROM content_workspace_documents WHERE owner_email=%s", (owner_email,))
+            cleared.append("content_workspace_documents")
             self._db.execute(cur, "DELETE FROM content_workspaces WHERE owner_email=%s", (owner_email,))
             cleared.append("content_workspaces")
             # scan_runs last — every scan_id-scoped subquery above depends on these rows existing.
@@ -7424,6 +7485,109 @@ class Store:
             self._db.execute(cur,
                 "SELECT * FROM content_workspaces WHERE id=%s AND owner_email=%s",
                 (workspace_id, owner_email))
+            return self._db.fetchone(cur)
+
+    # ── ACP Managed Content Workspace: documents & versions (ADR 0044) ──────────
+    # No ownership check against content_workspaces here — same convention as
+    # create_campaign/create_campaign_batch (which don't re-verify the scan they attach to
+    # either): the CALLER (the future upload route, item 19) is responsible for having already
+    # resolved and owner-checked the workspace via get_content_workspace before reaching here.
+
+    def create_content_workspace_document(self, document_id: str, *, workspace_id: str,
+                                          owner_email: str, display_name: str | None = None,
+                                          relative_path: str | None = None,
+                                          status: str = "uploading") -> None:
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO content_workspace_documents"
+                "(id,workspace_id,owner_email,display_name,relative_path,status,created_at,updated_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                (document_id, workspace_id, owner_email, display_name, relative_path, status, now, now))
+
+    def list_content_workspace_documents(self, workspace_id: str, *, owner_email: str) -> list[dict]:
+        """Owner-scoped like every other list here — a workspace_id belonging to a different
+        owner returns [] (indistinguishable from an empty workspace), never another owner's
+        documents."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM content_workspace_documents "
+                "WHERE workspace_id=%s AND owner_email=%s ORDER BY created_at DESC",
+                (workspace_id, owner_email))
+            return self._db.fetchall(cur)
+
+    def get_content_workspace_document(self, document_id: str, *, owner_email: str) -> dict | None:
+        """Same 404-not-403 contract as get_content_workspace: owner_email checked in the SAME
+        query, never after."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM content_workspace_documents WHERE id=%s AND owner_email=%s",
+                (document_id, owner_email))
+            return self._db.fetchone(cur)
+
+    def update_content_workspace_document_status(self, document_id: str, status: str) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE content_workspace_documents SET status=%s, updated_at=%s WHERE id=%s",
+                (status, self._now(), document_id))
+
+    def next_content_workspace_document_version_seq(self, document_id: str) -> int:
+        """1-based (PRD §12): the first version of a document is version_seq=1, not 0."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT MAX(version_seq) AS m FROM content_workspace_document_versions "
+                "WHERE document_id=%s", (document_id,))
+            row = self._db.fetchone(cur)
+        return (row["m"] or 0) + 1 if row else 1
+
+    def create_content_workspace_document_version(
+            self, version_id: str, *, document_id: str, version_seq: int, content_hash: str,
+            mime_type: str | None = None, size_bytes: int | None = None,
+            blob_path: str | None = None, original_filename: str | None = None,
+            uploaded_by: str | None = None, malware_status: str | None = None,
+            lifecycle_state: str | None = "ready", assessment_status: str | None = None,
+            source_version_id: str | None = None, remediated_from_version_id: str | None = None,
+            release_status: str | None = None, retention_date: str | None = None) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO content_workspace_document_versions"
+                "(id,document_id,version_seq,content_hash,mime_type,size_bytes,blob_path,"
+                "original_filename,uploaded_at,uploaded_by,malware_status,lifecycle_state,"
+                "assessment_status,source_version_id,remediated_from_version_id,release_status,"
+                "retention_date) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (version_id, document_id, version_seq, content_hash, mime_type, size_bytes,
+                 blob_path, original_filename, self._now(), uploaded_by, malware_status,
+                 lifecycle_state, assessment_status, source_version_id,
+                 remediated_from_version_id, release_status, retention_date))
+
+    def list_content_workspace_document_versions(self, document_id: str) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM content_workspace_document_versions "
+                "WHERE document_id=%s ORDER BY version_seq DESC", (document_id,))
+            return self._db.fetchall(cur)
+
+    def get_latest_content_workspace_document_version(self, document_id: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM content_workspace_document_versions WHERE document_id=%s "
+                "ORDER BY version_seq DESC LIMIT 1", (document_id,))
+            return self._db.fetchone(cur)
+
+    def find_content_workspace_document_version_by_hash(
+            self, workspace_id: str, content_hash: str, *, owner_email: str) -> dict | None:
+        """PRD §12 duplicate detection: is this exact content already uploaded ANYWHERE in this
+        workspace? Joined through content_workspace_documents for workspace scoping (the
+        version row itself carries no workspace_id — see this table's own migration comment)
+        and owner-checked the same way, so a hash match in another owner's workspace of the
+        same id can never leak. Returns the newest match's version row, or None."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT v.* FROM content_workspace_document_versions v "
+                "JOIN content_workspace_documents d ON d.id = v.document_id "
+                "WHERE d.workspace_id=%s AND d.owner_email=%s AND v.content_hash=%s "
+                "ORDER BY v.uploaded_at DESC LIMIT 1",
+                (workspace_id, owner_email, content_hash))
             return self._db.fetchone(cur)
 
     def list_scan_severities(self, scan_id: str) -> list[dict]:
