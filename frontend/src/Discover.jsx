@@ -135,7 +135,7 @@ const DISCOVERY_JOB_TYPES = new Set(['scan_discover', 'scan_batch', 'scan_finali
 
 export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, preflightDegraded = null, preflightCapacityState = null, scanPct = 0, scanId = null, jobId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
   hasSPToken = false, runAt = null, run = null, scanList = null, rawFiles = null, onStop = null, onViewMonitor = null,
-  onOpenSource = null }) {
+  onOpenSource = null, pendingScanLoad = false }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
   // component is given neither — Discover takes scanId and scope, not the run. The pieces it needs
   // are assembled here rather than threading the whole run object through a new prop; the resolver
@@ -1041,8 +1041,21 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
             covers that case instead. Either way, this line's "0 documents discovered" is bold and
             reads as a result, not a caveat — the "provisional" note next to it is small italic
             text easily missed. A scan that hasn't started yet showed as prominently as a genuine
-            empty one — found live 2026-08-28 twice, once for each of these two paths. */}
-        {(busy || !(run?.discovered_at || run?.status === 'discovered'))
+            empty one — found live 2026-08-28 twice, once for each of these two paths.
+
+            A THIRD path, found live 2026-08-30: `run` is null not because nothing has ever been
+            scanned, but because App.jsx's initial load hasn't resolved `run` yet — `files` is `[]`
+            (App.jsx's own fallback, never `null`) for the same reason estateSummary() already
+            treats as "genuinely empty" (discoveryRecommendations.js), so this line, DiscoveryResults
+            and the "No documents yet" fallback below all read a just-logged-in, already-scanned
+            workspace as brand new. `pendingScanLoad` (App.jsx: `!run && !!overviewPreview` — the
+            SAME bootstrap snapshot OverviewPreviewCard/AssessPreviewCard already render from, so
+            this needed no new fetch) is the one signal that distinguishes the two: bootstrap found
+            a real scan, its full payload just hasn't arrived. */}
+        {pendingScanLoad && (
+          <div className="muted">Loading your inventory…</div>
+        )}
+        {!pendingScanLoad && (busy || !(run?.discovered_at || run?.status === 'discovered'))
           && progress?.phase !== 'queued' && run?.status !== 'queued' && (
           <div>
             <b>{discoveredCount} documents</b> discovered across {sources.length} sources · {Object.keys(groups).length} departments
@@ -1148,7 +1161,12 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           old numbers with nothing saying so. Scoped narrowly to the queued window: once real
           listing progress starts (phase leaves 'queued'), the live progress card above already
           carries the truth for that period, and this stops gating the table again. */}
-      {showQueuedPlaceholder && !showPreviousResults ? (
+      {/* pendingScanLoad suppresses this whole block the same way it suppresses the header line
+          above: DiscoveryResults/DiscoverInventoryExport read `files`/`scope.inventory` from
+          App.jsx, which are `[]`/`null` until `run` resolves — indistinguishable, to them, from a
+          genuinely empty scan (estateSummary() only guards on `Array.isArray(files)`, never on
+          "have we actually asked the backend yet"). */}
+      {pendingScanLoad ? null : showQueuedPlaceholder && !showPreviousResults ? (
         <DiscoveryQueuedPlaceholder previousCount={discoveredCount} previousAt={runAt}
                                     onShowPrevious={() => setShowPreviousResults(true)} />
       ) : (
@@ -1181,7 +1199,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       </div>
       )}
 
-      {files.length === 0 ? (
+      {pendingScanLoad ? null : files.length === 0 ? (
         <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Sources.</p>
       ) : (() => {
         const totalWidth = files.length || 1

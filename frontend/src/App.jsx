@@ -1771,6 +1771,12 @@ export default function App() {
           onOpenAssess={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />}
 
         {view === 'discover' && <Discover sources={sources} files={files} rawFiles={scan?.files ?? []} busy={busy} onScan={requestScan} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} delegations={delegations} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} preflightDegraded={preflightDegraded} preflightCapacityState={preflightCapacityState} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} jobId={discoverJobId} scope={run?.scope || null} run={run} scanList={scanList} runAt={inventorySnapshot({ run, inventory: run?.scope?.inventory || null })} decisions={decisions} setDecisions={setDecisions}
+          // Bootstrap already confirmed a scan exists (its cached snapshot arrived) but the full
+          // getScan() payload hasn't yet — the same `run`-is-null window Overview/Assess show a
+          // preview card for. Discover's own `files`/`scope` fall back to `[]`/`null` in exactly
+          // this window (never `null` for "not asked yet" vs. "asked, found none"), which reads
+          // to every count on this screen as a genuinely empty, just-created workspace.
+          pendingScanLoad={!run && !!overviewPreview}
           /* Upload lost its top-level tab in the v2 simplification, but not its capability:
              it is a secondary action inside Discover now, which is where "get files in front
              of ACP" already lives. Dropping it outright would have removed the only way to try
