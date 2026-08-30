@@ -7587,6 +7587,16 @@ class Store:
                 "ORDER BY version_seq DESC LIMIT 1", (document_id,))
             return self._db.fetchone(cur)
 
+    def update_content_workspace_document_version_lifecycle_state(
+            self, version_id: str, lifecycle_state: str) -> None:
+        """PRD §12's 'keep as new' duplicate resolution: flip an already-created version row's
+        state (e.g. duplicate -> ready) in place, rather than re-inserting a row that already
+        exists under this same id."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE content_workspace_document_versions SET lifecycle_state=%s WHERE id=%s",
+                (lifecycle_state, version_id))
+
     def find_content_workspace_document_version_by_hash(
             self, workspace_id: str, content_hash: str, *, owner_email: str) -> dict | None:
         """PRD §12 duplicate detection: is this exact content already uploaded ANYWHERE in this
@@ -7602,6 +7612,23 @@ class Store:
                 "ORDER BY v.uploaded_at DESC LIMIT 1",
                 (workspace_id, owner_email, content_hash))
             return self._db.fetchone(cur)
+
+    def delete_content_workspace_document(self, document_id: str, *, owner_email: str) -> bool:
+        """PRD §12 duplicate resolution ('reuse existing' / 'cancel'): remove a document and all
+        its versions. Owner-scoped the same way every other content_workspace_* write is —
+        the WHERE clause is on the document row itself, so a foreign document_id deletes
+        nothing (versions are removed via the document's own id, never independently owner-
+        checked, matching reset_user_data's identical join pattern). Returns whether a document
+        was actually found and removed, so the caller can 404 rather than silently no-op."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "DELETE FROM content_workspace_document_versions WHERE document_id IN "
+                "(SELECT id FROM content_workspace_documents WHERE id=%s AND owner_email=%s)",
+                (document_id, owner_email))
+            self._db.execute(cur,
+                "DELETE FROM content_workspace_documents WHERE id=%s AND owner_email=%s",
+                (document_id, owner_email))
+            return (getattr(cur, "rowcount", 0) or 0) > 0
 
     def list_scan_severities(self, scan_id: str) -> list[dict]:
         """{file, severity} for every finding in a scan -- the input compute_batches

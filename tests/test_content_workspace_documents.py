@@ -172,6 +172,44 @@ def test_no_match_returns_none(isolated_store, ws):
         ws, "never-uploaded", owner_email=OWNER) is None
 
 
+def test_update_version_lifecycle_state(isolated_store, ws):
+    doc_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)
+    version_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document_version(
+        version_id, document_id=doc_id, version_seq=1, content_hash="h1",
+        lifecycle_state="duplicate")
+
+    isolated_store.update_content_workspace_document_version_lifecycle_state(version_id, "ready")
+    [v] = isolated_store.list_content_workspace_document_versions(doc_id)
+    assert v["lifecycle_state"] == "ready"
+
+
+def test_delete_document_removes_it_and_its_versions(isolated_store, ws):
+    doc_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)
+    isolated_store.create_content_workspace_document_version(
+        uuid.uuid4().hex[:12], document_id=doc_id, version_seq=1, content_hash="h1")
+
+    deleted = isolated_store.delete_content_workspace_document(doc_id, owner_email=OWNER)
+    assert deleted is True
+    assert isolated_store.get_content_workspace_document(doc_id, owner_email=OWNER) is None
+    assert isolated_store.list_content_workspace_document_versions(doc_id) == []
+
+
+def test_delete_document_is_owner_scoped(isolated_store, ws):
+    doc_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)
+
+    deleted = isolated_store.delete_content_workspace_document(doc_id, owner_email=OTHER)
+    assert deleted is False
+    assert isolated_store.get_content_workspace_document(doc_id, owner_email=OWNER) is not None
+
+
+def test_delete_document_returns_false_for_a_nonexistent_document(isolated_store, ws):
+    assert isolated_store.delete_content_workspace_document("does-not-exist", owner_email=OWNER) is False
+
+
 def test_admin_reset_wipes_documents_and_versions(isolated_store, ws):
     doc_id = uuid.uuid4().hex[:12]
     isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)

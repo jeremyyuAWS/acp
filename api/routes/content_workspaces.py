@@ -22,8 +22,22 @@ enqueueing Discovery. `malware_status` is stamped "not_scanned" on every version
 real AV integration behind it (yet), and claiming "clean" without one would be worse than
 omitting the field. Deeper archive-structure inspection, encrypted-file detection, and ZIP
 path-traversal prevention are explicitly OUT of scope here — later work, once a real scanning
-dependency is chosen. PRD §12's duplicate-handling UX (reuse/new-version/cancel) is also a
-later PR; this PR always creates a brand-new document per upload session.
+dependency is chosen.
+
+Also implements the detectable half of PRD §12's duplicate handling: `complete_upload` checks
+the freshly-uploaded content_hash against every other document already in the workspace (via
+store.find_content_workspace_document_version_by_hash) and, on a match, marks the new version
+"duplicate" instead of "ready" — again a normal terminal state (PRD §8 lists "Duplicate"
+alongside "Quarantined"), not a request error, and skipped entirely when the upload was already
+quarantined (a quarantined file's dedup status isn't useful). `POST
+.../documents/{document_id}/resolve-duplicate` then lets the caller pick one of PRD §12's four
+paths for a flagged document: `keep_as_new` (clear the flag, treat it as an ordinary new
+document), `reuse_existing` or `cancel` (both delete this document/version and its blob — the
+former because the existing document already has the content, the latter because the upload
+was a mistake; they differ only in which decision gets logged). The fourth path, "attach as a
+new version of the existing document", needs a document-scoped upload-session variant that
+does not exist yet (`create_upload_session` always mints a brand-new document) — explicitly
+deferred rather than half-built here.
 
 Owner-scoped throughout: `owner_email` is the tenant boundary this whole app already uses
 (ADR 0044). `GET /content-workspaces/{id}` 404s — never 403 — for a foreign id, matching
@@ -230,9 +244,26 @@ def complete_upload(workspace_id: str, document_id: str, body: UploadComplete, r
                                                           body.version_id, n=len(expected_sig))
         quarantined = prefix is None or not prefix.startswith(expected_sig)
 
+    # PRD §12: is this exact content already uploaded elsewhere in the workspace? A match
+    # against THIS SAME document is a normal re-upload/new-version, not a duplicate — only a
+    # match against a DIFFERENT document is flagged. Skipped once already quarantined: a
+    # security hold takes precedence, and dedup status on a file that isn't going to Discovery
+    # anyway isn't useful.
+    duplicate_of = None
+    if not quarantined:
+        dup = core.store.find_content_workspace_document_version_by_hash(
+            workspace_id, body.content_hash, owner_email=owner)
+        if dup is not None and dup["document_id"] != document_id:
+            duplicate_of = {"document_id": dup["document_id"], "version_id": dup["id"]}
+
     version_seq = core.store.next_content_workspace_document_version_seq(document_id)
     path = workspace_blob.blob_path(owner, workspace_id, document_id, body.version_id)
-    lifecycle_state = "quarantined" if quarantined else "ready"
+    if quarantined:
+        lifecycle_state = "quarantined"
+    elif duplicate_of is not None:
+        lifecycle_state = "duplicate"
+    else:
+        lifecycle_state = "ready"
     core.store.create_content_workspace_document_version(
         body.version_id, document_id=document_id, version_seq=version_seq,
         content_hash=body.content_hash, mime_type=body.mime_type, size_bytes=body.size_bytes,
@@ -240,10 +271,56 @@ def complete_upload(workspace_id: str, document_id: str, body: UploadComplete, r
         lifecycle_state=lifecycle_state, malware_status="not_scanned")
     core.store.update_content_workspace_document_status(document_id, lifecycle_state)
     core.store.log_decision(
-        owner, "content_workspace.upload_quarantined" if quarantined
-        else "content_workspace.upload_completed",
+        owner, f"content_workspace.upload_{lifecycle_state}"
+        if lifecycle_state != "ready" else "content_workspace.upload_completed",
         detail=f"{workspace_id}/{document_id}/{body.version_id}")
-    return get_content_workspace_document(workspace_id, document_id, request)
+    result = get_content_workspace_document(workspace_id, document_id, request)
+    if duplicate_of is not None:
+        result = {**result, "duplicate_of": duplicate_of}
+    return result
+
+
+class DuplicateResolution(BaseModel):
+    action: str  # "keep_as_new" | "reuse_existing" | "cancel"
+
+
+@router.post("/content-workspaces/{workspace_id}/documents/{document_id}/resolve-duplicate")
+def resolve_duplicate(workspace_id: str, document_id: str, body: DuplicateResolution,
+                      request: Request):
+    """PRD §12: the caller's decision once complete_upload has flagged a document
+    lifecycle_state="duplicate". `keep_as_new` clears the flag (the user confirms this really
+    is a separate, wanted document despite the identical content). `reuse_existing` and
+    `cancel` both discard this document/version and its blob — they differ only in the reason
+    recorded, since from the store's point of view an unwanted duplicate and an abandoned
+    upload end the same way. See this module's docstring for why the fourth PRD §12 path
+    ("attach as a new version of the existing document") isn't implemented here."""
+    if body.action not in ("keep_as_new", "reuse_existing", "cancel"):
+        raise HTTPException(422, "action must be one of: keep_as_new, reuse_existing, cancel")
+    owner = _owner(request)
+    _require_workspace(workspace_id, owner)
+    doc = core.store.get_content_workspace_document(document_id, owner_email=owner)
+    if doc is None or doc["workspace_id"] != workspace_id:
+        raise HTTPException(404, "document not found")
+    if doc["status"] != "duplicate":
+        raise HTTPException(409, "document is not flagged as a duplicate")
+
+    if body.action == "keep_as_new":
+        latest = core.store.get_latest_content_workspace_document_version(document_id)
+        if latest is not None:
+            core.store.update_content_workspace_document_version_lifecycle_state(
+                latest["id"], "ready")
+        core.store.update_content_workspace_document_status(document_id, "ready")
+        core.store.log_decision(owner, "content_workspace.duplicate_kept_as_new",
+                                detail=f"{workspace_id}/{document_id}")
+        return get_content_workspace_document(workspace_id, document_id, request)
+
+    latest = core.store.get_latest_content_workspace_document_version(document_id)
+    if latest is not None:
+        workspace_blob.delete_document_version(owner, workspace_id, document_id, latest["id"])
+    core.store.delete_content_workspace_document(document_id, owner_email=owner)
+    core.store.log_decision(
+        owner, f"content_workspace.duplicate_{body.action}", detail=f"{workspace_id}/{document_id}")
+    return {"document_id": document_id, "status": "deleted", "action": body.action}
 
 
 @router.get("/content-workspaces/{workspace_id}/documents")
