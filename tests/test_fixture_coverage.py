@@ -3,7 +3,7 @@
 WHY A COVERAGE REPORT AT ALL. The Phase-1 acceptance criterion is "all applicable pairs have
 explicit fixture coverage or a documented human-only rationale". Nothing computed that, so the
 size of the remaining job was unknown — and an unknown denominator is how "we have a corpus"
-becomes a claim nobody can check. The answer today is 47 of 62 (76%): .docx complete, and a
+becomes a claim nobody can check. The answer today is 48 of 62 (77%): .docx complete, and a
 partial labelled corpus for each of xlsx, pptx and pdf. It started at 15 of 62 (24%), with
 .docx the only format that had one at all.
 
@@ -94,7 +94,7 @@ def test_coverage_is_complete_for_docx_and_partial_for_the_other_three():
         f"BASELINE['pptx'] and this count together, in the commit that adds the fixtures")
 
     assert cov["pdf"]["has_generator"] is True
-    assert len(cov["pdf"]["covered"]) == 11, (
+    assert len(cov["pdf"]["covered"]) == 12, (
         f"the pdf corpus now declares {len(cov['pdf']['covered'])} pairs — raise "
         f"BASELINE['pdf'] and this count together, in the commit that adds the fixtures")
 

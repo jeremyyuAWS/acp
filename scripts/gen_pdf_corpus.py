@@ -393,7 +393,33 @@ def f_sensory_instruction_ok(path: Path):
             "the same instruction naming the control and the section (adversarial)")
 
 
+# 1.3.1 on PDF is the tag tree itself: without /StructTreeRoot and /MarkInfo a screen reader has
+# no headings, no reading order and no table semantics to read, whatever the page looks like. The
+# prose is deliberately flat — no instruction, no link, no heading — so the only thing separating
+# this pair is the tagging.
+TAGGING_PROSE = ("Payment terms are agreed at the start of each billing period. "
+                 "Invoices are issued monthly and settled within thirty days.")
+
+
+def f_untagged_document(path: Path):
+    _prose(path, TAGGING_PROSE)
+    return ({"1.3.1": "FAIL"},
+            "no structure tree and no /MarkInfo — assistive technology gets nothing but a bag "
+            "of glyphs",
+            {"tagged": False})
+
+
+def f_tagged_document_ok(path: Path):
+    _prose(path, TAGGING_PROSE)
+    return ({"1.3.1": "REVIEW"},
+            "the same page carrying /StructTreeRoot and /MarkInfo (adversarial). REVIEW, not "
+            "PASS: a tag tree existing says nothing about whether the tags are CORRECT, which "
+            "is a judgement no detector makes (ADR 0016)")
+
+
 FIXTURES = [
+    ("untagged-document",       f_untagged_document,       "violation"),
+    ("tagged-document-ok",      f_tagged_document_ok,      "adversarial"),
     ("sensory-instruction",     f_sensory_instruction,     "violation"),
     ("sensory-instruction-ok",  f_sensory_instruction_ok,  "adversarial"),
     ("no-document-title",       f_no_document_title,       "violation"),
@@ -418,22 +444,52 @@ FIXTURES = [
     ("field-named-ok",          f_field_named_ok,          "adversarial"),
 ]
 
-DECLARED = ("1.1.1", "1.3.3", "1.4.1", "1.4.11", "1.4.3", "2.4.2", "2.4.3", "2.4.4", "2.4.6",
-            "3.1.1", "4.1.2")
+DECLARED = ("1.1.1", "1.3.1", "1.3.3", "1.4.1", "1.4.11", "1.4.3", "2.4.2", "2.4.3", "2.4.4",
+            "2.4.6", "3.1.1", "4.1.2")
 
 
-def _stamp(path: Path, title: str | None, lang: str | None) -> None:
-    """Give a built fixture its document title and language — or deliberately withhold one.
+def _stamp(path: Path, title: str | None, lang: str | None,
+           display_title: bool = True, tagged: bool = True) -> None:
+    """Give a built fixture the four document-wide properties every accessible PDF carries — or
+    deliberately withhold the one it is testing the absence of.
 
     Applied to EVERY fixture rather than left to each builder, because the failure mode of
     forgetting is silent: the fixture simply grows a second and third finding and the corpus
-    stops being per-criterion without anything going red."""
+    stops being per-criterion without anything going red.
+
+    THAT IS NOT A HYPOTHETICAL — it is what happened, and it is why `tagged` and `display_title`
+    are here at all. When this corpus landed, `_stamp` set only /Title and /Lang, and the corpus
+    test hand-picked two of the analyser's eight rules to check. Driven through the product's own
+    entry point instead, ALL 22 fixtures raised an undeclared 2.4.2 (`pdf.display-doc-title`) and
+    18 raised an undeclared 1.3.1 (`pdf.tagged`). The worst of those was `document-title-ok` — the
+    2.4.2 CONTROL, whose whole job is to stay silent on 2.4.2, and which did not. Its label was a
+    claim about a rule nobody was running.
+
+    So all four are stamped here, together, and each is withheld only by a fixture that says so."""
     import pikepdf
     with pikepdf.open(str(path), allow_overwriting_input=True) as pdf:
         if title is not None:
             pdf.docinfo[pikepdf.Name("/Title")] = pikepdf.String(title)
         if lang is not None:
             pdf.Root.Lang = pikepdf.String(lang)
+        # /Title alone does not satisfy 2.4.2: a viewer shows the FILENAME in its window bar
+        # unless ViewerPreferences opts into the title (pdf.display-doc-title).
+        if display_title:
+            pdf.Root.ViewerPreferences = pikepdf.Dictionary(DisplayDocTitle=True)
+        # `pdf.tagged` wants BOTH a structure tree and /MarkInfo /Marked. The four fixtures built
+        # by _figure and _headings already have a real tag tree with content in it; the rest get a
+        # minimal empty one, which is enough to say "this document is tagged" without adding
+        # structure that another criterion would then read.
+        if tagged:
+            if "/StructTreeRoot" not in pdf.Root:
+                doc = pdf.make_indirect(pikepdf.Dictionary(
+                    Type=pikepdf.Name.StructElem, S=pikepdf.Name.Document,
+                    K=pikepdf.Array([])))
+                root = pdf.make_indirect(pikepdf.Dictionary(
+                    Type=pikepdf.Name.StructTreeRoot, K=pikepdf.Array([doc])))
+                doc.P = root
+                pdf.Root.StructTreeRoot = root
+            pdf.Root.MarkInfo = pikepdf.Dictionary(Marked=True)
         pdf.save(str(path))
 
 
@@ -459,10 +515,12 @@ def build_all(docs: Path) -> tuple[list[dict], list[str]]:
         built = build(path)
         expectations, note = built[0], built[1]
         # A builder may return a third element saying which piece of document metadata it is
-        # deliberately withholding; everything else gets both, so no fixture accidentally tests
-        # 2.4.2 or 3.1.1 as well as its own criterion.
+        # deliberately withholding; everything else gets all four, so no fixture accidentally
+        # tests 1.3.1, 2.4.2 or 3.1.1 as well as its own criterion.
         meta = built[2] if len(built) > 2 else {}
-        _stamp(path, meta.get("title", DOC_TITLE), meta.get("lang", DOC_LANG))
+        _stamp(path, meta.get("title", DOC_TITLE), meta.get("lang", DOC_LANG),
+               display_title=meta.get("display_title", True),
+               tagged=meta.get("tagged", True))
         problems += _validate(name, expectations)
         manifest.append({"file": f"docs/{name}.pdf", "name": name, "kind": kind,
                          "format": FMT, "expect": expectations, "note": note})
