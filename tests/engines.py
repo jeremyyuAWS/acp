@@ -8,15 +8,27 @@ stale skip reason survive for weeks:
   clone. It is a BUILD step, not a dev-machine artifact — CI builds it
   (azure-pipelines.yml). Absent only means "nobody ran `dotnet build`".
 
-* **PDF** (`worker-python`). NOT vendored. Loaded at runtime from `ACP_PDF_ENGINE`
-  (`api/scanner.py:WP`) and lives outside this repo entirely. Its absence is a
-  structural gap, not a forgotten build step.
+* **PDF** (`worker-python`). VENDORED in `engine/pdf-analyser/` since ADR 0029, and
+  resolved from `ACP_PDF_ENGINE` (`api/scanner.py:WP`) only so anyone working against
+  the upstream checkout can override it. It is pure Python — no build step — so it is
+  present wherever the suite runs, which is the opposite of the Office story.
 
-The PDF gap bites harder than it looks: `scanner._analyse_pdf` imports `analysers`
-OUTSIDE its try/except, so a missing tree raises `ModuleNotFoundError` rather than
-degrading to an engine-error the way the surrounding code intends. Anything that scans
-a corpus containing a PDF — or imports `remediation` — therefore hard-errors, which is
-why several modules need PDF_OK even when what they assert is about Office formats.
+  This paragraph used to say the PDF engine was NOT vendored and "lives outside this
+  repo entirely". That was true when written and false since ADR 0029, and the stale
+  version cost real coverage: the first draft of the pdf ground-truth corpus recorded
+  2.4.2 and 3.1.1 as unreachable work needing "tag-tree semantics or langdetect", when
+  both are one pikepdf lookup in `engine/pdf-analyser/analysers/rules/pdf/`. Both are
+  certification-capable pairs, and both went unverified for a commit on the strength of
+  a comment. The `PDF_ENGINE` line below has carried the correction since ADR 0029;
+  this header disagreed with it twelve lines later.
+
+The PDF gap still bites harder than it looks WHEN the tree is genuinely absent (a
+truncated checkout, or an override pointing somewhere empty): `scanner._analyse_pdf`
+imports `analysers` OUTSIDE its try/except, so a missing tree raises `ModuleNotFoundError`
+rather than degrading to an engine-error the way the surrounding code intends. Anything
+that scans a corpus containing a PDF — or imports `remediation` — therefore hard-errors,
+which is why several modules need PDF_OK even when what they assert is about Office
+formats.
 
 Import as `from engines import OFFICE_OK, PDF_OK` — tests/ is not a package, and pytest's
 default prepend import mode puts this directory on sys.path.

@@ -13,12 +13,17 @@ dict names the criterion and the verdict; a fixture that happens to be a .docx s
 easy way to report coverage that is not there.
 
 WHY THE NUMBER IS WHAT IT IS. Every format now has a per-criterion generator, and only .docx is
-complete: xlsx declares 8 of 15, pptx 9 of 17, pdf 8 of 15. The shortfalls are not neglect — a
-pair is declared only where a FIRST-PARTY detector was confirmed to fire against the fixture, so
-the criteria routed through the .NET Office analyser, OCR or langdetect stay uncounted until
-something can actually check them. Reporting 65% honestly is worth more than a percentage
+complete: xlsx declares 8 of 15, pptx 9 of 17, pdf 10 of 15. The shortfalls are not neglect — a
+pair is declared only where a detector that RUNS WHEREVER THE SUITE RUNS was confirmed to fire
+against the fixture, so the criteria needing the .NET Office analyser or OCR stay uncounted
+until something can actually check them. Reporting 68% honestly is worth more than a percentage
 assembled from whatever happened to be countable; that was true at 24%, when .docx was the only
 corpus, and it is the reason the number moved by fixtures rather than by redefinition.
+
+"Runs wherever the suite runs" is deliberately not "first-party": pdf 2.4.2 and 3.1.1 live in
+the vendored analyser (ADR 0029) rather than in api/, and are as reachable as anything in
+api/formats/. Phrasing the rule by directory instead of by availability cost this corpus two
+pairs for one commit, and they were two of the ten pairs that can CERTIFY.
 
 Not counted here, deliberately: `gen_complex_corpus.py` is also .docx, and `complex_corpus.py`'s
 expectations are a floor ("at least these SCs"), not a per-pair verdict.
@@ -59,7 +64,7 @@ PRESET = "acp-core-17"
 
 # Coverage floor, by format. Update ONLY upward, and only alongside the fixtures that earned it.
 # Written down rather than computed so a drop is a diff someone has to justify in review.
-BASELINE = {"docx": 15, "xlsx": 8, "pptx": 9, "pdf": 8}
+BASELINE = {"docx": 15, "xlsx": 8, "pptx": 9, "pdf": 10}
 
 
 def applicable_pairs() -> dict[str, list[str]]:
