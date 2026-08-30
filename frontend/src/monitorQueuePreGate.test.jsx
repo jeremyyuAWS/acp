@@ -31,7 +31,10 @@ describe('QueuePanel is visible on Monitor before the scan is assessed', () => {
   it('renders QueuePanel alongside assessGate in the not-yet-assessed branch of the monitor tab', () => {
     const m = app().match(/\{view === 'monitor' && \(run \? \(assessed \? <Monitor [^]*?\/> : (.*?)\) : /)
     expect(m, "the monitor tab's run-exists ternary wasn't found in the shape this test expects").toBeTruthy()
-    expect(m[1]).toMatch(/<QueuePanel \/>/)
+    // Live 2026-08-30: QueuePanel gained focusScanId/onClearFocus props ("View in Monitor →"
+    // scan focus) so this no longer asserts a bare self-close — see monitorScanFocus.test.jsx
+    // for the props themselves.
+    expect(m[1]).toMatch(/<QueuePanel[^]*?\/>/)
     expect(m[1]).toMatch(/assessGate/)
   })
 

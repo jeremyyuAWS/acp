@@ -66,7 +66,11 @@ const STATUS = {
 // show the remediation is active — client-paced (a one-shot job streams no per-rule step),
 // the same representative animation the FileDrawer progress line uses.
 
-export default function QueuePanel() {
+// focusScanId/onClearFocus: "View in Monitor →" from Discover/Assess (2026-08-30) lands here
+// wanting the originating scan's own job(s) surfaced, not a filtered queue — this codebase's
+// "never hide data, only surface it" convention (see CLAUDE.md's retired-features section) rules
+// out dropping every other job from the list, so this only highlights + banners, never filters.
+export default function QueuePanel({ focusScanId = null, onClearFocus = null }) {
   const [q, setQ] = useState(null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -415,21 +419,44 @@ export default function QueuePanel() {
           document each worker is processing right now and how long each step took. */}
       {q?.jobs?.length > 0 && (
         <div style={{ marginTop: 14 }}>
+          {focusScanId && (
+            <div className="queuefocusbanner" role="status">
+              <span>Focused on this run</span>
+              <button onClick={() => onClearFocus?.()}>Show all</button>
+            </div>
+          )}
           <div className="muted" style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>
             Recent jobs <span style={{ fontWeight: 400, textTransform: 'none' }}>· your most recent {Math.min(q.jobs.length, 8)}</span>
           </div>
           <div className="jobcards">
-            {q.jobs.slice(0, 8).map((jb) => {
+            {/* The focused scan's own job usually IS among the visible 8 — but not always: a
+                terminal (done/dead) job old enough to have already been pushed off "recent 8" by
+                newer activity is a real case, not an edge case to ignore. When none of the
+                visible 8 match, prepend the single most recent matching job from the FULL list
+                (already fetched by getJobs(), just sliced below for display) rather than let the
+                banner point at a highlight nobody can see. Still additive, never a filter — every
+                one of the visible 8 stays exactly where it was. */}
+            {(() => {
+              const visible = q.jobs.slice(0, 8)
+              const focusInVisible = focusScanId && visible.some((jb) => jb.scan_id === focusScanId)
+              const pushedOff = focusScanId && !focusInVisible
+                ? q.jobs.find((jb) => jb.scan_id === focusScanId) : null
+              return pushedOff ? [{ ...pushedOff, __pushedOff: true }, ...visible] : visible
+            })().map((jb) => {
               const desc = jobDesc(jb)
               const dur = jb.created_at && jb.updated_at ? Math.max(0, (new Date(jb.updated_at) - new Date(jb.created_at)) / 1000) : null
               const [fg, bg] = STATUS[jb.status] || ['#555', '#eee']
               const phase = phaseLine(jb)
               const stalled = isStalled(jb, dur)
+              const focused = !!focusScanId && jb.scan_id === focusScanId
               return (
-                <div className="jobcard" key={jb.id}>
+                <div className={focused ? 'jobcard focused' : 'jobcard'} key={jb.id}>
                   <span className="jobtype">{JOBLABEL[jb.type] || jb.type}</span>
                   <span className="jobfile" title={jb.scan_id ? `${desc} · scan ${jb.scan_id}` : desc}>
                     {desc}
+                    {jb.__pushedOff && (
+                      <div className="jobphase muted" aria-live="polite">focused run · not in the most recent 8</div>
+                    )}
                     {/* What this job is doing right now, straight from jobs.phase. Absent
                         phase renders nothing — never a placeholder standing in for work. */}
                     {phase && <div className="jobphase muted" aria-live="polite">{phase}</div>}

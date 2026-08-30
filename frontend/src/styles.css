@@ -390,6 +390,11 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 /* 7 tracks: type | file+phase | status | attempts? | stalled? | duration | trace.
    attempts and stalled are conditional; their `auto` tracks collapse when absent. */
 .jobcard { display: grid; grid-template-columns: 82px minmax(0, 1fr) auto auto auto auto auto; align-items: center; gap: 10px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12.5px; animation: auditslide 0.4s ease; }
+/* "View in Monitor" scan focus (Discover/Assess → Monitor, 2026-08-30): highlights rather than
+   filters — every job stays in the list, the focused scan's own job(s) just stand out. */
+.jobcard.focused { border-color: var(--accent, #7C3AED); background: color-mix(in srgb, var(--accent, #7C3AED) 8%, transparent); }
+.queuefocusbanner { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 8px; padding: 6px 10px; border-radius: 7px; color: var(--accent, #7C3AED); background: color-mix(in srgb, var(--accent, #7C3AED) 8%, transparent); }
+.queuefocusbanner button { font: inherit; color: inherit; font-weight: 600; text-decoration: underline; background: none; border: none; cursor: pointer; padding: 0; }
 .jobtype { font-weight: 600; color: var(--plum); }
 .jobfile { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
 .jobstatus { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 7px; white-space: nowrap; }

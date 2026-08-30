@@ -416,6 +416,12 @@ export default function App() {
   // The in-flight durable scan's id — what the banner's Stop button cancels. null when
   // no queued scan is being polled (sync scans finish in-request and can't be stopped).
   const [liveScanId, setLiveScanId] = useState(null)
+  // Which scan Monitor should highlight, set by a "View in Monitor →" click from
+  // Discover/Assess (stakeholder UX review, 2026-08-30) so the click lands pointed at the run it
+  // came from instead of Monitor's unfiltered landing page. null means no focus — the ordinary,
+  // unfiltered Monitor-tab-click case. Cleared from QueuePanel's "Show all" via onClearFocus,
+  // threaded through <Monitor>.
+  const [monitorFocusScanId, setMonitorFocusScanId] = useState(null)
   // The in-flight discover job's id — lets Discover poll GET /jobs/{id} (the durable SQL queue
   // row, with a real locked_at claim timestamp) the same way AssessRunner already polls its own
   // job, to tell "queued, nobody's claimed it" from "a worker claimed it Ns ago and is opening
@@ -1819,7 +1825,8 @@ export default function App() {
              it is a secondary action inside Discover now, which is where "get files in front
              of ACP" already lives. Dropping it outright would have removed the only way to try
              a single ad-hoc file without wiring a whole source. */
-          onStop={() => stopScan(liveScanId)} me={me} onViewMonitor={() => setView('monitor')}
+          onStop={() => stopScan(liveScanId)} me={me}
+          onViewMonitor={() => { setMonitorFocusScanId(liveScanId || run?.id); setView('monitor') }}
           onOpenSource={(sourceKey) => { setPendingSourceOpen(sourceKey); setView('integrations'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />}
 
         {view === 'assess' && (run ? (
@@ -1869,7 +1876,8 @@ export default function App() {
               <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy}
                             controlled onReady={registerAssessStart}
                             onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase}
-                            onViewMonitor={() => setView('monitor')} me={me} />
+                            onViewMonitor={() => { setMonitorFocusScanId(run.id); setView('monitor') }}
+                            me={me} />
             )}
             {/* Gated on assessPhase === 'done', not just `assessed` — `assessed` flips true the
                 instant Assess is clicked (before AssessRunner's own progress animation even
@@ -1939,7 +1947,7 @@ export default function App() {
             can't have met yet. QueuePanel is deliberately still not rendered once `<Monitor>`
             itself mounts (assessed) — Monitor already includes it once, at line ~535 of
             Monitor.jsx; rendering it here too on top of `<Monitor>` would just show two. */}
-        {view === 'monitor' && (run ? (assessed ? <Monitor me={me} run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} /> : <><QueuePanel />{assessGate}</>) : (overviewPreview ? <MonitorPreviewCard preview={overviewPreview} /> : placeholder))}
+        {view === 'monitor' && (run ? (assessed ? <Monitor me={me} run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} focusScanId={monitorFocusScanId} onClearFocus={() => setMonitorFocusScanId(null)} /> : <><QueuePanel focusScanId={monitorFocusScanId} onClearFocus={() => setMonitorFocusScanId(null)} />{assessGate}</>) : (overviewPreview ? <MonitorPreviewCard preview={overviewPreview} /> : placeholder))}
 
 
         {/* Standalone Knowledge Graph — was nested inside Assess (findable only after
