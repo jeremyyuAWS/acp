@@ -56,7 +56,19 @@ export default function WorkerAvailability({ snap, busy, msg, onAdjust,
         <span className="muted">·</span>
         <span className="muted">
           {snap.workers === 0
-            ? 'Processing capacity is off — no worker will pick up new jobs'
+            ? (snap.alive
+                // snap.alive is worker_tier_status()'s heartbeat for the STANDALONE worker
+                // container (#113 split topology) — entirely independent of this container's
+                // own in-process pool (`snap.workers`) and of runtime_mode/externallyManaged.
+                // 0 in-process workers with that tier alive is the NORMAL split-topology state,
+                // not a problem — QueuePanel.jsx already draws this same distinction (its own
+                // "✓ worker service online — jobs run on the dedicated worker container" case).
+                // Found live 2026-08-30: this line previously said "no worker will pick up new
+                // jobs" here regardless of `alive`, directly beside "Worker service online" —
+                // a false alarm on every deployment where jobs run on a separate worker
+                // container with the in-process pool left at its default of 0.
+                ? 'Jobs run on the dedicated worker container — the concurrency below only adds extra in-process workers'
+                : 'Processing capacity is off — no worker will pick up new jobs')
             : `${snap.workers} worker${snap.workers === 1 ? '' : 's'} available to pick up jobs`}
         </span>
         {externallyManaged ? (
