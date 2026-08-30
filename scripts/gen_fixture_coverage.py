@@ -64,9 +64,20 @@ import corpus_expectations as ce  # noqa: E402
 FORMATS = ("docx", "xlsx", "pptx", "pdf")
 
 # The applicability model. `acp-core-17` is a SHIPPED scope preset, not a filter invented here —
-# 17 criteria, 62 pairs — and it is the model the PRD's own capability counts reproduce. The
-# wider registry carries more (currently 22 criteria), so which denominator is right is a
-# product decision, not this script's; it reports the preset and says so.
+# 17 criteria, 62 pairs — and it is the model the PRD's own capability counts reproduce.
+#
+# WHICH DENOMINATOR TO REPORT WAS AN OPEN PRODUCT QUESTION AND IS NOW SETTLED: the preset, 62
+# pairs, including for figures quoted outside the team (owner's decision, 2026-08-30). The wider
+# rules registry carries 22 criteria and 71 pairs — the extra nine being 1.3.5 docx/pdf, 1.4.4
+# pptx, 1.4.10 docx/pptx, 1.4.12 docx/pdf/pptx and 2.5.3 pdf — and the same body of work scores
+# noticeably lower against it. Both are defensible; the point of writing the choice down is that
+# only one of them should ever reach a customer, and a number that silently switches denominator
+# between two documents is worse than either.
+#
+# So this is now a recorded decision rather than a deferral, and changing it is an edit somebody
+# makes on purpose. If the preset itself gains or loses criteria the number moves with it, which
+# is the intended behaviour — tests/test_fixture_coverage.py asserts the pair count so that a
+# change to the scope cannot quietly restate coverage.
 PRESET = "acp-core-17"
 
 # Coverage floor, by format. Update ONLY upward, and only alongside the fixtures that earned it.
