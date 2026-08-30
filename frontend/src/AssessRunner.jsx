@@ -352,9 +352,19 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
             })
             .catch(() => { /* best-effort detail — never block or fail the assessment on it */ })
         }
-        // The first file with no score yet is the one in flight. `currentFile` state has
-        // existed since this component was written but was never populated or rendered, so a
-        // long scan showed a moving bar and no indication of what it was moving through.
+        // The first file WITHOUT A RESULT YET — deliberately not "the one in flight", which is
+        // what this used to claim and could not know. There is no per-file execution signal to
+        // read: file_records rows are INSERTed when a file FINISHES, so an unfinished file simply
+        // has no record and getScan surfaces it from scan_inventory as 'discovered'. `score ==
+        // null` means "no result yet", not "a worker has this open".
+        //
+        // Assessment is also CONCURRENT — production runs a 12-slot pool (readyz: pool_size: 12)
+        // — so roughly twelve documents are in flight at once and picking the first is arbitrary
+        // even when it happens to be right. The list order is the query's, not the worker's.
+        //
+        // The name is still worth showing: it tells a user where a long run has reached, which is
+        // why it was added. What changed is the CLAIM the UI makes about it — see the label at
+        // the render site.
         setCurrentFile(nameOf(fs.find((x) => x.score == null)))
         if (run.assessed_at || run.finalized_at) {
           clearInterval(timer.current)
@@ -693,7 +703,14 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
           })()}
             {(currentFile || currentPhase) && (
               <div className="assessfile">
-                {currentFile && <span className="assessfname" title={currentFile}>{currentFile}</span>}
+                {/* Say what this name IS. Rendered bare inside a running card, beside "Opening &
+                    assessing N of M…", a filename reads as "this is the document we are working
+                    on now" — a claim nothing here can support (see the setCurrentFile comment).
+                    Labelling it as the first document still awaiting a result says exactly what
+                    `score == null` does support, and keeps the information that made it worth
+                    showing. */}
+                {currentFile && <span className="assessfilelabel muted">Awaiting result:</span>}
+                {currentFile && <span className="assessfname" title={`${currentFile} — the first document with no result yet. Assessment runs several documents at once, so this is not necessarily the one being opened at this instant.`}>{currentFile}</span>}
                 {currentFile && <span className="assessengine" title={`The ${ruleCount} criteria in your ${SCOPE_LABEL} that block at level ${level} — the same list the result below is scored over`}>{ruleCount} criteria in scope</span>}
                 {currentPhase && <span className="muted assessphase">{currentPhase}</span>}
               </div>
