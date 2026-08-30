@@ -53,6 +53,7 @@ import OverviewPreviewCard from './OverviewPreviewCard.jsx'
 import AssessPreviewCard from './AssessPreviewCard.jsx'
 import { markLoad, logLoadSummary } from './loadPerf.js'
 import MonitorPreviewCard from './MonitorPreviewCard.jsx'
+import { isActiveJobStale } from './activeJobStaleness.js'
 import ScanReviewModal from './ScanReviewModal.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
 import { applyScopeConfig } from './activeScope.js'
@@ -611,7 +612,15 @@ export default function App() {
         // (see ACTIVE_JOB_KEY above), a window bootstrap's active_job cannot see into, so a
         // pending job and an active scan_runs row are never both real at once — no double-
         // reconnect risk.
-        const pendingJobId = sessionStorage.getItem(ACTIVE_JOB_KEY)
+        let pendingJobId = sessionStorage.getItem(ACTIVE_JOB_KEY)
+        // A job nobody ever claimed sits here forever otherwise — see activeJobStaleness.js.
+        // Past the stale window, stop treating it as pending and let the normal bootstrap-picked
+        // scan (already fetched above via scanId) show instead of an indefinite reconnect.
+        if (pendingJobId && isActiveJobStale(Number(sessionStorage.getItem(ACTIVE_JOB_AT_KEY)))) {
+          sessionStorage.removeItem(ACTIVE_JOB_KEY)
+          sessionStorage.removeItem(ACTIVE_JOB_AT_KEY)
+          pendingJobId = null
+        }
         // Only a stage that gates something worth waiting on is worth naming: with active_job
         // already resolved as part of bootstrap, a missing scanId has nothing left to await in
         // either branch below, so there is no meaningful "checking…" period left to narrate —
@@ -928,8 +937,10 @@ export default function App() {
   // ACTIVE_JOB_KEY is what survives the reload instead: sessionStorage (not state, which a reload
   // wipes), holding the one thing the poll actually needs — job_id — set the moment a job starts
   // and cleared the moment it resolves, success or failure alike, so a finished job is never
-  // "reconnected" to on a later reload.
+  // "reconnected" to on a later reload. ACTIVE_JOB_AT_KEY is its wall-clock companion — see
+  // activeJobStaleness.js for why a bare job_id with no timestamp isn't enough on its own.
   const ACTIVE_JOB_KEY = 'active_job_id'
+  const ACTIVE_JOB_AT_KEY = 'active_job_id_at'
 
   const _pollScanJobPolling = async (job_id) => {
     let job
@@ -944,6 +955,7 @@ export default function App() {
 
   const pollScanJob = (job_id) => {
     sessionStorage.setItem(ACTIVE_JOB_KEY, job_id)
+    sessionStorage.setItem(ACTIVE_JOB_AT_KEY, String(Date.now()))
     const run =
       typeof EventSource !== 'undefined'
         ? new Promise((resolve, reject) => {
@@ -981,7 +993,10 @@ export default function App() {
             })
           })
         : _pollScanJobPolling(job_id)
-    return run.finally(() => sessionStorage.removeItem(ACTIVE_JOB_KEY))
+    return run.finally(() => {
+      sessionStorage.removeItem(ACTIVE_JOB_KEY)
+      sessionStorage.removeItem(ACTIVE_JOB_AT_KEY)
+    })
   }
 
   // Reconnect to an in-flight DEFAULT-path scan after a page reload — the mirror of reconnectScan
