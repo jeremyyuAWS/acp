@@ -57,8 +57,8 @@ def test_every_format_is_accounted_for():
 
 def test_coverage_is_complete_for_docx_partial_for_xlsx_and_absent_elsewhere():
     """The honest state. gen_sc_corpus.py declares an expectation for every .docx pair in the
-    preset; gen_xlsx_corpus.py declares four of fifteen .xlsx pairs — deliberately partial,
-    because only those four have a first-party detector that can be confirmed to fire without
+    preset; gen_xlsx_corpus.py declares eight of fifteen .xlsx pairs — deliberately partial,
+    because only those eight have a first-party detector that can be confirmed to fire without
     the .NET engine (see tests/test_xlsx_corpus.py). Nothing declares anything for pptx or pdf.
 
     This assertion FAILED when the xlsx corpus landed, which is the guard working: it names the
@@ -70,7 +70,7 @@ def test_coverage_is_complete_for_docx_partial_for_xlsx_and_absent_elsewhere():
     assert cov["docx"]["has_generator"] is True
 
     assert cov["xlsx"]["has_generator"] is True
-    assert len(cov["xlsx"]["covered"]) == 4, (
+    assert len(cov["xlsx"]["covered"]) == 8, (
         f"the xlsx corpus now declares {len(cov['xlsx']['covered'])} pairs — raise "
         f"BASELINE['xlsx'] and this count together, in the commit that adds the fixtures")
 
