@@ -7643,6 +7643,26 @@ class Store:
                 (document_id, owner_email))
             return (getattr(cur, "rowcount", 0) or 0) > 0
 
+    def list_expired_content_workspace_document_versions(self, *, as_of: str | None = None) -> list[dict]:
+        """PRD §28 retention: every version whose `retention_date` (an ISO-8601 string, the
+        same format self._now() produces — set by whatever future work computes it from a
+        workspace's retention_policy; nothing does yet, so this is a baseline that activates
+        once something populates the column) is in the past and not already marked "expired".
+        System-wide, not owner-scoped — this is a maintenance sweep, not a user-facing route
+        (compare sweeper.py's job-queue checks, which are the same shape). Joined with
+        content_workspace_documents for owner_email/workspace_id, since the version row alone
+        doesn't carry either and the caller (the retention sweep) needs both to delete the
+        matching blob."""
+        as_of = as_of or self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT v.*, d.workspace_id, d.owner_email FROM content_workspace_document_versions v "
+                "JOIN content_workspace_documents d ON d.id = v.document_id "
+                "WHERE v.retention_date IS NOT NULL AND v.retention_date <= %s "
+                "AND (v.lifecycle_state IS NULL OR v.lifecycle_state != 'expired')",
+                (as_of,))
+            return self._db.fetchall(cur)
+
     def list_scan_severities(self, scan_id: str) -> list[dict]:
         """{file, severity} for every finding in a scan -- the input compute_batches
         (api/campaigns.py) buckets by, kept as its own narrow query like
