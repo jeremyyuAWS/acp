@@ -7,6 +7,20 @@
  * mixing observation into a configuration surface was the first draft of this and was steered
  * away from directly.
  *
+ * Review Memory (2026-08-30, ADR 0021) joins on the same terms Worker Configuration did, and the
+ * distinction is worth stating because the tab bar is pinned precisely so additions are argued
+ * rather than assumed. It is administrator-controlled CONFIGURATION — authoring house-style rules
+ * and accepting or dismissing rules the derivation job proposes — not observation. The evidence
+ * BEHIND a proposal is shown inline because a decision cannot be made without it, but the
+ * reviewer-analytics rollups it derives from stay in Scan Analytics; this tab does not become a
+ * second place to go and look at numbers.
+ *
+ * Its backend (`GET/POST /org-memory`, `POST /org-memory/derive`, `PUT /org-memory/{id}/status`)
+ * shipped admin-gated and tested with NO client at all — a 2026-08-30 audit found it, along with
+ * the panel ADR 0021 specified and never got. Note that ADR 0021 modelled the routes on
+ * `/ai/providers`, whose panel is one of the six removed below; the routes being similar did not
+ * make the surfaces the same decision, and this one was asked for explicitly.
+ *
  * The six OTHER admin panels (Scoring rules, Estate, File types, Remediated storage, Disposition,
  * the global admin Data reset, AI-provider governance) were removed from the tab bar on request.
  * They were NOT deleted — their components are still exported from Settings.jsx and still covered
@@ -44,8 +58,9 @@ const setValue = (el, v) => {
 }
 
 describe('the settings panel is access-only, plus self-service My Data and My Scope', () => {
-  it('shows exactly the Owners, Users, My Data, My Scope and Worker Configuration tabs, in that order', async () => {
-    expect(tabTexts(await render())).toEqual(['Owners', 'Users', 'My Data', 'My Scope', 'Worker Configuration'])
+  it('shows exactly the Owners, Users, My Data, My Scope, Worker Configuration and Review Memory tabs, in that order', async () => {
+    expect(tabTexts(await render())).toEqual(
+      ['Owners', 'Users', 'My Data', 'My Scope', 'Worker Configuration', 'Review Memory'])
   })
 
   it('no longer offers any of the removed ADMIN-ONLY tabs', async () => {
@@ -76,6 +91,28 @@ describe('the Worker Configuration tab', () => {
     await settle()
     expect(c.textContent).toMatch(/Warm capacity/)
     expect(c.textContent).not.toMatch(/Async job queue/)
+  })
+})
+
+// ReviewMemory is fully self-contained (its own fetch, its own state) — this only proves Settings
+// mounts it on the new tab and threads `me` through; the panel's own behaviour is covered in
+// reviewMemory.test.jsx. The second assertion is the one worth having: SIM's /org-memory reports
+// `enabled: false`, and the panel must say the rules are inert rather than listing them under a
+// status that reads as "in effect". A mount that rendered the rules but dropped that line would
+// still pass a naive "does the tab work" check.
+describe('the Review Memory tab', () => {
+  it('mounts the review-memory panel, and it reports the feature flag rather than status alone', async () => {
+    const c = await render()
+    const tabs = [...c.querySelectorAll('button[role="tab"]')]
+    const memoryTab = tabs.find((b) => b.textContent.trim() === 'Review Memory')
+    expect(memoryTab, 'no Review Memory tab').toBeTruthy()
+    await act(async () => { memoryTab.click() })
+    await settle()
+    expect(c.querySelector('.rm-panel'), 'Review Memory tab rendered no panel').toBeTruthy()
+    expect(c.textContent).toMatch(/Review memory is switched off/)
+    expect(c.querySelector('.rm-state.rm-disabled')).toBeTruthy()
+    // Still a configuration surface: the capacity control belongs to the tab next door.
+    expect(c.textContent).not.toMatch(/Warm capacity/)
   })
 })
 
