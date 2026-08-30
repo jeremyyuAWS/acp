@@ -1551,7 +1551,14 @@ class Store:
                 "ON CONFLICT(id) DO UPDATE SET "
                 "  started_at=EXCLUDED.started_at, rubric_name=EXCLUDED.rubric_name, "
                 "  rubric_hash=EXCLUDED.rubric_hash, files=EXCLUDED.files, "
-                "  status=EXCLUDED.status, scope=EXCLUDED.scope",
+                "  status=EXCLUDED.status, scope=EXCLUDED.scope "
+                # Same resurrection guard as finalize_scan_run, at the other end of the run: a
+                # worker claiming a job whose scan was superseded or cancelled while it sat in the
+                # queue must not promote that scan back to 'running'/'discovered'. The retry case
+                # this DO UPDATE exists for (a re-attempt of the SAME job resetting status — see
+                # handlers.py's 'between-attempts marker' comment) is unaffected: those rows are
+                # 'failed' or 'queued', never one of these two terminal values.
+                "WHERE scan_runs.status NOT IN ('superseded','cancelled')",
                 (scan_id, started_at, source, rubric_name, rubric_hash, total, status, owner,
                  _json.dumps(scope) if scope else None))
 
@@ -2298,7 +2305,26 @@ class Store:
     def finalize_scan_run(self, scan_id: str, completed_at: str) -> dict:
         """Aggregate per-file results into the scan_runs summary — matches
         Rubric.aggregate (certifiable=Σcompliant, uncertain/error by status,
-        avg=mean of scored). 'files' becomes the count actually analysed."""
+        avg=mean of scored). 'files' becomes the count actually analysed.
+
+        REFUSES to finalize a run already ended as 'superseded' or 'cancelled'. Without that
+        guard an ended run resurrects itself: supersede_scan marks the scan 'superseded' and its
+        jobs 'dead', but it does NOT set cancel_requested_at — the only field check_cancel()
+        reads — so a worker already executing that job never stops. It runs to completion and
+        arrives here, and this UPDATE had no status test, so it wrote status='done' with
+        completed_at=NOW().
+
+        list_scans() excludes 'superseded' but orders by completed_at DESC, so the resurrected
+        run came back with the FRESHEST timestamp in the estate and displaced the run that
+        replaced it. That is precisely the collapse supersede_scan's own docstring records from
+        2026-08-26 ("newest has 0 documents but a recent scan had 999"), reachable again through
+        finalize rather than through cancel_scan's completed_at.
+
+        The window is not small. It is the whole remaining duration of the superseded run, because
+        nothing interrupts it. Making supersession actually stop the worker — setting
+        cancel_requested_at so check_cancel() fires — is the follow-up that would also stop it
+        burning Drive quota and DB connections; this guard is the correctness half, and it holds
+        whether or not the worker ever learns to stop."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "UPDATE scan_runs SET status='done', completed_at=%s, "
@@ -2307,7 +2333,7 @@ class Store:
                 "uncertain=(SELECT COUNT(*) FROM file_records WHERE scan_id=%s AND status='uncertain'), "
                 "error=(SELECT COUNT(*) FROM file_records WHERE scan_id=%s AND status='error'), "
                 "avg_score=(SELECT ROUND(AVG(score)) FROM file_records WHERE scan_id=%s AND score IS NOT NULL) "
-                "WHERE id=%s",
+                "WHERE id=%s AND status NOT IN ('superseded','cancelled')",
                 (completed_at, scan_id, scan_id, scan_id, scan_id, scan_id, scan_id))
             self._bump_scan_revision(cur, scan_id)
             self._db.execute(cur,
