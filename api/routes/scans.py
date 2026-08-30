@@ -1383,7 +1383,18 @@ def scan_inventory_list(sid: str, request: Request,
     (ADR 0020): `total` is the real count, page through it with offset/limit. Export via the
     `.csv` sibling. NB: the estate `status` is derived per row, so filtering by it is a client
     concern for now — a server-side status filter needs the classification persisted (follow-up)."""
-    if core.store.get_scan(sid, owner=_owner(request)) is None:
+    # get_scan_head, not get_scan (PRD H-09). The result is used ONLY as an ownership gate —
+    # `is None` and nothing else — but get_scan assembles the entire scan aggregate to produce
+    # it, and on a discover-only run (ADR 0020: inventory listed, no file_records yet, which is
+    # exactly the state this endpoint serves) it takes the `if not files` fallback and reads the
+    # WHOLE scan_inventory table ordered by file. To authorise one 1000-row page.
+    #
+    # Measured on the incident's own 6,916-row inventory: a full 7-page load read 55,328 rows to
+    # return 6,916 — 8.0x amplification, all of it in the gate. get_scan_head is one indexed
+    # SELECT on scan_runs with identical owner semantics (None for missing OR foreign), and takes
+    # the same load to 6,916 rows read, 1.0x, byte-identical output. This endpoint is one of the
+    # routes that 500'd on 2026-08-30, at offset=5000.
+    if core.store.get_scan_head(sid, owner=_owner(request)) is None:
         raise HTTPException(404, "scan not found")
     rows = core.store.list_inventory_page(sid, limit=limit, offset=offset)
     return {"scan_id": sid, "total": core.store.count_inventory(sid),
@@ -1395,7 +1406,9 @@ def scan_inventory_list(sid: str, request: Request,
 def scan_inventory_csv(sid: str, request: Request):
     """The whole per-file estate inventory as CSV (owner-scoped) — every discovered file, source
     metadata + capability, for offline analysis / an auditor. Not paginated: it IS the export."""
-    if core.store.get_scan(sid, owner=_owner(request)) is None:
+    # get_scan_head for the same reason as the paginated sibling above — this one reads the whole
+    # inventory itself, so paying for a second full read in the ownership gate is pure duplication.
+    if core.store.get_scan_head(sid, owner=_owner(request)) is None:
         raise HTTPException(404, "scan not found")
     import csv
     import io
