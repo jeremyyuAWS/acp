@@ -3,7 +3,7 @@
 WHY A COVERAGE REPORT AT ALL. The Phase-1 acceptance criterion is "all applicable pairs have
 explicit fixture coverage or a documented human-only rationale". Nothing computed that, so the
 size of the remaining job was unknown — and an unknown denominator is how "we have a corpus"
-becomes a claim nobody can check. The answer today is 44 of 62 (71%): .docx complete, and a
+becomes a claim nobody can check. The answer today is 51 of 62 (82%): .docx complete, and a
 partial labelled corpus for each of xlsx, pptx and pdf. It started at 15 of 62 (24%), with
 .docx the only format that had one at all.
 
@@ -78,7 +78,7 @@ def test_coverage_is_complete_for_docx_and_partial_for_the_other_three():
     assert cov["docx"]["has_generator"] is True
 
     assert cov["xlsx"]["has_generator"] is True
-    assert len(cov["xlsx"]["covered"]) == 10, (
+    assert len(cov["xlsx"]["covered"]) == 12, (
         f"the xlsx corpus now declares {len(cov['xlsx']['covered'])} pairs — raise "
         f"BASELINE['xlsx'] and this count together, in the commit that adds the fixtures")
     # Two of those ten (2.4.2, 3.1.1) are confirmed only where the .NET analyser is built. Pinned
@@ -89,12 +89,12 @@ def test_coverage_is_complete_for_docx_and_partial_for_the_other_three():
         f"so here; the headline coverage number implies a guarantee these pairs do not have")
 
     assert cov["pptx"]["has_generator"] is True
-    assert len(cov["pptx"]["covered"]) == 9, (
+    assert len(cov["pptx"]["covered"]) == 11, (
         f"the pptx corpus now declares {len(cov['pptx']['covered'])} pairs — raise "
         f"BASELINE['pptx'] and this count together, in the commit that adds the fixtures")
 
     assert cov["pdf"]["has_generator"] is True
-    assert len(cov["pdf"]["covered"]) == 10, (
+    assert len(cov["pdf"]["covered"]) == 13, (
         f"the pdf corpus now declares {len(cov['pdf']['covered'])} pairs — raise "
         f"BASELINE['pdf'] and this count together, in the commit that adds the fixtures")
 

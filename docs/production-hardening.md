@@ -128,6 +128,13 @@ ACP_WORKERS=<n>                            # or live-scale from Monitor
 - **Scan size.** A single scan is capped (`_search_drive` 500, `_search_folder`
   1000 files) and stages every file to the container's ephemeral disk. Thousands
   of files per scan needs higher caps, streaming, and a larger scan container.
+- **Database connection budget.** Each replica sizes its own Postgres pool from
+  `db_max_conn()` (`api/store.py`) and nothing sums those pools against the server's
+  `max_connections`. Raising `maxReplicas` or `ACP_WORKERS` therefore raises the fleet's
+  connection ceiling silently. Work the capacity gate in
+  [`docs/prd-reliability-hardening.md`](prd-reliability-hardening.md) (H-02) before you
+  scale either one — on 30 August 2026 the configured maxima already permitted more pool
+  connections than the production server allows.
 
 ## 7. Blue/green deployment
 

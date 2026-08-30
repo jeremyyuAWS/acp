@@ -1,0 +1,214 @@
+# Applies (not just proposes) Azure diagnostic settings on staging's API Container App, worker
+# Container App, and staging's PostgreSQL flexible server, routing all three to a DEDICATED
+# staging Log Analytics workspace with 30-day retention.
+#
+# WHY THIS EXISTS: the incident review for the 30 Aug 2026 production connection-pool-exhaustion
+# incident (psycopg2.pool.PoolError recurring across 5 production revisions) found that staging
+# currently has NO retained logs at all — "no destination; no environment diagnostic settings" —
+# and that staging's historical error rate is therefore unknown, not zero. That means staging
+# cannot currently be used to validate any fix with confidence. This workflow closes that gap by
+# actually applying diagnostic settings, once, on demand.
+#
+# WORKSPACE CHOICE: a DEDICATED staging workspace, not production's existing one
+# (3e4c5202-f541-41ea-ab71-a677d91cf38e). Nothing in this repo's docs establishes commingled
+# staging+prod log destinations as the pattern — deploy-staging.yml's own comment block is
+# explicit that staging gets its OWN database "separate from production" specifically so staging
+# activity cannot mix into production's own signal, and the same reasoning applies to logs: a
+# staging deadlock/error burst (which this repo now deliberately provokes — see
+# staging-deadlock-diagnostics.yml) must not pollute production's retained diagnostic history or
+# its query results. See this PR's body for the full reasoning.
+#
+# SAME SAFETY PATTERN AS validate-staging-azure.yml / validate-staging-scale-test.yml:
+#   - workflow_dispatch only, no push/schedule trigger.
+#   - Zero new secrets: reuses deploy-staging.yml's OIDC AZURE_CLIENT_ID/AZURE_TENANT_ID/
+#     AZURE_SUBSCRIPTION_ID, unchanged.
+#   - Hard-fails BEFORE any Azure call if the resolved target doesn't look like staging — reuses
+#     scripts/validate_staging_azure.py's assert_staging_target() via --check-staging-only for
+#     the two Container Apps, and applies the equivalent "-staging" suffix check inline for the
+#     Postgres server name (a workflow_dispatch input — see below).
+#   - Idempotent: checks for an existing diagnostic setting by name before creating, so running
+#     this twice does not duplicate settings or fail.
+#
+# POSTGRES SERVER NAME: not discoverable anywhere in this repo. redeploy.sh/deploy.sh only know
+# about the two Container Apps (ACP_APP/ACP_WORKER) — Postgres is reached purely via
+# DATABASE_URL, an opaque connection string, never a resource name. staging_up.sh's own comments
+# confirm staging's Postgres is a separate, out-of-band provisioned resource. So this workflow
+# takes it as an explicit input rather than guessing, and applies the same staging-suffix safety
+# check to whatever name is given.
+#
+# RBAC: the OIDC identity currently holds broad Contributor on the resource group (inherited from
+# the deploy pipeline) — enough to run this. See this PR's body for a recommendation to narrow
+# that to Monitoring Contributor + Log Analytics Contributor as a follow-up; this workflow does
+# not attempt to change the identity's own RBAC.
+
+name: configure-staging-diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_postgres_server:
+        description: "Name of staging's PostgreSQL flexible server (not derivable from this repo's own files — e.g. acp-postgres-staging). Must end in '-staging'."
+        required: true
+        type: string
+      log_analytics_workspace:
+        description: "Name of the DEDICATED staging Log Analytics workspace to create (if absent) or reuse. Must contain 'staging' and must not be production's workspace id/name."
+        required: false
+        type: string
+        default: "acp-staging-logs"
+      retention_days:
+        description: "Retention (days) for the Log Analytics workspace and for each diagnostic-setting log category."
+        required: false
+        type: string
+        default: "30"
+
+permissions:
+  id-token: write     # OIDC federation to Azure — no stored client secret, same as deploy-staging.yml
+  contents: read
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    # Dormant like the sibling staging workflows until staging exists.
+    if: vars.STAGING_FQDN != ''
+    env:
+      STAGING_RG: ${{ vars.STAGING_RG || 'mdk-accessibility' }}
+      STAGING_APP: ${{ vars.STAGING_APP || 'acp-app-staging' }}
+      STAGING_WORKER: ${{ vars.STAGING_WORKER || 'acp-worker-staging' }}
+      STAGING_PG: ${{ inputs.staging_postgres_server }}
+      LAW_NAME: ${{ inputs.log_analytics_workspace }}
+      RETENTION_DAYS: ${{ inputs.retention_days }}
+      SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Azure SDK deps
+        run: python -m pip install --quiet -r api/requirements.txt
+
+      - name: Staging-name safety check (before any Azure call) — Container Apps
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_staging_azure.py --check-staging-only \
+            --az-resource-group "$STAGING_RG" --az-app "$STAGING_APP"
+          python3 scripts/validate_staging_azure.py --check-staging-only \
+            --az-resource-group "$STAGING_RG" --az-app "$STAGING_WORKER"
+
+      - name: Staging-name safety check — Postgres server and workspace name
+        run: |
+          set -euo pipefail
+          # Same rule validate_staging_azure.py's assert_staging_target() applies to the
+          # Container Apps: the resolved name must unambiguously say "staging". Applied inline
+          # here because the Postgres server name is a workflow input, not something
+          # validate_staging_azure.py's own CLI currently accepts.
+          case "$(echo "$STAGING_PG" | tr '[:upper:]' '[:lower:]')" in
+            *-staging) ;;
+            *) echo "::error::REFUSING to run: staging_postgres_server '$STAGING_PG' does not end in '-staging'. This guard exists to stop this workflow from ever being pointed at production's Postgres server."; exit 1 ;;
+          esac
+          case "$(echo "$LAW_NAME" | tr '[:upper:]' '[:lower:]')" in
+            *staging*) ;;
+            *) echo "::error::REFUSING to run: log_analytics_workspace '$LAW_NAME' does not look like a dedicated staging workspace (must contain 'staging'). This guard exists to stop diagnostics from ever being routed into production's workspace by an unnoticed default."; exit 1 ;;
+          esac
+          # Belt-and-suspenders: never allow production's own known workspace id to be passed here.
+          if [ "$LAW_NAME" = "3e4c5202-f541-41ea-ab71-a677d91cf38e" ]; then
+            echo "::error::REFUSING to run: log_analytics_workspace resolves to production's known workspace id. This workflow only writes to a dedicated staging workspace."
+            exit 1
+          fi
+          echo "OK: '$STAGING_PG' and workspace '$LAW_NAME' both look like staging targets"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Create (idempotent) or reuse the dedicated staging Log Analytics workspace
+        id: law
+        run: |
+          set -euo pipefail
+          EXISTING_ID=$(az monitor log-analytics workspace show \
+            --subscription "$SUBSCRIPTION" -g "$STAGING_RG" -n "$LAW_NAME" \
+            --query id -o tsv 2>/dev/null || echo "")
+          if [ -n "$EXISTING_ID" ]; then
+            echo "Workspace '$LAW_NAME' already exists — reusing it (idempotent)."
+            LAW_ID="$EXISTING_ID"
+          else
+            echo "Creating workspace '$LAW_NAME' (retention: ${RETENTION_DAYS}d)."
+            LAW_ID=$(az monitor log-analytics workspace create \
+              --subscription "$SUBSCRIPTION" -g "$STAGING_RG" -n "$LAW_NAME" \
+              --location "$(az group show --subscription "$SUBSCRIPTION" -g "$STAGING_RG" --query location -o tsv)" \
+              --retention-time "$RETENTION_DAYS" \
+              --query id -o tsv)
+          fi
+          # Retention is also set explicitly even on an existing workspace, so a re-run that
+          # changes RETENTION_DAYS actually applies the new value rather than silently keeping
+          # whatever the workspace had at creation time.
+          az monitor log-analytics workspace update \
+            --subscription "$SUBSCRIPTION" -g "$STAGING_RG" -n "$LAW_NAME" \
+            --retention-time "$RETENTION_DAYS" -o none
+          echo "law_id=$LAW_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Apply diagnostic settings to acp-app-staging (idempotent)
+        env:
+          LAW_ID: ${{ steps.law.outputs.law_id }}
+        run: |
+          set -euo pipefail
+          APP_ID=$(az containerapp show --subscription "$SUBSCRIPTION" -g "$STAGING_RG" -n "$STAGING_APP" --query id -o tsv)
+          SETTING_NAME="acp-staging-diagnostics"
+          CATEGORIES=$(az monitor diagnostic-settings categories list --subscription "$SUBSCRIPTION" --resource "$APP_ID" --query "value[].name" -o tsv)
+          echo "Available categories for $STAGING_APP: $CATEGORIES"
+          LOGS_JSON=$(printf '%s\n' $CATEGORIES | jq -R -s --argjson days "$RETENTION_DAYS" 'split("\n") | map(select(length > 0)) | map({category: ., enabled: true, retentionPolicy: {enabled: true, days: $days}})')
+          EXISTS=$(az monitor diagnostic-settings show --subscription "$SUBSCRIPTION" --resource "$APP_ID" --name "$SETTING_NAME" --query name -o tsv 2>/dev/null || echo "")
+          if [ -n "$EXISTS" ]; then
+            echo "Diagnostic setting '$SETTING_NAME' already exists on $STAGING_APP — create is idempotent, re-applying to pick up any category/retention change."
+          fi
+          az monitor diagnostic-settings create --subscription "$SUBSCRIPTION" \
+            --name "$SETTING_NAME" --resource "$APP_ID" --workspace "$LAW_ID" \
+            --logs "$LOGS_JSON" -o none
+          echo "Applied diagnostic setting '$SETTING_NAME' on $STAGING_APP -> workspace $LAW_NAME"
+
+      - name: Apply diagnostic settings to acp-worker-staging (idempotent)
+        env:
+          LAW_ID: ${{ steps.law.outputs.law_id }}
+        run: |
+          set -euo pipefail
+          APP_ID=$(az containerapp show --subscription "$SUBSCRIPTION" -g "$STAGING_RG" -n "$STAGING_WORKER" --query id -o tsv)
+          SETTING_NAME="acp-staging-diagnostics"
+          CATEGORIES=$(az monitor diagnostic-settings categories list --subscription "$SUBSCRIPTION" --resource "$APP_ID" --query "value[].name" -o tsv)
+          echo "Available categories for $STAGING_WORKER: $CATEGORIES"
+          LOGS_JSON=$(printf '%s\n' $CATEGORIES | jq -R -s --argjson days "$RETENTION_DAYS" 'split("\n") | map(select(length > 0)) | map({category: ., enabled: true, retentionPolicy: {enabled: true, days: $days}})')
+          az monitor diagnostic-settings create --subscription "$SUBSCRIPTION" \
+            --name "$SETTING_NAME" --resource "$APP_ID" --workspace "$LAW_ID" \
+            --logs "$LOGS_JSON" -o none
+          echo "Applied diagnostic setting '$SETTING_NAME' on $STAGING_WORKER -> workspace $LAW_NAME"
+
+      - name: Apply diagnostic settings to the staging Postgres flexible server (idempotent)
+        env:
+          LAW_ID: ${{ steps.law.outputs.law_id }}
+        run: |
+          set -euo pipefail
+          PG_ID=$(az postgres flexible-server show --subscription "$SUBSCRIPTION" -g "$STAGING_RG" -n "$STAGING_PG" --query id -o tsv)
+          SETTING_NAME="acp-staging-diagnostics"
+          CATEGORIES=$(az monitor diagnostic-settings categories list --subscription "$SUBSCRIPTION" --resource "$PG_ID" --query "value[].name" -o tsv)
+          echo "Available categories for $STAGING_PG: $CATEGORIES"
+          LOGS_JSON=$(printf '%s\n' $CATEGORIES | jq -R -s --argjson days "$RETENTION_DAYS" 'split("\n") | map(select(length > 0)) | map({category: ., enabled: true, retentionPolicy: {enabled: true, days: $days}})')
+          az monitor diagnostic-settings create --subscription "$SUBSCRIPTION" \
+            --name "$SETTING_NAME" --resource "$PG_ID" --workspace "$LAW_ID" \
+            --logs "$LOGS_JSON" -o none
+          echo "Applied diagnostic setting '$SETTING_NAME' on $STAGING_PG -> workspace $LAW_NAME"
+
+      - name: Summary
+        env:
+          LAW_ID: ${{ steps.law.outputs.law_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Staging diagnostics configured"
+            echo
+            echo "- workspace: \`$LAW_NAME\` (retention: ${RETENTION_DAYS}d, DEDICATED to staging — not production's workspace)"
+            echo "- resources: \`$STAGING_APP\`, \`$STAGING_WORKER\`, \`$STAGING_PG\` (resource group \`$STAGING_RG\`)"
+            echo "- next step: run staging-deadlock-diagnostics.yml to query the logs this workflow just started collecting (logs take a few minutes to begin flowing after a diagnostic setting is first applied)."
+          } >> "$GITHUB_STEP_SUMMARY"

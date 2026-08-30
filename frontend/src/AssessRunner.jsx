@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 import { allRules } from './rules'
 import { WCAG } from './wcagCatalog.js'
-import { assessScan, getCapability, getScan, getScanLive, getScanTraces, refreshScanDriveToken, getQueueJob, getJobs, setWorkers, getQueueEstimate } from './api.js'
+import { assessScan, getCapability, getScan, getScanLive, getScanTraces, refreshScanDriveToken, getQueueJob, setWorkers, getQueueEstimate } from './api.js'
+import { subscribeJobs } from './jobsFeed.js'
 import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
 import WorkerReplicaControl from './WorkerReplicaControl.jsx'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
@@ -140,17 +141,14 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   const lastInFlightValRef = useRef(null)  // last known inFlight count
   useEffect(() => {
     if (phase !== 'running') return undefined
-    let on = true
-    const load = () => getJobs().then((d) => {
-      if (!on) return
+    // Shared subscription (jobsFeed.js) rather than a private timer — see its header for the
+    // measured cost of five components each polling /jobs on their own.
+    return subscribeJobs(null, (d) => {
       setWorkerSnap({ workers: d.workers ?? 0, running: d.stats?.running ?? 0,
                       queued: d.stats?.queued ?? 0, alive: !!d.worker_tier_alive,
                       suggested: d.suggested_workers ?? 4,
                       runtime_mode: d.runtime_mode ?? 'auto' })
-    }).catch(() => {})
-    load()
-    const id = setInterval(load, 10000)
-    return () => { on = false; clearInterval(id) }
+    }, { intervalMs: 10000 })
   }, [phase])
   // The "Estimated pickup" range (GET /scans/{id}/queue-estimate?kind=assess) — same 10s cadence
   // and running-only gate as workerSnap above, since it answers the same "is anything happening

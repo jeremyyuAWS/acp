@@ -2,7 +2,7 @@
 """A LABELLED .pdf corpus — the fourth and last format to get ground truth.
 
 WHY THIS EXISTS. `scripts/gen_fixture_coverage.py` reports coverage per (criterion, format)
-pair; pdf sat at 0 of 15 because no labelled corpus existed. This declares TEN of them, and
+pair; pdf sat at 0 of 15 because no labelled corpus existed. This declares ELEVEN of them, and
 completes the sweep begun with .docx: every format ACP scans now has ground truth.
 
 THE RULE THAT MAKES THE NUMBER MEAN SOMETHING: a pair is declared only when a detector that
@@ -20,6 +20,7 @@ raising what the number measures.
     2.4.4   a vague link label ("Click here")        pdf_link_purpose_check
     2.4.6   a tagged 6-page file with no heading     pdf_headings_labels_check
     3.1.1   no /Lang in the document catalog         analysers…pdf.document_language
+    1.3.3   a sensory-only instruction, as prose     textchecks.detect_sensory
     4.1.2   an AcroForm field with no /TU            pdf_form_field_checks
 
 TWO CODE PATHS, ONE AVAILABILITY STORY. The first eight run through
@@ -36,8 +37,10 @@ Those two are also the most valuable pairs here: both sit in the ASSESSMENT AUTO
 ceiling C, so a clean result CERTIFIES the document. They were two of the ten
 certification-capable pairs in the whole preset with nothing verifying them.
 
-The five not here (1.3.1, 1.3.2, 1.3.3, 1.4.5, 3.1.2) need tag-tree semantics no detector
-reads yet, or OCR (1.4.5).
+The four not here: 1.4.5 needs tesseract, 3.1.2 needs langdetect, and 1.3.1/1.3.2 have
+vendored rules (pdf.tagged, pdf.table-headers, pdf.reading-order) that are reachable and
+simply not yet fixtured. 1.3.3 WAS on this list and is now declared: it is a text predicate
+with no engine behind it, which reading the list rather than testing it had obscured.
 
 THREE DETECTOR SUBTLETIES, each of which would silently cover nothing if a fixture ignored it:
 
@@ -347,12 +350,175 @@ def f_document_language_ok(path: Path):
     return {"3.1.1": "PASS"}, f"/Lang set to {DOC_LANG!r} (adversarial)", {}
 
 
+# ── 1.3.3 Sensory Characteristics — a TEXT criterion, not a structural one ──────
+# Every other pair in this corpus is decided by reading the file's structure. 1.3.3 is decided by
+# reading its PROSE: textchecks.detect_sensory looks for an instruction that identifies a control
+# only by shape, colour or position. That makes it the one criterion here whose fixture is the
+# same on all four formats — the words are the fixture, and the container is incidental.
+#
+# It also makes it reachable everywhere, which is why it is in DECLARED and not DECLARED_ENGINE:
+# no analyser, no OCR, no langdetect. `content_findings` guards each sub-check separately, so
+# 3.1.2 going quiet on a box without langdetect does not take 1.3.3 with it.
+
+SENSORY_BAD = ("To continue, click the round green button on the right. "
+               "See the box below for the payment terms.")
+SENSORY_OK = ("To continue, choose Submit under Payment options. "
+              "The payment terms are in the Payment terms section.")
+
+
+def _prose(path: Path, body: str) -> None:
+    from reportlab.lib.colors import HexColor
+    from reportlab.pdfgen import canvas
+    c = canvas.Canvas(str(path), pagesize=(520, 200))
+    c.setFillColor(HexColor(PAPER))
+    c.rect(0, 0, 520, 200, stroke=0, fill=1)
+    c.setFillColor(HexColor(INK))
+    c.setFont("Helvetica", 11)
+    # Split so the line box stays inside the page — extraction joins them back with a space.
+    for i, chunk in enumerate(body.split(". ")):
+        c.drawString(30, 140 - i * 20, chunk.strip().rstrip(".") + ".")
+    c.save()
+
+
+def f_sensory_instruction(path: Path):
+    _prose(path, SENSORY_BAD)
+    return ({"1.3.3": "FAIL"},
+            "an instruction identifying a control only by shape, colour and position — "
+            "unusable to a screen-reader or low-vision reader")
+
+
+def f_sensory_instruction_ok(path: Path):
+    _prose(path, SENSORY_OK)
+    return ({"1.3.3": "REVIEW"},
+            "the same instruction naming the control and the section (adversarial)")
+
+
+# 1.3.1 on PDF is the tag tree itself: without /StructTreeRoot and /MarkInfo a screen reader has
+# no headings, no reading order and no table semantics to read, whatever the page looks like. The
+# prose is deliberately flat — no instruction, no link, no heading — so the only thing separating
+# this pair is the tagging.
+TAGGING_PROSE = ("Payment terms are agreed at the start of each billing period. "
+                 "Invoices are issued monthly and settled within thirty days.")
+
+
+def f_untagged_document(path: Path):
+    _prose(path, TAGGING_PROSE)
+    return ({"1.3.1": "FAIL"},
+            "no structure tree and no /MarkInfo — assistive technology gets nothing but a bag "
+            "of glyphs",
+            {"tagged": False})
+
+
+def f_tagged_document_ok(path: Path):
+    _prose(path, TAGGING_PROSE)
+    return ({"1.3.1": "REVIEW"},
+            "the same page carrying /StructTreeRoot and /MarkInfo (adversarial). REVIEW, not "
+            "PASS: a tag tree existing says nothing about whether the tags are CORRECT, which "
+            "is a judgement no detector makes (ADR 0016)")
+
+
+
+# ── 1.4.5 Images of Text — decided by OCR, not by the container ─────────────────
+# Like 1.3.3, this criterion reads the DOCUMENT'S PIXELS rather than its structure: ocr.py runs
+# tesseract over each embedded raster and flags any carrying >= ocr._MIN_WORDS (10) real words.
+# The image is the fixture and the page is the container, so the wording is identical across
+# the .xlsx, .pptx and .pdf corpora — see tests/test_images_of_text_corpus.py, which asserts that
+# sameness so one detector change reads as one result in three places.
+#
+# THE ALT IS CORRECT ON PURPOSE, and that is what keeps the fixture single-criterion. 1.4.5 is
+# alt-agnostic — `images_of_text` never looks at a descr — so an image of prose fails 1.4.5
+# whether or not it is described. Leaving the alt off would fail 1.1.1 as well and the fixture
+# would measure two things at once. (The .docx corpus's equivalent DOES declare both, which is
+# correct there: gen_sc_corpus is scored by score_assessment rather than by the single-criterion
+# sweep these three corpora use.)
+#
+# THE WORD FLOOR IS THE TRAP. _MIN_WORDS counts OCR'd TOKENS, not what was drawn — dates and
+# phone numbers are not words. The .docx corpus hit this: three short lines recovered six words,
+# so 1.4.9 (floor 3) fired and 1.4.5 (floor 10) did not, and the fixture read as an engine bug.
+# Hence prose, and enough of it: this image OCRs to 29 words, with room for the odd merge
+# ("begins on" comes back as "beginson").
+IMAGE_OF_TEXT_PROSE = ("Open enrollment for the coming plan year",
+                       "begins on the first of March and closes",
+                       "on the last day of the same month. Call",
+                       "the benefits office to change your plan.")
+IMAGE_OF_TEXT_ALT = ("Open enrollment runs from 1 March to 31 March; call the benefits office "
+                     "to change plan.")
+# WCAG 1.4.5 exempts logotypes, and ocr._MIN_WORDS is what encodes that exemption here: two words
+# is under the floor, so the control is clean for the same reason a real logo would be.
+LOGO_TEXT = ("UT Health",)
+
+
+def _text_png(lines, size=(900, 360)) -> bytes:
+    """A PNG with real, OCR-legible text baked into it.
+
+    Scaled up AFTER drawing because PIL's default bitmap font is too small for tesseract to read
+    reliably at native size. An unreadable image-of-text fixture silently becomes a no-text
+    fixture, and 1.4.5 then stops firing for a reason that has nothing to do with the detector —
+    which is the failure mode a ground-truth corpus exists to make impossible."""
+    import io
+    from PIL import Image, ImageDraw
+    im = Image.new("RGB", size, "white")
+    d = ImageDraw.Draw(im)
+    y = 20
+    for line in lines:
+        d.text((20, y), line, fill="black")
+        y += 70
+    im = im.resize((size[0] * 2, size[1] * 2), Image.LANCZOS)
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _text_png_file(lines, size=(900, 360)):
+    import tempfile
+    png = Path(tempfile.mkdtemp()) / "image-of-text.png"
+    png.write_bytes(_text_png(lines, size))
+    return png
+
+
+def _page_with_image(path: Path, lines, size, heading: str) -> None:
+    from reportlab.lib.colors import HexColor
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+    c = canvas.Canvas(str(path), pagesize=(520, 400))
+    c.setFillColor(HexColor(PAPER))
+    c.rect(0, 0, 520, 400, stroke=0, fill=1)
+    c.setFillColor(HexColor(INK))
+    c.setFont("Helvetica", 12)
+    c.drawString(30, 370, heading)
+    w, h = size
+    draw_w = 460.0
+    c.drawImage(ImageReader(str(_text_png_file(lines, size))), 30, 120,
+                width=draw_w, height=draw_w * h / w)
+    c.save()
+
+
+def f_image_of_text(path: Path):
+    _page_with_image(path, IMAGE_OF_TEXT_PROSE, (900, 360), "Enrollment notice")
+    return ({"1.4.5": "FAIL"},
+            "a page whose body is a picture of prose rather than real text — selectable by "
+            "nobody, resizable by nobody, and searchable by nobody")
+
+
+def f_image_of_text_logo_ok(path: Path):
+    _page_with_image(path, LOGO_TEXT, (300, 100), "Enrollment notice")
+    return ({"1.4.5": "REVIEW"},
+            "a logotype on an otherwise ordinary page (adversarial). WCAG 1.4.5 exempts logos, "
+            "so a finding here is a false positive")
+
+
 FIXTURES = [
+    ("untagged-document",       f_untagged_document,       "violation"),
+    ("tagged-document-ok",      f_tagged_document_ok,      "adversarial"),
+    ("sensory-instruction",     f_sensory_instruction,     "violation"),
+    ("sensory-instruction-ok",  f_sensory_instruction_ok,  "adversarial"),
     ("no-document-title",       f_no_document_title,       "violation"),
     ("document-title-ok",       f_document_title_ok,       "adversarial"),
     ("no-document-language",    f_no_document_language,    "violation"),
     ("document-language-ok",    f_document_language_ok,    "adversarial"),
     ("figure-no-alt",           f_figure_no_alt,           "violation"),
+    ("image-of-text",           f_image_of_text,           "violation"),
+    ("image-of-text-logo-ok",   f_image_of_text_logo_ok,   "adversarial"),
     ("figure-with-alt-ok",      f_figure_with_alt_ok,      "adversarial"),
     ("link-colour-only",        f_link_colour_only,        "violation"),
     ("link-underlined-ok",      f_link_underlined_ok,      "adversarial"),
@@ -370,22 +536,52 @@ FIXTURES = [
     ("field-named-ok",          f_field_named_ok,          "adversarial"),
 ]
 
-DECLARED = ("1.1.1", "1.4.1", "1.4.11", "1.4.3", "2.4.2", "2.4.3", "2.4.4", "2.4.6",
-            "3.1.1", "4.1.2")
+DECLARED = ("1.1.1", "1.3.1", "1.3.3", "1.4.1", "1.4.11", "1.4.3", "1.4.5", "2.4.2",
+            "2.4.3", "2.4.4", "2.4.6", "3.1.1", "4.1.2")
 
 
-def _stamp(path: Path, title: str | None, lang: str | None) -> None:
-    """Give a built fixture its document title and language — or deliberately withhold one.
+def _stamp(path: Path, title: str | None, lang: str | None,
+           display_title: bool = True, tagged: bool = True) -> None:
+    """Give a built fixture the four document-wide properties every accessible PDF carries — or
+    deliberately withhold the one it is testing the absence of.
 
     Applied to EVERY fixture rather than left to each builder, because the failure mode of
     forgetting is silent: the fixture simply grows a second and third finding and the corpus
-    stops being per-criterion without anything going red."""
+    stops being per-criterion without anything going red.
+
+    THAT IS NOT A HYPOTHETICAL — it is what happened, and it is why `tagged` and `display_title`
+    are here at all. When this corpus landed, `_stamp` set only /Title and /Lang, and the corpus
+    test hand-picked two of the analyser's eight rules to check. Driven through the product's own
+    entry point instead, ALL 22 fixtures raised an undeclared 2.4.2 (`pdf.display-doc-title`) and
+    18 raised an undeclared 1.3.1 (`pdf.tagged`). The worst of those was `document-title-ok` — the
+    2.4.2 CONTROL, whose whole job is to stay silent on 2.4.2, and which did not. Its label was a
+    claim about a rule nobody was running.
+
+    So all four are stamped here, together, and each is withheld only by a fixture that says so."""
     import pikepdf
     with pikepdf.open(str(path), allow_overwriting_input=True) as pdf:
         if title is not None:
             pdf.docinfo[pikepdf.Name("/Title")] = pikepdf.String(title)
         if lang is not None:
             pdf.Root.Lang = pikepdf.String(lang)
+        # /Title alone does not satisfy 2.4.2: a viewer shows the FILENAME in its window bar
+        # unless ViewerPreferences opts into the title (pdf.display-doc-title).
+        if display_title:
+            pdf.Root.ViewerPreferences = pikepdf.Dictionary(DisplayDocTitle=True)
+        # `pdf.tagged` wants BOTH a structure tree and /MarkInfo /Marked. The four fixtures built
+        # by _figure and _headings already have a real tag tree with content in it; the rest get a
+        # minimal empty one, which is enough to say "this document is tagged" without adding
+        # structure that another criterion would then read.
+        if tagged:
+            if "/StructTreeRoot" not in pdf.Root:
+                doc = pdf.make_indirect(pikepdf.Dictionary(
+                    Type=pikepdf.Name.StructElem, S=pikepdf.Name.Document,
+                    K=pikepdf.Array([])))
+                root = pdf.make_indirect(pikepdf.Dictionary(
+                    Type=pikepdf.Name.StructTreeRoot, K=pikepdf.Array([doc])))
+                doc.P = root
+                pdf.Root.StructTreeRoot = root
+            pdf.Root.MarkInfo = pikepdf.Dictionary(Marked=True)
         pdf.save(str(path))
 
 
@@ -411,10 +607,12 @@ def build_all(docs: Path) -> tuple[list[dict], list[str]]:
         built = build(path)
         expectations, note = built[0], built[1]
         # A builder may return a third element saying which piece of document metadata it is
-        # deliberately withholding; everything else gets both, so no fixture accidentally tests
-        # 2.4.2 or 3.1.1 as well as its own criterion.
+        # deliberately withholding; everything else gets all four, so no fixture accidentally
+        # tests 1.3.1, 2.4.2 or 3.1.1 as well as its own criterion.
         meta = built[2] if len(built) > 2 else {}
-        _stamp(path, meta.get("title", DOC_TITLE), meta.get("lang", DOC_LANG))
+        _stamp(path, meta.get("title", DOC_TITLE), meta.get("lang", DOC_LANG),
+               display_title=meta.get("display_title", True),
+               tagged=meta.get("tagged", True))
         problems += _validate(name, expectations)
         manifest.append({"file": f"docs/{name}.pdf", "name": name, "kind": kind,
                          "format": FMT, "expect": expectations, "note": note})

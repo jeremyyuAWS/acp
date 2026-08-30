@@ -21,7 +21,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 import core
 from routes import ROUTERS
@@ -29,6 +29,80 @@ from routes import ROUTERS
 app = FastAPI(title="acp — accessibility compliance API", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
                    allow_methods=["*"], allow_headers=["*"])
+
+# Not every environment has the Postgres driver installed (store.py's SQLite path doesn't need
+# it, and some dev boxes never install it) — guard the import so this module still loads there.
+# When it IS present (every real deploy: api/requirements.txt pins psycopg2-binary), register a
+# handler for the exact failure mode of the 2026-08-30 incident.
+try:
+    import psycopg2.pool as _pg_pool
+except ImportError:  # pragma: no cover — SQLite-only dev environment, no Postgres driver at all
+    _pg_pool = None
+
+if _pg_pool is not None:
+    @app.exception_handler(_pg_pool.PoolError)
+    async def _db_pool_exhausted(request, exc):
+        """store.py's _getconn() retries a burst for a few seconds (api/store.py ~line 1156)
+        but still raises psycopg2.pool.PoolError once that window elapses — previously an
+        unhandled 500 with no distinguishable body, which is what POST /discovery/preflight and
+        POST /scans both did during the 2026-08-30 pool-exhaustion incident. _getconn() fails
+        BEFORE acquiring a connection, i.e. before any query in THIS cursor() call runs — so for
+        the common case (pool exhaustion on the first DB touch of a request) nothing from this
+        request was written. A handler that already committed an earlier, separate cursor() call
+        before a LATER one hits this is the one case that statement doesn't cover; the response
+        is intentionally still framed as advice ("try again"), not a hard guarantee, for exactly
+        that reason.
+
+        Response shape is a stable contract the frontend detects to replace the generic
+        "scan failed: 500" copy with something legible.
+
+        WHAT THE MESSAGE MAY CLAIM depends on the request, and this is the part that was wrong.
+        The body used to say "No changes were made" for every route. That statement is provable
+        only when nothing in the request could have written before the pool gave out — true of a
+        read, and NOT true of a mutating request, because an earlier cursor() in the same handler
+        may already have committed. The docstring above conceded exactly that case in prose while
+        the message asserted the opposite in the user's face.
+
+        It is not theoretical. POST /scans commits enqueue_scan (scan_runs + jobs + scan_inputs)
+        and then calls scan_event() to record scan.queued — another database write, after the
+        scan is durable. A PoolError there returns this 503 with the scan genuinely created, and
+        "No changes were made" would be a lie that invites the user to submit a second one.
+
+        So the claim is scoped to what the method can prove:
+
+          * safe method (GET/HEAD/OPTIONS) -> changes="none". Nothing was written; say so.
+          * anything else                  -> changes="unknown". Say that plainly and point at
+                                              reconciliation rather than at a retry.
+
+        The client's half of this already exists: submitIntent.outcomeIsUncertain() treats a 503
+        as uncertain and RETAINS the submit intent's idempotency key, so a retry after this
+        response resolves to the job that may already exist instead of creating a duplicate.
+        `changes` makes that reasoning explicit in the payload rather than implicit in the status
+        code, and `code` is the stable identifier to branch on — `detail` is kept unchanged for
+        the callers already reading it."""
+        import uuid as _uuid
+        from datetime import datetime as _dt, timezone as _tz
+        safe = request.method.upper() in {"GET", "HEAD", "OPTIONS"}
+        request_id = (request.headers.get("x-request-id")
+                      or _uuid.uuid4().hex[:12])
+        if safe:
+            message = ("ACP's database was temporarily at capacity, so this could not be read. "
+                       "No changes were made. Try again shortly.")
+        else:
+            message = ("ACP's database was temporarily at capacity. We could not confirm whether "
+                       "your request completed — check its status before submitting it again.")
+        return JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "5", "X-Request-Id": request_id},
+            content={
+                "detail": "database_busy",          # unchanged: existing callers branch on this
+                "code": "DB_CAPACITY_BUSY",         # stable identifier for new callers
+                "message": message,
+                "changes": "none" if safe else "unknown",
+                "request_id": request_id,
+                "occurred_at": _dt.now(_tz.utc).isoformat(),
+            },
+        )
 
 
 @app.middleware("http")

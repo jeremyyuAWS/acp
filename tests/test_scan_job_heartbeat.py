@@ -44,6 +44,36 @@ def _wait_until(predicate, timeout=3.0, interval=0.02):
     return False
 
 
+def _settled_updated_at(core, job_id, quiet_for=0.12, timeout=3.0):
+    """`updated_at` once it has stopped moving — the baseline for "the heartbeat stopped".
+
+    Sampling it the instant `done` flips races the heartbeat's own shutdown. The companion
+    thread ticks every `_JOB_HEARTBEAT_SECONDS` (0.03s under this fixture) and can be scheduled
+    one last time between work() setting done and the thread observing its stop flag, so a
+    baseline taken immediately can be one tick stale through no fault of the code under test.
+
+    That is not hypothetical: CI shard 4 failed on exactly this, on a commit touching none of
+    this path, with the two timestamps 29ms apart — one heartbeat interval, to the millisecond.
+    Under a loaded runner the shutdown simply lands after the read.
+
+    Waiting for quiet FIRST and then asserting continued quiet keeps the assertion intact — a
+    heartbeat that never stops can never go quiet, so it still fails — while measuring the
+    steady state the test is actually about rather than the shutdown transition.
+    """
+    deadline = time.time() + timeout
+    last = core.get_job_state(job_id)["updated_at"]
+    stable_since = time.time()
+    while time.time() < deadline:
+        time.sleep(0.02)
+        now = core.get_job_state(job_id)["updated_at"]
+        if now != last:
+            last, stable_since = now, time.time()
+        elif time.time() - stable_since >= quiet_for:
+            return last
+    raise AssertionError(
+        "updated_at never stopped moving — the heartbeat thread did not stop")
+
+
 def test_the_heartbeat_ticks_during_a_long_silent_discover_call(client, monkeypatch):
     """The load-bearing case. _scan_discover makes exactly one update_job call, at the very
     end — during the call itself, updated_at must still move, or a large estate's genuine crawl
@@ -93,7 +123,7 @@ def test_the_heartbeat_stops_once_the_job_completes(client, monkeypatch):
     job_id = r.json()["job_id"]
 
     assert _wait_until(lambda: core.get_job_state(job_id)["done"] is True)
-    after_done = core.get_job_state(job_id)["updated_at"]
+    after_done = _settled_updated_at(core, job_id)
     # If the heartbeat were still running it would tick again well within this window.
     time.sleep(0.15)
     assert core.get_job_state(job_id)["updated_at"] == after_done, (
@@ -116,6 +146,8 @@ def test_the_heartbeat_stops_when_the_scan_raises(client, monkeypatch):
     assert _wait_until(lambda: core.get_job_state(job_id)["done"] is True)
     got = core.get_job_state(job_id)
     assert got["phase"] == "error" and "simulated scan failure" in got["error"]
-    after_done = got["updated_at"]
+    after_done = _settled_updated_at(core, job_id)
     time.sleep(0.15)
-    assert core.get_job_state(job_id)["updated_at"] == after_done
+    assert core.get_job_state(job_id)["updated_at"] == after_done, (
+        "updated_at kept changing after the scan raised — the heartbeat thread did not stop"
+    )

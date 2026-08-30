@@ -33,8 +33,18 @@ export function scanFailureDetail(rawMessage) {
  * failed: 500" banner rendered directly above a "Discovery complete" card from the last good run,
  * with nothing on screen explaining that the two describe different attempts.
  *
- * @param completedAt  scan?.run?.completed_at — a real completion timestamp, not just a truthy id.
+ * Takes BOTH `discovered_at` and `completed_at` — checking `completed_at` alone (the original
+ * shape of this function) went false-negative on a Discover-only run under ADR 0020's phase
+ * separation: `completed_at` is set only once the whole pipeline (through Assess) finishes, but
+ * Discover.jsx's own completion card renders off `discovered_at`/`status==='discovered'` (see its
+ * "Discovery complete" block) well before that. Found live 2026-08-30: a completion card showing
+ * 6,922 real files sat under a "scan failed" banner with the reassurance line silently missing,
+ * because the run behind it was discovered-but-not-yet-assessed — `discovered_at` was real,
+ * `completed_at` was still null.
+ *
+ * @param discoveredAt  scan?.run?.discovered_at
+ * @param completedAt   scan?.run?.completed_at
  */
-export function hasFallbackInventory(completedAt) {
-  return !!completedAt
+export function hasFallbackInventory(discoveredAt, completedAt) {
+  return !!(discoveredAt || completedAt)
 }

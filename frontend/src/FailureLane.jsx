@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { getJobs, clearDeadJobs, remediateScan, rescoreFile } from './api.js'
+import { clearDeadJobs, remediateScan, rescoreFile } from './api.js'
+import { subscribeJobs } from './jobsFeed.js'
 
 // W7 · Operational-failure lane. Until now the flow had the "unsupported type" branch but not
 // the "job *failed*" branch — a corrupt file, an OAuth token that expired mid-scan, a source
@@ -151,15 +152,14 @@ export default function FailureLane() {
   const [retried, setRetried] = useState({}) // job id → true once its retry was accepted
   const onRef = useRef(true)
 
-  const load = () => getJobs()
-    .then((d) => { if (onRef.current) { setJobs(d?.jobs || []); setErr('') } })
-    .catch((e) => { if (onRef.current) setErr(e?.message || 'unavailable') })
-
   useEffect(() => {
     onRef.current = true
-    load()
-    const t = setInterval(load, 4000)
-    return () => { onRef.current = false; clearInterval(t) }
+    // Shared subscription (jobsFeed.js) — this wants the same unfiltered /jobs response
+    // QueuePanel, Discover and AssessRunner want.
+    const stop = subscribeJobs(null, (d) => { setJobs(d?.jobs || []); setErr('') },
+                               { intervalMs: 4000,
+                                 onError: (e) => setErr(e?.message || 'unavailable') })
+    return () => { onRef.current = false; stop() }
   }, [])
 
   const retry = (jb) => {
