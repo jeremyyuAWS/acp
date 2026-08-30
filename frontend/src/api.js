@@ -97,6 +97,13 @@ const j = async (r) => {
       throw e
     }
     const e = new Error(detail)
+    // Carry the HTTP status on the error. Callers that must distinguish "the server proved it
+    // did nothing" from "we have no idea what happened" cannot do it from the message text —
+    // submitIntent.outcomeIsUncertain() is the first, and it decides whether a retry reuses its
+    // idempotency key or mints a new one. Without this the check reads `undefined` every time
+    // and silently answers "uncertain" for everything, which is the safe direction but is not a
+    // check.
+    e.status = r.status
     // A capability failure, not a transient one: every other card in the inbox would hit the
     // same missing model, so the auto-draft gate stops rather than asking N more times.
     if (r.status === 503 && AI_MODEL_NOT_PULLED_DETAIL.test(String(detail))) e.aiModelNotPulled = true
@@ -662,9 +669,14 @@ export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/sca
 
 // ── Durable async queue (ADR 0004/0005) ───────────────────────────────────────
 // Queued scan: runs in the worker pool, survives restarts, shows in /jobs + Grafana.
-export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null, exclude = null) => (SIM
+// `idempotencyKey` comes from submitIntent.js — one key per submit intent, the SAME key on a
+// retry of that intent. enqueue_scan looks it up owner-scoped and returns the original
+// (scan_id, job_id) rather than inserting, so a response lost after the commit resolves to the
+// job that already exists instead of creating a second scan. Optional so every existing caller
+// and test keeps working unchanged; without it the server behaves exactly as before.
+export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null, exclude = null, idempotencyKey = null) => (SIM
   ? sim({ scan_id: 'sim-scan', job_id: 'sim-job', queued: true, workers: 4 })
-  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}${excludeQ(exclude)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}&queue=true&fanout=true`, { method: 'POST', headers: headers() }).then(j))
+  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}${excludeQ(exclude)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}&queue=true&fanout=true`, { method: 'POST', headers: headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) }).then(j))
 // Read-only check on the SPECIFIC source + folders about to be scanned — run right before
 // doScan actually starts one, so a bad credential, a deleted folder, or a dead worker tier is
 // caught before a scan row exists rather than surfacing as "0 documents" after the fact.
