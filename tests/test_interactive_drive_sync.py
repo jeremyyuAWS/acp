@@ -18,10 +18,17 @@ different from the sweep, not just a copy of it, and all three are pinned here:
      in a caller that asserts _drive_service was called exactly once, a real regression, caught
      live while building this: see git history for why _drive_delta_check takes a `build_svc`
      callable rather than a token).
+  4. THE PRIOR-SCAN BASELINE IS ALSO VERIFIED PER GOOGLE ACCOUNT
+     (core._drive_prior_inventory_for_account), not just looked up by owner. A Drive token is a
+     per-request browser OAuth credential, not a server-bound "connected account" — nothing
+     stops the same signed-in ACP user presenting a DIFFERENT Google identity (a different
+     account in the browser's Drive picker) from one interactive scan to the next.
+     Reconstructing one account's estate from another's inventory would silently show the wrong
+     documents, mirroring _sp_prior_inventory_for_drive's identical concern for SharePoint.
 
-Hermetic: no real Drive access. scanner._drive_service/drive_start_page_token/drive_changes_since
-are monkeypatched, and a minimal store double stands in for get_sync_cursor/save_sync_cursor/
-latest_scan_inventory_items.
+Hermetic: no real Drive access. scanner._drive_service/drive_account_id/drive_start_page_token/
+drive_changes_since are monkeypatched, and a minimal store double stands in for
+get_sync_cursor/save_sync_cursor/latest_scan_inventory_items.
 """
 from __future__ import annotations
 
@@ -75,6 +82,11 @@ def core_mod(monkeypatch):
     monkeypatch.setattr(scanner, "_drive_service", _fake_drive_service)
     monkeypatch.setattr(scanner, "drive_start_page_token", lambda svc: "seed-token")
     monkeypatch.setattr(scanner, "drive_changes_since", _fake_drive_changes_since)
+    # Default: no account identity in play. PRIOR_ROW carries no drive_account_id either, so
+    # existing tests below (none of which care about account matching) see a trivial match —
+    # see test_a_prior_scan_by_a_different_google_account_never_gets_used_as_the_baseline etc.
+    # for tests that override this.
+    monkeypatch.setattr(scanner, "drive_account_id", lambda svc: None)
     return core, store, calls
 
 
@@ -187,3 +199,73 @@ def test_the_scheduled_sweeps_own_cursor_is_a_completely_separate_key(core_mod):
     assert set(store.sync_cursors) == {"drive", "drive:alice@x.com"}
     # The interactive call must still never have built its own service.
     assert calls["drive_service_calls"] == [None]
+
+
+def test_a_prior_scan_by_a_different_google_account_never_gets_used_as_the_baseline(
+        core_mod, monkeypatch):
+    """The Drive mirror of SharePoint's drive-mismatch guard
+    (test_interactive_sp_sync.py::test_a_prior_scan_of_a_different_drive_never_gets_used_as_the_baseline)
+    — a Drive token is a per-request browser credential, so the same signed-in ACP user can sign
+    into a DIFFERENT Google account in the browser's Drive picker from one scan to the next."""
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive:alice@x.com"] = {"page_token": "tok-1"}
+    store.prior_inventory["alice@x.com"] = [
+        {**PRIOR_ROW, "drive_account_id": "alice.other@gmail.com"}]
+    monkeypatch.setattr(scanner, "drive_changes_since",
+                        lambda svc, tok: ([{"id": "F1"}], set(), "tok-2"))
+    monkeypatch.setattr(scanner, "drive_account_id", lambda svc: "alice.work@gmail.com")
+
+    result = core._interactive_drive_sync_plan("alice@x.com", SVC_ALICE)
+    assert result is None, (
+        "a different Google account's inventory must never be used as this account's baseline")
+
+
+def test_a_partial_account_mismatch_also_refuses_the_whole_baseline(core_mod, monkeypatch):
+    """Even if only SOME rows carry a different account (a corrupt/legacy record), the whole
+    baseline is untrustworthy — never a partial reconstruction."""
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive:alice@x.com"] = {"page_token": "tok-1"}
+    store.prior_inventory["alice@x.com"] = [
+        {**PRIOR_ROW, "drive_account_id": "alice.work@gmail.com"},
+        {**PRIOR_ROW, "file": "other.pdf", "drive_file_id": "F9",
+         "drive_account_id": "someone.else@gmail.com"}]
+    monkeypatch.setattr(scanner, "drive_changes_since",
+                        lambda svc, tok: ([{"id": "F1"}], set(), "tok-2"))
+    monkeypatch.setattr(scanner, "drive_account_id", lambda svc: "alice.work@gmail.com")
+
+    result = core._interactive_drive_sync_plan("alice@x.com", SVC_ALICE)
+    assert result is None
+
+
+def test_matching_account_id_uses_the_prior_scan_as_baseline(core_mod, monkeypatch):
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive:alice@x.com"] = {"page_token": "tok-1"}
+    store.prior_inventory["alice@x.com"] = [
+        {**PRIOR_ROW, "drive_account_id": "alice.work@gmail.com"}]
+    monkeypatch.setattr(scanner, "drive_changes_since", lambda svc, tok: ([], set(), "tok-2"))
+    monkeypatch.setattr(scanner, "drive_account_id", lambda svc: "alice.work@gmail.com")
+
+    result = core._interactive_drive_sync_plan("alice@x.com", SVC_ALICE)
+    assert result is not None
+    assert [f["id"] for f in result["prior_files"]] == ["F0"]
+
+
+def test_an_unverifiable_current_identity_against_a_known_prior_one_is_a_mismatch(
+        core_mod, monkeypatch):
+    """scanner.drive_account_id's own best-effort failure mode returns None on any error — that
+    must not be silently trusted against a prior scan whose account WAS recorded, or an
+    identity check that can fail open is no check at all."""
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive:alice@x.com"] = {"page_token": "tok-1"}
+    store.prior_inventory["alice@x.com"] = [
+        {**PRIOR_ROW, "drive_account_id": "alice.work@gmail.com"}]
+    monkeypatch.setattr(scanner, "drive_changes_since",
+                        lambda svc, tok: ([{"id": "F1"}], set(), "tok-2"))
+    monkeypatch.setattr(scanner, "drive_account_id", lambda svc: None)
+
+    result = core._interactive_drive_sync_plan("alice@x.com", SVC_ALICE)
+    assert result is None

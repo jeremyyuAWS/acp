@@ -255,6 +255,29 @@ def test_a_cursor_with_changes_and_a_prior_scan_reconstructs_instead_of_a_fresh_
     assert [f["id"] for f in delta["prior_files"]] == ["F0"]
 
 
+def test_a_prior_scan_by_a_different_google_account_falls_back_to_a_full_scan(core_mod, monkeypatch):
+    """The scheduled sweep's own mirror of core._interactive_drive_sync_plan's account
+    verification (test_interactive_drive_sync.py) — here the realistic trigger is an
+    operator-rotated ADC service-account credential rather than a browser account picker, but
+    the same rule applies: reconstructing from a DIFFERENT Google account's inventory would
+    silently show the wrong estate, so a mismatch is treated as no usable baseline."""
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive"] = {"page_token": "tok-1"}
+    store.prior_inventory = [{"file": "unchanged.pdf", "drive_file_id": "F0", "mime": "application/pdf",
+                             "size_kb": 1, "checksum": "x", "created_at": None,
+                             "source_modified": None, "owner": None, "parent_folder": None,
+                             "drive_account_id": "old-svc-acct@x.iam.gserviceaccount.com"}]
+    monkeypatch.setattr(scanner, "drive_changes_since",
+                        lambda svc, token: ([{"id": "F1", "name": "changed.pdf"}], set(), "tok-2"))
+    monkeypatch.setattr(scanner, "drive_account_id",
+                        lambda svc: "new-svc-acct@x.iam.gserviceaccount.com")
+    core._do_scheduled_scan()
+    assert calls["scans"] == ["drive"]
+    assert calls["drive_deltas"] == [None], (
+        "a different account's inventory must never be used as this account's baseline")
+
+
 def test_a_cursor_with_removed_files_also_triggers_a_scan(core_mod, monkeypatch):
     import scanner
     core, store, calls = core_mod

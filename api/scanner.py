@@ -271,6 +271,26 @@ def _drive_service(drive_token: str | None = None):
     return build("drive", "v3", http=http, cache_discovery=False)
 
 
+def drive_account_id(svc) -> str | None:
+    """The Google account THIS Drive client is authenticated as — svc.about()'s own identity,
+    not a file's owner (scan_inventory.owner is a per-FILE fact, e.g. a shared file's owner,
+    and can differ from the signed-in user). Stamped onto every Drive scan_inventory row (see
+    _list's drive branch) so a later scan can tell whether it would be reconstructing from the
+    SAME account's prior estate — core._drive_prior_inventory_for_account is the guard that
+    reads it back.
+
+    Best-effort: any failure (network, insufficient scope, a test double with no `.about`)
+    returns None rather than raising, since identifying WHO ran a listing is secondary to the
+    listing itself. A None here still resolves safely — it only ever matches another None, so
+    an unverifiable current identity against a KNOWN prior one reads as a mismatch, never a
+    silent pass (see _drive_prior_inventory_for_account)."""
+    try:
+        about = svc.about().get(fields="user").execute(num_retries=5) or {}
+        return about.get("user", {}).get("emailAddress")
+    except Exception:
+        return None
+
+
 def _normalize(files: list[dict]) -> list[dict]:
     """Convert raw Drive API file objects to scan items.
 
@@ -2318,6 +2338,21 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
                               "folders_walked": 1, "listed": len(batch), "kept": len(result),
                               "truncated": False,
                               "inventory": estate_inventory.summarize(_estate_files, truncated=False)})
+    if source == "drive":
+        # PRD Phase 3 follow-up: stamp the Google account THIS listing ran as onto every
+        # persisted row — scannable (`result`) and not (`inventory_out`) — regardless of which
+        # branch above produced it (whole-Drive, folder-scoped, multi-folder, delta-
+        # reconstructed, or the ADC/demo pinned folder all share this one `svc`). One about()
+        # call per scan, not per file. See core._drive_prior_inventory_for_account for why: a
+        # Drive token is a per-request browser credential, not a server-bound "connected
+        # account", so nothing else stops the same ACP owner presenting a different Google
+        # identity between scans.
+        _drive_acct = drive_account_id(svc)
+        for _it in result:
+            _it["drive_account_id"] = _drive_acct
+        if inventory_out is not None:
+            for _it in inventory_out:
+                _it["drive_account_id"] = _drive_acct
     # ── the operator's file-type scope, applied to what gets READ ───────────────────────────
     #
     # ONE PLACE, NOT FOUR. The proposal for this listed four enumeration sites (local, SharePoint,

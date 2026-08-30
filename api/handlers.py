@@ -1813,6 +1813,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
         norm = [{"file": it["name"], "drive_file_id": it.get("id"), "mime": it.get("mime"),
                  "path": it.get("path"), "checksum": it.get("checksum"),
                  "drive_id": it.get("driveId"),
+                 "drive_account_id": it.get("drive_account_id"),
                  "source_modified": it.get("source_modified"),
                  "source_mime": it.get("source_mime"), "created_at": it.get("created_at"),
                  "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
@@ -1829,6 +1830,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
                     "created_at": it.get("created_at"), "source_modified": it.get("source_modified"),
                     "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
                     "drive_id": it.get("drive_id"),
+                    "drive_account_id": it.get("drive_account_id"),
                     "content_type": it.get("content_type")}
                    for it in norm] + inventory
             _dedupe_inventory_files(inv)
