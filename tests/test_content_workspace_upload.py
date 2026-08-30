@@ -121,6 +121,58 @@ def test_oversized_upload_is_rejected(gated_client, monkeypatch):
     assert r.status_code == 413
 
 
+def test_upload_session_rejected_when_it_would_exceed_the_workspace_quota(gated_client, monkeypatch):
+    import routes.content_workspaces as cw
+    monkeypatch.setattr(cw, "_WORKSPACE_QUOTA_BYTES", 1000)
+    ws = _make_workspace(gated_client)
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/upload-session",
+                                 json={"filename": "huge.pdf", "size_bytes": 1001})
+    assert r.status_code == 413
+
+
+def test_upload_session_allowed_exactly_at_the_quota(gated_client, monkeypatch):
+    import routes.content_workspaces as cw
+    monkeypatch.setattr(cw, "_WORKSPACE_QUOTA_BYTES", 1000)
+    ws = _make_workspace(gated_client)
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/upload-session",
+                                 json={"filename": "report.pdf", "size_bytes": 1000})
+    assert r.status_code == 200, r.text
+
+
+def test_upload_session_quota_accounts_for_bytes_already_stored(gated_client, monkeypatch):
+    """The quota is checked against USAGE + this upload, not this upload alone — a workspace
+    that already holds 900 bytes has only 100 left of a 1000-byte quota."""
+    import routes.content_workspaces as cw
+    monkeypatch.setattr(cw, "_WORKSPACE_QUOTA_BYTES", 1000)
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws, filename="a.pdf", size_bytes=900)
+    _mock_uploaded(monkeypatch, size=900, prefix=b"%PDF-1.7")
+    r1 = _complete(gated_client, ws, doc_id, version_id, content_hash="h1", size_bytes=900)
+    assert r1.json()["status"] == "ready"
+
+    r2 = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/upload-session",
+                                  json={"filename": "b.pdf", "size_bytes": 101})
+    assert r2.status_code == 413
+
+    r3 = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/upload-session",
+                                  json={"filename": "b.pdf", "size_bytes": 100})
+    assert r3.status_code == 200, r3.text
+
+
+def test_upload_session_quota_is_scoped_to_the_workspace(gated_client, monkeypatch):
+    import routes.content_workspaces as cw
+    monkeypatch.setattr(cw, "_WORKSPACE_QUOTA_BYTES", 1000)
+    ws1 = _make_workspace(gated_client)
+    ws2 = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws1, filename="a.pdf", size_bytes=900)
+    _mock_uploaded(monkeypatch, size=900, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws1, doc_id, version_id, content_hash="h1", size_bytes=900)
+
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws2}/documents/upload-session",
+                                 json={"filename": "b.pdf", "size_bytes": 900})
+    assert r.status_code == 200, r.text
+
+
 def test_503_when_workspace_blob_is_not_configured(gated_client, monkeypatch):
     import workspace_blob
     monkeypatch.setattr(workspace_blob, "enabled", lambda: False)

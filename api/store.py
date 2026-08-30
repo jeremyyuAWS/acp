@@ -7663,6 +7663,26 @@ class Store:
                 (as_of,))
             return self._db.fetchall(cur)
 
+    def get_content_workspace_storage_bytes(self, workspace_id: str, *, owner_email: str) -> int:
+        """PRD §9's "quota" half of "ACP validates user, workspace, type, size, and quota" —
+        current bytes actually occupying blob storage for this workspace, so the upload-session
+        route can check a new file against a quota before issuing an authorization for it.
+        Excludes "expired" versions (their blob is already deleted by the retention sweep, so
+        they no longer occupy space) but counts everything else — quarantined and duplicate
+        versions still have a real blob sitting in storage, occupying real space, whatever their
+        Discovery-eligibility. A resolved duplicate/cancelled document's versions are gone
+        entirely (delete_content_workspace_document removes the rows), so there's no separate
+        state to exclude for those."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COALESCE(SUM(v.size_bytes), 0) AS total FROM content_workspace_document_versions v "
+                "JOIN content_workspace_documents d ON d.id = v.document_id "
+                "WHERE d.workspace_id=%s AND d.owner_email=%s "
+                "AND (v.lifecycle_state IS NULL OR v.lifecycle_state != 'expired')",
+                (workspace_id, owner_email))
+            row = self._db.fetchone(cur)
+            return int(row["total"]) if row and row["total"] is not None else 0
+
     def list_scan_severities(self, scan_id: str) -> list[dict]:
         """{file, severity} for every finding in a scan -- the input compute_batches
         (api/campaigns.py) buckets by, kept as its own narrow query like
