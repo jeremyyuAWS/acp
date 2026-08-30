@@ -600,3 +600,124 @@ def test_resolve_duplicate_404s_for_a_foreign_owner(gated_client, monkeypatch):
     r = gated_client(OTHER).post(f"/content-workspaces/{ws}/documents/{doc2}/resolve-duplicate",
                                  json={"action": "cancel"})
     assert r.status_code == 404
+
+
+# ── download (PRD "download original") ───────────────────────────────────────
+
+def _download(gated_client, ws, doc_id, version_id, *, owner=OWNER):
+    return gated_client(owner).get(
+        f"/content-workspaces/{ws}/documents/{doc_id}/versions/{version_id}/download")
+
+
+def test_download_returns_the_bytes_and_content_type(gated_client, monkeypatch):
+    import workspace_blob
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws, filename="report.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws, doc_id, version_id, content_hash="h1", size_bytes=1024)
+    monkeypatch.setattr(workspace_blob, "download_document_bytes",
+                        lambda *a, **kw: b"%PDF-1.7 fake pdf bytes")
+
+    r = _download(gated_client, ws, doc_id, version_id)
+    assert r.status_code == 200
+    assert r.content == b"%PDF-1.7 fake pdf bytes"
+    assert r.headers["content-type"] == "application/pdf"
+    assert 'filename="report.pdf"' in r.headers["content-disposition"]
+
+
+def test_download_404s_when_the_blob_is_not_retrievable(gated_client, monkeypatch):
+    import workspace_blob
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws)
+    _mock_uploaded(monkeypatch)
+    _complete(gated_client, ws, doc_id, version_id)
+    monkeypatch.setattr(workspace_blob, "download_document_bytes", lambda *a, **kw: None)
+
+    r = _download(gated_client, ws, doc_id, version_id)
+    assert r.status_code == 404
+
+
+def test_download_404s_for_a_nonexistent_version(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws)
+    _mock_uploaded(monkeypatch)
+    _complete(gated_client, ws, doc_id, version_id)
+
+    r = _download(gated_client, ws, doc_id, "does-not-exist")
+    assert r.status_code == 404
+
+
+def test_download_404s_for_a_version_belonging_to_a_different_document(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc1, v1 = _start_upload(gated_client, ws, filename="a.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws, doc1, v1, content_hash="hash-a")
+    doc2, _ = _start_upload(gated_client, ws, filename="b.pdf")
+    _complete(gated_client, ws, doc2, "v-002", content_hash="hash-b")
+
+    r = _download(gated_client, ws, doc2, v1)  # v1 belongs to doc1, not doc2
+    assert r.status_code == 404
+
+
+def test_download_404s_for_a_foreign_owner(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client, owner=OWNER)
+    doc_id, version_id = _start_upload(gated_client, ws)
+    _mock_uploaded(monkeypatch)
+    _complete(gated_client, ws, doc_id, version_id)
+
+    r = _download(gated_client, ws, doc_id, version_id, owner=OTHER)
+    assert r.status_code == 404
+
+
+def test_download_404s_for_a_nonexistent_document(gated_client):
+    ws = _make_workspace(gated_client)
+    r = _download(gated_client, ws, "does-not-exist", "v1")
+    assert r.status_code == 404
+
+
+def test_download_works_for_a_quarantined_version(gated_client, monkeypatch):
+    """Quarantine blocks Discovery, not a user retrieving their own upload — see the route's
+    own docstring for why this is a deliberate choice, not an oversight."""
+    import workspace_blob
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws, filename="report.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"not a pdf")
+    r = _complete(gated_client, ws, doc_id, version_id)
+    assert r.json()["status"] == "quarantined"
+    monkeypatch.setattr(workspace_blob, "download_document_bytes", lambda *a, **kw: b"bytes")
+
+    r2 = _download(gated_client, ws, doc_id, version_id)
+    assert r2.status_code == 200
+
+
+def test_download_sanitizes_a_filename_containing_a_quote(gated_client, monkeypatch):
+    """The stored filename is whatever the client claimed at upload-session time —
+    untrusted — and goes straight into a response header, so an embedded quote must not be
+    able to break out of the quoted-string. (A raw CR/LF can't reach this point at all: it
+    would change the extension _start_upload's own allow-list checks, per
+    test_safe_disposition_filename_strips_control_characters below — this test covers what a
+    quote alone, which doesn't affect the extension, does.)"""
+    import workspace_blob
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws, filename='evil".pdf')
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws, doc_id, version_id)
+    monkeypatch.setattr(workspace_blob, "download_document_bytes", lambda *a, **kw: b"bytes")
+
+    r = _download(gated_client, ws, doc_id, version_id)
+    assert r.status_code == 200
+    disposition = r.headers["content-disposition"]
+    assert '"' not in disposition.split("filename=", 1)[1][1:-1]
+
+
+def test_safe_disposition_filename_strips_control_characters():
+    import routes.content_workspaces as cw
+    cleaned = cw._safe_disposition_filename('evil".pdf\r\nX-Injected: yes')
+    assert "\r" not in cleaned
+    assert "\n" not in cleaned
+    assert '"' not in cleaned
+
+
+def test_safe_disposition_filename_falls_back_when_nothing_printable_survives():
+    import routes.content_workspaces as cw
+    assert cw._safe_disposition_filename("\r\n\t") == "download"

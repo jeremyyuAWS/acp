@@ -39,6 +39,11 @@ new version of the existing document", needs a document-scoped upload-session va
 does not exist yet (`create_upload_session` always mints a brand-new document) — explicitly
 deferred rather than half-built here.
 
+Also implements PRD's "download original": `GET .../documents/{document_id}/versions/
+{version_id}/download` streams the version's bytes back through the server (the SAME
+server-mediated shape api/blob.py's download_remediated route already uses for remediated
+output — no second SAS scheme for reads), via workspace_blob.download_document_bytes.
+
 Owner-scoped throughout: `owner_email` is the tenant boundary this whole app already uses
 (ADR 0044). `GET /content-workspaces/{id}` 404s — never 403 — for a foreign id, matching
 `test_foreign_scan_404.py`'s established "an id is never an existence oracle across owners"
@@ -51,6 +56,7 @@ import os
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 import core
@@ -58,6 +64,18 @@ import scanner
 import workspace_blob
 
 router = APIRouter()
+
+# PRD's "download original": fall back to this when a version's own stored mime_type is
+# missing (e.g. the client never sent one at upload-completion time) — the same map
+# api/routes/scans.py's download_remediated route already uses for the equivalent case.
+_MIME_TYPES = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".html": "text/html",
+    ".htm": "text/html",
+}
 
 # PRD §9: "ACP validates user, workspace, type, size, and quota" before issuing upload
 # authorization. Quota (per-workspace limits) remains out of scope. 500 MiB is an
@@ -82,6 +100,15 @@ _SIGNATURES: dict[str, bytes] = {
 
 def _extension(filename: str) -> str:
     return "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+
+def _safe_disposition_filename(filename: str) -> str:
+    """`filename` is the ORIGINAL uploaded name (user-controlled, stored verbatim at session
+    creation) — unlike scans.py's Content-Disposition uses, which are all server-generated
+    ids. Strip control characters (CR/LF header-injection) and quotes (which would otherwise
+    terminate the quoted-string early) before it goes anywhere near a response header."""
+    cleaned = "".join(c for c in filename if c.isprintable()).replace('"', "'")
+    return cleaned or "download"
 
 
 def _owner(request: Request) -> str:
@@ -340,3 +367,34 @@ def get_content_workspace_document(workspace_id: str, document_id: str, request:
         raise HTTPException(404, "document not found")
     versions = core.store.list_content_workspace_document_versions(document_id)
     return {**doc, "versions": versions}
+
+
+@router.get("/content-workspaces/{workspace_id}/documents/{document_id}/versions/{version_id}/download")
+def download_content_workspace_document_version(workspace_id: str, document_id: str,
+                                                 version_id: str, request: Request):
+    """PRD's 'download original': stream the version's bytes back through the server, the same
+    shape api/routes/scans.py's download_remediated route already uses. A quarantined version
+    is still downloadable — quarantine blocks Discovery, not a user retrieving their own
+    upload — but this is a deliberate choice, not PRD-mandated; a deployment that wants to
+    withhold quarantined bytes entirely can add that check here without touching anything else
+    in this module."""
+    owner = _owner(request)
+    _require_workspace(workspace_id, owner)
+    doc = core.store.get_content_workspace_document(document_id, owner_email=owner)
+    if doc is None or doc["workspace_id"] != workspace_id:
+        raise HTTPException(404, "document not found")
+    version = core.store.get_content_workspace_document_version(version_id, document_id=document_id)
+    if version is None:
+        raise HTTPException(404, "version not found")
+
+    data = workspace_blob.download_document_bytes(owner, workspace_id, document_id, version_id)
+    if data is None:
+        raise HTTPException(404, "the original file is not retrievable "
+                             "(blob storage not configured, or the object is gone)")
+
+    filename = version.get("original_filename") or doc.get("display_name") or "download"
+    media_type = version.get("mime_type") or _MIME_TYPES.get(_extension(filename),
+                                                              "application/octet-stream")
+    safe_filename = _safe_disposition_filename(filename)
+    return Response(data, media_type=media_type,
+                    headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'})
