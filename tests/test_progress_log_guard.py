@@ -151,3 +151,33 @@ def test_an_untrailered_commit_behind_a_merge_is_still_caught(repo):
     r = _check(repo, main_tip)
     assert r.returncode == 1, "the undeclared commit was laundered through the merge"
     assert "undeclared change" in r.stderr
+
+
+# ── every vendored engine is watched, not just the one that was there first ──────
+
+def test_both_vendored_analysers_are_in_rule_paths():
+    """A capability change lives in whichever engine implements the criterion, and this repo
+    vendors two: the Office analysers (ADR 0012) and the PDF analyser (ADR 0029). Only the first
+    was in RULE_PATHS, so a rule change under engine/pdf-analyser/ merged with no Matrix-Note —
+    silently, because a missing prefix produces no output at all.
+
+    The asymmetry survived because the directory names differ in a way that reads as one entry:
+    "office-analysers" plural, "pdf-analyser" singular. Asserted by DERIVING the engine
+    directories from the tree rather than listing them here, so vendoring a third engine fails
+    this test instead of quietly repeating the gap."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("gen_progress_log", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    def _is_analyser(d: Path) -> bool:
+        if not d.is_dir() or d.name.startswith("."):
+            return False
+        return any(next(d.rglob(pat), None) for pat in ("*.py", "*.cs"))
+
+    vendored = sorted(d.name for d in (ACP / "engine").iterdir() if _is_analyser(d))
+    assert vendored, "engine/ holds no vendored analyser — has the layout changed?"
+    for name in vendored:
+        assert f"engine/{name}/" in mod.RULE_PATHS, (
+            f"engine/{name}/ is vendored but not in RULE_PATHS, so a capability change there "
+            f"merges with no Matrix-Note — the one thing this guard exists to catch")
