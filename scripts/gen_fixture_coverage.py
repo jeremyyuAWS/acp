@@ -12,11 +12,16 @@ dict names the criterion and the verdict; a fixture that happens to be a .docx s
 1.4.3 unless it declares something about 1.4.3. Counting files rather than declarations is the
 easy way to report coverage that is not there.
 
-WHY THE NUMBER IS LOW AND THAT IS THE POINT. Only .docx has a per-criterion generator today. The
-other three formats have no labelled corpus at all — `gen_complex_corpus.py` is also .docx, and
-`complex_corpus.py`'s expectations are a floor ("at least these SCs"), not a per-pair verdict.
-Reporting 24% honestly is worth more than a percentage assembled from whatever happened to be
-countable.
+WHY THE NUMBER IS WHAT IT IS. Every format now has a per-criterion generator, and only .docx is
+complete: xlsx declares 8 of 15, pptx 9 of 17, pdf 8 of 15. The shortfalls are not neglect — a
+pair is declared only where a FIRST-PARTY detector was confirmed to fire against the fixture, so
+the criteria routed through the .NET Office analyser, OCR or langdetect stay uncounted until
+something can actually check them. Reporting 65% honestly is worth more than a percentage
+assembled from whatever happened to be countable; that was true at 24%, when .docx was the only
+corpus, and it is the reason the number moved by fixtures rather than by redefinition.
+
+Not counted here, deliberately: `gen_complex_corpus.py` is also .docx, and `complex_corpus.py`'s
+expectations are a floor ("at least these SCs"), not a per-pair verdict.
 
 THE GUARD IS A RATCHET, NOT A THRESHOLD. `--check` fails when coverage DROPS below the recorded
 baseline, not when it falls short of 100%. A guard demanding full coverage today would be red on
@@ -54,7 +59,7 @@ PRESET = "acp-core-17"
 
 # Coverage floor, by format. Update ONLY upward, and only alongside the fixtures that earned it.
 # Written down rather than computed so a drop is a diff someone has to justify in review.
-BASELINE = {"docx": 15, "xlsx": 8, "pptx": 9, "pdf": 0}
+BASELINE = {"docx": 15, "xlsx": 8, "pptx": 9, "pdf": 8}
 
 
 def applicable_pairs() -> dict[str, list[str]]:
@@ -111,10 +116,22 @@ def _pptx_declared() -> set[str]:
     return set(gen_pptx_corpus.DECLARED)
 
 
-# One entry per format. A format with no generator is absent here rather than mapped to a stub
-# that returns an empty set: "nobody has written one" and "the generator found nothing" are
-# different states, and the report distinguishes them.
-GENERATORS = {"docx": _docx_declared, "xlsx": _xlsx_declared, "pptx": _pptx_declared}
+def _pdf_declared() -> set[str]:
+    """Criteria the .pdf corpus declares. Same constant-plus-test shape as xlsx and pptx, held
+    honest against the fixtures by tests/test_pdf_corpus.py — which, unlike the Office ones, can
+    drive real detection anywhere the suite runs, because the PDF analyser is vendored in-tree
+    (ADR 0029) rather than needing the .NET engine."""
+    import gen_pdf_corpus
+    return set(gen_pdf_corpus.DECLARED)
+
+
+# One entry per format. A format with no generator was absent here rather than mapped to a stub
+# returning an empty set: "nobody has written one" and "the generator found nothing" are
+# different states, and the report distinguished them. Every format now has one — the
+# distinction is kept because it is what `has_generator` reports, and a format could lose its
+# corpus the same way it gained one.
+GENERATORS = {"docx": _docx_declared, "xlsx": _xlsx_declared, "pptx": _pptx_declared,
+              "pdf": _pdf_declared}
 
 
 def coverage() -> dict:
