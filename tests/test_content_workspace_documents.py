@@ -116,6 +116,31 @@ def test_get_latest_version_of_a_document_with_none_is_none(isolated_store, ws):
     assert isolated_store.get_latest_content_workspace_document_version(doc_id) is None
 
 
+def test_get_version_scoped_to_its_own_document(isolated_store, ws):
+    doc_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)
+    version_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document_version(
+        version_id, document_id=doc_id, version_seq=1, content_hash="h1")
+
+    found = isolated_store.get_content_workspace_document_version(version_id, document_id=doc_id)
+    assert found is not None
+    assert found["id"] == version_id
+
+
+def test_get_version_belonging_to_a_different_document_is_none(isolated_store, ws):
+    doc1 = uuid.uuid4().hex[:12]
+    doc2 = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document(doc1, workspace_id=ws, owner_email=OWNER)
+    isolated_store.create_content_workspace_document(doc2, workspace_id=ws, owner_email=OWNER)
+    version_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document_version(
+        version_id, document_id=doc1, version_seq=1, content_hash="h1")
+
+    assert isolated_store.get_content_workspace_document_version(
+        version_id, document_id=doc2) is None
+
+
 def test_a_version_carries_the_full_field_set(isolated_store, ws):
     doc_id = uuid.uuid4().hex[:12]
     isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)

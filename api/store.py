@@ -7587,6 +7587,19 @@ class Store:
                 "ORDER BY version_seq DESC LIMIT 1", (document_id,))
             return self._db.fetchone(cur)
 
+    def get_content_workspace_document_version(self, version_id: str, *,
+                                               document_id: str) -> dict | None:
+        """Scoped to `document_id` (not just the version's own primary key) so a version_id
+        that's real but belongs to a DIFFERENT document — including another owner's, since the
+        route checks document ownership separately — is treated as not found, the same
+        "an id is never an existence oracle across owners" contract every other lookup here
+        follows."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM content_workspace_document_versions WHERE id=%s AND document_id=%s",
+                (version_id, document_id))
+            return self._db.fetchone(cur)
+
     def update_content_workspace_document_version_lifecycle_state(
             self, version_id: str, lifecycle_state: str) -> None:
         """PRD §12's 'keep as new' duplicate resolution: flip an already-created version row's
