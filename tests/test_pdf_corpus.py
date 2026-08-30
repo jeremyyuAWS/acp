@@ -58,10 +58,38 @@ def corpus(tmp_path_factory):
     return out, {row["name"]: row for row in manifest}
 
 
+_ENGINE = ROOT / "engine" / "pdf-analyser"
+if str(_ENGINE) not in sys.path:
+    sys.path.insert(0, str(_ENGINE))
+
+def _catalog_wcags(path: Path) -> set[str]:
+    """The criteria the VENDORED analyser's catalog rules report — 2.4.2 and 3.1.1, which do not
+    go through office_structure.checks_for. Kept separate from the import above so that a
+    truncated checkout fails this file loudly rather than silently reporting a clean scan."""
+    import pdfplumber
+    import pikepdf
+    from analysers.rules.pdf.document_language import DocumentLanguageRule
+    from analysers.rules.pdf.document_title import DocumentTitleRule
+
+    found: set[str] = set()
+    with pikepdf.open(str(path)) as pk, pdfplumber.open(str(path)) as pl:
+        for rule in (DocumentTitleRule(), DocumentLanguageRule()):
+            for issue in rule.check(pk, pl):
+                name = issue.wcag_criterion.name           # e.g. "SC_2_4_2"
+                found.add(".".join(name.removeprefix("SC_").split("_")))
+    return found
+
+
 def _wcags(path: Path) -> set[str]:
-    """The criteria a real scan of this file reports, via the same dispatch the product uses."""
-    return {(f.get("wcag") or "").split()[0] for f in osx.checks_for(path, ".pdf")
-            if f.get("wcag")}
+    """Every criterion a real scan of this file reports, across BOTH pdf code paths.
+
+    The union is what makes the single-criterion assertions below mean anything. Checking only
+    `checks_for` would miss 2.4.2 and 3.1.1 — which every fixture would otherwise raise, since a
+    freshly authored PDF carries neither /Title nor /Lang. The generator stamps both onto every
+    fixture that is not testing their absence, and this union is what proves it did."""
+    structural = {(f.get("wcag") or "").split()[0] for f in osx.checks_for(path, ".pdf")
+                  if f.get("wcag")}
+    return structural | _catalog_wcags(path)
 
 
 def _path(corpus, name: str) -> Path:
@@ -80,18 +108,23 @@ def test_every_declaration_is_a_verdict_the_engine_can_emit(corpus):
                 f"{name} expects {sc}={verdict}, but ({sc}, pdf) can only emit {sorted(allowed)}")
 
 
-def test_only_the_one_certifiable_pair_claims_pass(corpus):
-    """1.4.3 is the only declared .pdf pair that can ever certify; the other seven are
-    review-lane and may never expect PASS however clean the fixture is (ADR 0016). Asserted in
-    both directions so a lane change on either side has to be noticed here."""
+CERTIFIABLE = ("1.4.3", "2.4.2", "3.1.1")
+
+
+def test_only_the_certifiable_pairs_claim_pass(corpus):
+    """Three of the ten declared .pdf pairs can ever certify — 1.4.3, 2.4.2 and 3.1.1, all in the
+    assessment AUTO lane. The other seven are review-lane and may never expect PASS however clean
+    the fixture is (ADR 0016). Asserted in both directions so a lane change on either side has to
+    be noticed here rather than silently turning a control's verdict into a false claim."""
     _out, rows = corpus
     for name, row in rows.items():
         for sc, verdict in row["expect"].items():
             if not ce.can_ever_pass(sc, "pdf"):
                 assert verdict != "PASS", (
                     f"{name} expects PASS on {sc}, which .pdf cannot certify")
-    assert ce.can_ever_pass("1.4.3", "pdf"), (
-        "1.4.3 stopped being certifiable on pdf — contrast-ok's PASS is now a false claim")
+    for sc in CERTIFIABLE:
+        assert ce.can_ever_pass(sc, "pdf"), (
+            f"{sc} stopped being certifiable on pdf — its control's PASS is now a false claim")
 
 
 # ── the labels are EARNED ────────────────────────────────────────────────────────
@@ -101,9 +134,11 @@ def test_only_the_one_certifiable_pair_claims_pass(corpus):
     ("link-colour-only", "1.4.1"),
     ("contrast-fail", "1.4.3"),
     ("rect-faint-outline", "1.4.11"),
+    ("no-document-title", "2.4.2"),
     ("no-tabs-structure", "2.4.3"),
     ("link-vague", "2.4.4"),
     ("no-headings", "2.4.6"),
+    ("no-document-language", "3.1.1"),
     ("field-no-name", "4.1.2"),
 ])
 def test_each_violation_fixture_is_actually_detected(corpus, name, sc):
@@ -120,9 +155,11 @@ def test_each_violation_fixture_is_actually_detected(corpus, name, sc):
     ("link-underlined-ok", "1.4.1"),
     ("contrast-ok", "1.4.3"),
     ("rect-strong-outline-ok", "1.4.11"),
+    ("document-title-ok", "2.4.2"),
     ("tabs-structure-ok", "2.4.3"),
     ("link-descriptive-ok", "2.4.4"),
     ("headings-ok", "2.4.6"),
+    ("document-language-ok", "3.1.1"),
     ("field-named-ok", "4.1.2"),
 ])
 def test_each_adversarial_fixture_stays_silent(corpus, name, sc):
@@ -150,15 +187,21 @@ def test_every_violation_has_a_paired_adversarial_fixture(corpus):
     ("figure-no-alt", "1.1.1"),
     ("link-colour-only", "1.4.1"),
     ("rect-faint-outline", "1.4.11"),
+    ("no-document-title", "2.4.2"),
     ("no-tabs-structure", "2.4.3"),
     ("link-vague", "2.4.4"),
     ("no-headings", "2.4.6"),
+    ("no-document-language", "3.1.1"),
     ("field-no-name", "4.1.2"),
 ])
 def test_each_violation_fixture_trips_exactly_one_criterion(corpus, name, sc):
     """A fixture that raises two findings cannot say which change the detector reacted to, and
-    it silently makes the corpus's per-criterion counts wrong. contrast-fail is excluded and
-    covered by its own test below — its second finding is inherent, not a defect."""
+    it silently makes the corpus's per-criterion counts wrong. Because `_wcags` unions both pdf
+    code paths, this is also what proves the generator stamped /Title and /Lang onto every
+    fixture: without the stamp all nine of these would additionally raise 2.4.2 and 3.1.1.
+
+    contrast-fail is excluded and covered by its own test below — its second finding is
+    inherent, not a defect."""
     fired = _wcags(_path(corpus, name))
     assert fired == {sc}, f"{name} should trip only {sc} but a real scan reported {sorted(fired)}"
 

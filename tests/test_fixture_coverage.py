@@ -3,7 +3,7 @@
 WHY A COVERAGE REPORT AT ALL. The Phase-1 acceptance criterion is "all applicable pairs have
 explicit fixture coverage or a documented human-only rationale". Nothing computed that, so the
 size of the remaining job was unknown — and an unknown denominator is how "we have a corpus"
-becomes a claim nobody can check. The answer today is 40 of 62 (65%): .docx complete, and a
+becomes a claim nobody can check. The answer today is 42 of 62 (68%): .docx complete, and a
 partial labelled corpus for each of xlsx, pptx and pdf. It started at 15 of 62 (24%), with
 .docx the only format that had one at all.
 
@@ -59,7 +59,8 @@ def test_every_format_is_accounted_for():
 def test_coverage_is_complete_for_docx_and_partial_for_the_other_three():
     """The honest state. gen_sc_corpus.py declares an expectation for every .docx pair in the
     preset; the other three corpora are deliberately partial, declaring only the pairs whose
-    first-party detector was confirmed to fire against the fixture (see tests/test_xlsx_corpus.py,
+    detector — one that runs wherever the suite runs, whether it lives in api/ or in the
+    vendored analyser — was confirmed to fire against the fixture (see tests/test_xlsx_corpus.py,
     test_pptx_corpus.py, test_pdf_corpus.py). Every format now has a labelled corpus; none but
     .docx is complete, and the missing pairs are named by the report rather than rounded away.
 
@@ -82,7 +83,7 @@ def test_coverage_is_complete_for_docx_and_partial_for_the_other_three():
         f"BASELINE['pptx'] and this count together, in the commit that adds the fixtures")
 
     assert cov["pdf"]["has_generator"] is True
-    assert len(cov["pdf"]["covered"]) == 8, (
+    assert len(cov["pdf"]["covered"]) == 10, (
         f"the pdf corpus now declares {len(cov['pdf']['covered'])} pairs — raise "
         f"BASELINE['pdf'] and this count together, in the commit that adds the fixtures")
 

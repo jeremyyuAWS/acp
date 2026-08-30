@@ -2,33 +2,42 @@
 """A LABELLED .pdf corpus — the fourth and last format to get ground truth.
 
 WHY THIS EXISTS. `scripts/gen_fixture_coverage.py` reports coverage per (criterion, format)
-pair; pdf sat at 0 of 15 because no labelled corpus existed. This declares EIGHT of them, and
+pair; pdf sat at 0 of 15 because no labelled corpus existed. This declares TEN of them, and
 completes the sweep begun with .docx: every format ACP scans now has ground truth.
 
-SAME RULE AS THE XLSX AND PPTX CORPORA, and it is the rule that makes the number mean
-something: a pair is declared only when a FIRST-PARTY detector — pure Python under
-`api/formats/pdf/detectors/` and `api/office_structure.py`, no partner engine — was driven
-against the fixture and confirmed to fire, with an adversarial counterpart confirmed to stay
-silent. Coverage is counted from declarations, so a fixture whose seeded violation nobody has
-confirmed is caught would raise the number without raising what the number measures.
+THE RULE THAT MAKES THE NUMBER MEAN SOMETHING: a pair is declared only when a detector that
+runs WHEREVER THE SUITE RUNS was driven against the fixture and confirmed to fire, with an
+adversarial counterpart confirmed to stay silent. Coverage is counted from declarations, so a
+fixture whose seeded violation nobody has confirmed is caught would raise the number without
+raising what the number measures.
 
     1.1.1   a tagged /Figure with no /Alt            pdf_non_text_content_checks
     1.4.1   a coloured link with no underline        pdf_use_of_color_checks
     1.4.3   grey text on an explicit white ground    pdf_contrast_checks
     1.4.11  a faint rect outline on its own fill     pdf_nontext_contrast_checks
+    2.4.2   no /Title in the info dictionary         analysers…pdf.document_title
     2.4.3   form widgets on a page without /Tabs /S  pdf_focus_order_checks
     2.4.4   a vague link label ("Click here")        pdf_link_purpose_check
     2.4.6   a tagged 6-page file with no heading     pdf_headings_labels_check
+    3.1.1   no /Lang in the document catalog         analysers…pdf.document_language
     4.1.2   an AcroForm field with no /TU            pdf_form_field_checks
 
-WHY PDF REACHES FURTHEST OF ANY FORMAT — eight pairs from a standing start, where xlsx managed
-eight only after zip-part injection. The PDF analyser is vendored in-tree (ADR 0029), so unlike
-the .NET Office analyser it is present wherever the suite runs: `scripts/check_engines.py`
-reports office and ocr unavailable in a bare container and pdf available. Every detector above
-is reachable without installing anything.
+TWO CODE PATHS, ONE AVAILABILITY STORY. The first eight run through
+`office_structure.checks_for`; 2.4.2 and 3.1.1 are catalog rules in
+`engine/pdf-analyser/analysers/rules/pdf/`. The xlsx and pptx corpora phrased their rule as
+"first-party, no partner engine", and applying that phrasing here was a MISTAKE this file made
+in its first draft: it listed 2.4.2 and 3.1.1 among criteria needing "tag-tree semantics or
+langdetect", when each is one pikepdf dictionary lookup in a tree vendored in-repo since ADR
+0029. The property that actually matters is whether a detector runs everywhere the suite runs,
+not which directory it lives in — for PDF, both paths do. `scripts/check_engines.py` reports
+office and ocr unavailable in a bare container and pdf available.
 
-The seven not here (1.3.1, 1.3.2, 1.3.3, 1.4.5, 2.4.2, 3.1.1, 3.1.2) need tag-tree semantics no
-detector reads yet, OCR (1.4.5), or langdetect (3.1.1/3.1.2).
+Those two are also the most valuable pairs here: both sit in the ASSESSMENT AUTO lane at
+ceiling C, so a clean result CERTIFIES the document. They were two of the ten
+certification-capable pairs in the whole preset with nothing verifying them.
+
+The five not here (1.3.1, 1.3.2, 1.3.3, 1.4.5, 3.1.2) need tag-tree semantics no detector
+reads yet, or OCR (1.4.5).
 
 THREE DETECTOR SUBTLETIES, each of which would silently cover nothing if a fixture ignored it:
 
@@ -84,6 +93,13 @@ LINK_URL = "https://example.org/accessibility-policy"
 
 _PAGE = (400, 220)
 _MIN_PAGES = 6       # clears the five-page floor pdf_headings_labels_check applies
+
+# Stamped onto EVERY fixture that is not deliberately testing their absence. Without this each
+# fixture would also raise 2.4.2 (no /Title) and 3.1.1 (no /Lang), because a pikepdf-authored or
+# reportlab-authored PDF carries neither by default — so every fixture in the corpus would be a
+# three-criterion fixture and none of the per-criterion counts would mean anything.
+DOC_TITLE = "Q3 regional accessibility report"
+DOC_LANG = "en-GB"
 
 
 # ── reportlab-drawn fixtures (content: text, links, rects) ───────────────────────
@@ -299,7 +315,43 @@ def f_tabs_structure_ok(path: Path):
     return {"2.4.3": "REVIEW"}, "the same page with /Tabs /S set (adversarial)"
 
 
+# ── the two catalog rules, run from the vendored analyser ───────────────────────
+# 2.4.2 and 3.1.1 do NOT go through office_structure.checks_for — they are catalog rules
+# implemented in engine/pdf-analyser/analysers/rules/pdf/. That is a different code path, not a
+# different availability story: both are pure Python reading /Title and /Lang with pikepdf, and
+# the analyser is vendored in-tree (ADR 0029), so they run wherever the suite runs. An earlier
+# draft of this file listed both as unreachable "tag-tree semantics or langdetect" work; they
+# are neither, and each is one dictionary lookup.
+#
+# These two matter more than their count suggests: both sit in the ASSESSMENT AUTO lane at
+# ceiling C, meaning a clean result certifies the document. They were two of the ten
+# certification-capable pairs with no ground-truth fixture behind them.
+
+def f_no_document_title(path: Path):
+    _blank().save(str(path))
+    return {"2.4.2": "FAIL"}, "no /Title in the document info dictionary", {"title": None}
+
+
+def f_document_title_ok(path: Path):
+    _blank().save(str(path))
+    return {"2.4.2": "PASS"}, f"/Title set to {DOC_TITLE!r} (adversarial)", {}
+
+
+def f_no_document_language(path: Path):
+    _blank().save(str(path))
+    return {"3.1.1": "FAIL"}, "no /Lang in the document catalog", {"lang": None}
+
+
+def f_document_language_ok(path: Path):
+    _blank().save(str(path))
+    return {"3.1.1": "PASS"}, f"/Lang set to {DOC_LANG!r} (adversarial)", {}
+
+
 FIXTURES = [
+    ("no-document-title",       f_no_document_title,       "violation"),
+    ("document-title-ok",       f_document_title_ok,       "adversarial"),
+    ("no-document-language",    f_no_document_language,    "violation"),
+    ("document-language-ok",    f_document_language_ok,    "adversarial"),
     ("figure-no-alt",           f_figure_no_alt,           "violation"),
     ("figure-with-alt-ok",      f_figure_with_alt_ok,      "adversarial"),
     ("link-colour-only",        f_link_colour_only,        "violation"),
@@ -318,7 +370,23 @@ FIXTURES = [
     ("field-named-ok",          f_field_named_ok,          "adversarial"),
 ]
 
-DECLARED = ("1.1.1", "1.4.1", "1.4.11", "1.4.3", "2.4.3", "2.4.4", "2.4.6", "4.1.2")
+DECLARED = ("1.1.1", "1.4.1", "1.4.11", "1.4.3", "2.4.2", "2.4.3", "2.4.4", "2.4.6",
+            "3.1.1", "4.1.2")
+
+
+def _stamp(path: Path, title: str | None, lang: str | None) -> None:
+    """Give a built fixture its document title and language — or deliberately withhold one.
+
+    Applied to EVERY fixture rather than left to each builder, because the failure mode of
+    forgetting is silent: the fixture simply grows a second and third finding and the corpus
+    stops being per-criterion without anything going red."""
+    import pikepdf
+    with pikepdf.open(str(path), allow_overwriting_input=True) as pdf:
+        if title is not None:
+            pdf.docinfo[pikepdf.Name("/Title")] = pikepdf.String(title)
+        if lang is not None:
+            pdf.Root.Lang = pikepdf.String(lang)
+        pdf.save(str(path))
 
 
 def _validate(name: str, expectations: dict[str, str]) -> list[str]:
@@ -340,7 +408,13 @@ def build_all(docs: Path) -> tuple[list[dict], list[str]]:
     manifest, problems = [], []
     for name, build, kind in FIXTURES:
         path = docs / f"{name}.pdf"
-        expectations, note = build(path)
+        built = build(path)
+        expectations, note = built[0], built[1]
+        # A builder may return a third element saying which piece of document metadata it is
+        # deliberately withholding; everything else gets both, so no fixture accidentally tests
+        # 2.4.2 or 3.1.1 as well as its own criterion.
+        meta = built[2] if len(built) > 2 else {}
+        _stamp(path, meta.get("title", DOC_TITLE), meta.get("lang", DOC_LANG))
         problems += _validate(name, expectations)
         manifest.append({"file": f"docs/{name}.pdf", "name": name, "kind": kind,
                          "format": FMT, "expect": expectations, "note": note})
