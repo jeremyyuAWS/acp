@@ -3170,12 +3170,24 @@ class Store:
             # it without a schema change. Was previously unset on real scans (SIM-only field),
             # which silently blanked any "by source" chart.
             src_label = _SOURCE_LABEL.get(run.get("source"), run.get("source"))
+            # ONE query for every file's issues, not one per file — this loop used to issue a
+            # separate SELECT per row, which is thousands of sequential round trips on a real
+            # estate (exactly the add_inventory bug #880 already fixed on the write side, still
+            # live here on the read side: found live 2026-08-30, a ~6,916-file scan's Discover
+            # tab stuck on "Loading your inventory…" indefinitely — getScan() has no client-side
+            # timeout, so a slow response here just hangs the tab forever rather than erroring).
+            # Grouped in Python instead, from one round trip.
+            self._db.execute(cur,
+                "SELECT file,rule_id,wcag,severity,detail,page,location FROM issue_records WHERE scan_id=%s",
+                (sid,))
+            issues_by_file: dict[str, list] = {}
+            for row in self._db.fetchall(cur):
+                issues_by_file.setdefault(row["file"], []).append(
+                    {"rule_id": row["rule_id"], "wcag": row["wcag"], "severity": row["severity"],
+                     "detail": row["detail"], "page": row["page"], "location": row["location"]})
             for f in files:
                 f["sourceName"] = src_label
-                self._db.execute(cur,
-                    "SELECT rule_id,wcag,severity,detail,page,location FROM issue_records WHERE scan_id=%s AND file=%s",
-                    (sid, f["file"]))
-                f["issues"] = self._db.fetchall(cur)
+                f["issues"] = issues_by_file.get(f["file"], [])
             # Phase 3a — project the scan's FROZEN criterion×format scope onto the run payload so
             # the SPA can render a scope chip (3b) from `run.scan_scope` without re-reading and
             # re-decoding the scope JSON itself. Additive and non-breaking: None when the scan

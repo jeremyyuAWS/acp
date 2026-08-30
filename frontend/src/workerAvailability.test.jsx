@@ -35,15 +35,24 @@ describe('WorkerAvailability', () => {
     const c = await mount({ snap: { workers: 0, alive: false } })
     expect(c.textContent).toMatch(/offline/i)
     expect(c.textContent).toMatch(/processing capacity is off/i)
+    expect(c.textContent).toMatch(/no worker will pick up new jobs/i)
   })
 
   it('does not say "online" and "0 workers available" in the same breath — that reads as a '
      + 'contradiction (found live 2026-08-29); zero capacity is said as one fact instead', async () => {
     const c = await mount({ snap: { workers: 0, alive: true } })
     expect(c.textContent).toMatch(/online/i)
-    expect(c.textContent).toMatch(/processing capacity is off/i)
     expect(c.textContent).not.toMatch(/0 workers available/i)
   })
+
+  it('does not claim "no worker will pick up new jobs" when the dedicated worker tier is alive '
+     + '— found live 2026-08-30, a false alarm on every split-topology deployment with the '
+     + 'in-process pool left at its default of 0', async () => {
+    const c = await mount({ snap: { workers: 0, alive: true } })
+    expect(c.textContent).not.toMatch(/no worker will pick up new jobs/i)
+    expect(c.textContent).toMatch(/jobs run on the dedicated worker container/i)
+  })
+
 
   it('singularizes "worker" for a count of one', async () => {
     const c = await mount({ snap: { workers: 1, alive: true } })
