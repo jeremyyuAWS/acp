@@ -713,6 +713,31 @@ _SCHEMA = [
     # named a second, non-unique index on the same two columns in the same order; it would be
     # pure dead weight beside this one, so only this ships.
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_events_seq ON scan_events(scan_id, seq)",
+    # ADR 0044 — ACP Managed Content Workspace, Phase 1. A workspace is the tenant-scoped
+    # container a customer creates before uploading anything; `content_workspace_documents`/
+    # `content_workspace_document_versions` (the actual upload targets) are deliberately NOT
+    # created yet — see the ADR for why an empty, unpopulated table is worse than no table.
+    # `owner_email` is the tenant boundary, same convention as every other per-user isolation
+    # boundary in this app (scan_runs, documents, campaign, ...) — no new tenant_id concept.
+    """CREATE TABLE IF NOT EXISTS content_workspaces (
+      id TEXT PRIMARY KEY,
+      owner_email TEXT NOT NULL,
+      name TEXT NOT NULL,
+      purpose TEXT,
+      business_owner TEXT,
+      department TEXT,
+      wcag_standard TEXT,
+      retention_policy TEXT,
+      permitted_file_types TEXT,
+      due_date TEXT,
+      project TEXT,
+      processing_region TEXT,
+      external_ai_policy TEXT,
+      status TEXT DEFAULT 'active',
+      created_at TEXT,
+      updated_at TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_content_workspaces_owner ON content_workspaces(owner_email)",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -2240,7 +2265,8 @@ class Store:
                          "active_discovery_guard",  # transient lock state — cleared on reset
                          "sync_cursors",  # connector sync position is customer-derived, not config
                          "overview_snapshots",  # derived from scan results — customer data, not config
-                         "scan_events"]  # ADR 0042 lifecycle log — a record OF customer scans
+                         "scan_events",  # ADR 0042 lifecycle log — a record OF customer scans
+                         "content_workspaces"]  # ADR 0044 — a customer's own workspace, not config
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
@@ -2268,9 +2294,9 @@ class Store:
             owner_email=%s).
           - doc_id-keyed (_RESET_USER_DOC_TABLES): doc_id IN (SELECT doc_id FROM documents WHERE
             owner_email=%s) — disposition_audit/remediation_state key on doc_id, not scan_id.
-          - owns owner_email directly: scan_decisions, documents, scan_runs (WHERE owner_email=%s);
-            org_memory (WHERE org=%s — every call site sets `org` to the signed-in user's own
-            email, so it is already per-user despite the name).
+          - owns owner_email directly: scan_decisions, documents, scan_runs, content_workspaces
+            (ADR 0044 — WHERE owner_email=%s); org_memory (WHERE org=%s — every call site sets
+            `org` to the signed-in user's own email, so it is already per-user despite the name).
 
         Deliberately excluded, unlike reset_analytics():
           - `inventory` — a global path-dedup index with no owner concept; nothing to scope it by.
@@ -2307,6 +2333,8 @@ class Store:
             cleared.append("documents")
             self._db.execute(cur, "DELETE FROM org_memory WHERE org=%s", (owner_email,))
             cleared.append("org_memory")
+            self._db.execute(cur, "DELETE FROM content_workspaces WHERE owner_email=%s", (owner_email,))
+            cleared.append("content_workspaces")
             # scan_runs last — every scan_id-scoped subquery above depends on these rows existing.
             self._db.execute(cur, "DELETE FROM scan_runs WHERE owner_email=%s", (owner_email,))
             cleared.append("scan_runs")
@@ -7351,6 +7379,52 @@ class Store:
     def update_campaign_batch_status(self, batch_id: str, status: str) -> None:
         with self._db.cursor() as cur:
             self._db.execute(cur, "UPDATE campaign_batch SET status=%s WHERE batch_id=%s", (status, batch_id))
+
+    # ── ACP Managed Content Workspace (ADR 0044, PRD Phase 1) ───────────────────
+    _CONTENT_WORKSPACE_COLS = (
+        "id,owner_email,name,purpose,business_owner,department,wcag_standard,retention_policy,"
+        "permitted_file_types,due_date,project,processing_region,external_ai_policy,status,"
+        "created_at,updated_at")
+
+    def create_content_workspace(self, workspace_id: str, *, owner_email: str, name: str,
+                                 purpose: str | None = None, business_owner: str | None = None,
+                                 department: str | None = None, wcag_standard: str | None = None,
+                                 retention_policy: str | None = None,
+                                 permitted_file_types: list[str] | None = None,
+                                 due_date: str | None = None, project: str | None = None,
+                                 processing_region: str | None = None,
+                                 external_ai_policy: str | None = None) -> None:
+        import json as _json
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"INSERT INTO content_workspaces({self._CONTENT_WORKSPACE_COLS}) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (workspace_id, owner_email, name, purpose, business_owner, department,
+                 wcag_standard, retention_policy,
+                 _json.dumps(permitted_file_types) if permitted_file_types is not None else None,
+                 due_date, project, processing_region, external_ai_policy, "active", now, now))
+
+    def list_content_workspaces(self, owner_email: str) -> list[dict]:
+        """Owner-scoped, same tenant boundary as every other per-user list in this app — never
+        a global listing (see ADR 0044: owner_email is the tenant, no admin-sees-all carve-out
+        decided yet)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM content_workspaces WHERE owner_email=%s ORDER BY created_at DESC",
+                (owner_email,))
+            return self._db.fetchall(cur)
+
+    def get_content_workspace(self, workspace_id: str, *, owner_email: str) -> dict | None:
+        """`owner_email` required and checked in the SAME query, not after — a foreign
+        workspace id must come back exactly like a nonexistent one (see
+        tests/test_foreign_scan_404.py's identical contract for scans: an id is never an
+        existence oracle across owners)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM content_workspaces WHERE id=%s AND owner_email=%s",
+                (workspace_id, owner_email))
+            return self._db.fetchone(cur)
 
     def list_scan_severities(self, scan_id: str) -> list[dict]:
         """{file, severity} for every finding in a scan -- the input compute_batches
