@@ -261,9 +261,28 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
 
         def _g(rule):
             return _mem.guidance_for(core.store, _org, rule, _fmt)
+
+        # ADR 0021 §E — the rules behind that guidance, so the review card can show WHICH house
+        # style shaped a scan-time draft (the chip #999 built for the live /ai/suggest path).
+        # Same store.memory_applied_rules call `_g` composed its prompt block from, so the chip
+        # reports what the proposer was actually asked rather than a second lookup that could
+        # disagree with it.
+        #
+        # Passed ONLY at the call sites that pass `guidance=_g(...)`. That is the whole design
+        # constraint: `_enqueue_proposals` is reached by 12 criteria and only five of them see
+        # guidance at all — reading order, the colour/contrast cards, the one-click layout fixes,
+        # chart datasheets and the language tags are deterministic, and ADR 0021 says so outright
+        # ("Deterministic proposers … ignore memory — there is nothing to steer"). Stamping at the
+        # choke point would put "house style applied" on drafts memory never touched, which is
+        # precisely the claim the chip exists to make impossible.
+        def _hs(rule):
+            return _mem.applied_rules(core.store, _org, rule, _fmt)
     except Exception:
         def _g(rule):
             return ""
+
+        def _hs(rule):
+            return []
     try:
         import tempfile
         from pathlib import Path as _P
@@ -334,7 +353,8 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
         try:
             _enqueue_proposals(scan_id, filename, "1.3.3", "Sensory Characteristics",
                                _prop.propose_sensory_rewrite(text, filename=filename,
-                                                             ai_enabled=ai_enabled, guidance=_g("1.3.3")))
+                                                             ai_enabled=ai_enabled, guidance=_g("1.3.3")),
+                               house_style=_hs("1.3.3"))
         except Exception:
             pass
         try:
@@ -345,12 +365,14 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
     # 2.4.10 — AI-drafted section headings for a long, heading-less docx (reads the zip, so
     # computed above while the temp path was alive; self-gates on the detector's conditions).
     try:
-        _enqueue_proposals(scan_id, filename, "2.4.10", "Section Headings", section_heads)
+        _enqueue_proposals(scan_id, filename, "2.4.10", "Section Headings", section_heads,
+                           house_style=_hs("2.4.10"))
     except Exception:
         pass
     # 2.4.6 — AI slide-title drafts for pptx title placeholders left empty.
     try:
-        _enqueue_proposals(scan_id, filename, "2.4.6", "Headings and Labels", slide_titles + xlsx_labels)
+        _enqueue_proposals(scan_id, filename, "2.4.6", "Headings and Labels", slide_titles + xlsx_labels,
+                           house_style=_hs("2.4.6"))
     except Exception:
         pass
     # 1.3.2 — reading-order recommendations for docx floating text boxes / frames.
@@ -390,10 +412,16 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
     # text reused across destinations). Needs the file on disk like the OCR proposer, so it
     # was computed above while the temp path was alive; split by the sc each proposal carries.
     try:
+        # Both criteria carry _hs("2.4.4"), not each their own, because both halves of
+        # `link_props` came out of ONE propose_link_texts call built with `guidance=_g("2.4.4")`.
+        # The chip reports the rules the prompt actually received, so a 2.4.9 card can show a
+        # rule scoped to WCAG 2.4.4 — which reads oddly but is the true answer. Looking up
+        # _hs("2.4.9") here would look tidier and would name rules that shaped nothing.
         for sc, rule_name in (("2.4.4", "Link Purpose (In Context)"),
                               ("2.4.9", "Link Purpose (Link Only)")):
             _enqueue_proposals(scan_id, filename, sc, rule_name,
-                               [p for p in link_props if p.get("sc") == sc])
+                               [p for p in link_props if p.get("sc") == sc],
+                               house_style=_hs("2.4.4"))
     except Exception:
         pass
 
@@ -437,12 +465,21 @@ def _record_applied_fixes(scan_id: str, filename: str, fixes: list) -> None:
 
 
 def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
-                       proposals: list, *, validated: bool = False) -> None:
+                       proposals: list, *, validated: bool = False,
+                       house_style: list | None = None) -> None:
     """Best-effort: attach AI-proposed (not auto-applied) fix values to the file's HITL row
     for this SC, so the reviewer approves a prefilled value in one click. Never fails the
     remediation job — a telemetry/queue error just means the finding routes as a plain
     deferral. `validated` stays False for model/heuristic proposals (a machine guess a human
-    confirms), so confidence.js surfaces them as Medium/Low, never a trusted 'fixed'."""
+    confirms), so confidence.js surfaces them as Medium/Low, never a trusted 'fixed'.
+
+    `house_style` is the org review-memory rules that shaped these drafts' prompt (ADR 0021 §E),
+    for the card's "house style applied" chip. OPTIONAL AND DEFAULTED TO NONE ON PURPOSE, and
+    that default is the safety property, not a convenience: this function is the choke point for
+    12 criteria and only five of them are given guidance at all. A caller that does not pass it
+    — every deterministic proposer — cannot accidentally acquire a chip claiming an influence its
+    draft never had. Passing it here rather than deriving it here is deliberate for the same
+    reason: derived, it would apply to all 12."""
     if not proposals:
         return
     # OPERATOR SCOPE. One gate here covers every proposer — 19 call sites across 12 criteria —
@@ -463,6 +500,17 @@ def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
         except Exception:
             pass
         return
+    # Stamp the applied house style onto each proposal. It rides inside the existing `proposals`
+    # JSON blob — no schema change: store._decode_proposals is a plain json.loads and
+    # routes/hitl.py returns the rows unfiltered, so an extra key reaches the SPA intact.
+    #
+    # On every proposal rather than just the first: the value is card-level (it keys on org +
+    # criterion + format, identical across a card's instances), but reading it off index 0 would
+    # make the chip depend on list ORDER, and the frontend reads the first proposal that carries
+    # one instead. A few hundred bytes per instance is the right price for not having an
+    # ordering assumption in a claim about what shaped a draft.
+    if house_style:
+        proposals = [{**p, "house_style": house_style} for p in proposals]
     try:
         core.store.enqueue_proposals(scan_id, filename, sc, proposals,
                                      validated=validated, rule_name=rule_name)
