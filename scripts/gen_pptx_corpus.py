@@ -284,6 +284,88 @@ def f_sensory_instruction_ok(prs, slide):
             "the same instruction naming the control and the section (adversarial)")
 
 
+
+# ── 1.4.5 Images of Text — decided by OCR, not by the container ─────────────────
+# Like 1.3.3, this criterion reads the DOCUMENT'S PIXELS rather than its structure: ocr.py runs
+# tesseract over each embedded raster and flags any carrying >= ocr._MIN_WORDS (10) real words.
+# The image is the fixture and the deck is the container, so the wording is identical across
+# the .xlsx, .pptx and .pdf corpora — see tests/test_images_of_text_corpus.py, which asserts that
+# sameness so one detector change reads as one result in three places.
+#
+# THE ALT IS CORRECT ON PURPOSE, and that is what keeps the fixture single-criterion. 1.4.5 is
+# alt-agnostic — `images_of_text` never looks at a descr — so an image of prose fails 1.4.5
+# whether or not it is described. Leaving the alt off would fail 1.1.1 as well and the fixture
+# would measure two things at once. (The .docx corpus's equivalent DOES declare both, which is
+# correct there: gen_sc_corpus is scored by score_assessment rather than by the single-criterion
+# sweep these three corpora use.)
+#
+# THE WORD FLOOR IS THE TRAP. _MIN_WORDS counts OCR'd TOKENS, not what was drawn — dates and
+# phone numbers are not words. The .docx corpus hit this: three short lines recovered six words,
+# so 1.4.9 (floor 3) fired and 1.4.5 (floor 10) did not, and the fixture read as an engine bug.
+# Hence prose, and enough of it: this image OCRs to 29 words, with room for the odd merge
+# ("begins on" comes back as "beginson").
+IMAGE_OF_TEXT_PROSE = ("Open enrollment for the coming plan year",
+                       "begins on the first of March and closes",
+                       "on the last day of the same month. Call",
+                       "the benefits office to change your plan.")
+IMAGE_OF_TEXT_ALT = ("Open enrollment runs from 1 March to 31 March; call the benefits office "
+                     "to change plan.")
+# WCAG 1.4.5 exempts logotypes, and ocr._MIN_WORDS is what encodes that exemption here: two words
+# is under the floor, so the control is clean for the same reason a real logo would be.
+LOGO_TEXT = ("UT Health",)
+
+
+def _text_png(lines, size=(900, 360)) -> bytes:
+    """A PNG with real, OCR-legible text baked into it.
+
+    Scaled up AFTER drawing because PIL's default bitmap font is too small for tesseract to read
+    reliably at native size. An unreadable image-of-text fixture silently becomes a no-text
+    fixture, and 1.4.5 then stops firing for a reason that has nothing to do with the detector —
+    which is the failure mode a ground-truth corpus exists to make impossible."""
+    import io
+    from PIL import Image, ImageDraw
+    im = Image.new("RGB", size, "white")
+    d = ImageDraw.Draw(im)
+    y = 20
+    for line in lines:
+        d.text((20, y), line, fill="black")
+        y += 70
+    im = im.resize((size[0] * 2, size[1] * 2), Image.LANCZOS)
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _text_png_file(lines, size=(900, 360)):
+    import tempfile
+    png = Path(tempfile.mkdtemp()) / "image-of-text.png"
+    png.write_bytes(_text_png(lines, size))
+    return png
+
+
+def f_image_of_text(prs, slide):
+    from pptx.util import Inches
+    _textbox(slide, "Enrollment notice")
+    pic = slide.shapes.add_picture(str(_text_png_file(IMAGE_OF_TEXT_PROSE)),
+                                   Inches(1), Inches(2), Inches(6), Inches(2.4))
+    pic._element._nvXxPr.cNvPr.set("descr", IMAGE_OF_TEXT_ALT)
+    return ({"1.4.5": "FAIL"},
+            "a screenshot of prose pasted onto a slide, correctly described. The alt makes it "
+            "reachable but not RESIZABLE — enlarging it pixelates rather than reflows, which is "
+            "what 1.4.5 is about")
+
+
+def f_image_of_text_logo_ok(prs, slide):
+    from pptx.util import Inches
+    _textbox(slide, "Enrollment notice")
+    pic = slide.shapes.add_picture(str(_text_png_file(LOGO_TEXT, size=(300, 100))),
+                                   Inches(1), Inches(2), Inches(2), Inches(0.7))
+    pic._element._nvXxPr.cNvPr.set("descr", "UT Health")
+    return ({"1.4.5": "REVIEW"},
+            "a logotype with its text as the alt (adversarial). WCAG 1.4.5 exempts logos, so a "
+            "finding here is a false positive")
+
+
 FIXTURES = [
     ("sensory-instruction",     f_sensory_instruction,     "violation"),
     ("sensory-instruction-ok",  f_sensory_instruction_ok,  "adversarial"),
@@ -302,11 +384,13 @@ FIXTURES = [
     ("embedded-control",        f_embedded_control,        "violation"),
     ("no-controls-ok",          f_no_controls_ok,          "adversarial"),
     ("picture-no-alt",          f_picture_no_alt,          "violation"),
+    ("image-of-text",           f_image_of_text,           "violation"),
+    ("image-of-text-logo-ok",   f_image_of_text_logo_ok,   "adversarial"),
     ("no-picture-ok",           f_no_picture_ok,           "adversarial"),
 ]
 
-DECLARED = ("1.1.1", "1.3.3", "1.4.1", "1.4.11", "1.4.3", "2.1.2", "2.4.3", "2.4.4",
-            "2.4.6", "4.1.2")
+DECLARED = ("1.1.1", "1.3.3", "1.4.1", "1.4.11", "1.4.3", "1.4.5", "2.1.2", "2.4.3",
+            "2.4.4", "2.4.6", "4.1.2")
 
 
 def _validate(name: str, expectations: dict[str, str]) -> list[str]:

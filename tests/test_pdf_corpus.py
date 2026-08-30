@@ -46,6 +46,7 @@ sys.path.insert(0, str(ROOT / "api"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import office_structure as osx  # noqa: E402
+import ocr as _ocr  # noqa: E402
 import scanner  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
@@ -99,6 +100,15 @@ def _analyser_wcags(path: Path) -> set[str]:
             for i in result["issues"] if i.get("wcag")}
 
 
+def _ocr_wcags(path: Path) -> set[str]:
+    """Criteria the OCR lane reports — 1.4.5, read out of the page's PIXELS rather than its
+    structure or its object tree. Empty when tesseract is unavailable, which is why the 1.4.5
+    assertions skip rather than fail on a bare checkout; both CI pipelines run
+    scripts/install_tesseract.sh, so that skip is a fallback and not the normal state."""
+    return {(f.get("wcag") or "").split()[0] for f in _ocr.images_of_text(path, ".pdf")
+            if f.get("wcag")}
+
+
 def _wcags(path: Path) -> set[str]:
     """Every criterion a real scan of this file reports, across BOTH pdf code paths.
 
@@ -106,10 +116,15 @@ def _wcags(path: Path) -> set[str]:
     halves are genuinely disjoint sources rather than one wrapping the other: the vendored
     analyser supplies 1.1.1, 1.3.1, 1.3.2, 2.4.2 and 3.1.1, while `office_structure.checks_for`
     supplies the first-party contrast, link, tab-order, heading and form-label checks. Neither
-    alone is what a user's scan reports."""
+    alone is what a user's scan reports.
+
+    THREE lanes now, not two: 1.4.5 is read out of the page's PIXELS by ocr.py, which is neither
+    of the above. Adding a fixture for a criterion whose lane is missing from this union is how
+    the 2.4.2 control came to be labelled without being checked, so the union grows with the
+    corpus rather than after it."""
     structural = {(f.get("wcag") or "").split()[0] for f in osx.checks_for(path, ".pdf")
                   if f.get("wcag")}
-    return structural | _analyser_wcags(path)
+    return structural | _analyser_wcags(path) | _ocr_wcags(path)
 
 
 def _path(corpus, name: str) -> Path:
@@ -151,8 +166,10 @@ def test_only_the_certifiable_pairs_claim_pass(corpus):
 
 @pytest.mark.parametrize("name,sc", [
     ("figure-no-alt", "1.1.1"),
+    ("untagged-document", "1.3.1"),
     ("link-colour-only", "1.4.1"),
     ("contrast-fail", "1.4.3"),
+    ("image-of-text", "1.4.5"),
     ("rect-faint-outline", "1.4.11"),
     ("no-document-title", "2.4.2"),
     ("no-tabs-structure", "2.4.3"),
@@ -172,8 +189,10 @@ def test_each_violation_fixture_is_actually_detected(corpus, name, sc):
 
 @pytest.mark.parametrize("name,sc", [
     ("figure-with-alt-ok", "1.1.1"),
+    ("tagged-document-ok", "1.3.1"),
     ("link-underlined-ok", "1.4.1"),
     ("contrast-ok", "1.4.3"),
+    ("image-of-text-logo-ok", "1.4.5"),
     ("rect-strong-outline-ok", "1.4.11"),
     ("document-title-ok", "2.4.2"),
     ("tabs-structure-ok", "2.4.3"),
@@ -428,3 +447,16 @@ def test_the_two_tagging_fixtures_differ_only_in_the_tag_tree(corpus):
     import pii
     assert (pii.extract_text(bad) or "").strip() == (pii.extract_text(ok) or "").strip(), (
         "the tagging pair's page text has diverged — the pair no longer isolates 1.3.1")
+
+
+def test_ocr_is_present_in_ci():
+    """The 1.4.5 rows above go quiet without tesseract, and a quiet row is a covered pair proving
+    nothing. Both ci.yml and azure-pipelines.yml run scripts/install_tesseract.sh, so the skip on
+    a bare checkout is a fallback rather than the normal state — asserted here so it cannot
+    become the normal state without someone seeing it."""
+    import os
+    if not (os.environ.get("CI") or os.environ.get("TF_BUILD")):
+        pytest.skip("not CI — tesseract is optional on a developer checkout")
+    assert _ocr.is_available(), (
+        "tesseract is unavailable in CI, so 1.4.5 was NOT exercised — the corpus would report "
+        "the pair as covered while proving nothing about it")

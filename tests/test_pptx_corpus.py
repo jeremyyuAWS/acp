@@ -39,6 +39,7 @@ sys.path.insert(0, str(ROOT / "api"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import office_structure as osx  # noqa: E402
+import ocr as _ocr  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
     "gen_pptx_corpus", ROOT / "scripts" / "gen_pptx_corpus.py")
@@ -57,9 +58,26 @@ def corpus(tmp_path_factory):
     return out, {row["name"]: row for row in manifest}
 
 
-def _wcags(path: Path) -> set[str]:
-    return {(f.get("wcag") or "").split()[0] for f in osx.checks_for(path, ".pptx")
+def _ocr_wcags(path: Path, ext: str) -> set[str]:
+    """Criteria the OCR lane reports — 1.4.5, read out of the document's PIXELS rather than its
+    structure. A real scan runs this pass alongside the structural one, so `_wcags` is their
+    union; checking only the structural lane would make every 1.4.5 fixture invisible and every
+    "this fixture is single-criterion" assertion below weaker than it reads.
+
+    Empty when tesseract is unavailable — `ocr.is_available()` gates it, and the 1.4.5
+    assertions skip rather than fail on a bare checkout (both CI pipelines install tesseract, so
+    the skip is a fallback and not the normal state; see test_ocr_is_present_in_ci below)."""
+    return {(f.get("wcag") or "").split()[0] for f in _ocr.images_of_text(path, ext)
             if f.get("wcag")}
+
+
+def _wcags(path: Path) -> set[str]:
+    """Every criterion a real scan of this file reports, across BOTH lanes: the first-party pptx
+    structure checks and the OCR pass over its embedded images. The union is what makes the
+    single-criterion assertions below mean anything."""
+    structural = {(f.get("wcag") or "").split()[0] for f in osx.checks_for(path, ".pptx")
+                  if f.get("wcag")}
+    return structural | _ocr_wcags(path, ".pptx")
 
 
 # ── the labels are legal for their lane ──────────────────────────────────────────
@@ -96,6 +114,7 @@ def test_no_review_lane_fixture_claims_pass(corpus):
     ("embedded-control", "4.1.2"),
     ("embedded-control", "2.1.2"),
     ("picture-no-alt", "1.1.1"),
+    ("image-of-text", "1.4.5"),
 ])
 def test_each_violation_fixture_is_actually_detected(corpus, name, sc):
     out, _rows = corpus
@@ -115,6 +134,7 @@ def test_each_violation_fixture_is_actually_detected(corpus, name, sc):
     ("no-controls-ok", "4.1.2"),
     ("no-controls-ok", "2.1.2"),
     ("no-picture-ok", "1.1.1"),
+    ("image-of-text-logo-ok", "1.4.5"),
 ])
 def test_each_adversarial_fixture_stays_silent(corpus, name, sc):
     """A false positive is cheap to ship and expensive to trust — it is what teaches a reviewer
@@ -204,3 +224,20 @@ def test_every_violation_has_a_paired_adversarial_fixture(corpus):
     assert violations == controls, (
         f"criteria with no adversarial counterpart: {sorted(violations - controls)}; "
         f"with no violation: {sorted(controls - violations)}")
+
+
+# ── 1.4.5 is read out of the pixels, so it needs its own lane and its own guard ──
+
+def test_ocr_is_present_in_ci():
+    """The environment-conditional skip on the 1.4.5 assertions must be a FALLBACK, never the
+    normal state. Both ci.yml and azure-pipelines.yml run scripts/install_tesseract.sh, and the
+    .docx gate makes the same assertion for the same reason: a skip nobody notices is one edit
+    away from being how a criterion stops being covered.
+
+    Skipped OFF CI so a bare checkout is not failed for a dependency it never claimed to have."""
+    import os
+    if not (os.environ.get("CI") or os.environ.get("TF_BUILD")):
+        pytest.skip("not CI — tesseract is optional on a developer checkout")
+    assert _ocr.is_available(), (
+        "tesseract is unavailable in CI, so 1.4.5 was NOT exercised — the corpus would report "
+        "the pair as covered while proving nothing about it")
