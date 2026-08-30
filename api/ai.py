@@ -817,14 +817,19 @@ def validate_alt_text(image_bytes: bytes, alt: str, *, filename: str = "", model
             "validator_model": vmodel or OLLAMA_VISION_MODEL}
 
 
-def _structured_vision_prompt(filename: str, ocr_text: str, context: str) -> str:
+def _structured_vision_prompt(filename: str, ocr_text: str, context: str,
+                              guidance: str = "") -> str:
     """A structured alt-text prompt for a data-bearing image (chart, diagram, screenshot).
     Feeds the OCR-read text so the description is ANCHORED in the image's real labels
-    (headline, categories) instead of a free vision guess."""
+    (headline, categories) instead of a free vision guess.
+
+    `guidance` is the org house-style block (ADR 0021), appended last so it qualifies the
+    instruction without displacing the OCR anchor above it."""
     where = f" It appears in the document '{filename}'." if filename else ""
     seen = re.sub(r"\s+", " ", (ocr_text or "").strip())[:400]
     read = f"\nText read from the image (OCR): {seen}" if seen else ""
     near = f"\nNearby document text: {context.strip()[:200]}" if context and context.strip() else ""
+    house = f"\n{guidance}" if guidance else ""
     return (
         "You are writing alternative text for a chart, diagram, or screenshot so a screen-"
         "reader user understands what it conveys. Using the text read from the image, write "
@@ -834,7 +839,7 @@ def _structured_vision_prompt(filename: str, ocr_text: str, context: str) -> str
         "or pair numbers with categories (e.g. 'North at 150') — reading a chart's exact values is "
         "unreliable, a wrong figure is worse than none, and a human confirms the specifics. Do not "
         "begin with 'image of', 'picture of', or 'this image shows'."
-        f"{where}{read}{near}\nAlt text:"
+        f"{where}{read}{near}{house}\nAlt text:"
     )
 
 
@@ -877,7 +882,8 @@ def _transcribed_alt(ocr_txt: str) -> str:
 
 def describe_image_structured(image_bytes: bytes, *, filename: str = "", context: str = "",
                               scan_id: str | None = None, file: str | None = None,
-                              allow_transcription: bool = False) -> dict | None:
+                              allow_transcription: bool = False,
+                              guidance: str = "") -> dict | None:
     """Structured, OCR-anchored alt text (WCAG 1.1.1). Returns
     {"alt", "grounded", "evidence", "model"} or None.
 
@@ -892,7 +898,15 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     it is returned verbatim as the alt and no model runs. Only set it when `image_bytes` is the
     image ITSELF. The PDF remediator must not — it OCRs a render of the whole PAGE, so "this
     render contains prose" means "the page has paragraphs", not "this figure is an image of
-    text", and transcribing would hand a figure the page's body copy as its alt."""
+    text", and transcribing would hand a figure the page's body copy as its alt.
+
+    `guidance` is the org house-style block (ADR 0021), and it reaches the two prompts and
+    NOTHING ELSE. The transcription path above returns before any prompt is built, which is the
+    correct behaviour and worth stating because it looks like an omission: the alt for an image
+    of text IS that text (WCAG 1.1.1 / F30), so there is no prose for a house style to shape.
+    Letting guidance touch it would let an org preference rewrite a verbatim quotation of what
+    the image says — turning a transcription into a paraphrase, which is the one thing this path
+    exists to prevent. tests/test_alt_house_style.py asserts that separation directly."""
     if not image_bytes:
         return None
     ocr_txt = ""
@@ -912,9 +926,9 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
                                 "paraphrase, so no figure or label can drift",
                     "model": None, "source": "ocr"}
     if grounded:
-        prompt = _structured_vision_prompt(filename, ocr_txt, context)
+        prompt = _structured_vision_prompt(filename, ocr_txt, context, guidance)
     else:
-        prompt = _vision_prompt(filename, context)
+        prompt = _vision_prompt(filename, context, "", guidance)
     pv = "describe-structured-v1" if grounded else "describe-v1"
     alt = _vision_generate(prompt, image_bytes, scan_id=scan_id, file=file, prompt_version=pv)
     # Compact models (moondream) return empty for the full _vision_prompt due to its negation

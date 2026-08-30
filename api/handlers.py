@@ -329,7 +329,18 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
                     from remediate_office import alt_proposals_for_office
                     img_props, img_evidence = alt_proposals_for_office(
                         file_bytes, p.suffix, ai_enabled=ai_enabled, scan_id=scan_id,
-                        context_file=filename)
+                        context_file=filename, guidance=_g("1.1.1"))
+                    # STAMPED HERE, NOT AT THE ENQUEUE. 1.1.1 is the one criterion whose batch
+                    # is MIXED: chart datasheets are deterministic (grounded in the chart's own
+                    # cells, no prompt, no house style) and these image drafts are model-written
+                    # with the guidance above. `_enqueue_proposals(house_style=...)` stamps every
+                    # proposal it is given, so passing it there would hand the datasheets a chip
+                    # claiming an influence they never had — the exact over-claim that argument
+                    # is written to prevent, reached from the other side. Stamping the subset
+                    # that was actually shaped keeps the chip true per proposal.
+                    _hs_alt = _hs("1.1.1")
+                    if _hs_alt and img_props:
+                        img_props = [{**_p, "house_style": _hs_alt} for _p in img_props]
                 except Exception:
                     img_props, img_evidence = [], []
     except Exception:

@@ -332,7 +332,8 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
                   vision_budget: list | None = None,
                   applied_fixes: list | None = None,
                   proposals: list | None = None,
-                  evidence: list | None = None) -> tuple[str, list[tuple[str, str]], int]:
+                  evidence: list | None = None,
+                  guidance: str = "") -> tuple[str, list[tuple[str, str]], int]:
     """Add descr= to every <tag …> lacking one, from a faithful source or (when
     vision_enabled) a genuine vision description of the image bytes.
 
@@ -462,7 +463,7 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
             if src is None:
                 src = _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name,
                                   vision_enabled, context_file, caption, scan_id, vision_budget,
-                                  applied_fixes, proposals)
+                                  applied_fixes, proposals, guidance=guidance)
             # xlsx chart with no vision draft (no GPU / no key / model down): compose a keyless draft
             # from the sheet's OWN adjacent data table — the numbers a chart plots live in cells right
             # beside it. Offered as a PROPOSAL so the reviewer confirms it against the visible chart;
@@ -508,7 +509,7 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
 
 def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_enabled,
                 context_file, caption, scan_id, vision_budget, applied_fixes=None,
-                proposals=None) -> tuple[str, str] | None:
+                proposals=None, *, guidance: str = "") -> tuple[str, str] | None:
     """Structured, OCR-anchored alt text for an unlabelled image from the local vision model.
 
     Finds this drawing's r:embed (the blip follows the docPr/cNvPr within the same
@@ -539,7 +540,7 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
         # really is the image's own text — the alt for an image of text is that text (WCAG 1.1.1).
         res = _ai.describe_image_structured(img, filename=context_file, context=caption or "",
                                             scan_id=scan_id, file=context_file,
-                                            allow_transcription=True)
+                                            allow_transcription=True, guidance=guidance)
     except Exception:
         res = None
     if not res:
@@ -1272,7 +1273,8 @@ def _remediate_xlsx_structure(entries: dict, diffs=None, in_scope=None) -> list[
 
 
 def alt_proposals_for_office(doc_bytes: bytes, ext: str, *, ai_enabled: bool = True,
-                             scan_id: str | None = None, context_file: str = "") -> tuple[list, list]:
+                             scan_id: str | None = None, context_file: str = "",
+                             guidance: str = "") -> tuple[list, list]:
     """Assess-time WCAG 1.1.1: enumerate every unlabelled image and return
     (proposals, evidence) WITHOUT writing the file — so the review card can show a per-image
     thumbnail and, when a vision model is reachable, a PRE-FILLED AI description for each
@@ -1284,7 +1286,14 @@ def alt_proposals_for_office(doc_bytes: bytes, ext: str, *, ai_enabled: bool = T
     reviewer sees at assess time matches what remediation would do. Grounded (auto-applied)
     images don't produce a card proposal here (they clear deterministically at fix time);
     the ungrounded ones — the exact images that used to show only a text template — arrive
-    with a real vision draft. Best-effort: ([], []) on any failure or unsupported ext."""
+    with a real vision draft. Best-effort: ([], []) on any failure or unsupported ext.
+
+    `guidance` is the org house-style block (ADR 0021). 1.1.1 was the ONE guidance-receiving
+    criterion this function could not carry it to: handlers._scan_file passes `guidance=_g(...)`
+    to all five other scan-time proposers, and this one had no parameter to pass it to — so the
+    highest-volume drafts ACP writes, an alt text per image, were the only ones an org's house
+    style never reached. It threads to the two vision prompts and stops there; see
+    ai.describe_image_structured on why the transcription path must not receive it."""
     if (ext or "").lower().lstrip(".") not in ("docx", "pptx", "xlsx"):
         return [], []
     import io
@@ -1317,7 +1326,8 @@ def alt_proposals_for_office(doc_bytes: bytes, ext: str, *, ai_enabled: bool = T
                               entries=entries, part_name=name, vision_enabled=vision_enabled,
                               context_file=context_file or name, scan_id=scan_id,
                               vision_budget=vision_budget, applied_fixes=_throwaway_fixes,
-                              proposals=proposals, evidence=evidence)  # rewritten XML discarded
+                              proposals=proposals, evidence=evidence,
+                              guidance=guidance)  # rewritten XML discarded
             except Exception:
                 continue
     return proposals, evidence
