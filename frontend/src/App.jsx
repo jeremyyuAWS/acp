@@ -52,6 +52,7 @@ import Remediate from './Remediate.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
 import OverviewPreviewCard from './OverviewPreviewCard.jsx'
 import AssessPreviewCard from './AssessPreviewCard.jsx'
+import { markLoad, logLoadSummary } from './loadPerf.js'
 import ScanReviewModal from './ScanReviewModal.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
 import { applyScopeConfig } from './activeScope.js'
@@ -576,8 +577,15 @@ export default function App() {
     getRubric().then(setRubric).catch(() => {})
     getSources().then(setSources).catch(() => {})
     setLoadStage('bootstrap')
+    // Real timing for this chain (loadPerf.js) — see that module's header for why. hadPreviewForPerf
+    // /hadScanForPerf are set inside the .then() below, where `b`/`scanId` are in scope, and read
+    // back out in .finally(), which is not.
+    markLoad('load-start')
+    let hadPreviewForPerf = false
+    let hadScanForPerf = false
     getWorkspaceBootstrap()
       .then(async (b) => {
+        markLoad('bootstrap-resolved')
         // Which scan is "the" default (newest NON-collapsed — a degenerate small scan on top
         // would otherwise make every view show a shrunken estate) is now decided server-side,
         // the SAME rule pickDefaultScan/defaultScan.js applies, pinned against the same test
@@ -586,7 +594,9 @@ export default function App() {
         // picked scan's cached Overview snapshot, in place of listScans + getActiveScan.
         setScanList(b.scans || [])
         setOverviewPreview(b.overview || null)
+        hadPreviewForPerf = !!b.overview
         const scanId = b.scan_id || null
+        hadScanForPerf = !!scanId
         // If a scan is still running (e.g. user reloaded mid-scan), resume tracking it. The
         // default-path job is checked FIRST: it can be mid-crawl with no scan_runs row at all
         // (see ACTIVE_JOB_KEY above), a window bootstrap's active_job cannot see into, so a
@@ -606,7 +616,7 @@ export default function App() {
           // scan_runs row are never both real at once, so there is nothing in it to act on here
           // — only getScan is left to actually wait on.
           reconnectJob(pendingJobId)
-          if (scanId) await getScan(scanId).then(setScan)
+          if (scanId) { await getScan(scanId).then(setScan); markLoad('scan-resolved') }
         } else {
           // reconnectScan, like reconnectJob above, stays fire-and-forget — bootstrap already
           // resolved active_job in the SAME request that gave us scanId, so unlike the old
@@ -615,11 +625,15 @@ export default function App() {
           // against scan_inventory, shadow-file reconciliation, counter aggregation) — still
           // gates `loaded`.
           if (b.active_job && b.active_job.id) reconnectScan(b.active_job.id, b.active_job.job_id)
-          if (scanId) await getScan(scanId).then(setScan)
+          if (scanId) { await getScan(scanId).then(setScan); markLoad('scan-resolved') }
         }
       })
       .catch(() => {})
-      .finally(() => { setLoaded(true); setLoadStage(null) })
+      .finally(() => {
+        setLoaded(true); setLoadStage(null)
+        markLoad('load-complete')
+        logLoadSummary({ hadPreview: hadPreviewForPerf, hadScan: hadScanForPerf })
+      })
   }, [me])
 
   // Annotate the corpus with the published business ontology (adds `.ont`: label,
