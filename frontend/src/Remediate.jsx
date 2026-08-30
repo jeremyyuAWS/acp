@@ -25,10 +25,12 @@ import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_RANK } from './ontology.js'
-import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl } from './api.js'
+import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate } from './api.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
 import QueuePanel from './QueuePanel.jsx'
+import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
+import { deriveRemediateProcessingState } from './remediateProcessingState.js'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
 import { firstProposed, firstBefore, firstThumb, firstKind, firstRationale, firstSource, pageOf,
          appliedFixAlt } from './reviewCard.js'
@@ -403,6 +405,23 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const remStartRef = useRef(false)   // synchronous guard — remBusy is state, two clicks in one frame both read false
   useEffect(() => () => clearInterval(pollRef.current), [])
   useEffect(() => { setStaleDismissed(false) }, [runId])
+  // The "Estimated pickup" range (GET /scans/{id}/queue-estimate?kind=remediate) for the window
+  // between clicking Remediate and the first document actually finishing — same 10s cadence as
+  // Discover's and Assess's own pickup polls. Stops the instant a document completes (remProg.done
+  // > 0): once files are moving, Remediate's own live progress bar already answers "is this
+  // working", and the estimate has nothing left to add. Omitted (stays null) until the backend has
+  // enough recent-completion history for an honest range.
+  const [pickupEstimate, setPickupEstimate] = useState(null)
+  useEffect(() => {
+    setPickupEstimate(null)
+    const waiting = remBusy && (!remProg || remProg.done === 0)
+    if (!waiting || !runId) return undefined
+    let on = true
+    const load = () => getQueueEstimate(runId, 'remediate').then((d) => { if (on) setPickupEstimate(d) }).catch(() => {})
+    load()
+    const id = setInterval(load, 10000)
+    return () => { on = false; clearInterval(id) }
+  }, [remBusy, remProg?.done, runId])
   const REMKEY = (id) => `acp-remed-${id || 'none'}`
 
   // One poll loop, shared by a fresh run and by resume-after-navigation. Ticks the live
@@ -1344,6 +1363,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             </button>
             {(serverFixed > 0 || remProg) && <TraceChip scanId={runId} kind="session" label="View scan traces" />}
           </div>
+
+          <ProcessingStatusPanel derived={deriveRemediateProcessingState({ remBusy, remProg, pickupEstimate })} />
 
           {remProg && (
             <div style={{ margin: '4px 0 14px', maxWidth: 560 }} role="status" aria-live="polite">
