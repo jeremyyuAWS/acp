@@ -38,15 +38,35 @@ def guidance_for(store, org: str | None, rule_id: str | None, fmt: str | None) -
             f"otherwise):\n{lines}\n")
 
 
+def applied_rules(store, org: str | None, rule_id: str | None, fmt: str | None) -> list[dict]:
+    """The rules that shaped this draft, for the card's "house style applied" chip (ADR 0021 §E).
+
+    Returns the SAME rows, in the same order, that `guidance_for` composed into the prompt —
+    both call `store.memory_applied_rules`, so the chip is a report of what the model was
+    actually asked, not a second lookup that could disagree with it. That matters because the
+    chip's whole job is to make the influence visible on a value a human is about to certify;
+    a chip listing a rule the prompt never carried would be worse than no chip at all.
+
+    Each row is `{id, kind, guidance, rule_id, format, evidence}`. `evidence` is the real count
+    from `hitl_events` for a rule that began as a derived proposal and was accepted (ADR 0016 —
+    the number on the card is that number or there is no number), and None for an authored one.
+
+    Empty when the flag is off, there is no org, or nothing applies — the same safe-dark
+    condition under which `guidance_for` returns "", so the chip is absent exactly when the
+    prompt was unchanged. Best-effort: any lookup failure degrades to [] rather than breaking
+    a draft."""
+    if not enabled() or not org or store is None:
+        return []
+    try:
+        return store.memory_applied_rules(org, rule_id, fmt)
+    except Exception:
+        return []
+
+
 def applied_rule_count(store, org: str | None, rule_id: str | None, fmt: str | None) -> int:
     """How many active rules shaped a draft — for the card's 'house style applied' chip.
     0 when memory is off/empty. Best-effort."""
-    if not enabled() or not org or store is None:
-        return 0
-    try:
-        return len(store.memory_guidance(org, rule_id, fmt))
-    except Exception:
-        return 0
+    return len(applied_rules(store, org, rule_id, fmt))
 
 
 # ── Derivation (ADR 0021 stage 3 / §D) — behaviour → PROPOSED rules, human-gated ─

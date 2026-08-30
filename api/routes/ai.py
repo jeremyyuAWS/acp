@@ -191,8 +191,25 @@ def ai_suggest(request: Request, scan_id: str = Query(...), file: str = Query(..
         guidance=guidance,
     )
     if result is not None and guidance:
-        # ADR 0021 §E — the memory that shaped this draft is visible on the card.
-        result["house_style_applied"] = _mem.applied_rule_count(core.store, org, rule_id, fmt)
+        # ADR 0021 §E — the memory that shaped this draft is visible on the card, "expandable to
+        # the exact guidance and (for derived rules) the evidence that justified it". A count
+        # alone cannot be expanded into anything, so the rules ride along: same rows, same order,
+        # same selection the prompt above was built from (memory.applied_rules → the one
+        # store.memory_applied_rules call guidance_for also used).
+        #
+        # `evidence` is passed through as the store holds it — a JSON string — and NOT parsed or
+        # summarised here. The count in it is the real one from hitl_events (ADR 0016); the card
+        # renders that number and nothing derived from it.
+        applied = _mem.applied_rules(core.store, org, rule_id, fmt)
+        result["house_style"] = [
+            {"id": r.get("id"), "kind": r.get("kind"), "guidance": r.get("guidance"),
+             "rule_id": r.get("rule_id"), "format": r.get("format"),
+             "evidence": r.get("evidence")}
+            for r in applied
+        ]
+        # Kept alongside the list: this field shipped first and tests/clients may read it. It is
+        # derived from the same list, so the two can never disagree.
+        result["house_style_applied"] = len(applied)
     if result is None:
         raise HTTPException(503, "AI suggestion unavailable — is Ollama running?")
     # Verification aid (<10s trust): alongside a vision draft, hand the reviewer the text OCR

@@ -9,6 +9,7 @@ import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import { speakAsScreenReader, srSupported } from './srPreview.js'
 import { runAutoDraft, resetAutoDraftBreaker } from './autoDraft.js'
 import { escalationPath, escalationFromDraft } from './escalationPath.js'
+import { houseStyleFromDraft } from './houseStyle.js'
 import { loadAiModels } from './aiModel.js'
 import HowToConfirm from './HowToConfirm.jsx'
 import TracePanel from './TracePanel.jsx'
@@ -26,6 +27,57 @@ const _TRUST_FG = { ok: '#0F6E56', warn: '#854F0B', todo: '#6b6b6b' }
 const trustPill = (tone) => ({ padding: '2px 9px', borderRadius: 6, fontSize: 12, whiteSpace: 'nowrap',
   background: _TRUST_BG[tone] || _TRUST_BG.todo, color: _TRUST_FG[tone] || _TRUST_FG.todo })
 const trustIcon = (tone) => (tone === 'ok' ? '✓' : tone === 'warn' ? '◐' : '○')
+
+// ADR 0021 §E — "house style applied", the chip that makes review memory's influence on a draft
+// visible instead of a hidden hand. Collapsed it names how many of the org's rules shaped this
+// draft's prompt; expanded it shows each rule's exact guidance, its scope, and — for a rule the
+// org accepted from the derivation job — the real count from `hitl_events` that justified it.
+//
+// It is a `<details>` for the same reason the OCR aid below it is: the reviewer's job is the
+// value in the box, and a wall of house rules on every card would bury it. One line says
+// influence happened; the disclosure answers "which rules, and why".
+//
+// Renders nothing when no memory applied. The absence IS the message — the backend attaches
+// these rules only when it actually injected them, so no chip means the prompt was byte-for-byte
+// the pre-memory one, not that nobody looked.
+function HouseStyleChip({ houseStyle }) {
+  if (!houseStyle) return null
+  return (
+    <details className="evcard-house-style">
+      <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>
+        📐 {houseStyle.label} — what your org asked the model for
+      </summary>
+      <ul style={{ listStyle: 'none', margin: '4px 0 0', padding: 0 }}>
+        {houseStyle.rules.map((r, i) => (
+          <li key={r.id || i} className="evcard-house-style-rule" data-kind={r.kind}
+              style={{ margin: '0 0 6px' }}>
+            <span className="muted" style={{ fontSize: 11 }}>
+              {r.kindLabel}
+              {' · '}
+              {r.ruleId ? `WCAG ${r.ruleId}` : 'all criteria'}
+              {' · '}
+              {r.format ? r.format.toUpperCase() : 'all formats'}
+            </span>
+            <div style={{ fontSize: 12, wordBreak: 'break-word' }}>{r.guidance}</div>
+            {/* The evidence is quoted, never characterised — the count the row carries and no
+                adjective, percentage or confidence this card invented (ADR 0016). */}
+            {r.evidence && (
+              <div className="muted evcard-house-style-evidence" style={{ fontSize: 11 }}>
+                {r.evidence}
+              </div>
+            )}
+            {r.evidenceMissing && (
+              <div className="muted evcard-house-style-evidence-missing" style={{ fontSize: 11 }}>
+                This rule recorded evidence that could not be read — judge the guidance on its
+                own terms rather than as measured.
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+    </details>
+  )
+}
 
 export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null, actualZone = null }) {
   const [diffs, setDiffs] = useState([])
@@ -65,6 +117,14 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   // Deterministic verification aid: the text OCR actually read from the drafted image, so the
   // reviewer checks the description against what the image SAYS instead of squinting at a thumb.
   const [ocrAid, setOcrAid] = useState(null)
+  // ADR 0021 §E — the org house-style rules that shaped this draft's PROMPT, read off the draft
+  // response that used them (houseStyleFromDraft). Null unless review memory actually applied,
+  // which is the common case: ACP_REVIEW_MEMORY defaults off, and with it off the backend sends
+  // nothing because the prompt was the pre-memory one. No chip therefore means no influence —
+  // never "we didn't check". Deliberately NOT cleared by a draft that carries no memory: see
+  // setHouseStyle's call sites in draftAll, where one image's rules must not be blanked by the
+  // next image in the same batch.
+  const [houseStyle, setHouseStyle] = useState(null)
   // Which deferred image the reviewer is looking at. The vision model describes ONE image, so
   // a row carrying nineteen must say which — defaulting to the first silently captions the
   // wrong picture and the reviewer approves alt text for an image they never saw.
@@ -158,6 +218,11 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
       setOcrAid(r.ocr_text || null)
       // Read the escalation path off the response itself (#378) — null when this draft stayed local.
       setDraftEscalation(escalationFromDraft(r))
+      // Likewise the house style that shaped it (ADR 0021 §E). Set unconditionally: this is the
+      // single-box path, so a re-draft REPLACES the card's state — if memory no longer applies
+      // (an admin retired the rule, or the flag went off), the chip must go with it rather than
+      // keep asserting an influence this draft did not have.
+      setHouseStyle(houseStyleFromDraft(r))
       if (r.is_template) {
         // A fill-in-the-blank template, NOT a description of this image. It is deliberately
         // NOT recorded as aiDraft: approving it verbatim must count as human-authored, and
@@ -206,6 +271,11 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
         if (s && !r.is_template) { setValueAt(i, s); n += 1 }
         const esc = escalationFromDraft(r)   // surface the path from whichever image escalated (#378)
         if (esc) setDraftEscalation(esc)
+        // House style is card-level (it keys on org + rule + format, all identical across this
+        // card's images), so any image's response answers for the batch. Only set when present,
+        // so an image that failed or returned a template cannot blank a chip a sibling earned.
+        const hs = houseStyleFromDraft(r)
+        if (hs) setHouseStyle(hs)
       } catch (e) {
         // One image failing must not stop the batch — but a model that is not pulled fails every
         // image identically, so asking 18 more times tells the reviewer nothing new and delays the
@@ -237,6 +307,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
       // if this image stayed local, so the card doesn't blank a path a sibling image established.
       const esc = escalationFromDraft(r)
       if (esc) setDraftEscalation(esc)
+      const hs = houseStyleFromDraft(r)   // card-level; don't blank a sibling image's chip
+      if (hs) setHouseStyle(hs)
       const styleWord = style === 'shorter' ? ' (shorter)' : style === 'detailed' ? ' (more detail)'
         : style === 'regenerate' ? ' (regenerated)' : style === 'numbers' ? ' (numbers stated)'
         : style === 'no_colour' ? ' (colour-free)' : style === 'professional' ? ' (professional tone)'
@@ -756,6 +828,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
                   <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>“{ocrAid}”</p>
                 </details>
               )}
+              {usingEvidence && <HouseStyleChip houseStyle={houseStyle} />}
             </>
           ) : editable ? (
             <label className="evcard-rec">
@@ -805,6 +878,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
                   <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>“{ocrAid}”</p>
                 </details>
               )}
+              <HouseStyleChip houseStyle={houseStyle} />
             </label>
           ) : explainOnly ? (
             /* Confirm-the-map, not write-this-back. The derived map is shown verbatim and
