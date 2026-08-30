@@ -54,7 +54,7 @@ PRESET = "acp-core-17"
 
 # Coverage floor, by format. Update ONLY upward, and only alongside the fixtures that earned it.
 # Written down rather than computed so a drop is a diff someone has to justify in review.
-BASELINE = {"docx": 15, "xlsx": 8, "pptx": 0, "pdf": 0}
+BASELINE = {"docx": 15, "xlsx": 8, "pptx": 9, "pdf": 0}
 
 
 def applicable_pairs() -> dict[str, list[str]]:
@@ -104,10 +104,17 @@ def _xlsx_declared() -> set[str]:
     return set(gen_xlsx_corpus.DECLARED)
 
 
+def _pptx_declared() -> set[str]:
+    """Criteria the .pptx corpus declares. Same constant-plus-test shape as xlsx: the set is held
+    honest against the fixtures themselves by tests/test_pptx_corpus.py."""
+    import gen_pptx_corpus
+    return set(gen_pptx_corpus.DECLARED)
+
+
 # One entry per format. A format with no generator is absent here rather than mapped to a stub
 # that returns an empty set: "nobody has written one" and "the generator found nothing" are
 # different states, and the report distinguishes them.
-GENERATORS = {"docx": _docx_declared, "xlsx": _xlsx_declared}
+GENERATORS = {"docx": _docx_declared, "xlsx": _xlsx_declared, "pptx": _pptx_declared}
 
 
 def coverage() -> dict:
