@@ -5826,14 +5826,26 @@ class Store:
                     "WHERE r.owner_email=%s ORDER BY e.created_at DESC LIMIT %s", (org, limit))
             return self._db.fetchall(cur)
 
-    def memory_guidance(self, org: str, rule_id: str | None, format: str | None) -> list[str]:
-        """The ACTIVE guidance fragments that apply to a (org, rule, format) draft, ordered
+    def memory_applied_rules(self, org: str, rule_id: str | None,
+                             format: str | None) -> list[dict]:
+        """The ACTIVE org_memory ROWS that apply to a (org, rule, format) draft, ordered
         most-specific-first (rule+format > rule > format > org-wide). Only 'active' rules —
-        'proposed'/'derived' never influence a draft until accepted (ADR 0021 §D). Returns
-        the raw guidance strings; the caller composes them into the prompt."""
+        'proposed'/'derived' never influence a draft until accepted (ADR 0021 §D).
+
+        This is the ONE selection. `memory_guidance` (what goes into the prompt) is this list
+        mapped to its guidance strings, and the card's "house style applied" chip renders these
+        same rows — so the chip cannot name a rule the prompt did not actually receive, or miss
+        one it did. Splitting the two into parallel implementations is the failure this shape
+        exists to prevent: the chip is a claim about what shaped a draft a human is about to
+        certify, and a claim derived from a second, drifting copy of the specificity rules is
+        exactly the invisible dishonesty ADR 0021 §E forbids.
+
+        Each row carries `kind` and `evidence` as well as the guidance, because an ACCEPTED
+        derived rule stays `kind='derived'` (acceptance flips status, not kind) and keeps the
+        count that justified it — which is what the chip expands to show (ADR 0016)."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT rule_id,format,guidance FROM org_memory "
+                "SELECT id,rule_id,format,guidance,kind,evidence FROM org_memory "
                 "WHERE org=%s AND status='active'", (org,))
             rows = self._db.fetchall(cur)
 
@@ -5848,13 +5860,22 @@ class Store:
         keep.sort(key=specificity, reverse=True)
         # De-dup identical guidance text (an org-wide + a rule-scoped copy) while keeping order.
         seen: set[str] = set()
-        out: list[str] = []
+        out: list[dict] = []
         for r in keep:
             g = (r.get("guidance") or "").strip()
             if g and g not in seen:
                 seen.add(g)
-                out.append(g)
+                out.append({"id": r.get("id"), "kind": r.get("kind"), "guidance": g,
+                            "rule_id": r.get("rule_id"), "format": r.get("format"),
+                            "evidence": r.get("evidence")})
         return out
+
+    def memory_guidance(self, org: str, rule_id: str | None, format: str | None) -> list[str]:
+        """The ACTIVE guidance fragments that apply to a (org, rule, format) draft, ordered
+        most-specific-first. The raw strings the caller composes into the prompt — the same
+        rows `memory_applied_rules` returns, in the same order, by construction rather than by
+        a matching second implementation."""
+        return [r["guidance"] for r in self.memory_applied_rules(org, rule_id, format)]
 
     def get_ai_enabled(self) -> bool:
         """Platform AI mode. Defaults to enabled; admin can hard-disable it
