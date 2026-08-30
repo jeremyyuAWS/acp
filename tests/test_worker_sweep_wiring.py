@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
 import core
 import sweeper as sweeper_module
+import content_workspace_retention as retention_module
 
 
 class _ImmediateExit(BaseException):
@@ -102,3 +103,43 @@ def test_sweep_thread_survives_a_run_sweep_exception_and_keeps_looping(monkeypat
         sweep_target()
 
     assert ticks["n"] == 2   # the RuntimeError on tick 1 was caught, not fatal
+
+
+def test_sweep_thread_also_calls_the_content_workspace_retention_sweep(monkeypatch):
+    """ADR 0044 / PRD §28: content_workspace_retention.py exists and is fully tested
+    (test_content_workspace_retention.py) the same way sweeper.py once was before the fix this
+    file's own docstring describes — pin the wiring here too, so it can't sit built and unused
+    the same way."""
+    monkeypatch.setenv("ACP_WORKERS", "0")
+    monkeypatch.setattr(core, "_worker_handles", [], raising=False)
+
+    captured = {}
+
+    class _FakeThread:
+        def __init__(self, target=None, daemon=None, name=None):
+            captured["target"] = target
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(core.threading, "Thread", _FakeThread)
+
+    calls = []
+    monkeypatch.setattr(sweeper_module, "run_sweep", lambda store, **kw: None)
+
+    def fake_retention_sweep(store, **kw):
+        calls.append(store)
+        raise _ImmediateExit
+
+    monkeypatch.setattr(retention_module, "run_content_workspace_retention_sweep",
+                        fake_retention_sweep)
+    monkeypatch.setattr(core, "get_store", lambda: object())
+
+    core.start_workers()
+    sweep_target = captured.get("target")
+    assert sweep_target is not None
+
+    with pytest.raises(_ImmediateExit):
+        sweep_target()
+
+    assert len(calls) == 1

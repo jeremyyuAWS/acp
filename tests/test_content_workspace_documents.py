@@ -235,6 +235,53 @@ def test_delete_document_returns_false_for_a_nonexistent_document(isolated_store
     assert isolated_store.delete_content_workspace_document("does-not-exist", owner_email=OWNER) is False
 
 
+def test_list_expired_versions_finds_a_past_due_retention_date(isolated_store, ws):
+    doc_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)
+    version_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document_version(
+        version_id, document_id=doc_id, version_seq=1, content_hash="h1",
+        retention_date="2020-01-01T00:00:00+00:00")
+
+    expired = isolated_store.list_expired_content_workspace_document_versions(
+        as_of="2026-01-01T00:00:00+00:00")
+    assert [v["id"] for v in expired] == [version_id]
+    assert expired[0]["workspace_id"] == ws
+    assert expired[0]["owner_email"] == OWNER
+
+
+def test_list_expired_versions_excludes_a_future_retention_date(isolated_store, ws):
+    doc_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)
+    isolated_store.create_content_workspace_document_version(
+        uuid.uuid4().hex[:12], document_id=doc_id, version_seq=1, content_hash="h1",
+        retention_date="2099-01-01T00:00:00+00:00")
+
+    assert isolated_store.list_expired_content_workspace_document_versions(
+        as_of="2026-01-01T00:00:00+00:00") == []
+
+
+def test_list_expired_versions_excludes_a_version_with_no_retention_date(isolated_store, ws):
+    doc_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)
+    isolated_store.create_content_workspace_document_version(
+        uuid.uuid4().hex[:12], document_id=doc_id, version_seq=1, content_hash="h1")
+
+    assert isolated_store.list_expired_content_workspace_document_versions() == []
+
+
+def test_list_expired_versions_excludes_one_already_marked_expired(isolated_store, ws):
+    doc_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)
+    version_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document_version(
+        version_id, document_id=doc_id, version_seq=1, content_hash="h1",
+        retention_date="2020-01-01T00:00:00+00:00", lifecycle_state="expired")
+
+    assert isolated_store.list_expired_content_workspace_document_versions(
+        as_of="2026-01-01T00:00:00+00:00") == []
+
+
 def test_admin_reset_wipes_documents_and_versions(isolated_store, ws):
     doc_id = uuid.uuid4().hex[:12]
     isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)
