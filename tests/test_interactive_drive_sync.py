@@ -159,6 +159,31 @@ def test_a_failed_change_check_falls_back_to_a_full_listing(core_mod, monkeypatc
     assert result is None
 
 
+class _FakePanic(BaseException):
+    """Stands in for pyo3_runtime.PanicException — a broken native cryptography/_cffi_backend
+    build surfaces as a BaseException subclass, deliberately NOT an Exception subclass, so
+    `except Exception` would let it propagate uncaught. core._drive_delta_check's docstring
+    justifies its wider `except BaseException` specifically for this case; this test is what
+    makes that justification checked rather than asserted in a comment nobody re-verifies."""
+
+
+def test_a_baseexception_from_the_change_check_still_falls_back_safely(core_mod, monkeypatch):
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive:alice@x.com"] = {"page_token": "tok-1"}
+    store.prior_inventory["alice@x.com"] = [PRIOR_ROW]
+
+    def _panic(svc, tok):
+        raise _FakePanic("Python API version mismatch")
+    monkeypatch.setattr(scanner, "drive_changes_since", _panic)
+
+    result = core._interactive_drive_sync_plan("alice@x.com", SVC_ALICE)
+    assert result is None, (
+        "a BaseException (not just Exception) from the change check must still degrade to a "
+        "full listing, not propagate and crash the scan — plain `except Exception` would not "
+        "catch this")
+
+
 def test_two_different_users_never_share_or_clobber_each_others_cursor(core_mod, monkeypatch):
     import scanner
     core, store, calls = core_mod

@@ -373,7 +373,7 @@ def _normalize(files: list[dict]) -> list[dict]:
 # The scheduled sweep (core._do_scheduled_scan) re-lists Drive's ENTIRE estate on every
 # fire today, even when nothing changed. Drive's Changes API answers "what changed since
 # a prior checkpoint" directly, so a sweep can check cheaply and skip the expensive full
-# scan when the answer is "nothing" — see core._drive_sync_gate for how this is used.
+# scan when the answer is "nothing" — see core._drive_sync_plan for how this is used.
 #
 # Deliberately NOT plumbed into the scan pipeline itself (run_scan/_list still always do a
 # full listing+download+analyse pass when they run at all): _list's scope/inventory/
@@ -412,7 +412,7 @@ def drive_changes_since(svc, page_token: str) -> tuple[list[dict], set[str], str
 
     Raises the SDK's own HttpError on an expired or invalid page token (Drive expires an
     unused one after ~1 week — a 404) or any other API failure; the caller decides how to
-    degrade (core._drive_sync_gate always falls back to a full scan rather than trusting a
+    degrade (core._drive_delta_check always falls back to a full scan rather than trusting a
     failed check)."""
     raw_files: list[dict] = []
     removed_ids: set[str] = set()
@@ -1699,7 +1699,7 @@ def _sp_base(drive_id: str | None) -> str:
 # feed Microsoft Graph offers. Unlike Drive's changes.list, Graph's delta has no free-standing
 # "give me a baseline token" call — the ONLY way to get a deltaLink is to walk the delta feed at
 # least once, and on a token-less first call that walk returns the ENTIRE current tree, not an
-# empty starting point. See core._sp_sync_gate for how a seed call's (large) first page is
+# empty starting point. See core._sp_sync_plan for how a seed call's (large) first page is
 # discarded rather than processed, same as this cost being paid once ever, not once per skip.
 
 def sp_delta_since(token: str, drive_id: str | None, delta_link: str | None
@@ -1714,7 +1714,7 @@ def sp_delta_since(token: str, drive_id: str | None, delta_link: str | None
     Raises PermissionError (via _sp_get) on a missing Sites.Read.All grant, or the SDK's own
     error on an invalidated delta link (Graph 410 Gone — a link expires after roughly 30 days
     unused, or when the drive itself resets); the caller decides how to degrade
-    (core._sp_sync_gate always falls back to a full scan rather than trusting a failed check)."""
+    (core._sp_delta_check always falls back to a full scan rather than trusting a failed check)."""
     url = delta_link or f"{_sp_base(drive_id)}/root/delta?$select={_SP_ITEM_SELECT}"
     items: list[dict] = []
     removed: set[tuple[str | None, str]] = set()

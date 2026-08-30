@@ -10,7 +10,9 @@ Three things make this genuinely different from BOTH the sweep and the Drive int
   2. PER (USER, DRIVE) CURSOR, not just per-user. Drive's interactive plan only needed
      f"drive:{owner}" because a user has exactly one Drive, always the same. A SharePoint user
      can interactively scan a DIFFERENT library — or their own OneDrive — from one scan to the
-     next, so the cursor is keyed f"sharepoint:{owner}:{drive_id}".
+     next, so the cursor is keyed by core._sp_interactive_cursor_key(owner, drive_id) — JSON-
+     encoded, not an f-string colon-join, since drive_id is client-supplied and unvalidated
+     (see that function's own docstring for the collision a naive join allowed).
   3. THE PRIOR-SCAN BASELINE IS ALSO VERIFIED PER DRIVE (_sp_prior_inventory_for_drive), not just
      looked up by owner. store.latest_scan_inventory_items has no drive-scoped query of its
      own — it returns whatever the most recent 'sharepoint'-source scan for this owner covered,
@@ -73,13 +75,13 @@ def test_first_ever_interactive_scan_has_nothing_to_reconstruct_and_seeds_a_curs
     core, store = core_mod
     result = core._interactive_sp_sync_plan("alice@x.com", "alice-token", DRIVE_A)
     assert result is None, "no cursor yet — nothing to reconstruct from, fall back to a full listing"
-    assert store.sync_cursors[f"sharepoint:alice@x.com:{DRIVE_A}"]["page_token"] == "next-link"
+    assert store.sync_cursors[core._sp_interactive_cursor_key("alice@x.com", DRIVE_A)]["page_token"] == "next-link"
 
 
 def test_no_changes_still_returns_a_delta_never_a_skip(core_mod, monkeypatch):
     import scanner
     core, store = core_mod
-    store.sync_cursors[f"sharepoint:alice@x.com:{DRIVE_A}"] = {"page_token": "tok-1"}
+    store.sync_cursors[core._sp_interactive_cursor_key("alice@x.com", DRIVE_A)] = {"page_token": "tok-1"}
     store.prior_inventory["alice@x.com"] = [_row("F0", "unchanged.pdf")]
     monkeypatch.setattr(scanner, "sp_delta_since", lambda token, drive_id, link: ([], set(), "tok-2"))
 
@@ -87,13 +89,13 @@ def test_no_changes_still_returns_a_delta_never_a_skip(core_mod, monkeypatch):
     assert result is not None, "an interactive scan must never be told to do nothing"
     assert result["changed"] == [] and result["removed_ids"] == set()
     assert [f["id"] for f in result["prior_files"]] == ["F0"]
-    assert store.sync_cursors[f"sharepoint:alice@x.com:{DRIVE_A}"]["page_token"] == "tok-2"
+    assert store.sync_cursors[core._sp_interactive_cursor_key("alice@x.com", DRIVE_A)]["page_token"] == "tok-2"
 
 
 def test_real_changes_are_reconstructed(core_mod, monkeypatch):
     import scanner
     core, store = core_mod
-    store.sync_cursors[f"sharepoint:alice@x.com:{DRIVE_A}"] = {"page_token": "tok-1"}
+    store.sync_cursors[core._sp_interactive_cursor_key("alice@x.com", DRIVE_A)] = {"page_token": "tok-1"}
     store.prior_inventory["alice@x.com"] = [_row("F0", "unchanged.pdf")]
     changed_file = {"id": "F1", "name": "changed.pdf", "parentReference": {"driveId": DRIVE_A}}
     monkeypatch.setattr(scanner, "sp_delta_since",
@@ -107,7 +109,7 @@ def test_real_changes_are_reconstructed(core_mod, monkeypatch):
 def test_a_cursor_with_no_prior_scan_at_all_falls_back_to_a_full_listing(core_mod, monkeypatch):
     import scanner
     core, store = core_mod
-    store.sync_cursors[f"sharepoint:alice@x.com:{DRIVE_A}"] = {"page_token": "tok-1"}
+    store.sync_cursors[core._sp_interactive_cursor_key("alice@x.com", DRIVE_A)] = {"page_token": "tok-1"}
     # No entry in store.prior_inventory for alice at all.
     monkeypatch.setattr(scanner, "sp_delta_since", lambda token, drive_id, link: ([], set(), "tok-2"))
     result = core._interactive_sp_sync_plan("alice@x.com", "alice-token", DRIVE_A)
@@ -120,7 +122,7 @@ def test_a_prior_scan_of_a_different_drive_never_gets_used_as_the_baseline(core_
     it anyway would silently reconstruct the wrong estate."""
     import scanner
     core, store = core_mod
-    store.sync_cursors[f"sharepoint:alice@x.com:{DRIVE_A}"] = {"page_token": "tok-1"}
+    store.sync_cursors[core._sp_interactive_cursor_key("alice@x.com", DRIVE_A)] = {"page_token": "tok-1"}
     # Alice's most recent completed scan was of DRIVE_B, not the DRIVE_A we're checking now.
     store.prior_inventory["alice@x.com"] = [_row("F0", "from-library-b.pdf", drive_id=DRIVE_B)]
     monkeypatch.setattr(scanner, "sp_delta_since",
@@ -134,7 +136,7 @@ def test_a_partial_drive_mismatch_also_refuses_the_whole_baseline(core_mod, monk
     baseline is untrustworthy — never a partial reconstruction."""
     import scanner
     core, store = core_mod
-    store.sync_cursors[f"sharepoint:alice@x.com:{DRIVE_A}"] = {"page_token": "tok-1"}
+    store.sync_cursors[core._sp_interactive_cursor_key("alice@x.com", DRIVE_A)] = {"page_token": "tok-1"}
     store.prior_inventory["alice@x.com"] = [_row("F0", "ok.pdf", drive_id=DRIVE_A),
                                             _row("F1", "wrong-drive.pdf", drive_id=DRIVE_B)]
     monkeypatch.setattr(scanner, "sp_delta_since",
@@ -148,7 +150,7 @@ def test_onedrive_drive_id_none_is_its_own_valid_baseline(core_mod, monkeypatch)
     identity (the signed-in user's own drive), not as 'missing' or a wildcard."""
     import scanner
     core, store = core_mod
-    store.sync_cursors["sharepoint:alice@x.com:None"] = {"page_token": "tok-1"}
+    store.sync_cursors[core._sp_interactive_cursor_key("alice@x.com", None)] = {"page_token": "tok-1"}
     store.prior_inventory["alice@x.com"] = [_row("F0", "my-onedrive-file.pdf", drive_id=None)]
     monkeypatch.setattr(scanner, "sp_delta_since", lambda token, drive_id, link: ([], set(), "tok-2"))
     result = core._interactive_sp_sync_plan("alice@x.com", "alice-token", None)
@@ -159,7 +161,7 @@ def test_onedrive_drive_id_none_is_its_own_valid_baseline(core_mod, monkeypatch)
 def test_a_failed_change_check_falls_back_to_a_full_listing(core_mod, monkeypatch):
     import scanner
     core, store = core_mod
-    store.sync_cursors[f"sharepoint:alice@x.com:{DRIVE_A}"] = {"page_token": "tok-1"}
+    store.sync_cursors[core._sp_interactive_cursor_key("alice@x.com", DRIVE_A)] = {"page_token": "tok-1"}
     store.prior_inventory["alice@x.com"] = [_row("F0", "unchanged.pdf")]
 
     def _boom(token, drive_id, link):
@@ -169,14 +171,38 @@ def test_a_failed_change_check_falls_back_to_a_full_listing(core_mod, monkeypatc
     assert result is None
 
 
+class _FakePanic(BaseException):
+    """Stands in for pyo3_runtime.PanicException — a broken native cryptography/_cffi_backend
+    build surfaces as a BaseException subclass, deliberately NOT an Exception subclass, so
+    `except Exception` would let it propagate uncaught. core._sp_delta_check's docstring
+    justifies its wider `except BaseException` specifically for this case; this test is what
+    makes that justification checked rather than asserted in a comment nobody re-verifies."""
+
+
+def test_a_baseexception_from_the_change_check_still_falls_back_safely(core_mod, monkeypatch):
+    import scanner
+    core, store = core_mod
+    store.sync_cursors[core._sp_interactive_cursor_key("alice@x.com", DRIVE_A)] = {"page_token": "tok-1"}
+    store.prior_inventory["alice@x.com"] = [_row("F0", "unchanged.pdf")]
+
+    def _panic(token, drive_id, link):
+        raise _FakePanic("Python API version mismatch")
+    monkeypatch.setattr(scanner, "sp_delta_since", _panic)
+    result = core._interactive_sp_sync_plan("alice@x.com", "alice-token", DRIVE_A)
+    assert result is None, (
+        "a BaseException (not just Exception) from the change check must still degrade to a "
+        "full listing, not propagate and crash the scan — plain `except Exception` would not "
+        "catch this")
+
+
 def test_two_different_drives_for_the_same_user_never_share_a_cursor(core_mod, monkeypatch):
     import scanner
     core, store = core_mod
     store.prior_inventory["alice@x.com"] = [_row("F0", "a.pdf", drive_id=DRIVE_A)]
 
     core._interactive_sp_sync_plan("alice@x.com", "tok", DRIVE_A)
-    assert f"sharepoint:alice@x.com:{DRIVE_A}" in store.sync_cursors
-    assert f"sharepoint:alice@x.com:{DRIVE_B}" not in store.sync_cursors
+    assert core._sp_interactive_cursor_key("alice@x.com", DRIVE_A) in store.sync_cursors
+    assert core._sp_interactive_cursor_key("alice@x.com", DRIVE_B) not in store.sync_cursors
 
     result = core._interactive_sp_sync_plan("alice@x.com", "tok", DRIVE_B)
     assert result is None, "drive B has no cursor of its own yet — drive A's must not answer for it"
@@ -189,8 +215,8 @@ def test_two_different_users_never_share_a_cursor(core_mod, monkeypatch):
     store.prior_inventory["bob@y.com"] = [_row("F0", "b.pdf")]
 
     core._interactive_sp_sync_plan("alice@x.com", "alice-tok", DRIVE_A)
-    assert f"sharepoint:alice@x.com:{DRIVE_A}" in store.sync_cursors
-    assert f"sharepoint:bob@y.com:{DRIVE_A}" not in store.sync_cursors
+    assert core._sp_interactive_cursor_key("alice@x.com", DRIVE_A) in store.sync_cursors
+    assert core._sp_interactive_cursor_key("bob@y.com", DRIVE_A) not in store.sync_cursors
 
 
 def test_the_scheduled_sweeps_own_cursor_is_a_completely_separate_key(core_mod, monkeypatch):
@@ -202,5 +228,17 @@ def test_the_scheduled_sweeps_own_cursor_is_a_completely_separate_key(core_mod, 
     assert "sharepoint" in store.sync_cursors
 
     core._interactive_sp_sync_plan("alice@x.com", "alice-tok", DRIVE_A)
-    assert f"sharepoint:alice@x.com:{DRIVE_A}" in store.sync_cursors
-    assert set(store.sync_cursors) == {"sharepoint", f"sharepoint:alice@x.com:{DRIVE_A}"}
+    assert core._sp_interactive_cursor_key("alice@x.com", DRIVE_A) in store.sync_cursors
+    assert set(store.sync_cursors) == {"sharepoint", core._sp_interactive_cursor_key("alice@x.com", DRIVE_A)}
+
+
+def test_cursor_key_does_not_collide_across_a_reshuffled_colon(core_mod):
+    """drive_id is client-supplied and unvalidated (scanner._sp_locations parses it off a
+    request `folder` value with a bare r.partition("/")), so it can contain anything —
+    including a literal colon. A naive f"sharepoint:{owner}:{drive_id}" join made
+    owner="x", drive_id="y:z" produce the identical string as owner="x:y", drive_id="z". The
+    JSON-encoded key must tell the two apart."""
+    core, store = core_mod
+    key1 = core._sp_interactive_cursor_key("x", "y:z")
+    key2 = core._sp_interactive_cursor_key("x:y", "z")
+    assert key1 != key2
