@@ -13,6 +13,7 @@ here too (ACA sends SIGTERM then waits ~30s before SIGKILL).
 """
 from __future__ import annotations
 
+import json
 import os
 import signal
 import sys
@@ -64,6 +65,16 @@ def run(poll_seconds: float = 2.0, _install_signals: bool = True) -> None:
     # workers?" scan guard can't look at its own pool. A fresh timestamp in the shared store is
     # real liveness the API can check (worker_tier_alive) — not a config flag that could lie.
     # Throttled and best-effort: a transient DB blip must never kill the pool.
+    #
+    # JSON envelope, not a bare timestamp: carries this container's own `core.WORKERS` (the
+    # pool size actually latched at import time, see the note above) so the API tier — and
+    # eventually Monitor — can report real slot capacity instead of the API's own ACP_WORKERS,
+    # which is 0 in this topology. store.py's `_parse_worker_tier_heartbeat` reads either this
+    # or the old bare-ISO format, so an old worker_main talking to new store.py (or the
+    # reverse) during a rolling deploy never breaks. Busy/idle within the pool is NOT tracked
+    # here — that needs instrumentation inside worker.py's pool itself, a separate problem; a
+    # caller can cheaply approximate "busy" from GET /jobs' `stats.running` once pool_size is
+    # real, without any further change here.
     last_beat = 0.0
     while not _stop.is_set():
         now = time.monotonic()
@@ -72,7 +83,10 @@ def run(poll_seconds: float = 2.0, _install_signals: bool = True) -> None:
             try:
                 core.get_store().set_setting(
                     "worker_tier_heartbeat",
-                    datetime.now(timezone.utc).isoformat(),
+                    json.dumps({
+                        "at": datetime.now(timezone.utc).isoformat(),
+                        "pool_size": core.WORKERS,
+                    }),
                 )
             except Exception:
                 pass

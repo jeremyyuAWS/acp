@@ -85,6 +85,19 @@ def test_naive_timestamps_are_treated_as_utc():
     assert FakeStore(naive).worker_tier_status()["alive"] is True
 
 
+def test_pool_size_is_none_for_a_bare_timestamp_and_present_for_a_json_envelope():
+    """worker_tier_status()'s new `pool_size` field: None for the old bare-ISO format (a
+    worker container that hasn't redeployed onto the JSON envelope yet), and the real
+    `core.WORKERS` figure once it has — read straight through this class-level borrow, the
+    same path /readyz and GET /jobs both go through."""
+    import json as _json
+    bare = FakeStore(_iso(seconds=5)).worker_tier_status()
+    assert bare["alive"] is True and bare["pool_size"] is None
+
+    enveloped = FakeStore(_json.dumps({"at": _iso(seconds=5), "pool_size": 12})).worker_tier_status()
+    assert enveloped["alive"] is True and enveloped["pool_size"] == 12
+
+
 # ── /readyz ────────────────────────────────────────────────────────────────────────────
 def _readyz(monkeypatch, *, beat, local_pool, pdf_ok):
     import core
