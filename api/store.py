@@ -6666,6 +6666,111 @@ class Store:
             self._db.execute(cur, "SELECT * FROM jobs" + where + " ORDER BY updated_at DESC LIMIT %s", tuple(params))
             return self._db.fetchall(cur)
 
+    # Job `type` -> the user-facing phase it belongs to, for the pickup-estimate panel on
+    # Discover/Assess/Remediate. Several types (scan_finalize) are shared tail-of-pipeline
+    # steps; classified under the phase that enqueues them in the common case.
+    _JOB_KIND = {
+        "scan_batch": "discover", "scan_file": "discover", "scan_folder": "discover",
+        "scan_finalize": "discover",
+        "scan_assess": "assess", "assess_trace": "assess",
+        "remediate_file": "remediate", "rescore_file": "remediate",
+        "apply_approved_values": "remediate",
+    }
+    _KIND_TYPES = {"discover": (), "assess": (), "remediate": ()}
+    for _jt, _k in _JOB_KIND.items():
+        _KIND_TYPES[_k] = _KIND_TYPES[_k] + (_jt,)
+    del _jt, _k
+
+    def queue_estimate(self, scan_id: str, kind: str, *, owner: str | None = None,
+                       ready_workers: int | None = None, window_s: int = 1800) -> dict:
+        """"When will my work actually begin?" for one scan's Discover/Assess/Remediate job —
+        the queue-status panel's data source.
+
+        Answers with what the `jobs` table can actually prove, and says so when it can't:
+          - compatible_jobs_ahead / compatible_workers_busy are exact live counts, not modeled.
+          - the wait estimate is `compatible_jobs_ahead ÷ recent throughput` (jobs of this kind
+            completed in the last `window_s`), which needs no per-worker concurrency figure —
+            aggregate throughput already accounts for however many workers are actually running.
+            `ready_workers` is caller-supplied (core.WORKERS, or the split-topology worker tier)
+            purely for display ("N workers busy / M ready"); it plays no part in the wait math.
+          - fewer than 3 completions in the window means there isn't enough recent history for
+            an honest range, so state is "insufficient_history" and earliest_at/latest_at stay
+            null rather than a confident-looking guess from thin data.
+
+        Returns {"available": False} when the scan has no live job of this kind (nothing
+        queued or running — already done, or this phase hasn't started)."""
+        from datetime import datetime as _dt, timedelta as _td
+        types = self._KIND_TYPES.get(kind, ())
+        if not types:
+            raise ValueError(f"unknown queue-estimate kind: {kind!r}")
+        now = self._now()
+        with self._db.cursor() as cur:
+            # Owner scoping happens once here, up front — every count below is either about
+            # THIS job (already owner-checked) or a GLOBAL queue fact (how many jobs of this
+            # kind are queued/running across all tenants), which is infrastructure state, not
+            # per-tenant data, and matches oldest_queued_job's/job_stats' own global-by-default
+            # shape.
+            self._db.execute(cur,
+                "SELECT j.* FROM jobs j JOIN scan_runs s ON s.id=j.scan_id "
+                "WHERE j.scan_id=%s AND j.type IN (" + ",".join(["%s"] * len(types)) + ") "
+                "AND j.status IN ('queued','running') "
+                "AND (%s IS NULL OR s.owner_email=%s) "
+                "ORDER BY CASE j.status WHEN 'running' THEN 0 ELSE 1 END, j.priority, j.run_after "
+                "LIMIT 1",
+                (scan_id, *types, owner, owner))
+            job = self._db.fetchone(cur)
+            if not job:
+                return {"available": False}
+
+            if job["status"] == "running":
+                return {"available": True, "state": "claimed", "job_type": job["type"],
+                        "worker_assigned_at": job.get("locked_at"), "phase": job.get("phase"),
+                        "estimated_at": now}
+
+            if job.get("run_after") and job["run_after"] > now:
+                return {"available": True, "state": "scheduled", "job_type": job["type"],
+                        "run_after": job["run_after"], "estimated_at": now}
+
+            if ready_workers is not None and ready_workers <= 0:
+                return {"available": True, "state": "no_worker_available", "job_type": job["type"],
+                        "compatible_workers_busy": 0, "ready_workers": 0, "estimated_at": now}
+
+            type_ph = ",".join(["%s"] * len(types))
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE type IN (" + type_ph + ") "
+                "AND status='queued' AND run_after<=%s "
+                "AND (priority < %s OR (priority = %s AND run_after < %s))",
+                (*types, now, job["priority"], job["priority"], job["run_after"]))
+            jobs_ahead = self._db.fetchone(cur)["n"]
+
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE type IN (" + type_ph + ") AND status='running'",
+                types)
+            workers_busy = self._db.fetchone(cur)["n"]
+
+            window_start = (_dt.fromisoformat(now) - _td(seconds=window_s)).isoformat()
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE type IN (" + type_ph + ") "
+                "AND status='done' AND updated_at>=%s",
+                (*types, window_start))
+            recent_done = self._db.fetchone(cur)["n"]
+
+        base = {"available": True, "job_type": job["type"],
+                "compatible_jobs_ahead": jobs_ahead, "compatible_workers_busy": workers_busy,
+                "ready_workers": ready_workers, "estimated_at": now}
+        if recent_done < 3:
+            return {**base, "state": "insufficient_history",
+                    "earliest_at": None, "latest_at": None, "confidence": None, "basis": None}
+
+        throughput_per_s = recent_done / window_s
+        wait_s = jobs_ahead / throughput_per_s
+        now_dt = _dt.fromisoformat(now)
+        confidence = "high" if recent_done >= 10 else "medium"
+        return {**base, "state": "estimated",
+                "earliest_at": (now_dt + _td(seconds=wait_s * 0.7)).isoformat(),
+                "latest_at": (now_dt + _td(seconds=wait_s * 1.3)).isoformat(),
+                "confidence": confidence, "basis": f"recent_{kind}_throughput"}
+
     # ── Document-centric layer (ADR 0003, Phase 1) ─────────────────────────────
     def upsert_document(self, doc_id: str, *, source: str, path: str, content_hash: str | None,
                         owner: str | None, created_at: str, last_seen: str,
