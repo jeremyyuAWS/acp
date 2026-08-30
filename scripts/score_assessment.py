@@ -62,8 +62,29 @@ PASS, FAIL, REVIEW, NOT_EVAL = ce.PASS, ce.FAIL, ce.REVIEW, ce.NOT_EVALUATED
 ABSTAIN = (REVIEW, NOT_EVAL)
 
 
+class ScanFailed(RuntimeError):
+    """A scan that did not run. Deliberately fatal — see `scan` below."""
+
+
 def scan(path: Path) -> tuple[list[dict], float]:
-    """Findings from the shipped scan path, plus wall-clock seconds."""
+    """Findings from the shipped scan path, plus wall-clock seconds.
+
+    A FAILED SCAN RAISES. It used to return `[], 0.0`, and that one line inverted the meaning of
+    this entire scorer: zero findings is what a CLEAN document produces, so an engine that never
+    ran was indistinguishable from a document with nothing wrong. On the four PASS-capable .docx
+    criteria that resolves to PASS, so the tool built to measure false certification was itself
+    certifying inaccessible documents — and reporting the result as a product measurement.
+
+    Measured, not theorised: on 2026-08-30, in a container without the .NET Office CLI, all 34
+    fixtures failed with `FileNotFoundError: /root/.dotnet/dotnet` and this script printed
+    "FALSE PASS 7 / 21 (33.3%)" with `1.3.1: FAIL->PASS` among them. Every number in that report
+    described the absence of an engine. Nothing in the output said so; the per-scan failures went
+    to stderr and the summary went to stdout, so a redirected run showed only the summary.
+
+    This is the exact thing the product forbids of itself — "never convert an analyser error into
+    a clean result" — and it was the measurement layer breaking the rule it exists to enforce.
+    An exception is not a finding count of zero, and a scorer that cannot scan has no numbers to
+    report rather than zeros to report."""
     import scanner
     tmp = Path(tempfile.mkdtemp())
     shutil.copy(path, tmp / path.name)
@@ -71,8 +92,11 @@ def scan(path: Path) -> tuple[list[dict], float]:
     try:
         res, _ = scanner.analyse_and_assess(tmp, path.name)
     except Exception as e:                                            # noqa: BLE001
-        print(f"    scan failed: {e.__class__.__name__}: {e}", file=sys.stderr)
-        return [], 0.0
+        raise ScanFailed(
+            f"{path.name}: {e.__class__.__name__}: {e}\n"
+            f"    A scan that did not run is not a scan that found nothing. Scoring stops here "
+            f"rather than reporting a rate that describes a missing dependency.\n"
+            f"    Check what is available: python scripts/check_engines.py --report") from e
     return list((res or {}).get("issues") or []), time.time() - t0
 
 
@@ -300,7 +324,7 @@ def _score_and_report(corpus: Path) -> dict:
         for name, seeded, blamed in attribution:
             print(f"  {name:24} seeded {seeded:8} -> reported {','.join(blamed) or '(none)'}")
 
-    if latencies:
+    if latencies and sum(latencies) > 0:
         ls = sorted(latencies)
         p95 = ls[min(len(ls) - 1, int(0.95 * len(ls)))]
         print(f"\nlatency  p50 {statistics.median(ls):.2f}s   p95 {p95:.2f}s   "
@@ -336,7 +360,28 @@ def main() -> int:
                     default=Path.home() / "Downloads" / "acp-docx-eval" / "sc-corpus")
     ap.add_argument("--out", type=Path)
     args = ap.parse_args()
-    summary = score_corpus(args.corpus, verbose=True)
+
+    # Pre-flight, so the failure names the cause instead of arriving 34 fixtures later as an
+    # exception about a path. Same check CI's fail-closed gate uses, and the same one that
+    # decides whether the engine-gated tests skip — a scorer that measured detection with no
+    # detector behind it is what this whole change exists to stop.
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import check_engines
+    missing = check_engines.check(["office"])
+    if missing:
+        for name, why in missing:
+            print(f"cannot score: the {name} engine is unavailable.\n  {why}", file=sys.stderr)
+        print("\nEvery .docx verdict would be computed from a scan that did not run, and on the "
+              "four\nPASS-capable criteria that reads as PASS — a conformance claim manufactured "
+              "by a\nmissing dependency. Refusing to report numbers rather than reporting those.",
+              file=sys.stderr)
+        return 2
+
+    try:
+        summary = score_corpus(args.corpus, verbose=True)
+    except ScanFailed as e:
+        print(f"\ncannot score: {e}", file=sys.stderr)
+        return 2
     if args.out:
         args.out.write_text(json.dumps(summary, indent=2, default=str) + "\n")
         print(f"\nwrote {args.out}")

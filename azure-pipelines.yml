@@ -52,15 +52,20 @@ pool:
 # with no sibling checkout present. The comment outlived the constraint by ~3 weeks
 # and cost every CI run the engine-gated suites.
 #
-# REMAINING GAP — the PDF analyser (worker-python) is still NOT vendored. It is loaded
-# at runtime from ACP_PDF_ENGINE (api/scanner.py:WP) and lives outside this repo, so:
-#   * tests/test_scan.py still skips here — it scans the whole oracle corpus in one
-#     pass, PDFs included, and scanner._analyse_pdf imports the analyser OUTSIDE its
-#     try/except, so a missing PDF engine is a hard ModuleNotFoundError, not a
-#     degraded scan;
-#   * tests/test_remediation_capability.py::test_pdf_auto_entries_clear likewise.
-# Both now say exactly that in their skip reason. Vendoring worker-python the way
-# ADR 0012 vendored the Office analysers is what closes this.
+# PDF engine: vendored in engine/pdf-analyser/ since ADR 0029, and needs no build step —
+# it is imported from the checkout (api/scanner.py's WP, env-overridable via ACP_PDF_ENGINE).
+#
+# This block used to read "REMAINING GAP — the PDF analyser (worker-python) is still NOT
+# vendored", and named tests/test_scan.py and test_remediation_capability.py as expected skips.
+# True when written, false since ADR 0029 — and note that the paragraph directly above records
+# the Office comment outliving ITS constraint by three weeks and costing every CI run the
+# engine-gated suites. The same thing happened again, in the same file, to the other engine.
+#
+# A stale comment pointing this direction is the expensive one: it tells a reader that skipped
+# PDF suites are normal, so a checkout that really had lost the engine would look exactly like
+# a correct one. Neither engine is trusted to a comment any more — the "Fail if an analysis
+# engine is missing" step below asserts all three against the same availability checks the
+# tests' own skips use.
 steps:
   # The matrix guards below read commit bodies and diff against the target branch, so they
   # need real history — the default shallow fetch would make both silently useless.
@@ -159,6 +164,26 @@ steps:
         python scripts/gen_progress_log.py --check
       fi
     displayName: Matrix guard — rule changes declare their matrix impact
+
+  # ── engine fail-closed gate ───────────────────────────────────────────────────────────
+  # A missing analysis engine degrades SILENTLY: the tests that need it self-skip, the suite
+  # goes green, and the tick sits over criteria that never ran. ci.yml has refused to let that
+  # happen for OCR since 2026-08-19; THIS pipeline installed tesseract and then never checked
+  # whether it worked.
+  #
+  # That is the second parity drift, and the same asymmetry as the first: ci.yml's header calls
+  # step-for-step parity with this file "a live invariant, not a description" and records that
+  # the three matrix guards landed there while this ran without them. The pipeline least likely
+  # to be watched carried the weaker gate both times — and this one is described in ci.yml as
+  # the pipeline mova-io/acp may still build from, so its result is somebody's evidence.
+  #
+  # `condition: always()` matches ci.yml's OCR step: run after the suite so the real pass/fail
+  # is visible first and this explains the red, rather than dying early with a job that says
+  # nothing about the change under review. tests/test_check_engines.py asserts both pipelines
+  # carry this step and that both run it after pytest.
+  - script: python scripts/check_engines.py --require office,pdf,ocr
+    condition: always()
+    displayName: Fail if an analysis engine is missing
 
   # UseNode@1, not NodeTool@0. The first real run of this pipeline against the GitHub repo
   # (acp-ci-github #20260808.1) warned twice at Initialize job: "Task 'Node.js tool installer'

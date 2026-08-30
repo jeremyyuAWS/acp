@@ -13,12 +13,23 @@
 # azure-pipelines.yml is deliberately left in place, not deleted — mova-io/acp may still
 # build from it, and removing it is a separate decision.
 #
-# Both engines, and why only one is built here:
+# Both engines, and why only one is BUILT here:
 #   * Office (.NET) — vendored in engine/office-analysers/ since ADR 0012, so the CLI
 #     builds standalone from a fresh clone. Built below; its test suites run.
-#   * PDF (worker-python) — NOT vendored, loaded at runtime from ACP_PDF_ENGINE. The
-#     suites needing it skip with an honest reason (see tests/engines.py). Vendoring it
-#     the way ADR 0012 vendored the Office analysers is what turns those on.
+#   * PDF — vendored in engine/pdf-analyser/ since ADR 0029, and needs no build step: it is
+#     imported from the checkout (api/scanner.py's WP, env-overridable via ACP_PDF_ENGINE).
+#
+#     This comment used to say the PDF engine was "NOT vendored ... the suites needing it skip
+#     with an honest reason", which was true when written and false since ADR 0029. That is the
+#     costly direction for a stale comment to point: it told every reader that skipping was
+#     expected, so a checkout that really had lost the engine would have looked normal.
+#     tests/engines.py records being bitten by the identical stale claim once already, when
+#     PDF_OK defaulted to a path outside the repo and ten tests skipped saying the engine "is
+#     not vendored in this repo".
+#
+#     Neither engine is trusted to be present on the strength of a comment any more — the
+#     "Fail if an analysis engine is missing" step at the end of this job asserts all three
+#     (office, pdf, ocr) against the same availability checks the tests' own skips use.
 #
 # Ollama-backed tests self-skip here (ai.is_available() is false on a runner), so no
 # model is needed and none is installed.
@@ -263,6 +274,23 @@ jobs:
           echo "The suite above ran WITHOUT OCR coverage — read its result as partial."
           echo "This is an apt/mirror failure, not a defect in the change under review."
           exit 1
+
+      - name: Fail if an analysis engine is missing
+        # Generalises the OCR step above to all three engines, for the same reason and with the
+        # same placement: last, `if: always()`, so the suite's real result is visible first and
+        # this explains the red rather than replacing it.
+        #
+        # Kept ALONGSIDE the OCR step rather than replacing it, because the two answer different
+        # questions and both are worth asking. That step reads `steps.tesseract.outcome`, so it
+        # can attribute the failure to apt ("not a defect in the change under review") — which
+        # this cannot know. This asks `ocr.is_available()`, the question the RUNTIME asks, so it
+        # also catches an install that reported success while leaving no usable binary.
+        #
+        # Runs on every shard, not just group 1 like the matrix guards: engine availability is a
+        # property of the runner, each shard IS a different runner, and a shard that lost an
+        # engine ran partial coverage regardless of what the other three managed.
+        if: always()
+        run: python scripts/check_engines.py --require office,pdf,ocr
 
   frontend:
     name: Frontend tests + build

@@ -80,7 +80,17 @@ def remediate(path: Path):
 
 
 def assess(path: Path) -> set:
-    """Criteria the SCAN reports for this file — the assessment channel."""
+    """Criteria the SCAN reports for this file — the assessment channel.
+
+    RAISES when the scan does not run. It used to `return set()`, which Gate 3 could not
+    distinguish from "the scan ran and reported nothing" — and Gate 3's verdict is
+    `n_edits == 0 and not dmg`, which does not consult `detected` at all. So an engine failure
+    printed "NOTE assessment reported none of them" and then PASSED a gate whose name is
+    "assisted-only: assessed, not edited". It had not assessed anything.
+
+    Same one-line inversion as scripts/score_assessment.py's `scan` (see its docstring for the
+    measured case). An analyser error is never a clean result — including in the tools that
+    decide whether the product's results can be trusted."""
     sys.path.insert(0, str(ROOT / "api"))
     import scanner
     tmp = Path(tempfile.mkdtemp())
@@ -88,8 +98,10 @@ def assess(path: Path) -> set:
     try:
         res, _ = scanner.analyse_and_assess(tmp, path.name)
     except Exception as e:                                        # noqa: BLE001
-        print(f"      assess failed: {e.__class__.__name__}: {e}")
-        return set()
+        raise RuntimeError(
+            f"assess failed on {path.name}: {e.__class__.__name__}: {e}\n"
+            f"    A scan that did not run reports no criteria, which Gate 3 would pass.\n"
+            f"    Check what is available: python scripts/check_engines.py --report") from e
     out = set()
     for issue in (res or {}).get("issues", []) or []:
         w = str(issue.get("wcag") or "").replace("SC_", "").replace("_", ".")
@@ -123,6 +135,19 @@ def main() -> int:
     docs, exp = args.root / "docs", args.root / "expected"
     os.environ.setdefault("OLLAMA_MODEL", "llama3.1:8b")
     os.environ.setdefault("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
+
+    # Pre-flight the analyser, for the reason in `assess`'s docstring: without it Gate 3 reports
+    # PASS on a run where nothing was assessed. These gates decide whether a model comparison
+    # from this corpus is valid at all, so they are the last place to let a missing dependency
+    # read as a result.
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import check_engines
+    missing = check_engines.check(["office"])
+    if missing:
+        for name, why in missing:
+            print(f"cannot run the gates: the {name} engine is unavailable.\n  {why}",
+                  file=sys.stderr)
+        return 2
 
     failures = []
 
