@@ -167,6 +167,31 @@ def test_a_verified_lane_may_not_rest_on_a_simulated_rescan():
                         f"patches the re-scan it is cited for, at {path}:{node.lineno}")
 
 
+def test_a_verified_lane_must_actually_run_the_production_lane():
+    """The other half of the bar, and the half that was missing.
+
+    Refusing a PATCHED re-scan does not oblige a cited test to REACH one. The first .xlsx entry
+    was added on the strength of tests that called `apply_link_text` and the detector directly —
+    a genuine proof of the writer, and silent about the lane: no `handlers._apply_approved_values`,
+    so no `verify_residual_scs`, so nothing establishing that an approved value is credited on
+    evidence. The patch guard passed it without complaint, because there was no patch.
+
+    So a cited test must call the production entry point by name. Asserted on the parsed source
+    rather than a substring, for the same reason as above: prose describing the lane is not the
+    lane."""
+    import ast
+
+    for (sc, fmt), why in gcl.REMEDIATION_VERIFIED.items():
+        for path in [w for w in why.split() if w.startswith("tests/") and w.endswith(".py")]:
+            tree = ast.parse((ROOT / path).read_text(), filename=path)
+            called = {n.func.attr for n in ast.walk(tree)
+                      if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+            assert "_apply_approved_values" in called, (
+                f"{sc} {fmt} is claimed remediation-verified on {path}, but that file never calls "
+                f"handlers._apply_approved_values — it may prove the writer, and it cannot prove "
+                f"the lane credits on a re-scan")
+
+
 def test_the_write_lanes_come_from_handlers_not_from_a_list_here():
     """Restating the lanes would let this report claim a writer that does not exist. Asserted by
     checking a lane handlers.py declares and one it does not."""

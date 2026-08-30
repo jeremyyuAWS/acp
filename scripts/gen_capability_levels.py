@@ -94,7 +94,23 @@ REMEDIATION_VERIFIED: dict[tuple[str, str], str] = {
         "file still opens, and a second real assessment no longer reports 2.4.4. Negative "
         "controls: an approved value that is itself vague is written but never credited, and an "
         "already-descriptive document is left byte-identical"),
+    ("2.4.4", "xlsx"): (
+        "tests/test_remediation_verified_xlsx_link.py — extraction, proposal, writer and "
+        "verification moved as one change. The CELL VALUE (what a reader sees in the grid) "
+        "carries the approved text, read back with openpyxl; the href, formulas, cell styles, "
+        "the other hyperlink and an unrelated cell holding the same string all survive; a "
+        "shared <si> is never edited in place (a new entry is appended and only the linked cell "
+        "repointed, with uniqueCount bumped and count left alone); the workbook opens; a re-scan "
+        "no longer reports 2.4.4. A formula-labelled cell is REFUSED with a reason rather than "
+        "rewritten, and never gets its display= written as a consolation"),
 }
+
+# WHAT NEITHER ENTRY ABOVE CLAIMS, written here rather than left to be inferred from their
+# brevity: that a screen reader announces the new text usefully. Both lanes verify that the text
+# a SIGHTED reader sees changed and that the document survived; how Excel or Word expose a
+# hyperlink's accessible name to assistive technology is a rendered behaviour, and nothing in
+# this repo can observe it. A lane that needed that evidence would need a different instrument
+# than a test suite, and saying so is cheaper than a footnote nobody reads.
 
 
 def _load(name: str, path: Path):
