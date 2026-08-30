@@ -282,6 +282,59 @@ def test_list_expired_versions_excludes_one_already_marked_expired(isolated_stor
         as_of="2026-01-01T00:00:00+00:00") == []
 
 
+def test_storage_bytes_sums_versions_across_documents(isolated_store, ws):
+    doc1 = uuid.uuid4().hex[:12]
+    doc2 = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document(doc1, workspace_id=ws, owner_email=OWNER)
+    isolated_store.create_content_workspace_document(doc2, workspace_id=ws, owner_email=OWNER)
+    isolated_store.create_content_workspace_document_version(
+        uuid.uuid4().hex[:12], document_id=doc1, version_seq=1, content_hash="h1", size_bytes=100)
+    isolated_store.create_content_workspace_document_version(
+        uuid.uuid4().hex[:12], document_id=doc2, version_seq=1, content_hash="h2", size_bytes=250)
+
+    assert isolated_store.get_content_workspace_storage_bytes(ws, owner_email=OWNER) == 350
+
+
+def test_storage_bytes_is_zero_for_an_empty_workspace(isolated_store, ws):
+    assert isolated_store.get_content_workspace_storage_bytes(ws, owner_email=OWNER) == 0
+
+
+def test_storage_bytes_excludes_expired_versions(isolated_store, ws):
+    doc_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)
+    isolated_store.create_content_workspace_document_version(
+        uuid.uuid4().hex[:12], document_id=doc_id, version_seq=1, content_hash="h1",
+        size_bytes=500, lifecycle_state="expired")
+
+    assert isolated_store.get_content_workspace_storage_bytes(ws, owner_email=OWNER) == 0
+
+
+def test_storage_bytes_includes_quarantined_and_duplicate_versions(isolated_store, ws):
+    """Those states still occupy real blob storage, whatever their Discovery-eligibility."""
+    doc_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)
+    isolated_store.create_content_workspace_document_version(
+        uuid.uuid4().hex[:12], document_id=doc_id, version_seq=1, content_hash="h1",
+        size_bytes=100, lifecycle_state="quarantined")
+    isolated_store.create_content_workspace_document_version(
+        uuid.uuid4().hex[:12], document_id=doc_id, version_seq=2, content_hash="h2",
+        size_bytes=200, lifecycle_state="duplicate")
+
+    assert isolated_store.get_content_workspace_storage_bytes(ws, owner_email=OWNER) == 300
+
+
+def test_storage_bytes_is_scoped_to_the_workspace_and_owner(isolated_store, ws):
+    doc_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)
+    isolated_store.create_content_workspace_document_version(
+        uuid.uuid4().hex[:12], document_id=doc_id, version_seq=1, content_hash="h1", size_bytes=500)
+
+    other_ws = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace(other_ws, owner_email=OWNER, name="Other")
+    assert isolated_store.get_content_workspace_storage_bytes(other_ws, owner_email=OWNER) == 0
+    assert isolated_store.get_content_workspace_storage_bytes(ws, owner_email=OTHER) == 0
+
+
 def test_admin_reset_wipes_documents_and_versions(isolated_store, ws):
     doc_id = uuid.uuid4().hex[:12]
     isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)

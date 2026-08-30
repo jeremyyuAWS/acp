@@ -44,6 +44,12 @@ Also implements PRD's "download original": `GET .../documents/{document_id}/vers
 server-mediated shape api/blob.py's download_remediated route already uses for remediated
 output — no second SAS scheme for reads), via workspace_blob.download_document_bytes.
 
+Also implements the "quota" half of PRD §9's "ACP validates user, workspace, type, size, and
+quota": `create_upload_session` checks the workspace's current storage usage
+(store.get_content_workspace_storage_bytes) plus this upload's declared size against
+_WORKSPACE_QUOTA_BYTES before issuing an authorization, the same way it already checks a
+single file against _MAX_UPLOAD_BYTES.
+
 Owner-scoped throughout: `owner_email` is the tenant boundary this whole app already uses
 (ADR 0044). `GET /content-workspaces/{id}` 404s — never 403 — for a foreign id, matching
 `test_foreign_scan_404.py`'s established "an id is never an existence oracle across owners"
@@ -78,9 +84,16 @@ _MIME_TYPES = {
 }
 
 # PRD §9: "ACP validates user, workspace, type, size, and quota" before issuing upload
-# authorization. Quota (per-workspace limits) remains out of scope. 500 MiB is an
-# arbitrary-but-reasonable placeholder ceiling for a single file, configurable per deployment.
+# authorization. 500 MiB is an arbitrary-but-reasonable placeholder ceiling for a single file,
+# configurable per deployment.
 _MAX_UPLOAD_BYTES = int(os.environ.get("ACP_WORKSPACE_MAX_UPLOAD_BYTES", str(500 * 1024 * 1024)))
+
+# The "quota" half of the same PRD §9 requirement: a per-WORKSPACE ceiling on total bytes
+# already occupying blob storage (store.get_content_workspace_storage_bytes), checked against
+# BEFORE issuing an authorization for one more file. 5 GiB is an arbitrary-but-reasonable
+# placeholder, the same way _MAX_UPLOAD_BYTES's 500 MiB is — configurable per deployment, not a
+# PRD-specified number (the PRD names "quota" as a thing to validate, not a value).
+_WORKSPACE_QUOTA_BYTES = int(os.environ.get("ACP_WORKSPACE_QUOTA_BYTES", str(5 * 1024 * 1024 * 1024)))
 
 # PRD §8's supported-format list, reusing scanner.py's own constants rather than a second list
 # that could drift from what the scan engines actually accept.
@@ -211,6 +224,11 @@ def create_upload_session(workspace_id: str, body: UploadSessionCreate, request:
         raise HTTPException(422, "size_bytes must be positive")
     if body.size_bytes > _MAX_UPLOAD_BYTES:
         raise HTTPException(413, f"file exceeds the {_MAX_UPLOAD_BYTES}-byte workspace upload limit")
+    used = core.store.get_content_workspace_storage_bytes(workspace_id, owner_email=owner)
+    if used + body.size_bytes > _WORKSPACE_QUOTA_BYTES:
+        raise HTTPException(413, f"this upload would exceed the workspace's "
+                             f"{_WORKSPACE_QUOTA_BYTES}-byte storage quota "
+                             f"({used} bytes already used)")
     if not workspace_blob.enabled():
         raise HTTPException(503, "workspace uploads are not configured on this deployment")
 
