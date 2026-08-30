@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { resetDemoData, resetMyData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, getAiStatus, getAdmins, setAdmins, getMe, getToken } from './api.js'
 import { SIM } from './sim.js'
 import WorkerReplicaControl from './WorkerReplicaControl.jsx'
+import ReviewMemory from './ReviewMemory.jsx'
 
 // What a write is allowed to claim when the API layer marked its own answer `simulated`.
 // A simulated response never reached a server, so it is neither a success nor a failure — the
@@ -849,6 +850,11 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
           <button role="tab" aria-selected={tab === 'mydata'} className={tab === 'mydata' ? 'fchip on' : 'fchip'} onClick={() => setTab('mydata')}>My Data</button>
           <button role="tab" aria-selected={tab === 'myscope'} className={tab === 'myscope' ? 'fchip on' : 'fchip'} onClick={() => setTab('myscope')}>My Scope</button>
           <button role="tab" aria-selected={tab === 'workers'} className={tab === 'workers' ? 'fchip on' : 'fchip'} onClick={() => setTab('workers')}>Worker Configuration</button>
+          {/* ADR 0021's "Settings → Review Memory". The tab renders for everyone because GET
+              /org-memory has no admin gate — seeing which house style shaped a draft is not an
+              admin privilege — and ReviewMemory itself withholds every write control unless
+              me?.is_admin, matching the backend's _require_admin on all three writes. */}
+          <button role="tab" aria-selected={tab === 'memory'} className={tab === 'memory' ? 'fchip on' : 'fchip'} onClick={() => setTab('memory')}>Review Memory</button>
         </div>
         <div className="setbody">
           {tab === 'owners' && <OwnerDelegate files={files} onChanged={onDelegationChange} />}
@@ -856,6 +862,7 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
           {tab === 'mydata' && <><ResetMyData /><CopyToken /></>}
           {tab === 'myscope' && <MyScanScope />}
           {tab === 'workers' && <WorkerConfiguration me={me} />}
+          {tab === 'memory' && <ReviewMemory me={me} />}
         </div>
       </div>
     </div>

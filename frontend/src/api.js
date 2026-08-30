@@ -778,6 +778,45 @@ export const putAiProvider = (patch) => (SIM
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(patch),
     }).then(j))
+
+// ADR 0021 · Review memory — the org's house-style rules, and the decisions on derived proposals.
+//
+// The READ is open to any signed-in user (the backend's GET has no admin gate), because seeing
+// which house style shaped a draft is not an admin privilege. Every WRITE is admin-gated server
+// side by `_require_admin`, so ReviewMemory.jsx renders those controls only for `me?.is_admin` —
+// the #952 lesson, where WorkerReplicaControl showed buttons to everyone and a non-admin's click
+// optimistically updated then silently reverted on the 403, with no message.
+//
+// Errors are NOT swallowed. "This org has no house style" and "we could not reach the server" are
+// different sentences, and only the caller can say which it is in — the same contract
+// getDocumentTimeline and getAiProviders already hold. Callers must carry a .catch.
+//
+// The three writes send their arguments as QUERY PARAMS, not a JSON body: the backend declares
+// them as `Query(...)`, so a JSON body would be silently ignored and every call would 422.
+export const getOrgMemory = () => (SIM
+  ? sim({ rules: [], enabled: false })
+  : fetch(`${BASE}/org-memory`, { headers: headers() }).then(j))
+
+export const addOrgMemoryRule = ({ kind, guidance, ruleId = null, format = null }) => {
+  if (SIM) return sim({ id: 'sim', status: 'active', simulated: true })
+  const qs = new URLSearchParams({ kind, guidance })
+  if (ruleId) qs.set('rule_id', ruleId)
+  if (format) qs.set('format', format)
+  return fetch(`${BASE}/org-memory?${qs}`, { method: 'POST', headers: headers() }).then(j)
+}
+
+export const setOrgMemoryStatus = (id, status) => (SIM
+  ? sim({ id, status, simulated: true })
+  : fetch(`${BASE}/org-memory/${encodeURIComponent(id)}/status?status=${encodeURIComponent(status)}`,
+          { method: 'PUT', headers: headers() }).then(j))
+
+// Runs the derivation job for this org NOW. Returns {proposed, count} — `count: 0` is a real,
+// common answer (not enough review signal yet), and the panel says so rather than reading as a
+// failed request.
+export const deriveOrgMemory = () => (SIM
+  ? sim({ proposed: [], count: 0, simulated: true })
+  : fetch(`${BASE}/org-memory/derive`, { method: 'POST', headers: headers() }).then(j))
+
 // A SIM write is not a write, and this stub used to be unable to say so. It returned
 // `{ ...defaults, ...patch }` — the caller's own request handed back as the server's answer.
 // Settings.jsx guards against a silent no-op by comparing the RESPONSE to the REQUEST, so a
