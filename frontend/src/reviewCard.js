@@ -111,6 +111,22 @@ export const firstProposed = (item) => proposalsOf(item)[0]?.proposed_value ?? n
 // the image they're being asked to describe, whether or not the AI managed a draft.
 export const firstThumb = (item) => proposalsOf(item)[0]?.thumb ?? evidenceOf(item)[0]?.thumb ?? null
 
+// ADR 0021 §E — the org house-style rules that shaped a SCAN-TIME pre-drafted value, stamped onto
+// each proposal by handlers._enqueue_proposals. The live /ai/suggest path carries the same shape
+// on its response (houseStyle.js), so one chip renders both sources.
+//
+// Reads the FIRST proposal that carries one, not index 0. The value is card-level — it keys on
+// org + criterion + format, identical across a card's instances — so any proposal answers for the
+// card; scanning avoids making the chip depend on list order, which nothing else guarantees.
+//
+// null for the overwhelming majority of cards, and that is the honest answer rather than a gap:
+// only five criteria are given house-style guidance at scan time (1.3.3, 2.4.4/2.4.9, 2.4.6,
+// 2.4.10). The rest are deterministic proposers that ADR 0021 explicitly excludes — "there is
+// nothing to steer" — so no chip means memory genuinely did not shape that draft.
+export const houseStyleOf = (item) =>
+  proposalsOf(item).find((p) => Array.isArray(p?.house_style) && p.house_style.length)
+    ?.house_style ?? null
+
 // The `part#rId` locator of the first offending shape — what the geometry endpoint resolves to a
 // bounding box for the page-preview overlay (ADR 0018). Same source-of-truth precedence as the
 // thumb: a drafted proposal's locator, else the first deferred evidence image's. null when the

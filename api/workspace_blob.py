@@ -60,12 +60,18 @@ def _service_client():
     return _client
 
 
-def _blob_path(owner: str | None, workspace_id: str, document_id: str, version_id: str,
+def blob_path(owner: str | None, workspace_id: str, document_id: str, version_id: str,
               *, kind: str = "source", leaf: str = "original") -> str:
     """ADR 0044's Blob layout, with owner_email standing in for {tenant_id} (see that ADR's
     tenant-boundary decision). Opaque ids throughout (PRD §10: "use opaque IDs as Blob keys") —
     the human-facing filename is protected metadata in content_workspace_document_versions.
-    original_filename, never part of the path itself."""
+    original_filename, never part of the path itself.
+
+    Public (no leading underscore) so the upload-completion route can RECOMPUTE the expected
+    path server-side from (owner, workspace_id, document_id, version_id) rather than trust a
+    client-supplied one — a client-supplied path could otherwise point a new document_version
+    row at a completely different, already-uploaded blob (including another owner's), since
+    nothing else in that flow re-derives or re-checks it."""
     return f"workspace/{owner or 'demo'}/{workspace_id}/{document_id}/{kind}/{version_id}/{leaf}"
 
 
@@ -105,7 +111,7 @@ def generate_upload_authorization(owner: str | None, workspace_id: str, document
     from azure.storage.blob import BlobSasPermissions, generate_blob_sas
 
     version_id = uuid.uuid4().hex[:12]
-    path = _blob_path(owner, workspace_id, document_id, version_id, kind=kind)
+    path = blob_path(owner, workspace_id, document_id, version_id, kind=kind)
     expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
     udk = _user_delegation_key(svc, expires_in_seconds)
     sas = generate_blob_sas(
@@ -132,7 +138,7 @@ def get_uploaded_blob_properties(owner: str | None, workspace_id: str, document_
     svc = _service_client()
     if svc is None:
         return None
-    path = _blob_path(owner, workspace_id, document_id, version_id, kind=kind)
+    path = blob_path(owner, workspace_id, document_id, version_id, kind=kind)
     blob = svc.get_blob_client(container=_CONTAINER, blob=path)
     try:
         props = blob.get_blob_properties()
@@ -150,7 +156,7 @@ def download_document_bytes(owner: str | None, workspace_id: str, document_id: s
     svc = _service_client()
     if svc is None:
         return None
-    path = _blob_path(owner, workspace_id, document_id, version_id, kind=kind)
+    path = blob_path(owner, workspace_id, document_id, version_id, kind=kind)
     blob = svc.get_blob_client(container=_CONTAINER, blob=path)
     try:
         return blob.download_blob().readall()
@@ -166,7 +172,7 @@ def delete_document_version(owner: str | None, workspace_id: str, document_id: s
     svc = _service_client()
     if svc is None:
         return False
-    path = _blob_path(owner, workspace_id, document_id, version_id, kind=kind)
+    path = blob_path(owner, workspace_id, document_id, version_id, kind=kind)
     blob = svc.get_blob_client(container=_CONTAINER, blob=path)
     try:
         blob.delete_blob()

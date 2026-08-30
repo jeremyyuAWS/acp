@@ -3,7 +3,7 @@ import { aiProvenance, getFileGeometry, getFileRemediationDiffs, getScanAiCalls,
 import Thumbnail from './Thumbnail.jsx'
 import BeforeAfterEvidence from './BeforeAfterEvidence.jsx'
 import RiskChip from './RiskChip.jsx'
-import { authoringScaffold, buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, firstProposed, groupPages, imagesOfTextException, isValueFix, leadWithIsolatedImage, primaryActionLabel, proposalsOf, reviewIntent, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview, whyRecommendation, whySafeToApprove } from './reviewCard.js'
+import { authoringScaffold, buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, firstProposed, groupPages, houseStyleOf, imagesOfTextException, isValueFix, leadWithIsolatedImage, primaryActionLabel, proposalsOf, reviewIntent, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview, whyRecommendation, whySafeToApprove } from './reviewCard.js'
 import ProposalThumb, { isSafeThumb } from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import { speakAsScreenReader, srSupported } from './srPreview.js'
@@ -124,7 +124,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   // never "we didn't check". Deliberately NOT cleared by a draft that carries no memory: see
   // setHouseStyle's call sites in draftAll, where one image's rules must not be blanked by the
   // next image in the same batch.
-  const [houseStyle, setHouseStyle] = useState(null)
+  const [draftHouseStyle, setHouseStyle] = useState(null)
   // Which deferred image the reviewer is looking at. The vision model describes ONE image, so
   // a row carrying nineteen must say which — defaulting to the first silently captions the
   // wrong picture and the reviewer approves alt text for an image they never saw.
@@ -377,6 +377,13 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   // predate #378 (e.g. a card pre-drafted at scan time, where no live /ai/suggest call was made). Null
   // in the common all-local case, from either source.
   const escalation = draftEscalation || escalationPath(auditRows)
+  // ADR 0021 §E — same two-source shape as `escalation` directly above, and for the same reason.
+  // A live /ai/suggest draft carries its own house style (draftHouseStyle); a card PRE-DRAFTED at
+  // scan time never made that call, and reads it off the proposals the scan stamped instead. The
+  // live draft wins when both exist: it is the value on screen, so its rules are the ones that
+  // shaped what the reviewer is about to approve.
+  const houseStyle = draftHouseStyle
+    || houseStyleFromDraft({ house_style: houseStyleOf(item) })
   // The ledger is otherwise fetched lazily (only when the reviewer opens the audit trail). To show
   // the escalation path WITHOUT a click — the whole point of item 2 — pull it once for a file whose
   // AI actually ran in the cloud (provZone 'cloud' is the escalation signal). This stays bounded to
@@ -828,7 +835,14 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
                   <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>“{ocrAid}”</p>
                 </details>
               )}
-              {usingEvidence && <HouseStyleChip houseStyle={houseStyle} />}
+              {/* NOT gated on `usingEvidence`, unlike the OCR aid above it. That guard was
+                  correct when the chip could only come from a live draft — drafting in this
+                  branch only happens for deferred-evidence rows. It is wrong now: `usingEvidence`
+                  is false exactly when the card HAS proposals, which is the scan-time pre-drafted
+                  case this chip was extended to cover, so the guard suppressed the one situation
+                  it most needed to show. HouseStyleChip renders null on a null value, so it is
+                  self-gating and needs no condition here. */}
+              <HouseStyleChip houseStyle={houseStyle} />
             </>
           ) : editable ? (
             <label className="evcard-rec">
