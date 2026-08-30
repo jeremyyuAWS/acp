@@ -261,14 +261,33 @@ def test_the_engine_confirms_the_declared_pairs(corpus, name, sc, fires):
 
     That is a weaker guarantee, and it is still worth having: both are among the seventeen
     (criterion, format) pairs in the preset that can return a PASS, so before these fixtures a
-    clean scan CERTIFIED the file against a criterion nothing in the suite checked."""
+    clean scan CERTIFIED the file against a criterion nothing in the suite checked.
+
+    SC ids come through `assessment_policy._extract_sc`, not a string split. The .NET analyser
+    reports `wcag` in enum form — "SC_2_4_2" — where the first-party checks report
+    "2.4.2 Page Titled", so splitting on whitespace yields "SC_2_4_2" and matches nothing. That
+    is what the first CI run of this test failed on: both detectors HAD fired, and the assertion
+    could not see it. `_extract_sc` is the repo's own normaliser for this exact spread of formats
+    and is what `proposals.verify_residual_scs` uses, so the ids line up with the scan traces."""
+    from assessment_policy import _extract_sc
     from scanner import analyse_and_assess
     out, rows = corpus
     path = out / rows[name]["file"]
     fd, _ = analyse_and_assess(path.parent, path.name, detect_pii=False)
-    found = {(i.get("wcag") or "").split()[0] for i in (fd or {}).get("issues", [])}
+    found = {sc for i in (fd or {}).get("issues", []) if (sc := _extract_sc(i.get("wcag", "")))}
     if fires:
         assert sc in found, (
             f"{name} declares {sc} but the analyser reported {sorted(found) or 'nothing'}")
     else:
         assert sc not in found, f"{name} is the clean control for {sc} but the analyser flagged it"
+
+    # The other engine pair must stay quiet whichever way this fixture goes — that is the
+    # correctness fix proving itself against the real analyser. `no-document-title` withholds a
+    # title but HAS a language, so it must raise 2.4.2 and not 3.1.1; before the base workbook
+    # stamped a language it would have raised both, and every other fixture here would have
+    # raised 3.1.1 as well. Asserted in CI because that is the only place it can be.
+    other = "3.1.1" if sc == "2.4.2" else "2.4.2"
+    assert other not in found, (
+        f"{name} also raised {other} — the base workbook has stopped stamping "
+        f"{'a language' if other == '3.1.1' else 'a title'}, so every fixture in this corpus is "
+        f"now carrying an undeclared finding")
