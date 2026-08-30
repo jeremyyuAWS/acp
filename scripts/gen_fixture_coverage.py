@@ -13,17 +13,24 @@ dict names the criterion and the verdict; a fixture that happens to be a .docx s
 easy way to report coverage that is not there.
 
 WHY THE NUMBER IS WHAT IT IS. Every format now has a per-criterion generator, and only .docx is
-complete: xlsx declares 8 of 15, pptx 9 of 17, pdf 10 of 15. The shortfalls are not neglect — a
-pair is declared only where a detector that RUNS WHEREVER THE SUITE RUNS was confirmed to fire
-against the fixture, so the criteria needing the .NET Office analyser or OCR stay uncounted
-until something can actually check them. Reporting 68% honestly is worth more than a percentage
-assembled from whatever happened to be countable; that was true at 24%, when .docx was the only
-corpus, and it is the reason the number moved by fixtures rather than by redefinition.
+complete: xlsx declares 10 of 15, pptx 9 of 17, pdf 10 of 15. The shortfalls are not neglect — a
+pair is declared only where a detector was actually driven against the fixture and confirmed to
+fire, so criteria needing OCR, or tag-tree semantics nothing reads yet, stay uncounted until
+something can check them. Reporting 71% honestly is worth more than a percentage assembled from
+whatever happened to be countable; that was true at 24%, when .docx was the only corpus, and it
+is the reason the number moved by fixtures rather than by redefinition.
 
-"Runs wherever the suite runs" is deliberately not "first-party": pdf 2.4.2 and 3.1.1 live in
-the vendored analyser (ADR 0029) rather than in api/, and are as reachable as anything in
-api/formats/. Phrasing the rule by directory instead of by availability cost this corpus two
-pairs for one commit, and they were two of the ten pairs that can CERTIFY.
+"Confirmed to fire" is deliberately not "first-party": pdf 2.4.2 and 3.1.1 live in the vendored
+analyser (ADR 0029) rather than in api/, and are as reachable as anything in api/formats/.
+Phrasing the rule by directory instead of by availability cost that corpus two pairs for one
+commit, and they were two of the ten pairs that can CERTIFY.
+
+WHERE the confirmation happens is a real distinction, and the report keeps it. Most pairs are
+confirmed wherever the suite runs. A few — xlsx 2.4.2 and 3.1.1 today — have no first-party
+detector on any Office format and are proven by the .NET analyser, so their label holds in CI
+and not on a bare checkout. `engine_only` names them per format and the header counts them,
+because folding them in would make one column mean two things; leaving them out entirely would
+mean a certifying pair stayed verified by nothing, which is strictly worse.
 
 Not counted here, deliberately: `gen_complex_corpus.py` is also .docx, and `complex_corpus.py`'s
 expectations are a floor ("at least these SCs"), not a per-pair verdict.
@@ -64,7 +71,7 @@ PRESET = "acp-core-17"
 
 # Coverage floor, by format. Update ONLY upward, and only alongside the fixtures that earned it.
 # Written down rather than computed so a drop is a diff someone has to justify in review.
-BASELINE = {"docx": 15, "xlsx": 8, "pptx": 9, "pdf": 10}
+BASELINE = {"docx": 15, "xlsx": 10, "pptx": 9, "pdf": 10}
 
 
 def applicable_pairs() -> dict[str, list[str]]:
@@ -114,6 +121,26 @@ def _xlsx_declared() -> set[str]:
     return set(gen_xlsx_corpus.DECLARED)
 
 
+def _engine_declared(fmt: str) -> set[str]:
+    """Criteria a corpus declares that are confirmed ONLY where the .NET Office analyser is
+    built — CI, not a bare container.
+
+    Held apart from `_*_declared` on purpose. The corpora's rule is "a detector was driven
+    against this fixture and confirmed to fire"; for these the confirmation happens in CI
+    instead of everywhere, which is a weaker guarantee and would silently make one column mean
+    two things if the two sets were merged. They are counted in the total — a pair verified in
+    CI is enormously better than a certifying pair verified nowhere, which is what these were —
+    and the report names the split so nobody has to infer it.
+    """
+    gen = GENERATORS.get(fmt)
+    if gen is None:
+        return set()
+    mod = {"xlsx": "gen_xlsx_corpus", "pptx": "gen_pptx_corpus",
+           "pdf": "gen_pdf_corpus", "docx": "gen_sc_corpus"}[fmt]
+    import importlib
+    return set(getattr(importlib.import_module(mod), "DECLARED_ENGINE", ()))
+
+
 def _pptx_declared() -> set[str]:
     """Criteria the .pptx corpus declares. Same constant-plus-test shape as xlsx: the set is held
     honest against the fixtures themselves by tests/test_pptx_corpus.py."""
@@ -145,13 +172,19 @@ def coverage() -> dict:
     for fmt in FORMATS:
         applicable = pairs[fmt]
         gen = GENERATORS.get(fmt)
-        declared = gen() if gen else None
+        base = gen() if gen else None
+        engine_only = _engine_declared(fmt) if gen else set()
+        declared = (base | engine_only) if base is not None else None
         covered = sorted(sc for sc in applicable if declared and sc in declared) if declared else []
         out[fmt] = {
             "applicable": applicable,
             "covered": covered,
             "missing": sorted(set(applicable) - set(covered)),
             "has_generator": gen is not None,
+            # Of `covered`, the pairs whose label is confirmed only where the .NET Office
+            # analyser is built. Reported rather than merged so the headline number keeps
+            # meaning "confirmed wherever the suite runs" for everything outside this list.
+            "engine_only": sorted(sc for sc in covered if sc in engine_only),
             # A criterion the corpus declares that the preset does not consider applicable to
             # this format. Not an error — a fixture may legitimately exercise more — but worth
             # surfacing, because it usually means the preset and the corpus disagree about scope.
@@ -163,9 +196,14 @@ def coverage() -> dict:
 def _report(cov: dict) -> None:
     total_app = sum(len(v["applicable"]) for v in cov.values())
     total_cov = sum(len(v["covered"]) for v in cov.values())
+    total_eng = sum(len(v["engine_only"]) for v in cov.values())
     print(f"Ground-truth fixture coverage — scope preset {PRESET!r}")
     print(f"{total_cov} of {total_app} applicable (criterion, format) pairs "
-          f"have a labelled fixture ({100 * total_cov / total_app:.0f}%)\n")
+          f"have a labelled fixture ({100 * total_cov / total_app:.0f}%)")
+    if total_eng:
+        print(f"  of those, {total_eng} are confirmed only where the .NET Office analyser is "
+              f"built (CI), not on a bare checkout")
+    print()
     print(f"  {'format':8}{'covered':>9}{'applicable':>12}   status")
     for fmt in FORMATS:
         v = cov[fmt]
@@ -178,6 +216,9 @@ def _report(cov: dict) -> None:
         if v["missing"]:
             print(f"\n  {fmt} — no fixture declares an expectation for:")
             print(f"    {', '.join(v['missing'])}")
+        if v["engine_only"]:
+            print(f"  {fmt} — confirmed only with the .NET analyser built: "
+                  f"{', '.join(v['engine_only'])}")
         if v["declared_outside_preset"]:
             print(f"  {fmt} — corpus declares criteria the preset excludes: "
                   f"{', '.join(v['declared_outside_preset'])}")

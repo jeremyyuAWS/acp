@@ -41,6 +41,7 @@ sys.modules["gen_xlsx_corpus"] = gen
 _spec.loader.exec_module(gen)
 
 import corpus_expectations as ce  # noqa: E402
+from engines import NO_OFFICE, OFFICE_OK  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -166,10 +167,14 @@ def test_the_coverage_report_counts_this_corpus(corpus):
     cov = gfc.coverage()
     assert cov["xlsx"]["has_generator"] is True, (
         "gen_fixture_coverage does not know about the xlsx corpus — add it to GENERATORS")
-    assert sorted(cov["xlsx"]["covered"]) == sorted(gen.DECLARED)
-    assert gfc.BASELINE["xlsx"] == len(gen.DECLARED), (
+    declared = set(gen.DECLARED) | set(gen.DECLARED_ENGINE)
+    assert sorted(cov["xlsx"]["covered"]) == sorted(declared)
+    assert gfc.BASELINE["xlsx"] == len(declared), (
         f"BASELINE['xlsx'] is {gfc.BASELINE['xlsx']} but the corpus declares "
-        f"{len(gen.DECLARED)} — the ratchet would have slack in it")
+        f"{len(declared)} — the ratchet would have slack in it")
+    assert sorted(cov["xlsx"]["engine_only"]) == sorted(gen.DECLARED_ENGINE), (
+        "the report's engine-only split disagrees with the generator — the headline number "
+        "would then imply a guarantee two of these pairs do not have")
 
 
 def test_the_declared_set_matches_what_the_fixtures_actually_declare(corpus):
@@ -177,4 +182,93 @@ def test_the_declared_set_matches_what_the_fixtures_actually_declare(corpus):
     fixtures themselves."""
     _out, rows = corpus
     from_fixtures = {sc for row in rows.values() for sc in row["expect"]}
-    assert from_fixtures == set(gen.DECLARED)
+    assert from_fixtures == set(gen.DECLARED) | set(gen.DECLARED_ENGINE)
+
+
+# ── the engine-verified pairs: structure here, detection in CI ───────────────────
+
+def _core_xml(path: Path) -> str:
+    import zipfile
+    with zipfile.ZipFile(path) as z:
+        return z.read("docProps/core.xml").decode("utf-8")
+
+
+def _prop(xml: str, tag: str) -> str | None:
+    """A core-property value, or None when the element is absent.
+
+    The regex allows attributes on the element — openpyxl writes `<dc:title xmlns:dc="...">`,
+    not `<dc:title>`, and a pattern without that allowance silently reports every fixture as
+    having no title. (It did, on the first run of this check.)"""
+    import re
+    m = re.search(rf"<{tag}[^>]*>(.*?)</{tag}>", xml, re.S)
+    return m.group(1) if m else None
+
+
+@pytest.mark.parametrize("name,tag,present", [
+    ("no-document-title", "dc:title", False),
+    ("document-title-ok", "dc:title", True),
+    ("no-document-language", "dc:language", False),
+    ("document-language-ok", "dc:language", True),
+])
+def test_the_engine_fixtures_carry_or_withhold_the_right_property(corpus, name, tag, present):
+    """What this file CAN prove without the .NET analyser, and the half that actually rots.
+
+    Detection for 2.4.2 and 3.1.1 is asserted below, gated on the engine. But a fixture silently
+    losing the property it was built around is a corpus defect that no engine is needed to catch
+    — and it is the likelier failure, because it happens whenever someone edits the base workbook
+    rather than the fixture. Splitting the two means a broken fixture fails everywhere, and only
+    the detection claim waits for CI."""
+    out, rows = corpus
+    xml = _core_xml(out / rows[name]["file"])
+    value = _prop(xml, tag)
+    if present:
+        assert value, f"{name} should carry a non-empty <{tag}> and has {value!r}"
+    else:
+        assert not value, f"{name} deliberately withholds <{tag}> but carries {value!r}"
+
+
+def test_every_other_fixture_declares_both_a_title_and_a_language(corpus):
+    """The correctness fix this pair of criteria surfaced, pinned so it cannot regress.
+
+    openpyxl leaves `properties.language` at None, and XLSX-LANG-001 reports 3.1.1 for exactly
+    that — so before the base workbook set one, EVERY fixture here also carried a 3.1.1 finding
+    under the engine. The single-criterion labels were true only because a bare container has no
+    .NET, which is the worst way for a ground-truth corpus to be right."""
+    out, rows = corpus
+    withholding = {"no-document-title": "dc:title", "no-document-language": "dc:language"}
+    for name, row in rows.items():
+        xml = _core_xml(out / row["file"])
+        for tag in ("dc:title", "dc:language"):
+            if withholding.get(name) == tag:
+                continue
+            assert _prop(xml, tag), (
+                f"{name} has no <{tag}> — under the .NET analyser it would also raise "
+                f"{'2.4.2' if tag == 'dc:title' else '3.1.1'}, so its label is wrong in CI")
+
+
+@pytest.mark.skipif(not OFFICE_OK, reason=NO_OFFICE)
+@pytest.mark.parametrize("name,sc,fires", [
+    ("no-document-title", "2.4.2", True),
+    ("document-title-ok", "2.4.2", False),
+    ("no-document-language", "3.1.1", True),
+    ("document-language-ok", "3.1.1", False),
+])
+def test_the_engine_confirms_the_declared_pairs(corpus, name, sc, fires):
+    """The detection half — and the reason these two pairs sit in DECLARED_ENGINE rather than
+    DECLARED. No first-party Python detector exists for 2.4.2 or 3.1.1 on ANY Office format, so
+    unlike every other pair in this corpus the label is proven where the analyser is built and
+    skipped where it is not.
+
+    That is a weaker guarantee, and it is still worth having: both are among the seventeen
+    (criterion, format) pairs in the preset that can return a PASS, so before these fixtures a
+    clean scan CERTIFIED the file against a criterion nothing in the suite checked."""
+    from scanner import analyse_and_assess
+    out, rows = corpus
+    path = out / rows[name]["file"]
+    fd, _ = analyse_and_assess(path.parent, path.name, detect_pii=False)
+    found = {(i.get("wcag") or "").split()[0] for i in (fd or {}).get("issues", [])}
+    if fires:
+        assert sc in found, (
+            f"{name} declares {sc} but the analyser reported {sorted(found) or 'nothing'}")
+    else:
+        assert sc not in found, f"{name} is the clean control for {sc} but the analyser flagged it"

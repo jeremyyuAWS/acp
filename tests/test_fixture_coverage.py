@@ -3,7 +3,7 @@
 WHY A COVERAGE REPORT AT ALL. The Phase-1 acceptance criterion is "all applicable pairs have
 explicit fixture coverage or a documented human-only rationale". Nothing computed that, so the
 size of the remaining job was unknown — and an unknown denominator is how "we have a corpus"
-becomes a claim nobody can check. The answer today is 42 of 62 (68%): .docx complete, and a
+becomes a claim nobody can check. The answer today is 44 of 62 (71%): .docx complete, and a
 partial labelled corpus for each of xlsx, pptx and pdf. It started at 15 of 62 (24%), with
 .docx the only format that had one at all.
 
@@ -59,10 +59,15 @@ def test_every_format_is_accounted_for():
 def test_coverage_is_complete_for_docx_and_partial_for_the_other_three():
     """The honest state. gen_sc_corpus.py declares an expectation for every .docx pair in the
     preset; the other three corpora are deliberately partial, declaring only the pairs whose
-    detector — one that runs wherever the suite runs, whether it lives in api/ or in the
-    vendored analyser — was confirmed to fire against the fixture (see tests/test_xlsx_corpus.py,
-    test_pptx_corpus.py, test_pdf_corpus.py). Every format now has a labelled corpus; none but
-    .docx is complete, and the missing pairs are named by the report rather than rounded away.
+    detector was actually driven against the fixture and confirmed to fire (see
+    tests/test_xlsx_corpus.py, test_pptx_corpus.py, test_pdf_corpus.py). Every format now has a
+    labelled corpus; none but .docx is complete, and the missing pairs are named by the report
+    rather than rounded away.
+
+    Most of those confirmations hold wherever the suite runs. Two — xlsx 2.4.2 and 3.1.1 — have
+    no first-party detector on any Office format and are proven by the .NET analyser, so they
+    hold in CI and not on a bare checkout. `engine_only` reports them separately, and the
+    assertion below pins the split so it cannot widen without someone saying why.
 
     This assertion FAILED when each corpus landed, which is the guard working: it names the two
     things a new corpus has to do — join GENERATORS and raise its BASELINE — and refuses to pass
@@ -73,9 +78,15 @@ def test_coverage_is_complete_for_docx_and_partial_for_the_other_three():
     assert cov["docx"]["has_generator"] is True
 
     assert cov["xlsx"]["has_generator"] is True
-    assert len(cov["xlsx"]["covered"]) == 8, (
+    assert len(cov["xlsx"]["covered"]) == 10, (
         f"the xlsx corpus now declares {len(cov['xlsx']['covered'])} pairs — raise "
         f"BASELINE['xlsx'] and this count together, in the commit that adds the fixtures")
+    # Two of those ten (2.4.2, 3.1.1) are confirmed only where the .NET analyser is built. Pinned
+    # here so the split cannot quietly widen: every pair that joins it weakens what the headline
+    # number promises, and that should be a decision in a diff rather than a drift.
+    assert cov["xlsx"]["engine_only"] == ["2.4.2", "3.1.1"], (
+        f"the engine-only set is now {cov['xlsx']['engine_only']} — if that is deliberate, say "
+        f"so here; the headline coverage number implies a guarantee these pairs do not have")
 
     assert cov["pptx"]["has_generator"] is True
     assert len(cov["pptx"]["covered"]) == 9, (

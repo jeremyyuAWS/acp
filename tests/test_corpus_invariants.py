@@ -75,6 +75,17 @@ def built():
     return out
 
 
+def _declared(gen) -> set[str]:
+    """Everything a corpus declares, across both confirmation stories.
+
+    `DECLARED` is confirmed wherever the suite runs; the optional `DECLARED_ENGINE` is confirmed
+    only where the .NET Office analyser is built. The rules below apply to BOTH — a pair proven
+    in CI still needs a control, still has to sit inside the preset, and still cannot claim a
+    verdict the engine could never emit. Only the coverage report cares which set a pair is in,
+    and it reports the split rather than merging it."""
+    return set(gen.DECLARED) | set(getattr(gen, "DECLARED_ENGINE", ()))
+
+
 def _roles(manifest) -> tuple[set[str], set[str]]:
     """(criteria with a violation fixture, criteria with a control fixture).
 
@@ -118,8 +129,9 @@ def test_declared_matches_the_fixtures(built, fmt):
     coverage report is a claim about a tuple somebody typed."""
     gen, manifest, _problems = built[fmt]
     actual = {sc for r in manifest for sc in r["expect"]}
-    assert actual == set(gen.DECLARED), (
-        f"{fmt}: DECLARED says {sorted(gen.DECLARED)} but the fixtures declare {sorted(actual)}")
+    assert actual == _declared(gen), (
+        f"{fmt}: DECLARED (+DECLARED_ENGINE) says {sorted(_declared(gen))} but the fixtures "
+        f"declare {sorted(actual)}")
 
 
 @pytest.mark.parametrize("fmt", [f for f, _ in CORPORA])
@@ -129,9 +141,9 @@ def test_declared_sits_inside_the_shipped_preset(built, fmt):
     inflate coverage against a denominator that does not contain it."""
     gen, _manifest, _problems = built[fmt]
     applicable = {sc for sc, fmts in ce.pol.SCOPE_PRESETS[PRESET].items() if fmt in fmts}
-    assert set(gen.DECLARED) <= applicable, (
+    assert _declared(gen) <= applicable, (
         f"{fmt}: declared but not applicable in {PRESET!r}: "
-        f"{sorted(set(gen.DECLARED) - applicable)}")
+        f"{sorted(_declared(gen) - applicable)}")
 
 
 @pytest.mark.parametrize("fmt", [f for f, _ in CORPORA])
@@ -141,8 +153,9 @@ def test_the_baseline_has_no_slack(built, fmt):
     first loss rather than the second."""
     gen, _manifest, _problems = built[fmt]
     gfc = _load("gen_fixture_coverage")
-    assert gfc.BASELINE[fmt] == len(gen.DECLARED), (
-        f"BASELINE[{fmt!r}] is {gfc.BASELINE[fmt]} but the corpus declares {len(gen.DECLARED)}")
+    assert gfc.BASELINE[fmt] == len(_declared(gen)), (
+        f"BASELINE[{fmt!r}] is {gfc.BASELINE[fmt]} but the corpus declares "
+        f"{len(_declared(gen))} (DECLARED + DECLARED_ENGINE)")
 
 
 @pytest.mark.parametrize("fmt", [f for f, _ in CORPORA])
