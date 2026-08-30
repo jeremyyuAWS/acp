@@ -1724,9 +1724,20 @@ export default function App() {
       {err && (
         <div className="err" role="alert">
           <div>{err}</div>
-          {hasFallbackInventory(run?.completed_at) && (
+          {hasFallbackInventory(run?.discovered_at, run?.completed_at) && (
             <div style={{ fontWeight: 400, fontSize: 12.5, marginTop: 3 }}>
-              Your previous inventory from {fmtStamp(run.completed_at)} is unaffected and still shown below.
+              Your previous inventory from {fmtStamp(run.discovered_at || run.completed_at)} is unaffected and still shown below.
+            </div>
+          )}
+          {/* The scan_id of THIS failed attempt, for correlating with Monitor/support — never
+              run?.id (a different, unrelated scan: the one whose results are still on screen,
+              per the reassurance line above). liveScanId is only set once startScanQueued
+              returns (App.jsx's doScan), so a failure before that point — a blocked preflight
+              check, "no workers available" — has no attempt-specific id to show and this is
+              correctly omitted rather than showing an id that isn't the failed attempt's own. */}
+          {liveScanId && (
+            <div style={{ fontWeight: 400, fontSize: 11.5, marginTop: 3, fontFamily: 'monospace' }}>
+              Scan ID: {liveScanId}
             </div>
           )}
         </div>

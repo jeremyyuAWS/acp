@@ -29,7 +29,20 @@ describe('the failure banner explains a raw status and a stale-looking completed
   it('the err banner shows a reassurance line gated on hasFallbackInventory', () => {
     const bannerBlock = src.match(/\{err && \([\s\S]*?\)\}\n/)
     expect(bannerBlock, 'err banner block should be found').toBeTruthy()
-    expect(bannerBlock[0]).toMatch(/hasFallbackInventory\(run\?\.completed_at\)/)
+    // Passes BOTH discovered_at and completed_at — checking completed_at alone went
+    // false-negative on a Discover-only run (ADR 0020), where discovered_at is the real marker
+    // and completed_at stays null until the whole pipeline finishes (found live 2026-08-30).
+    expect(bannerBlock[0]).toMatch(/hasFallbackInventory\(run\?\.discovered_at, run\?\.completed_at\)/)
     expect(bannerBlock[0]).toMatch(/unaffected and still shown below/)
+  })
+
+  it('the err banner shows the failed attempt\'s own scan id, from liveScanId not run?.id', () => {
+    // run?.id names the OLD scan whose results are still on screen (the reassurance line above
+    // is about that one) — showing it here as "the scan that failed" would be a different,
+    // unrelated id wearing the label of the one that actually failed. liveScanId is the new
+    // attempt's own id, set once startScanQueued returns (doScan) — correctly absent for a
+    // failure before that point (a blocked preflight check, "no workers available").
+    expect(src).toMatch(/\{liveScanId && \(/)
+    expect(src).toMatch(/Scan ID: \{liveScanId\}/)
   })
 })

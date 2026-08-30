@@ -39,11 +39,22 @@ describe('scanFailureDetail', () => {
 
 describe('hasFallbackInventory', () => {
   it('is true when a previous scan has a real completion timestamp', () => {
-    expect(hasFallbackInventory('2026-08-28T16:07:00+00:00')).toBe(true)
+    expect(hasFallbackInventory(null, '2026-08-28T16:07:00+00:00')).toBe(true)
+  })
+
+  it('is true from discovered_at alone — a Discover-only run under ADR 0020 has no completed_at yet', () => {
+    // Found live 2026-08-30: a run that finished Discovery but hasn't been Assessed shows a real
+    // "Discovery complete" card (Discover.jsx gates that on discovered_at/status, never
+    // completed_at) while completed_at itself stays null until the whole pipeline finishes.
+    expect(hasFallbackInventory('2026-08-30T14:44:00+00:00', null)).toBe(true)
+  })
+
+  it('is true when both timestamps are present', () => {
+    expect(hasFallbackInventory('2026-08-28T14:00:00+00:00', '2026-08-28T16:07:00+00:00')).toBe(true)
   })
 
   it('is false when there is nothing to fall back on', () => {
-    expect(hasFallbackInventory(null)).toBe(false)
-    expect(hasFallbackInventory(undefined)).toBe(false)
+    expect(hasFallbackInventory(null, null)).toBe(false)
+    expect(hasFallbackInventory(undefined, undefined)).toBe(false)
   })
 })
