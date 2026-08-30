@@ -1854,6 +1854,18 @@ class Store:
         same account before trusting it, the Drive mirror of drive_id's role above for
         core._sp_prior_inventory_for_drive.
 
+        `content_type` is SharePoint's per-item Content Type (scanner._sp_enrich_content_types).
+        Selected because a delta-sync reconstruction otherwise LOSES it on every carried-forward
+        file: the column is real and `add_inventory` populates it, but this SELECT never listed
+        it, so the reconstruction baseline arrived with the field absent and each unchanged file
+        was re-inventoried as having none. Recovering it live is the one thing delta sync exists
+        not to do — `_sp_enrich_content_types` is a per-item Graph call, and paying it for every
+        carried-forward file would spend exactly the cost this whole feature saves. Carrying the
+        stored value forward costs nothing and is correct: an UNCHANGED file's content type is
+        still its content type. Files the delta reports as changed are replaced wholly by their
+        fresh raw item (apply_sp_delta) and so legitimately have none this scan, exactly as
+        before. Tracked as a known gap in docs/TODO.md P1e; this is that fix.
+
         Rows with no drive_file_id are dropped (a local/non-Drive row, or one from a scan old
         enough to predate that column) — they carry nothing a delta could ever reconcile
         against."""
@@ -1870,7 +1882,8 @@ class Store:
                 return None
             self._db.execute(cur,
                 "SELECT file, drive_file_id, mime, size_kb, checksum, created_at, "
-                "source_modified, owner, parent_folder, drive_id, drive_account_id "
+                "source_modified, owner, parent_folder, drive_id, drive_account_id, "
+                "content_type "
                 "FROM scan_inventory WHERE scan_id=%s",
                 (row["id"],))
             return [r for r in self._db.fetchall(cur) if r.get("drive_file_id")]
