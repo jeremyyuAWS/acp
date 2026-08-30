@@ -290,6 +290,89 @@ def test_list_falls_back_to_a_live_walk_when_drive_delta_is_none():
     assert "reconstructed" not in scope
 
 
+# ── scanner.drive_account_id ────────────────────────────────────────────────────
+# Stamped onto every Drive scan_inventory row (see _list's drive branch, below) so a later
+# scan can tell whether it would be reconstructing from the SAME Google account's prior
+# estate — core._drive_prior_inventory_for_account is the guard that reads it back.
+
+class _FakeAbout:
+    def __init__(self, email=None, boom=False):
+        self._email = email
+        self._boom = boom
+
+    def get(self, fields=None):
+        if self._boom:
+            raise RuntimeError("insufficient authentication scopes")
+        return _Req({"user": {"emailAddress": self._email}} if self._email else {})
+
+
+class _FakeSvcWithAbout:
+    def __init__(self, email=None, boom=False):
+        self._about = _FakeAbout(email, boom)
+
+    def about(self):
+        return self._about
+
+
+def test_drive_account_id_returns_the_authenticated_users_email():
+    assert scanner.drive_account_id(_FakeSvcWithAbout(email="alice@gmail.com")) == "alice@gmail.com"
+
+
+def test_drive_account_id_is_none_on_failure_rather_than_raising():
+    assert scanner.drive_account_id(_FakeSvcWithAbout(boom=True)) is None
+
+
+def test_drive_account_id_is_none_for_a_service_double_with_no_about():
+    """Most hermetic Drive tests build a narrow double exposing only the methods under test
+    (e.g. this file's own _FakeSvc, which has no `.about`) — drive_account_id must degrade to
+    None rather than raise AttributeError and break every one of them."""
+    assert scanner.drive_account_id(_FakeSvc(_Changes({}))) is None
+
+
+# ── _list()'s drive branch stamps drive_account_id onto every row ────────────────
+
+def test_list_stamps_drive_account_id_onto_reconstructed_rows():
+    prior_row = {"file": "unchanged.pptx", "drive_file_id": "F1", "mime": PPTX, "size_kb": 1,
+                "checksum": "abc", "created_at": None, "source_modified": None,
+                "owner": None, "parent_folder": None}
+    delta = {"prior_files": [scanner._drive_file_from_inventory_row(prior_row)],
+            "changed": [], "removed_ids": set()}
+    items = scanner._list("drive", svc=_FakeSvcWithAbout(email="alice@gmail.com"), folder=None,
+                          drive_delta=delta)
+    assert items and all(i["drive_account_id"] == "alice@gmail.com" for i in items)
+
+
+def test_list_stamps_none_when_the_account_lookup_fails():
+    prior_row = {"file": "unchanged.pptx", "drive_file_id": "F1", "mime": PPTX, "size_kb": 1,
+                "checksum": "abc", "created_at": None, "source_modified": None,
+                "owner": None, "parent_folder": None}
+    delta = {"prior_files": [scanner._drive_file_from_inventory_row(prior_row)],
+            "changed": [], "removed_ids": set()}
+    items = scanner._list("drive", svc=_FakeSvcWithAbout(boom=True), folder=None, drive_delta=delta)
+    assert items and all(i["drive_account_id"] is None for i in items)
+
+
+def test_list_never_stamps_drive_account_id_for_a_non_drive_source():
+    items = scanner._list("local")
+    assert all("drive_account_id" not in i for i in items)
+
+
+def test_drive_account_id_round_trips_through_add_inventory_and_latest_scan_inventory_items(
+        isolated_store):
+    """Proves the real SQL plumbing (migration + parameterized INSERT + SELECT), not just the
+    hermetic core.py-level guard tests above — a column-count mistake in store.add_inventory's
+    INSERT wouldn't surface from a mocked store."""
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "INSERT INTO scan_runs (id, owner_email, source, completed_at) VALUES (%s,%s,%s,%s)",
+            ("s1", "alice@x.com", "drive", "2026-01-01T00:00:00Z"))
+    isolated_store.add_inventory("s1", [
+        {"file": "a.pdf", "drive_file_id": "F1", "mime": "application/pdf", "size_kb": 1,
+         "checksum": "x", "drive_account_id": "alice@gmail.com"}])
+    [item] = isolated_store.latest_scan_inventory_items("alice@x.com", "drive")
+    assert item["drive_account_id"] == "alice@gmail.com"
+
+
 # ── store.get_sync_cursor / save_sync_cursor ──────────────────────────────────────
 
 def test_a_never_synced_source_has_no_cursor(isolated_store):

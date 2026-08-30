@@ -657,6 +657,34 @@ def _drive_delta_check(cursor_key: str, owner: str | None,
         return None
 
 
+def _drive_prior_inventory_for_account(owner: str | None, account_id: str | None) -> list[dict] | None:
+    """The most recent completed Drive scan's inventory, but ONLY if it was actually run as
+    THIS Google account. store.latest_scan_inventory_items has no account-scoped query of its
+    own — it returns whatever the most recent 'drive'-source scan for this owner covered,
+    regardless of which Google identity a per-request drive_token authenticated as.
+
+    A Drive token is a per-request browser OAuth credential, never a server-bound "connected
+    account", so nothing else stops the same ACP owner email presenting a DIFFERENT Google
+    account between scans — the same signed-in ACP user can sign into a different Google
+    account in the browser's Drive picker from one interactive scan to the next. Reconstructing
+    one account's estate from another's inventory would silently show the wrong documents, so
+    an account_id mismatch on ANY row is treated the same as 'no prior scan to reconstruct
+    from' — never a partial or approximate match, matching _sp_prior_inventory_for_drive's
+    identical contract for SharePoint. An empty-but-real prior scan is not a mismatch and still
+    returns (as `[]`, not None).
+
+    `account_id` can itself be None (scanner.drive_account_id's own best-effort failure mode) —
+    that still participates in the comparison rather than skipping it: None only matches other
+    Nones, so an unverifiable CURRENT identity checked against a KNOWN prior one is correctly
+    treated as a mismatch, never a silent pass."""
+    prior = get_store().latest_scan_inventory_items(owner, "drive")
+    if prior is None:
+        return None
+    if any(r.get("drive_account_id") != account_id for r in prior):
+        return None
+    return prior
+
+
 def _drive_sync_plan(owner: str | None) -> tuple[bool, dict | None]:
     """PRD Phase 3: decide what the scheduled Drive sweep should do, from the stored sync
     cursor. Returns (skip, drive_delta):
@@ -674,19 +702,29 @@ def _drive_sync_plan(owner: str | None) -> tuple[bool, dict | None]:
     skip, and never to a reconstruction this function can't vouch for. A SKIP is the right
     answer for THIS caller specifically because nobody is waiting on a scheduled sweep's
     result — see _interactive_drive_sync_plan below for why an interactive scan can never use
-    the same shortcut."""
-    from scanner import _drive_service
+    the same shortcut.
+
+    The reconstruction baseline is also verified against the CURRENT Google account
+    (_drive_prior_inventory_for_account) before it is trusted — see that function's docstring
+    for why a Drive token is not guaranteed to be the same identity from one sweep to the
+    next (an operator-rotated ADC credential, in this caller's case)."""
+    from scanner import _drive_service, drive_account_id
     result = _drive_delta_check("drive", owner, lambda: _drive_service(None))
     if result is None:
         return False, None
     changed, removed_ids = result
     if not changed and not removed_ids:
         return True, None
-    prior = get_store().latest_scan_inventory_items(owner, "drive")
+    try:
+        account_id = drive_account_id(_drive_service(None))
+    except Exception:
+        account_id = None
+    prior = _drive_prior_inventory_for_account(owner, account_id)
     if prior is None:
         # A cursor exists but no completed scan does (e.g. every prior sweep since it was
-        # seeded has failed before saving) — nothing to reconstruct FROM. A full listing
-        # gives the NEXT sweep a real baseline again.
+        # seeded has failed before saving, or the most recent one ran as a different Google
+        # account) — nothing to reconstruct FROM. A full listing gives the NEXT sweep a real
+        # baseline again.
         print(f"scheduled drive sweep: {len(changed)} changed, {len(removed_ids)} removed/"
               f"trashed, but no prior scan to reconstruct from — running a full scan",
               flush=True)
@@ -720,16 +758,24 @@ def _interactive_drive_sync_plan(owner: str, svc) -> dict | None:
     calling — see handlers._scan_discover. Drive's Changes API has no folder filter, so
     reconciling it against a folder-scoped baseline would need a containment check this
     function does not do.
+
+    The prior-scan baseline is also verified against the CURRENT Google account
+    (_drive_prior_inventory_for_account) before it is trusted — unlike the scheduled sweep's
+    fixed ADC identity, a signed-in ACP user can sign into a DIFFERENT Google account in the
+    browser's Drive picker from one interactive scan to the next, and reconstructing from the
+    wrong account's inventory would silently show the wrong documents.
     """
+    from scanner import drive_account_id
     result = _drive_delta_check(f"drive:{owner}", owner, lambda: svc)
     if result is None:
         return None
     changed, removed_ids = result
-    prior = get_store().latest_scan_inventory_items(owner, "drive")
+    prior = _drive_prior_inventory_for_account(owner, drive_account_id(svc))
     if prior is None:
         # A cursor exists but no completed whole-Drive scan for this user does (their first
-        # scan predates this cursor, or every prior one failed before saving) — nothing to
-        # reconstruct FROM. A full listing gives the NEXT interactive scan a real baseline.
+        # scan predates this cursor, every prior one failed before saving, or the most recent
+        # one was a different Google account) — nothing to reconstruct FROM. A full listing
+        # gives the NEXT interactive scan a real baseline.
         return None
     if changed or removed_ids:
         print(f"interactive drive scan ({owner}): {len(changed)} changed, {len(removed_ids)} "

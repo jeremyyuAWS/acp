@@ -522,6 +522,17 @@ _SCHEMA = [
     # Null for Drive/local/SMB rows, and null for a OneDrive listing, which legitimately has no
     # driveId; both mean "no drive to name", which _sp_base already reads as /me/drive.
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS drive_id TEXT",
+    # The Google account a Drive row's listing ran as (scanner.drive_account_id) — the SIBLING
+    # identity concept to drive_id above, on its own column since the two are unrelated: a
+    # Graph drive names WHICH library a SharePoint item came from, this names WHO a Drive item
+    # was listed as. A Drive token is a per-request browser credential, not a server-bound
+    # "connected account", so nothing else records whether two Drive scans for the same ACP
+    # owner even used the same Google identity. Null for non-Drive rows and for a Drive listing
+    # where the identity call itself failed. Read back by
+    # core._drive_prior_inventory_for_account before a prior scan's inventory is trusted as a
+    # delta-sync baseline — the Drive mirror of drive_id's role in
+    # core._sp_prior_inventory_for_drive.
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS drive_account_id TEXT",
     # Per-document lifecycle status (PRD §4.3). One of: Active, Archive Candidate, Archived,
     # Delete Candidate, Deleted, Failed, Exempted. Defaults to Active on first discovery; a rule
     # run (Discover) or a manual action moves it. `lifecycle_rule_id`/`lifecycle_reason` record
@@ -1443,8 +1454,8 @@ class Store:
         now = self._now()
         sql = ("INSERT INTO scan_inventory(scan_id,file,drive_file_id,mime,size_kb,doc_class,"
                "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
-               "content_type) "
-               "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
+               "content_type,drive_account_id) "
+               "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
                "drive_file_id=EXCLUDED.drive_file_id, mime=EXCLUDED.mime, size_kb=EXCLUDED.size_kb, "
                "doc_class=EXCLUDED.doc_class, checksum=EXCLUDED.checksum, path=EXCLUDED.path, "
                "created_at=EXCLUDED.created_at, source_modified=EXCLUDED.source_modified, "
@@ -1452,14 +1463,15 @@ class Store:
                # COALESCE, not overwrite: a re-list that got no content type this time (a
                # transient enrichment failure) must not blank out one recorded on a PRIOR
                # list of the same file — that would be a real answer thrown away for a gap.
-               "content_type=COALESCE(EXCLUDED.content_type, scan_inventory.content_type)")
+               "content_type=COALESCE(EXCLUDED.content_type, scan_inventory.content_type), "
+               "drive_account_id=EXCLUDED.drive_account_id")
 
         def _params(it: dict) -> tuple:
             return (scan_id, it.get("file"), it.get("drive_file_id"), it.get("mime"),
                     it.get("size_kb"), it.get("doc_class"), it.get("checksum"), it.get("path"),
                     it.get("created_at"), it.get("source_modified"), it.get("owner"),
                     it.get("parent_folder"), it.get("discovered_at") or now, it.get("drive_id"),
-                    it.get("content_type"))
+                    it.get("content_type"), it.get("drive_account_id"))
 
         failed = 0
         with self._db.cursor() as cur:
@@ -1712,6 +1724,12 @@ class Store:
         it, matching apply_sp_delta's (drive_id, item_id) identity — a Graph item id is unique
         only within its drive.
 
+        `drive_account_id` is Drive's OWN sibling identity concept — the Google account a Drive
+        row's listing ran as (scanner.drive_account_id) — None for non-Drive rows. Selected so
+        core._drive_prior_inventory_for_account can verify a Drive baseline was scanned as the
+        same account before trusting it, the Drive mirror of drive_id's role above for
+        core._sp_prior_inventory_for_drive.
+
         Rows with no drive_file_id are dropped (a local/non-Drive row, or one from a scan old
         enough to predate that column) — they carry nothing a delta could ever reconcile
         against."""
@@ -1725,8 +1743,8 @@ class Store:
                 return None
             self._db.execute(cur,
                 "SELECT file, drive_file_id, mime, size_kb, checksum, created_at, "
-                "source_modified, owner, parent_folder, drive_id FROM scan_inventory "
-                "WHERE scan_id=%s",
+                "source_modified, owner, parent_folder, drive_id, drive_account_id "
+                "FROM scan_inventory WHERE scan_id=%s",
                 (row["id"],))
             return [r for r in self._db.fetchall(cur) if r.get("drive_file_id")]
 
