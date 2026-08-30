@@ -199,6 +199,58 @@ export default function QueuePanel() {
   const active = Math.min(running, workers)
   const idle = Math.max(0, workers - active)
   const initializing = note.includes('initializing')
+  // The in-process pool is legitimately, permanently 0 whenever a dedicated worker tier is
+  // doing the real work (split topology, #113) — that is the SAME condition the "✓ worker
+  // service online" paragraph below already gates on. A bold "0" sized like every other stat
+  // on this row reads as "no capacity" regardless of that paragraph, because font-weight beats
+  // prose. Found live 2026-08-30: a real deployment showed "worker service online" directly
+  // above a 22px-bold "0", and it read as a contradiction rather than as "this number doesn't
+  // mean what it looks like it means". Collapsing it behind a disclosure only in THIS case —
+  // never when the pool is the genuine capacity control (workers > 0, or no tier heartbeat at
+  // all) — keeps the control reachable without it dominating the healthy, common case.
+  const poolDecorative = !!(q && workers === 0 && q.worker_tier_alive)
+  const poolBlock = (
+    <>
+      <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button onClick={() => scaleWorkers(workers - 1)}
+                  disabled={busy || workers <= 0} aria-label="Remove a worker"
+                  title={workers <= 0 ? 'Already at 0 — nothing to remove' : 'Remove a worker'}
+                  style={WBTN}>−</button>
+          <span style={{ fontSize: 22, fontWeight: 700, minWidth: 22, textAlign: 'center' }}>{workers}</span>
+          <button onClick={() => scaleWorkers(workers + 1)}
+                  disabled={busy || workers >= 16} aria-label="Add a worker"
+                  title={workers >= 16 ? 'Pool cap is 16 workers' : 'Add a worker'}
+                  style={WBTN}>+</button>
+        </span>
+        <span className="muted" style={{ fontSize: 11, color: note ? '#185FA5' : undefined }}>
+          {note || 'workers · live-scale (0–16)'}
+        </span>
+      </span>
+      {/* Real-time worker state — what the pool is doing right now. */}
+      <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
+        {workers > 0 && (
+          <span className="workerdots" aria-hidden="true" style={{ marginBottom: 3 }}>
+            {Array.from({ length: workers }, (_, i) => (
+              <span key={i} className={i < active ? 'activedot' : 'idledot'} />
+            ))}
+          </span>
+        )}
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600 }}>
+          <span style={{ color: active > 0 ? '#185FA5' : 'var(--muted)' }}>
+            {active > 0 && <span className="pulsedot" aria-hidden="true" style={{ marginRight: 5 }} />}
+            {active} active
+          </span>
+          <span style={{ color: 'var(--muted)' }}>· {idle} idle</span>
+          {initializing && <span style={{ color: '#185FA5' }}>· ⏳ initializing</span>}
+        </span>
+        <span className="muted" style={{ fontSize: 11 }}>
+          {running > 0 ? `processing ${running} job${running !== 1 ? 's' : ''}` : 'idle — nothing in flight'}
+          {queued > 0 ? ` · ${queued} waiting` : ''}
+        </span>
+      </span>
+    </>
+  )
 
   return (
     <section className="panel" style={{ marginBottom: 14 }}>
@@ -290,44 +342,16 @@ export default function QueuePanel() {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap', marginTop: 12 }}
            role="status" aria-live="polite">
-        <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <button onClick={() => scaleWorkers(workers - 1)}
-                    disabled={busy || workers <= 0} aria-label="Remove a worker"
-                    title={workers <= 0 ? 'Already at 0 — nothing to remove' : 'Remove a worker'}
-                    style={WBTN}>−</button>
-            <span style={{ fontSize: 22, fontWeight: 700, minWidth: 22, textAlign: 'center' }}>{workers}</span>
-            <button onClick={() => scaleWorkers(workers + 1)}
-                    disabled={busy || workers >= 16} aria-label="Add a worker"
-                    title={workers >= 16 ? 'Pool cap is 16 workers' : 'Add a worker'}
-                    style={WBTN}>+</button>
-          </span>
-          <span className="muted" style={{ fontSize: 11, color: note ? '#185FA5' : undefined }}>
-            {note || 'workers · live-scale (0–16)'}
-          </span>
-        </span>
-        {/* Real-time worker state — what the pool is doing right now. */}
-        <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
-          {workers > 0 && (
-            <span className="workerdots" aria-hidden="true" style={{ marginBottom: 3 }}>
-              {Array.from({ length: workers }, (_, i) => (
-                <span key={i} className={i < active ? 'activedot' : 'idledot'} />
-              ))}
-            </span>
-          )}
-          <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600 }}>
-            <span style={{ color: active > 0 ? '#185FA5' : 'var(--muted)' }}>
-              {active > 0 && <span className="pulsedot" aria-hidden="true" style={{ marginRight: 5 }} />}
-              {active} active
-            </span>
-            <span style={{ color: 'var(--muted)' }}>· {idle} idle</span>
-            {initializing && <span style={{ color: '#185FA5' }}>· ⏳ initializing</span>}
-          </span>
-          <span className="muted" style={{ fontSize: 11 }}>
-            {running > 0 ? `processing ${running} job${running !== 1 ? 's' : ''}` : 'idle — nothing in flight'}
-            {queued > 0 ? ` · ${queued} waiting` : ''}
-          </span>
-        </span>
+        {poolDecorative ? (
+          <details>
+            <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>
+              Advanced: emergency in-process workers
+            </summary>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap', marginTop: 8 }}>
+              {poolBlock}
+            </div>
+          </details>
+        ) : poolBlock}
         {fullList && scanCount > 0 && <Stat label={`scan${scanCount !== 1 ? 's' : ''}`} value={scanCount} />}
         {fullList && fileCount > 0 && <Stat label={`file${fileCount !== 1 ? 's' : ''}`} value={fileCount} />}
         <Stat label="total jobs" value={total}
@@ -351,23 +375,39 @@ export default function QueuePanel() {
         })}
       </div>
 
-      {/* Dead-letters: show WHY they failed + a one-click clear (terminal failures —
-          re-run the originating action to retry the actual work). */}
+      {/* Dead-letters: show WHY they failed, what to do about it, and a clear-the-records
+          action that is deliberately NOT phrased as the fix — it removes the diagnostic
+          evidence, it doesn't touch whatever actually made the jobs fail. Retrying means
+          re-running the originating action once the real cause is addressed. */}
       {stats.dead > 0 && (
         <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 9,
                       background: '#FCEBEB', border: '1px solid #F3C9C9',
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      gap: 12, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 12.5, color: '#7A2020' }}>
-            <strong>{stats.dead} job{stats.dead !== 1 ? 's' : ''} failed permanently.</strong>{' '}
-            {deadReason ? `Reason: ${deadReason}` : 'See server logs for details.'}
-            {deadReason?.includes('Drive token') &&
-              ' — re-run remediation while signed in to retry the work.'}
-          </span>
-          <button className="ghost small" onClick={clearDead} disabled={busy}
-                  title="Remove these terminal-failure jobs from the queue">
-            Clear dead-letters
-          </button>
+                      display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        gap: 12, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12.5, color: '#7A2020' }}>
+              <strong>{stats.dead} job{stats.dead !== 1 ? 's' : ''} failed permanently.</strong>{' '}
+              {deadReason ? `Reason: ${deadReason}` : 'See server logs for details.'}
+              {deadReason?.includes('Drive token') &&
+                ' — re-run remediation while signed in to retry the work.'}
+            </span>
+            <button className="ghost small" onClick={clearDead} disabled={busy}
+                    title="Removes these records from the queue — this does not fix whatever caused the failures.">
+              Dismiss records
+            </button>
+          </div>
+          {/* Discover's suspicious-zero guard (_scan_discover, api/handlers.py) refuses to
+              publish an empty listing over a proven non-empty inventory — the reason string is
+              this specific and stable because it's a RuntimeError message, not free text, so
+              matching it here is safe. Every dead-lettered attempt shares one root cause, so
+              this reads as one incident rather than N unexplained identical rows. */}
+          {deadReason?.includes('refusing to publish suspicious zero') && (
+            <div style={{ fontSize: 12, color: '#7A2020' }}>
+              ACP preserved the previously verified inventory rather than overwrite it with an
+              empty result. Verify the source's connection and authorization, then re-run
+              Discover to retry — dismissing these records alone will not.
+            </div>
+          )}
         </div>
       )}
 
