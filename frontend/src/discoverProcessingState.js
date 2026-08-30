@@ -15,6 +15,8 @@
 // Not a replacement for those banners (yet) — additive, matching how the Assess panel shipped
 // alongside its own existing worker strip rather than replacing it.
 
+import { fmtPickupRange } from './pickupEstimateFmt.js'
+
 const CAPACITY_DETAIL = {
   starting: 'A worker is starting. Your scan will begin automatically once it is ready.',
   busy: 'Discovery capacity is currently busy. Your scan will be queued and start automatically.',
@@ -34,17 +36,6 @@ const STAGE_HEADLINE = {
 function fmtAgo(secs) {
   const s = Math.round(secs)
   return s < 60 ? `${s}s ago` : `${Math.round(s / 60)}m ago`
-}
-
-// "2–4 min" from the queue-estimate route's earliest_at/latest_at (ISO timestamps, absolute —
-// so this stays correct across however long the fact sits on screen before its next poll,
-// unlike a range computed once at fetch time and left to go stale).
-function fmtPickupRange(earliestAt, latestAt) {
-  const now = Date.now()
-  const lo = Math.max(0, Math.round((Date.parse(earliestAt) - now) / 60000))
-  const hi = Math.max(lo, Math.round((Date.parse(latestAt) - now) / 60000))
-  if (hi === 0) return 'under a minute'
-  return lo === hi ? `about ${hi} min` : `${lo}–${hi} min`
 }
 
 export function deriveDiscoverProcessingState({

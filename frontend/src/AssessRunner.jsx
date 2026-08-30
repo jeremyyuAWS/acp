@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { allRules } from './rules'
 import { WCAG } from './wcagCatalog.js'
-import { assessScan, getCapability, getScan, getScanLive, getScanTraces, refreshScanDriveToken, getQueueJob, getJobs, setWorkers } from './api.js'
+import { assessScan, getCapability, getScan, getScanLive, getScanTraces, refreshScanDriveToken, getQueueJob, getJobs, setWorkers, getQueueEstimate } from './api.js'
 import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
 import WorkerReplicaControl from './WorkerReplicaControl.jsx'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
@@ -152,6 +152,21 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     const id = setInterval(load, 10000)
     return () => { on = false; clearInterval(id) }
   }, [phase])
+  // The "Estimated pickup" range (GET /scans/{id}/queue-estimate?kind=assess) — same 10s cadence
+  // and running-only gate as workerSnap above, since it answers the same "is anything happening
+  // yet" question. Omitted (stays null) until the backend has enough recent-completion history
+  // for an honest range — processingState.js's deriveProcessingState reads that absence as
+  // pickupUnavailable, same as before this existed, rather than showing a guess.
+  const [pickupEstimate, setPickupEstimate] = useState(null)
+  useEffect(() => {
+    setPickupEstimate(null)
+    if (phase !== 'running' || !runId) return undefined
+    let on = true
+    const load = () => getQueueEstimate(runId, 'assess').then((d) => { if (on) setPickupEstimate(d) }).catch(() => {})
+    load()
+    const id = setInterval(load, 10000)
+    return () => { on = false; clearInterval(id) }
+  }, [phase, runId])
   // Per-scan queue snapshot from GET /scans/{id}/live — accurate in-flight/waiting counts
   // for THIS scan only, unlike workerSnap which counts across all jobs system-wide.
   const [liveQueue, setLiveQueue] = useState(null)   // {inFlight, queued, workersBusy, workersMax}
@@ -550,6 +565,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               const derived = deriveProcessingState({
                 phase, noCapacity, stalled, completedCount: progress, totalCount: assessN,
                 processingCount, waitingCount, lastActivityMins, currentFile, currentPhase,
+                pickupEstimate,
               })
               return (
                 <ProcessingStatusPanel derived={derived} onViewMonitor={onViewMonitor}

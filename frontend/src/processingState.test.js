@@ -77,4 +77,40 @@ describe('deriveProcessingState', () => {
     })
     expect(d.detail).not.toMatch(/last activity/i)
   })
+
+  it('adds an "Estimated pickup" clause and clears pickupUnavailable from a real queue-estimate', () => {
+    const now = Date.now()
+    const d = deriveProcessingState({
+      phase: 'running', completedCount: 0, totalCount: 12, processingCount: 0, waitingCount: 12,
+      pickupEstimate: {
+        available: true, state: 'estimated',
+        earliest_at: new Date(now + 3 * 60000).toISOString(),
+        latest_at: new Date(now + 5 * 60000).toISOString(),
+      },
+    })
+    expect(d.detail).toMatch(/Estimated pickup: 3–5 min\./)
+    expect(d.pickupUnavailable).toBe(false)
+  })
+
+  it('stays pickupUnavailable for insufficient_history — no confident-looking guess from thin data', () => {
+    const d = deriveProcessingState({
+      phase: 'running', completedCount: 0, totalCount: 12, processingCount: 0, waitingCount: 12,
+      pickupEstimate: { available: true, state: 'insufficient_history', earliest_at: null, latest_at: null },
+    })
+    expect(d.detail).not.toMatch(/estimated pickup/i)
+    expect(d.pickupUnavailable).toBe(true)
+  })
+
+  it('does not attach a pickup estimate to the no_capacity branch — no worker exists to estimate against', () => {
+    const now = Date.now()
+    const d = deriveProcessingState({
+      phase: 'running', noCapacity: true, completedCount: 0, totalCount: 12,
+      pickupEstimate: {
+        available: true, state: 'estimated',
+        earliest_at: new Date(now + 60000).toISOString(), latest_at: new Date(now + 120000).toISOString(),
+      },
+    })
+    expect(d.state).toBe('no_capacity')
+    expect(d.detail).not.toMatch(/estimated pickup/i)
+  })
 })
