@@ -112,7 +112,7 @@ function useProgramBatches(files, decisions) {
   }
 }
 
-export default function Monitor({ run, scanList = [], sources = [], files = [], ratified, decisions = {}, publishedFiles = [], aiEnabled = true, onAiToggle, busy = false, progress = null, scanPct = 0, readOnly = false, me }) {
+export default function Monitor({ run, scanList = [], sources = [], files = [], ratified, decisions = {}, publishedFiles = [], aiEnabled = true, onAiToggle, busy = false, progress = null, scanPct = 0, readOnly = false, me, focusScanId = null, onClearFocus = null }) {
   const m = monitoringState(files)
   // Real signed-in org for the evidence report — demo org only in SIM.
   const orgName = SIM ? IDENTITY.org : (me?.email?.split('@')[1]?.replace(/\.[^.]+$/, '') || me?.name || 'your organisation')
@@ -532,7 +532,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
           without an active run, so this no longer means checking Azure logs directly. Adjust
           how many are warm ahead of a large batch in Settings → Worker Configuration.
         </p>
-        <QueuePanel />
+        <QueuePanel focusScanId={focusScanId} onClearFocus={onClearFocus} />
         <RevisionHistoryPanel />
       </section>
 
