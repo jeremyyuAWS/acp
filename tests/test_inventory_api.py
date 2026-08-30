@@ -39,7 +39,16 @@ def test_inventory_endpoints_owner_scoped_paginated_and_capability_enriched():
     assert '@router.get("/scans/{sid}/inventory.csv")' in src
 
     listbody = re.search(r"def scan_inventory_list\(.*?(?=\n@router)", src, re.S).group(0)
-    assert "get_scan(sid, owner=_owner(request))" in listbody and "404" in listbody   # owner-scoped
+    # get_scan_head, not get_scan, since PRD H-09: the gate needs identity+owner, and get_scan
+    # assembled the whole scan aggregate to supply it — on a discover-only run that meant reading
+    # the entire scan_inventory table to authorise one page of it (8.0x read amplification over a
+    # 6,916-row estate). Owner semantics are identical: None for a missing OR a foreign scan.
+    #
+    # Matching the call by its TEXT is why this test broke on a rename that changed no behaviour.
+    # tests/test_inventory_read_amplification.py asserts the same isolation by actually requesting
+    # another owner's inventory and requiring a 404, which a rename cannot fool; this line is kept
+    # as the cheap wiring check it was always meant to be, not as the isolation guarantee.
+    assert "get_scan_head(sid, owner=_owner(request))" in listbody and "404" in listbody
     assert "limit: int = Query(200, ge=1, le=1000)" in listbody                       # paginated, bounded
     assert "list_inventory_page(sid, limit=limit, offset=offset)" in listbody         # DB paging, not fetch-all
     assert '"total": core.store.count_inventory(sid)' in listbody                     # real total

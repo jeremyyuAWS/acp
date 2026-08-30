@@ -2,6 +2,7 @@
 remediation endpoints."""
 from __future__ import annotations
 import hashlib
+import logging
 import os
 import threading
 import uuid
@@ -59,6 +60,9 @@ def _owner(request: Request) -> str:
     return getattr(request.state, "user_email", None) or "demo"
 
 
+logger = logging.getLogger(__name__)
+
+
 def _inv_capability(row: dict) -> dict:
     """Add the estate capability {format, status} to a scan_inventory row, derived from its mime/name
     the same way estate_inventory.summarize classifies the whole estate — so the per-file list/export
@@ -67,6 +71,31 @@ def _inv_capability(row: dict) -> dict:
     c = ei.classify({"id": row.get("drive_file_id"), "name": row.get("file"),
                      "mimeType": row.get("mime")})
     return {**row, "format": c["format"], "status": c["status"]}
+
+
+def _supersede_replaced_run(prior: dict | None, new_scan_id: str, owner: str) -> None:
+    """Stop the run a newly accepted scan replaces — called only AFTER enqueue_scan has
+    committed (PRD H-03).
+
+    Two guards, both of which the pre-2026-08-30 inline version lacked:
+
+    * **Never stop the scan we are about to return.** enqueue_scan honours Idempotency-Key by
+      returning the ORIGINAL (scan_id, job_id) instead of inserting. On such a replay the scan
+      being returned can be the very run active_scan() reported, and superseding it would kill
+      the job the caller is being handed — a retry destroying the submission it was retrying.
+    * **Never fail the request for this.** The new scan is already durable; raising here would
+      report a failed submission that in fact succeeded, and the UI would offer a retry that
+      enqueues a second scan. A prior run left running is self-correcting — the next submission
+      supersedes it, and acquire_discovery_guard's stale reclaim covers the abandoned case — so
+      the honest outcome is to log and return the identifiers the caller earned.
+    """
+    if not prior or not prior.get("id") or prior["id"] == new_scan_id:
+        return
+    try:
+        core.store.supersede_scan(prior["id"], owner=owner)
+    except Exception as exc:  # noqa: BLE001 — see the docstring: never fail an accepted scan
+        logger.warning("scan %s accepted, but superseding prior run %s failed: %s",
+                       new_scan_id, prior["id"], exc)
 
 
 @router.post("/scans")
@@ -128,9 +157,17 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
         # scan — with files=0 since it barely started — hiding the real completed scan behind it
         # and tripping the production collapse monitor within minutes (found live 2026-08-26).
         # supersede_scan does the same job-kill but under a status list_scans() excludes.
+        #
+        # ORDERING (PRD reliability-hardening H-03): this READS the prior run here but does not
+        # stop it until enqueue_scan below has committed. It used to supersede immediately, 46
+        # lines before the durable write, with three more DB round trips in between
+        # (list_ai_provider_configs, list_disposition_policies, get_ai_enabled). Any of those
+        # raising — PoolError is the observed one, 2026-08-30, when the API replica's pool was
+        # exhausted — left the user's running scan KILLED and no replacement created. The request
+        # 500'd, so the UI reported failure, and the run it had silently destroyed was gone.
+        # Losing work on the failure path is strictly worse than the concurrency the guard exists
+        # to prevent, so acceptance now comes first and the stop follows it.
         _prior_active = core.store.active_scan(owner=user)
-        if _prior_active and _prior_active.get("id"):
-            core.store.supersede_scan(_prior_active["id"], owner=user)
         scan_id = uuid.uuid4().hex[:12]
         idempotency_key = request.headers.get("idempotency-key") or None
         # fanout=true → decompose into per-file jobs (ADR 0007); else the monolithic
@@ -187,6 +224,9 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
              "drive_token": token, "sp_token": sp_token},
             idempotency_key=idempotency_key,
             inputs=_scan_inputs)
+        # Acceptance is durable from here on: scan_runs + jobs + scan_inputs are committed and
+        # GET /scans/{scan_id} resolves. Only NOW is it safe to stop the run this one replaces.
+        _supersede_replaced_run(_prior_active, scan_id, user)
         core.register_scan_tokens(scan_id, drive=token, sp=sp_token)  # in-memory only
         # ADR 0042 — the run's first event, and the only one emitted from a request thread rather
         # than from the worker. After enqueue_scan, because that is the durable write that makes
@@ -1343,7 +1383,18 @@ def scan_inventory_list(sid: str, request: Request,
     (ADR 0020): `total` is the real count, page through it with offset/limit. Export via the
     `.csv` sibling. NB: the estate `status` is derived per row, so filtering by it is a client
     concern for now — a server-side status filter needs the classification persisted (follow-up)."""
-    if core.store.get_scan(sid, owner=_owner(request)) is None:
+    # get_scan_head, not get_scan (PRD H-09). The result is used ONLY as an ownership gate —
+    # `is None` and nothing else — but get_scan assembles the entire scan aggregate to produce
+    # it, and on a discover-only run (ADR 0020: inventory listed, no file_records yet, which is
+    # exactly the state this endpoint serves) it takes the `if not files` fallback and reads the
+    # WHOLE scan_inventory table ordered by file. To authorise one 1000-row page.
+    #
+    # Measured on the incident's own 6,916-row inventory: a full 7-page load read 55,328 rows to
+    # return 6,916 — 8.0x amplification, all of it in the gate. get_scan_head is one indexed
+    # SELECT on scan_runs with identical owner semantics (None for missing OR foreign), and takes
+    # the same load to 6,916 rows read, 1.0x, byte-identical output. This endpoint is one of the
+    # routes that 500'd on 2026-08-30, at offset=5000.
+    if core.store.get_scan_head(sid, owner=_owner(request)) is None:
         raise HTTPException(404, "scan not found")
     rows = core.store.list_inventory_page(sid, limit=limit, offset=offset)
     return {"scan_id": sid, "total": core.store.count_inventory(sid),
@@ -1355,7 +1406,9 @@ def scan_inventory_list(sid: str, request: Request,
 def scan_inventory_csv(sid: str, request: Request):
     """The whole per-file estate inventory as CSV (owner-scoped) — every discovered file, source
     metadata + capability, for offline analysis / an auditor. Not paginated: it IS the export."""
-    if core.store.get_scan(sid, owner=_owner(request)) is None:
+    # get_scan_head for the same reason as the paginated sibling above — this one reads the whole
+    # inventory itself, so paying for a second full read in the ownership gate is pure duplication.
+    if core.store.get_scan_head(sid, owner=_owner(request)) is None:
         raise HTTPException(404, "scan not found")
     import csv
     import io

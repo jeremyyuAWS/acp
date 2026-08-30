@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { subscribeJobs } from './jobsFeed.js'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import WindowedRows from './WindowedRows.jsx'
 import FileDrawer from './FileDrawer.jsx'
@@ -23,7 +24,7 @@ import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 import DiscoverCompleteSummary from './DiscoverCompleteSummary.jsx'
 import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
 import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation,
-         acknowledgeScan, unacknowledgeScan, checkReadiness, getQueueJob, getJobs, setWorkers,
+         acknowledgeScan, unacknowledgeScan, checkReadiness, getQueueJob, setWorkers,
          getSourceStatus, getWorkerReplicas, setWorkerReplicas, getQueueEstimate } from './api.js'
 import { useWorkerCapacity } from './workerCapacityStore.js'
 import { buildUnreadableWhy } from './unreadableWhy.js'
@@ -229,16 +230,13 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
     setQueueSnap(null)
     const phase = progress?.phase ?? null
     if (!busy || (phase && phase !== 'queued')) return undefined
-    let live = true
-    const load = () => getJobs('queued').then((d) => {
-      if (!live) return
+    // Shared subscription, not a private timer (jobsFeed.js). Every other consumer asking for
+    // the same query rides the same request instead of adding five more pool acquisitions.
+    return subscribeJobs('queued', (d) => {
       const ahead = (d.jobs || []).filter((j) => DISCOVERY_JOB_TYPES.has(j.type) && j.id !== jobId).length
       setQueueSnap({ compatibleJobsAhead: ahead, workersTotal: d.workers ?? null,
                      workersOnline: !!d.worker_tier_alive, polledAt: Date.now() })
-    }).catch(() => {})
-    load()
-    const id = setInterval(load, 5000)
-    return () => { live = false; clearInterval(id) }
+    }, { intervalMs: 5000 })
   }, [busy, jobId, progress?.phase])
   // The actual "estimated pickup: X–Y minutes" range (GET /scans/{id}/queue-estimate), on top of
   // queueSnap's own compatibleJobsAhead/workersTotal facts above — same pre-listing window, same
@@ -271,17 +269,12 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   const [workerMsg, setWorkerMsg] = useState(null)
   const workerMsgTimer = useRef(null)
   useEffect(() => {
-    let live = true
-    const load = () => getJobs().then((d) => {
-      if (!live) return
+    return subscribeJobs(null, (d) => {
       setWorkerSnap({ workers: d.workers ?? 0, alive: !!d.worker_tier_alive,
                       suggested: d.suggested_workers ?? 4, runtime_mode: d.runtime_mode ?? 'auto',
                       oldestQueuedCreatedAt: d.oldest_queued?.created_at ?? null,
                       workerHeartbeatAgeS: d.worker_heartbeat_age_s ?? null })
-    }).catch(() => {})
-    load()
-    const id = setInterval(load, 10000)
-    return () => { live = false; clearInterval(id) }
+    }, { intervalMs: 10000 })
   }, [])
   useEffect(() => () => clearTimeout(workerMsgTimer.current), [])
   const adjustWorkers = (delta) => {

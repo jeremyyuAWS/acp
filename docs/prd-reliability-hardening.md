@@ -95,11 +95,12 @@ Working hypothesis: sustained database CPU pressure and repeated reads increase 
 > [jeremyyuAWS/acp#1045](https://github.com/jeremyyuAWS/acp/pull/1045) already
 > decouples the headroom term from `ACP_WORKERS`, raises `_API_HEADROOM_CONN` from
 > 8 to 16, adds a `PoolError` handler returning 503 with `Retry-After`, and adds a
-> concurrent-load reproduction test. It is unmerged at the time of writing. Treat
-> H-01 and the 503 half of H-05 as **claimed by that PR**, and review it against the
-> H-02 capacity gate rather than opening a second implementation. The remaining
-> H-05 obligations (stable `DB_CAPACITY_BUSY` code, request ID, incident time,
-> `submission_state`) are not covered by it.
+> concurrent-load reproduction test. **It merged as `fb754290` later the same day**, so
+> H-01 and the 503 half of H-05 are **done**. H-02 was never run against it — see
+> §4.1 for what running it now shows. The remaining H-05 obligations (stable
+> `DB_CAPACITY_BUSY` code, request ID, incident time, `submission_state`) are still
+> uncovered: the shipped body uses `detail: "database_busy"` and carries no request ID
+> or timestamp.
 
 **H-02. Capacity gate.** Before changing pool or replica limits, document the maximum budget per database:
 
@@ -109,9 +110,69 @@ Include warm revisions and rolling-deployment overlap. Under a one-process assum
 
 At current production CPU saturation, first measure expensive queries and reduce optional read pressure. Benchmark a pool of 10 versus 20 with bounded read concurrency on a representative staging workload. A capacity/tier change may be needed; provide its cost and rollout proposal for separate approval. Do not infer safety from the 150-connection setting.
 
+### 4.1 H-02 applied to the merged H-01 fix — the gate's first real result
+
+H-01 asked for the API pool to be sized independently of `ACP_WORKERS`, and said explicitly:
+*"do not increase worker pools as part of that mitigation."* The merged fix
+(`api/store.py`, `fb754290`) replaces `max(2, workers) + 8` with `max(2, workers + 16)`.
+That is one formula for **every** role, so the constant — still named `_API_HEADROOM_CONN` —
+is added to the worker tier's twelve threads as well:
+
+| Role (`ACP_WORKERS`) | Pool before | Pool after |
+|---|---:|---:|
+| Production API (0) | 10 | **16** |
+| Production worker (12) | 20 | **28** |
+| Staging API (0) | 10 | **16** |
+| Staging worker (2) | 10 | **18** |
+
+Carried through H-02's budget formula at each environment's configured `maxReplicas`:
+
+| Environment | Ceiling before | Ceiling after | Server `max_connections` |
+|---|---:|---:|---:|
+| Production | 3×10 + 10×20 = 230 | 3×16 + 10×28 = **328** | 150 |
+| Staging | 1×10 + 3×10 = 40 | 1×16 + 3×18 = **70** | 50 |
+
+Two things follow, and neither is a criticism of the fix — the incident it targets was real
+and its own reasoning about connection count is sound:
+
+1. **The worker tier was raised as a side effect**, which is the one thing H-01 asked not to
+   do. The constant's name says API; its application does not.
+2. **Staging's ceiling now exceeds its own server limit**, where before it did not (70 against
+   50; production was already over at 230 and is further over at 328). Crossing the *server*
+   limit is a worse failure than exhausting a local pool: `FATAL: too many connections` refuses
+   everything, migrations and the monitor included, rather than making one request wait.
+
+These are potential ceilings, not observed counts — pools grow on demand and the observed
+24-hour maxima were 74 (production) and 27 (staging), so nothing is breached today. But that
+gap is exactly what H-02 exists to hold, and it is now wider than when this PRD was drafted.
+**This is not a request to revert or to re-tune the constant in code**: per H-02 the numbers
+are the platform owner's to set against verified process counts, using `ACP_DB_MAX_CONN`, which
+the merged fix deliberately preserves as the override for precisely this decision.
+
 ### P1 — Durable submission and truthful overload behavior
 
 **H-03. Atomic submission.** Success returns the durable scan/job identifiers only after commit. Preserve existing atomic scan/job/input-snapshot enqueue. Make prior-run supersession atomic with acceptance, or defer it until acceptance is durable; source review confirms supersession currently commits at `scans.py:133`, 46 lines before `enqueue_scan` at `:179`. Rejected submissions must not cancel the user's existing run.
+
+> **Done — deferral, the second of the two options above.** `start_scan` now reads the prior
+> run before enqueue but stops it only after `enqueue_scan` has committed
+> (`_supersede_replaced_run`, `api/routes/scans.py`). Two guards came out of writing the
+> regression: the stop skips the scan being returned, because an `Idempotency-Key` replay
+> could otherwise kill the job it was handing back; and it never raises, because after commit
+> the scan exists and a failure there would report a false rejection whose retry enqueues a
+> real duplicate. `tests/test_scan_submission_atomicity.py` fails on the old ordering.
+>
+> The atomic option was not taken. It needs `_end_running_scan` to accept a caller's cursor so
+> the stop joins `enqueue_scan`'s transaction; that helper kills jobs and stamps three tables,
+> and threading a cursor through it for every existing caller is a larger change than the
+> defect warrants. The residue is a millisecond window in which both runs exist and a worker
+> could claim the new job before the old one is stopped — self-correcting (the next submission
+> supersedes it, and `acquire_discovery_guard`'s stale reclaim covers abandonment), and
+> strictly smaller than the destroyed-run failure it replaces. Revisit if that window is ever
+> observed to matter.
+
+**H-04 note.** The idempotency guard above is a *server-side* protection for a key the client
+already sends when it chooses to. H-04's actual requirement — the UI minting one key per submit
+intent and retaining it across retries — is not built.
 
 **H-04. Idempotent retries.** The UI creates one owner-scoped idempotency key per submit intent and retains it across retries. A lost response after commit must resolve to the existing job. Do not automatically create a new intent after a timeout. Test concurrent retries and the order of idempotency lookup versus supersession.
 
@@ -201,7 +262,7 @@ PRs on this repository:
 
 | PR | Touches | Overlap |
 |---|---|---|
-| [#1045](https://github.com/jeremyyuAWS/acp/pull/1045) | `api/store.py`, `api/app.py`, `tests/test_db_pool*.py` | **Direct.** Claims H-01 and the 503 half of H-05; also lands the H-05 `Retry-After` and an incident-reproduction test close to the §5 first row. Review it against H-02 before merge. |
+| [#1045](https://github.com/jeremyyuAWS/acp/pull/1045) | `api/store.py`, `api/app.py`, `tests/test_db_pool*.py` | **Direct — merged as `fb754290`.** Landed H-01 and the 503 half of H-05, plus an incident-reproduction test close to the §5 first row. H-02 was not run against it; see the H-01 note. |
 | [#1040](https://github.com/jeremyyuAWS/acp/pull/1040) | `orchestration_events`, `worker_instances` tables | **Adjacent.** New tables arrive through the same `init_schema` path H-15 identifies as the startup-deadlock site. Sequence H-15 with it. |
 | [#1041](https://github.com/jeremyyuAWS/acp/pull/1041) | auto-merge hold label | None. |
 | [#790](https://github.com/jeremyyuAWS/acp/pull/790) | Power BI DirectQuery export | None. |
