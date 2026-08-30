@@ -80,9 +80,16 @@ const j = async (r) => {
   }
   if (!r.ok) {
     let detail = `${r.status} ${r.statusText}`
+    let payload = null
     try {
       const body = await r.json()
-      if (body?.detail) detail = body.detail
+      payload = body
+      // `message` is the human sentence when the server wrote one; `detail` is the machine tag.
+      // Preferring detail put strings like "database_busy" in front of users — the overload 503
+      // carries a written explanation precisely so it does not have to. Fall back to detail for
+      // every endpoint that only sends that.
+      if (body?.message) detail = body.message
+      else if (body?.detail) detail = body.detail
     } catch (_) { /* body wasn't JSON */ }
     if (r.status === 404 && SCAN_NOT_FOUND_DETAIL.test(String(detail).trim())) {
       const m = SCAN_URL_RE.exec(r.url || '')
@@ -104,6 +111,16 @@ const j = async (r) => {
     // and silently answers "uncertain" for everything, which is the safe direction but is not a
     // check.
     e.status = r.status
+    // Machine-readable fields alongside the sentence, so a caller can branch without parsing
+    // prose: `code` (e.g. DB_CAPACITY_BUSY), `changes` ("none" | "unknown" — whether the server
+    // can prove nothing was written), and the ids needed to correlate or reconcile.
+    if (payload) {
+      if (payload.code) e.code = payload.code
+      if (payload.detail) e.detail = payload.detail
+      if (payload.changes) e.changes = payload.changes
+      if (payload.request_id) e.requestId = payload.request_id
+      if (payload.occurred_at) e.occurredAt = payload.occurred_at
+    }
     // A capability failure, not a transient one: every other card in the inbox would hit the
     // same missing model, so the auto-draft gate stops rather than asking N more times.
     if (r.status === 503 && AI_MODEL_NOT_PULLED_DETAIL.test(String(detail))) e.aiModelNotPulled = true
