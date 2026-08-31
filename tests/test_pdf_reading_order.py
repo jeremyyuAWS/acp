@@ -19,16 +19,28 @@ which is precisely the signal the rule exists to look at.
 WHY THE ONE-WORD FIX IS NOT THE FIX. `use_text_flow=True` does make the rule fire — it is also
 what the rule's own docstring describes. But `_compute_divergence` compares the stream against a
 naive (top, x0) sort, and that is not the visual reading order of a multi-column page: column
-one's second line sorts above column two's first. Measured on well-formed fixtures below, a
-correct two-column layout scores 78% divergence and a page whose footnote is drawn before the
-body scores 100% — both far past the 25% threshold, both false positives, on documents with
-nothing wrong with them. Flipping the flag alone would take a detector that reports nothing and
-turn it into one that reports confidently on correct documents, which is the worse of the two
-failures: a silent detector understates, and a wrong one gets acted on.
+one's second line sorts above column two's first. Measured on well-formed fixtures below, THREE
+classes of correct document blow past the 25% threshold:
 
-So 1.3.2 on .pdf needs column-aware visual ordering before it can mean anything, and until then
-the corpus has no fixture for it — a ground-truth pair asserts that a detector fires, and this
-one cannot. These tests pin the measurement so the next person to find the dead rule finds the
+    two-column layout                       78%
+    footnote drawn before the body         100%
+    TAGGED, order defined by the tree      100%
+
+all false positives, on documents with nothing wrong with them. Flipping the flag alone would
+take a detector that reports nothing and turn it into one that reports confidently on correct
+documents, which is the worse of the two failures: a silent detector understates, and a wrong
+one gets acted on.
+
+The third is the sharpest, because it is worst exactly where it should be best: a tagged PDF is
+one that has BEEN through an accessibility workflow, its reading order is defined by the
+structure tree, and the content stream it is measured against does not decide what a reader
+gets. The fix for that one is also already written, in the AI path for this same criterion —
+`remediate_pdf._propose_reading_order` returns early on `/StructTreeRoot`. The detector never
+asks.
+
+So 1.3.2 on .pdf needs a tagged gate AND column-aware visual ordering before it can mean
+anything, and until then the corpus has no fixture for it — a ground-truth pair asserts that a
+detector fires, and this one cannot. These tests pin the measurement so the next person to find the dead rule finds the
 reason it was left alone rather than re-deriving the one-word change and shipping it.
 
 See also the 1.4.3-on-PDF story in CLAUDE.md: a fixer that assumed a white page rewrote compliant
@@ -195,6 +207,78 @@ def test_flipping_the_flag_alone_would_fire_on_well_formed_documents(tmp_path, n
         f"{name} no longer false-positives under use_text_flow=True — if _compute_divergence "
         f"became column-aware, this file's objection is answered and 1.3.2 on .pdf can have a "
         f"real corpus pair")
+
+
+# ── and a TAGGED document is a third false positive, with a gate already written next door ──
+
+def _tagged(src: Path, dst: Path, elements: int = 8) -> None:
+    """Turn a PDF into a TAGGED one: give it a StructTreeRoot with a paragraph element per line.
+
+    This is what "reading order is defined" MEANS for a PDF. A tagged document's order comes from
+    the structure tree, which is what assistive technology walks; the order things happen to be
+    drawn in the content stream is then irrelevant to a reader, and routinely differs from it —
+    that is the normal output of every tagging workflow, not a defect.
+    """
+    with pikepdf.open(str(src)) as pdf:
+        page = pdf.pages[0]
+        root = pdf.make_indirect(pikepdf.Dictionary(
+            Type=pikepdf.Name.StructTreeRoot, K=pikepdf.Array([])))
+        root.K = pikepdf.Array([
+            pdf.make_indirect(pikepdf.Dictionary(
+                Type=pikepdf.Name.StructElem, S=pikepdf.Name.P, P=root, Pg=page.obj))
+            for _ in range(elements)])
+        pdf.Root.StructTreeRoot = root
+        pdf.Root.MarkInfo = pikepdf.Dictionary(Marked=True)
+        pdf.save(str(dst))
+
+
+def test_the_rule_never_asks_whether_the_document_is_tagged(tmp_path):
+    """THE THIRD FALSE POSITIVE, and the one with a fix already written twelve files away.
+
+    A tagged PDF whose structure tree defines a correct reading order still measures 100%
+    divergence off its content stream, because the rule reads the stream and never looks at the
+    tree. So flipping the flag would flag correctly-tagged documents — the documents that are
+    MOST likely to have been through an accessibility workflow — at the top of the scale.
+
+    The gate is not hypothetical or hard: `remediate_pdf._propose_reading_order`, the AI path for
+    this same criterion, opens with
+
+        if "/StructTreeRoot" in pdf.Root:
+            return  # tagged -> reading order comes from the structure tree, not a guess
+
+    The detector has no equivalent. Two code paths answering one question, one of which knows
+    something the other does not — so this is recorded as a specific, small prerequisite rather
+    than left inside the general "the maths is wrong" objection.
+    """
+    scrambled = tmp_path / "scrambled.pdf"
+    _lines_in_stream_order(scrambled, list(reversed(range(8))))
+    tagged = tmp_path / "scrambled-tagged.pdf"
+    _tagged(scrambled, tagged)
+
+    with pikepdf.open(str(tagged)) as pk:
+        assert "/StructTreeRoot" in pk.Root, "the fixture must actually be tagged to be a fixture"
+
+    today, with_flow = _divergences(tagged)
+    assert today == 0.0, "dead today, tagged or not"
+    assert with_flow >= _DIVERGENCE_THRESHOLD, (
+        "a tagged document no longer false-positives under text flow — if the rule learned to "
+        "read the structure tree, say so here and in the module docstring")
+    assert not _fires(tagged), "the rule reports nothing today, which is the whole point"
+
+
+def test_a_correctly_tagged_and_correctly_streamed_document_is_clean(tmp_path):
+    """The control for the case above. Without it, "tagged scores 100%" is consistent with
+    "tagging itself breaks the measurement", which would be a different bug and a different fix."""
+    correct = tmp_path / "correct.pdf"
+    _lines_in_stream_order(correct, list(range(8)))
+    tagged = tmp_path / "correct-tagged.pdf"
+    _tagged(correct, tagged)
+
+    today, with_flow = _divergences(tagged)
+    assert today == 0.0
+    assert with_flow < _DIVERGENCE_THRESHOLD, (
+        "tagging alone moved the divergence — the fixture, not the document, is what differs "
+        "between this test and the one above")
 
 
 def test_a_single_column_document_is_clean_either_way(tmp_path):
