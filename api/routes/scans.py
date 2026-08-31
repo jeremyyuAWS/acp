@@ -143,6 +143,35 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
     # Owner for per-user isolation: the gate-verified email, else 'demo' (keyless/demo).
     user = getattr(request.state, "user_email", None) or "demo"
 
+    # ── Worker-free Discover (ACP_INLINE_DISCOVER) ────────────────────────────
+    # Runs discovery in this API process instead of handing it to the worker tier — the
+    # pre-worker arrangement, kept because for DISCOVER specifically the durable queue buys
+    # little and costs a hard dependency: a deployment with no live worker cannot start a scan
+    # at all (routes/discovery.py's preflight blocks on worker_tier_never_started), and every
+    # queue fault between "user clicked" and "listing began" lands on the stage that is only
+    # reading metadata anyway.
+    #
+    # Deliberately scoped to DISCOVER. Assess and Remediate still fan out to workers, which is
+    # where the durable queue earns its keep: those stages download bytes, take minutes per file,
+    # and — via the ADR 0044 blob path — can be retried by a worker that holds no user token.
+    #
+    # Gated on defer mode as well as the flag. With ACP_DEFER_ANALYSIS_TO_ASSESS=0 a "discover"
+    # also downloads and analyses every file, and running THAT in the API process is exactly the
+    # long, blocking, restart-losable work the queue exists for. The flag must not silently
+    # widen from "list metadata here" to "analyse the whole estate here".
+    #
+    # WHAT IS GIVEN UP, stated plainly: the run no longer survives an API restart, and there is
+    # no automatic retry. Single-flight is NOT given up — `_scan_discover` claims the durable
+    # per-(owner, source) discovery guard itself (store.acquire_discovery_guard), so a double
+    # click still gets a conflict rather than two concurrent listings.
+    inline_discover = False
+    if queue:
+        from .discovery import inline_discover_enabled
+        from handlers import _defer_analysis_to_assess as _defer_check
+        if inline_discover_enabled() and _defer_check():
+            inline_discover = True
+            queue = False
+
     # ── Durable async path: enqueue a scan job for the worker pool (ADR 0004). ──
     # Survives restarts, retries on transient failure, shows up in /jobs + Grafana.
     if queue:
@@ -288,6 +317,16 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
 
     # Default: in-process background thread (fast, but lost on restart).
     job_id = uuid.uuid4().hex[:12]
+    # Minted HERE rather than inside work() so the response can name the scan it started. The
+    # durable path returns a scan_id and the SPA's queued flow reads it (api.js startScanQueued);
+    # the worker-free path above lands in this branch and has to keep that contract. None when
+    # the legacy full-scan branch will run, since only save_scan can mint an id for that one.
+    from handlers import _defer_analysis_to_assess as _defer_now
+    pre_scan_id = uuid.uuid4().hex[:12] if _defer_now() else None
+    if pre_scan_id:
+        # Before the thread starts, not inside it: a caller handed a scan_id in the response may
+        # act on it immediately, and the tokens have to be resolvable by then.
+        core.register_scan_tokens(pre_scan_id, drive=token, sp=sp_token)  # in-memory only
     # Written through core.set_job/update_job so the poll can be served by ANY replica. Writing
     # straight into the dict is what made ingress session affinity load-bearing, and affinity is
     # what blocks multi-revision mode and therefore blue-green.
@@ -321,8 +360,12 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                 # 'discovered' state is identical; tokens stay registered for the later Assess.
                 # ACP_DEFER_ANALYSIS_TO_ASSESS=0 forces the legacy full download+analyse scan.
                 from handlers import _scan_discover
-                sid = uuid.uuid4().hex[:12]
-                core.register_scan_tokens(sid, drive=token, sp=sp_token)  # in-memory only
+                # Pre-minted above (with its tokens already registered) so the response could
+                # name it; the fallback keeps this branch correct if it is ever reached without
+                # one — the id has to exist before _scan_discover is called either way.
+                sid = pre_scan_id or uuid.uuid4().hex[:12]
+                if sid != pre_scan_id:
+                    core.register_scan_tokens(sid, drive=token, sp=sp_token)  # in-memory only
                 # Same as the sync branch above: the chosen scope has to travel with the
                 # payload or the default scan silently widens to the whole source.
                 _scan_discover({"source": source, "scan_id": sid, "folder": folder,
@@ -409,6 +452,14 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
 
     threading.Thread(target=_heartbeat, daemon=True).start()
     threading.Thread(target=work, daemon=True).start()
+    if inline_discover:
+        # The shape the caller asked for by passing queue=true, minus the one claim that would be
+        # false: queued=False, because nothing was enqueued and no worker will ever claim this.
+        # `inline` says WHY a queue=true request came back unqueued, so a client (or an operator
+        # reading a log) is never left inferring it from a missing job row.
+        return {"scan_id": pre_scan_id, "job_id": job_id, "queued": False, "inline": True,
+                "fanout": fanout, "batch": batch, "workers": core.WORKERS,
+                "worker_tier_alive": core.store.worker_tier_alive()}
     return {"job_id": job_id}
 
 

@@ -212,3 +212,67 @@ def test_preflight_requires_auth_like_every_other_scan_route(monkeypatch, isolat
     client = TestClient(app)
     r = client.post("/discovery/preflight?source=local")
     assert r.status_code in (401, 403)
+
+
+# ── worker-free Discover (ACP_INLINE_DISCOVER) ────────────────────────────────────────────────
+# The block these lift is the hardest dependency in the discover path: with the worker tier never
+# started, a deployment could not begin a listing that needs no worker at all. What must NOT
+# change is the reporting — Assess still runs on workers, so the facts stay in the response and
+# only the verdict moves.
+
+def test_no_worker_tier_no_longer_blocks_when_discover_runs_inline(gated_client, monkeypatch):
+    monkeypatch.setattr(core, "WORKERS", 0, raising=False)
+    monkeypatch.setenv("ACP_INLINE_DISCOVER", "1")
+    r = gated_client("owner@example.com").post("/discovery/preflight?source=local")
+    body = r.json()
+    assert body["verdict"] == "degraded"        # startable, with a caveat about Assess
+    assert body["blocked_reasons"] == []
+    assert body["capacity_state"] == "inline"
+    assert body["discover_execution"] == "inline"
+    # The worker tier is still REPORTED — an operator needs to know Assess will wait.
+    assert any("Assess" in d for d in body["degraded_reasons"])
+    assert body["workers"]["alive"] is False
+
+
+def test_the_same_deployment_is_blocked_with_the_flag_off(gated_client, monkeypatch):
+    """The bite check for the test above: identical state, flag off, still blocked.
+
+    Without this pair, `test_no_worker_tier_no_longer_blocks...` would also pass if the endpoint
+    had simply stopped checking workers altogether.
+    """
+    monkeypatch.setattr(core, "WORKERS", 0, raising=False)
+    monkeypatch.delenv("ACP_INLINE_DISCOVER", raising=False)
+    body = gated_client("owner@example.com").post("/discovery/preflight?source=local").json()
+    assert body["verdict"] == "blocked"
+    assert "worker_tier_never_started" in body["blocked_reasons"]
+    assert body["discover_execution"] == "queued"
+
+
+def test_a_queue_backlog_does_not_degrade_an_inline_discover(gated_client, monkeypatch,
+                                                             isolated_store):
+    """A backlog says how long a QUEUED scan would wait. An inline one never joins the queue.
+
+    Reporting it as degraded would be a false statement about this scan — and the depth is still
+    in the `queue` block for anyone who wants it.
+    """
+    monkeypatch.setattr(core, "WORKERS", 1, raising=False)
+    monkeypatch.setenv("ACP_INLINE_DISCOVER", "1")
+    for i in range(60):
+        isolated_store.enqueue_job("scan", {"n": i})
+    body = gated_client("owner@example.com").post("/discovery/preflight?source=local").json()
+    assert body["verdict"] == "ready"
+    assert body["queue"]["backlogged"] is True      # still reported, just not blocking
+    assert not any("queue has" in d for d in body["degraded_reasons"])
+
+
+def test_a_broken_source_still_blocks_an_inline_discover(gated_client, monkeypatch):
+    """Inline execution answers "does this need a worker", never "is the credential any good".
+
+    The flag must not become a blanket way past preflight — a Drive scan with no token returns
+    nothing whether or not a worker is involved.
+    """
+    monkeypatch.setattr(core, "WORKERS", 1, raising=False)
+    monkeypatch.setenv("ACP_INLINE_DISCOVER", "1")
+    body = gated_client("owner@example.com").post("/discovery/preflight?source=drive").json()
+    assert body["verdict"] == "blocked"
+    assert body["source"]["ready"] is False
