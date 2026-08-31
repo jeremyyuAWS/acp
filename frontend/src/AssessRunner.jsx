@@ -9,6 +9,7 @@ import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
 import { deriveProcessingState } from './processingState.js'
 import { assessLine } from './phaseNarration.js'
 import { coreStats } from './coreStats.js'
+import { activeAssessmentFiles } from './assessLiveJobs.js'
 // Separate line on purpose: coreStats.test.js pins the exact `import { coreStats } from
 // './coreStats.js'` line as its no-drift guard, and widening the braces would have meant
 // loosening someone else's assertion to accommodate this change.
@@ -206,6 +207,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     return subscribeJobs(null, (d) => {
       setWorkerSnap({ workers: d.workers ?? 0, running: d.stats?.running ?? 0,
                       queued: d.stats?.queued ?? 0, alive: !!d.worker_tier_alive,
+                      jobs: d.jobs ?? [],
                       // The heartbeat's AGE, not just its boolean. /jobs has carried both since
                       // system.py exposed worker_tier_status(); this file threw them away and
                       // rendered `alive` as a hard binary, which cannot express the third state
@@ -660,7 +662,8 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               // `noCapacity` true and the panel announced "no worker is currently online to
               // process them" — the same claim the banner had just been fixed to withhold,
               // rendered ABOVE it, with a "Start workers" button attached.
-              const processingCount = liveQueue ? liveQueue.workersBusy : 0
+              const activeFiles = activeAssessmentFiles(workerSnap?.jobs, runId)
+              const processingCount = Math.max(liveQueue?.workersBusy ?? 0, activeFiles.size)
               const noCapacity = !!(workerSnap && workerSnap.workers === 0 && !workersDown
                 && workerSnap.runtime_mode !== 'distributed'
                 && !progressIsConfirmed({ completed: progress, inFlight: processingCount }))
@@ -785,7 +788,8 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               // infrastructure controls in a deployment where those controls adjust a pool
               // (the API container's own) that is 0 by design and does no work.
               const externallyManaged = workerSnap.runtime_mode === 'distributed'
-              const processingCount = liveQueue ? liveQueue.workersBusy : 0
+              const activeFiles = activeAssessmentFiles(workerSnap?.jobs, runId)
+              const processingCount = Math.max(liveQueue?.workersBusy ?? 0, activeFiles.size)
               const health = processingCount > 0
                 ? { state: 'active', label: 'active for this run', tone: 'ok' }
                 : deriveWorkerHealth(workerSnap)
@@ -864,19 +868,30 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                     Labelling it as the first document still awaiting a result says exactly what
                     `score == null` does support, and keeps the information that made it worth
                     showing. */}
-                {currentFile && <span className="assessfilelabel muted">Awaiting result:</span>}
-                {currentFile && <span className="assessfname" title={`${currentFile} — the first document with no result yet. Assessment runs several documents at once, so this is not necessarily the one being opened at this instant.`}>{currentFile}</span>}
+                {(() => {
+                  const activeFiles = activeAssessmentFiles(workerSnap?.jobs, runId)
+                  const active = activeFiles.entries().next().value
+                  const shownFile = active?.[0] || currentFile
+                  return <>
+                    {shownFile && <span className="assessfilelabel muted">{active ? 'Processing now:' : 'Awaiting result:'}</span>}
+                    {shownFile && <span className="assessfname" title={active
+                      ? `${shownFile} — claimed by an assessment worker.`
+                      : `${shownFile} — the first document with no result yet.`}>{shownFile}</span>}
+                    {active && <span className="assess-live-stage">{active[1]}</span>}
+                  </>
+                })()}
                 {currentFile && <span className="assessengine" title={`The ${ruleCount} criteria in your ${SCOPE_LABEL} that block at level ${level} — the same list the result below is scored over`}>{ruleCount} criteria in scope</span>}
-                {currentPhase && <span className="muted assessphase">{currentPhase}</span>}
+                {currentPhase && <span className="muted assessphase">{currentPhase.replace('Opening & assessing', 'Completed')}</span>}
               </div>
             )}
             {liveFiles.length > 0 && (
               <ul className="assesslist" aria-label="Per-document assessment progress">
                 {liveFiles.map((f) => {
                   const scs = failedScs[f.path]
+                  const activeStage = activeAssessmentFiles(workerSnap?.jobs, runId).get(f.path)
                   return (
-                    <li key={f.path} className={f.done ? 'done' : 'pending'}>
-                      <span className="alstate" aria-hidden="true">{f.done ? '\u2713' : '\u25CB'}</span>
+                    <li key={f.path} className={f.done ? 'done' : activeStage ? 'active' : 'pending'}>
+                      <span className="alstate" aria-hidden="true">{f.done ? '\u2713' : activeStage ? '\u25CF' : '\u25CB'}</span>
                       <span className="alname" title={f.path}>{f.file}</span>
                       {f.done
                         ? <>
@@ -890,7 +905,9 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                                 ? <span className="alscs">{scs.map((c) => <b key={c}>{c}</b>)}</span>
                                 : <span className="alclean">no failures</span>}
                           </>
-                        : <span className="muted alscs">{f.status === 'analysed' ? 'Processing now' : 'Waiting'}</span>}
+                        : <span className={activeStage ? 'alscs assess-live-stage' : 'muted alscs'}>
+                            {activeStage || (f.status === 'analysed' ? 'Processing now' : 'Waiting')}
+                          </span>}
                     </li>
                   )
                 })}
