@@ -63,11 +63,75 @@ OWNER = "demo"
 # regardless of future headroom tuning.
 _OLD_API_POOL_SIZE = 10
 
-_HOLD_S = 0.5             # how long a background reader holds its "connection" — long enough
-                          # for the race below to be reliable rather than timing-dependent.
+_HOLD_S = 0.5             # how long a background reader holds its "connection" when no
+                          # saturation gate is in play (see _Saturation).
 _GETCONN_TIMEOUT_S = 0.2  # short, so a starved caller fails fast instead of padding CI time.
-_STARTUP_GRACE_S = 0.15   # time given to the background readers to grab their slots before the
-                          # scan submission is dispatched on top of them.
+_GATE_TIMEOUT_S = 10.0    # upper bound on every gate wait, so a bug here fails the test loudly
+                          # instead of hanging a CI shard.
+
+
+class _Saturation:
+    """Makes "the pool is full" an OBSERVED FACT rather than a timing assumption.
+
+    THE BUG THIS REMOVES. This file used to sleep a fixed 0.15s and then assume all ten
+    background readers were holding a connection. A reader only holds one once its thread has
+    actually reached `cursor()` — and on a loaded runner one of them can miss that window. The
+    pool then still has a free slot, the scan submission legitimately succeeds, and the test
+    fails with `200 == 503` for a reason that has nothing to do with pool sizing. It failed that
+    way on `main` at 07b86db8 and on #1125, and passed on #1129 — same code, three runs, decided
+    by runner speed. Reproduced deterministically by delaying ONE reader past the grace.
+
+    So the readers now ANNOUNCE that they are holding a connection and keep holding until told
+    to let go, and the submission is dispatched only once every one of them has announced. The
+    assertions are unchanged; what changes is that the precondition they rest on is established
+    rather than hoped for — and `_run_under_load` now returns it so the test can assert it too,
+    which is what stops this from silently degrading back into a race.
+
+    COUNTED, NOT KEYED ON THE THREAD, and that is not a stylistic choice. `TestClient` runs each
+    request on its own blocking portal, so the thread that executes a route handler is NOT the
+    executor thread that submitted it — an earlier draft marked reader threads and checked the
+    mark inside `cursor()`, the mark was never visible there, no reader ever announced, and the
+    wait timed out every time. Admitting the first `expected` acquisitions instead needs no
+    thread identity at all.
+
+    That also settles the submission: it is dispatched only after `wait_saturated` has returned,
+    so it is always past the admission count and passes straight through. Were it gated, the
+    wider-pool case (where it does get a connection) would block forever waiting for a release
+    only it could trigger.
+    """
+
+    def __init__(self, expected: int):
+        self._expected = expected
+        self._admitted = 0
+        self._holding = threading.Semaphore(0)
+        self._release = threading.Event()
+        self._lock = threading.Lock()
+
+    def hold(self) -> None:
+        """Announce this connection and keep it until `let_go`.
+
+        Only the first `expected` acquisitions wait. A handler that opens a second cursor must
+        not block on a gate that is already satisfied — it would be waiting behind its own
+        release, holding a slot nobody is going to free. It cannot reach a second cursor before
+        the release anyway, since its first one is parked here.
+        """
+        with self._lock:
+            if self._admitted >= self._expected:
+                return
+            self._admitted += 1
+        self._holding.release()
+        self._release.wait(timeout=_GATE_TIMEOUT_S)
+
+    def wait_saturated(self, timeout: float = _GATE_TIMEOUT_S) -> bool:
+        """Block until `expected` connections are held at once. False on timeout."""
+        deadline = time.monotonic() + timeout
+        for _ in range(self._expected):
+            if not self._holding.acquire(timeout=max(0.0, deadline - time.monotonic())):
+                return False
+        return True
+
+    def let_go(self) -> None:
+        self._release.set()
 
 
 class _BoundedPool:
@@ -92,10 +156,11 @@ class _BoundedSQLiteAdapter(store_mod._SQLiteAdapter):
     actually contend for a connection the way they do against the real Postgres pool, instead of
     SQLite's normal unlimited-connections behaviour masking the bug entirely."""
 
-    def __init__(self, path: str, max_conn: int):
+    def __init__(self, path: str, max_conn: int, gate: "_Saturation | None" = None):
         super().__init__(path)
         self._MAX_CONN = max_conn
         self._pool = _BoundedPool(max_conn)
+        self._gate = gate
 
     def _get_pool(self):
         return self._pool
@@ -108,7 +173,13 @@ class _BoundedSQLiteAdapter(store_mod._SQLiteAdapter):
     def cursor(self):
         self._getconn(timeout=_GETCONN_TIMEOUT_S)
         try:
-            time.sleep(_HOLD_S)  # hold the "connection" the way a live query round trip would
+            if self._gate is not None:
+                # Hold the slot until the submission has been attempted — the same thing the
+                # sleep was reaching for, but ending on the event that matters rather than on a
+                # duration guessed against one machine's scheduler.
+                self._gate.hold()
+            else:
+                time.sleep(_HOLD_S)  # hold it the way a live query round trip would
             with super().cursor() as cur:
                 yield cur
         finally:
@@ -156,28 +227,43 @@ def _background_read_calls(client, sid: str) -> list:
 
 
 def _run_under_load(monkeypatch, max_conn: int):
-    """Seed a scan with a large inventory, saturate `max_conn` connections with the documented
-    real read traffic, then submit a NEW scan (POST /scans?queue=true, the exact route that
-    died in production) into that load. Returns (background_responses, scan_response)."""
+    """Seed a scan with a large inventory, saturate the documented real read traffic against a
+    `max_conn` pool, then submit a NEW scan (POST /scans?queue=true, the exact route that died
+    in production) into that load.
+
+    Returns (background_responses, scan_response, saturated) — `saturated` says whether every
+    background reader was PROVABLY holding a connection at the instant the submission was
+    dispatched. It is returned rather than asserted here so each test states the precondition
+    its own assertion depends on.
+    """
     tmp_path = Path(tempfile.mkdtemp()) / "db-pool-load.db"
     monkeypatch.setattr(store_mod, "_SQLITE_PATH", tmp_path)
     store = store_mod.Store()
     sid = "load-sid"
     _seed(store, sid)
-    store._db = _BoundedSQLiteAdapter(str(tmp_path), max_conn)
 
     client = _client_for(monkeypatch, store)
     reads = _background_read_calls(client, sid)
+    gate = _Saturation(len(reads))
+    store._db = _BoundedSQLiteAdapter(str(tmp_path), max_conn, gate=gate)
 
     ex = ThreadPoolExecutor(max_workers=len(reads))
     futures = [ex.submit(fn) for fn in reads]
-    time.sleep(_STARTUP_GRACE_S)  # let the background readers grab their slots first
+    try:
+        # Dispatch only once the pool is actually full, rather than after a fixed sleep and a
+        # hope. This is the whole fix: the outcome no longer depends on how fast the runner
+        # starts ten threads.
+        saturated = gate.wait_saturated()
+        scan_response = client.post("/scans", params={"source": "local", "queue": "true"})
+    finally:
+        # Always release, even if the submission raised — otherwise every reader thread stays
+        # parked on the gate and the shutdown below hangs the shard.
+        gate.let_go()
 
-    scan_response = client.post("/scans", params={"source": "local", "queue": "true"})
-
-    bg_responses = [f.result(timeout=5) for f in as_completed(futures, timeout=5)]
+    bg_responses = [f.result(timeout=_GATE_TIMEOUT_S)
+                    for f in as_completed(futures, timeout=_GATE_TIMEOUT_S)]
     ex.shutdown(wait=True)
-    return bg_responses, scan_response
+    return bg_responses, scan_response, saturated
 
 
 @requires_psycopg2
@@ -187,7 +273,13 @@ def test_old_formula_exhausts_the_pool_but_degrades_cleanly(monkeypatch):
     ("comfortably more than 10 concurrent DB-touching HTTP handlers") — and a scan submission
     landing on top of that is starved. Before this PR, that surfaced as a bare 500; this test
     pins that it is now the documented, clean 503 instead."""
-    bg_responses, scan_response = _run_under_load(monkeypatch, _OLD_API_POOL_SIZE)
+    bg_responses, scan_response, saturated = _run_under_load(monkeypatch, _OLD_API_POOL_SIZE)
+
+    # The precondition the assertion below rests on, asserted rather than assumed. Without this
+    # a reader that never grabbed a slot leaves the pool with room, the submission succeeds for
+    # a reason that has nothing to do with sizing, and the failure reads as a sizing regression.
+    assert saturated, ("the background readers never filled the pool, so this run never tested "
+                       "starvation at all")
 
     # The background reads, sized exactly to the pool, all succeed on their own.
     for r in bg_responses:
@@ -209,7 +301,12 @@ def test_fixed_sizing_lets_a_new_scan_through_under_the_same_load(monkeypatch):
     (store.db_max_conn({"ACP_WORKERS": "0"}) — the real value an API replica computes today),
     the identical concurrent read load no longer starves a new scan submission."""
     fixed_size = store_mod.db_max_conn({"ACP_WORKERS": "0"})
-    bg_responses, scan_response = _run_under_load(monkeypatch, fixed_size)
+    bg_responses, scan_response, saturated = _run_under_load(monkeypatch, fixed_size)
+
+    # Same load, established the same way — otherwise "the wider pool survives it" would be a
+    # claim about a lighter load than the one the test above starves under.
+    assert saturated, ("the background readers never filled their ten slots, so this run did not "
+                       "apply the load the comparison depends on")
 
     for r in bg_responses:
         assert r.status_code == 200, r.text

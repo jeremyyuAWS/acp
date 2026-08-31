@@ -183,6 +183,49 @@
   footer { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
   footer p { max-width: 78ch; margin: 0 0 7px; }
 
+  /* ── Folder picker ─────────────────────────────────────────────────────── */
+  .picker { display: grid; grid-template-columns: 1.4fr 1fr; gap: 0; border-top: 1px solid var(--line); }
+  .picker-tree { border-right: 1px solid var(--line); min-width: 0; }
+  .picker-scope { min-width: 0; background: var(--bg); }
+  .picker-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .picker-bar b { font-size: 12.5px; font-weight: 600; }
+  .picker-bar .btn { margin-left: auto; }
+
+  .crumbs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 12.5px; min-width: 0; flex: 1 1 auto; }
+  .crumbs button { appearance: none; border: 0; background: none; font: inherit; font-size: 12.5px;
+                   color: var(--plum); cursor: pointer; padding: 2px 4px; border-radius: 5px; }
+  .crumbs button:hover { background: var(--idle-bg); }
+  .crumbs button[disabled] { color: var(--ink); cursor: default; font-weight: 600; }
+  .crumbs .sep { color: var(--muted); }
+
+  .folders { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; }
+  .folders li { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+  .folders li:hover { background: var(--bg); }
+  .folders .fname { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .folders .fname .txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  .folders .drill { appearance: none; border: 1px solid var(--line); background: #fff; font: inherit;
+                    font-size: 11.5px; color: var(--muted); cursor: pointer; padding: 3px 9px; border-radius: 6px; }
+  .folders .drill:hover { border-color: var(--plum); color: var(--plum); }
+  .folders .drill[disabled] { opacity: .4; cursor: default; }
+  .folders .hint { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+  .folders svg { color: var(--muted); flex: 0 0 auto; }
+
+  .picker-empty { padding: 18px 14px; color: var(--muted); font-size: 13px; margin: 0; }
+
+  #scope-chips { padding: 12px 14px 4px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .fchip { display: inline-flex; align-items: center; gap: 6px; background: #fff; border: 1px solid var(--line);
+           border-radius: 20px; padding: 4px 6px 4px 11px; font-size: 12.5px; max-width: 100%; }
+  .fchip.ex { border-color: #e8cdc9; color: var(--fail); background: var(--fail-bg); }
+  .fchip .x { appearance: none; border: 0; background: none; cursor: pointer; font: inherit; line-height: 1;
+              color: var(--muted); padding: 2px 4px; border-radius: 50%; }
+  .fchip .x:hover { background: var(--idle-bg); color: var(--ink); }
+  .picker-scope .safety { padding: 4px 14px 14px; margin: 0; }
+
+  @media (max-width: 760px) {
+    .picker { grid-template-columns: 1fr; }
+    .picker-tree { border-right: 0; border-bottom: 1px solid var(--line); }
+  }
+
   [hidden] { display: none !important; }
   :focus-visible { outline: 2px solid var(--plum); outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -263,14 +306,39 @@
           <label class="fld"><span>Source</span>
             <select id="src"><option value="drive">Google Drive</option><option value="sharepoint">SharePoint / OneDrive</option></select>
           </label>
-          <label class="fld"><span>Folder</span>
-            <select id="folder"><option value="Clinical Ops">Clinical Ops</option><option value="Revenue Cycle">Revenue Cycle</option><option value="all">All folders</option></select>
+          <label class="fld"><span>Scope</span>
+            <button class="btn" id="pick-open" aria-expanded="false" aria-controls="picker">
+              <span id="pick-summary">Whole source</span> &#9662;
+            </button>
           </label>
           <label class="fld"><span>Formats in scope</span><div class="chips" id="scope"></div></label>
           <button class="btn primary" id="run-discover">Run discovery</button>
         </div>
         <div class="prog" id="disc-prog" hidden><i></i></div>
         <div class="prog-note" id="disc-note" hidden></div>
+      </div>
+
+      <!-- Folder picker — the production component's behaviour, not a dropdown. It DRILLS
+           (one level at a time, breadcrumb for ancestry) rather than expanding a whole tree,
+           because that is all a real connector will tell you in one call. -->
+      <div id="picker" class="picker" hidden>
+        <div class="picker-tree">
+          <div class="picker-bar">
+            <nav class="crumbs" id="crumbs" aria-label="Folder path"></nav>
+            <input type="search" id="pick-filter" placeholder="Filter this level…"
+                   aria-label="Filter folders at this level">
+          </div>
+          <ul class="folders" id="folder-rows"></ul>
+          <p class="picker-empty" id="picker-empty" hidden>No subfolders here.</p>
+        </div>
+        <div class="picker-scope">
+          <div class="picker-bar">
+            <b>Selected scope</b>
+            <button class="btn sm" id="pick-clear">Clear all</button>
+          </div>
+          <div id="scope-chips"></div>
+          <p class="safety" id="scope-note"></p>
+        </div>
       </div>
     </div>
 
@@ -459,11 +527,89 @@
   ];
   var MEDIA = { png: 1, jpg: 1, mp4: 1, mov: 1, mp3: 1 };
 
+  // ── The folder tree ─────────────────────────────────────────────────────
+  // Shaped like a connector listing, not like a convenient flat list: children are looked up one
+  // level at a time, exactly what GET /folders and GET /sharepoint/folders each return.
+  //
+  // `items` is populated only for the SharePoint-like source, deliberately. Graph gives
+  // `folder.childCount`; Drive's /folders returns id and name and NO count of any kind. Showing an
+  // invented number on the screen whose whole job is telling you what you are about to scan would
+  // be wrong twice over — wrong unit (items, not files) and wrong depth (this level, not the
+  // subtree) — so the hint appears where it exists and is absent where it does not.
+  var FOLDERS = {
+    root:         { id: "root", name: "My Drive", children: ["f-clin", "f-rev", "f-admin"] },
+    "f-clin":     { id: "f-clin", name: "Clinical Ops", items: 4,
+                    children: ["f-cardio", "f-pted", "f-pharm", "f-arch19"] },
+    "f-cardio":   { id: "f-cardio", name: "Cardiology", items: 3, children: [] },
+    "f-pted":     { id: "f-pted", name: "Patient Education", items: 9, children: [] },
+    "f-pharm":    { id: "f-pharm", name: "Pharmacy & Protocols", items: 7, children: [] },
+    "f-arch19":   { id: "f-arch19", name: "Archive 2019", items: 5, children: [] },
+    "f-rev":      { id: "f-rev", name: "Revenue Cycle", items: 3,
+                    children: ["f-appeals", "f-billing", "f-payer"] },
+    "f-appeals":  { id: "f-appeals", name: "Appeals", items: 4, children: [] },
+    "f-billing":  { id: "f-billing", name: "Billing Exports", items: 5, children: [] },
+    "f-payer":    { id: "f-payer", name: "Payer Contracts", items: 2, children: [] },
+    "f-admin":    { id: "f-admin", name: "Administration", items: 2,
+                    children: ["f-cred", "f-policies"] },
+    "f-cred":     { id: "f-cred", name: "Credentialing", items: 3, children: [] },
+    "f-policies": { id: "f-policies", name: "Policies", items: 6, children: [] }
+  };
+
+  var PARENT = (function () {
+    var out = {};
+    Object.keys(FOLDERS).forEach(function (id) {
+      (FOLDERS[id].children || []).forEach(function (c) { out[c] = id; });
+    });
+    return out;
+  })();
+
+  /** root -> folder, inclusive. The breadcrumb IS the ancestry, which is what makes exclusion
+      semantics exact without ever holding the whole tree. */
+  function pathOf(id) {
+    var out = [], cur = id;
+    while (cur) { out.unshift(cur); cur = PARENT[cur]; }
+    return out;
+  }
+  function isUnder(folderId, ancestorId) { return pathOf(folderId).indexOf(ancestorId) >= 0; }
+
+  // The size hint, or null when the provider gave us nothing. Deliberately "items", never
+  // "files" — childCount counts subfolders too and does not recurse.
+  function sizeHint(f) {
+    if (typeof f.items !== "number") return null;
+    return f.items + " item" + (f.items === 1 ? "" : "s");
+  }
+  var SIZE_HINT_BASIS =
+    "Items directly inside this folder, including subfolders. Not a recursive file count — "
+    + "the exact number of documents is known after a scan.";
+
+  // Which leaf each document lives in. Keyword-first so the estate reads like a real one, with a
+  // per-area fallback so every document lands somewhere real.
+  var FOLDER_HINTS = [
+    [/appeal/i, "f-appeals"],
+    [/billing|cpt|denial/i, "f-billing"],
+    [/payer|contract|charge_capture|legacy_billing/i, "f-payer"],
+    [/cardio|anesthes|readmission/i, "f-cardio"],
+    [/consent|discharge|patient|telehealth|interpreter|referral|portal/i, "f-pted"],
+    [/formulary|pharmacy|antibiotic|sepsis|wound|radiolog|infection/i, "f-pharm"],
+    [/2014|2017|2018|2019|2020|2021/i, "f-arch19"],
+    [/credential|nursing|handbook|competency|onboarding/i, "f-cred"],
+    [/policy|policies|protocol|charter|rights|schedule|minutes|scorecard|quality|throughput|floorplan|prior auth|grand rounds|transfer/i, "f-policies"]
+  ];
+  function folderFor(name, area) {
+    for (var i = 0; i < FOLDER_HINTS.length; i++) {
+      if (FOLDER_HINTS[i][0].test(name)) return FOLDER_HINTS[i][1];
+    }
+    return area === "Revenue Cycle" ? "f-billing" : "f-policies";
+  }
+
+
   var seed = 20260831;
   function rnd() { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; }
   var DOCS = NAMES.map(function (row, i) {
     var ageDays = Math.floor(rnd() * 2600) + 5;
-    return { id: "d" + i, name: row[0] + "." + row[1], ext: row[1], folder: row[2],
+    var name = row[0] + "." + row[1];
+    return { id: "d" + i, name: name, ext: row[1], folder: row[2],
+             folderId: folderFor(row[0], row[2]),
              kb: Math.floor(rnd() * 5400) + 40, ageDays: ageDays,
              modified: new Date(Date.now() - ageDays * 864e5), seedIssues: Math.floor(rnd() * 5) };
   });
@@ -551,6 +697,10 @@
   // ── State ───────────────────────────────────────────────────────────────
   var S = {
     user: null, tab: "discover", scope: load("acp.scope", FORMATS.slice()),
+    // The folder picker. `picked` and `excluded` are held SEPARATELY rather than as positive and
+    // negative entries in one list, because "not included" and "explicitly excluded" are
+    // different answers and the review surface has to be able to show the difference.
+    stack: [{ id: "root", name: "My Drive" }], picked: [], excluded: [], pickFilter: "",
     discovered: false, docs: [], selected: {}, lastAnchor: null,
     rules: [], tags: {}, audit: [], ruleRun: false,
     queued: [], assessed: false, results: {}, findings: [], fixSel: {}
@@ -621,14 +771,226 @@
     });
   }
 
+  // ── Folder picker ───────────────────────────────────────────────────────
+  // Ported from the production FolderPicker (frontend/src/FolderPicker.jsx + folderTree.js).
+  // It drills one level at a time and keeps the breadcrumb, which is what makes the exclusion
+  // and tri-state semantics below exact rather than guessed.
+
+  function isPicked(id) { return S.picked.some(function (p) { return p.id === id; }); }
+  function isExcluded(id) { return S.excluded.some(function (p) { return p.id === id; }); }
+
+  /** The included ancestor a carve-out narrows, read from the LIVE breadcrumb at the moment of
+      exclusion. You can only exclude while drilled inside an included folder, so it is exact
+      here and unknowable afterwards — which is what buys tri-state without the whole tree. */
+  function excludeUnder() {
+    for (var i = S.stack.length - 1; i >= 0; i--) {
+      if (isPicked(S.stack[i].id)) return S.stack[i].id;
+    }
+    return null;
+  }
+
+  /** Partly selected iff INCLUDED and something was carved out beneath it. Exact, not heuristic.
+      An unexpanded folder with unknown descendants is not "partially selected" — it is a folder
+      nobody has looked inside, and saying otherwise would be a claim we cannot support. */
+  function isPartlySelected(id) {
+    if (!id || !isPicked(id)) return false;
+    return S.excluded.some(function (e) { return e.under === id; });
+  }
+
+  /** 'on' | 'off' | 'partial' for one row's checkbox. One function, because the two branches
+      drift easily and drift here silently turns an exclusion into a no-op: the folder still gets
+      scanned and the chip still says it will not be. */
+  function checkboxState(f, inherited) {
+    if (inherited) return isExcluded(f.id) ? "off" : "on";
+    if (isPartlySelected(f.id)) return "partial";
+    return isPicked(f.id) ? "on" : "off";
+  }
+
+  function togglePick(f) {
+    if (isPicked(f.id)) S.picked = S.picked.filter(function (p) { return p.id !== f.id; });
+    else S.picked.push({ id: f.id, name: f.name });
+    renderPicker();
+  }
+  function toggleExclude(f) {
+    if (isExcluded(f.id)) S.excluded = S.excluded.filter(function (p) { return p.id !== f.id; });
+    else S.excluded.push({ id: f.id, name: f.name, under: excludeUnder() });
+    renderPicker();
+  }
+
+  /* Clearing the inclusions clears the carve-outs with them. An exclusion whose parent is gone
+     is not a narrower scope, it is a false line: the chip would read "except Archive" with
+     nothing included for Archive to be an exception to. */
+  function clearScope() { S.picked = []; S.excluded = []; renderPicker(); }
+
+  /** Is a document inside the chosen scope? No inclusions means the whole source — the same
+      "empty selection is a legitimate everything" the picker's caller declares. */
+  function inScope(d) {
+    if (S.excluded.some(function (e) { return isUnder(d.folderId, e.id); })) return false;
+    if (!S.picked.length) return true;
+    return S.picked.some(function (pk) { return isUnder(d.folderId, pk.id); });
+  }
+
+  function scopeSummary() {
+    if (!S.picked.length) return "Whole source";
+    var base = S.picked.length === 1 ? S.picked[0].name : S.picked.length + " folders";
+    return S.excluded.length ? base + " · " + S.excluded.length + " excluded" : base;
+  }
+
+  $("pick-open").addEventListener("click", function () {
+    var open = $("picker").hidden;
+    $("picker").hidden = !open;
+    this.setAttribute("aria-expanded", String(open));
+    if (open) renderPicker();
+  });
+  $("pick-clear").addEventListener("click", clearScope);
+  $("pick-filter").addEventListener("input", function () {
+    S.pickFilter = this.value; renderFolderRows();
+  });
+
+  function renderCrumbs() {
+    var box = $("crumbs"); box.innerHTML = "";
+    S.stack.forEach(function (node, i) {
+      if (i) {
+        var sep = document.createElement("span"); sep.className = "sep"; sep.textContent = "/";
+        box.appendChild(sep);
+      }
+      var b = document.createElement("button");
+      b.type = "button"; b.textContent = node.name;
+      if (i === S.stack.length - 1) b.disabled = true;
+      else b.addEventListener("click", function () {
+        S.stack = S.stack.slice(0, i + 1); S.pickFilter = ""; $("pick-filter").value = "";
+        renderPicker();
+      });
+      box.appendChild(b);
+    });
+  }
+
+  function folderIcon() {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "16"); svg.setAttribute("height", "16");
+    svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor"); svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round"); svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z");
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function renderFolderRows() {
+    var cur = S.stack[S.stack.length - 1];
+    var kids = (FOLDERS[cur.id] || {}).children || [];
+    var q = (S.pickFilter || "").trim().toLowerCase();
+    // A row is inherited-included iff one of the folders ABOVE it in the breadcrumb was picked.
+    var inherited = S.stack.some(function (a) { return isPicked(a.id); });
+
+    var list = $("folder-rows"); list.innerHTML = "";
+    var shown = kids.map(function (id) { return FOLDERS[id]; })
+                    .filter(function (f) { return !q || f.name.toLowerCase().indexOf(q) >= 0; });
+    $("picker-empty").hidden = shown.length > 0;
+    $("picker-empty").textContent = kids.length
+      ? "No folder here matches “" + S.pickFilter + "”."
+      : "No subfolders here. " + cur.name + " can still be selected above.";
+
+    shown.forEach(function (f) {
+      var li = document.createElement("li");
+
+      var cb = document.createElement("input");
+      cb.type = "checkbox";
+      var st = checkboxState(f, inherited);
+      cb.checked = st !== "off";
+      // `partial` maps to the DOM indeterminate property, which cannot be set from markup.
+      cb.indeterminate = st === "partial";
+      cb.setAttribute("aria-label", (inherited ? "Exclude " : "Select ") + f.name);
+      cb.addEventListener("change", function () {
+        if (inherited) toggleExclude(f); else togglePick(f);
+      });
+      li.appendChild(cb);
+
+      var nm = document.createElement("span"); nm.className = "fname";
+      nm.appendChild(folderIcon());
+      var txt = document.createElement("span"); txt.className = "txt"; txt.textContent = f.name;
+      nm.appendChild(txt);
+      li.appendChild(nm);
+
+      if (inherited) {
+        var hint = document.createElement("span"); hint.className = "hint";
+        hint.textContent = isExcluded(f.id) ? "excluded" : "included via parent";
+        li.appendChild(hint);
+      } else {
+        var sh = sizeHint(f);
+        if (sh) {
+          var h = document.createElement("span"); h.className = "hint";
+          h.textContent = sh; h.title = SIZE_HINT_BASIS;
+          li.appendChild(h);
+        }
+      }
+
+      var drill = document.createElement("button");
+      drill.className = "drill"; drill.type = "button"; drill.textContent = "Open";
+      drill.disabled = !(f.children || []).length;
+      drill.addEventListener("click", function () {
+        S.stack = S.stack.concat([{ id: f.id, name: f.name }]);
+        S.pickFilter = ""; $("pick-filter").value = "";
+        renderPicker();
+      });
+      li.appendChild(drill);
+
+      list.appendChild(li);
+    });
+  }
+
+  function renderChips() {
+    var box = $("scope-chips"); box.innerHTML = "";
+    if (!S.picked.length && !S.excluded.length) {
+      var none = document.createElement("p");
+      none.className = "safety"; none.style.margin = "0";
+      none.textContent = "Nothing selected — the whole source will be discovered.";
+      box.appendChild(none);
+    }
+    S.picked.forEach(function (f) {
+      var c = document.createElement("span"); c.className = "fchip";
+      c.appendChild(document.createTextNode(f.name));
+      var x = document.createElement("button");
+      x.className = "x"; x.type = "button"; x.textContent = "\u00d7";
+      x.setAttribute("aria-label", "Remove " + f.name);
+      x.addEventListener("click", function () { togglePick(f); });
+      c.appendChild(x);
+      box.appendChild(c);
+    });
+    S.excluded.forEach(function (f) {
+      var c = document.createElement("span"); c.className = "fchip ex";
+      c.appendChild(document.createTextNode("except " + f.name));
+      var x = document.createElement("button");
+      x.className = "x"; x.type = "button"; x.textContent = "\u00d7";
+      x.setAttribute("aria-label", "Remove exclusion " + f.name);
+      x.addEventListener("click", function () { toggleExclude(f); });
+      c.appendChild(x);
+      box.appendChild(c);
+    });
+
+    // There is no "include subfolders" toggle, because everything beneath a chosen folder is
+    // always in scope — a toggle would be a choice whose wrong answer silently under-reports.
+    $("scope-note").textContent = S.picked.length
+      ? "Everything inside a selected folder is included, at any depth. Uncheck a child while "
+        + "inside a selected folder to carve it out."
+      : "Select folders to narrow the scan. Open a folder to drill into it.";
+  }
+
+  function renderPicker() {
+    renderCrumbs(); renderFolderRows(); renderChips();
+    $("pick-summary").textContent = scopeSummary();
+    if (S.discovered) renderDiscover();
+  }
+
   // ── Discovery ───────────────────────────────────────────────────────────
   var discovering = false;
   $("run-discover").addEventListener("click", function () {
     if (discovering) return;
     discovering = true;
     var btn = this; btn.disabled = true; btn.textContent = "Listing…";
-    var folder = $("folder").value;
-    var pool = DOCS.filter(function (d) { return folder === "all" || d.folder === folder; });
+    var pool = DOCS.filter(inScope);
     $("disc-prog").hidden = false; $("disc-note").hidden = false;
     var bar = $("disc-prog").firstElementChild, i = 0;
     var t = setInterval(function () {
@@ -864,11 +1226,11 @@
       // a folder count. Two numbers, both labelled, is the fix.
       var estate = DOCS.filter(function (d) { return ruleEligible(d, S.scope) && matches(rule, d); }).length;
       var here = S.discovered ? S.docs.filter(function (d) { return ruleEligible(d, S.scope) && matches(rule, d); }).length : 0;
-      var folderName = $("folder").value === "all" ? "all folders" : $("folder").value;
+      var folderName = scopeSummary().toLowerCase();
       var pv = document.createElement("div"); pv.className = "callout"; pv.style.marginTop = "10px";
       pv.innerHTML = "<b>" + estate + "</b> supported document" + (estate === 1 ? "" : "s") +
         " across the whole estate match this rule" +
-        (S.discovered ? ", of which <b>" + here + "</b> " + (here === 1 ? "is" : "are") + " in the folder you have open (" + folderName + ")" : "") +
+        (S.discovered ? ", of which <b>" + here + "</b> " + (here === 1 ? "is" : "are") + " in the scope you discovered (" + folderName + ")" : "") +
         ". " + ACTIONS[rule.action].safety;
       el.appendChild(pv);
 
@@ -1111,7 +1473,7 @@
 
   // ── Boot ────────────────────────────────────────────────────────────────
   S.rules.push({ id: "r0", action: "archive", enabled: true, conds: [{ key: "age", value: 730 }] });
-  renderScope(); setTab("discover"); renderDiscover(); renderAssess(); renderFix(); renderCounts();
+  renderScope(); renderPicker(); setTab("discover"); renderDiscover(); renderAssess(); renderFix(); renderCounts();
 })();
 </script>
 

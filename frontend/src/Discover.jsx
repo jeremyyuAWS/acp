@@ -813,7 +813,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           from the last GET /scans/{id} the outer `scan` state holds, which during an active run
           can be the PREVIOUS scan's terminal value until this one settles. */}
       {/* The queue/assignment card below owns status until listing starts. */}
-      {!(busy && progress?.phase === 'queued') && <DiscoverRunProgress progress={progress} busy={busy} onStop={onStop} onContinue={onAdvance} sources={sources} inv={inv} preflightDegraded={preflightDegraded} freshness={progress?.freshness ?? run?.freshness ?? null} runStartedAt={run?.started_at ?? null} />}
+      {!(busy && ['queued', 'preparing', 'submitting'].includes(progress?.phase)) && <DiscoverRunProgress progress={progress} busy={busy} onStop={onStop} onContinue={onAdvance} sources={sources} inv={inv} preflightDegraded={preflightDegraded} freshness={progress?.freshness ?? run?.freshness ?? null} runStartedAt={run?.started_at ?? null} />}
 
       {(() => {
         const jobClaimed = !!(discoverJobInfo && discoverJobInfo.status && discoverJobInfo.status !== 'queued')
