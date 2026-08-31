@@ -28,10 +28,20 @@ DOCX_ONLY = {"1.1.1": frozenset({"docx"}), "1.3.1": frozenset({"docx"})}
 DOCX_AND_PDF = {"1.1.1": frozenset({"docx", "pdf"})}
 
 
+# TWO SCOPES, AND THEY ARE NOT THE SAME THING. The per-scan `scan_scope` these tests are about
+# gates which criteria run and therefore which files are read, for one engagement. Outside it
+# sits the DEPLOYMENT format scope (api/scan_formats, PDF/DOCX/XLSX/PPTX since 2026-08-31),
+# which decides what discovery may enumerate at all. The outer one runs first, so a format it
+# excludes never reaches the per-scan predicate — which is why `e.html` stays in the corpus
+# below and is asserted ABSENT from every listing: keeping the file is what makes the layering
+# visible instead of leaving it to be inferred from a corpus that quietly stopped having one.
+_IN_SCOPE = ["a.docx", "b.pdf", "c.pptx", "d.xlsx"]
+
+
 @pytest.fixture
 def corpus(tmp_path, monkeypatch):
-    """A local estate with one file of every format ACP can enumerate."""
-    for name in ("a.docx", "b.pdf", "c.pptx", "d.xlsx", "e.html"):
+    """A local estate with one file of every format ACP can enumerate, plus one it cannot."""
+    for name in _IN_SCOPE + ["e.html"]:
         (tmp_path / name).write_bytes(b"x")
     monkeypatch.setenv("ACP_LOCAL_CORPUS", str(tmp_path))
     return tmp_path
@@ -80,7 +90,11 @@ def test_a_docx_scope_drops_the_pdf_from_the_listing(corpus):
     names, _ = _listed(DOCX_ONLY)
     assert "b.pdf" not in names
     assert "a.docx" in names
-    assert "e.html" in names, "the html exemption must survive enumeration, not just the predicate"
+    # The predicate above still exempts html (test_html_is_exempt_and_that_is_deliberate), but
+    # the exemption is no longer REACHABLE through enumeration: the deployment format scope
+    # drops html before the per-scan predicate is ever consulted. Asserted rather than deleted,
+    # because "html is exempt" is still true of the layer it was written about.
+    assert "e.html" not in names
 
 
 def test_a_docx_scope_still_drops_pptx_and_xlsx(corpus):
@@ -91,8 +105,10 @@ def test_a_docx_scope_still_drops_pptx_and_xlsx(corpus):
 
 
 def test_no_scope_scans_every_format(corpus):
+    """"Every format" means every format the DEPLOYMENT enumerates — the four. An unrestricted
+    per-scan scope removes the inner filter, never the outer one."""
     names, _ = _listed(None)
-    assert names == ["a.docx", "b.pdf", "c.pptx", "d.xlsx", "e.html"]
+    assert names == _IN_SCOPE
 
 
 def test_a_wider_scope_keeps_the_pdf(corpus):
@@ -132,7 +148,10 @@ def test_a_docx_scoped_scan_never_downloads_the_pdf(corpus, monkeypatch):
     assert "b.pdf" not in fetched, f"an out-of-scope PDF was downloaded: {fetched}"
     assert "c.pptx" not in fetched and "d.xlsx" not in fetched
     assert "a.docx" in fetched
-    assert "e.html" in fetched, "html is exempt and must still be read"
+    # Not read either, and for a different reason than the pdf: the pdf is excluded by THIS
+    # scan's scope, html by the deployment's format scope. Same observable outcome, two
+    # different gates — the data-minimisation guarantee this module exists for holds under both.
+    assert "e.html" not in fetched
 
 
 def test_an_unscoped_scan_downloads_everything(corpus, monkeypatch):
@@ -146,7 +165,8 @@ def test_an_unscoped_scan_downloads_everything(corpus, monkeypatch):
 
     scanner.run_scan("local", folder=str(corpus), ai_enabled=False, scan_id="s-open")
 
-    assert {"a.docx", "b.pdf", "c.pptx", "d.xlsx", "e.html"} <= set(fetched)
+    assert set(_IN_SCOPE) <= set(fetched)
+    assert "e.html" not in fetched, "the deployment format scope still applies with no scan scope"
 
 
 def test_run_scan_threads_the_signed_in_user_into_the_scope_gate(corpus, monkeypatch):

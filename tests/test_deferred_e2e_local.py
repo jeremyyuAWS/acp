@@ -30,7 +30,14 @@ from engines import NO_OFFICE, OFFICE_OK  # noqa: E402
 pytestmark = pytest.mark.skipif(not OFFICE_OK, reason=NO_OFFICE)
 
 _SAMPLES = Path(__file__).resolve().parent.parent / "frontend" / "public" / "samples"
-_WANT = ["benefits-policy.docx", "careers-landing.html", "finance-metrics.xlsx"]
+# What lands in the corpus. The .html sample is copied in DELIBERATELY and is expected never to
+# be scanned: since the 2026-08-31 scope decision (PDF/DOCX/XLSX/PPTX — api/scan_formats) it is
+# out of scope, and a corpus containing one proves the boundary holds end to end rather than
+# assuming it. Removing it would make this test pass for the wrong reason.
+_CORPUS = ["benefits-policy.docx", "careers-landing.html", "finance-metrics.xlsx"]
+# What discovery may list, and therefore what Assess must score.
+_WANT = ["benefits-policy.docx", "finance-metrics.xlsx"]
+_OUT_OF_SCOPE = ["careers-landing.html"]
 
 
 def _run_queue(core):
@@ -52,13 +59,13 @@ def _run_queue(core):
 
 
 def test_deferred_discover_then_assess_scores_real_files(isolated_store, monkeypatch, tmp_path):
-    missing = [s for s in _WANT if not (_SAMPLES / s).exists()]
+    missing = [s for s in _CORPUS if not (_SAMPLES / s).exists()]
     if missing:
         pytest.skip(f"sample docs not present: {missing}")
 
     corpus = tmp_path / "corpus"
     corpus.mkdir()
-    for s in _WANT:
+    for s in _CORPUS:
         shutil.copy(_SAMPLES / s, corpus / s)
 
     monkeypatch.setenv("ACP_DEFER_ANALYSIS_TO_ASSESS", "1")
@@ -74,6 +81,12 @@ def test_deferred_discover_then_assess_scores_real_files(isolated_store, monkeyp
     files0 = isolated_store.get_scan(sid)["files"]
     assert run["status"] == "discovered"
     assert len(files0) == len(_WANT) and all(f["status"] == "discovered" and f["score"] is None for f in files0)
+    # The out-of-scope sample is in the corpus but must never reach the scan. Asserted at
+    # DISCOVER, not only at the end: a format that is listed here and dropped later is the
+    # failure mode CI caught on #1120 — the file is queued, never analysed, and its record sits
+    # scoreless forever, which reads as a broken analyser rather than as a scope decision.
+    assert not any(f["file"] in _OUT_OF_SCOPE for f in files0), (
+        f"an out-of-scope format was listed for scanning: {[f['file'] for f in files0]}")
     assert not any(j["type"] in ("scan_file", "scan_batch") for j in isolated_store.list_jobs(status="queued"))
 
     # 2. ASSESS — kick off the fan-out and drain the queue.

@@ -164,6 +164,37 @@ def test_sharepoint_walk_drops_an_out_of_scope_file():
     assert dropped["inventory_row"] is not None
 
 
+# ── the local source ────────────────────────────────────────────────────────────────────────
+# THE ONE THIS SUITE MISSED. Drive and SharePoint were covered above; the local corpus listing
+# was not, and it kept its own `OFFICE + (".pdf",) + HTML_EXTS` literal. So local discovery went
+# on listing .html as scannable after estate_inventory had stopped calling it assessable: the
+# file was listed, queued, and never analysed — a record left permanently scoreless, which reads
+# as a broken analyser rather than as a scope decision. CI caught it on #1120 through
+# test_deferred_e2e_local ("only 2/3 scored"); this covers the listing directly, with no .NET
+# engine needed, so the next regression fails in a second rather than in a CI shard.
+
+def _local_corpus(tmp_path, names):
+    for n in names:
+        (tmp_path / n).write_bytes(b"x")
+    return str(tmp_path)
+
+
+def test_local_listing_follows_the_scope(tmp_path, monkeypatch):
+    monkeypatch.setenv("ACP_LOCAL_CORPUS", _local_corpus(
+        tmp_path, ["a.docx", "b.pdf", "c.xlsx", "d.pptx", "e.html", "f.txt"]))
+    listed = sorted(f["name"] for f in scanner._list("local", scope_out={}))
+    assert listed == ["a.docx", "b.pdf", "c.xlsx", "d.pptx"]
+
+
+def test_local_listing_widens_with_the_scope(tmp_path, monkeypatch):
+    """The bite check for the test above — without it, a listing that had simply stopped
+    admitting html for some unrelated reason would pass just as well."""
+    monkeypatch.setenv("ACP_LOCAL_CORPUS", _local_corpus(tmp_path, ["a.docx", "e.html"]))
+    monkeypatch.setenv("ACP_SCAN_FORMATS", "docx,html")
+    listed = sorted(f["name"] for f in scanner._list("local", scope_out={}))
+    assert listed == ["a.docx", "e.html"]
+
+
 # ── the three consumers agree ───────────────────────────────────────────────────────────────
 def test_every_consumer_moves_together_when_the_scope_changes(monkeypatch):
     """The whole point of the module, asserted directly across all three consumers at once."""
