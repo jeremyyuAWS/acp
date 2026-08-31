@@ -1099,6 +1099,20 @@ def _discovery_reservation(pool_size):
     return max(0, min(requested, pool_size - 1))
 
 
+
+def _worker_job_types(index, pool_size):
+    """Route dedicated services before falling back to the mixed pool reservation."""
+    from worker import HANDLERS
+    role = os.environ.get("ACP_WORKER_ROLE", "mixed").strip().lower()
+    if role == "discovery":
+        return ("scan_discover",)
+    if role == "processing":
+        return tuple(sorted(name for name in HANDLERS if name != "scan_discover"))
+    if role != "mixed":
+        raise ValueError("ACP_WORKER_ROLE must be mixed, discovery, or processing")
+    return ("scan_discover",) if index < _discovery_reservation(pool_size) else None
+
+
 def _spawn_worker() -> None:
     import threading
     from worker import JobWorker
@@ -1108,7 +1122,7 @@ def _spawn_worker() -> None:
     # own docstring). See _job_is_stale's phase=='retrying' exemption below for why this signal
     # can outlive the normal 90s staleness window (backoff can run up to 600s).
     w = JobWorker(get_store(), worker_id=f"w{_worker_seq}", on_retry=update_job)
-    w.job_types = ("scan_discover",) if len(_worker_handles) < _discovery_reservation(WORKERS) else None
+    w.job_types = _worker_job_types(len(_worker_handles), WORKERS)
     t = threading.Thread(target=w.run_forever, daemon=True, name=f"jobworker-{_worker_seq}")
     _worker_seq += 1
     t.start()
@@ -1133,7 +1147,7 @@ def set_worker_count(n: int) -> int:
         del _worker_handles[n:]
     WORKERS = n
     for index, (worker, _thread) in enumerate(_worker_handles):
-        worker.job_types = ("scan_discover",) if index < _discovery_reservation(n) else None
+        worker.job_types = _worker_job_types(index, n)
     return len(_worker_handles)
 
 
