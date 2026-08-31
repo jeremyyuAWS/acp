@@ -340,7 +340,7 @@ jobs:
       - name: Install API + test dependencies
         run: python -m pip install --quiet -r api/requirements.txt -r tests/requirements.txt
 
-      - name: Schema and lock regressions against a real PostgreSQL
+      - name: Schema, lock and job-queue regressions against a real PostgreSQL
         env:
           DATABASE_URL: postgresql://postgres:acp-ci-throwaway@localhost:5432/acp_ci
           # Turns a missing DATABASE_URL into a FAILURE instead of a skip — see
@@ -348,23 +348,32 @@ jobs:
           # that quietly skips is the failure mode this whole job exists to avoid.
           ACP_REQUIRE_PG: '1'
         run: |
-          python -m pytest tests/test_schema_boot_locks.py -v --no-header -p no:warnings
+          python -m pytest tests/test_schema_boot_locks.py tests/test_pg_job_queue.py \
+            -v --no-header -p no:warnings
 
-      - name: Fail if the real-server tests did not actually run
+      - name: Fail if anything in this job skipped instead of running
         env:
           DATABASE_URL: postgresql://postgres:acp-ci-throwaway@localhost:5432/acp_ci
           ACP_REQUIRE_PG: '1'
-        # Belt and braces on top of the in-test guard: assert by NAME that both real-server tests
-        # were selected and passed. `pytest` exits 0 on a skip, so neither the exit status above
-        # nor a green tick here would otherwise distinguish "the lock behaviour is correct" from
-        # "the lock behaviour was never tested".
+        # `pytest` exits 0 on a skip, so neither the exit status above nor a green tick here
+        # distinguishes "the Postgres behaviour is correct" from "it was never tested".
+        #
+        # ASSERT ZERO SKIPS rather than a specific passed-count. The previous version grepped for
+        # `^2 passed` after selecting the two real-server tests by name — correct at the time and
+        # already wrong by the next commit that adds a test, which is the failure mode of pinning
+        # a number. Every test in these files is gated on DATABASE_URL alone, so in THIS job the
+        # honest invariant is that nothing skips at all, and it keeps holding as tests are added.
         run: |
           set -euo pipefail
-          python -m pytest tests/test_schema_boot_locks.py -q --no-header -p no:warnings \
-            -k "against_a_real_server" > /tmp/pg.txt 2>&1 || { cat /tmp/pg.txt; exit 1; }
+          python -m pytest tests/test_schema_boot_locks.py tests/test_pg_job_queue.py \
+            -q --no-header -p no:warnings > /tmp/pg.txt 2>&1 || { cat /tmp/pg.txt; exit 1; }
           cat /tmp/pg.txt
-          grep -qE "^2 passed" /tmp/pg.txt || {
-            echo "::error::the real-server lock tests did not both run and pass"; exit 1; }
+          if grep -qE '[0-9]+ skipped' /tmp/pg.txt; then
+            echo "::error::tests skipped in the Postgres job — they did not exercise the server"
+            exit 1
+          fi
+          grep -qE '[0-9]+ passed' /tmp/pg.txt || {
+            echo "::error::no tests ran in the Postgres job"; exit 1; }
 
   frontend:
     name: Frontend tests + build
