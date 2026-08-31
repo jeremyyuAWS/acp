@@ -194,7 +194,9 @@ describe('explainFinding — deterministic, keyless, honest', () => {
       { trust: { grounding: { state: 'grounded' }, validation: { state: 'not_yet_written' } },
         whyReview: 'The wording is a judgement call.' })
     expect(e).toMatch(/WCAG 1\.1\.1/)
-    expect(e).toMatch(/assistive technology|screen reader/i)
+    // `screen[- ]reader`: the per-criterion impact line (wcagWhy.js) hyphenates it, the
+    // principle fallback does not. Both name the same blocked user, which is what this asserts.
+    expect(e).toMatch(/assistive technology|screen[- ]reader/i)
     expect(e).toMatch(/ACP drafted/)
     expect(e).toMatch(/anchored in text read/i)
     expect(e).toMatch(/judgement call/)
@@ -209,7 +211,14 @@ describe('explainFinding — deterministic, keyless, honest', () => {
   it('never emits a percentage or a confidence-level word', () => {
     const e = explainFinding({ sc: '1.4.3', certifiesOnApprove: true },
       { trust: { validation: { state: 'deterministic_passed' } } })
-    expect(e).not.toMatch(/%|confidence|\b(high|medium|low)\b/i)
+    // The guard is against a FABRICATED confidence — "82%", "High confidence", a bare "Low"
+    // used as this product's confidence label. It was written as a case-insensitive
+    // /\b(high|medium|low)\b/, which also matches the clinical term "low vision": nine of the
+    // 87 per-criterion impact lines say "low-vision users" or "users with low vision", so
+    // wiring those lines in turned a correct explanation into a failure. Asserted as the
+    // capitalised LABEL instead, which is how confidence.js actually renders a level.
+    expect(e).not.toMatch(/%|confidence/i)
+    expect(e).not.toMatch(/(?<![-\w])(High|Medium|Low)(?![-\w])/)
   })
 })
 

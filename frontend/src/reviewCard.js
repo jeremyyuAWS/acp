@@ -11,15 +11,41 @@
 import { confidenceForFinding } from './confidence.js'
 import { remediationTrack } from './remediationTrack.js'
 import { WCAG } from './wcagCatalog.js'
+import { WHY } from './wcagWhy.js'
 
 const _WCAG_BY_SC = Object.fromEntries(WCAG.map((c) => [c.sc, c]))
-// Who is blocked when a criterion under each WCAG principle fails — a plain-English impact clause,
-// composed from the maintained catalog, never invented per finding.
+// Who is blocked when a criterion fails — a plain-English impact clause, composed from the
+// maintained catalog, never invented per finding.
+//
+// PER CRITERION FIRST. `wcagWhy.js` carries one specific line for each of the 87 criteria
+// ("Screen-reader users can't perceive images, charts or icons"); the principle table below is
+// four sentences covering all 87. Falling back to the principle made every Perceivable finding
+// read identically — a missing alt text, a contrast failure and a broken reading order all
+// explained with the same clause — which tells a reviewer nothing about the finding in front of
+// them. The specific line was written for exactly this and had never been imported by anything:
+// `git log -S wcagWhy` returned only the commit that added it.
+//
+// The principle table stays as the fallback: it is what a criterion outside the catalog gets,
+// and it is still true, just unspecific.
 const _PRINCIPLE_IMPACT = {
   Perceivable: 'people using a screen reader or other assistive technology cannot access this content',
   Operable: 'people navigating by keyboard or assistive technology cannot operate it',
   Understandable: 'the content is harder to understand, and assistive technology may mishandle it',
   Robust: 'assistive technology may fail to interpret it correctly',
+}
+
+// Both call sites embed the clause mid-sentence ("...it currently fails, so X."), while every
+// WHY entry is a standalone sentence — capitalised, full stop. Join them grammatically rather
+// than producing "so Screen-reader users can't perceive images.." with a doubled stop.
+// Verified against all 87 entries: none begins with an acronym or proper noun, so lowercasing
+// the first character is safe.
+function _impactFor(sc, principle) {
+  const specific = WHY[sc]
+  if (specific) {
+    const t = specific.trim().replace(/\.$/, '')
+    return t.charAt(0).toLowerCase() + t.slice(1)
+  }
+  return _PRINCIPLE_IMPACT[principle] || 'some users cannot access this content'
 }
 import { metaFor } from './hitlMeta.js'
 
@@ -466,7 +492,7 @@ export function explainFinding(card, { trust = null, whyReview = null } = {}) {
   const parts = []
   // 1. what the criterion requires + who is blocked while it fails
   const req = String(cat.req || c.problem || '').replace(/\s*\.\s*$/, '')
-  const impact = _PRINCIPLE_IMPACT[cat.principle] || 'some users cannot access this content'
+  const impact = _impactFor(c.sc, cat.principle)
   if (req) parts.push(`WCAG ${c.sc}${cat.name ? ` (${cat.name})` : ''} requires: ${req}. It currently fails, so ${impact}.`)
   // 2. what ACP did + how well anchored the draft is
   const rec = c.recommendation
@@ -508,7 +534,7 @@ export function whyRecommendation(card, { trust = null, kind = null, ocrText = n
   else if (g && g.state === 'visual_only') detected.push({ label: 'Grounding', value: 'a visual interpretation (no text to anchor it — confirm the wording)' })
   // What the model saw it as (image kind), when recognised.
   if (kind && kind.label) detected.push({ label: 'Detected', value: kind.label })
-  const impact = _PRINCIPLE_IMPACT[cat.principle] || 'some users cannot access this content'
+  const impact = _impactFor(c.sc, cat.principle)
   const req = String(cat.req || '').replace(/\s*\.\s*$/, '')
   return {
     problem: c.problem || null,
