@@ -16,9 +16,9 @@ const mount = async (props) => {
 afterEach(() => unmountAll())
 
 describe('DiscoveryQueuedPlaceholder', () => {
-  it('says results will appear when processing begins', async () => {
+  it('says results will appear when this scan finishes', async () => {
     const c = await mount({ previousCount: null, previousAt: null })
-    expect(c.textContent).toMatch(/Discovery results will appear here when processing begins/i)
+    expect(c.textContent).toMatch(/Discovery results will appear here when this scan finishes/i)
   })
 
   it('shows the previous inventory count and date when a real previous run exists', async () => {

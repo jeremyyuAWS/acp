@@ -85,9 +85,9 @@ describe('ScanReviewModal — honest estimate line', () => {
     }
   })
 
-  it('shows the count only for a real positive estimate', async () => {
+  it('does not reuse a positive previous-run count as the new scope estimate', async () => {
     const c = await mount({ source: 'drive', estCount: 42, ...BEHAVIOR })
-    expect(dialog(c).querySelector('.scanmodal-est').textContent).toMatch(/~42 documents in Google Drive/)
+    expect(dialog(c).querySelector('.scanmodal-est').textContent).not.toMatch(/42|documents in Google Drive/)
   })
 })
 
@@ -123,9 +123,9 @@ describe('ScanReviewModal — chrome and labels', () => {
     expect(dialog(c).textContent).toMatch(/selected folder/)
   })
 
-  it('shows an honest estimate line for the chosen source', async () => {
+  it('states that the chosen scope count is not yet known', async () => {
     const c = await mount({ source: 'drive', estCount: 50, ...BEHAVIOR })
-    expect(dialog(c).querySelector('.scanmodal-est').textContent).toMatch(/~50 documents in Google Drive/)
+    expect(dialog(c).querySelector('.scanmodal-est').textContent).toMatch(/Document count is determined when the scan starts/)
   })
 })
 
@@ -162,7 +162,7 @@ describe('ScanReviewModal — the engine switches are not on this surface', () =
     // This has now lost two proxies in a row — first the "Formats & WCAG criteria" heading (#509),
     // then the Continue control, both of which were only ever standing in for "the modal rendered
     // with these props". Assert the thing itself: the wizard's own primary action is on screen.
-    expect(dialog(c).textContent).toMatch(/documents in/)
+    expect(dialog(c).textContent).toMatch(/Document count is determined/)
     expect(await startBtn(c), 'the wizard did not mount, so the props were not accepted after all')
       .toBeTruthy()
   })

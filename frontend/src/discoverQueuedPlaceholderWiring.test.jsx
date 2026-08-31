@@ -50,7 +50,7 @@ describe('the queued placeholder replacing stale results', () => {
       progress: { phase: 'queued' },
     })
     await settle()
-    expect(c.textContent).toMatch(/Discovery results will appear here when processing begins/i)
+    expect(c.textContent).toMatch(/Discovery results will appear here when this scan finishes/i)
     expect(c.textContent).toMatch(/Previous inventory: 170 files/)
     expect(c.querySelector('#discover-inventory-table')).toBeFalsy()
   })
@@ -60,17 +60,20 @@ describe('the queued placeholder replacing stale results', () => {
       scope: PREV_RUN.scope, run: { ...PREV_RUN, status: 'queued' }, busy: false, files: [],
     })
     await settle()
-    expect(c.textContent).toMatch(/Discovery results will appear here when processing begins/i)
+    expect(c.textContent).toMatch(/Discovery results will appear here when this scan finishes/i)
   })
 
-  it('shows the real results table once real listing progress starts', async () => {
+  it.each(['discovering', 'lifecycle', 'connecting'])('keeps old results hidden during %s', async (phase) => {
     const c = await mount({
-      scope: PREV_RUN.scope, run: PREV_RUN, busy: true, files: [],
-      progress: { phase: 'discovering', elapsed: 5, files_found: 3 },
+      scope: PREV_RUN.scope, run: PREV_RUN, busy: true,
+      files: [{ file: 'previous-estate.docx', status: 'unassessed' }],
+      progress: { phase, elapsed: 5, files_found: 3 },
     })
     await settle()
-    expect(c.textContent).not.toMatch(/Discovery results will appear here when processing begins/i)
-    expect(c.querySelector('#discover-inventory-table')).toBeTruthy()
+    expect(c.textContent).toMatch(/Discovery results will appear here when this scan finishes/i)
+    expect(c.querySelector('#discover-inventory-table')).toBeFalsy()
+    expect(c.querySelector('#disc-documents')).toBeFalsy()
+    expect(c.textContent).not.toContain('previous-estate.docx')
   })
 
   it('shows the real results table for a settled, non-queued run', async () => {
@@ -78,7 +81,7 @@ describe('the queued placeholder replacing stale results', () => {
       scope: PREV_RUN.scope, run: PREV_RUN, busy: false, files: [],
     })
     await settle()
-    expect(c.textContent).not.toMatch(/Discovery results will appear here when processing begins/i)
+    expect(c.textContent).not.toMatch(/Discovery results will appear here when this scan finishes/i)
     expect(c.querySelector('#discover-inventory-table')).toBeTruthy()
   })
 
@@ -93,7 +96,8 @@ describe('the queued placeholder replacing stale results', () => {
     expect(btn, 'no View previous run button rendered').toBeTruthy()
     await act(async () => { btn.click() })
     expect(c.querySelector('#discover-inventory-table')).toBeTruthy()
-    expect(c.textContent).not.toMatch(/Discovery results will appear here when processing begins/i)
+    expect(c.textContent).toContain('Previous scan results — not results from the active discovery.')
+    expect(c.textContent).not.toMatch(/Discovery results will appear here when this scan finishes/i)
   })
 
   it('resets the "view previous" reveal when a new scan starts (busy flips true again)', async () => {
@@ -114,6 +118,16 @@ describe('the queued placeholder replacing stale results', () => {
       progress: { phase: 'queued' },
     })
     await settle()
-    expect(c.textContent).toMatch(/Discovery results will appear here when processing begins/i)
+    expect(c.textContent).toMatch(/Discovery results will appear here when this scan finishes/i)
+  })
+
+  it('resets the reveal when the active run changes without an idle render', async () => {
+    const props = { scope: PREV_RUN.scope, run: PREV_RUN, busy: true, progress: { phase: 'discovering' } }
+    const c = await mount({ ...props, activeScanId: 'active-a' })
+    await settle()
+    await act(async () => { [...c.querySelectorAll('button')].find(b => b.textContent.includes('View previous run')).click() })
+    expect(c.querySelector('#discover-inventory-table')).toBeTruthy()
+    await rerender({ ...props, activeScanId: 'active-b' })
+    expect(c.querySelector('#discover-inventory-table')).toBeFalsy()
   })
 })

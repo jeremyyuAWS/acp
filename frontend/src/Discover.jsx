@@ -153,7 +153,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // `scope`/`files`) does not change to the new scan's id until it settles, same staleness this
   // whole placeholder exists to name rather than hide.
   const [showPreviousResults, setShowPreviousResults] = useState(false)
-  useEffect(() => { if (busy) setShowPreviousResults(false) }, [busy])
+  useEffect(() => { if (busy) setShowPreviousResults(false) }, [busy, activeScanId])
   const [open, setOpen] = useState(() => new Set())
   const toggle = (d) => setOpen((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n })
   // Cross-department search + facet filters — a match auto-expands ITS department
@@ -510,14 +510,11 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // correctly said 170). Falls back to files.length so a scan predating scope.inventory — nothing
   // recorded the estate size any other way — still shows its historical count instead of 0.
   const discoveredCount = scope?.inventory?.discovered ?? files.length
-  // The queued-placeholder condition (stakeholder screenshot review): a NEW scan whose results
-  // have not started arriving yet, either because this tab is tracking it pre-listing, or
-  // because it knows the displayed run is queued without tracking it live (the same two cases
-  // the "Queued — not started yet" / "Waiting for a worker" ProcessingStatusPanel states cover).
-  // Deliberately does NOT extend into 'discovering' — once real listing progress exists, the
-  // live progress card already carries the truth for that period.
-  const showQueuedPlaceholder = (busy && (!progress?.phase || progress.phase === 'queued'))
+  // App keeps the previous run's inventory until the active run settles. Live progress does
+  // not make that inventory current: preserve the separation through every active phase.
+  const showQueuedPlaceholder = busy
     || (!busy && run?.status === 'queued')
+  const hidePreviousInventory = showQueuedPlaceholder && !showPreviousResults
   // Stated against the raw discovered count — the estate line describes discovery, which the
   // location view filter never restricts.
   const scopeLine = scopeSentence(scope, discoveredCount)
@@ -1257,21 +1254,25 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           Self-guarding: it renders nothing when it has nothing to say. A panel appearing on every
           run to announce "this might be incomplete" would be true of all software, useful to
           nobody, and would train the reader to skip the box that one day carries a real signal. */}
-      <DiscoveryCompleteness run={run} scanList={scanList}
-                             onRelist={() => onScan && onScan(run?.source === 'sharepoint' ? 'sharepoint' : 'drive')} />
+      {showQueuedPlaceholder && showPreviousResults && (
+        <div role="status" className="muted">
+          Previous scan results — not results from the active discovery.
+          {scanId && <> Scan ID: {scanId}.</>}
+          {runAt?.recorded && <> Recorded {runAt.absolute}.</>}
+          {' '}<button type="button" className="linklike" onClick={() => setShowPreviousResults(false)}>Hide previous results</button>
+        </div>
+      )}
+      {!hidePreviousInventory && <DiscoveryCompleteness run={run} scanList={scanList}
+                             onRelist={() => onScan && onScan(run?.source === 'sharepoint' ? 'sharepoint' : 'drive')} />}
 
-      {/* Queued placeholder (stakeholder screenshot review, 2026-08-29): while a NEW scan is
-          queued or tracked pre-listing, `scope`/`files`/`run` below are still the PREVIOUS scan's
-          — App.jsx only replaces them once the new run settles — so the results table would show
-          old numbers with nothing saying so. Scoped narrowly to the queued window: once real
-          listing progress starts (phase leaves 'queued'), the live progress card above already
-          carries the truth for that period, and this stops gating the table again. */}
+      {/* The prior inventory stays opt-in throughout discovery. Its explicit historical label
+          also covers exports and document rows; write actions retain the displayed run's ID. */}
       {/* pendingScanLoad suppresses this whole block the same way it suppresses the header line
           above: DiscoveryResults/DiscoverInventoryExport read `files`/`scope.inventory` from
           App.jsx, which are `[]`/`null` until `run` resolves — indistinguishable, to them, from a
           genuinely empty scan (estateSummary() only guards on `Array.isArray(files)`, never on
           "have we actually asked the backend yet"). */}
-      {pendingScanLoad ? null : showQueuedPlaceholder && !showPreviousResults ? (
+      {pendingScanLoad ? null : hidePreviousInventory ? (
         <DiscoveryQueuedPlaceholder previousCount={discoveredCount} previousAt={runAt}
                                     onShowPrevious={() => setShowPreviousResults(true)} />
       ) : (
@@ -1304,7 +1305,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       </div>
       )}
 
-      {pendingScanLoad ? null : files.length === 0 ? (
+      {pendingScanLoad || hidePreviousInventory ? null : files.length === 0 ? (
         <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Sources.</p>
       ) : (() => {
         const totalWidth = files.length || 1
