@@ -207,6 +207,32 @@ REMEDIATION_VERIFIED: dict[tuple[str, str], str] = {
         "writes ONLY the inline form — so the shared fixture exercises half the dialect. "
         "test_the_rewrite_also_reaches_a_real_shared_string_table converts the package by hand "
         "and proves the pooled form too, which is what Excel itself writes"),
+    ("2.4.6", "xlsx"): (
+        "tests/test_remediation_verified_xlsx_labels.py — approved sheet names go through "
+        "handlers._apply_approved_values with the re-scan UNPATCHED, the tabs a reader sees "
+        "carry them, the already-named sheet is untouched and openpyxl reopens the workbook "
+        "with its data intact. THE LANE WAS WITHHELD UNTIL #1076: it cleared the criterion by "
+        "renaming only the tab, leaving every formula that referenced the sheet naming one that "
+        "no longer existed, so registering it earlier would have certified the damage. "
+        "test_the_rename_does_not_strand_a_formula_that_referenced_the_sheet asserts that "
+        "through the LANE, and is the single test that fails when the pre-#1076 writer is "
+        "restored. The partial-write control uses THREE default tabs because the detector gates "
+        "at two: renaming one of two would drop below the gate and clear the criterion, so that "
+        "control would have proved nothing"),
+    ("1.1.1", "pdf"): (
+        "tests/test_remediation_verified_pdf_writeback.py — /Alt on a tagged figure's structure "
+        "element, through handlers._apply_approved_values with the re-scan UNPATCHED. The "
+        "fixture fails FOUR criteria (1.1.1, 1.4.11, 2.4.2, 3.1.1), which no Office fixture "
+        "does, so test_only_the_lanes_own_criterion_changes can assert that the scan lost "
+        "exactly 1.1.1 and nothing else — a write that silenced the whole scan, or bytes that "
+        "stopped parsing, would look like success on every other assertion. Control: describing "
+        "one of two figures is written and never credited"),
+    ("4.1.2", "pdf"): (
+        "tests/test_remediation_verified_pdf_writeback.py — /TU on an AcroForm field, same "
+        "harness and same writer entry point, with the same exactly-one-criterion assertion "
+        "against a fixture that also fails 1.3.1, 2.4.2, 2.4.3 and 3.1.1. Controls: naming one "
+        "of two fields is not credited, and a form whose fields are already named is left "
+        "alone"),
 }
 
 # WHAT NEITHER ENTRY ABOVE CLAIMS, written here rather than left to be inferred from their
