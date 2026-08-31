@@ -1107,8 +1107,8 @@ def _spawn_worker() -> None:
     # poll/SSE stream without worker.py importing core (it is deliberately infra-only — see its
     # own docstring). See _job_is_stale's phase=='retrying' exemption below for why this signal
     # can outlive the normal 90s staleness window (backoff can run up to 600s).
-    w = JobWorker(get_store(), worker_id=f"w{_worker_seq}", on_retry=update_job,
-                  job_types=("scan_discover",) if len(_worker_handles) < _discovery_reservation(WORKERS) else None)
+    w = JobWorker(get_store(), worker_id=f"w{_worker_seq}", on_retry=update_job)
+    w.job_types = ("scan_discover",) if len(_worker_handles) < _discovery_reservation(WORKERS) else None
     t = threading.Thread(target=w.run_forever, daemon=True, name=f"jobworker-{_worker_seq}")
     _worker_seq += 1
     t.start()
