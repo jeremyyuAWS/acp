@@ -667,6 +667,12 @@ _SCHEMA = [
     # scan_discover job when it fans out to per-folder work; completed_folders is
     # atomically incremented by each scan_folder job once it finishes its subtree.
     # Together they drive the finalization trigger and the "N/M folders scanned" UI.
+    # WHICH job, and which ATTEMPT of it, wrote this result. The fence for a stale writer — see
+    # save_file_result. Both NULL on every row written before these columns existed and on any
+    # caller that passes no job; a NULL on either side always ALLOWS the write rather than
+    # blocking it, because an old row must never become unwritable.
+    "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS written_job TEXT",
+    "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS written_attempt INT",
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS total_folders INT",
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS completed_folders INT",
     # Which folders that counter has already counted. The counter alone cannot answer that —
@@ -1345,8 +1351,15 @@ class _PgAdapter:
     # v2 adds scan_folder_completions (additive, per docs/adr/0045 — an older replica keeps
     # serving: it neither reads nor writes that table, and the counter it guards behaves for
     # that replica exactly as it did at v1).
-    _SCHEMA_VERSION = 2
-    _SCHEMA_CHECKSUM_AT_VERSION = "ead8f8295ec9671adcd63c924b1514e7"
+    # v3 adds file_records.written_job / .written_attempt, the result-write fence
+    # (save_file_result). Additive on the same terms, and additive in BEHAVIOUR too, which is the
+    # part worth checking rather than assuming: a v2 replica writes NULL into both columns, and
+    # the fence reads a NULL on either side as ALLOW — so an old replica keeps writing results
+    # exactly as it did, it simply is not fenced. The failure mode a non-additive change would
+    # have had here (old replica's writes rejected, results silently lost) is the reason the
+    # predicate is built out of allow-clauses with a single fall-through refusal.
+    _SCHEMA_VERSION = 3
+    _SCHEMA_CHECKSUM_AT_VERSION = "62b2477e4c67317f9c7d47679af54056"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -2405,9 +2418,56 @@ class Store:
             self._db.execute(cur, "DELETE FROM file_tags WHERE scan_id=%s AND file=%s AND tag=%s",
                              (scan_id, file, tag))
 
-    def save_file_result(self, scan_id: str, f: dict, completed_at: str) -> None:
+    def save_file_result(self, scan_id: str, f: dict, completed_at: str,
+                         *, job: dict | None = None) -> bool:
         """Persist one assessed file (same shape save_scan writes). Idempotent so a
-        retried scan_file job doesn't double-insert."""
+        retried scan_file job doesn't double-insert.
+
+        Returns True if the result was written, False if it was REFUSED as stale.
+
+        THE FENCE, and why the queue's existing one does not cover this. #1075/#1080 made every
+        queue OUTCOME write require the current claim, so a superseded worker cannot mark a job
+        done or dead. That was reported — by me — as "a superseded worker cannot publish". True
+        of the job row; false of the result. This method took no claim at all, and it does more
+        than set a score: it replaces the file's issue_records, rule traces, manifest, PII
+        findings and inventory row. A stale write substitutes the finding set a reviewer is
+        reading, and feeds count_files_done, which gates scan_finalize.
+
+        WHICH WRITER IS ACTUALLY DANGEROUS. Not the crashed one — a dead process writes nothing.
+        It is a worker that is alive but no longer owns the job:
+
+          - slow, not dead: its lease expires, reclaim_stuck_jobs requeues, another worker takes
+            attempt 2, and the original handler runs to completion and writes. Its complete_job
+            is correctly refused; the row it already wrote was not.
+          - the timeout orphan: _analyse_and_persist_one runs the work on a DAEMON thread and
+            joins it for ACP_SCAN_FILE_TIMEOUT_S, then records an error and moves on WITHOUT
+            cancelling it. That thread keeps running and writes later.
+
+        WHY MONOTONIC BY ATTEMPT rather than "is this claim still current". The orphan thread DID
+        hold the claim when it started, so a liveness check would let it through; and by the time
+        it lands the claim may legitimately have moved on. Comparing attempts answers the
+        question that actually matters — is this result older than what is already stored — and
+        it needs no round trip to the jobs table.
+
+        THE COMPARISON IS SCOPED TO ONE JOB, which is the part an attempt number alone gets
+        wrong. Attempt counters are per-job and mean nothing across jobs: rescore_file walks the
+        same (scan_id, file) row under its OWN counter, so a first-attempt re-score landing on a
+        row written by a scan_file job's second attempt would be refused — a deliberate user
+        action silently dropped, by a guard meant to stop an abandoned thread. Only a lower
+        attempt of the SAME job id is refused; every other writer passes as before.
+
+        EQUAL ATTEMPTS STILL WIN, deliberately. Within one attempt the late orphan replacing its
+        own timeout error row is the documented, useful behaviour, and a retried job re-saving
+        the same file must still update it. Only a STRICTLY LOWER attempt is refused.
+
+        A refused write touches NOTHING. The dependent rows are written only after the upsert is
+        known to have applied — otherwise a refusal would still delete the finding set it was not
+        allowed to replace, which is most of the harm with none of the benefit.
+        """
+        # The write's identity, or (None, None) for a caller that has no job in hand — a test
+        # double, a fixture, an import path. Those keep the pre-fence behaviour exactly.
+        _job_id = (job or {}).get("id")
+        _attempt = (job or {}).get("attempts")
         target = config_target()
         # Phase 3a — the scan's FROZEN scope (recorded by init_scan_run at discover), NOT the live
         # global. This is the FAN-OUT path: the scan_runs row already exists, so get_scan_scope(sid)
@@ -2421,16 +2481,45 @@ class Store:
         import json as _json
         catalog = _CATALOG_JSON
         with self._db.cursor() as cur:
+            # The WHERE on DO UPDATE is the fence. Supported by both SQLite and Postgres, and
+            # confirmed by experiment rather than by reading: a failed WHERE leaves rowcount 0,
+            # which is what the refusal below reads.
+            #
+            # Every clause but the last says ALLOW. The single refusal is the fall-through: same
+            # job, strictly lower attempt. A row with no stamp, a writer with no stamp, or a
+            # DIFFERENT job all pass, because this must narrow who can CLOBBER and never widen
+            # who is blocked.
+            #
+            # COALESCE, not a plain EXCLUDED assignment, so an unstamped write does not ERASE the
+            # stamp a fenced one left. Assignment would let any passer-by reset the columns to
+            # NULL and reopen the row to every stale writer — a guard anyone can switch off is
+            # not a guard.
             self._db.execute(cur,
-                "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped,checksum,size_kb,pages,sheets,source_modified) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
+                "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped,checksum,size_kb,pages,sheets,source_modified,written_job,written_attempt) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
                 "engine=EXCLUDED.engine,status=EXCLUDED.status,score=EXCLUDED.score,"
                 "compliant=EXCLUDED.compliant,skipped_rules=EXCLUDED.skipped_rules,"
                 "drive_file_id=EXCLUDED.drive_file_id,acp_stamped=EXCLUDED.acp_stamped,checksum=EXCLUDED.checksum,"
-                "size_kb=EXCLUDED.size_kb,pages=EXCLUDED.pages,sheets=EXCLUDED.sheets,source_modified=EXCLUDED.source_modified",
+                "size_kb=EXCLUDED.size_kb,pages=EXCLUDED.pages,sheets=EXCLUDED.sheets,source_modified=EXCLUDED.source_modified,"
+                "written_job=COALESCE(EXCLUDED.written_job,file_records.written_job),"
+                "written_attempt=COALESCE(EXCLUDED.written_attempt,file_records.written_attempt) "
+                "WHERE file_records.written_attempt IS NULL "
+                "   OR EXCLUDED.written_attempt IS NULL "
+                "   OR file_records.written_job IS NULL "
+                "   OR EXCLUDED.written_job IS NULL "
+                "   OR file_records.written_job <> EXCLUDED.written_job "
+                "   OR EXCLUDED.written_attempt >= file_records.written_attempt",
                 (scan_id, f["file"], f["engine"], f["status"], f["score"],
                  int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id"), f.get("acp_stamped"),
-                 f.get("checksum"), f.get("size_kb"), f.get("pages"), f.get("sheets"), f.get("source_modified")))
+                 f.get("checksum"), f.get("size_kb"), f.get("pages"), f.get("sheets"), f.get("source_modified"),
+                 _job_id, _attempt))
+            if (getattr(cur, "rowcount", 1) or 0) == 0:
+                # Refused. Return BEFORE the dependent writes below — a refusal that still deleted
+                # issue_records would do the damage it was refusing to do.
+                print(f"[acp] save_file_result: refused a stale result for {scan_id}/{f['file']} "
+                      f"from job {_job_id} attempt {_attempt} — a later attempt of that same job "
+                      f"has already written it", flush=True)
+                return False
             self._db.execute(cur, "DELETE FROM issue_records WHERE scan_id=%s AND file=%s", (scan_id, f["file"]))
             issues = f.get("issues", [])
             if issues:
@@ -2465,6 +2554,7 @@ class Store:
                      _json.dumps(pf["samples"])))
             self._db.execute(cur, _UPSERT_INV,
                 (f["file"], completed_at, completed_at, f["status"], f["score"]))
+        return True
 
     def find_by_checksum(self, scan_id: str, checksum: str) -> dict | None:
         """Look up an already-analysed file in THIS scan with the same Drive md5Checksum —
@@ -7587,10 +7677,14 @@ class Store:
             return
         for r in rows:
             try:
+                # Fenced by the dying job itself: an error row for attempt 1 must not land on a
+                # result attempt 2 has already produced. fail_job's _claim_is_current bail
+                # protects THIS caller, but that guard lives in the caller — passing the job
+                # makes the write safe on its own terms.
                 self.save_file_result(scan_id, {
                     "file": r["file"], "engine": "n/a", "status": "error", "score": None,
                     "compliant": 0, "skipped_rules": 0, "issues": [],
-                    "drive_file_id": r.get("drive_file_id")}, now_iso)
+                    "drive_file_id": r.get("drive_file_id")}, now_iso, job=job)
             except Exception:
                 swallowed("store._record_dead_scan_files: saving an error row for a dead scan file failed")
             # The REASON, in the one place the UI already looks for it: fileErrorReason.js reads

@@ -1350,7 +1350,7 @@ def _process_scan_folder_item(scan_id: str, item: dict, *, source: str,
     now = _dt.datetime.now(_dt.timezone.utc).isoformat()
     _analyse_and_persist_one(
         scan_id, item, source, pii, svc, toks, now, _lf,
-        user=user, rubric_hash=core.active_rubric().hash, incremental=True)
+        user=user, rubric_hash=core.active_rubric().hash, incremental=True, job=job)
 
 
 @handler("scan_folder")
@@ -2365,7 +2365,7 @@ def _scan_assess(payload: dict, job: dict) -> None:
 
 
 def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, user=None,
-                             rubric_hash=None, incremental=True) -> None:
+                             rubric_hash=None, incremental=True, job=None) -> None:
     """Per-file WALL-CLOCK safety net around the real work (_impl below).
 
     The sub-steps are already individually bounded — download (httpx timeout 120s), the .NET
@@ -2382,6 +2382,14 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
     toward that total — so a timed-out LAST file still finalizes the scan. save_file_result
     upserts, so if the orphaned worker thread finishes late with a real result it simply replaces
     the error row (no double count). ACP_SCAN_FILE_TIMEOUT_S=0 disables the watchdog.
+
+    `job` is the queue row, threaded down to save_file_result purely so the result write can be
+    fenced — see its docstring. The ORPHAN THIS FUNCTION CREATES is one of the two writers that
+    fence exists for: the thread below is a daemon and is never cancelled, so after the join
+    expires it keeps running with nothing left holding its claim, and its eventual write must not
+    land on a later attempt's result. Within the same attempt it still wins, which is the
+    replaces-the-error-row behaviour described above; only its attempt-1 self landing after
+    attempt 2 is refused.
     """
     import threading
     try:
@@ -2391,14 +2399,14 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
     if cap <= 0:
         return _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _lf,
                                              user=user, rubric_hash=rubric_hash,
-                                             incremental=incremental)
+                                             incremental=incremental, job=job)
     outcome: dict = {}
 
     def _work():
         try:
             _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _lf,
                                           user=user, rubric_hash=rubric_hash,
-                                          incremental=incremental)
+                                          incremental=incremental, job=job)
             outcome["done"] = True
         except BaseException as e:   # noqa: BLE001 — re-raised on the caller thread below
             outcome["error"] = e
@@ -2426,7 +2434,7 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
             core.store.save_file_result(scan_id, {
                 "file": name, "engine": "n/a", "status": "error", "score": None,
                 "compliant": 0, "skipped_rules": 0, "issues": [],
-                "drive_file_id": item.get("drive_file_id")}, now)
+                "drive_file_id": item.get("drive_file_id")}, now, job=job)
         except Exception:
             swallowed("_analyse_and_persist_one: store.save_file_result for a timed-out file failed — this "
                        "file will never reach the files_done counter", scan_id)
@@ -2444,7 +2452,7 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
 
 
 def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _lf, user=None,
-                                  rubric_hash=None, incremental=True) -> None:
+                                  rubric_hash=None, incremental=True, job=None) -> None:
     """Download + analyse + assess + persist ONE file and emit its Discover span on that
     file's own Langfuse trace. Shared by scan_file (per-file fan-out) and scan_batch
     (ADR 0008). A
@@ -2632,7 +2640,7 @@ def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _l
         fdict["source_modified"] = item.get("source_modified")
         if pinfo:
             fdict["pii"] = pinfo
-        core.store.save_file_result(scan_id, fdict, now)
+        core.store.save_file_result(scan_id, fdict, now, job=job)
         # ADR 0037 Step 0 — record this file's stage timing (side-channel, best-effort: a timing write
         # must never fail the scan). Skipped when nothing was measured — the reuse/dedup path downloads
         # and analyses nothing, so it has no timing to record.
@@ -2872,7 +2880,7 @@ def _scan_batch(payload: dict, job: dict) -> None:
         if scan_paused(scan_id):
             return
         _analyse_and_persist_one(scan_id, it, source, pii, svc, toks, now, _lf, user=user,
-                                 rubric_hash=rubric_hash, incremental=incremental)
+                                 rubric_hash=rubric_hash, incremental=incremental, job=job)
 
     if workers <= 1 or len(items) <= 1:
         for it in items:
@@ -2922,7 +2930,7 @@ def _scan_file(payload: dict, job: dict) -> None:
     if not scan_paused(scan_id):
         _analyse_and_persist_one(scan_id, payload, source, pii, svc, toks, now, _lf, user=user,
                                  rubric_hash=core.active_rubric().hash,
-                                 incremental=bool(payload.get("incremental", True)))
+                                 incremental=bool(payload.get("incremental", True)), job=job)
     _lf.flush()  # send file span before this per-file job exits
     done, total = core.store.count_files_done(scan_id)   # ADR 0013: count, not a running counter
     if done >= total > 0:
@@ -3162,7 +3170,10 @@ def _rescore_file(payload: dict, job: dict) -> None:
         import os as _os
         corpus = _os.environ.get("ACP_CORPUS_DIR", "/corpus")
         item["path"] = _os.path.join(corpus, file)
-    _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, user=user)
+    # job=job even though a re-score is not a retry of anything: the fence compares attempts
+    # only WITHIN one job id, so passing this job's own identity stamps the row without ever
+    # making a re-score refusable — and leaves the row fenced against the scan job's orphans.
+    _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, user=user, job=job)
     core.store.refresh_scan_aggregate(scan_id)
     _lf.flush()
 
