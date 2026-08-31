@@ -382,6 +382,9 @@ def _report(d: dict) -> str:
         f"  REMEDIATION-VERIFIED   {d['remediation_verified']['count']:>3}"
         f" of {d['remediation_verified']['of']}"
         f"  {d['remediation_verified']['denominator']}",
+    ]
+    lines += _engine_condition_lines(d["remediation_verified"]["lanes"])
+    lines += [
         "",
         "DISPROVEN — registered, and a real scan does not report it:",
     ]
@@ -392,6 +395,78 @@ def _report(d: dict) -> str:
               "nobody has tested, and counting it as capability is the over-claim the four",
               "disproven cells above are instances of.", ""]
     return "\n".join(lines)
+
+
+# ── engine conditions on the REMEDIATION-VERIFIED milestone ───────────────────────
+#
+# WHY THIS IS PRINTED WITH THE COUNT AND NOT LEFT IN A COMMENT SOMEWHERE. "17 of 17" is the same
+# string whether the Office lanes were verified by the real .NET analyser or by the stand-in that
+# `tests/conftest.py` installs when the CLI is absent. The stand-in exists for a good reason —
+# without it a developer box cannot exercise these lanes at all, because fail-closed verification
+# correctly refuses to credit a scan no engine graded — but it exercises the CALLER, and cannot
+# establish that a real scan verifies the document. Two runs that prove materially different
+# things must not print the same line.
+_IN_PROCESS_FORMAT = "pdf"
+
+
+def _office_analyser_present():
+    """True / False / None (could not determine).
+
+    READ FROM tests/engines.py, NOT RECOMPUTED. That is the same module whose OFFICE_OK decides
+    whether conftest installs the stand-in, so this line and the thing it describes cannot
+    disagree. scripts/check_engines.py's header spells out why recomputing is wrong: "A guard
+    that recomputed the condition could pass while the tests it is guarding still skipped —
+    which is the precise shape of a check that cannot fail."
+
+    The three-state return is not decoration. The first version of this function imported
+    `engines` from api/ (it lives in tests/) and swallowed the ImportError as `office_ok =
+    False`. That made the PRESENT branch DEAD CODE — the report would have said "analyser
+    ABSENT" on CI, where it is present, and nothing would have failed. A condition that cannot
+    be determined is its own answer and is reported as such.
+    """
+    try:
+        sys.path.insert(0, str(ROOT / "tests"))
+        import engines
+        return bool(engines.OFFICE_OK)
+    except Exception:
+        return None
+
+
+def _engine_condition_lines(lanes) -> list:
+    office = [l for l in lanes if not l.endswith(" " + _IN_PROCESS_FORMAT)]
+    inproc = [l for l in lanes if l.endswith(" " + _IN_PROCESS_FORMAT)]
+    present = _office_analyser_present()
+    out = [
+        f"      engine condition  {len(office):>3} of {len(lanes)} lanes need the .NET Office"
+        f" analyser to grade a re-scan",
+        f"                            trustworthy; {len(inproc)} (pdf) run in-process and do not.",
+    ]
+    if present is True:
+        out += [
+            f"                        THIS RUN: Office analyser PRESENT — the {len(office)}"
+            " Office lanes are",
+            "                            real-engine results.",
+        ]
+    elif present is False:
+        out += [
+            f"                        THIS RUN: Office analyser ABSENT — the {len(office)}"
+            " Office lanes ran against",
+            "                            a stand-in. That exercises the caller; it is NOT evidence",
+            "                            that a real scan verifies the document. CI builds the",
+            "                            analyser, and check_engines.py --require office fails the",
+            "                            shard without it, so the milestone's real-engine evidence",
+            "                            comes from there, not from a run like this one.",
+        ]
+    else:
+        out += [
+            "                        THIS RUN: engine condition COULD NOT BE DETERMINED —"
+            " tests/engines.py",
+            "                            did not import. Treat the Office lanes as unverified"
+            " until this",
+            "                            resolves; do not read the count above as real-engine"
+            " evidence.",
+        ]
+    return out
 
 
 def main(argv=None) -> int:
