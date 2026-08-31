@@ -14,23 +14,34 @@ programmatically determined". A field collecting a company's address, or a third
 number, is outside that — the autocomplete vocabulary has no term for it — so a finding on one is
 a false positive, not a strict reading.
 
-    user's own data          16/17 matched     (true positives)
-    organisation/3rd party   15/20 matched     (FALSE POSITIVES)
-    unrelated fields          0/12 matched     (correctly quiet)
+    user's own data          16/17 matched     16 true positives,  1 false negative
+    organisation/3rd party   15/20 matched     15 FALSE POSITIVES,  5 correct rejections
+    unrelated fields          0/12 matched      0 false positives, 12 correct rejections
+    ------------------------------------------------------------------------------
+    49 labels total          31 matched        TP 16 / FP 15  ->  precision 52%
 
-    precision 52%
+WHAT THAT 52% IS AND IS NOT. It is the precision ON THIS CONSTRUCTED SET OF 49 LABELS, whose
+composition is listed in full below and was chosen by hand to probe the predicted weakness. It
+is NOT an estimated production precision, and must not be reported as one: the three groups are
+present in whatever proportion made the boundary legible, not in the proportion a real corpus of
+business documents would carry. A form with twenty user-data fields and one company address
+would score far better; a vendor-onboarding form far worse.
 
-So the prediction was right, and now has a number on it: roughly half of what this detector would
-report on a business form would be wrong. That is the cost of wiring it, stated in the unit the
-decision needs.
+What the number does support is a floor on the existence and rough scale of the problem: the
+failure mode is real, reproducible, and not a handful of edge cases. Turning it into a
+production estimate needs a representative sample of real documents, which is a separate piece
+of work and is not claimed here.
 
 TWO THINGS THE MEASUREMENT FOUND THAT THE PREDICTION DID NOT.
 
 1. The vocabulary is not indiscriminate. Zero of twelve ordinary business fields (Invoice Number,
    Project Name, Delivery Date...) match, and bare "Name" does not match — only the qualified
    forms do. The problem is precisely and only that the regex has no notion of WHOSE data the
-   field collects. That is worth knowing because it says what a fix would have to be: negative
-   context ("company", "employer", "billing", "vendor", "site"), not a narrower vocabulary.
+   field collects. That suggests a CANDIDATE fix — negative context ("company", "employer",
+   "billing", "vendor", "site") rather than a narrower vocabulary — but a candidate is all it
+   is. Nothing here demonstrates that negative context works: it would have its own false
+   negatives ("my company address" on a sole-trader form is still the user's own), and it must
+   be measured the same way before it is believed.
 
 2. "Date of Birth" — the commonest English phrasing — does NOT match, while "Birth Date",
    "Birthdate", "Birth Day" and "DOB" all do. A false NEGATIVE hiding inside a detector whose
@@ -41,12 +52,24 @@ standing instruction is that these stay visibly unproven until their behaviour j
 them; this supplies the behaviour, so the decision can be made on evidence. Fixing the regex
 while it is uninvoked would change nothing a user sees and would spend the measurement.
 
-A NOTE ON THE THIRD DETECTOR, because "three uninvoked heuristics" is not quite right. pdf 2.5.3
-(`label_in_name`) is NOT a heuristic: it compares a push button's caption (/MK /CA) against its
-accessible name (/TU or /T) by exact case-insensitive containment, and its registration is
-PARTIAL coverage with HIGH confidence. Its limit is which fields it can see — only push buttons
-carry a caption in the AcroForm dictionary — not how often it is wrong. It has no false-positive
-rate to measure, and lumping it in with the other two overstates the risk of wiring it.
+A NOTE ON THE THIRD DETECTOR — CORRECTED. An earlier version of this paragraph said pdf 2.5.3
+(`label_in_name`) is "NOT a heuristic ... Its limit is which fields it can see, not how often it
+is wrong. It has no false-positive rate to measure." The first half is right and the rest was
+wrong, in a way worth keeping visible because the reasoning was seductive: the detector compares
+a push button's caption (/MK /CA) against its accessible name (/TU or /T) by exact
+case-insensitive containment, and its registration declares PARTIAL coverage with HIGH
+confidence. Both facts are true, and neither is evidence of correctness — a predicate can be
+perfectly deterministic and still answer a different question from the one WCAG 2.5.3 asks.
+
+Measured in tests/test_label_in_name_precision.py: the comparison folds case and nothing else,
+so it false-positives on six of nine realistic caption/name pairs — curly apostrophes,
+non-breaking spaces, doubled spaces, zero-width spaces, NFD accents, soft hyphens. Every one is
+a button that works fine for a speech-input user and would be reported SERIOUS.
+
+So it does have a false-positive rate, it is not small, and it needs its own evaluation through
+real scan dispatch with positive and negative controls before anything is decided about wiring
+it. What remains true is only that its failure mode is DIFFERENT from the other two — text
+normalization rather than missing context — so the three should be judged separately.
 """
 from __future__ import annotations
 
