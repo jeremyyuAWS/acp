@@ -1059,7 +1059,7 @@ export default function App() {
 
   const doScan = async (source, folder = null, runScope = null) => {
     if (busy) return                              // a scan/assessment is already running — don't launch another
-    setBusy(true); setErr(null); setPreflightCapacityState(null); setProgress({ phase: 'queued' })
+    setBusy(true); setErr(null); setPreflightCapacityState(null); setProgress({ phase: 'preparing' })
     // A stop belongs to the run that was stopped. Clearing both here is what stops the previous
     // run's notice hanging over this one, and stops a stale flag ending this scan the moment it
     // starts.
@@ -1128,6 +1128,7 @@ export default function App() {
         // if the first request committed before its response was lost the server hands back that
         // same job instead of enqueuing a second scan. The key is only released once the outcome
         // is known: accepted here, or provably rejected in the catch below.
+        setProgress({ phase: 'submitting' })
         const submitKey = beginOrResumeIntent('scan')
         let accepted
         try {
@@ -1146,6 +1147,7 @@ export default function App() {
         if (!SIM && !workers && !worker_tier_alive) throw new Error('no workers available — the worker service looks down; check Monitor')
         setLiveScanId(scan_id)
         setDiscoverJobId(job_id)
+        setProgress({ phase: accepted.inline ? 'connecting' : 'queued' })
         // Live job state arrives by push instead of the loop below fetching getJob() every
         // tick — a strict reduction in request volume, not just lower latency. onError flips
         // sseFailedRef so the loop degrades to the old per-tick poll for the rest of this scan

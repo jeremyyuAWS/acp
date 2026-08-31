@@ -74,15 +74,35 @@ export default function FolderPicker({
   const current = stack[stack.length - 1]
   const inline = layout === 'inline'
 
-  const load = useCallback((folderId) => {
-    setLoading(true); setErr('')
-    Promise.resolve(lister(folderId))
-      .then((r) => setFolders(r.folders || []))
-      .catch((e) => setErr(e.message || 'Failed to load folders'))
-      .finally(() => setLoading(false))
+  // Cache only within this picker and provider; never share folders across accounts.
+  const folderCache = useRef(new WeakMap())
+  const loadEpoch = useRef(0)
+  const load = useCallback((folderId, refresh = false) => {
+    const epoch = ++loadEpoch.current
+    let cache = folderCache.current.get(lister)
+    if (!cache) { cache = new Map(); folderCache.current.set(lister, cache) }
+    const hit = cache.get(folderId)
+    setErr('')
+    if (!refresh && hit && Date.now() - hit.at < 30_000) {
+      setFolders(hit.folders); setLoading(false); return
+    }
+    setLoading(true)
+    Promise.resolve().then(() => lister(folderId))
+      .then((r) => {
+        if (epoch !== loadEpoch.current) return
+        const rows = r.folders || []
+        if (cache.size >= 100) cache.delete(cache.keys().next().value)
+        cache.set(folderId, { at: Date.now(), folders: rows })
+        setFolders(rows)
+      })
+      .catch((e) => { if (epoch === loadEpoch.current) setErr(e.message || 'Failed to load folders') })
+      .finally(() => { if (epoch === loadEpoch.current) setLoading(false) })
   }, [lister])
 
-  useEffect(() => { setFilter(''); load(current.id) }, [current.id, load])
+  useEffect(() => {
+    setFilter(''); load(current.id)
+    return () => { ++loadEpoch.current }
+  }, [current.id, load])
 
   // The inline layout has no Save button — the wizard's own footer is the only footer — so the
   // selection has to reach the parent as it is made. Reported through a ref so a parent that
@@ -152,6 +172,8 @@ export default function FolderPicker({
     <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, marginBottom: 10,
                   flexWrap: 'wrap', color: 'var(--muted)', paddingBottom: 10,
                   borderBottom: '1px solid var(--line)' }}>
+      <button type="button" className="ghost small" disabled={loading}
+              onClick={() => load(current.id, true)}>Refresh folders</button>
       {stack.map((f, i) => (
         <span key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           {i > 0 && <span>›</span>}

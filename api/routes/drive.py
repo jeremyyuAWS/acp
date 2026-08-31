@@ -53,7 +53,7 @@ def me(request: Request):
 
 
 @router.get("/sources")
-def sources(request: Request):
+def sources(request: Request, include_counts: bool = False):
     from scanner import _drive_mime_q
     token = request.headers.get("x-drive-token")
     # No Google Drive token in GIS mode = the user is authenticated some other way (a Microsoft /
@@ -70,6 +70,13 @@ def sources(request: Request):
     try:
         svc = core.drive_service(request)
         about = svc.about().get(fields="user/displayName").execute()
+        if not include_counts:
+            # Connection discovery must not enumerate the document estate. Scan results
+            # supply authoritative counts; clients may explicitly request a provider count.
+            source_id = "root" if token else (os.environ.get("ACP_DRIVE_FOLDER") or "1W27ULZsstP7gYGzgKKBId0qEfNxeKn0_")
+            return [{"type": "google_drive", "name": name, "id": source_id,
+                     "files": None, "access": "read-only",
+                     "user": about.get("user", {}).get("displayName")}]
         if token:
             # Paginate to get an accurate count (mirrors _search_drive in scanner.py)
             n = 0
@@ -77,7 +84,7 @@ def sources(request: Request):
             while True:
                 resp = svc.files().list(
                     q=f"({_drive_mime_q()}) and trashed=false",
-                    fields="files(id)", pageSize=1000, pageToken=page_token,
+                    fields="nextPageToken,files(id)", pageSize=1000, pageToken=page_token,
                 ).execute()
                 n += len(resp.get("files", []))
                 page_token = resp.get("nextPageToken")

@@ -59,9 +59,20 @@ def test_sources_with_drive_token_still_lists_drive(gated, monkeypatch):
     svc.about.return_value.get.return_value.execute.return_value = {"user": {"displayName": "Jer"}}
     svc.files.return_value.list.return_value.execute.return_value = {"files": [{"id": "1"}, {"id": "2"}]}
     monkeypatch.setattr(core, "drive_service", lambda request=None: svc)
-    r = gated.get("/sources", headers={**_ms(), "X-Drive-Token": "gd"})
+    r = gated.get("/sources?include_counts=true", headers={**_ms(), "X-Drive-Token": "gd"})
     assert r.status_code == 200
     body = r.json()
     assert body and body[0]["type"] == "google_drive"
     assert body[0]["name"] == "My Drive"
     assert body[0]["files"] == 2
+
+
+def test_source_connection_does_not_enumerate_files(gated, monkeypatch):
+    import core
+    svc = MagicMock()
+    svc.about.return_value.get.return_value.execute.return_value = {"user": {"displayName": "Jer"}}
+    monkeypatch.setattr(core, "drive_service", lambda request=None: svc)
+    r = gated.get("/sources", headers={**_ms(), "X-Drive-Token": "gd"})
+    assert r.status_code == 200
+    assert r.json()[0]["files"] is None
+    svc.files.assert_not_called()

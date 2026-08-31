@@ -261,3 +261,11 @@ describe('deriveDiscoverProcessingState', () => {
     }
   })
 })
+
+it('does not call an unaccepted submission queued or assigned', () => {
+ for (const phase of ['preparing', 'submitting']) {
+  const state = deriveDiscoverProcessingState({busy:true,phase})
+  expect(state.state).toBe(phase)
+  expect(state.headline).not.toMatch(/worker|queued/i)
+ }
+})
