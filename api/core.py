@@ -1099,17 +1099,34 @@ def _discovery_reservation(pool_size):
     return max(0, min(requested, pool_size - 1))
 
 
-# What a reserved slot may claim. `scan_folder` is here as well as `scan_discover` because the
-# two are one stage split across two job types: `scan_discover` lists the source and fans out one
-# `scan_folder` per top-level folder, and those folder jobs are what actually enumerate the
-# estate. Reserving only the entry job meant the lane took the first job, fanned out, and then
-# went idle while its own follow-on work queued behind the content backlog in the general lane —
-# a reserved slot covering the starting gun and not the race.
+# THE DISCOVERY STAGE IS TWO JOB TYPES, NOT ONE. `scan_discover` lists the source and fans out
+# one `scan_folder` per top-level folder; those folder jobs are what actually enumerate the
+# estate. Naming only the entry job means the Discovery lane — whether that is a reserved slot in
+# a mixed pool or a whole dedicated service (ACP_WORKER_ROLE=discovery) — takes the first job,
+# fans out, and then goes idle while its own follow-on work queues in the processing lane behind
+# the content backlog. It covers the starting gun and not the race.
 #
-# `scan` is deliberately NOT reserved. Under ACP_DEFER_ANALYSIS_TO_ASSESS=0 it downloads and
-# analyses the whole estate, and a lane sized for short metadata work must not be occupied for
-# minutes by one content job. It gets queue precedence (store.job_priority) but no dedicated slot.
+# `scan` is deliberately NOT here. Under ACP_DEFER_ANALYSIS_TO_ASSESS=0 it downloads and analyses
+# the whole estate, and a lane sized for short metadata work must not be occupied for minutes by
+# one content job. It gets queue precedence (store.job_priority) but no dedicated slot.
 DISCOVERY_LANE_JOB_TYPES = ("scan_discover", "scan_folder")
+
+
+def _worker_job_types(index, pool_size):
+    """Route dedicated services before falling back to the mixed pool reservation."""
+    from worker import HANDLERS
+    role = os.environ.get("ACP_WORKER_ROLE", "mixed").strip().lower()
+    if role == "discovery":
+        return DISCOVERY_LANE_JOB_TYPES
+    if role == "processing":
+        # Excludes the WHOLE Discovery stage, not just its entry job. Otherwise "isolate
+        # Discovery and processing by role" leaks: processing workers claim the scan_folder
+        # jobs the discovery service just fanned out, which is both a breach of the isolation
+        # and the reason a dedicated discovery service would sit idle mid-scan.
+        return tuple(sorted(n for n in HANDLERS if n not in DISCOVERY_LANE_JOB_TYPES))
+    if role != "mixed":
+        raise ValueError("ACP_WORKER_ROLE must be mixed, discovery, or processing")
+    return DISCOVERY_LANE_JOB_TYPES if index < _discovery_reservation(pool_size) else None
 
 
 def _spawn_worker() -> None:
@@ -1121,8 +1138,7 @@ def _spawn_worker() -> None:
     # own docstring). See _job_is_stale's phase=='retrying' exemption below for why this signal
     # can outlive the normal 90s staleness window (backoff can run up to 600s).
     w = JobWorker(get_store(), worker_id=f"w{_worker_seq}", on_retry=update_job)
-    w.job_types = (DISCOVERY_LANE_JOB_TYPES
-                   if len(_worker_handles) < _discovery_reservation(WORKERS) else None)
+    w.job_types = _worker_job_types(len(_worker_handles), WORKERS)
     t = threading.Thread(target=w.run_forever, daemon=True, name=f"jobworker-{_worker_seq}")
     _worker_seq += 1
     t.start()
@@ -1147,8 +1163,7 @@ def set_worker_count(n: int) -> int:
         del _worker_handles[n:]
     WORKERS = n
     for index, (worker, _thread) in enumerate(_worker_handles):
-        worker.job_types = (DISCOVERY_LANE_JOB_TYPES
-                            if index < _discovery_reservation(n) else None)
+        worker.job_types = _worker_job_types(index, n)
     return len(_worker_handles)
 
 

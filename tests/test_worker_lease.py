@@ -83,10 +83,18 @@ def test_a_wedged_job_stops_having_its_lease_extended(store, monkeypatch, capsys
         w = worker.JobWorker(store, worker_id="w1")
         t = threading.Thread(target=w.run_once, daemon=True)
         t.start()
-        time.sleep(0.2)          # several heartbeat intervals
+        # Wait for the observed heartbeat decision, not a 200ms scheduling guess.
+        # Busy CI runners can start the heartbeat thread after that fixed window.
+        output = ""
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            output += capsys.readouterr().out
+            if "no longer extending it" in output:
+                break
+            time.sleep(0.01)
         # The lease was never extended: the job is now reclaimable by the sweeper.
         assert touches == []
-        assert "no longer extending it" in capsys.readouterr().out
+        assert "no longer extending it" in output
     finally:
         release.set()
         t.join(timeout=5)
