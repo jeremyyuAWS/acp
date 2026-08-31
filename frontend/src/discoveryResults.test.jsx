@@ -119,17 +119,21 @@ describe('the estate summary and its reconciliations add up on screen', () => {
     await render({ files: ESTATE })
     expect(text()).toContain('EVERY DISCOVERED FILE, IN ONE BUCKET')
     expect(text()).toContain('The buckets add up to the 6 files discovered')
-    const recon = [...container.querySelectorAll('table')]
-      .find((t) => (t.textContent || '').includes('No recommendation'))
-    const cells = [...recon.querySelectorAll('tbody tr')]
-      .map((tr) => tr.children[0].textContent.trim())
-    expect(cells).toContain('Tagged for archive review')
-    expect(cells).toContain('Tagged for deletion review')
-    expect(cells).toContain('Could not be read — no recommendation was produced')
-    // Last row is the total, and it equals the population.
-    const totals = [...recon.querySelectorAll('tbody tr')].at(-1)
-    expect(totals.children[1].textContent.trim()).toBe('6')
-    expect(totals.textContent).toContain('files discovered')
+    const expanders = [...container.querySelectorAll('details')]
+    expect(expanders.some((d) => d.textContent.includes('Tagged for archive review'))).toBe(true)
+    expect(expanders.some((d) => d.textContent.includes('Tagged for deletion review'))).toBe(true)
+    expect(expanders.some((d) => d.textContent.includes('Could not be read — no recommendation was produced'))).toBe(true)
+    expect(text()).toMatch(/Total · files discovered6/)
+  })
+
+  it('expands each lifecycle bucket to show the files counted in it', async () => {
+    await render({ files: ESTATE })
+    const archive = [...container.querySelectorAll('details')]
+      .find((d) => d.querySelector('summary')?.textContent.includes('archive review'))
+    expect(archive).toBeTruthy()
+    await click(archive.querySelector('summary'))
+    expect([...archive.querySelectorAll('li')].map((li) => li.textContent))
+      .toContain('Clinical Guidelines/2019/sepsis-pathway-v3.docx')
   })
 
   it('says when the whole-estate listing total differs from the rows on screen', async () => {

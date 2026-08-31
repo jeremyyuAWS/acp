@@ -847,9 +847,8 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                 ambiently, not only inferred from a capacity banner mid-run. Polled the whole time
                 this tab is mounted (see the effect above), so it also answers the question
                 BEFORE a scan is even started. */}
-            <WorkerAvailability snap={workerSnap} busy={workerBusy} msg={workerMsg} onAdjust={adjustWorkers}
-                                replicas={replicas} replicasBusy={replicasBusy} replicasMsg={replicasMsg}
-                                onAdjustReplicas={me?.is_admin ? adjustReplicas : undefined}
+            <WorkerAvailability snap={workerSnap}
+                                replicas={replicas}
                                 capacity={capacity} />
 
             {/* PRD "Processing status" — the Discover instance of the same panel Assess uses
@@ -1202,7 +1201,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               above was found saying at once with "waiting for a worker" (stakeholder UX review,
               2026-08-30). Same claimed signal ProcessingStatusPanel's own derivation already
               reads (jobs.locked_at via discoverJobInfo), so the two can't disagree. */}
-          <button disabled={busy} onClick={() => onScan('all')}>
+          <button disabled={busy} onClick={() => onScan('all', null, { allFolders: true })}>
             {busy
               ? (progress?.phase === 'queued'
                   && !(discoverJobInfo && discoverJobInfo.status && discoverJobInfo.status !== 'queued')

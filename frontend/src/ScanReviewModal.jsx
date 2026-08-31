@@ -49,7 +49,7 @@ export function scanSourceLabel(source, opts = {}) {
 }
 
 export default function ScanReviewModal({
-  source = 'all', folder = null, startInFolderMode = false,
+  source = 'all', folder = null, startInFolderMode = false, startInAllMode = false,
   deepScan, setDeepScan, queuedScan, setQueuedScan,
   excludeRemediated, setExcludeRemediated, incremental, setIncremental,
   estCount = null, estWhere = null,
@@ -125,6 +125,7 @@ export default function ScanReviewModal({
           <ScanScopeWizard showStartButton canEditScope={canEditScope} rememberDefault={rememberDefault}
             source={source} hasDrive={hasDrive} hasSP={hasSP} scans={scans}
             startInFolderMode={startInFolderMode}
+            startInAllMode={startInAllMode}
             onStartScan={(o) => { if (o?.cancel) onCancel?.(); else onConfirm?.(o) }} />
         </div>
       </div>

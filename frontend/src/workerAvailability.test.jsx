@@ -50,7 +50,7 @@ describe('WorkerAvailability', () => {
      + 'in-process pool left at its default of 0', async () => {
     const c = await mount({ snap: { workers: 0, alive: true } })
     expect(c.textContent).not.toMatch(/no worker will pick up new jobs/i)
-    expect(c.textContent).toMatch(/jobs run on the dedicated worker container/i)
+    expect(c.textContent).toMatch(/jobs run on the dedicated stage service/i)
   })
 
 
@@ -59,28 +59,11 @@ describe('WorkerAvailability', () => {
     expect(c.textContent).toMatch(/1 worker available to pick up jobs/i)
   })
 
-  it('offers +/- controls that call onAdjust, and disables "-" at zero', async () => {
-    const onAdjust = vi.fn()
-    const c = await mount({ snap: { workers: 0, alive: false }, onAdjust })
-    const minus = c.querySelector('button[aria-label="Remove a worker"]')
-    const plus = c.querySelector('button[aria-label="Add a worker"]')
-    expect(minus.disabled).toBe(true)
-    expect(plus.disabled).toBe(false)
-    await act(async () => { plus.click() })
-    expect(onAdjust).toHaveBeenCalledWith(1)
-  })
-
-  it('disables both controls while an adjustment is in flight', async () => {
-    const c = await mount({ snap: { workers: 2, alive: true }, busy: true, onAdjust: vi.fn() })
-    const minus = c.querySelector('button[aria-label="Remove a worker"]')
-    const plus = c.querySelector('button[aria-label="Add a worker"]')
-    expect(minus.disabled).toBe(true)
-    expect(plus.disabled).toBe(true)
-  })
-
-  it('shows the transient feedback message when set', async () => {
-    const c = await mount({ snap: { workers: 4, alive: true }, msg: 'Starting 4 workers…', onAdjust: vi.fn() })
-    expect(c.textContent).toMatch(/Starting 4 workers…/)
+  it('does not expose manual concurrency controls; stage capacity is managed automatically', async () => {
+    const c = await mount({ snap: { workers: 0, alive: true }, onAdjust: vi.fn() })
+    expect(c.querySelector('button[aria-label="Remove a worker"]')).toBeFalsy()
+    expect(c.querySelector('button[aria-label="Add a worker"]')).toBeFalsy()
+    expect(c.textContent).toMatch(/capacity is managed automatically/i)
   })
 
   it('hides the +/- controls and explains externally-managed capacity for a distributed alive tier', async () => {

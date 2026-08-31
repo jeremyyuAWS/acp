@@ -87,16 +87,12 @@ describe('Worker availability on Discover', () => {
     expect(c.textContent).toMatch(/processing capacity is off/i)
   })
 
-  it('starting workers from zero calls setWorkers with the suggested count and reflects the result', async () => {
+  it('does not expose manual worker controls when capacity is zero', async () => {
     getJobs.mockResolvedValue({ workers: 0, worker_tier_alive: false, suggested_workers: 4, runtime_mode: 'auto' })
-    setWorkers.mockResolvedValue({ workers: 4 })
     const c = await mount({})
     await settle()
-    const plus = c.querySelector('button[aria-label="Add a worker"]')
-    await act(async () => { plus.click() })
-    await settle()
-    expect(setWorkers).toHaveBeenCalledWith(4)
-    expect(c.textContent).toMatch(/4 workers available to pick up jobs/i)
+    expect(c.querySelector('button[aria-label="Add a worker"]')).toBeFalsy()
+    expect(setWorkers).not.toHaveBeenCalled()
   })
 
   it('renders nothing from this strip while getJobs has not resolved yet', async () => {
@@ -149,18 +145,15 @@ describe('Azure replica visibility/control wiring on Discover', () => {
     expect(c.querySelector('button[aria-label="Add a warm replica"]')).toBeFalsy()
   })
 
-  it('gives an admin +/- controls that call setWorkerReplicas and reflect the result', async () => {
+  it('keeps replica capacity read-only for admins because autoscaling owns it', async () => {
     getJobs.mockResolvedValue(distributed)
     getWorkerReplicas.mockResolvedValue({ configured: true, min_replicas: 2, max_replicas: 5 })
     setWorkerReplicas.mockResolvedValue({ configured: true, min_replicas: 3, max_replicas: 5 })
     const c = await mount({ me: { email: 'admin@b.com', is_admin: true } })
     await settle()
-    const plus = c.querySelector('button[aria-label="Add a warm replica"]')
-    expect(plus).toBeTruthy()
-    await act(async () => { plus.click() })
-    await settle()
-    expect(setWorkerReplicas).toHaveBeenCalledWith(3)
-    expect(c.textContent).toMatch(/Azure warm replicas: 3 \(max 5\)/)
+    expect(c.querySelector('button[aria-label="Add a warm replica"]')).toBeFalsy()
+    expect(setWorkerReplicas).not.toHaveBeenCalled()
+    expect(c.textContent).toMatch(/Azure warm replicas: 2 \(max 5\)/)
   })
 
   it('a non-admin sees the generic "managed by" line, never the count, while replicas has not resolved', async () => {
