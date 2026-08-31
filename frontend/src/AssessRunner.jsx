@@ -660,13 +660,14 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               // `noCapacity` true and the panel announced "no worker is currently online to
               // process them" — the same claim the banner had just been fixed to withhold,
               // rendered ABOVE it, with a "Start workers" button attached.
+              const processingCount = liveQueue ? liveQueue.workersBusy : 0
               const noCapacity = !!(workerSnap && workerSnap.workers === 0 && !workersDown
-                && workerSnap.runtime_mode !== 'distributed')
+                && workerSnap.runtime_mode !== 'distributed'
+                && !progressIsConfirmed({ completed: progress, inFlight: processingCount }))
               const stalled = !!(workerSnap && workerSnap.workers > 0 && assessStartedAt && (() => {
                 const lastActivityMs = Math.max(lastProgressRef.current ?? 0, lastInFlightRef.current ?? 0) || assessStartedAt
                 return lastActivityMs < nowTick - 5 * 60 * 1000
               })())
-              const processingCount = liveQueue ? liveQueue.workersBusy : 0
               const waitingCount = liveQueue ? liveQueue.queued : Math.max(0, assessN - progress - processingCount)
               const lastActivityMs = Math.max(lastProgressRef.current ?? 0, lastInFlightRef.current ?? 0) || null
               const lastActivityMins = lastActivityMs ? Math.round((nowTick - lastActivityMs) / 60000) : null
@@ -682,7 +683,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                 <ProcessingStatusPanel derived={derived} onViewMonitor={onViewMonitor} />
               )
             })()}
-            {workersDown && (
+            {workersDown && !progressIsConfirmed({ completed: progress, inFlight: liveQueue?.workersBusy }) && (
               <div role="alert" style={{ margin: '0 0 10px', padding: '10px 14px', borderRadius: 8,
                    fontSize: 13, background: '#FBE9E7', border: '1px solid #E7B4AC', color: '#8A2A20' }}>
                 ⛔ <b>Assessment cannot continue.</b> No worker capacity was available when this run
@@ -701,7 +702,8 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
             {/* Real queue status, not a guess — GET /jobs/{id}, polled only while nothing has
                 scored yet (see pollDeferred). Distinguishes "about to start" from "genuinely
                 stuck" instead of leaving both read as an identical, silent 0%. */}
-            {jobInfo && !workersDown && (
+            {jobInfo && !workersDown
+              && (isTerminalJob(jobInfo.status) || !progressIsConfirmed({ inFlight: liveQueue?.workersBusy })) && (
               <div style={{ fontSize: 13, margin: '4px 0 0', display: 'flex', alignItems: 'center', gap: 6 }}>
                 {jobInfo.status === 'queued'
                   ? <><span style={{ background: '#FAEEDA', color: '#854F0B', fontWeight: 600,
@@ -748,7 +750,8 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                 local pool being 0 says nothing about whether work is progressing, so the banner
                 simply does not apply. */}
             {workerSnap && workerSnap.workers === 0 && !workersDown
-              && workerSnap.runtime_mode !== 'distributed' && (
+              && workerSnap.runtime_mode !== 'distributed'
+              && !progressIsConfirmed({ completed: progress, inFlight: liveQueue?.workersBusy }) && (
               <div role="alert" style={{ margin: '8px 0', padding: '10px 14px', borderRadius: 8,
                    fontSize: 13, background: '#FBE9E7', border: '1px solid #E7B4AC', color: '#8A2A20',
                    display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -782,7 +785,10 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               // infrastructure controls in a deployment where those controls adjust a pool
               // (the API container's own) that is 0 by design and does no work.
               const externallyManaged = workerSnap.runtime_mode === 'distributed'
-              const health = deriveWorkerHealth(workerSnap)
+              const processingCount = liveQueue ? liveQueue.workersBusy : 0
+              const health = processingCount > 0
+                ? { state: 'active', label: 'active for this run', tone: 'ok' }
+                : deriveWorkerHealth(workerSnap)
               // TERMINAL STATE OUTRANKS SERVICE HEALTH. A dead or cancelled job does not become
               // less dead because the tier is answering, so a green "online" light must not sit
               // beside it as though it were reassurance about this run. When the job is terminal
@@ -797,7 +803,6 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               // and every user, so subtracting a per-scan number from it would produce a figure
               // belonging to neither. Rather than invent one, the strip reports the two counts that
               // ARE measured. Restoring this needs a per-scan claimed count from the backend first.
-              const processingCount = liveQueue ? liveQueue.workersBusy : 0
               const brokerQueued = liveQueue ? liveQueue.queued : Math.max(0, assessN - progress - processingCount)
               const workerCount = liveQueue?.workersMax || workerSnap.workers
               const lastActivityMs = Math.max(lastProgressRef.current ?? 0, lastInFlightRef.current ?? 0) || null
