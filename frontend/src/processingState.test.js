@@ -80,6 +80,17 @@ describe('deriveProcessingState', () => {
     expect(d.pickupUnavailable).toBe(true)
   })
 
+  it('lets observed processing outrank a stale no-capacity snapshot', () => {
+    const d = deriveProcessingState({
+      phase: 'running', noCapacity: true, completedCount: 0, totalCount: 63,
+      processingCount: 2, waitingCount: 61,
+    })
+    expect(d.state).toBe('assessing')
+    expect(d.headline).toBe('Assessing documents')
+    expect(d.detail).toMatch(/2 processing/)
+    expect(d.detail).not.toMatch(/no worker/i)
+  })
+
   it('omits the "last activity" clause when none is known yet', () => {
     const d = deriveProcessingState({
       phase: 'running', completedCount: 0, totalCount: 12, processingCount: 0, waitingCount: 12,

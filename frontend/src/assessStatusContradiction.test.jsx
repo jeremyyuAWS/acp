@@ -40,6 +40,8 @@ const assessScan = vi.fn()
 const getScan = vi.fn()
 const getQueueJob = vi.fn()
 const getJobs = vi.fn()
+const getScanLive = vi.fn()
+const getQueueEstimate = vi.fn()
 const setWorkers = vi.fn()
 vi.mock('./api.js', () => ({
   assessScan: (...a) => assessScan(...a),
@@ -50,10 +52,10 @@ vi.mock('./api.js', () => ({
   getCapability: vi.fn(() => Promise.resolve(null)),
   refreshScanDriveToken: vi.fn(() => Promise.resolve(null)),
   getScanTraces: vi.fn(() => Promise.resolve([])),
-  getScanLive: vi.fn(() => Promise.resolve({ queue: null })),
+  getScanLive: (...a) => getScanLive(...a),
   getWorkerReplicas: vi.fn(() => Promise.resolve({ configured: false })),
   setWorkerReplicas: vi.fn(() => Promise.resolve({ configured: false })),
-  getQueueEstimate: vi.fn(() => Promise.resolve({ available: false })),
+  getQueueEstimate: (...a) => getQueueEstimate(...a),
 }))
 
 import { resetJobsFeed } from './jobsFeed.js'
@@ -100,7 +102,9 @@ const SPLIT_TOPOLOGY_HEARTBEAT_STALE = {
 beforeEach(() => {
   resetJobsFeed()
   assessScan.mockReset(); getScan.mockReset(); getQueueJob.mockReset()
-  getJobs.mockReset(); setWorkers.mockReset()
+  getJobs.mockReset(); getScanLive.mockReset(); getQueueEstimate.mockReset(); setWorkers.mockReset()
+  getScanLive.mockResolvedValue({ queue: null })
+  getQueueEstimate.mockResolvedValue({ available: false })
   errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
   try { sessionStorage.clear() } catch { /* ignore */ }
 })
@@ -149,5 +153,34 @@ describe('the Assess status contradiction', () => {
     await settle()
 
     expect(text()).toMatch(/No local workers active/i)
+  })
+
+  it('shows one active state when scan evidence says files are processing', async () => {
+    // Exact production overlap: the global snapshot still says zero local workers and the
+    // stage estimate is one poll behind, while this scan's own live queue proves two files are
+    // already executing. Execution evidence must win and redundant queue warnings disappear.
+    assessScan.mockResolvedValue({ deferred: true, job_id: 'j1', workers: 0, worker_tier_alive: true })
+    getScan.mockResolvedValue({ ...NOTHING_SCORED, run: { files: 63 } })
+    getQueueJob.mockResolvedValue({ id: 'j1', status: 'running', phase: 'assessing' })
+    getJobs.mockResolvedValue({ ...SPLIT_TOPOLOGY_HEARTBEAT_STALE,
+                                runtime_mode: 'auto', worker_tier_alive: true,
+                                worker_heartbeat_age_s: 4 })
+    getScanLive.mockResolvedValue({
+      queue: { in_flight: 2, queued: 61, workers: { busy: 2, max: 2 } },
+    })
+    getQueueEstimate.mockResolvedValue({ available: true, state: 'no_worker_available' })
+
+    await mount([{ file: 'a.docx', status: 'discovered' }])
+    await clickText('Assess')
+    await settle()
+
+    expect(container.querySelector('[aria-label="Processing status"]')?.textContent)
+      .toMatch(/Assessing (documents|a\.docx)/i)
+    expect(text()).toMatch(/2 processing/i)
+    expect(text()).toMatch(/Worker service\s*active for this run/i)
+    expect(text()).not.toMatch(/Waiting for a worker/i)
+    expect(text()).not.toMatch(/No local workers active/i)
+    expect(text()).not.toMatch(/No compatible worker/i)
+    expect(text()).not.toMatch(/A worker is on this now/i)
   })
 })
