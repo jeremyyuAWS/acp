@@ -269,15 +269,20 @@ export default function DiscoverCompleteSummary({
                        display: 'flex', flexDirection: 'column', gap: 4 }}>
             {hasLifecycleRules ? (
               <li>
-                {n(lifecycleRulesCount)} matched lifecycle rule{lifecycleRulesCount === 1 ? '' : 's'}
+                {n(lifecycleRulesCount)} lifecycle rule{lifecycleRulesCount === 1 ? '' : 's'}
                 {lifecycleBreakdown.length > 0 && (
                   <div style={{ color: 'var(--muted)', fontSize: 12.5, marginTop: 3 }}>
                     {lifecycleBreakdown.join(' · ')}
+                    <div>Candidates are recommendations. No source files were moved or deleted.</div>
                   </div>
                 )}
               </li>
             ) : (
-              <li style={{ color: 'var(--muted)' }}>No lifecycle rules enabled</li>
+              <li style={{ color: 'var(--muted)' }}>{lifecycleRulesCount === 0
+                ? 'No lifecycle rules enabled' : 'Lifecycle rule status was not recorded'}</li>
+            )}
+            {hasLifecycleRules && archiveCandidates === 0 && deleteCandidates === 0 && tagged === 0 && (
+              <li style={{ color: 'var(--muted)' }}>No files matched these rules.</li>
             )}
             {/* NOT a comparison against a previous scan, however the field name reads.
                 `add_inventory` (api/store.py) upserts scoped to THIS scan_id alone — "new" vs
