@@ -160,11 +160,34 @@ def test_a_real_assessment_reports_2_4_6_on_default_sheet_names():
     assert "2.4.6" in _assess(_book())
 
 
-def test_one_default_tab_is_not_a_finding():
-    """The detector's gate, measured rather than assumed: it fires at TWO or more default tabs.
-    Without this, the fixture's second default sheet reads as decoration, and the control below
-    would look like it could have used two sheets."""
-    assert "2.4.6" not in _assess(_book(defaults=1))
+def test_the_first_party_gate_is_two_default_tabs():
+    """Why the partial-write control below needs THREE default sheets, asked of the FIRST-PARTY
+    detector rather than of a full scan — and that distinction is the whole point.
+
+    `office_structure` fires at TWO or more default tabs, so renaming one of two drops below its
+    gate and clears the criterion: a control built that way would prove nothing. Three leaves
+    two, and still fails.
+
+    THE .NET ANALYSER IS STRICTER, and asking a full scan would have conflated the two. Its
+    `SheetNameRule` flags EVERY sheet matching `^Sheet\d+$` individually, with no count gate at
+    all — so on a host where the Office CLI is built, even one default tab is a 2.4.6 finding.
+    The first draft of this test asserted `"2.4.6" not in _assess(_book(defaults=1))`, passed
+    locally where no analyser is installed, and failed CI with
+    `assert '2.4.6' not in {'2.4.2', '2.4.6', '3.1.1'}` — the same environment-dependence that
+    turned #1069's shard 3 red, in a new place.
+
+    Three sheets is therefore the right fixture under BOTH engines: it is above the first-party
+    gate, and .NET is only ever stricter. Asking the first-party detector directly makes this
+    assertion say what it means and hold everywhere.
+    """
+    from office_structure import xlsx_structure_checks
+    def first_party_scs(data: bytes) -> set[str]:
+        return {f["wcag"].split()[0] for f in xlsx_structure_checks(_spill(data))
+                if f.get("wcag")}
+
+    assert "2.4.6" not in first_party_scs(_book(defaults=1))
+    assert "2.4.6" in first_party_scs(_book(defaults=2))
+    assert "2.4.6" in first_party_scs(_book(defaults=3))
 
 
 def test_a_meaningfully_named_workbook_is_not_flagged():
