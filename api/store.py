@@ -8827,6 +8827,62 @@ class Store:
                  lifecycle_state, assessment_status, source_version_id,
                  remediated_from_version_id, release_status, retention_date))
 
+    def create_pending_content_workspace_document_version(
+            self, version_id: str, *, document_id: str, version_seq: int,
+            original_filename: str | None = None, uploaded_by: str | None = None) -> None:
+        """Reserves the version row at upload-SESSION time, not completion — keyed by the
+        version_id workspace_blob already minted for the SAS. Fixes two things at once:
+
+        (1) `original_filename` here is immutable per-session data. Before this, complete_upload
+        derived the extension to verify (and the eventual original_filename) from
+        content_workspace_documents.display_name, which create_new_version_upload_session
+        mutated at SESSION-creation time — a second session for the same document (retry,
+        double-click) could race and flip which extension gets checked against which upload
+        before either one completed. A pending row keyed by its own version_id has no such
+        shared mutable state to race on.
+
+        (2) it gives complete_upload a real row to test for retry-idempotency
+        (lifecycle_state='pending' vs already resolved) instead of trusting a client-supplied
+        version_id blindly — see complete_content_workspace_document_version.
+
+        content_hash is NOT NULL on this table, so a placeholder empty string stands in until
+        completion supplies the real, server-verified one; it can never collide with a real
+        client-supplied hash in find_content_workspace_document_version_by_hash, which is only
+        ever queried against a non-empty string. mime_type/size_bytes/blob_path/malware_status
+        all describe bytes that have not landed yet and stay NULL until then."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO content_workspace_document_versions"
+                "(id,document_id,version_seq,content_hash,original_filename,uploaded_at,"
+                "uploaded_by,lifecycle_state) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                (version_id, document_id, version_seq, "", original_filename, self._now(),
+                 uploaded_by, "pending"))
+
+    def complete_content_workspace_document_version(
+            self, version_id: str, *, document_id: str, content_hash: str,
+            mime_type: str | None, size_bytes: int, blob_path: str,
+            uploaded_by: str | None, lifecycle_state: str, malware_status: str) -> bool:
+        """Resolves a PENDING version row (create_pending_content_workspace_document_version)
+        to its final state. Fenced on lifecycle_state='pending' in the WHERE clause — the same
+        "was this actually the row I expected to update" guard as every other completion-path
+        write in this codebase (e.g. resolve_duplicate) — so a retried completion request
+        (network blip, duplicate submit) that arrives after the row already resolved is a safe
+        no-op here: returns False, and the CALLER decides what a False means (the route treats
+        it as "someone else's request already completed this — reconcile, don't error").
+
+        uploaded_by uses COALESCE rather than overwriting: the pending row's own uploader
+        (stamped at session-creation time) is who actually authenticated for the SAS, and
+        should win even if this call somehow carried a different value."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE content_workspace_document_versions SET content_hash=%s, mime_type=%s, "
+                "size_bytes=%s, blob_path=%s, uploaded_by=COALESCE(uploaded_by,%s), "
+                "lifecycle_state=%s, malware_status=%s "
+                "WHERE id=%s AND document_id=%s AND lifecycle_state='pending'",
+                (content_hash, mime_type, size_bytes, blob_path, uploaded_by, lifecycle_state,
+                 malware_status, version_id, document_id))
+            return (getattr(cur, "rowcount", 0) or 0) > 0
+
     def list_content_workspace_document_versions(self, document_id: str) -> list[dict]:
         with self._db.cursor() as cur:
             self._db.execute(cur,
