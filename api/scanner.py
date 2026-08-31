@@ -12,6 +12,12 @@ from pathlib import Path
 import lf as _lf_mod
 import provenance
 import estate_inventory
+# Module level is safe in this direction and only this direction: worker imports nothing from
+# this package but joblog, so scanner -> worker is not a cycle (handlers -> worker and
+# handlers -> scanner are the edges that exist). _cancel_checkpoint() still imports check_cancel
+# lazily, because that one is called from inside the listing loops and reads better next to its
+# own explanation; this import is here because an `except` clause needs the NAME at runtime.
+from worker import JobCancelledError
 
 # Per-file analysis is CPU/IO bound and independent; run it across a small thread
 # pool. pikepdf/lxml release the GIL and each analyser is built fresh per call.
@@ -766,6 +772,31 @@ def drive_reconstructed_listing(prior_files: list[dict], changed_files: list[dic
                                  extra_scope={"reconstructed": True})
 
 
+def _cancel_checkpoint() -> None:
+    """Raise JobCancelledError if cancellation has been REQUESTED for the job running this scan.
+
+    THREE STATES, deliberately distinguished — the queue and the UI mean different things by
+    "stopped" and conflating them is what makes a Stop button lie:
+
+      requested  `jobs.cancel_requested_at` is set. A user pressed Stop. Nothing has necessarily
+                 noticed yet, and work is still running.
+      observed   some thread's check_cancel() raised here. THIS work knows. Sibling folder
+                 fetches may still be in flight, and the pool may still hold queued ones.
+      stopped    no task belonging to this job can still run or write: the discovery pool has
+                 been shut down with cancel_futures (queued tasks dropped) and joined (running
+                 ones finished), and nothing was persisted after the observation.
+
+    Only the caller that drains the pool may report `stopped`; a checkpoint can only ever report
+    `observed`. See _search_folder's BFS, which is the one place that can make the promise.
+
+    Lazy import because scanner is imported BY handlers, which is imported by worker — a
+    module-level `import worker` is a cycle. Outside a worker turn (tests, scripts, the API
+    process) check_cancel() is a no-op, so calling this anywhere is safe.
+    """
+    from worker import check_cancel
+    check_cancel()
+
+
 def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediated: bool = False,
                    scope_out: dict | None = None, inventory_out: list | None = None,
                    exclude_ids: set | None = None, raw_out: list | None = None,
@@ -856,6 +887,12 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
         page_token = None
         capped = False
         while True:
+            # BETWEEN PAGES, and before the first request. A folder with thousands of files is
+            # many sequential round-trips, and without this the only cancellation opportunity in
+            # the whole walk was between whole FOLDERS — so a Stop during one large folder waited
+            # for every remaining page of it. Placed before the request rather than after, so a
+            # cancelled scan stops SPENDING Drive quota immediately.
+            _cancel_checkpoint()
             with _lock:
                 if len(raw) + len(local_raw) >= max_files:
                     capped = True
@@ -921,56 +958,94 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
         _active[folder_id] = {"name": _root_name, "path": _root_name,
                               "started_at": datetime.now(timezone.utc).isoformat()}
         pending: dict[_cf.Future, str] = {ex.submit(_jl_bind.bind(_fetch_folder), folder_id): folder_id}
-        while pending:
-            done, _ = _cf.wait(list(pending.keys()), return_when=_cf.FIRST_COMPLETED)
-            for fut in done:
-                fid = pending.pop(fut)
-                try:
-                    local_raw, child_folders, capped = fut.result()
-                except Exception as _fetch_exc:  # noqa: BLE001 — one inaccessible folder must not abort the BFS
-                    # Classified AFTER the fact, from an exception .execute()'s own internal
-                    # retries already exhausted — this does not change what was retried or when,
-                    # only whether the reason a subtree was skipped is visible to anyone.
-                    rate_limited = _is_drive_rate_limit_error(_fetch_exc)
-                    if rate_limited:
-                        print(f"[scan] folder {fid}: Google Drive rate-limited this request "
-                              f"(exhausted retries) — skipping subtree", flush=True)
-                    else:
-                        print(f"[scan] folder {fid}: listing failed, skipping subtree", flush=True)
-                    with _lock:
+        try:
+            while pending:
+                done, _ = _cf.wait(list(pending.keys()), return_when=_cf.FIRST_COMPLETED)
+                for fut in done:
+                    fid = pending.pop(fut)
+                    try:
+                        local_raw, child_folders, capped = fut.result()
+                    except JobCancelledError:
+                        # NOT a folder that failed. This clause used to be reached by cancellation
+                        # too, and the result was that a Stop was recorded as "listing failed,
+                        # skipping subtree" — one folder at a time, while the walk carried on to the
+                        # next. Cancellation is a decision about the whole scan, so it leaves the
+                        # per-folder error path entirely and is handled by the drain below.
+                        raise
+                    except Exception as _fetch_exc:  # noqa: BLE001 — one inaccessible folder must not abort the BFS
+                        # Classified AFTER the fact, from an exception .execute()'s own internal
+                        # retries already exhausted — this does not change what was retried or when,
+                        # only whether the reason a subtree was skipped is visible to anyone.
+                        rate_limited = _is_drive_rate_limit_error(_fetch_exc)
                         if rate_limited:
-                            _skipped_rate_limited[0] += 1
-                        _skipped_errors[0] += 1
-                        _record_folder_done(fid, "rate_limited" if rate_limited else "failed", 0)
-                    continue
-                with _lock:
-                    space = max_files - len(raw)
-                    if space > 0:
-                        raw.extend(local_raw[:space])
-                        if len(local_raw) > space:
-                            _truncated[0] = True
-                    elif local_raw:
-                        _truncated[0] = True
-                    if capped:
-                        _truncated[0] = True
-                    _record_folder_done(fid, "completed", len(local_raw))
-                    if progress_cb:
-                        _now = time.monotonic()
-                        if _now - _last_progress_at[0] >= 2.0:
-                            _last_progress_at[0] = _now
-                            progress_cb(len(raw), len(seen_folders),
-                                       active=list(_active.values()), recent=list(_recent))
-                    for child_id, child_name in child_folders:
-                        if child_id in seen_folders:
-                            continue
-                        seen_folders.add(child_id)
-                        _folder_paths[child_id] = f"{_folder_paths.get(fid, _root_name)}/{child_name}"
-                        if len(raw) < max_files:
-                            _active[child_id] = {"name": child_name, "path": _folder_paths[child_id],
-                                                 "started_at": datetime.now(timezone.utc).isoformat()}
-                            pending[ex.submit(_jl_bind.bind(_fetch_folder), child_id)] = child_id
+                            print(f"[scan] folder {fid}: Google Drive rate-limited this request "
+                                  f"(exhausted retries) — skipping subtree", flush=True)
                         else:
+                            print(f"[scan] folder {fid}: listing failed, skipping subtree", flush=True)
+                        with _lock:
+                            if rate_limited:
+                                _skipped_rate_limited[0] += 1
+                            _skipped_errors[0] += 1
+                            _record_folder_done(fid, "rate_limited" if rate_limited else "failed", 0)
+                        continue
+                    with _lock:
+                        space = max_files - len(raw)
+                        if space > 0:
+                            raw.extend(local_raw[:space])
+                            if len(local_raw) > space:
+                                _truncated[0] = True
+                        elif local_raw:
                             _truncated[0] = True
+                        if capped:
+                            _truncated[0] = True
+                        _record_folder_done(fid, "completed", len(local_raw))
+                        if progress_cb:
+                            _now = time.monotonic()
+                            if _now - _last_progress_at[0] >= 2.0:
+                                _last_progress_at[0] = _now
+                                progress_cb(len(raw), len(seen_folders),
+                                           active=list(_active.values()), recent=list(_recent))
+                        for child_id, child_name in child_folders:
+                            if child_id in seen_folders:
+                                continue
+                            seen_folders.add(child_id)
+                            _folder_paths[child_id] = f"{_folder_paths.get(fid, _root_name)}/{child_name}"
+                            if len(raw) < max_files:
+                                _active[child_id] = {"name": child_name, "path": _folder_paths[child_id],
+                                                     "started_at": datetime.now(timezone.utc).isoformat()}
+                                pending[ex.submit(_jl_bind.bind(_fetch_folder), child_id)] = child_id
+                            else:
+                                _truncated[0] = True
+        except JobCancelledError:
+            # OBSERVED -> STOPPED. This is the only place in the walk that can promise "stopped",
+            # so it is the only place that does the work to earn it.
+            #
+            # Be precise about what this adds, because the obvious justification is wrong and was
+            # written here first: leaving the `with` block already joins RUNNING tasks
+            # (ThreadPoolExecutor.__exit__ calls shutdown(wait=True)), and a QUEUED task that
+            # starts afterwards hits _cancel_checkpoint() at the top of its page loop and raises
+            # before issuing any Drive call. So neither "a cancelled scan keeps listing folders"
+            # nor "results land after the user was told it stopped" is what cancel_futures
+            # prevents. Deleting this block leaves every behavioural test in
+            # test_discovery_cancellation.py green, which is how the overclaim was caught.
+            #
+            # What it actually prevents is a burst of DATABASE reads. Every queued task that runs
+            # far enough to reach its checkpoint issues an is_job_cancelled() query, one per
+            # folder still in the queue. Measured on a 60-folder tree: 61 cancellation-check
+            # queries without this block, 9 with it. Those land precisely when a user has just
+            # pressed Stop — which is often when they are reloading the queue view — so a
+            # cancelled wide scan pushes ~50 extra queries into the moment the queue endpoints
+            # are being read. Pinned by test_the_drain_stops_a_burst_of_cancellation_checks.
+            #
+            # wait=True is what lets the caller say no task can still be RUNNING; cancel_futures
+            # is what stops the queued ones from running at all. The discover handler relies on
+            # the first before recording the scan cancelled rather than failed.
+            for _f in pending:
+                _f.cancel()
+            ex.shutdown(wait=True, cancel_futures=True)
+            print(f"[scan] discovery cancelled — stopped after {len(seen_folders)} folders, "
+                  f"{len(raw)} files listed; no partial listing was persisted", flush=True)
+            raise
 
     # Unconditional final tick, bypassing the throttle above. Without it, the LAST folder(s)
     # processed can go unreported: `_cf.wait()`'s `done` set has no guaranteed order, so a
