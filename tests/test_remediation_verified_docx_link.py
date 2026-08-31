@@ -379,3 +379,45 @@ def test_a_missing_office_analyser_does_not_credit_on_a_rescan_that_never_ran(
     assert store.count_unapplied_approved_values(SID, FILE) == 1, (
         "credit was granted with no working Office analyser — the fail-open is back")
     assert not blob.uploads
+
+
+# ── the same guarantee for an engine that RUNS and fails ─────────────────────
+
+@pytest.mark.parametrize("name,script,timeout", [
+    ("exits non-zero with no output", "#!/bin/sh\necho boom >&2\nexit 9\n", None),
+    ("writes unparseable output", '#!/bin/sh\nprintf "not json" > "$3"\nexit 3\n', None),
+    ("hangs past the timeout", "#!/bin/sh\nsleep 30\n", "2"),
+])
+def test_an_office_cli_that_fails_never_earns_credit_either(monkeypatch, original,
+                                                            name, script, timeout):
+    """MISSING and FAILED are different engine states, and only the first is what
+    `test_a_missing_office_analyser_does_not_credit_on_a_rescan_that_never_ran` covers.
+
+    A CLI that launches and then dies was already handled before this PR — `_analyse_office`
+    turns a crash, unparseable output or a timeout into a RESULT rather than an exception. That
+    makes the guarantee here pre-existing rather than new, which is exactly why it is worth
+    pinning: the fail-open this PR closes was one unhandled branch away from these three, and a
+    later refactor that unified the error paths could reopen it for all four at once.
+
+    Driven with a real executable standing in for dotnet, so the failure happens where the
+    production code expects it — in the subprocess — rather than at a patched Python boundary.
+    """
+    import stat as _stat
+
+    import scanner
+    fake = Path(tempfile.mkdtemp()) / "dotnet"
+    fake.write_text(script)
+    fake.chmod(fake.stat().st_mode | _stat.S_IEXEC)
+    monkeypatch.setattr(scanner, "DOTNET", str(fake), raising=False)
+    if timeout:
+        monkeypatch.setenv("ACP_OFFICE_CLI_TIMEOUT", timeout)
+
+    from proposals import verify_residual_scs
+    residual = verify_residual_scs(original, FILE)
+
+    assert residual is not None, (
+        f"the office CLI that {name} made the re-scan return None, which "
+        f"_apply_one_value_kind reads as 'cleared' — every approved value would be credited")
+    assert "2.4.4" in residual, (
+        f"the first-party detectors stopped reporting when the CLI {name}; they run after the "
+        f"engine call in their own try/except and must survive it")
