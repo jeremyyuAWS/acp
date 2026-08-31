@@ -18,6 +18,7 @@ design question and is the next step). It can be exercised today via the store
 queue methods and the tests in tests/test_jobs.py.
 """
 from __future__ import annotations
+import contextvars
 import os
 import random
 import threading
@@ -87,9 +88,21 @@ class JobCancelledError(Exception):
     worker catches this, skips retry logic, and marks the job status='cancelled'."""
 
 
-# Thread-local: the worker installs a callable here before running a handler, and the
-# handler (indirectly, via check_cancel()) reads it without needing a reference to the worker.
-_cancel_local = threading.local()
+# The worker installs a callable here before running a handler, and the handler reads it
+# (indirectly, via check_cancel()) without needing a reference to the worker.
+#
+# A ContextVar, NOT a threading.local, and the difference is the whole point. As a thread-local
+# the callable existed only on the thread that CLAIMED the job, so check_cancel() called from any
+# pool thread found nothing and returned silently — a checkpoint that could never fire. Every
+# parallel path in the scan pipeline is another thread (scanner.py:915 and :3837,
+# handlers.py:2767, and the Thread handlers.py:2303 spawns inside that), so all of them were
+# uncancellable no matter how many checkpoints were added.
+#
+# A ContextVar does not cross a thread start either — but joblog.bind() already carries the
+# calling context over exactly those hops (added in #1068 for the diagnostics), and
+# copy_context() carries EVERY var, not just logging's. So cancellation now propagates wherever
+# job identity does, and the two cannot drift apart.
+_cancel_cv: contextvars.ContextVar = contextvars.ContextVar("acp_worker_cancel", default=None)
 
 
 def check_cancel() -> None:
@@ -112,7 +125,7 @@ def check_cancel() -> None:
                     check_cancel()      # before writes
                     write_results(doc)
     """
-    fn = getattr(_cancel_local, "check", None)
+    fn = _cancel_cv.get()
     if fn:
         fn()
 
@@ -332,7 +345,7 @@ class JobWorker:
         def _do_cancel_check():
             if self.store.is_job_cancelled(job["id"]):
                 raise JobCancelledError(f"job {job['id']} was cancelled")
-        _cancel_local.check = _do_cancel_check
+        _cancel_token = _cancel_cv.set(_do_cancel_check)
         try:
             # The job's identity travels with the work. Handlers fan out across threads — and
             # handlers._analyse_and_persist_one spawns another inside that — so a stage record
@@ -416,7 +429,9 @@ class JobWorker:
                 except Exception:
                     pass  # best-effort — a progress-signal failure must never affect the retry
         finally:
-            _cancel_local.check = None
+            # reset() rather than set(None): a token restores the value this frame replaced, so
+            # a worker running nested turns cannot clear an outer job's hook.
+            _cancel_cv.reset(_cancel_token)
             stop_hb.set()
         return True
 
