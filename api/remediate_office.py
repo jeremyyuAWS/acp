@@ -42,6 +42,7 @@ from xml.etree import ElementTree as ET
 from formats.office.images import ALT_TARGETS as _ALT_TARGETS
 from formats.office.images import is_decorative as _images_is_decorative
 from activity import record as _act_record
+from swallowed import swallowed
 
 _CORE = "docProps/core.xml"
 _CUSTOM = "docProps/custom.xml"
@@ -587,7 +588,8 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
                 return res["alt"], ("an AI vision description confirmed by an independent "
                                     "second reading (auto-apply-validated policy)")
     except Exception:
-        pass
+        swallowed("remediate_office._vision_alt: validating and auto-applying vision alt text "
+                  "failed", scan_id)
     # Ungrounded guess → surface for one-click approval instead of auto-writing it. When a
     # DISTINCT validator model is configured (ACP_ALT_VALIDATOR_MODEL), run the consensus
     # cross-check now and attach the verdict, so the card arrives already showing whether a
@@ -1508,7 +1510,8 @@ def _draft_docx_assisted(entries: dict, path: Path, proposals: list | None, *,
                 source="OCR transcription (no model)", sc="1.4.5"))
             made += 1
     except Exception:
-        pass
+        swallowed("remediate_office._draft_docx_assisted: drafting AI-assisted docx proposals "
+                  "failed", scan_id)
 
     return made
 

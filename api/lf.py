@@ -26,6 +26,7 @@ _ENABLED = bool(_HOST and _PK and _SK)
 # keys + host is a real one — staging and demo override it. Lowercased + sanitised to the
 # characters Langfuse accepts so a stray value can't make the client reject every trace.
 import re as _re
+from swallowed import swallowed
 _ENV = (os.environ.get("LANGFUSE_TRACING_ENVIRONMENT") or os.environ.get("ACP_ENV") or "production").strip().lower()
 _ENV = _re.sub(r"[^a-z0-9_-]", "-", _ENV)[:40] or "production"
 
@@ -143,7 +144,7 @@ def set_outcome_tags(scan_id: str, file: str, user: str | None, *, result: str,
     try:
         lf.trace(id=_trace_id(scan_id, file)).update(tags=tags)
     except Exception:
-        pass
+        swallowed("lf.set_outcome_tags: tagging the trace with its outcome failed", scan_id)
 
 
 def _det_id(*parts) -> str:
@@ -260,7 +261,7 @@ def rule_spans(file_span_, sc_counts: dict[str, int], rule_catalog: list[dict],
                 lf.trace(id=_trace_id(scan_id, filename)).update(
                     tags=_file_tags(filename, user) + [f"rule-fail:{rid}" for rid in failing_ids])
             except Exception:
-                pass
+                swallowed("lf.rule_spans: updating the trace with its rule spans failed", scan_id)
 
 
 def pii_span(file_span_, pinfo: dict, filename: str | None = None):
@@ -304,7 +305,7 @@ def flush():
         if lf:
             lf.flush()
     except Exception:
-        pass
+        swallowed("lf.flush: flushing Langfuse failed")
 
 
 _PROJECT_ID_CACHE: str | None = None
@@ -338,7 +339,7 @@ def _project_id() -> str:
                 _PROJECT_ID_CACHE = pid
                 return pid
         except Exception:
-            pass
+            swallowed("lf._project_id: resolving the Langfuse project id failed")
     return "acp-compliance"
 
 
@@ -435,7 +436,7 @@ def trace_ai_call(surface: str, model: str, latency_ms: int, *, ok: bool,
                    cost=cost, provider=provider, zone=zone, latency_ms=latency_ms, ok=ok,
                    surface=surface)
     except Exception:
-        pass
+        swallowed("lf.trace_ai_call: tracing the AI call failed", scan_id)
 
 
 def trace_hitl_decision(scan_id, file, rule_id, status, *, note=None, approved_value=None) -> None:
@@ -477,7 +478,7 @@ def trace_hitl_decision(scan_id, file, rule_id, status, *, note=None, approved_v
                            "approved_value": (approved_value or "")[:500]})
         s.end()
     except Exception:
-        pass
+        swallowed("lf.trace_hitl_decision: tracing the HITL decision failed", scan_id)
 
 
 def trace_disposition_decision(scan_id, file, *, action, status, policy_id=None,
@@ -518,7 +519,7 @@ def trace_disposition_decision(scan_id, file, *, action, status, policy_id=None,
                    output={"status": status, "reason_chars": len(reason or "")})
         s.end()
     except Exception:
-        pass
+        swallowed("lf.trace_disposition_decision: tracing the disposition decision failed", scan_id)
 
 
 def trace_deep_link(trace_id: str) -> str | None:
@@ -629,7 +630,7 @@ def file_error_span(trace, reason: str | None):
                        status_message=(str(reason)[:200] if reason else "error"))
         s.end(output={"status": "error", "reason": (str(reason)[:200] if reason else "error")})
     except Exception:
-        pass
+        swallowed("lf.file_error_span: emitting the file-error span failed")
 
 
 def remediate_span(trace, drive_write_url: str | None, *, fixes_applied: int | None = None,
@@ -660,7 +661,7 @@ def remediate_span(trace, drive_write_url: str | None, *, fixes_applied: int | N
         s = trace.span(name="Remediate", output=out)
         s.end()
     except Exception:
-        pass
+        swallowed("lf.remediate_span: emitting the remediation span failed")
 
 
 
@@ -793,7 +794,7 @@ def file_score(scan_id: str, file: str, score: float | None) -> None:
         lf.score(id=_det_id(scan_id, file, "compliance_score"),
                  trace_id=_trace_id(scan_id, file), name="compliance_score", value=float(score))
     except Exception:
-        pass
+        swallowed("lf.file_score: scoring the file trace failed", scan_id)
 
 
 def file_assessment_result(scan_id: str, file: str, *, score: float | None,
@@ -841,7 +842,8 @@ def file_assessment_result(scan_id: str, file: str, *, score: float | None,
     try:
         lf.trace(id=_trace_id(scan_id, file)).update(output=out, name=name)
     except Exception:
-        pass
+        swallowed("lf.file_assessment_result: updating the trace with the file's assessment "
+                  "result failed", scan_id)
 
 
 def session_exists(scan_id: str) -> bool:

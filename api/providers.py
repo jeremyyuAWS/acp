@@ -23,6 +23,7 @@ import os
 import time
 from typing import Protocol, runtime_checkable
 from urllib.parse import urlparse
+from swallowed import swallowed
 
 # The cloud providers the gateway knows how to configure. Slice 2 stores config for all of them;
 # slice 3 wires the Azure OpenAI *adapter* first (the enterprise-safe default). Ollama is the
@@ -696,7 +697,7 @@ def active_vision_provider() -> VisionProvider:
                 )
             choice = setting
     except Exception:
-        pass
+        swallowed("providers.active_vision_provider: reading the active vision provider setting failed")
     choice = choice or "ollama"
     # RunPod Serverless GPU is the durable default when configured (ADR 0022); it falls back to the
     # local floor inside ai._vision_generate on a miss, and returns None here when unconfigured so
@@ -732,5 +733,6 @@ def active_vision_provider() -> VisionProvider:
                 if adapter is not None:
                     return adapter
         except Exception:
-            pass
+            swallowed("providers.active_vision_provider: resolving the vision provider's adapter "
+                      "config failed")
     return OllamaVisionProvider(base_url, model)

@@ -26,6 +26,7 @@ import time
 import uuid
 
 import joblog
+from swallowed import swallowed
 
 
 def _log(event, **fields):
@@ -41,7 +42,7 @@ def _log(event, **fields):
     try:
         joblog.emit(event, **fields)
     except Exception:                              # noqa: BLE001 — never fail a job to log it
-        pass
+        swallowed("worker._log: emitting a worker job-log record failed")
 
 # Registry: job type -> handler(payload: dict, job: dict) -> None
 HANDLERS: dict[str, callable] = {}
@@ -345,7 +346,7 @@ class JobWorker:
                     self.store.touch_job(job["id"], worker_id=self.worker_id,
                                          attempt=job.get("attempts"))
                 except Exception:
-                    pass
+                    swallowed("worker._heartbeat: renewing the job lease (heartbeat) failed")
         threading.Thread(target=_heartbeat, daemon=True, name="job-heartbeat").start()
         # Install a cancel-check callable so check_cancel() can read it from any frame
         # in this thread without needing a store reference.
@@ -435,7 +436,8 @@ class JobWorker:
                                 detail={"max_attempts": job.get("max_attempts"),
                                         "error_class": eclass, "last_error": msg[:200]})
                 except Exception:
-                    pass  # best-effort — a progress-signal failure must never affect the retry
+                    # best-effort — a progress-signal failure must never affect the retry
+                    swallowed("worker.run_once: re-reading the job for the retry callback failed")
         finally:
             # reset() rather than set(None): a token restores the value this frame replaced, so
             # a worker running nested turns cannot clear an outer job's hook.

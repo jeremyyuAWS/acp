@@ -22,6 +22,7 @@ throughput) or a separate trace pass (a per-finding count) are NOT invented here
 the run summary, it does not show.
 """
 from __future__ import annotations
+from swallowed import swallowed
 
 # States in which the assessment is still doing work (vs. a terminal outcome).
 _ACTIVE_STATES = {"preparing", "running", "degraded", "pausing", "paused", "finalizing"}
@@ -57,7 +58,8 @@ def _eligible_denominator(run: dict, total_files: int) -> tuple[int, int]:
                 return int(funnel.get("discovered", total_files) or total_files), \
                     int(funnel.get("assessable", total_files) or total_files)
         except Exception:
-            pass
+            swallowed("live_snapshot._eligible_denominator: deriving the eligible denominator from "
+                      "the inventory funnel failed")
     return total_files, total_files
 
 

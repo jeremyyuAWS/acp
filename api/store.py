@@ -17,6 +17,8 @@ import sqlite3
 import uuid
 from pathlib import Path
 
+from swallowed import swallowed
+
 logger = logging.getLogger(__name__)
 
 _DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -1695,7 +1697,7 @@ class Store:
                                      triage_score=tscore, triage_rationale=rationale,
                                      classify=f.get("classify"), size_kb=f.get("size_kb"))
         except Exception:
-            pass
+            swallowed("store.save_scan: upserting the document row while saving the scan failed")
         # PRD Phase 3: this MONOLITHIC path (core._do_scheduled_scan, and routes/scans.py's
         # sync/thread branches when ACP_DEFER_ANALYSIS_TO_ASSESS=0) never wrote scan_inventory
         # before this — only ADR 0020's deferred discovery path did (handlers._scan_discover's
@@ -2075,7 +2077,9 @@ class Store:
                 if age_s > ceiling_s:
                     stale = True
             except Exception:
-                pass  # an unparseable timestamp must never crash a scan start — treat as live
+                # an unparseable timestamp must never crash a scan start — treat as live
+                swallowed("store.acquire_discovery_guard: reading the discovery guard's acquired_at "
+                          "failed", scan_id)
 
         if not stale:
             return holder
@@ -5995,7 +5999,9 @@ class Store:
             self.log_decision("system", "file.certified", scan_id=scan_id, file=file,
                               detail="All review items approved; no unapplied approved content")
         except Exception:
-            pass   # certification itself must not fail on a logging error
+            # certification itself must not fail on a logging error
+            swallowed("store.mark_file_compliant_if_reviewed: logging the revalidation decision "
+                      "failed", scan_id)
         self.refresh_scan_aggregate(scan_id)
         return True
 
@@ -6251,7 +6257,7 @@ class Store:
                 "error": (error or None) and str(error)[:400],
             }))
         except Exception:
-            pass
+            swallowed("store.record_sweep_outcome: recording the sweep outcome failed", scan_id)
 
     def get_last_sweep(self) -> dict | None:
         """The last recorded sweep outcome, or None if none has run since this was added."""
@@ -7076,7 +7082,7 @@ class Store:
             try:
                 row["payload"] = _json.loads(row["payload"])
             except Exception:
-                pass
+                swallowed("store.get_job: decoding the job payload failed")
         return row
 
     @staticmethod
@@ -7546,7 +7552,7 @@ class Store:
                     "compliant": 0, "skipped_rules": 0, "issues": [],
                     "drive_file_id": r.get("drive_file_id")}, now_iso)
             except Exception:
-                pass
+                swallowed("store._record_dead_scan_files: saving an error row for a dead scan file failed")
             # The REASON, in the one place the UI already looks for it: fileErrorReason.js reads
             # `scan.file_error` rows to say why a document has no findings, and refuses to invent a
             # reason when none was recorded. Without this the drawer would say the reason was not
@@ -7555,7 +7561,7 @@ class Store:
                 self.log_decision("system", "scan.file_error", scan_id=scan_id, file=r["file"],
                                   detail=f"job dead-lettered: {error}"[:200])
             except Exception:
-                pass
+                swallowed("store._record_dead_scan_files: logging the dead-scan-files decision failed")
 
     def fail_job(self, job_id: str, error: str, backoff_seconds: float = 0.0,
                  force_dead: bool = False, error_class: str | None = None,
@@ -7646,7 +7652,8 @@ class Store:
                             "AND status IN ('queued','running')",
                             (job["scan_id"],))
                 except Exception:
-                    pass  # best-effort — the dead-letter itself must still be recorded
+                    # best-effort — the dead-letter itself must still be recorded
+                    swallowed("store.fail_job: rolling back the fail_job transaction failed")
             return "dead"
         run_after = (now + timedelta(seconds=backoff_seconds)).isoformat()
         # Same reclaimed-job guard as the dead-letter branch above: a zombie's late transient
@@ -7664,23 +7671,80 @@ class Store:
                   "no-op (requeue suppressed)", flush=True)
         return "queued"
 
+    # The phase a reclaimed job carries while it waits to be picked up again.
+    #
+    # DISTINCT FROM 'retrying' ON PURPOSE. Both are legitimate waiting states, but they answer
+    # different questions. 'retrying' means a handler raised and fail_job requeued it with
+    # backoff — the process is fine, the work failed. 'reclaimed' means the worker DIED holding
+    # the job: nothing failed, nothing was reported, the lease simply expired. An operator
+    # reading "a previous attempt failed" about a SIGSEGV is being told the wrong thing.
+    RECLAIMED_PHASE = "reclaimed"
+
     def reclaim_stuck_jobs(self, lease_seconds: int = 600) -> int:
         """Requeue jobs stuck in 'running' past their lease (worker died mid-job).
 
         Uses lease_expires_at < now() when the column is set (all jobs claimed after the
         migration), falling back to the locked_at+lease_seconds arithmetic for rows that
         pre-date the column (no lease_expires_at) — so the sweeper is correct across a
-        rolling deploy."""
+        rolling deploy.
+
+        WHY THIS ALSO NARRATES. A worker killed by the OS runs no code on the way out: no
+        `except` clause, no `on_retry` hook, no event. The graceful failure path emits
+        `scan.retrying` carrying the attempt number (worker.py), which is the ONLY way an
+        attempt count reaches the UI — routes/scans.py threads `attempt` out of scan_events and
+        nowhere else. So a crash produced complete silence, and the run went on rendering an
+        ordinary in-progress checklist as though nothing had happened.
+
+        Measured on 2026-08-31 against a production Discovery job: the worker logged
+        `double free or corruption (!prev)` and Azure recorded exit 139; the job was reclaimed
+        EIGHT MINUTES later and re-claimed as attempt 2, and no surface anywhere said so. Worse
+        than the silence, `claim_job` sets `phase=NULL` on every claim — so once attempt 2
+        started it was indistinguishable from a first attempt.
+
+        This closes both halves: the requeued row carries RECLAIMED_PHASE while it waits, and a
+        `scan.interrupted` event carries the attempt into the SSE stream the UI already reads.
+        `scan.interrupted` was already in SCAN_EVENT_KINDS and already rendered by
+        frontend/src/scanHistory.js as "Interrupted" — the vocabulary and the reader existed;
+        only the emitter was missing.
+
+        The event write is best-effort by construction (append_scan_event swallows everything but
+        a programming error), and it happens AFTER the UPDATE: narration must never be able to
+        stop a job being reclaimed. A reclaim that lands with no event is a gap in the story, not
+        a job left stuck.
+        """
         from datetime import datetime, timezone, timedelta
         now = self._now()
         cutoff = (datetime.now(timezone.utc) - timedelta(seconds=lease_seconds)).isoformat()
+        # Read the doomed rows BEFORE the UPDATE clears locked_by and bumps nothing else: the
+        # event wants the worker that died and the attempt it died on, and both are gone from
+        # the row a moment later.
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id, scan_id, locked_by, attempts, type FROM jobs "
+                "WHERE status='running' AND (lease_expires_at<%s OR locked_at<%s)",
+                (now, cutoff))
+            doomed = self._db.fetchall(cur) or []
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "UPDATE jobs SET status='queued', locked_at=NULL, locked_by=NULL, "
-                "lease_expires_at=NULL, updated_at=%s "
+                "lease_expires_at=NULL, updated_at=%s, phase=%s "
                 "WHERE status='running' AND (lease_expires_at<%s OR locked_at<%s)",
-                (now, now, cutoff))
-            return getattr(cur, "rowcount", 0) or 0
+                (now, self.RECLAIMED_PHASE, now, cutoff))
+            n = getattr(cur, "rowcount", 0) or 0
+        for row in doomed:
+            if not row.get("scan_id"):
+                continue
+            try:
+                self.append_scan_event(
+                    row["scan_id"], "scan.interrupted",
+                    phase=self.RECLAIMED_PHASE, job_id=row.get("id"),
+                    worker_id=row.get("locked_by"), attempt=row.get("attempts"),
+                    detail={"reason": "lease expired — the worker stopped without reporting",
+                            "job_type": row.get("type")})
+            except Exception as e:  # noqa: BLE001 — narration must not fail the reclaim
+                print(f"[sweeper] could not record scan.interrupted for job "
+                      f"{row.get('id')}: {e}", flush=True)
+        return n
 
     def sweep_exhausted_jobs(self) -> int:
         """Dead-letter queued jobs that have already used all their attempts.

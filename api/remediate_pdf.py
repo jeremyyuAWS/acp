@@ -415,19 +415,19 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
             _propose_reading_order(pdf, str(path), ai_enabled=ai_enabled,
                                    scan_id=scan_id, file=path.name, proposals=proposals)
         except Exception:
-            pass
+            swallowed("remediate_pdf.remediate_pdf: proposing the PDF reading order failed", scan_id)
         # 1.3.1 structure map — deterministic heading-hierarchy proposal for an untagged PDF
         # (kind='structure-map'; the handler routes it to the 1.3.1 review card).
         try:
             _propose_structure_map(pdf, str(path), proposals=proposals)
         except Exception:
-            pass
+            swallowed("remediate_pdf.remediate_pdf: proposing the PDF structure map failed", scan_id)
         # 2.4.6 heading map — for a TAGGED PDF that has no heading struct elements, propose the
         # headings deterministically from the font hierarchy (kind='headings-map').
         try:
             _propose_pdf_headings(pdf, str(path), proposals=proposals)
         except Exception:
-            pass
+            swallowed("remediate_pdf.remediate_pdf: proposing the PDF headings failed", scan_id)
         # 2.4.4 link purpose — no proposal: a raw-URL link label can only be changed by
         # rewriting the text-showing operators, so the finding is explain-only and routes to a
         # human unmodified. See the block above _propose_pdf_headings for why.
@@ -444,7 +444,7 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
                 skipped.append(f"{fld_deferred} form field(s) need an accessible name — each "
                                "surfaced as a review card · 4.1.2")
         except Exception:
-            pass
+            swallowed("remediate_pdf.remediate_pdf: fixing the PDF form fields failed", scan_id)
         # 1.4.3/1.4.6 — recolour failing text colours in the content streams (deterministic,
         # text-scoped only; shapes/backgrounds untouched), each against the background
         # resolved behind its own glyphs. Verified by the post-fix re-scan.
@@ -481,7 +481,7 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
                 _rec("2.4.1", "(no bookmark outline — no way to skip past repeated content)",
                      "bookmark outline", "screen-reader/keyboard users can jump between sections")
         except Exception:
-            pass
+            swallowed("remediate_pdf.remediate_pdf: generating the PDF outline failed", scan_id)
         # 2.4.3 focus order — set /Tabs = /S (structure order) on every page carrying form-field
         # widgets that doesn't already declare it, so the keyboard tab sequence follows the
         # tagged reading order rather than the PDF's default (raw annotation-array order, which
@@ -575,6 +575,7 @@ def _figure_locators(figures, pdf) -> dict:
 
 # ── 4.1.2 Name, Role, Value — AcroForm field accessible names (/TU) ─────────────
 import re as _re
+from swallowed import swallowed
 
 # Generic auto-generated field names carry no meaning — a screen reader announcing "Text1"
 # helps no one. When /T looks like this, we defer to a human rather than write a bad name.
@@ -647,7 +648,7 @@ def _collect_form_fields(pdf) -> list:
             for f in root["/AcroForm"]["/Fields"]:
                 walk(f)
     except Exception:
-        pass
+        swallowed("remediate_pdf._collect_form_fields: walking the form-field tree failed")
     return out
 
 
@@ -961,7 +962,9 @@ def _alt_write_anchor(res: dict, img: bytes, *, scan_id: str | None, file: str) 
                 return ("confirmed by an independent second reading (consistency cross-check, "
                         "auto-apply-validated policy)")
     except Exception:
-        pass                        # validator down / policy unreadable → the human decides
+        # validator down / policy unreadable → the human decides
+        swallowed("remediate_pdf._alt_write_anchor: validating and auto-applying the alt-text "
+                  "anchor failed", scan_id)
     return None
 
 
@@ -992,7 +995,7 @@ def _resolve_page_number(figure, pdf) -> int | None:
             if page.obj.objgen == pg_ref.objgen:
                 return i + 1
     except Exception:
-        pass
+        swallowed("remediate_pdf._resolve_page_number: resolving a figure's page number failed")
     return None
 
 
@@ -1022,7 +1025,7 @@ def _unlink(p: Path) -> None:
     try:
         p.unlink()
     except Exception:
-        pass
+        swallowed("remediate_pdf._unlink: unlinking a temporary file failed")
 
 
 # ── 2.4.1 Bypass Blocks — build a bookmark outline from the document's own headings ──

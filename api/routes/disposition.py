@@ -26,6 +26,7 @@ from pydantic import BaseModel
 import core
 import disposition
 from .system import _require_admin, _require_owner
+from swallowed import swallowed
 
 router = APIRouter()
 
@@ -74,7 +75,7 @@ def _trace_decision(doc_id: str, path: str | None, *, action: str, status: str,
         _lf.trace_disposition_decision(doc_id, path, action=action, status=status,
                                        policy_id=policy_id, reason=reason)
     except Exception:
-        pass
+        swallowed("routes.disposition._trace_decision: tracing the disposition decision failed")
 
 
 class PolicyCreate(BaseModel):

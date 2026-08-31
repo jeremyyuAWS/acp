@@ -17,6 +17,7 @@ import re
 from typing import Callable
 
 from lxml import html as _lh
+from swallowed import swallowed
 
 # wcag_sc -> (fix_mode, fixer). fixer(tree) mutates tree, returns change descriptions.
 Fixer = Callable[..., list]
@@ -621,7 +622,7 @@ def remediate_html(html_text: str, *, ai_enabled: bool = True, diffs=None,
                 applied.extend(fn(tree, diffs))
             except Exception:
                 # one fixer failing must never abort the whole remediation
-                pass
+                swallowed("remediate.remediate_html: applying an HTML fixer failed")
         else:
             # ai-assisted / human-only → defer (HITL). When AI is off this is the
             # only path; when AI is on a later step may draft a fix for approval.
@@ -632,7 +633,7 @@ def remediate_html(html_text: str, *, ai_enabled: bool = True, diffs=None,
         if proposals and any(p.get("applied") for p in proposals):
             applied.append("Expanded vague link text to describe its destination · 2.4.4")
     except Exception:
-        pass
+        swallowed("remediate.remediate_html: proposing HTML link text failed")
     # Provenance: self-identify the remediated HTML (generator meta + leading comment).
     if applied:
         from datetime import datetime, timezone

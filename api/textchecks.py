@@ -19,6 +19,7 @@ All run on pii.extract_text output, so they cover every format the scanner reads
 from __future__ import annotations
 
 import re
+from swallowed import swallowed
 
 # ── 1.3.3 Sensory Characteristics ───────────────────────────────────────────────
 # An instruction verb followed (within a short window, same sentence) by a
@@ -248,13 +249,13 @@ def content_findings(text: str, marked: dict[str, str] | None = None) -> list[di
     try:
         out += detect_sensory(text)
     except Exception:
-        pass
+        swallowed("textchecks.content_findings: running the sensory-characteristics detector failed")
     try:
         out += detect_language_parts(text, marked)
     except Exception:
-        pass
+        swallowed("textchecks.content_findings: running the language-of-parts detector failed")
     try:
         out += detect_reading_level(text)
     except Exception:
-        pass
+        swallowed("textchecks.content_findings: running the reading-level detector failed")
     return out

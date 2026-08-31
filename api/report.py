@@ -53,6 +53,7 @@ from reportlab.platypus import (HRFlowable, Image, KeepTogether, Paragraph,
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 
 import human_categories as _hc
+from swallowed import swallowed
 
 PLUM = colors.HexColor("#46303F")
 AMBER = colors.HexColor("#854F0B")
@@ -2025,7 +2026,7 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
         import core as _core
         _hitl = _core.store.hitl_analytics(run["id"])
     except Exception:
-        pass
+        swallowed("report.build_report: reading the HITL analytics for the assurance section failed")
     el.extend(_assurance_section(facts, h2, body, cell, _muted, hitl=_hitl))
 
     # ── How to verify this independently (R13) ───────────────────────────────
