@@ -20,7 +20,7 @@ import os as _os
 
 import core
 import provenance
-from worker import handler, FatalJobError
+from worker import handler, FatalJobError, JobCancelledError, check_cancel
 from scanner import run_scan
 
 logger = logging.getLogger(__name__)
@@ -1306,6 +1306,14 @@ def _list_folder_files(source: str, folder_id: str, toks: dict) -> list:
                 return []
             svc = _drive_service(drive_token)
             return _search_folder(svc, folder_id)
+        except JobCancelledError:
+            # Not an empty folder. `return []` is a defensible answer to "we could not list it"
+            # and the worst possible answer to "the user stopped it": a cancelled listing would
+            # report the folder as EMPTY, and the scan_folder job would go on to record that as
+            # the folder's contents — a wrong result rather than a visible failure. Found by
+            # test_no_blanket_handler_over_cancellable_work_omits_a_cancellation_clause, not by
+            # reading, which is the whole argument for that guard.
+            raise
         except Exception:
             return []
     return []
@@ -1632,6 +1640,15 @@ def _scan_discover(payload: dict, job: dict) -> None:
                     if recent is not None:
                         patch["recent_folders"] = recent
                     core.update_job(_jid, patch)
+            except JobCancelledError:
+                # "A diagnostic must never fail the scan" is right about diagnostics and wrong
+                # about this: cancellation is not a progress-reporting failure, it is the scan
+                # being stopped, and it happens to be travelling through a progress tick. Caught
+                # by the blanket clause below, a Stop observed here would be logged at DEBUG and
+                # discarded, and the listing would carry on as though nothing had been asked.
+                # This callback runs on the BFS thread, so the raise reaches the drain in
+                # scanner._search_folder that turns "observed" into "stopped".
+                raise
             except Exception:  # noqa: BLE001 — a diagnostic must never fail the scan
                 logger.debug("_listing_progress: progress update failed", exc_info=True)
 
@@ -1682,6 +1699,34 @@ def _scan_discover(payload: dict, job: dict) -> None:
                           exclude_remediated=bool(payload.get("exclude_remediated", False)),
                           scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory,
                           progress_cb=_listing_progress, drive_delta=drive_delta, sp_delta=sp_delta)
+        except JobCancelledError:
+            # A user pressed Stop. Before this clause existed the blanket handler below caught it
+            # and recorded scan_runs.status='failed' with a 'listing_failed' event — so the one
+            # outcome the user themselves asked for was the one the product reported as a fault,
+            # and the run showed up in dead-letter diagnostics as a Drive listing error.
+            #
+            # Reached only after scanner._search_folder's drain has returned, so by here the
+            # discovery pool is shut down and joined: no folder fetch can still be running or
+            # writing. That is what makes 'cancelled' honest rather than optimistic — it is the
+            # STOPPED state, not merely the observed one. Nothing partial is persisted: `items`
+            # was never assigned, and the merge_scan_scope/add_inventory writes below are all
+            # downstream of this raise.
+            try:
+                core.store.set_scan_status(scan_id, "cancelled")
+                core.store.log_decision("system", "scan.discover_cancelled", scan_id=scan_id,
+                                        detail="cancelled during listing")
+                if user:
+                    core.store.release_discovery_guard(scan_id)
+            except Exception:
+                pass
+            scan_event(scan_id, "scan.cancelled", phase="cancelled", job_id=job.get("id"),
+                       attempt=job.get("attempts", 1), owner_email=user,
+                       detail={"reason": "cancel_requested", "source": source,
+                               "stopped_during": "listing"})
+            # Re-raised as JobCancelledError, NOT converted: worker.run_once catches this exact
+            # type and records the job 'cancelled'. Letting it reach the generic Exception path
+            # instead would consume a retry and re-run the listing the user just stopped.
+            raise
         except Exception as e:
             try:
                 core.store.set_scan_status(scan_id, "failed")
@@ -1815,8 +1860,15 @@ def _scan_discover(payload: dict, job: dict) -> None:
             # zero-with-no-baseline is cheap and closes the stuck-at-zero loop.
             if not _baseline_id:
                 import time as _time
+                # Before the sleep AND before the re-listing. This retry is the one place the
+                # discover handler starts substantial NEW work on its own initiative, so it is
+                # the one place "stop scheduling new tasks after cancellation" has real content:
+                # without this a Stop arriving here bought the user a 5s sleep followed by a
+                # complete second walk of the estate they had just stopped.
+                check_cancel()
                 logger.info("_scan_discover: no non-empty baseline for %s, 0 files returned; retrying once in 5s", scan_id)
                 _time.sleep(5)
+                check_cancel()   # again after the sleep — 5s is long enough to be stopped inside
                 _retry_scope: dict = {}
                 _retry_inv: list = []
                 try:
@@ -1835,6 +1887,13 @@ def _scan_discover(payload: dict, job: dict) -> None:
                         items = _retry_items
                         scope.update(_retry_scope)
                         inventory[:] = _retry_inv
+                except JobCancelledError:
+                    # The only clause here that does not swallow. "first-scan retry failed" is
+                    # the right reading of a Drive error — the zero stands and the handler goes
+                    # on to check reachability — and exactly the wrong one for a Stop: it would
+                    # discard the cancellation and let the run proceed to record an empty estate
+                    # as fact, on a scan the user had already stopped.
+                    raise
                 except Exception:
                     logger.warning("_scan_discover: first-scan retry failed for %s",
                                    scan_id, exc_info=True)
