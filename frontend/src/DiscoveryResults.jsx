@@ -358,7 +358,7 @@ export default function DiscoveryResults({
             {contentTypes.buckets.map((b) => (
               <div className="critrow" key={b.key} style={{ gridTemplateColumns: '160px 1fr 56px' }}>
                 <span className="critlabel" style={{ fontSize: 13, color: b.known ? undefined : 'var(--muted)' }}>
-                  <DiscoveryFolderLabel folder={b.label} source={source} />
+                  {b.label}
                 </span>
                 <span className="track">
                   <i style={{ width: `${(b.count / Math.max(1, ...contentTypes.buckets.map((x) => x.count))) * 100}%`,
