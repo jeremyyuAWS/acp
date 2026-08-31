@@ -16,25 +16,44 @@ therefore flushed on the spot. That single property is the reason this module ex
 a `logging` call: a handler that buffers is worse than no handler, because it looks like
 instrumentation and produces nothing at the only moment it was needed.
 
-WHAT IS AND IS NOT LOGGED. Document identity is recorded as an opaque `doc` — the first 12 hex
-of a SHA-256 over the document's stable identifier — never a filename, path, byte of content,
-token or signed URL. These lines go to a container log stream with a different audience and
-retention from the application database, and a filename is itself disclosure: "Q3-layoffs.docx"
-names the thing whether or not anyone opens it.
+WHAT IS AND IS NOT LOGGED. No filename, path, byte of content, token or signed URL appears in
+these records. Documents are named by `doc`, which PREFERS an identifier the system already
+treats as opaque — the Drive file id — and falls back to a digest of the filename only when no
+such id reaches the call site.
 
-An operator maps `doc` back by recomputing it over the scan's own inventory rows
-(`joblog.doc_id(<the same identifier>)`) — the mapping stays inside the system that already
-holds the filenames, rather than being published into the log by every worker.
+BE PRECISE ABOUT WHAT THAT FALLBACK IS. A truncated unkeyed SHA-256 of a filename is a
+PSEUDONYM, not anonymisation. Filenames are low-entropy and enumerable, so anyone holding the
+digest and a candidate list can confirm a guess by hashing it; the digest resists casual reading,
+not an adversary with the estate's file listing. It is used because it is stable and stops the
+name being sitting in plain text, and it must not be described as anonymous or non-reversible.
+The Drive id is preferred precisely because it is a real opaque handle rather than a disguised
+name.
+
+An operator maps `doc` back by recomputing it over the scan's own inventory rows, so the mapping
+stays inside the system that already holds the filenames.
 
 A CLAIM LINE ALONE IS NOT ENOUGH, which is the trap this module is shaped to avoid. One
 discovery job walks a whole estate, so "job X was claimed" narrows a crash to a job that may
 have touched thousands of documents. Correlation has to be per-document: `stage()` brackets each
-native call with an enter and an exit, so the document with an enter and no exit at the moment
-the log stops is the candidate. With a 12-slot pool there will be up to twelve such candidates,
-which is a shortlist rather than the empty set the incident actually produced.
+native call with an enter and an exit.
+
+WHAT AN UNMATCHED ENTER DOES AND DOES NOT MEAN. A document with an enter and no exit when the
+log stops is a CRASH CANDIDATE — the work that was in flight. It is not proof that the document
+is malformed, nor that the library named in the stage is the one that corrupted the heap: with a
+12-slot pool a dozen documents are in flight at once, all of them unmatched, and only one of them
+(at most) is implicated. The shortlist is where an investigation starts, not its conclusion.
+
+CORRELATION SURVIVES THREADS, and has to. The per-document work does not run on the thread that
+claimed the job: handlers._analyse_and_persist_one spawns a Thread, which may itself already be
+inside a ThreadPoolExecutor, so the stage records are emitted one or two hops away from
+worker.run_once. contextvars do NOT cross a thread boundary on their own, so `bind()` captures
+the calling context and re-enters it inside the new thread. Without that the stage records carry
+a document and no job, which correlates nothing.
 """
 from __future__ import annotations
 
+import contextvars
+import functools
 import hashlib
 import json
 import os
@@ -62,17 +81,57 @@ _lock = threading.Lock()
 _enabled = True
 
 
-def doc_id(identifier: str | None) -> str | None:
-    """Opaque, stable, non-reversible handle for one document.
+def doc_id(identifier: str | None, *, opaque_ref: str | None = None) -> str | None:
+    """A stable handle for one document, preferring an id that is ALREADY opaque.
 
-    Deterministic so the same document reads as the same `doc` across attempts, replicas and
-    restarts — that is what makes "this document was open on all three crashes" a statement the
-    log can support. Truncated to 12 hex (48 bits): collision-safe at estate scale, and short
-    enough to eyeball across a page of log lines.
+    `opaque_ref` is a system identifier that carries no user content — a Drive file id. When one
+    is available it is used as-is: it is the real opaque handle, it already appears in the
+    database, and hashing it would only make correlation harder for an operator without making
+    anything safer.
+
+    Falling back to a digest of `identifier` (the filename) yields a PSEUDONYM, not anonymity —
+    see this module's header. Truncated to 12 hex (48 bits): collision-safe at estate scale and
+    short enough to eyeball down a page of log lines.
+
+    Deterministic either way, which is what makes "this document was open on all three crashes"
+    a statement the log can support.
     """
+    if opaque_ref:
+        return str(opaque_ref)
     if identifier is None:
         return None
-    return hashlib.sha256(str(identifier).encode("utf-8", "replace")).hexdigest()[:12]
+    return "h:" + hashlib.sha256(str(identifier).encode("utf-8", "replace")).hexdigest()[:12]
+
+
+# The claimed job, for records emitted far from worker.run_once. A ContextVar rather than a
+# threading.local so that `bind()` can carry it across a thread boundary explicitly; see the
+# header on why that boundary exists at all.
+_job_cv: contextvars.ContextVar[dict] = contextvars.ContextVar("acp_joblog_job", default={})
+
+
+@contextmanager
+def job_context(**fields):
+    """Attach job identity to every record emitted inside this block, on any thread reached
+    through `bind()`. Restores the previous value on exit, so nested jobs cannot leak."""
+    token = _job_cv.set({k: v for k, v in fields.items() if v is not None})
+    try:
+        yield
+    finally:
+        _job_cv.reset(token)
+
+
+def bind(fn):
+    """Wrap `fn` so it runs inside the CURRENT context on whatever thread executes it.
+
+    contextvars do not cross `threading.Thread` or `ThreadPoolExecutor.submit` — a new thread
+    starts from an empty context, so a stage emitted there would carry a document and no job.
+    Capturing at submit time and re-entering with `Context.run` is the supported way to carry it.
+    """
+    ctx = contextvars.copy_context()
+    @functools.wraps(fn)
+    def _run(*a, **kw):
+        return ctx.run(fn, *a, **kw)
+    return _run
 
 
 def emit(event: str, **fields) -> None:
@@ -86,6 +145,13 @@ def emit(event: str, **fields) -> None:
         return
     rec = {"ts": time.time(), "event": event, "revision": REVISION,
            "replica": REPLICA, "proc": PROC}
+    # Job identity from the ambient context first, so a record emitted deep inside a handler —
+    # on a thread two hops from run_once — still says which job and which attempt it belongs to.
+    # Explicit fields win, so a caller that knows better is never overwritten.
+    try:
+        rec.update({k: v for k, v in (_job_cv.get() or {}).items() if v is not None})
+    except Exception:
+        pass
     rec.update({k: v for k, v in fields.items() if v is not None})
     try:
         line = json.dumps(rec, default=repr)
@@ -96,6 +162,16 @@ def emit(event: str, **fields) -> None:
             sys.stdout.write(line + "\n")
             sys.stdout.flush()
     except Exception:
+        pass
+
+
+def _safe(event, **fields):
+    """emit() that cannot alter the control flow of the work it observes. `stage()` wraps real
+    document processing, so a fault in the logging path must not become the reason a document
+    failed — the guarded call's own exception is the only one allowed out of here."""
+    try:
+        emit(event, **fields)
+    except Exception:                                  # noqa: BLE001 — observation is never fatal
         pass
 
 
@@ -110,15 +186,15 @@ def stage(name: str, *, job_id: str | None = None, doc: str | None = None, **fie
     Re-raises everything. This observes; it must not change which exceptions the worker's own
     retry policy sees.
     """
-    emit("stage.enter", stage=name, job_id=job_id, doc=doc, **fields)
+    _safe("stage.enter", stage=name, job_id=job_id, doc=doc, **fields)
     t0 = time.monotonic()
     try:
         yield
     except BaseException as exc:                       # noqa: BLE001 — observed, then re-raised
-        emit("stage.error", stage=name, job_id=job_id, doc=doc,
-             elapsed_s=round(time.monotonic() - t0, 3),
-             error_type=type(exc).__name__, **fields)
+        _safe("stage.error", stage=name, job_id=job_id, doc=doc,
+              elapsed_s=round(time.monotonic() - t0, 3),
+              error_type=type(exc).__name__, **fields)
         raise
     else:
-        emit("stage.exit", stage=name, job_id=job_id, doc=doc,
-             elapsed_s=round(time.monotonic() - t0, 3), **fields)
+        _safe("stage.exit", stage=name, job_id=job_id, doc=doc,
+              elapsed_s=round(time.monotonic() - t0, 3), **fields)

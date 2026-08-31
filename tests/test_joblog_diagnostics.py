@@ -8,9 +8,12 @@ which failed on 2026-08-30:
   the line that never arrives. Asserted by counting flushes, not by reading output — output
   proves the string was formatted, never that it left the buffer.
 
-  OPAQUE. Filenames are disclosure in their own right, and these records go to a log stream with
-  a different audience and retention from the database. Asserted by feeding a distinctive
-  filename through and requiring it does not appear anywhere in what was written.
+  FREE OF FILENAMES — these records, not the whole stream. Asserted by feeding a distinctive
+  filename through and requiring it does not appear in what joblog wrote. The claim stops there
+  on purpose: scanner.py still prints `[scan] analysing {name} …` to the same stdout, so the
+  stream is NOT filename-free and saying otherwise would be a privacy claim the code does not
+  support. Where an already-opaque id exists (a Drive file id) it is used as-is; the filename
+  digest is a fallback and is a pseudonym, not anonymisation.
 
   PER-DOCUMENT. One discovery job walks a whole estate, so a claim line narrows a crash to a job
   that touched thousands of documents. The enter/exit asymmetry is what shortlists the candidate,
@@ -139,13 +142,13 @@ def test_a_completed_stage_records_its_elapsed_time():
 SENSITIVE = "Q3-layoffs-confidential.docx"
 
 
-def test_doc_id_is_opaque_stable_and_short():
+def test_doc_id_is_stable_and_short():
     a = joblog.doc_id(SENSITIVE)
     assert SENSITIVE not in a and "layoffs" not in a
     assert a == joblog.doc_id(SENSITIVE), (
         "must be stable across calls — 'this document was open on all three crashes' is only "
         "sayable if the same document yields the same id across attempts and restarts")
-    assert len(a) == 12 and int(a, 16) >= 0
+    assert len(a) == 14 and int(a[2:], 16) >= 0     # "h:" + 12 hex
     assert joblog.doc_id("other.docx") != a
     assert joblog.doc_id(None) is None
 
@@ -200,3 +203,92 @@ def test_records_carry_the_replica_identity():
 
     for key in ("ts", "event", "revision", "replica", "proc"):
         assert key in recs[0], f"{key} is needed to tie a crash to the replica and revision it hit"
+
+
+# ── job identity survives threads ─────────────────────────────────────────────────────────────
+# The per-document work runs one or two thread hops from worker.run_once
+# (handlers._analyse_and_persist_one spawns a Thread, itself possibly inside a
+# ThreadPoolExecutor). contextvars do NOT cross a thread start, so without joblog.bind() a stage
+# record names a document and no job — which correlates nothing.
+
+def test_job_identity_does_not_reach_a_plain_thread_without_bind():
+    """The negative half. Stated as a test so the need for bind() is a measured fact rather than
+    an assertion in a comment — if contextvars ever did propagate, this fails and bind() can go."""
+    import threading as _t
+    seen = {}
+    with joblog.job_context(job_id="j1", attempt=2):
+        def body():
+            with recording_stdout() as cap:
+                joblog.emit("stage.enter", stage="analyse.pdf", doc="d1")
+                seen["rec"] = _records(cap)[0]
+        th = _t.Thread(target=body)          # NOT bound
+        th.start(); th.join()
+    assert "job_id" not in seen["rec"]
+
+
+def test_bind_carries_job_identity_into_a_thread():
+    import threading as _t
+    seen = {}
+    with joblog.job_context(job_id="j1", attempt=2, scan_id="s1"):
+        def body():
+            with recording_stdout() as cap:
+                joblog.emit("stage.enter", stage="analyse.pdf", doc="d1")
+                seen["rec"] = _records(cap)[0]
+        th = _t.Thread(target=joblog.bind(body))
+        th.start(); th.join()
+    rec = seen["rec"]
+    assert rec["job_id"] == "j1" and rec["attempt"] == 2 and rec["scan_id"] == "s1"
+    assert rec["doc"] == "d1"
+
+
+def test_bind_carries_identity_through_TWO_nested_thread_hops():
+    """The real shape: a pool thread that spawns another thread. Both hops must be bound, and
+    binding at the inner hop alone would capture an already-empty context."""
+    import threading as _t
+    from concurrent.futures import ThreadPoolExecutor
+    seen = {}
+    with joblog.job_context(job_id="j9", attempt=3):
+        def inner():
+            with recording_stdout() as cap:
+                joblog.emit("stage.enter", stage="analyse.ocr", doc="d2")
+                seen["rec"] = _records(cap)[0]
+        def outer():
+            th = _t.Thread(target=joblog.bind(inner))
+            th.start(); th.join()
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            ex.submit(joblog.bind(outer)).result()
+    assert seen["rec"]["job_id"] == "j9" and seen["rec"]["attempt"] == 3
+
+
+def test_job_context_does_not_leak_after_the_block():
+    with joblog.job_context(job_id="j1"):
+        pass
+    with recording_stdout() as cap:
+        joblog.emit("stage.enter", stage="s", doc="d")
+        rec = _records(cap)[0]
+    assert "job_id" not in rec
+
+
+def test_an_explicit_field_wins_over_the_ambient_context():
+    with joblog.job_context(job_id="ambient"):
+        with recording_stdout() as cap:
+            joblog.emit("job.claim", job_id="explicit")
+            rec = _records(cap)[0]
+    assert rec["job_id"] == "explicit"
+
+
+# ── document identity ─────────────────────────────────────────────────────────────────────────
+
+def test_an_already_opaque_ref_is_preferred_over_hashing_the_filename():
+    drive_id = "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456"
+    assert joblog.doc_id(SENSITIVE, opaque_ref=drive_id) == drive_id, (
+        "a Drive file id is a real opaque handle and is already in the database — hashing it "
+        "would only make correlation harder without making anything safer")
+
+
+def test_the_filename_fallback_is_marked_as_a_digest_not_passed_off_as_an_id():
+    d = joblog.doc_id(SENSITIVE)
+    assert d.startswith("h:"), (
+        "the fallback is a PSEUDONYM over a low-entropy name, not anonymisation; marking it "
+        "keeps the two kinds of handle distinguishable in the log")
+    assert SENSITIVE not in d and "layoffs" not in d

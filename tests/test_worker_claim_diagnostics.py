@@ -150,3 +150,81 @@ def test_an_error_message_is_reduced_to_its_type(st, lines):
     assert "Q3-layoffs" not in blob
     outcome = [r for r in lines if r["event"] in ("job.retry", "job.dead")][0]
     assert outcome["error_type"] == "RuntimeError"
+
+
+# ── outcomes are read back, not assumed ───────────────────────────────────────────────────────
+
+def test_the_outcome_record_reports_the_PERSISTED_status_not_the_attempted_one(st, lines):
+    """"We called complete_job" is a statement about intent. The row is the statement about fact,
+    and they can differ: fail_job dead-letters on attempts-exhausted of its own accord, and both
+    mark_job_cancelled and complete_job are guarded against a zombie worker whose write the
+    reclaim-race check suppresses."""
+    st.enqueue_job("t_persist", {})
+    _run_one(st, "t_persist", lambda p, j: None, lines)
+
+    done = [r for r in lines if r["event"] == "job.complete"][0]
+    assert done["status"] == "done", (
+        f"the record must carry the status the row actually holds; saw {done.get('status')!r}")
+
+
+def test_a_suppressed_completion_is_not_reported_as_done(st, lines, monkeypatch):
+    """The zombie case, made concrete: complete_job's write is swallowed by the reclaim-race
+    guard, so the row stays 'running'. Reporting 'done' here would put a false terminal state in
+    the log — the exact class of error this re-read exists to prevent."""
+    real = st.complete_job
+    monkeypatch.setattr(st, "complete_job", lambda *a, **k: None)   # write suppressed
+    st.enqueue_job("t_zombie", {})
+    _run_one(st, "t_zombie", lambda p, j: None, lines)
+    monkeypatch.setattr(st, "complete_job", real)
+
+    done = [r for r in lines if r["event"] == "job.complete"][0]
+    assert done["status"] != "done", (
+        f"nothing persisted 'done', so the record must not claim it; saw {done.get('status')!r}")
+
+
+# ── logging can never change what happens to a job ────────────────────────────────────────────
+
+def test_a_logging_failure_cannot_change_a_job_outcome(st, monkeypatch):
+    """A diagnostic that can fail a job is worse than no diagnostic. Every joblog call on the
+    worker's path is made to raise; the job must still complete and the row must still say so."""
+    import joblog
+    monkeypatch.setattr(joblog, "emit",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("log backend down")))
+
+    jid = st.enqueue_job("t_logfail", {})
+    handled = _run_one(st, "t_logfail", lambda p, j: None, [])
+
+    assert handled is True
+    assert st.get_job(jid)["status"] == "done", (
+        "a raising logger must not stop the job being completed and persisted")
+
+
+def test_a_failing_status_read_does_not_break_the_job_or_invent_a_status(st, lines, monkeypatch):
+    """The re-read added for persisted outcomes is itself on the job's path, so it gets the same
+    treatment: when it cannot be done the record says so rather than asserting a status."""
+    st.enqueue_job("t_readfail", {})
+
+    import worker as worker_mod
+
+    # Broken only AFTER the completion has persisted, so this isolates the re-read. get_job is
+    # not private to the diagnostic — claim_job, complete_job and fail_job all call it — so
+    # breaking it any earlier fails the claim or the completion and the test would be measuring
+    # something else entirely. (Both earlier attempts did exactly that.)
+    real_complete = st.complete_job
+
+    def complete_then_break(*a, **k):
+        result = real_complete(*a, **k)
+        monkeypatch.setattr(st, "get_job",
+                            lambda *a2, **k2: (_ for _ in ()).throw(RuntimeError("db gone")))
+        return result
+
+    monkeypatch.setattr(st, "complete_job", complete_then_break)
+    worker_mod.HANDLERS["t_readfail"] = lambda p, j: None
+    try:
+        w = worker_mod.JobWorker(st, worker_id="worker-test")
+        assert w.run_once() is True
+    finally:
+        worker_mod.HANDLERS.pop("t_readfail", None)
+
+    done = [r for r in lines if r["event"] == "job.complete"][0]
+    assert done["status"] == "unread"

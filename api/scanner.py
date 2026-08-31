@@ -3456,7 +3456,7 @@ def rescore_reused(issues: list[dict], filename: str, status: str | None = None,
 
 
 def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
-                       scan_id: str | None = None):
+                       scan_id: str | None = None, doc_ref: str | None = None):
     """Analyse + rubric-assess ONE already-downloaded file (fan-out path, ADR 0007).
     `tmp` is a directory containing `name`. Returns (assessed_file_dict, pii_info),
     or (None, None) for an unsupported extension. Engines catch their own errors and
@@ -3476,13 +3476,17 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
     print(f"[scan] analysing {name} ({ext or '?'}) …", flush=True)
     import activity as _act
     import joblog as _jl
-    # Opaque and stable: the same document reads as the same `doc` across attempts, replicas and
-    # restarts, which is what makes "this one was open on all three crashes" sayable. Keyed on
-    # the document identity ALONE, deliberately not on scan_id — a per-scan id could not
-    # correlate the same file across the separate runs a retry produces. The plaintext
-    # `[scan] analysing {name}` line above is pre-existing and untouched here; nothing added by
-    # this change reproduces it. See joblog's header on why filenames stay out of these records.
-    doc = _jl.doc_id(name)
+    # Prefer the Drive file id, which is ALREADY an opaque system identifier, over a digest of
+    # the filename — an unkeyed hash of a low-entropy name is a pseudonym, not anonymity, and
+    # joblog's header says so plainly. Stable across attempts, replicas and restarts either way,
+    # which is what makes "this one was open on all three crashes" sayable; keyed on the document
+    # alone, deliberately not on scan_id, so a retry's separate run still correlates.
+    #
+    # NOTE, and this is a limit on what this change achieves: the `[scan] analysing {name} …`
+    # line printed above is PRE-EXISTING and still writes the filename to this same stream. So
+    # the no-filename property belongs to the joblog records, NOT to the log stream as a whole,
+    # and must not be described as though it did. Redacting that line is its own change.
+    doc = _jl.doc_id(name, opaque_ref=doc_ref)
     _act.record_file(scan_id, name, phase="analysing",
                      action="running the accessibility engine", force=True)
     # Each engine below is a NATIVE entry point, and the enter line is flushed before the call:
@@ -3835,7 +3839,10 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         # `raw`/`assessed` are keyed by filename and `aggregate` sums over values.
         analysed = []
         with _cf.ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as _ex:
-            _futs = [_ex.submit(_analyse_one, it) for it in items]
+            # Bound so the stage records _analyse_one emits keep the claiming job's identity;
+            # submit() starts each pool thread from an empty context. See joblog's header.
+            import joblog as _jl_bind
+            _futs = [_ex.submit(_jl_bind.bind(_analyse_one), it) for it in items]
             for _done_n, _fut in enumerate(_cf.as_completed(_futs), start=1):
                 _res = _fut.result()
                 if _res is not None:
