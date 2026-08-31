@@ -120,6 +120,27 @@ REMEDIATION_VERIFIED: dict[tuple[str, str], str] = {
         "no longer reports it. Because a language mark is metadata, the assertion is stronger "
         "than elsewhere: the whole extracted text is byte-identical before and after. A value "
         "that is not a language code is refused rather than written where AT reads a language"),
+    ("2.4.4", "pptx"): (
+        "tests/test_remediation_verified_pptx_link.py — the proposer's draft, a reviewer's "
+        "edit, handlers._apply_approved_values with the re-scan UNPATCHED, then the saved deck "
+        "re-opened: the visible text changed, the href, the run's <a:hlinkClick>, the author's "
+        "bold, the other slide's hyperlink and both titles did not, python-pptx re-opens it, "
+        "and a second real assessment no longer reports 2.4.4. The control this lane makes "
+        "possible and no single-criterion lane can: pptx declares scs_to_clear = {2.4.4, "
+        "2.4.9}, so an approved value that clears 2.4.4 by REUSING the other link's text — "
+        "breaking 2.4.9 in the same write — is written and never credited"),
+    ("1.1.1", "docx"): (
+        "tests/test_remediation_verified_docx_alt.py — a real assessment reports 1.1.1 on two "
+        "undescribed images carrying locators apply_alt.parse_locator resolves to wp:docPr; "
+        "reviewer-authored descriptions go through handlers._apply_approved_values with the "
+        "re-scan UNPATCHED; the saved document carries both descr values, the heading, bold "
+        "run, table and closing paragraph survive, python-docx re-opens it, and a second real "
+        "assessment no longer reports 1.1.1. It is also the first proof of the DECORATIVE half "
+        "of the lane — a reviewer's 'this image carries no information' answered with the OOXML "
+        "adec:decorative marker, which reaches _apply_one_value_kind through extra_work=True "
+        "with an empty value map and clears the criterion on the re-scan. Controls: describing "
+        "one of two images is written but never credited, and an approval aimed at an image the "
+        "document does not have resolves to nothing and changes nothing"),
 }
 
 # WHAT NEITHER ENTRY ABOVE CLAIMS, written here rather than left to be inferred from their
