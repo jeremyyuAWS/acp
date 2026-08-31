@@ -913,9 +913,14 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
     # Each completed folder's children are immediately submitted, so deeper levels start
     # as soon as any ancestor finishes — no level-barrier, no idle time between BFS levels.
     with _cf.ThreadPoolExecutor(max_workers=_DISCOVERY_WORKERS) as ex:
+        # Bound so the listing threads carry the claiming job's context: without it
+        # worker.check_cancel() is a silent no-op here and the joblog records name no job. This
+        # is the DISCOVERY walk — the path a user's Stop button is most likely to be waiting on.
+        # Binding does not by itself stop anything; it makes a checkpoint here capable of firing.
+        import joblog as _jl_bind
         _active[folder_id] = {"name": _root_name, "path": _root_name,
                               "started_at": datetime.now(timezone.utc).isoformat()}
-        pending: dict[_cf.Future, str] = {ex.submit(_fetch_folder, folder_id): folder_id}
+        pending: dict[_cf.Future, str] = {ex.submit(_jl_bind.bind(_fetch_folder), folder_id): folder_id}
         while pending:
             done, _ = _cf.wait(list(pending.keys()), return_when=_cf.FIRST_COMPLETED)
             for fut in done:
@@ -963,7 +968,7 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
                         if len(raw) < max_files:
                             _active[child_id] = {"name": child_name, "path": _folder_paths[child_id],
                                                  "started_at": datetime.now(timezone.utc).isoformat()}
-                            pending[ex.submit(_fetch_folder, child_id)] = child_id
+                            pending[ex.submit(_jl_bind.bind(_fetch_folder), child_id)] = child_id
                         else:
                             _truncated[0] = True
 

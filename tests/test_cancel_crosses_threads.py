@@ -166,3 +166,107 @@ def test_a_cancelled_job_is_recorded_as_cancelled_not_failed(st):
         worker_mod.HANDLERS.pop("t_status", None)
 
     assert st.get_job(jid)["status"] == "cancelled"
+
+
+# ── the REAL production fan-out boundaries ────────────────────────────────────────────────────
+# Everything above uses a ThreadPoolExecutor this file constructs. That proves the mechanism and
+# proves nothing about the three places the pipeline actually crosses a thread, which is where
+# the defect lived.
+
+def test_cancellation_crosses_the_REAL_per_file_thread(st, monkeypatch):
+    """handlers._analyse_and_persist_one spawns threading.Thread(target=joblog.bind(_work)) at
+    handlers.py:2307 — the innermost hop, and the one furthest from run_once. The heavy work
+    (_impl) is stubbed, so this is about the boundary rather than about Drive."""
+    import worker as worker_mod
+    import handlers as handlers_mod
+
+    seen = {}
+
+    def fake_impl(*a, **kw):
+        try:
+            worker_mod.check_cancel()
+            seen["fired"] = False
+        except worker_mod.JobCancelledError:
+            seen["fired"] = True
+            raise
+
+    monkeypatch.setattr(handlers_mod, "_analyse_and_persist_one_impl", fake_impl)
+
+    def handler(payload, job):
+        st.request_job_cancellation(job["id"])
+        handlers_mod._analyse_and_persist_one(
+            "scan-1", {"file": "a.docx"}, "drive", False, None, None, None, None)
+
+    worker_mod.HANDLERS["t_realthread"] = handler
+    try:
+        st.enqueue_job("t_realthread", {})
+        worker_mod.JobWorker(st, worker_id="worker-A").run_once()
+    finally:
+        worker_mod.HANDLERS.pop("t_realthread", None)
+
+    assert seen.get("fired") is True, (
+        "the per-file Thread did not inherit the cancel hook — this is the hop every document "
+        "crosses on its way to the native parsers")
+
+
+def test_every_job_path_thread_start_is_bound():
+    """A structural guard, because the behavioural tests can only cover the sites that exist
+    today. A fourth fan-out added without joblog.bind() would be silently uncancellable again
+    and would look correct in review — which is exactly how the first three came to be.
+
+    Reads the source rather than the runtime: every `threading.Thread(target=...)` and every
+    `.submit(` / `.map(` in the two scan modules must name bind() in the same call."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent / "api"
+    offenders = []
+    for mod in ("handlers.py", "scanner.py"):
+        for n, line in enumerate((root / mod).read_text().splitlines(), 1):
+            if re.search(r"threading\.Thread\(\s*target=", line) or re.search(r"\.(submit|map)\(", line):
+                if "bind(" not in line:
+                    offenders.append(f"{mod}:{n}: {line.strip()}")
+
+    assert not offenders, (
+        "a thread start in the scan path does not carry the calling context, so check_cancel() "
+        "and the job diagnostics are both blind there:\n  " + "\n  ".join(offenders))
+
+
+# ── one job's cancellation must not reach another ─────────────────────────────────────────────
+
+def test_the_hook_does_not_leak_from_one_job_to_the_next(st):
+    """Job A is cancelled; job B is not. B must not inherit A's hook — a ContextVar set without
+    being reset by token would do exactly that, and B would abort for a reason belonging to
+    someone else's job."""
+    import worker as worker_mod
+    outcome = {}
+
+    def cancelled_handler(payload, job):
+        st.request_job_cancellation(job["id"])
+        worker_mod.check_cancel()
+
+    def clean_handler(payload, job):
+        try:
+            worker_mod.check_cancel()
+            outcome["b_survived"] = True
+        except worker_mod.JobCancelledError:
+            outcome["b_survived"] = False
+            raise
+
+    worker_mod.HANDLERS["t_a"] = cancelled_handler
+    worker_mod.HANDLERS["t_b"] = clean_handler
+    try:
+        a = st.enqueue_job("t_a", {})
+        w = worker_mod.JobWorker(st, worker_id="worker-A")
+        w.run_once()
+        assert st.get_job(a)["status"] == "cancelled"
+
+        b = st.enqueue_job("t_b", {})
+        w.run_once()
+        assert st.get_job(b)["status"] == "done"
+    finally:
+        worker_mod.HANDLERS.pop("t_a", None)
+        worker_mod.HANDLERS.pop("t_b", None)
+
+    assert outcome.get("b_survived") is True, (
+        "job B saw job A's cancel hook — the reset is not restoring the previous value")
