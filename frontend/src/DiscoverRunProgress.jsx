@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import WorkerCard from './WorkerCard.jsx'
 import LiveCounter from './LiveCounter.jsx'
 import { nextMilestone } from './discoveryMilestone.js'
-import { deriveRunAge, ageText } from './queueAge.js'
+import { deriveRunAge, ageText, elapsedText, startedText } from './queueAge.js'
 
 // The Discover RUNNING screen: a per-step checklist showing what the discovery agent is doing.
 // This replaces the generic scan-progress banner on the Discover tab so the screen stays scoped
@@ -134,8 +134,18 @@ function DiscoverStep({ label, kpi, status }) {
   )
 }
 
-export default function DiscoverRunProgress({ progress, busy, onStop, sources, inv = null, onReview, onContinue, preflightDegraded = null, freshness = null }) {
-  const [startedAt] = useState(() => Date.now())
+export default function DiscoverRunProgress({ progress, busy, onStop, sources, inv = null, onReview, onContinue, preflightDegraded = null, freshness = null, runStartedAt = null }) {
+  // MOUNT time, and named for it. This clock answers "how long has this VIEW been watching",
+  // which is the right input for the stall and slow-lifecycle hints below — they are questions
+  // about the watching, and server-anchoring them would fire them instantly on any reload of an
+  // older scan (see queueAge.js's own note on what it is not for).
+  //
+  // It is the wrong input for anything presented as a fact about the RUN, and it used to be
+  // used for exactly that: the card read `{elapsed} elapsed`, so switching tabs and back — the
+  // moment someone checks whether a run is stuck — remounted the component and a scan five
+  // minutes in reported "0s elapsed". It was called `startedAt`, which is how a mount clock came
+  // to be rendered as the run's start in the first place.
+  const [mountedAt] = useState(() => Date.now())
   const [elapsed, setElapsed] = useState(0)
   const [stopping, setStopping] = useState(false)
   const [stalledSecs, setStalledSecs] = useState(0)
@@ -164,16 +174,22 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
 
   useEffect(() => {
     if (!busy || !progress) return
-    setElapsed(Math.round((Date.now() - startedAt) / 1000))
+    setElapsed(Math.round((Date.now() - mountedAt) / 1000))
     const t = setInterval(() => {
-      setElapsed(Math.round((Date.now() - startedAt) / 1000))
+      setElapsed(Math.round((Date.now() - mountedAt) / 1000))
       setStalledSecs(Math.round((Date.now() - lastTickRef.current) / 1000))
     }, 1000)
     return () => clearInterval(t)
-  }, [busy, progress, startedAt])
+  }, [busy, progress, mountedAt])
 
   if (!progress) return null
 
+  // How long the RUN has been going, from the server's own enqueue instant — the same fact the
+  // queued card already reads, available for every phase and not just the queued stub, because
+  // the caller passes scan_runs.started_at straight through. `progress.started_at` is the
+  // queuedProgress fallback for the one phase that carries it. Null when neither exists, and
+  // every renderer below has to say so rather than substitute the mount clock.
+  const runAge = deriveRunAge({ startedAt: runStartedAt ?? progress.started_at })
   const phase = progress.phase || 'queued'
   const isDone = phase === 'done'
   const isStopped = !busy && !isDone
@@ -397,7 +413,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
     // from a real one — and it reset to zero on every tab switch, which is exactly when someone
     // is checking whether the run is stuck. deriveRunAge returns null rather than a number when
     // there is no persisted instant, and ageText says so in words.
-    const queuedAge = deriveRunAge({ startedAt: progress.started_at })
+    const queuedAge = runAge
     return (
       <section className="discover-run-progress" role="region" aria-label="Discovery queued"
                style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
@@ -445,8 +461,11 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
             <div style={{ fontSize: 14.5, fontWeight: 650 }}>
               {errorMsg ? 'Discovery could not complete' : 'Discovery stopped'}
             </div>
+            {/* A terminal run, so this is an AGE, not a duration — see startedText. It used to
+                render the mount clock, and `elapsed` only ticks while busy, so on any fresh load
+                of an already-stopped scan this said "0s" regardless of when the run really ran. */}
             <span className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>
-              {fmtElapsedSecs(elapsed)}
+              {startedText(runAge, fmtElapsedSecs)}
             </span>
           </div>
           <div role="list" aria-label="Discovery steps"
@@ -489,7 +508,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <span className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}
                   aria-hidden="true">
-              {fmtElapsedSecs(elapsed)} elapsed
+              {elapsedText(runAge, fmtElapsedSecs)}
             </span>
             {/* 'live' is a real value api/routes/scans.py's _scan_freshness computes — the job's
                 Redis state updated within the last 30s — distinct from null/undefined (the field
@@ -632,7 +651,13 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
           <WorkerCard current={progress.current || null}
                       filesDone={progress.files_done ?? 0}
                       filesTotal={filesFound}
-                      elapsed={elapsed} />
+                      /* The RUN's seconds, not the view's. WorkerCard divides filesDone by this
+                         to get a rate and an ETA, so the mount clock made a tab switch report an
+                         impossible speed — 500 files against a 3-second-old clock reads as 166
+                         files/sec, and the ETA collapses to seconds on a run with minutes left.
+                         null when there is no server instant, which suppresses both rather than
+                         fabricating them. */
+                      elapsed={runAge.seconds} />
         )}
 
         {/* Announces phase transitions to screen readers without repeating per-tick KPI counts.

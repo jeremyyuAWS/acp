@@ -62,3 +62,28 @@ export function ageText(age, fmt) {
   if (!age || age.source !== 'server' || age.seconds === null) return 'submission time unavailable'
   return `${fmt(age.seconds)} ago`
 }
+
+/**
+ * The same instant read as a DURATION rather than an age — for a run that is still going, where
+ * "N elapsed" is the natural phrasing. Same contract as ageText: a whole phrase, so a missing
+ * timestamp cannot be formatted into a number that looks measured.
+ */
+export function elapsedText(age, fmt) {
+  if (!age || age.source !== 'server' || age.seconds === null) return 'elapsed time unavailable'
+  return `${fmt(age.seconds)} elapsed`
+}
+
+/**
+ * For a run that has ENDED. "N elapsed" would be a lie on a terminal run — nothing is elapsing,
+ * and the number keeps growing forever after the run stopped, so a scan stopped last Tuesday
+ * would report "6d elapsed". The honest reading of (now - started_at) on a finished run is when
+ * it STARTED, which is what this says.
+ *
+ * The run's actual DURATION is not derivable: scan_runs records started_at and completed_at, and
+ * completed_at stays NULL for a run that stopped or died — the exact case this renders. Saying
+ * "started 6d ago" is the true statement available; inventing an end instant to subtract is not.
+ */
+export function startedText(age, fmt) {
+  if (!age || age.source !== 'server' || age.seconds === null) return 'start time unavailable'
+  return `started ${fmt(age.seconds)} ago`
+}
