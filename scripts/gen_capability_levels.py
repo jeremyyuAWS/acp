@@ -185,6 +185,28 @@ REMEDIATION_VERIFIED: dict[tuple[str, str], str] = {
         "bookkeeping. Controls: an author-supplied Title is never overwritten, an approval "
         "aimed at a control that is not there changes nothing, and a w:text control is not a "
         "form field at all — the exclusion both detector and writer gate on"),
+    ("1.3.3", "docx"): (
+        "tests/test_remediation_verified_office_sensory.py — parametrised over docx, pptx and "
+        "xlsx: one criterion, one store getter and one writer (apply_text_values."
+        "apply_sensory_rewrite) with a _Dialect per format, so parametrising the test the same "
+        "way is what asserts the differing half. A position-only instruction trips 1.3.3, a "
+        "reviewer-authored rewrite goes through handlers._apply_approved_values with the "
+        "re-scan UNPATCHED, and the sentence a reader sees no longer names its target by "
+        "position. The value is AUTHORED rather than proposed because propose_sensory_rewrite "
+        "returns [] with no AI text model, and a lane provable only where a model happens to be "
+        "installed is not proved; the proposer seam is covered by the 3.1.2 proofs on the same "
+        "writer. Control: swapping one position reference for another is written and never "
+        "credited"),
+    ("1.3.3", "pptx"): (
+        "tests/test_remediation_verified_office_sensory.py — the pptx half of the same "
+        "parametrised proof; the rewrite must land in the slide part"),
+    ("1.3.3", "xlsx"): (
+        "tests/test_remediation_verified_office_sensory.py — the xlsx half, and the one that "
+        "needed a second fixture. SpreadsheetML holds a cell's text either pooled in "
+        "xl/sharedStrings.xml (t=\"s\") or inline in the cell (t=\"inlineStr\"), and openpyxl "
+        "writes ONLY the inline form — so the shared fixture exercises half the dialect. "
+        "test_the_rewrite_also_reaches_a_real_shared_string_table converts the package by hand "
+        "and proves the pooled form too, which is what Excel itself writes"),
 }
 
 # WHAT NEITHER ENTRY ABOVE CLAIMS, written here rather than left to be inferred from their
