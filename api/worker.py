@@ -318,7 +318,12 @@ class JobWorker:
                           f"can reclaim it. The handler may still be running.", flush=True)
                     return
                 try:
-                    self.store.touch_job(job["id"])
+                    # Identity of THIS claim, captured when the job was claimed. If the sweeper
+                    # has since reclaimed it and another worker took over, these no longer match
+                    # the row and the renewal is correctly ignored — this thread outlives its
+                    # claim whenever the handler wedges, which is exactly when that matters.
+                    self.store.touch_job(job["id"], worker_id=self.worker_id,
+                                         attempt=job.get("attempts"))
                 except Exception:
                     pass
         threading.Thread(target=_heartbeat, daemon=True, name="job-heartbeat").start()
