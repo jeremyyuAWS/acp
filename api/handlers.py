@@ -17,6 +17,7 @@ from __future__ import annotations
 import json as _json
 import logging
 import os as _os
+import threading as _threading
 
 import core
 import provenance
@@ -24,6 +25,71 @@ from worker import handler, FatalJobError, JobCancelledError, check_cancel
 from scanner import run_scan
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Best-effort failures that are deliberately not re-raised.
+#
+# This module is full of calls that must not take a scan or a remediation down
+# with them — a timing row, a progress update, a marker, an evidence thumbnail.
+# Every one of them used to be `except Exception: pass`, which is not "best
+# effort" but "no effort observable by anyone": no log, no metric, no row.
+#
+# WHAT THAT COSTS, concretely. `store.touch_job` gained required arguments in
+# #1075. A test double kept the old signature, and the worker heartbeat wraps
+# its touch_job call in the same construct (api/worker.py:347) — so a TypeError
+# was raised and swallowed on every heartbeat of every test using that double,
+# for five PRs, with the suite green throughout
+# (tests/test_store_doubles_match_the_real_store.py). A single line of output
+# would have ended it on the first run. The same signature-drift risk is live in
+# this file today: `_enqueue_proposals` does not pass `finding_count`, which the
+# real Store.enqueue_proposals accepts, so a future caller that starts passing it
+# would fail invisibly at the store.enqueue_proposals call below.
+#
+# WHY A HELPER RATHER THAN 40 BARE logger.warning CALLS. Volume. Several of
+# these sit inside the per-file loop over the whole estate, and the proposal
+# sites fire once per (file, criterion) — so a systematically failing store on a
+# 6,000-file scan would emit ~70,000 tracebacks and bury the signal it exists to
+# provide. Occurrences are counted per (scan_id, operation) and reported at
+# powers of two: the first failure is always logged, and a systematic one still
+# escalates visibly (1, 2, 4, 8 ...) without flooding.
+#
+# WHY exc_info RATHER THAN str(e). `exc_info=True` inside an `except` block
+# picks up the live exception on its own, so no site needs `as e` — which
+# matters here beyond tidiness. In `_scan_discover`'s listing-failure path, the
+# nested best-effort handler is followed by a `scan_event(... str(e) ...)` call
+# reading `e` from the ENCLOSING handler; binding `as e` in the nested one would
+# `del e` on exit and raise NameError out of a block whose entire job is to
+# swallow — turning an observability change into a control-flow one. exc_info
+# also carries the traceback, which is what identifies a drift AS a drift.
+#
+# This helper must not raise: every caller is a handler that previously could
+# not. `logger.warning` does not (logging routes its own errors through
+# Handler.handleError), and the counter is a dict under a lock.
+# ---------------------------------------------------------------------------
+_SWALLOWED_LOCK = _threading.Lock()
+_SWALLOWED_COUNTS: dict[tuple[str, str], int] = {}
+_SWALLOWED_MAX_KEYS = 2048
+
+
+def _swallowed(op: str, scan_id: str | None = None) -> None:
+    """Report a failure that is deliberately not re-raised. Call from an `except` block.
+
+    `op` reads "<function>: <what was being attempted> failed", matching the
+    logger.warning calls already in this module. Rate-limited per (scan_id, op)."""
+    key = (scan_id or "-", op)
+    with _SWALLOWED_LOCK:
+        # A long-lived worker accumulates one key per (scan, site). Dropping the whole
+        # table when it grows past a few dozen scans re-reports some failures at their
+        # first occurrence again, which is the harmless direction to be wrong in.
+        if len(_SWALLOWED_COUNTS) >= _SWALLOWED_MAX_KEYS:
+            _SWALLOWED_COUNTS.clear()
+        n = _SWALLOWED_COUNTS.get(key, 0) + 1
+        _SWALLOWED_COUNTS[key] = n
+    if n & (n - 1):          # not a power of two — already reported at a lower count
+        return
+    logger.warning("%s for %s%s", op, scan_id or "-",
+                   "" if n == 1 else f" (occurrence {n}; reported at powers of two)",
+                   exc_info=True)
 
 
 def _defer_analysis_to_assess() -> bool:
@@ -374,37 +440,37 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
                 _enqueue_proposals(scan_id, filename, "3.1.2", "Language of Parts",
                                    _lang_props, validated=_all_verified)
         except Exception:
-            pass
+            _swallowed("_propose_text_findings: enqueueing 3.1.2 Language of Parts proposals failed", scan_id)
         try:
             _enqueue_proposals(scan_id, filename, "1.3.3", "Sensory Characteristics",
                                _prop.propose_sensory_rewrite(text, filename=filename,
                                                              ai_enabled=ai_enabled, guidance=_g("1.3.3")),
                                house_style=_hs("1.3.3"))
         except Exception:
-            pass
+            _swallowed("_propose_text_findings: enqueueing 1.3.3 Sensory Characteristics proposals failed", scan_id)
         try:
             _enqueue_proposals(scan_id, filename, "3.1.5", "Reading Level",
                                _prop.propose_reading_level(text, filename=filename, ai_enabled=ai_enabled))
         except Exception:
-            pass
+            _swallowed("_propose_text_findings: enqueueing 3.1.5 Reading Level proposals failed", scan_id)
     # 2.4.10 — AI-drafted section headings for a long, heading-less docx (reads the zip, so
     # computed above while the temp path was alive; self-gates on the detector's conditions).
     try:
         _enqueue_proposals(scan_id, filename, "2.4.10", "Section Headings", section_heads,
                            house_style=_hs("2.4.10"))
     except Exception:
-        pass
+        _swallowed("_propose_text_findings: enqueueing 2.4.10 Section Headings proposals failed", scan_id)
     # 2.4.6 — AI slide-title drafts for pptx title placeholders left empty.
     try:
         _enqueue_proposals(scan_id, filename, "2.4.6", "Headings and Labels", slide_titles + xlsx_labels,
                            house_style=_hs("2.4.6"))
     except Exception:
-        pass
+        _swallowed("_propose_text_findings: enqueueing 2.4.6 Headings and Labels proposals failed", scan_id)
     # 1.3.2 — reading-order recommendations for docx floating text boxes / frames.
     try:
         _enqueue_proposals(scan_id, filename, "1.3.2", "Meaningful Sequence", reading_order)
     except Exception:
-        pass
+        _swallowed("_propose_text_findings: enqueueing 1.3.2 Meaningful Sequence proposals failed", scan_id)
     # One-click deterministic layout cards — the fix is exact, the human elects it.
     try:
         if filename.lower().endswith(".docx"):
@@ -414,7 +480,7 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
         else:
             _enqueue_proposals(scan_id, filename, "1.4.2", "Audio Control", one_clicks)
     except Exception:
-        pass
+        _swallowed("_propose_text_findings: enqueueing the one-click/colour/contrast proposals failed", scan_id)
     # 1.1.1 — chart datasheets + per-image alt drafts (vision when reachable) go on the SAME
     # 1.1.1 card in one enqueue: enqueue_proposals REPLACES per (scan,file,rule), so two calls
     # would clobber. Together they turn a single fill-in template into an editable AI
@@ -423,16 +489,16 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
         _enqueue_proposals(scan_id, filename, "1.1.1", "Non-text Content",
                            (chart_sheets or []) + (img_props or []))
     except Exception:
-        pass
+        _swallowed("_propose_text_findings: enqueueing 1.1.1 Non-text Content proposals failed", scan_id)
     try:
         if img_evidence:
             core.store.attach_hitl_evidence(scan_id, filename, "1.1.1", img_evidence)
     except Exception:
-        pass
+        _swallowed("_propose_text_findings: attaching 1.1.1 image evidence failed", scan_id)
     try:
         _enqueue_proposals(scan_id, filename, "1.4.5", "Images of Text", image_text)
     except Exception:
-        pass
+        _swallowed("_propose_text_findings: enqueueing 1.4.5 Images of Text proposals failed", scan_id)
     # 2.4.4 / 2.4.9 — descriptive link-text proposals for Office hyperlinks (vague text /
     # text reused across destinations). Needs the file on disk like the OCR proposer, so it
     # was computed above while the temp path was alive; split by the sc each proposal carries.
@@ -448,7 +514,7 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
                                [p for p in link_props if p.get("sc") == sc],
                                house_style=_hs("2.4.4"))
     except Exception:
-        pass
+        _swallowed("_propose_text_findings: enqueueing 2.4.4/2.4.9 Link Purpose proposals failed", scan_id)
 
 
 def _propose_form_fields(scan_id: str, filename: str, file_bytes: bytes, ai_enabled: bool) -> None:
@@ -486,7 +552,7 @@ def _record_applied_fixes(scan_id: str, filename: str, fixes: list) -> None:
                 scan_id, filename, fx["rule_id"], fx["value"],
                 source=fx.get("source"), thumb=fx.get("thumb"), seq=i)
         except Exception:
-            pass
+            _swallowed("_record_applied_fixes: recording an applied fix failed", scan_id)
 
 
 def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
@@ -523,7 +589,7 @@ def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
                                     detail=f"{sc} is outside the operator scope — "
                                            f"{len(proposals)} proposal(s) not enqueued")
         except Exception:
-            pass
+            _swallowed("_enqueue_proposals: logging the remediate.out_of_scope decision failed", scan_id)
         return
     # Stamp the applied house style onto each proposal. It rides inside the existing `proposals`
     # JSON blob — no schema change: store._decode_proposals is a plain json.loads and
@@ -540,7 +606,8 @@ def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
         core.store.enqueue_proposals(scan_id, filename, sc, proposals,
                                      validated=validated, rule_name=rule_name)
     except Exception:
-        pass
+        _swallowed("_enqueue_proposals: store.enqueue_proposals failed — EVERY proposal for this (file, "
+                   "criterion) is lost, and the reviewer sees a document with no suggested fixes", scan_id)
 
 
 @handler("remediate_file")
@@ -737,14 +804,15 @@ def _remediate_file(payload: dict, job: dict) -> None:
                             core.store.queue_hitl_deferral(scan_id, filename, _msg, _n,
                                                            rule_name="Non-text Content")
                         except Exception:
-                            pass
+                            _swallowed("_remediate_file: queueing the 1.1.1 HITL deferral failed", scan_id)
                 # Attach the deferred images to whichever 1.1.1 row now exists — the
                 # deferral queued just above, or the proposals row. Last, because there is
                 # nothing to attach to until one of them has been created.
                 try:
                     core.store.attach_hitl_evidence(scan_id, filename, "1.1.1", _evidence)
                 except Exception:
-                    pass   # evidence is a nicety; never fail a remediation job for a thumbnail
+                    # evidence is a nicety; never fail a remediation job for a thumbnail
+                    _swallowed("_remediate_file: attaching 1.1.1 HITL evidence failed", scan_id)
             if not out_path or not _Path(out_path).exists():
                 core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
                                         file=filename, detail=f".{ext}: no deterministic fixes applied")
@@ -882,7 +950,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
                           if verification.cleared({d.get("rule_id")})]
         core.store.record_remediation_diffs(scan_id, filename, verified_diffs)
     except Exception:
-        pass
+        _swallowed("_remediate_file: recording the verified remediation diffs failed", scan_id)
     try:
         from documents import resolve_doc_id
         doc_id = resolve_doc_id("drive", drive_file_id, filename, None)
@@ -930,7 +998,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
                                            "Automatic fix applied — verify the result", 1,
                                            rule_id="auto/verify")
     except Exception:
-        pass
+        _swallowed("_remediate_file: settling remediation state and routing findings to human review failed", scan_id)
 
 
 # ── Fan-out scan pipeline (ADR 0007): discover → scan_file → finalize ─────────
@@ -1718,7 +1786,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 if user:
                     core.store.release_discovery_guard(scan_id)
             except Exception:
-                pass
+                _swallowed("_scan_discover: recording the cancelled listing (status, decision, guard) failed", scan_id)
             scan_event(scan_id, "scan.cancelled", phase="cancelled", job_id=job.get("id"),
                        attempt=job.get("attempts", 1), owner_email=user,
                        detail={"reason": "cancel_requested", "source": source,
@@ -1735,7 +1803,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 if user:
                     core.store.release_discovery_guard(scan_id)
             except Exception:
-                pass
+                _swallowed("_scan_discover: recording the failed listing (status, decision, guard) failed", scan_id)
             # Inside the same best-effort block's shadow but outside its try, so a failure here
             # cannot swallow the re-raise below: scan_event never raises, and the original
             # exception must still propagate to the worker's retry policy.
@@ -1999,7 +2067,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
                         }
                     })
                 except Exception:
-                    pass
+                    _swallowed("_scan_discover: merging the inventory delta into the scan scope failed", scan_id)
                 if _job_id:
                     core.update_job(_job_id, {
                         "schema_version": 2,
@@ -2046,7 +2114,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
                                            "files_found": _lifecycle_total,
                                            **stats})
             except Exception:
-                pass
+                _swallowed("_scan_discover/_lc_progress: updating lifecycle job progress failed", scan_id)
         _lc_stats = _evaluate_discover_lifecycle_rules(
             scan_id, source, user, progress_cb=_lc_progress, tick_every=_tick_every)
         # ADR 0042 — after the evaluator has written its outcomes, not beside the "lifecycle"
@@ -2074,7 +2142,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
                                        "files_tagged": _lc_stats.get("lifecycle_tagged", 0),
                                        "unevaluable": _lc_stats.get("lifecycle_errors", 0)})
             except Exception:
-                pass
+                _swallowed("_scan_discover: updating the job with lifecycle totals failed", scan_id)
         # Transition the job progress to "done" so DiscoverRunProgress shows the completion
         # summary (with lifecycle breakdown) before the frontend detects scan status="discovered"
         # and navigates away. Uses the lifecycle_* naming the completion summary reads.
@@ -2091,7 +2159,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
                     "lifecycle_unevaluable": _lc_stats.get("lifecycle_errors", 0),
                 })
             except Exception:
-                pass
+                _swallowed("_scan_discover: marking the lifecycle job phase done failed", scan_id)
         # Persist lifecycle stats alongside inventory_delta so the completion card shows them
         # correctly after a page reload (job state in Redis is ephemeral).
         try:
@@ -2102,7 +2170,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 "lifecycle_tagged": _lc_stats.get("lifecycle_tagged", 0),
             })
         except Exception:
-            pass
+            _swallowed("_scan_discover: merging the lifecycle counters into the scan scope failed", scan_id)
         # THIS is where an ADR 0020 run's discovery ends — the estate is listed, the inventory is
         # persisted, the lifecycle rules have run, and nothing further happens until somebody
         # triggers Assess. The run stays at status='discovered' with completed_at NULL, possibly
@@ -2397,7 +2465,7 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
             core.store.log_decision("system", "scan.file_timeout", scan_id=scan_id, file=name,
                                     detail=f"exceeded per-file limit {cap}s")
         except Exception:
-            pass
+            _swallowed("_analyse_and_persist_one: logging the scan.file_timeout decision failed", scan_id)
         # Record an error row so count_files_done reaches total and the scan finalizes. Upsert, so a
         # late-finishing orphan thread just overwrites this with its real result.
         try:
@@ -2406,7 +2474,8 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                 "compliant": 0, "skipped_rules": 0, "issues": [],
                 "drive_file_id": item.get("drive_file_id")}, now)
         except Exception:
-            pass
+            _swallowed("_analyse_and_persist_one: store.save_file_result for a timed-out file failed — this "
+                       "file will never reach the files_done counter", scan_id)
         # Flag the timed-out file ERROR in its trace (item 2), so it stands out in Langfuse instead
         # of looking like a clean discover-only trace. Best-effort.
         try:
@@ -2414,7 +2483,7 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
             _lf2.file_error_span(_lf2.file_trace(scan_id, name, user=user),
                                  f"exceeded per-file limit {cap}s")
         except Exception:
-            pass
+            _swallowed("_analyse_and_persist_one: emitting the file-timeout error span failed", scan_id)
         return
     if "error" in outcome:
         raise outcome["error"]   # preserve the impl's original error propagation
@@ -2618,7 +2687,7 @@ def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _l
             if _t.get("totals_s"):
                 core.store.record_file_timing(scan_id, name, _t)
         except Exception:
-            pass
+            _swallowed("_analyse_and_persist_one_impl: recording the per-file timings failed", scan_id)
         # Document-centric layer (ADR 0003, Phase 1): every scan upserts the long-lived
         # document row (api/documents.py), independent of file_records' per-scan snapshot.
         # Defensively wrapped -- must never break the scan pipeline itself, only lose this
@@ -2643,7 +2712,7 @@ def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _l
                                        classify=fdict.get("classify"),   # ADR 0020 stage 2
                                        size_kb=item.get("size_kb"))
         except Exception:
-            pass
+            _swallowed("_analyse_and_persist_one_impl: upserting the document triage row failed", scan_id)
         # File-centric tracing (see lf.file_trace): each file gets its own trace, so unlike
         # the old shared-trace model there's no "too many spans on one trace" risk to cap —
         # always emit, regardless of deep-scan setting (the PII sub-span stays conditional).
@@ -2664,7 +2733,7 @@ def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _l
             else:
                 _emit_realtime_file_assess(scan_id, name, _assess_level(scan_id), user=user)
         except Exception:
-            pass
+            _swallowed("_analyse_and_persist_one_impl: emitting the per-file assess event failed", scan_id)
     finally:
         _shutil.rmtree(tmp, ignore_errors=True)
 
@@ -2733,7 +2802,8 @@ def _stop_scan_downloads(scan_id: str, reason: str) -> None:
             core.store.log_decision("system", "scan.drive_unusable", scan_id=scan_id,
                                     detail=reason[:200])
     except Exception:
-        pass    # a marker that cannot be written must not take the scan down with it
+        # a marker that cannot be written must not take the scan down with it
+        _swallowed("_stop_scan_downloads: setting the drive-stop marker failed", scan_id)
 
 
 def drive_download_halted(scan_id: str) -> str | None:
@@ -2755,7 +2825,7 @@ def clear_drive_stop(scan_id: str) -> None:
     try:
         core.store.set_setting(_DRIVE_STOP_KEY % scan_id, "")
     except Exception:
-        pass
+        _swallowed("clear_drive_stop: clearing the drive-stop marker failed", scan_id)
 
 
 # ADR 0038 — pausable/resumable scans. Same marker mechanism as _DRIVE_STOP_KEY above, but the
@@ -2783,7 +2853,8 @@ def set_scan_paused_marker(scan_id: str) -> None:
     try:
         core.store.set_setting(_PAUSE_KEY % scan_id, "1")
     except Exception:
-        pass    # a marker that cannot be written must not take the pause request down with it
+        # a marker that cannot be written must not take the pause request down with it
+        _swallowed("set_scan_paused_marker: setting the pause marker failed", scan_id)
 
 
 def clear_scan_paused_marker(scan_id: str) -> None:
@@ -2793,7 +2864,7 @@ def clear_scan_paused_marker(scan_id: str) -> None:
     try:
         core.store.set_setting(_PAUSE_KEY % scan_id, "")
     except Exception:
-        pass
+        _swallowed("clear_scan_paused_marker: clearing the pause marker failed", scan_id)
 
 
 def _make_svc(source, toks):
@@ -2945,7 +3016,8 @@ def _assess_level(scan_id: str) -> str:
         if lvl:
             return str(lvl)
     except Exception:
-        pass
+        _swallowed("_assess_level: reading the assess level from settings failed — falling back to the "
+                   "default", scan_id)
     return "AA"
 
 
@@ -3077,7 +3149,7 @@ def ensure_assess_trace(scan_id: str, level: str = "AA") -> None:
                 for rule_id in sc_counts:
                     core.store.seed_remediation_state(doc_id, rule_id, scan_id)
             except Exception:
-                pass
+                _swallowed("ensure_assess_trace: seeding remediation state for this file failed", scan_id)
         else:
             conformant = not bool(f.get("issues"))
         pe = pii_by_file.get(fname)
@@ -3122,7 +3194,7 @@ def _rescore_file(payload: dict, job: dict) -> None:
         try:
             svc = _drive_service(drive_token)
         except Exception:
-            pass
+            _swallowed("_rescore_file: building a Drive service for re-scoring failed", scan_id)
     toks = {"drive": drive_token} if drive_token else {}
     now = _dt.datetime.now(_dt.timezone.utc).isoformat()
     file_rec = core.store.get_file_record(scan_id, file) or {}
@@ -3262,7 +3334,7 @@ def _apply_one_value_kind(
             {"rule_id": diff_rule_id, "before": a["before"], "after": a["after"],
              "note": f"approved by a reviewer · {a['locator']}"} for a in applied])
     except Exception:
-        pass
+        _swallowed("_apply_one_value_kind: recording the reviewer-approved remediation diffs failed", scan_id)
 
     for rule_id in credit_rule_ids:
         for item_id in core.store.approved_unapplied_item_ids(scan_id, filename, rule_id):
@@ -3428,4 +3500,4 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
                 "system", "revalidate.certified", scan_id=scan_id, file=filename,
                 detail="all findings resolved (auto-fixed + approved values written) — advanced to Publish")
     except Exception:
-        pass
+        _swallowed("_apply_approved_values: marking the file compliant after revalidation failed", scan_id)
