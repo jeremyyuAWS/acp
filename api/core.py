@@ -1113,9 +1113,16 @@ DISCOVERY_LANE_JOB_TYPES = ("scan_discover", "scan_folder")
 
 # Stage-owned queues. These tuples are intentionally disjoint: once the generic processing
 # service is retired, an Assess backlog cannot consume Remediate capacity and vice versa.
+#
+# WORKSPACE DISCOVERY IS AN ASSESS-LANE JOB, not a Discovery-lane one, which looks wrong from the
+# name and is right from the work. The Discovery lane exists for the connector walk — minutes of
+# paginated traffic, which is why it gets reserved capacity at all. workspace_scan_discover reads
+# an uploaded workspace out of the database in one indexed SELECT and fans out; it touches no
+# connector and holds no worker. Keeping it beside workspace_scan_file also means an uploaded
+# estate is assessed end to end by one service, with no cross-lane handoff to stall on.
 ASSESS_LANE_JOB_TYPES = (
     "scan", "scan_assess", "scan_batch", "scan_file", "workspace_scan_file",
-    "scan_finalize", "assess_trace",
+    "workspace_scan_discover", "scan_finalize", "assess_trace",
 )
 REMEDIATE_LANE_JOB_TYPES = ("remediate_file", "rescore_file", "apply_approved_values")
 
