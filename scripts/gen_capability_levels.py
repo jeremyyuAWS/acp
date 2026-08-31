@@ -103,6 +103,14 @@ REMEDIATION_VERIFIED: dict[tuple[str, str], str] = {
         "repointed, with uniqueCount bumped and count left alone); the workbook opens; a re-scan "
         "no longer reports 2.4.4. A formula-labelled cell is REFUSED with a reason rather than "
         "rewritten, and never gets its display= written as a consolation"),
+    ("1.1.1", "pptx"): (
+        "tests/test_remediation_verified_pptx_alt.py — a real assessment reports 1.1.1 on an "
+        "undescribed picture and carries a locator apply_alt.parse_locator resolves; a "
+        "reviewer-authored description goes through handlers._apply_approved_values with the "
+        "re-scan UNPATCHED; the saved deck carries the descr, the title and body copy survive, "
+        "python-pptx re-opens it, and a second real assessment no longer reports 1.1.1. The "
+        "load-bearing control is a TWO-picture deck with one description approved: the write "
+        "succeeds, the criterion still fails, and nothing is credited or published"),
 }
 
 # WHAT NEITHER ENTRY ABOVE CLAIMS, written here rather than left to be inferred from their
