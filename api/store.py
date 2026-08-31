@@ -7019,17 +7019,39 @@ class Store:
             self._db.execute(cur, "DELETE FROM jobs WHERE status='done' AND updated_at<%s", (cutoff,))
         return n
 
-    def touch_job(self, job_id: str) -> None:
+    def touch_job(self, job_id: str, *, worker_id: str, attempt: int) -> None:
         """Heartbeat: extend a running job's lease so the stuck-job sweeper won't
         reclaim a slow-but-alive job (e.g. a long PII scan). Called periodically by
-        the worker while the handler runs."""
+        the worker while the handler runs.
+
+        ONLY THE CURRENT HOLDER MAY RENEW. The predicate used to be `id=%s AND
+        status='running'`, which any process still believing it owned the job satisfied —
+        including one whose claim the sweeper reclaimed minutes ago. A wedged worker's
+        heartbeat thread outlives its claim, so it went on extending the lease of whichever
+        worker took the job over.
+
+        That is worse than a wasted write. The lease is the ONLY mechanism that recovers a job
+        from a dead worker, so while a zombie keeps renewing it the new holder's death is
+        invisible: the lease never goes stale, reclaim_stuck_jobs never fires, and the job sits
+        'running' behind a heartbeat from a process doing no work. The zombie masks the failure
+        of its own replacement. Bounded by max_unverified_lease_s (ACP_JOB_MAX_LEASE_S, 3600s
+        by default) rather than small.
+
+        `attempt` as well as `worker_id`, because a worker can legitimately re-claim a job it
+        ran before — same locked_by, later attempt — and the earlier execution's heartbeat must
+        not renew the later one's lease. claim_job sets both fields, so both are available to
+        check against.
+
+        Both are REQUIRED keyword arguments, deliberately: an optional guard is one a future
+        caller forgets, and the failure would be silent. Pinned by tests/test_lease_ownership.py.
+        """
         now = self._now()
         expires = self._lease_expiry()
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "UPDATE jobs SET locked_at=%s, updated_at=%s, lease_expires_at=%s "
-                "WHERE id=%s AND status='running'",
-                (now, now, expires, job_id))
+                "WHERE id=%s AND status='running' AND locked_by=%s AND attempts=%s",
+                (now, now, expires, job_id, worker_id, attempt))
 
     # Job types whose payload names documents that COUNT toward a scan's finalize total.
     # A dead-letter on one of these has to leave a file_records row behind — see

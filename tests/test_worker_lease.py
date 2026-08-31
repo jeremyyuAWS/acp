@@ -74,7 +74,7 @@ def test_a_wedged_job_stops_having_its_lease_extended(store, monkeypatch, capsys
     monkeypatch.setattr(worker, "max_unverified_lease_s", lambda: 0.001)
 
     touches = []
-    monkeypatch.setattr(store, "touch_job", lambda jid: touches.append(jid))
+    monkeypatch.setattr(store, "touch_job", lambda jid, **kw: touches.append(jid))
 
     release = threading.Event()
     worker.HANDLERS["wedged"] = _blocking_handler(release)
@@ -101,7 +101,7 @@ def test_a_slow_but_healthy_job_still_gets_its_lease_extended(store, monkeypatch
     monkeypatch.setattr(worker, "max_unverified_lease_s", lambda: 3600)
 
     touches = []
-    monkeypatch.setattr(store, "touch_job", lambda jid: touches.append(jid))
+    monkeypatch.setattr(store, "touch_job", lambda jid, **kw: touches.append(jid))
 
     release = threading.Event()
     worker.HANDLERS["slow"] = _blocking_handler(release)

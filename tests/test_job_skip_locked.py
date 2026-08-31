@@ -67,7 +67,10 @@ def test_touch_job_refreshes_lease(isolated_store, monkeypatch):
 
     # Advance the env to a longer lease and touch
     monkeypatch.setenv("ACP_JOB_LEASE_S", "3600")
-    st.touch_job(job["id"])
+    # Ownership is part of the contract now: only the current holder, on the attempt it claimed,
+    # may renew (see tests/test_lease_ownership.py). 'w1' claimed it two lines up, so this is the
+    # same refresh this test always asserted — stated explicitly rather than implied by status.
+    st.touch_job(job["id"], worker_id="w1", attempt=job["attempts"])
 
     refreshed = st.get_job(job["id"])
     assert refreshed["lease_expires_at"] != first_exp
