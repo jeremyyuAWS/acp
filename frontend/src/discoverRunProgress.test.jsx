@@ -918,9 +918,22 @@ describe('the queued state (PRD §16.1)', () => {
     expect(html).toMatch(/created (29|30)m ago/)
   })
 
-  it('falls back to mount-relative elapsed when started_at is absent (fresh submission)', () => {
+  it('says the submission time is unavailable rather than inventing one from mount', () => {
+    // INVERTED DELIBERATELY. This previously asserted `created 0s ago` — the mount-relative
+    // fallback, written as intended behaviour for a fresh submission. It is the wrong answer for
+    // two reasons that only show up away from the happy path:
+    //
+    //   - "0s ago" is indistinguishable from a real reading, so nobody can tell the age is
+    //     fabricated. On a tab switch the component remounts and a five-minute-old run reads as
+    //     0s — precisely when someone is checking whether it is stuck.
+    //   - It is not merely imprecise, it is confidently wrong in the direction that reassures.
+    //
+    // The run's age now comes from the persisted instant or is not shown as a number at all
+    // (queueAge.js). The mount-relative clock is still right for the "this view has been watching
+    // N seconds with nothing happening" hints, which are questions about the watching.
     const html = render({ phase: 'queued' }, true)
-    expect(html).toMatch(/created 0s ago/)
+    expect(html).toMatch(/submission time unavailable/)
+    expect(html).not.toMatch(/created \d+s ago/)
   })
 
   it('never shows a negative wait time when started_at is slightly in the future (clock skew)', () => {

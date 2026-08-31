@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import WorkerCard from './WorkerCard.jsx'
 import LiveCounter from './LiveCounter.jsx'
 import { nextMilestone } from './discoveryMilestone.js'
+import { deriveRunAge, ageText } from './queueAge.js'
 
 // The Discover RUNNING screen: a per-step checklist showing what the discovery agent is doing.
 // This replaces the generic scan-progress banner on the Discover tab so the screen stays scoped
@@ -20,6 +21,9 @@ function fmtElapsedSecs(s) {
 
 // Seconds since a real ISO timestamp, clamped to >= 0 (clock skew, or a timestamp that arrives
 // fractionally in the future relative to this tab's clock, must never show as negative).
+// Kept for the stall counter below, which is genuinely view-relative. The RUN's age comes from
+// queueAge.js instead — see its header for why a silent mount-relative fallback is worse than
+// no number at all.
 function secsSince(iso) {
   if (!iso) return null
   const ms = Date.now() - Date.parse(iso)
@@ -388,7 +392,12 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   // queuedProgress.js on a refresh) over the component's own mount-relative `elapsed`, so
   // reloading the page while queued does not reset the wait time back to zero.
   if (busy && phase === 'queued') {
-    const waitedSecs = secsSince(progress.started_at) ?? elapsed
+    // No `?? elapsed`. That fallback substituted the component's MOUNT-relative clock and
+    // rendered it in the same words ("created 4s ago"), so a fabricated age was indistinguishable
+    // from a real one — and it reset to zero on every tab switch, which is exactly when someone
+    // is checking whether the run is stuck. deriveRunAge returns null rather than a number when
+    // there is no persisted instant, and ageText says so in words.
+    const queuedAge = deriveRunAge({ startedAt: progress.started_at })
     return (
       <section className="discover-run-progress" role="region" aria-label="Discovery queued"
                style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
@@ -410,7 +419,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
             <span style={{ fontSize: 13.5 }}>
               Waiting for an available worker
               <span className="muted" style={{ marginLeft: 8, fontVariantNumeric: 'tabular-nums' }}>
-                · created {fmtElapsedSecs(waitedSecs)} ago
+                · created {ageText(queuedAge, fmtElapsedSecs)}
               </span>
             </span>
           </div>
