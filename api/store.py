@@ -7158,10 +7158,47 @@ class Store:
             print(f"[acp] mark_job_cancelled: job {job_id} already terminal — zombie-worker no-op", flush=True)
         return won
 
+    # A job that reached 'dead' because someone STOPPED it, not because it failed.
+    #
+    # THREE STATES, and this predicate is where the third becomes visible in the data:
+    #
+    #   requested  cancel_requested_at is set. A user pressed Stop, or a newer run superseded
+    #              this one. Work may still be running.
+    #   observed   a worker's check_cancel() raised. That execution knows.
+    #   stopped    the row is terminal AND cancel_requested_at is set — nothing belonging to
+    #              this job can still run or write, and the reason it ended was a decision
+    #              rather than a fault.
+    #
+    # WHY IT LOOKS LIKE A FAILURE TODAY. _end_running_scan (cancel_scan and supersede_scan both
+    # route through it) sets status='dead' on every queued/running job of the scan, and its own
+    # comment records the consequence as deliberate: the worker's later mark_job_cancelled is
+    # guarded `status NOT IN ('done','dead','cancelled')`, so it no-ops and "the job KEEPS its
+    # 'dead' status — dead-letter accounting is unchanged".
+    #
+    # Unchanged, and wrong for the operator. dead_letter_breakdown answers "why are jobs dying",
+    # and every Stop press was landing in that answer as a failure — inflating `n`,
+    # `affected_runs` and `total_attempts`, and grouping under whatever last_error happened to be
+    # on the row. A pressed button is not an incident, and a diagnostic that cannot tell them
+    # apart makes the real incidents harder to see, which is the opposite of its purpose.
+    #
+    # The data to separate them was already there: those rows carry cancel_requested_at. Nothing
+    # read it that way. Kept as one predicate rather than inlined, so a future query cannot apply
+    # the distinction in one place and forget it in another — which is how it was lost the first
+    # time.
+    _STOPPED = " AND cancel_requested_at IS NOT NULL"
+    _FAILED = " AND cancel_requested_at IS NULL"
+
     def dead_letter_breakdown(self, owner: str | None = None) -> dict:
-        """Diagnostic: dead-lettered jobs grouped by type + the most common errors.
+        """Diagnostic: jobs that FAILED, grouped by type + the most common errors — and,
+        separately, jobs that were STOPPED.
         owner scopes to the caller's own jobs so error text (which can name a file)
         never leaks across tenants.
+
+        `by_type`, `top_errors` and `failed` exclude deliberately-stopped jobs (see _STOPPED).
+        They used to include them, because a Stop marks its jobs 'dead' and this read status
+        alone — so pressing Stop on a 200-document scan added 200 "failures" to the operator's
+        why-are-jobs-dying view. `stopped` reports that count instead of hiding it: the jobs are
+        still terminal and still worth seeing, they are simply not faults.
 
         Each `top_errors` group also carries incident-shaped context for the UI (Monitor's
         dead-letter banner): a scan (run) fans out into many jobs — scan_file/scan_batch/
@@ -7176,13 +7213,32 @@ class Store:
         sp = (owner,) if owner else ()
         out: dict = {}
         with self._db.cursor() as cur:
-            self._db.execute(cur, "SELECT type, COUNT(*) AS n FROM jobs WHERE status='dead'" + scope + " GROUP BY type", sp)
+            self._db.execute(cur, "SELECT type, COUNT(*) AS n FROM jobs WHERE status='dead'"
+                             + self._FAILED + scope + " GROUP BY type", sp)
             out["by_type"] = {r["type"]: r["n"] for r in self._db.fetchall(cur)}
+            # Deliberate stops, counted and reported rather than dropped: a user who stopped a
+            # run should still be able to see that its jobs ended, and an operator should not
+            # have to subtract them from a failure count by eye.
+            self._db.execute(cur, "SELECT COUNT(*) AS n, COUNT(DISTINCT scan_id) AS runs "
+                             "FROM jobs WHERE status IN ('dead','cancelled')"
+                             + self._STOPPED + scope, sp)
+            _st = self._db.fetchone(cur) or {}
+            out["stopped"] = {"n": _st.get("n") or 0, "affected_runs": _st.get("runs") or 0}
+            # The number the operator's red banner is ENTITLED to describe as "failed
+            # permanently". It equals sum(by_type.values()) by construction, but affected_runs
+            # is not derivable from by_type, and a caller that has to sum a dict to learn the
+            # headline figure will eventually sum the wrong one — QueuePanel read `stats.dead`,
+            # which is that mistake with a different source.
+            self._db.execute(cur, "SELECT COUNT(*) AS n, COUNT(DISTINCT scan_id) AS runs "
+                             "FROM jobs WHERE status='dead'" + self._FAILED + scope, sp)
+            _fl = self._db.fetchone(cur) or {}
+            out["failed"] = {"n": _fl.get("n") or 0, "affected_runs": _fl.get("runs") or 0}
             self._db.execute(cur,
                 "SELECT type, SUBSTR(last_error,1,200) AS err, COUNT(*) AS n, "
                 "COUNT(DISTINCT scan_id) AS affected_runs, SUM(attempts) AS total_attempts, "
                 "MIN(created_at) AS first_seen, MAX(updated_at) AS last_seen FROM jobs "
-                "WHERE status='dead'" + scope + " GROUP BY type, SUBSTR(last_error,1,200) ORDER BY n DESC LIMIT 15", sp)
+                "WHERE status='dead'" + self._FAILED + scope
+                + " GROUP BY type, SUBSTR(last_error,1,200) ORDER BY n DESC LIMIT 15", sp)
             out["top_errors"] = [{"type": r["type"], "n": r["n"], "error": r["err"],
                                   "affected_runs": r["affected_runs"],
                                   "total_attempts": r["total_attempts"],
