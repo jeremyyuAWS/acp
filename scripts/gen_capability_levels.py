@@ -141,6 +141,50 @@ REMEDIATION_VERIFIED: dict[tuple[str, str], str] = {
         "with an empty value map and clears the criterion on the re-scan. Controls: describing "
         "one of two images is written but never credited, and an approval aimed at an image the "
         "document does not have resolves to nothing and changes nothing"),
+    ("2.4.9", "docx"): (
+        "tests/test_remediation_verified_office_link_duplicate.py — parametrised over docx and "
+        "pptx, because 2.4.9 is one writer and one criterion differing only in which part the "
+        "hyperlink lives in. Two links reading 'annual report' at two DIFFERENT destinations; "
+        "the proposer offers a value for each side of the collision; relabelling ONE through "
+        "handlers._apply_approved_values with the re-scan UNPATCHED clears it, with the other "
+        "link, both destinations and the surrounding content untouched. The mirror control of "
+        "the pptx 2.4.4 proof: relabelling the duplicate to 'click here' genuinely clears 2.4.9 "
+        "and trips 2.4.4, and because the lane declares scs_to_clear = {2.4.4, 2.4.9} it is "
+        "written and never credited"),
+    ("2.4.9", "pptx"): (
+        "tests/test_remediation_verified_office_link_duplicate.py — the pptx half of the same "
+        "parametrised proof, where the two colliding links sit on DIFFERENT slides and so "
+        "resolve through different per-slide rels parts"),
+    ("3.1.2", "pptx"): (
+        "tests/test_remediation_verified_pptx_language.py — the docx language proof's twin, "
+        "kept a separate file because the WRITE differs: PresentationML records a run's "
+        "language as a bare `lang=` attribute on <a:rPr>, not Word's <w:lang w:val=…> element. "
+        "A real assessment reports 3.1.2 on an unmarked French passage, the code "
+        "propose_language_parts actually drafts is approved and written through the real lane "
+        "with the re-scan UNPATCHED, and a second assessment no longer reports it. As on docx "
+        "the survival assertion is the strong one — a language mark is metadata, so the whole "
+        "extracted text must be byte-identical. A value that is not a language code is refused "
+        "by the writer and reported unresolved rather than written"),
+    ("1.1.1", "xlsx"): (
+        "tests/test_remediation_verified_xlsx_alt.py — the third alt-text lane, and the only "
+        "one whose image is not in the content part at all: SpreadsheetML keeps pictures in "
+        "xl/drawings/drawingN.xml, so the locator names a drawing and the element is cNvPr "
+        "with or without an xdr: prefix (Excel writes it prefixed, openpyxl bare). The "
+        "workbook starts with openpyxl's hard-coded descr placeholder \"Picture\" — attribute "
+        "present, saying nothing — which the detector reads as undescribed; approved "
+        "descriptions go through handlers._apply_approved_values with the re-scan UNPATCHED; "
+        "the sheet name, cell values and shared strings are read back with openpyxl. Control: "
+        "describing one of two images is written and never credited"),
+    ("4.1.2", "docx"): (
+        "tests/test_remediation_verified_docx_field_name.py — a Word content control with no "
+        "Title: a real assessment reports 4.1.2, an approved name goes through "
+        "handlers._apply_approved_values with the re-scan UNPATCHED, and w:alias reaches the "
+        "document. The same write also clears 3.3.2, asserted rather than assumed — w:alias is "
+        "simultaneously the accessible name and the visible label, and the lane's scs_to_clear "
+        "is {4.1.2} alone, so that is a property of the document rather than of the "
+        "bookkeeping. Controls: an author-supplied Title is never overwritten, an approval "
+        "aimed at a control that is not there changes nothing, and a w:text control is not a "
+        "form field at all — the exclusion both detector and writer gate on"),
 }
 
 # WHAT NEITHER ENTRY ABOVE CLAIMS, written here rather than left to be inferred from their
