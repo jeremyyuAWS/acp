@@ -135,7 +135,7 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 // position (see discoverProcessingState.js's own comment on why a fixed "#N in queue" is fragile).
 const DISCOVERY_JOB_TYPES = new Set(['scan_discover', 'scan_batch', 'scan_finalize', 'scan_file', 'scan'])
 
-export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, preflightDegraded = null, preflightCapacityState = null, scanPct = 0, scanId = null, jobId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
+export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, preflightDegraded = null, preflightCapacityState = null, scanPct = 0, scanId = null, activeScanId = null, jobId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
   hasSPToken = false, runAt = null, run = null, scanList = null, rawFiles = null, onStop = null, onViewMonitor = null,
   onOpenSource = null, pendingScanLoad = false }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
@@ -253,18 +253,37 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // honest range — deriveDiscoverProcessingState reads that absence as pickupUnavailable, same
   // as before this existed, rather than showing a guess.
   const [pickupEstimate, setPickupEstimate] = useState(null)
+  // TWO IDENTITIES, and this is the one place that wants the ACTIVE one.
+  //
+  // `scanId` is the DISPLAYED run — the inventory on screen, which is the PREVIOUS scan for the
+  // whole time a new one is in flight (App only replaces it when pollScanJob resolves, i.e. when
+  // the scan finishes). Every other consumer in this file legitimately wants that: the inventory
+  // loader, getSourceStatus, acknowledgeScan, the export.
+  //
+  // The pickup estimate does not. It answers "when will the work I just submitted start", which
+  // is a question about the job that was just accepted. Using `scanId` asked it about a run that
+  // had already finished — which is what production recorded on 2026-08-30: the estimate request
+  // named scan 5e78b8d2cb75 while the worker had claimed the job for ad94e943e0f2.
+  //
+  // So this reads `activeScanId` (App's liveScanId, set from the submission's own response
+  // alongside jobId) and does NOT fall back to `scanId`. A fallback is what produced the bug:
+  // when nothing is live there is no pickup to estimate, and the honest answer is no request at
+  // all rather than an estimate for somebody else's finished run.
   useEffect(() => {
     setPickupEstimate(null)
     const phase = progress?.phase ?? null
-    if (!busy || (phase && phase !== 'queued') || !scanId) return undefined
+    if (!busy || (phase && phase !== 'queued') || !activeScanId) return undefined
     let live = true
-    const load = () => getQueueEstimate(scanId, 'discover').then((d) => {
+    const load = () => getQueueEstimate(activeScanId, 'discover').then((d) => {
+      // Guards a late response from a PREVIOUS activeScanId: the effect re-runs when the id
+      // changes and the old closure's `live` is already false, so scan A's reply cannot land on
+      // scan B's panel. Start B while A is still resolving and B keeps its own estimate.
       if (live) setPickupEstimate(d)
     }).catch(() => {})
     load()
     const id = setInterval(load, 10000)
     return () => { live = false; clearInterval(id) }
-  }, [busy, scanId, progress?.phase])
+  }, [busy, activeScanId, progress?.phase])
   // "How many workers are available to pick up scan jobs" — the same GET /jobs signal
   // AssessRunner's worker strip already polls (workers/alive/suggested), shown here so this
   // question is answered directly on Discover instead of only inside a "Preparing capacity"

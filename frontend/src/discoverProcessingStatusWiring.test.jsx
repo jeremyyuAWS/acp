@@ -109,9 +109,22 @@ describe('the queue-estimate poll is wired through to the panel', () => {
   const here = dirname(fileURLToPath(import.meta.url))
   const src = readFileSync(join(here, 'Discover.jsx'), 'utf8')
 
-  it('polls getQueueEstimate(scanId, "discover") only in the same pre-listing window as queueSnap', () => {
-    expect(src).toMatch(/getQueueEstimate\(scanId, 'discover'\)/)
-    expect(src).toMatch(/if \(!busy \|\| \(phase && phase !== 'queued'\) \|\| !scanId\) return undefined/)
+  it('polls getQueueEstimate(activeScanId, "discover") only in the same pre-listing window as queueSnap', () => {
+    // `activeScanId`, NOT `scanId`, and the difference is the 2026-08-30 production defect this
+    // assertion now guards rather than enshrines. `scanId` is the DISPLAYED run — the previous
+    // scan for the whole time a new one is in flight, because App only replaces `run` when
+    // pollScanJob resolves. So the estimate asked about a finished scan: production logged the
+    // request naming 5e78b8d2cb75 while the worker had claimed the job for ad94e943e0f2.
+    //
+    // This test previously pinned `scanId` here, which is why a source-text assertion is worth
+    // being careful with: it recorded what the code DID, and went on passing while the thing it
+    // described was wrong. It is kept (the mount cost argument in the block comment above still
+    // holds) but the behavioural case now lives in discoverActiveScanIdentity.test.jsx, which
+    // renders both ids at once and asserts each reaches the right call.
+    expect(src).toMatch(/getQueueEstimate\(activeScanId, 'discover'\)/)
+    expect(src).toMatch(/if \(!busy \|\| \(phase && phase !== 'queued'\) \|\| !activeScanId\) return undefined/)
+    // No fallback to the displayed run: when nothing is live there is no pickup to estimate.
+    expect(src).not.toMatch(/getQueueEstimate\(activeScanId \|\| scanId/)
   })
 
   it('threads the result into deriveDiscoverProcessingState as pickupEstimate', () => {
