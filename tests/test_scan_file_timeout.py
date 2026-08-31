@@ -23,7 +23,7 @@ class _FakeStore:
         self.saved = []
         self.decisions = []
 
-    def save_file_result(self, scan_id, fdict, now):
+    def save_file_result(self, scan_id, fdict, now, *, job=None):
         self.saved.append(fdict)
 
     def log_decision(self, *a, **k):

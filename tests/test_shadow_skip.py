@@ -109,7 +109,9 @@ def test_shadow_check_also_runs_when_prior_analysis_is_reused():
     # the convergent check
     check = src.index('and fdict.get("acp_stamped") and fdict.get("status") != "skipped"')
     # the single persist call
-    save = src.index('core.store.save_file_result(scan_id, fdict, now)')
+    # Anchored on the call PREFIX, not the whole line: the argument list gained `job=job` when
+    # result writes were fenced, and this assertion is about ORDER, not about the signature.
+    save = src.index('core.store.save_file_result(scan_id, fdict, now')
     assert dedup < check < save, "the check must run after the dedup branch and before persist"
 
 
