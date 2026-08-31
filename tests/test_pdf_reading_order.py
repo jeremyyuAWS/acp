@@ -1,51 +1,27 @@
-"""`pdf.reading-order` cannot fire, and the obvious one-word fix would be worse than the bug.
+"""Acceptance tests for `pdf.reading-order` as a BOUNDED capability.
 
-WHAT THIS FILE IS FOR. `acp-core-17` claims 1.3.2 on .pdf, and the comment above that table says
-its per-format asymmetries are "the engine's real coverage, not an editorial choice". For .pdf
-that is not true today: the only detector that could emit 1.3.2 on a PDF is
-`analysers.rules.pdf.reading_order.ReadingOrderRule`, and it returns nothing on every input,
-including a document whose content stream is written in exactly reverse visual order.
+WHAT CHANGED, and why this file was rewritten rather than extended. It used to document a rule
+that could not fire: `extract_words(use_text_flow=False)` presorted words by (top, x0) and
+`_compute_divergence` sorted that same list by (top, x0), so the divergence was 0.0 on every
+input including a fully reversed content stream. Those tests asserted the deadness, and measured
+that the one-word fix (`use_text_flow=True`) would be WORSE — three ordinary correct layouts
+scored 78%, 100% and 100% against a 25% threshold.
 
-That is invisible from reading the code, which is why it survived. The rule looks right — it
-computes a divergence, compares it to a threshold, builds a well-formed issue. It just measures
-a list that has already been sorted into the order it is checking for.
+The rule now reports on one shape of page and abstains on the rest, so the assertions here are
+the boundary rather than the deadness. Each abstention corresponds to one of those measured
+false positives, and each is tested positively — an abstention nobody exercises is a comment.
 
-WHY THE RULE IS DEAD. `page.extract_words(use_text_flow=False)` PRESORTS words by (top, x0).
-`_compute_divergence` then sorts that same list by (top, x0) and counts positions that moved.
-Sorting an already-sorted list moves nothing, so the divergence is 0.0 for every document ever
-scanned and the threshold is never reached. The flag means "ignore the PDF's own character flow",
-which is precisely the signal the rule exists to look at.
+THE DISTINCTION THIS FILE EXISTS TO KEEP: ABSTAINING IS NOT PASSING. The rule returns no issue
+for a tagged document, a two-column page and a footnote page alike, and in none of those cases
+has it formed the opinion that the order is correct. That is why (1.3.2, pdf) stays visibly
+uncovered in the capability report: a criterion nothing assesses must not read as one that
+passed. The last test pins that.
 
-WHY THE ONE-WORD FIX IS NOT THE FIX. `use_text_flow=True` does make the rule fire — it is also
-what the rule's own docstring describes. But `_compute_divergence` compares the stream against a
-naive (top, x0) sort, and that is not the visual reading order of a multi-column page: column
-one's second line sorts above column two's first. Measured on well-formed fixtures below, THREE
-classes of correct document blow past the 25% threshold:
-
-    two-column layout                       78%
-    footnote drawn before the body         100%
-    TAGGED, order defined by the tree      100%
-
-all false positives, on documents with nothing wrong with them. Flipping the flag alone would
-take a detector that reports nothing and turn it into one that reports confidently on correct
-documents, which is the worse of the two failures: a silent detector understates, and a wrong
-one gets acted on.
-
-The third is the sharpest, because it is worst exactly where it should be best: a tagged PDF is
-one that has BEEN through an accessibility workflow, its reading order is defined by the
-structure tree, and the content stream it is measured against does not decide what a reader
-gets. The fix for that one is also already written, in the AI path for this same criterion —
-`remediate_pdf._propose_reading_order` returns early on `/StructTreeRoot`. The detector never
-asks.
-
-So 1.3.2 on .pdf needs a tagged gate AND column-aware visual ordering before it can mean
-anything, and until then the corpus has no fixture for it — a ground-truth pair asserts that a
-detector fires, and this one cannot. These tests pin the measurement so the next person to find the dead rule finds the
-reason it was left alone rather than re-deriving the one-word change and shipping it.
-
-See also the 1.4.3-on-PDF story in CLAUDE.md: a fixer that assumed a white page rewrote compliant
-dark-theme PDFs from 21:1 to 3.66:1, unattended. Detectors that are confidently wrong cost more
-than detectors that are quiet.
+TAGGED DOCUMENTS GET THREE CASES, NOT ONE. Well-formed, malformed, and correctly-formed-but-
+mis-ordered. All three abstain, and that is the point: the rule cannot tell them apart, so
+finding /StructTreeRoot must never stand in for "the order is right". A version that abstained
+only on the well-formed tree — or worse, treated the tag's presence as a pass — would look
+identical on the first case.
 """
 from __future__ import annotations
 
@@ -64,14 +40,19 @@ pikepdf = pytest.importorskip("pikepdf")
 _rl = pytest.importorskip("reportlab.pdfgen")
 
 from analysers.rules.pdf.reading_order import (  # noqa: E402
-    _DIVERGENCE_THRESHOLD,
+    _INVERSION_THRESHOLD,
     ReadingOrderRule,
-    _compute_divergence,
+    _has_out_of_flow,
+    _inversion_ratio,
+    _is_tagged,
+    _stream_lines,
+    _vertical_gutter,
 )
 
 W, H = 500, 400
 
 
+# ── fixtures: real PDFs, built to trip one thing each ────────────────────────────
 def _canvas(path: Path):
     from reportlab.lib.colors import HexColor
     from reportlab.pdfgen import canvas
@@ -82,9 +63,8 @@ def _canvas(path: Path):
     return c
 
 
-def _lines_in_stream_order(path: Path, order: list[int]) -> None:
-    """Eight lines laid out top-to-bottom, DRAWN in `order`. `order == range(8)` is a correct
-    document; `reversed` is the worst reading-order defect a PDF can have."""
+def _single_column(path: Path, order: list[int]) -> None:
+    """Eight lines laid out top-to-bottom, DRAWN in `order`."""
     c = _canvas(path)
     c.setFont("Helvetica", 12)
     placed = {i: (40, H - 40 - i * 30, f"Line{i} alpha bravo charlie") for i in range(8)}
@@ -94,73 +74,8 @@ def _lines_in_stream_order(path: Path, order: list[int]) -> None:
     c.save()
 
 
-def _divergences(path: Path) -> tuple[float, float]:
-    """(what the rule measures today, what it would measure with use_text_flow=True)."""
-    with pdfplumber.open(str(path)) as pl:
-        page = pl.pages[0]
-        return (_compute_divergence(page.extract_words(use_text_flow=False)),
-                _compute_divergence(page.extract_words(use_text_flow=True)))
-
-
-def _fires(path: Path) -> bool:
-    with pikepdf.open(str(path)) as pk, pdfplumber.open(str(path)) as pl:
-        return bool(ReadingOrderRule().check(pk, pl))
-
-
-# ── the rule is dead ─────────────────────────────────────────────────────────────
-
-@pytest.mark.parametrize("label,order", [
-    ("correct", list(range(8))),
-    ("fully reversed", list(reversed(range(8)))),
-    ("scrambled", [7, 0, 6, 1, 5, 2, 4, 3]),
-])
-def test_the_rule_reports_nothing_however_scrambled_the_content_stream_is(tmp_path, label, order):
-    """The finding, stated so it cannot be mistaken for a passing document. A fully reversed
-    stream is the unambiguous 1.3.2 failure — every screen reader reads the page bottom-up — and
-    the rule returns an empty list for it.
-
-    If this test starts FAILING, the rule has been fixed. That is good news and the right
-    response is to delete this file and write the corpus pair it was blocking; do not "fix" the
-    test to keep it green."""
-    pdf = tmp_path / f"{label.replace(' ', '-')}.pdf"
-    _lines_in_stream_order(pdf, order)
-    assert not _fires(pdf), (
-        f"pdf.reading-order fired on the {label} stream — the rule is no longer dead. Delete "
-        f"this file and add the 1.3.2 .pdf corpus pair it was blocking")
-
-
-def test_the_divergence_is_exactly_zero_because_the_list_is_pre_sorted(tmp_path):
-    """The mechanism, not just the symptom — so the next reader does not conclude the threshold
-    is merely too high and lower it. The number is 0.0, not 0.2: no amount of threshold tuning
-    reaches it, because nothing is ever measured as out of order."""
-    pdf = tmp_path / "reversed.pdf"
-    _lines_in_stream_order(pdf, list(reversed(range(8))))
-    today, with_flow = _divergences(pdf)
-    assert today == 0.0, (
-        "the presorted list now yields non-zero divergence — re-derive this file's claim")
-    assert with_flow > _DIVERGENCE_THRESHOLD, (
-        "the signal is not in the text-flow ordering either; this file's diagnosis is wrong")
-
-
-def test_the_word_list_the_rule_reads_is_already_in_visual_order(tmp_path):
-    """Named directly rather than left as an inference from the zero above: with
-    use_text_flow=False the first word pdfplumber returns is the TOP line even when the stream
-    drew it last. That single fact is the whole bug."""
-    pdf = tmp_path / "reversed.pdf"
-    _lines_in_stream_order(pdf, list(reversed(range(8))))
-    with pdfplumber.open(str(pdf)) as pl:
-        page = pl.pages[0]
-        presorted = page.extract_words(use_text_flow=False)
-        flowed = page.extract_words(use_text_flow=True)
-    assert presorted[0]["text"] == "Line0", "presorted order is no longer visual order"
-    assert flowed[0]["text"] == "Line7", "text-flow order no longer follows the content stream"
-
-
-# ── and the one-word fix would be worse ──────────────────────────────────────────
-
 def _two_column(path: Path) -> None:
-    """Correct: column one is drawn in full, then column two. Naive (top, x0) sorting interleaves
-    them, so the stream looks 'out of order' to the current divergence maths."""
+    """Correct: column one drawn in full, then column two."""
     c = _canvas(path)
     c.setFont("Helvetica", 11)
     for i in range(9):
@@ -171,8 +86,7 @@ def _two_column(path: Path) -> None:
 
 
 def _footnote_first(path: Path) -> None:
-    """Also correct: a footnote emitted before the body that references it, which real layout
-    engines do routinely."""
+    """Also correct: a footnote emitted before the body that references it."""
     c = _canvas(path)
     c.setFont("Helvetica", 8)
     c.drawString(40, 30, "1. See appendix B for the full methodology and sampling frame.")
@@ -182,130 +96,157 @@ def _footnote_first(path: Path) -> None:
     c.save()
 
 
-def _single_column(path: Path) -> None:
-    c = _canvas(path)
-    c.setFont("Helvetica", 11)
-    for i in range(12):
-        c.drawString(40, H - 40 - i * 25, f"Paragraph line {i} with several ordinary words here")
-    c.save()
-
-
-@pytest.mark.parametrize("name,build", [("two column", _two_column),
-                                        ("footnote drawn first", _footnote_first)])
-def test_flipping_the_flag_alone_would_fire_on_well_formed_documents(tmp_path, name, build):
-    """The reason this is not a one-word fix, measured rather than asserted. Both documents are
-    correct — a reader of either gets the right sequence — and both blow past the threshold once
-    the divergence is computed against the content stream, because the comparison order is a flat
-    (top, x0) sort that does not understand columns.
-
-    This is the test to look at before changing `use_text_flow`. It does not forbid the change; it
-    says what else has to change with it."""
-    pdf = tmp_path / (name.replace(" ", "-") + ".pdf")
-    build(pdf)
-    _today, with_flow = _divergences(pdf)
-    assert with_flow >= _DIVERGENCE_THRESHOLD, (
-        f"{name} no longer false-positives under use_text_flow=True — if _compute_divergence "
-        f"became column-aware, this file's objection is answered and 1.3.2 on .pdf can have a "
-        f"real corpus pair")
-
-
-# ── and a TAGGED document is a third false positive, with a gate already written next door ──
-
-def _tagged(src: Path, dst: Path, elements: int = 8) -> None:
-    """Turn a PDF into a TAGGED one: give it a StructTreeRoot with a paragraph element per line.
-
-    This is what "reading order is defined" MEANS for a PDF. A tagged document's order comes from
-    the structure tree, which is what assistive technology walks; the order things happen to be
-    drawn in the content stream is then irrelevant to a reader, and routinely differs from it —
-    that is the normal output of every tagging workflow, not a defect.
-    """
+def _tag(src: Path, dst: Path, *, kind: str = "well_formed") -> None:
+    """Add a structure tree. `kind` picks how good it is — all three must abstain alike."""
     with pikepdf.open(str(src)) as pdf:
         page = pdf.pages[0]
         root = pdf.make_indirect(pikepdf.Dictionary(
             Type=pikepdf.Name.StructTreeRoot, K=pikepdf.Array([])))
-        root.K = pikepdf.Array([
-            pdf.make_indirect(pikepdf.Dictionary(
+        if kind == "malformed":
+            # A tree that exists but says nothing: no kids, no page links. Real files carry
+            # trees this broken, and the rule must not read the tag as a guarantee.
+            root.K = pikepdf.Array([])
+        else:
+            kids = [pdf.make_indirect(pikepdf.Dictionary(
                 Type=pikepdf.Name.StructElem, S=pikepdf.Name.P, P=root, Pg=page.obj))
-            for _ in range(elements)])
+                for _ in range(8)]
+            if kind == "misordered":
+                kids.reverse()      # a well-formed tree that states the WRONG order
+            root.K = pikepdf.Array(kids)
         pdf.Root.StructTreeRoot = root
         pdf.Root.MarkInfo = pikepdf.Dictionary(Marked=True)
         pdf.save(str(dst))
 
 
-def test_the_rule_never_asks_whether_the_document_is_tagged(tmp_path):
-    """THE THIRD FALSE POSITIVE, and the one with a fix already written twelve files away.
+def _fires(path: Path) -> list:
+    with pikepdf.open(str(path)) as pk, pdfplumber.open(str(path)) as pl:
+        return ReadingOrderRule().check(pk, pl)
 
-    A tagged PDF whose structure tree defines a correct reading order still measures 100%
-    divergence off its content stream, because the rule reads the stream and never looks at the
-    tree. So flipping the flag would flag correctly-tagged documents — the documents that are
-    MOST likely to have been through an accessibility workflow — at the top of the scale.
 
-    The gate is not hypothetical or hard: `remediate_pdf._propose_reading_order`, the AI path for
-    this same criterion, opens with
+def _ratio(path: Path) -> float:
+    with pdfplumber.open(str(path)) as pl:
+        return _inversion_ratio(_stream_lines(pl.pages[0]))
 
-        if "/StructTreeRoot" in pdf.Root:
-            return  # tagged -> reading order comes from the structure tree, not a guess
 
-    The detector has no equivalent. Two code paths answering one question, one of which knows
-    something the other does not — so this is recorded as a specific, small prerequisite rather
-    than left inside the general "the maths is wrong" objection.
-    """
-    scrambled = tmp_path / "scrambled.pdf"
-    _lines_in_stream_order(scrambled, list(reversed(range(8))))
-    tagged = tmp_path / "scrambled-tagged.pdf"
-    _tagged(scrambled, tagged)
+# ── 1. the capability: it reports the defect it is for ───────────────────────────
+def test_a_scrambled_untagged_single_column_page_is_reported(tmp_path):
+    """THE CAPABILITY. The case the old rule could not detect on any input: an untagged page
+    whose content stream is the exact reverse of its layout. A screen reader follows the stream,
+    so this reads the page backwards."""
+    pdf = tmp_path / "reversed.pdf"
+    _single_column(pdf, list(reversed(range(8))))
+
+    issues = _fires(pdf)
+    assert len(issues) == 1, f"expected one finding, got {issues}"
+    assert issues[0].rule_id == "pdf.reading-order"
+    assert issues[0].location.page_number == 1
+    assert _ratio(pdf) == 1.0, "a fully reversed stream should measure 1.0"
+
+
+def test_a_correctly_ordered_page_is_silent(tmp_path):
+    """The control that makes the test above mean something. Same fixture, correct order."""
+    pdf = tmp_path / "correct.pdf"
+    _single_column(pdf, list(range(8)))
+    assert _fires(pdf) == []
+    assert _ratio(pdf) == 0.0
+
+
+@pytest.mark.parametrize("label,order", [
+    ("swap the middle pair", [0, 1, 2, 4, 3, 5, 6, 7]),
+    ("one line late", [0, 2, 3, 4, 5, 6, 7, 1]),
+])
+def test_a_small_permutation_is_not_reported(tmp_path, label, order):
+    """The threshold, exercised rather than asserted in a comment. A slight departure is more
+    often a layout artefact this rule has not learned than a real defect, so only a gross
+    permutation is reported. Without this, `_INVERSION_THRESHOLD` could be 0 and every test
+    above would still pass."""
+    pdf = tmp_path / (label.replace(" ", "-") + ".pdf")
+    _single_column(pdf, order)
+    assert _ratio(pdf) < _INVERSION_THRESHOLD, f"{label}: fixture is grosser than intended"
+    assert _fires(pdf) == [], f"{label} was reported, but is below the threshold"
+
+
+# ── 2. the boundary: the three measured false positives now abstain ──────────────
+def test_a_two_column_page_abstains(tmp_path):
+    """78% under the naive comparison, and correct. The gutter is what the rule sees."""
+    pdf = tmp_path / "two-column.pdf"
+    _two_column(pdf)
+
+    with pdfplumber.open(str(pdf)) as pl:
+        page = pl.pages[0]
+        gutter = _vertical_gutter(_stream_lines(page), page.width)
+    assert gutter is not None, "the fixture must actually present a gutter to be a fixture"
+    assert _fires(pdf) == [], "a correct two-column layout must not be reported"
+
+
+def test_a_footnote_drawn_before_the_body_abstains(tmp_path):
+    """100% under the naive comparison, and the normal output of every layout engine."""
+    pdf = tmp_path / "footnote.pdf"
+    _footnote_first(pdf)
+
+    with pdfplumber.open(str(pdf)) as pl:
+        assert _has_out_of_flow(_stream_lines(pl.pages[0])), (
+            "the fixture must actually present a smaller out-of-flow line")
+    assert _fires(pdf) == [], "a footnote drawn before its body must not be reported"
+
+
+def test_too_few_lines_abstains(tmp_path):
+    """Nothing to draw a conclusion from."""
+    pdf = tmp_path / "sparse.pdf"
+    c = _canvas(pdf)
+    c.setFont("Helvetica", 12)
+    c.drawString(40, 200, "Only one line here")
+    c.save()
+    assert _fires(pdf) == []
+
+
+# ── 3. tagged: three trees, one answer, and it is never "correct" ────────────────
+@pytest.mark.parametrize("kind", ["well_formed", "malformed", "misordered"])
+def test_every_tagged_document_abstains_however_good_its_tree(tmp_path, kind):
+    """THE ASYMMETRY THAT MATTERS. All three trees produce the same silence, on a page whose
+    content stream is fully reversed — so the silence cannot be coming from the stream looking
+    fine. `misordered` is the sharp one: a well-formed tree that states the WRONG order abstains
+    exactly like a right one, because this rule does not read the tree and must not pretend to.
+
+    Finding /StructTreeRoot means "not assessable here", never "correctly ordered"."""
+    scrambled = tmp_path / f"src-{kind}.pdf"
+    _single_column(scrambled, list(reversed(range(8))))
+    tagged = tmp_path / f"tagged-{kind}.pdf"
+    _tag(scrambled, tagged, kind=kind)
 
     with pikepdf.open(str(tagged)) as pk:
-        assert "/StructTreeRoot" in pk.Root, "the fixture must actually be tagged to be a fixture"
-
-    today, with_flow = _divergences(tagged)
-    assert today == 0.0, "dead today, tagged or not"
-    assert with_flow >= _DIVERGENCE_THRESHOLD, (
-        "a tagged document no longer false-positives under text flow — if the rule learned to "
-        "read the structure tree, say so here and in the module docstring")
-    assert not _fires(tagged), "the rule reports nothing today, which is the whole point"
+        assert _is_tagged(pk), "the fixture must actually be tagged"
+    assert _fires(tagged) == [], f"{kind}: a tagged document must not be assessed by this rule"
+    # ...and the untagged twin IS reported, so the abstention is the tagging, nothing else.
+    assert len(_fires(scrambled)) == 1, "the same bytes untagged must still be reported"
 
 
-def test_a_correctly_tagged_and_correctly_streamed_document_is_clean(tmp_path):
-    """The control for the case above. Without it, "tagged scores 100%" is consistent with
-    "tagging itself breaks the measurement", which would be a different bug and a different fix."""
-    correct = tmp_path / "correct.pdf"
-    _lines_in_stream_order(correct, list(range(8)))
-    tagged = tmp_path / "correct-tagged.pdf"
-    _tagged(correct, tagged)
+def test_an_unreadable_root_abstains_rather_than_assessing(tmp_path):
+    """Ambiguity resolves to "do not assess", matching the rest of this repo's fail-closed
+    posture. A rule that assessed whatever it could not classify would reintroduce exactly the
+    confident-and-wrong behaviour it was rewritten to remove."""
+    class _Broken:
+        @property
+        def Root(self):
+            raise RuntimeError("cannot read the document catalog")
 
-    today, with_flow = _divergences(tagged)
-    assert today == 0.0
-    assert with_flow < _DIVERGENCE_THRESHOLD, (
-        "tagging alone moved the divergence — the fixture, not the document, is what differs "
-        "between this test and the one above")
+    assert _is_tagged(_Broken()) is True, "an unreadable catalog must read as 'do not assess'"
 
 
-def test_a_single_column_document_is_clean_either_way(tmp_path):
-    """The control. Without it, the two assertions above would be consistent with 'the text-flow
-    reading is simply always high', which would make them evidence of nothing."""
-    pdf = tmp_path / "single-column.pdf"
-    _single_column(pdf)
-    today, with_flow = _divergences(pdf)
-    assert today == 0.0
-    assert with_flow < _DIVERGENCE_THRESHOLD, (
-        "even a single-column document diverges under text flow — the divergence maths is more "
-        "broken than this file claims")
+# ── 4. abstaining is not passing ─────────────────────────────────────────────────
+def test_the_preset_still_claims_1_3_2_on_pdf_and_the_cell_stays_uncovered():
+    """Deliberately NOT a failure, and the reason this file cannot end at "the rule works now".
 
+    The rule reports one bounded shape of page. That is not the same as covering (1.3.2, pdf):
+    tagged documents — every file that has been through an accessibility workflow — multi-column
+    layouts, footnoted pages and tables are all still unassessed, and the rule is silent on each
+    for reasons that have nothing to do with whether their order is right.
 
-# ── so the preset's claim about (1.3.2, .pdf) is not currently earned ────────────
-
-def test_the_preset_still_claims_1_3_2_on_pdf_and_that_is_recorded_here():
-    """Deliberately NOT a failure. Removing (1.3.2, .pdf) from `acp-core-17` would drop the
-    reporting denominator from 62 pairs to 61 and change the headline coverage number, which is a
-    product decision rather than a test's to make — the denominator was chosen explicitly
-    (2026-08-30) and the alternative is to fix the detector and keep the pair.
-
-    What this asserts is that the claim is still there, so that if someone acts on this file by
-    editing the preset instead of the detector, that shows up as this test failing and gets a
-    sentence written about which of the two was chosen."""
+    So the pair stays claimed by the preset AND visibly uncovered in the capability report until
+    a ground-truth corpus pair earns the narrower claim. If someone answers the dead detector by
+    editing the preset instead, that shows up here."""
     sys.path.insert(0, str(ROOT / "api"))
     import assessment_policy as ap
     assert "pdf" in ap.SCOPE_PRESETS["acp-core-17"]["1.3.2"], (
-        "(1.3.2, pdf) left acp-core-17 — if that was the chosen answer to the dead detector, say "
-        "so here and update the coverage denominator from 62 in gen_fixture_coverage.py")
+        "(1.3.2, pdf) left acp-core-17 — if that was the chosen answer, say so here and update "
+        "the coverage denominator from 62 in gen_fixture_coverage.py")

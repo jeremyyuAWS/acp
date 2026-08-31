@@ -60,10 +60,19 @@ PRESET = "acp-core-17"
 # Cells a test shows a real scan does NOT report, on a document built to trip them. Each names the
 # test that establishes it, so the claim is checkable rather than asserted here. These are the only
 # way out of UNVERIFIED in the negative direction — a cell is never marked disproven by reading.
+# (1.3.2, pdf) WAS HERE and is deliberately no longer. The entry read "pdf.reading-order
+# compares a word list against itself, so divergence is 0.0 on every input including a fully
+# reversed content stream". That was true and is now false: the rule reports a scrambled,
+# untagged, single-column page and abstains elsewhere (see the rule's own docstring and
+# tests/test_pdf_reading_order.py).
+#
+# It did NOT move to `proven`. Proven means a ground-truth corpus pair shows a real scan
+# reporting the cell, and there is none — the rule is silent on tagged documents, multi-column
+# layouts, footnoted pages and tables, which between them are most real PDFs, and its silence
+# there says nothing about whether their order is right. So the cell falls to UNVERIFIED, the
+# honest state for "nobody has run the experiment that would settle it", and stays visibly
+# uncovered until a corpus pair earns the narrower claim.
 DISPROVEN = {
-    ("1.3.2", "pdf"): ("tests/test_pdf_reading_order.py — pdf.reading-order compares a word list "
-                       "against itself, so divergence is 0.0 on every input including a fully "
-                       "reversed content stream"),
     ("1.3.5", "docx"): ("tests/test_orphaned_detectors.py — input_purpose.detect returns a finding "
                         "when called directly; checks_for never invokes it"),
     ("1.3.5", "pdf"): ("tests/test_orphaned_detectors.py — same shape, PDF_INPUT_NO_PURPOSE"),
