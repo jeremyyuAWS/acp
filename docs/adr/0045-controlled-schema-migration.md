@@ -160,6 +160,57 @@ refuse to serve against a schema genuinely missing something, rather than inferr
 version number somebody has to remember to bump. The version number is guarded by a checksum
 test for exactly that reason.
 
+### 6. The app and the worker are deployed on different images, and that window is not protected
+
+Everything above is about mixed **schema** versions. This deployment has a second mixed-version
+window that has nothing to do with the schema, and `deploy/public/redeploy.sh:269-282` already
+documents it as a deliberate, unprotected property rather than an oversight:
+
+> `acp-worker` has NO INGRESS … It takes work by pulling from a shared job queue, so a second
+> worker on a different image would pull from that SAME queue — blue and green racing over live
+> production jobs, picked at random. There is no weight to set and nothing to split. The worker
+> therefore CUTS OVER at promotion, and that step is not protected. … Consequence while green
+> sits at 0%: the system is MIXED — green app on the new image, worker still on the old one.
+> Anything that enqueues a job whose contract changed is NOT [safe]: green would enqueue work
+> the old worker cannot correctly process.
+
+So `acp-app` gets real blue-green — green provisions at 0%, is smoke-tested on its own FQDN, then
+takes traffic in one reversible weight change — and `acp-worker` gets none, because ingress weight
+is the only splitting mechanism ACA offers and a worker has no ingress.
+
+**This is a different failure from anything in §1-§5, and the additive rule does not cover it.**
+The additive rule protects the *schema* contract between old code and new. It says nothing about
+the **job payload contract** between a new app that enqueues and an old worker that dequeues. A
+payload field the new app adds and the new worker requires is perfectly additive at the database
+level and still breaks: the old worker reads a job it does not understand, and the failure is a
+dead-lettered scan rather than a SQL error.
+
+The constraint that actually holds here is the mirror of the additive rule, one layer up:
+
+> A deploy may not change what a job payload MEANS in the same release that starts producing it.
+> Producing a new field is safe; requiring it is a later deploy, once no old worker remains.
+
+Which is the same expand/contract discipline applied to the queue instead of the schema, and it
+is currently enforced by nothing — not a test, not a check, not a review gate. The schema half
+now has `_SCHEMA_VERSION` and a checksum guard; the payload half has neither.
+
+Two things follow for this proposal:
+
+- **The migration step's ordering guarantee is weaker than §1 implies.** "Runs before the new
+  revision receives traffic" is true of `acp-app`, and the worker's cutover is a separate,
+  unprotected moment that the migration step does not coordinate with at all. A deploy that
+  migrates the schema, promotes the app, and cuts the worker over has three transitions, not one,
+  and only the first two are sequenced.
+- **`redeploy.sh` already names the fix and scopes it out**: queue partitioning, where green
+  consumes its own queue and promotion swaps which queue the app enqueues to. It is correctly
+  identified there as an application change (`worker_main.py` plus the job table), not a deploy
+  script change. This ADR does not propose it either — it is a larger piece of work than the
+  schema question, and naming it as the known answer is more useful than sketching a worse one.
+
+What this ADR does add is that the two windows must not be reasoned about separately. A migration
+that is additive at the schema level can still land in the middle of a worker cutover, and the
+deploy sequence in the next section only orders the schema half.
+
 ## Proposed sequence for a deploy that changes the schema
 
 1. **Pre-flight, read-only.** Assert the migration is Class A and additive. This is the gate; it
@@ -170,6 +221,12 @@ test for exactly that reason.
 3. **Index phase**, separate, autocommit, `CONCURRENTLY`, with `INVALID`-index cleanup on retry.
 4. **Rollout.** Replicas verify and find the database already ahead; no DDL, no locks.
 5. **Contract**, in a later deploy, once no old-code replica remains.
+
+Note what this sequence does NOT order: the `acp-worker` cutover (§6). Steps 2 and 4 sequence the
+schema against the app's revisions; the worker changes image at promotion, outside this sequence,
+and the window between the app going green and the worker cutting over is one in which a new app
+is enqueueing to an old worker. Reading this list as covering the whole deploy is the mistake §6
+exists to prevent.
 
 ## Consequences
 
@@ -191,3 +248,7 @@ test for exactly that reason.
 - It does not claim the boot-time version check protects a running replica. It protects boot. A
   replica already serving when a destructive migration lands is not protected by anything here
   except the additive rule itself.
+- It does not claim to make the app/worker cutover safe (§6). That window is documented in
+  `redeploy.sh`, unprotected today, and closed only by queue partitioning, which is not proposed
+  here. The schema discipline in §1-§5 does not extend to the job payload contract, and treating
+  it as though it does is the specific error §6 records.
