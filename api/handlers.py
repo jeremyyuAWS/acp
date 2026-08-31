@@ -2963,6 +2963,13 @@ def _workspace_scan_discover(payload: dict, job: dict) -> None:
     need the durable-checkpoint work the connector path still needs; it does not have the
     problem.
 
+    NOT RESERVED-CAPACITY DISCOVERY, despite the name. #1124 reserves worker slots for
+    `scan_discover` because a connector walk can starve the pool; this job is one indexed SELECT,
+    so it belongs in the processing pool and gets there because the processing role is defined as
+    the complement of that one literal type. That is correct but fragile — see
+    tests/test_dedicated_worker_roles.py, which pins both that no registered type falls through
+    every role's allow-list and that this one is not pinned behind the reserved workers.
+
     RESUMABLE BY CONSTRUCTION. A reclaim re-runs this handler from the top. It re-reads the
     workspace (the authoritative population, not a snapshot from the route) and enqueues only
     documents that have no workspace_scan_file job yet, so a fan-out interrupted at file 300 of
