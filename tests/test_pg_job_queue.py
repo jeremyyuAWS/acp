@@ -304,3 +304,14 @@ def test_concurrent_workers_counting_one_folder_advance_it_once(pg):
             "SELECT completed_folders FROM scan_runs WHERE id=%s", ("s-pg-race",))
         assert pg._db.fetchone(cur)["completed_folders"] == 1, (
             "concurrent increments for one folder advanced the counter more than once")
+
+
+def test_reserved_discovery_claim_bypasses_content_on_postgres(pg):
+    content = pg.enqueue_job('scan_file', {}, priority=0)
+    discovery = pg.enqueue_job('scan_discover', {}, priority=100)
+    claimed = pg.claim_job('discovery', job_types=('scan_discover',))
+    assert claimed['id'] == discovery
+    assert claimed['attempts'] == 1 and claimed['lease_expires_at']
+    assert pg.get_job(content)['status'] == 'queued'
+    assert pg.claim_job('discovery', job_types=('scan_discover',)) is None
+    assert pg.claim_job('general')['id'] == content

@@ -119,7 +119,7 @@ def test_a_live_item_classifies_exactly_as_before():
     — no content_type invented, and none of the other fields disturbed."""
     classified = scanner._sp_classify_item(
         _live_item("F9", "fresh.docx"), drive_id=DRIVE,
-        skip_folders=scanner._sp_skip_folders(False), exts=scanner._SP_SCANNABLE_EXTS)
+        skip_folders=scanner._sp_skip_folders(False), exts=scanner._sp_scannable_exts())
     assert classified["scannable"] is not None
     assert "content_type" not in classified["scannable"]
     assert classified["scannable"]["id"] == "F9"

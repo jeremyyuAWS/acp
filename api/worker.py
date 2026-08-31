@@ -259,7 +259,8 @@ def _backoff_seconds(attempts: int, base: float = 2.0, cap: float = 300.0) -> fl
 
 class JobWorker:
     def __init__(self, store, *, worker_id: str | None = None, poll_interval: float = 0.5,
-                 on_retry=None):
+                 on_retry=None, job_types=None):
+        self.job_types = job_types
         self.store = store
         self.worker_id = worker_id or f"worker-{uuid.uuid4().hex[:8]}"
         self.poll_interval = poll_interval
@@ -275,7 +276,8 @@ class JobWorker:
     def run_once(self) -> bool:
         """Claim and process at most one job. Returns True if a job was handled
         (success or failure), False if the queue was empty."""
-        job = self.store.claim_job(self.worker_id)
+        job = (self.store.claim_job(self.worker_id, job_types=self.job_types)
+               if self.job_types is not None else self.store.claim_job(self.worker_id))
         if job is None:
             return False
         # Flushed the moment the job is claimed, BEFORE any handler runs. A native crash

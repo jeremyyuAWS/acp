@@ -23,6 +23,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+import scan_formats
+
 # ── Capability status taxonomy ────────────────────────────────────────────────────────────────
 # A per-file answer to "what can ACP do with this?", visible for every discovered file. Only
 # ASSESSABLE files enter the assessment/remediation lanes; the rest are inventoried with metadata.
@@ -73,10 +75,20 @@ _OS_METADATA_NAMES = frozenset({
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
 
-# The formats that carry at least one applicable accessibility test. The single source of truth for
-# WHICH criteria per format lives in remediation_capability; this is only the assessable-format set,
-# which changes far less often. Kept here (not imported) so the taxonomy has no heavy dependency.
-SUPPORTED_FORMATS = ("docx", "pdf", "pptx", "xlsx", "html")
+# The formats that carry at least one applicable accessibility test AND are in Discovery's current
+# scan scope — the two have to be the same set, which is why this is no longer a literal here.
+#
+# It used to be `("docx", "pdf", "pptx", "xlsx", "html")`, written down independently of the two
+# connector filters in scanner.py that decide what actually gets listed. Once the scan scope
+# narrowed (2026-08-31: PDF/DOCX/XLSX/PPTX), a literal here would have gone on reporting HTML as
+# `assessable` — inflating the assessment-eligible denominator with files no listing would ever
+# produce and no Assess run could ever receive. That is precisely the "unsupported must never read
+# as passed" failure docs/discovery-assessment-remediation.md is built to prevent, and it fails
+# silently: the count simply reads a little high forever.
+#
+# api/scan_formats is stdlib-only (imported at the top), so this keeps the promise the old comment
+# made about the taxonomy carrying no heavy dependency — and `scanner` still imports THIS, never
+# the reverse: both now depend on scan_formats instead of on each other.
 
 
 def is_os_metadata(name: str) -> bool:
@@ -111,7 +123,7 @@ def _format_of(name: str, mime: str) -> str:
 
 def _status_of(fmt: str) -> str:
     """The capability status for an estate format bucket."""
-    if fmt in SUPPORTED_FORMATS:
+    if scan_formats.is_supported_format(fmt):
         return ASSESSABLE
     if fmt in ("image", "av"):
         return METADATA_ONLY

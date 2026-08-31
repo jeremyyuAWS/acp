@@ -61,6 +61,8 @@ def test_deferred_discover_then_assess_scores_real_files(isolated_store, monkeyp
     for s in _WANT:
         shutil.copy(_SAMPLES / s, corpus / s)
 
+    # This fixture explicitly exercises the retained HTML engine too.
+    monkeypatch.setenv("ACP_SCAN_FORMATS", "pdf,docx,xlsx,pptx,html")
     monkeypatch.setenv("ACP_DEFER_ANALYSIS_TO_ASSESS", "1")
     monkeypatch.setenv("ACP_LOCAL_CORPUS", str(corpus))
     import core
