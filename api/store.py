@@ -7368,16 +7368,36 @@ class Store:
             print(f"[acp] mark_job_cancelled: job {job_id} already terminal — zombie-worker no-op", flush=True)
         return won
 
-    # A job that reached 'dead' because someone STOPPED it, not because it failed.
+    # A job that reached a terminal state because someone STOPPED it, not because it failed.
     #
-    # THREE STATES, and this predicate is where the third becomes visible in the data:
+    # WHAT A TERMINAL ROW PLUS cancel_requested_at DOES AND DOES NOT PROVE. An earlier version of
+    # this comment claimed the pair meant "nothing belonging to this job can still run or write".
+    # That was false, and it was the same species of overclaim the rest of this method exists to
+    # remove — a label asserting more than its data supports.
     #
-    #   requested  cancel_requested_at is set. A user pressed Stop, or a newer run superseded
-    #              this one. Work may still be running.
-    #   observed   a worker's check_cancel() raised. That execution knows.
-    #   stopped    the row is terminal AND cancel_requested_at is set — nothing belonging to
-    #              this job can still run or write, and the reason it ended was a decision
-    #              rather than a fault.
+    # _end_running_scan writes status='dead' AND cancel_requested_at in ONE statement, while a
+    # handler may still be mid-flight: the worker does not stop until its next check_cancel()
+    # checkpoint. The row goes terminal immediately; the execution does not. Job-row writes from
+    # the late worker are refused (complete_job/fail_job/mark_job_cancelled are all guarded on
+    # `status NOT IN ('done','dead','cancelled')` plus the claim), but the handler can still be
+    # running, and can still write elsewhere — save_file_result is not gated on job status.
+    #
+    # THREE STATES, and only two of them are provable from a row:
+    #
+    #   requested       cancel_requested_at is set. Work may still be running. Says nothing
+    #                   about whether anyone has noticed.
+    #   acknowledged    status='cancelled'. PROVABLE, and the strong one: mark_job_cancelled is
+    #                   the only writer of that status on this table (see its docstring), and
+    #                   worker.py calls it in exactly two places, both AFTER the handler returned
+    #                   or raised. So the execution really has ended.
+    #   ended-by-decision  the row is terminal and cancel_requested_at is set. This says the job
+    #                   will not be retried and did not fail. It does NOT say the process
+    #                   stopped, unless the status is also 'cancelled'.
+    #
+    # `stopped` below counts ended-by-decision, which is the right bucket for a FAULT diagnostic:
+    # the question it answers is "is this an incident", and a pressed button is not one either
+    # way. It carries the acknowledged/unacknowledged split so the stronger question — has the
+    # work actually ceased — has a real answer instead of an implied one.
     #
     # WHY IT LOOKS LIKE A FAILURE TODAY. _end_running_scan (cancel_scan and supersede_scan both
     # route through it) sets status='dead' on every queued/running job of the scan, and its own
@@ -7397,12 +7417,20 @@ class Store:
     # time.
     _STOPPED = " AND cancel_requested_at IS NOT NULL"
     _FAILED = " AND cancel_requested_at IS NULL"
+    # The one status that is acknowledgement evidence. Written by mark_job_cancelled and nothing
+    # else, from worker.py's two post-handler call sites. Portable CASE rather than FILTER, which
+    # SQLite and Postgres do not agree on.
+    _ACKNOWLEDGED_CASE = "SUM(CASE WHEN status='cancelled' THEN 1 ELSE 0 END)"
 
     def dead_letter_breakdown(self, owner: str | None = None) -> dict:
         """Diagnostic: jobs that FAILED, grouped by type + the most common errors — and,
         separately, jobs that were STOPPED.
         owner scopes to the caller's own jobs so error text (which can name a file)
         never leaks across tenants.
+
+        `stopped` reports jobs that ended BY DECISION, split by whether a worker acknowledged
+        it (see the comment above _STOPPED). `stopped.n` is not a claim that the work has
+        ceased; `stopped.acknowledged` is.
 
         `by_type`, `top_errors` and `failed` exclude deliberately-stopped jobs (see _STOPPED).
         They used to include them, because a Stop marks its jobs 'dead' and this read status
@@ -7429,11 +7457,23 @@ class Store:
             # Deliberate stops, counted and reported rather than dropped: a user who stopped a
             # run should still be able to see that its jobs ended, and an operator should not
             # have to subtract them from a failure count by eye.
-            self._db.execute(cur, "SELECT COUNT(*) AS n, COUNT(DISTINCT scan_id) AS runs "
+            self._db.execute(cur, "SELECT COUNT(*) AS n, COUNT(DISTINCT scan_id) AS runs, "
+                             + self._ACKNOWLEDGED_CASE + " AS acked "
                              "FROM jobs WHERE status IN ('dead','cancelled')"
                              + self._STOPPED + scope, sp)
             _st = self._db.fetchone(cur) or {}
-            out["stopped"] = {"n": _st.get("n") or 0, "affected_runs": _st.get("runs") or 0}
+            _n = int(_st.get("n") or 0)
+            # int() because Postgres hands SUM() back as a Decimal and SQLite as an int; the
+            # subtraction below must not depend on which database answered.
+            _acked = int(_st.get("acked") or 0)
+            out["stopped"] = {
+                "n": _n, "affected_runs": _st.get("runs") or 0,
+                # A worker confirmed it stopped: the handler returned or raised first.
+                "acknowledged": _acked,
+                # Marked terminal by the cancellation itself. The job will not be retried, but no
+                # worker has confirmed the execution ended — it may still be between checkpoints.
+                "unacknowledged": max(0, _n - _acked),
+            }
             # The number the operator's red banner is ENTITLED to describe as "failed
             # permanently". It equals sum(by_type.values()) by construction, but affected_runs
             # is not derivable from by_type, and a caller that has to sum a dict to learn the
