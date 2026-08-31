@@ -15,7 +15,7 @@
 // MEASURED (2026-08-31, all 62 pairs of acp-core-17):
 //
 //     why it matters                    17/17 criteria   100%
-//     criterion-specific repair steps    13/17 criteria    76%
+//     criterion-specific repair steps    17/17 criteria   100%   (was 13/17)
 //     verify-in-app steps                17/62 pairs       27%
 //     pairs with NO instruction at all    0/62 pairs        0%
 //
@@ -25,10 +25,12 @@
 // instruction is worse than none... We never invent a menu path we're unsure of"), and 27% is
 // what that rule costs, not evidence that it is being broken.
 //
-// The four criteria on the generic fallback are 1.4.1, 1.4.11, 2.1.2 and 2.4.3. Three of those
-// are judgement calls a menu path cannot resolve anyway — whether colour alone carries meaning,
-// whether a focus order is logical — so "add a menu path" is not automatically the right answer
-// for them, and this file deliberately records the number rather than filing it as a defect.
+// The four that were on the generic fallback — 1.4.1, 1.4.11, 2.1.2, 2.4.3 — now carry their own
+// guidance (see reviewerGuidanceFour.test.js), which is why that row reads 17/17. They were not
+// answered with menu paths, because a menu path is not what they needed: the built-in
+// Accessibility Checker does not test any of the four, so the generic line pointed reviewers at
+// a tool that returns clean on a document failing all of them. Each now carries an inspection
+// procedure, a "done when", and an explicit statement of what ACP cannot verify.
 //
 // EXTENDING THE VERIFY STEPS IS BLOCKED, and that is why the floor below is a floor rather than
 // a target. Doing it needs CURRENT verified Microsoft 365 menu strings; egress to
