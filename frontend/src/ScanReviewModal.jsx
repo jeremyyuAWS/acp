@@ -59,11 +59,9 @@ export default function ScanReviewModal({
   onConfirm, onCancel,
 }) {
   const label = scanSourceLabel(source, { hasDrive, hasSP })
-  const where = estWhere || label
   const hasBehavior = setDeepScan || setQueuedScan || setExcludeRemediated || setIncremental
-  // Only a real, positive count is worth showing. 0 / null / unknown would render "~0 documents",
-  // which reads as "nothing to scan" — so we say when the count is actually determined instead.
-  const hasEstimate = typeof estCount === 'number' && estCount > 0
+  // estCount describes an earlier run, not the wizard's mutable folder selection.
+  // Keep accepting the legacy props, but never present them as this run's estimate.
 
   return (
     <div role="dialog" aria-modal="true" aria-label="New discovery"
@@ -114,16 +112,10 @@ export default function ScanReviewModal({
               on step 1, DRIVE LOCATIONS — naming a later step's subject as the current one. The
               wizard's own stepper says which step this is, and says it correctly. */}
           <div className="scanmodal-est muted">
-            {hasEstimate ? (
-              <>
-                ~{estCount.toLocaleString()} documents in {where}
-                <span style={{ display: 'block', fontSize: 11 }}>
-                  Discovered count — the actual scanned total may be lower after dedup, scope and unsupported-type filtering.
-                </span>
-              </>
-            ) : (
-              <>Document count is determined when the scan starts.</>
-            )}
+            Document count is determined when the scan starts.
+            <span style={{ display: 'block', fontSize: 11 }}>
+              Discovery counts files within the scope selected below, including subfolders unless excluded.
+            </span>
           </div>
           {/* source/hasDrive/hasSP so the wizard can seed its folder step from the SAME source the
               scan will resolve to; the run scope comes back out through onConfirm. */}

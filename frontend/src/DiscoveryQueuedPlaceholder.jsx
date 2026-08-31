@@ -15,7 +15,7 @@ export default function DiscoveryQueuedPlaceholder({ previousCount, previousAt, 
     <div role="status" style={{ margin: '12px 0', padding: '18px 16px', borderRadius: 8,
          border: '1px dashed var(--line)', background: 'var(--surface)', textAlign: 'center' }}>
       <div style={{ fontSize: 13, color: 'var(--ink)' }}>
-        Discovery results will appear here when processing begins.
+        Discovery results will appear here when this scan finishes. Live progress is shown above.
       </div>
       {hasPrevious && (
         <div style={{ marginTop: 10, fontSize: 12.5 }} className="muted">
