@@ -7275,6 +7275,54 @@ class Store:
         return [{"file": payload["file"], "drive_file_id": payload.get("drive_file_id")}] \
             if payload.get("file") else []
 
+    # The per-FOLDER checkpoint unit (ADR 0004 item 6). Its own _COUNTED_FILE_JOBS equivalent,
+    # kept separate because the accounting is a different one: a dead scan_file is missing a
+    # file_records ROW, a dead scan_folder is missing a COUNTER increment.
+    _FOLDER_CHECKPOINT_JOBS = ("scan_folder",)
+
+    def _record_dead_scan_folder(self, job: dict) -> None:
+        """Advance completed_folders for a folder job that will never come back to do it itself.
+
+        WHY THIS EXISTS — the same failure _record_dead_scan_files describes, on the other
+        counter, and it was not covered. `_scan_folder` calls increment_completed_folders only on
+        its success path, and rescue_unfinalized_scans finalizes a per-folder scan only when
+        `completed_folders >= total_folders`. A folder job that dead-letters returns through
+        neither:
+
+            completed_folders   incremented by _scan_folder's success path   -> never runs
+            finalize trigger    fires at completed >= total                  -> never reached
+            rescue sweeper      requires completed >= total                  -> cannot help
+
+        so the run sits at 'running' with no outstanding work and nothing able to end it. Measured
+        rather than reasoned: tests/test_dead_folder_job_wedges_the_scan.py drives one folder job
+        to 'dead' and rescue_unfinalized_scans returns 0.
+
+        Counted as ACCOUNTED FOR, not as succeeded. The folder's documents were never scanned and
+        this writes no file_records rows claiming otherwise; the dead job row keeps the error, so
+        the dead-letter view still reports what happened. What changes is only that the run can
+        reach a terminal state — reporting a partial scan is a fact, hanging at 0% is not.
+
+        MUST be called only once the terminal UPDATE has WON. Unlike _record_dead_scan_files,
+        whose per-document write is an upsert and so survives being repeated, an increment is not
+        idempotent: running it for a zombie worker's refused dead-letter would over-count and
+        finalize a scan whose folders are still being processed.
+
+        Best-effort by construction, for the same reason as its sibling: telemetry must never turn
+        a dead-letter into an exception inside the queue.
+        """
+        if job.get("type") not in self._FOLDER_CHECKPOINT_JOBS:
+            return
+        scan_id = job.get("scan_id")
+        if not scan_id:
+            return
+        try:
+            done, total = self.increment_completed_folders(scan_id)
+            print(f"[acp] dead folder job accounted for: scan={scan_id} "
+                  f"folders {done}/{total}", flush=True)
+        except Exception as e:  # noqa: BLE001 — see the best-effort note above
+            print(f"[acp] _record_dead_scan_folder: could not advance the folder counter for "
+                  f"scan {scan_id}: {e}", flush=True)
+
     def _record_dead_scan_files(self, job: dict, error: str, now_iso: str) -> None:
         """Leave an 'error' file_records row for every document a dead-lettered job was carrying.
 
@@ -7392,6 +7440,9 @@ class Store:
             # (Log Analytics scheduled query) keys on 'job dead-lettered'.
             print(f"[acp] job dead-lettered: id={job_id} type={job.get('type')} "
                   f"class={error_class or 'unclassified'} error={error[:160]}", flush=True)
+            # AFTER `won`, deliberately — the increment is not idempotent. See the method's own
+            # docstring for why a folder job that dies without this wedges the whole run.
+            self._record_dead_scan_folder(job)
             # The scan/scan_discover job IS the scan — unlike a per-file job (remediate_file,
             # apply_approved_values) whose death doesn't mean the whole run failed. Without
             # this, a discover job that exhausts retries (an unexpected exception the handler's
