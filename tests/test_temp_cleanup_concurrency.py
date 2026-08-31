@@ -186,8 +186,14 @@ def test_age_still_condemns_a_dead_run_inside_the_keep_window(isolated_root, dea
     hours, not a few weeks — a dead run past `_TMP_MAX_AGE_S` is deleted even though it is one of
     the newest. Safe precisely because its process is already gone.
     """
-    ancient_dead = _run_dir(isolated_root, dead_pid + 1, age_s=48 * 3600)
-    recent_dead = _run_dir(isolated_root, dead_pid + 2, age_s=60)
+    # Neighbouring PIDs may belong to live CI processes. Only the reaped PID is
+    # known dead; create and reap a second process for the recent directory too.
+    recent_process = subprocess.Popen([sys.executable, "-c", ""])
+    recent_process.wait()
+    assert not acp_conftest._acp_pid_alive(dead_pid)
+    assert not acp_conftest._acp_pid_alive(recent_process.pid)
+    ancient_dead = _run_dir(isolated_root, dead_pid, age_s=48 * 3600)
+    recent_dead = _run_dir(isolated_root, recent_process.pid, age_s=60)
 
     acp_conftest._acp_claim_tmpdir()
 
