@@ -37,22 +37,41 @@ _PII_SEV_RANK = {"critical": 3, "moderate": 2, "low": 1}
 _ISSUE_SEV_RANK = {"CRITICAL": 4, "SERIOUS": 3, "MODERATE": 2, "MINOR": 1}
 
 
-def _parse_worker_tier_heartbeat(raw: str) -> tuple[str, int | None]:
-    """Split a `worker_tier_heartbeat` setting value into (iso_timestamp, pool_size).
+def _parse_worker_tier_heartbeat(raw: str) -> tuple[str, int | None, str | None]:
+    """Split a `worker_tier_heartbeat` setting value into (iso_timestamp, pool_size, version).
 
-    Two formats have to coexist across a rolling deploy: the OLD bare ISO string
-    (`worker_main.py` before this change, or any value written before it) and the NEW JSON
-    envelope `{"at": "<iso>", "pool_size": <int>}` (worker_main.py's own `core.WORKERS` at
-    process start). Either a pre-rollout API reading a post-rollout worker's beat, or the
-    reverse, must keep working — so this tries JSON first and falls back to treating `raw`
-    itself as the bare timestamp whenever it isn't a `{"at": ...}` dict. `pool_size` is None
-    for the old format, and for a JSON envelope that omits or mistypes it — never a crash.
+    Formats have to coexist across a rolling deploy: the OLD bare ISO string (`worker_main.py`
+    before the envelope landed, or any value written before it) and the JSON envelope
+    `{"at": "<iso>", "pool_size": <int>, "version": "<calver>"}`. Any mix of pre- and
+    post-rollout API and worker must keep working — so this tries JSON first and falls back to
+    treating `raw` itself as the bare timestamp whenever it isn't a `{"at": ...}` dict. Every
+    optional field is None when the format is older, or when the envelope omits or mistypes it —
+    never a crash.
+
+    WHY `version` IS HERE. It is the only way to find out which image the worker tier is running.
+    The API tier answers that about ITSELF on /healthz, but acp-worker has NO INGRESS — nothing
+    can be asked of it directly — and the heartbeat carried only a timestamp and a pool size, so
+    "did the worker actually take the deploy?" had no answer at all from outside the cluster.
+    That question is not academic: app and worker deploy from different images with nothing
+    sequencing them (ADR 0045 §6), so they are routinely, briefly, on different code.
+
+    The `worker_instances` table would have carried this properly (it has `revision_name` and
+    `software_version` columns) but has NO WRITER — deliberately, as PR 1 of a 5-PR plan whose
+    emit sites are explicitly deferred for human review. This does not pre-empt any of that: it
+    adds one string to an envelope that already exists.
+
+    None and "dev" are DIFFERENT ANSWERS and must not be collapsed. None means the beat came from
+    a worker that predates this field — the deploy has not reached the worker tier, which is
+    itself the answer somebody was looking for. "dev" means the worker is running an image that
+    never went through deploy.sh, matching what /healthz reports for the API tier so the two are
+    directly comparable strings.
 
     A module-level function, not a method: test_readiness.py's FakeStore borrows
     `worker_tier_status`/`worker_tier_alive` straight off the real class without instantiating
     it as a full Store, so this must not depend on `self`.
     """
     pool_size: int | None = None
+    version: str | None = None
     iso = raw
     try:
         obj = json.loads(raw)
@@ -63,7 +82,10 @@ def _parse_worker_tier_heartbeat(raw: str) -> tuple[str, int | None]:
         ps = obj.get("pool_size")
         if isinstance(ps, int) and not isinstance(ps, bool):
             pool_size = ps
-    return iso, pool_size
+        v = obj.get("version")
+        if isinstance(v, str) and v.strip():
+            version = v.strip()
+    return iso, pool_size, version
 
 
 def _issue_location(i: dict) -> str | None:
@@ -6175,15 +6197,25 @@ class Store:
         `pool_size` is the worker container's own `core.WORKERS` at process start, carried in
         the heartbeat's JSON envelope (see `_parse_worker_tier_heartbeat`). It's None when the
         beat is old-format (bare ISO string) or never carried one — never a crash either way.
+
+        `version` is the worker image's ACP_BUILD_VERSION, and it is the only way to learn which
+        image the worker tier is running: acp-worker has no ingress, so nothing can ask it
+        directly, and app and worker deploy from different images with nothing sequencing them
+        (ADR 0045 §6). Compare it against /healthz's `version` to see whether a deploy reached
+        both tiers. None means the beat predates the field — which is itself the answer, not a
+        gap — and is deliberately not conflated with "dev" (an image that never went through
+        deploy.sh). See _parse_worker_tier_heartbeat for why those must stay distinct.
         """
         from datetime import datetime, timezone
         raw = self.get_setting("worker_tier_heartbeat")
         out = {"alive": False, "heartbeat_at": raw or None, "age_s": None,
-               "window_s": window_s, "ever_seen": bool(raw), "pool_size": None}
+               "window_s": window_s, "ever_seen": bool(raw), "pool_size": None,
+               "version": None}
         if not raw:
             return out
-        iso, pool_size = _parse_worker_tier_heartbeat(raw)
+        iso, pool_size, version = _parse_worker_tier_heartbeat(raw)
         out["pool_size"] = pool_size
+        out["version"] = version
         out["heartbeat_at"] = iso or None
         try:
             beat = datetime.fromisoformat(iso)
@@ -6212,7 +6244,7 @@ class Store:
         raw = self.get_setting("worker_tier_heartbeat")
         if not raw:
             return False
-        iso, _pool_size = _parse_worker_tier_heartbeat(raw)
+        iso, _pool_size, _version = _parse_worker_tier_heartbeat(raw)
         try:
             beat = datetime.fromisoformat(iso)
         except (ValueError, TypeError):
