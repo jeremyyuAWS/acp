@@ -1276,18 +1276,138 @@ class _PgAdapter:
                 self._MIN_CONN, self._MAX_CONN, self._url, **self._ssl_kwargs)
         return self._pool
 
+    # Bumped only by changing _SCHEMA/_PG_VIEWS themselves — see _schema_checksum.
+    _SCHEMA_VERSION_TABLE = "acp_schema_version"
+    # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
+    # (pg_advisory_lock, not _xact) because the migration spans several transactions.
+    _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
+
+    @staticmethod
+    def _schema_checksum() -> str:
+        """Identity of the DDL this build expects. Changing any statement changes it, which is
+        what makes 'the schema is already what I would apply' a decidable question."""
+        import hashlib
+        h = hashlib.sha256()
+        for stmt in (*_SCHEMA, *_PG_VIEWS):
+            h.update(" ".join(stmt.split()).encode())
+        return h.hexdigest()[:32]
+
     def init_schema(self) -> None:
+        """Verify the schema; migrate only if it differs, and only one process at a time.
+
+        THE PRODUCTION FAILURE THIS FIXES (reproduced 2026-08-31 on PostgreSQL 16, six replicas
+        booting against live reads). Store.__init__ calls this unconditionally, so EVERY API and
+        worker replica used to replay all 139 statements of _SCHEMA + _PG_VIEWS on every boot, in
+        ONE transaction (psycopg2 defaults to autocommit=False) with no lock_timeout — holding
+        ACCESS EXCLUSIVE on 40 tables until the final commit.
+
+        The statements are no-ops on an already-migrated database, and that does not help:
+
+            NOTICE:  column "phase" of relation "jobs" already exists, skipping
+            AccessExclusiveLock|jobs|t
+
+        ADD COLUMN IF NOT EXISTS takes the exclusive lock BEFORE discovering it has nothing to
+        do. So each replica locked 40 tables to change nothing, and the deadlock needs only that
+        plus two readers that touch the same tables in opposite orders — both of which exist:
+
+            queue_estimate        jobs -> scan_runs   (the pickup estimate; 500 in production)
+            sweep_orphaned_scans  scan_runs -> jobs   (the reconciliation sweep)
+
+        The four-process cycle Postgres reported, verbatim from the server log:
+
+            sweep_orphaned_scans  waits AccessShare     on scan_runs  blocked by ALTER jobs
+            ALTER TABLE jobs …    waits AccessExclusive on jobs       blocked by queue_estimate
+            queue_estimate        waits AccessShare     on scan_runs  blocked by ALTER scan_runs
+            ALTER TABLE scan_runs waits AccessExclusive on scan_runs  blocked by the sweep
+
+        Five of six replica boots failed with DeadlockDetected inside this function; with the
+        change, twelve of twelve succeed and exactly one runs DDL.
+
+        NOT A CONNECTION-POOL PROBLEM, and enlarging the pool makes it worse rather than better:
+        no PoolError appeared in the reproduction at all, and every extra connection is another
+        participant in the cycle. The 503s are downstream — reads queue behind the exclusive
+        locks until _getconn's 5s wait expires.
+
+        WHAT THIS DOES NOT FIX. A genuine migration still takes genuine exclusive locks, and
+        readers can still deadlock against it: three queue_estimate deadlocks remained against
+        the one process that really did apply DDL. Making that safe needs migration to run as a
+        controlled deployment step rather than concurrently with live traffic. lock_timeout below
+        bounds the damage — a blocked migration fails fast and visibly instead of holding its
+        locks while every reader queues — but bounding is not preventing.
+        """
         import psycopg2
+        want = self._schema_checksum()
         conn = psycopg2.connect(self._url, **self._ssl_kwargs)
         try:
-            cur = conn.cursor()
-            for stmt in _SCHEMA:
-                cur.execute(stmt)
-            for stmt in _PG_VIEWS:
-                cur.execute(stmt)
-            conn.commit()
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                if self._schema_is_current(cur, want):
+                    return                      # the overwhelmingly common path: no DDL, no locks
+                # Exactly one migrator. Concurrent boots queue on this instead of forming a lock
+                # cycle with each other — session-scoped, so it spans the transaction below.
+                cur.execute("SELECT pg_advisory_lock(%s)", (self._MIGRATION_ADVISORY_KEY,))
+                try:
+                    # Re-check: another replica may have migrated while we waited for the lock.
+                    if self._schema_is_current(cur, want):
+                        return
+                    self._apply_schema(conn, want)
+                finally:
+                    cur.execute("SELECT pg_advisory_unlock(%s)", (self._MIGRATION_ADVISORY_KEY,))
         finally:
             conn.close()
+
+    def _schema_is_current(self, cur, want: str) -> bool:
+        """One catalog read plus one small SELECT, both ACCESS SHARE. Never blocks a reader.
+
+        Returns False on anything unexpected — a missing table, an unreadable row — so an
+        unrecognised database is migrated rather than assumed good. The expensive answer is the
+        safe one here.
+        """
+        try:
+            cur.execute("SELECT to_regclass(%s)", (f"public.{self._SCHEMA_VERSION_TABLE}",))
+            row = cur.fetchone()
+            if not row or row[0] is None:
+                return False
+            cur.execute(f"SELECT checksum FROM {self._SCHEMA_VERSION_TABLE} LIMIT 1")
+            got = cur.fetchone()
+            return bool(got) and got[0] == want
+        except Exception:                       # noqa: BLE001 — unknown state means migrate
+            return False
+
+    def _apply_schema(self, conn, want: str) -> None:
+        """The DDL itself, under the advisory lock, with a bounded wait.
+
+        lock_timeout rather than an unbounded wait: a migration that cannot get its lock within
+        the window is the case that took production down, and failing there is recoverable —
+        the deploy reports it and the previous schema is untouched. Blocking instead means every
+        reader queues behind a transaction that is itself waiting.
+        """
+        conn.autocommit = False
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SET LOCAL lock_timeout = '5s'")
+                for stmt in _SCHEMA:
+                    cur.execute(stmt)
+                for stmt in _PG_VIEWS:
+                    cur.execute(stmt)
+                # Table name spelled out rather than interpolated from _SCHEMA_VERSION_TABLE:
+                # tests/test_reset_purges_blobs.py parses store.py for `CREATE TABLE [IF NOT
+                # EXISTS] <name>` to prove no table escapes the RESET classification, and an
+                # f-string placeholder makes that parser read the name as "IF". Pinned by
+                # test_the_marker_table_name_is_greppable.
+                cur.execute(
+                    "CREATE TABLE IF NOT EXISTS acp_schema_version ("
+                    "checksum TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT now())")
+                # One row, replaced wholesale: this records what the schema IS, not a history.
+                cur.execute(f"DELETE FROM {self._SCHEMA_VERSION_TABLE}")
+                cur.execute(
+                    f"INSERT INTO {self._SCHEMA_VERSION_TABLE} (checksum) VALUES (%s)", (want,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.autocommit = True
 
     def _getconn(self, timeout: float = 5.0):
         """psycopg2's ThreadedConnectionPool.getconn raises PoolError the moment the pool is

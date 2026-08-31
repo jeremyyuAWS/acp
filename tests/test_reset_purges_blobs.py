@@ -32,6 +32,13 @@ _CONFIG_SURVIVORS = {
     "campaign",            # admin-authored remediation programs
     "campaign_batch",
     "scope_rule",          # per-file WCAG scope RULES (config, like disposition_policy)
+    # Schema metadata, not customer data: one row holding a checksum of the DDL this build
+    # applies, so a booting replica can verify the schema instead of replaying it (see
+    # _PgAdapter.init_schema — replaying it on every boot deadlocked production). Nothing here
+    # describes a scan, a document or a decision. Wiping it would be harmless but pointless: the
+    # next boot would simply re-run the migration, taking the exclusive locks this exists to
+    # avoid.
+    "acp_schema_version",
 }
 
 
