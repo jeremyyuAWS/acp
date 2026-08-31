@@ -11,6 +11,8 @@ const showDate = value => value && Number.isFinite(Date.parse(value)) ? new Date
 export default function DiscoveryLifecycleResults({ rows, policies, scanId }) {
   const [rule, setRule] = useState('all')
   const [search, setSearch] = useState('')
+  const [page, setPage] = useState(0)
+  useEffect(() => { setPage(0) }, [rule, search, rows])
   const [loaded, setLoaded] = useState(null)
   const [error, setError] = useState('')
   useEffect(() => {
@@ -27,6 +29,9 @@ export default function DiscoveryLifecycleResults({ rows, policies, scanId }) {
   const rules = (Array.isArray(policies) ? policies : []).filter(p => p.enabled && LIFECYCLE_ACTIONS.has(p.action))
   const names = new Map((Array.isArray(policies) ? policies : []).map(p => [String(p.policy_id), p.name]))
   const shown = supported.filter(r => (rule === 'all' || String(r.lifecycle_rule_id) === rule) && String(r.file || '').toLowerCase().includes(search.toLowerCase()))
+  const lastPage = Math.max(0, Math.ceil(shown.length / 50) - 1)
+  const currentPage = Math.min(page, lastPage)
+  const visible = shown.slice(currentPage * 50, (currentPage + 1) * 50)
   return <section className="panel" aria-label="Lifecycle results for supported documents">
     <h2>Lifecycle results · supported documents</h2>
     <p className="muted">PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), including their Google equivalents. Results are saved from this scan; changing a rule requires a new scan.</p>
@@ -39,10 +44,10 @@ export default function DiscoveryLifecycleResults({ rows, policies, scanId }) {
       <label>Find a document <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search file names" /></label>
       <button type="button" onClick={() => { setRule('all'); setSearch('') }}>Clear filters</button>
     </div>
-    <p role="status">{shown.length} of {supported.length} supported documents shown. Counts reflect the recorded winning rule, not every rule that could match.</p>
+    <p role="status">{shown.length} of {supported.length} supported documents match. Showing {shown.length ? currentPage * 50 + 1 : 0}–{Math.min((currentPage + 1) * 50, shown.length)}. Counts reflect the recorded winning rule, not every rule that could match.</p>
     {shown.length === 0 && <p>No supported documents match these filters.</p>}
     <div style={{ maxHeight: 420, overflow: 'auto' }}>
-      {shown.map(r => <details key={r.file} style={{ padding: '10px 0', borderBottom: '1px solid var(--line)' }}>
+      {visible.map(r => <details key={r.file} style={{ padding: '10px 0', borderBottom: '1px solid var(--line)' }}>
         <summary>{r.file} · {r.lifecycle_status || 'Lifecycle status not recorded'}</summary>
         <dl style={{ display: 'grid', gridTemplateColumns: 'minmax(100px, 150px) 1fr', gap: 8, overflowWrap: 'anywhere' }}>
           <dt>Matched rule</dt><dd>{r.lifecycle_rule_id ? names.get(String(r.lifecycle_rule_id)) || `Recorded rule ${r.lifecycle_rule_id}` : 'No matched rule recorded'}</dd>
@@ -55,6 +60,11 @@ export default function DiscoveryLifecycleResults({ rows, policies, scanId }) {
         </dl>
       </details>)}
     </div>
+    {shown.length > 50 && <nav aria-label="Lifecycle result pages" style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 12 }}>
+      <button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous page</button>
+      <span>Page {currentPage + 1} of {lastPage + 1}</span>
+      <button type="button" disabled={currentPage === lastPage} onClick={() => setPage(currentPage + 1)}>Next page</button>
+    </nav>}
     <p className="muted">Archive and deletion candidates are recommendations. No source files are moved or deleted by this view.</p>
   </section>
 }
