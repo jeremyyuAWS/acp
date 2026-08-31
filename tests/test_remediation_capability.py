@@ -353,6 +353,35 @@ def test_pptx_auto_entries_clear(tmp_path):
     assert not still_firing, f"pptx 'auto' criteria still fail: {sorted(still_firing)}"
 
 
+def _add_failing_push_button(path: Path) -> None:
+    """Append one push button whose accessible name does NOT contain its visible caption.
+
+    Written with pikepdf rather than reportlab because reportlab's AcroForm has no push-button
+    helper at all — checkbox, radio, choice, listbox and textfield only — and a push button is the
+    ONE PDF field type that carries its visible caption (/MK /CA) in the field object, which is
+    the whole reason 2.5.3 is comparable on PDF and only for this type.
+
+    Caption "Submit" against a /TU of "btn_primary" is the ordinary real-world shape: a designer
+    labels the button and the form tool names the field, and a speech-input user saying "click
+    Submit" matches nothing.
+    """
+    import pikepdf
+    with pikepdf.open(str(path), allow_overwriting_input=True) as pdf:
+        page = pdf.pages[-1]                       # the form page this fixture adds last
+        fld = pdf.make_indirect(pikepdf.Dictionary(
+            Type=pikepdf.Name("/Annot"), Subtype=pikepdf.Name("/Widget"),
+            FT=pikepdf.Name("/Btn"), Ff=1 << 16,   # bit 17: pushbutton (ISO 32000 Table 227)
+            T=pikepdf.String("btn_primary"), TU=pikepdf.String("btn_primary"),
+            MK=pikepdf.Dictionary(CA=pikepdf.String("Submit")),
+            Rect=pikepdf.Array([72, 500, 172, 530]), F=4))
+        if "/Annots" in page.obj:
+            page.obj["/Annots"].append(fld)
+        else:
+            page.obj["/Annots"] = pdf.make_indirect(pikepdf.Array([fld]))
+        pdf.Root["/AcroForm"]["/Fields"].append(fld)
+        pdf.save()
+
+
 # Two gates, so the reason must name the one that actually fired. Reporting _NO_PDF for both was
 # harmless while the PDF engine was never present; since ADR 0029 vendored it, a .NET-only
 # shortfall was being reported as "the PDF engine is missing" — pointing whoever reads it at a
@@ -410,6 +439,9 @@ def test_pdf_auto_entries_clear(tmp_path):
         c.acroForm.textfield(name=fld, x=72, y=650 - i * 40, width=200, height=20, borderWidth=1)
     c.showPage()
     c.save()
+    # …and a push button on that same form page, so the 2.5.3 lane has something to clear too.
+    # Added after save() because reportlab cannot write one — see _add_failing_push_button.
+    _add_failing_push_button(src)
 
     before, engine_ran = _rescan(src, name, tmp_path)
     if not engine_ran:

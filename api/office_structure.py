@@ -2051,6 +2051,26 @@ def pdf_focus_order_checks(path: Path) -> list[dict]:
     return detect(path)
 
 
+def pdf_label_in_name_checks(path: Path) -> list[dict]:
+    """2.5.3 Label in Name for PDF. Implementation: formats/pdf/detectors/label_in_name.py —
+    registered as PARTIAL coverage (push buttons are the only field type carrying a caption).
+
+    THIS WRAPPER IS THE FIX, not tidying. The detector has been written, registered, and
+    reported as PARTIAL/HIGH coverage in the capability matrix and in docs/TODO.md's generated
+    table — and `checks_for` never called it. Every other registry detector has a wrapper on this
+    list; this one had neither, so no scan of any PDF has ever produced a 2.5.3 finding while the
+    product's own published matrix said the criterion was assessed.
+
+    That is the worst shape a coverage defect can take. A missing detector reads as a gap, which
+    is honest; a declared one that never runs reads as a clean result, and "unsupported must never
+    read as passed" is the rule it breaks. It surfaced only because an ⚡ remediation lane was
+    declared for the criterion and tests/test_remediation_capability.py's round-trip proof
+    demanded the fixture trip it first — the guard catching the thing it exists to catch.
+    """
+    from formats.pdf.detectors.label_in_name import detect
+    return detect(path)
+
+
 def pdf_non_text_content_checks(path: Path) -> list[dict]:
     """1.1.1 findings per tagged /Figure with no /Alt. Implementation: formats/pdf/detectors/
     non_text_content.py.
@@ -2171,6 +2191,7 @@ def checks_for(path: Path, ext: str) -> list[dict]:
                 + pdf_text_spacing_checks(path) + pdf_use_of_color_checks(path)
                 + pdf_nontext_contrast_checks(path) + pdf_text_over_image_checks(path)
                 + pdf_focus_order_checks(path) + pdf_scanned_page_checks(path)
+                + pdf_label_in_name_checks(path)
                 + pdf_non_text_content_checks(path))
     if ext == ".xlsx":
         return (xlsx_contrast_checks(path) + xlsx_structure_checks(path)

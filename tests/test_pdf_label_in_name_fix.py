@@ -289,3 +289,29 @@ def test_html_stays_the_model_this_was_copied_from():
     not an inconsistency to tidy away."""
     assert rc.REMEDIATION["html"]["2.5.3"] == rc.AUTO
     assert rc.assessment_lane("html", "2.5.3") == rc.A_AUTO
+
+
+# ── the dispatch this change wired ───────────────────────────────────────────────────────────
+
+def test_2_5_3_on_pdf_is_dispatched_now():
+    """2.5.3 on pdf was REGISTERED and never CALLED.
+
+    Every registry-backed detector gets a thin wrapper in office_structure.py that checks_for()
+    invokes; this pair had neither, so it was printed in the capability matrix and in
+    docs/TODO.md's generated coverage table as PARTIAL/HIGH while no scan of any PDF had ever
+    produced a 2.5.3 finding. A missing detector reads as a gap, which is honest; a declared one
+    that never runs reads as a clean result, which is the "unsupported must never read as passed"
+    rule broken in the direction nobody notices.
+
+    Pinned at the dispatch site rather than by scanning a fixture here, because the fixture proof
+    already exists one layer up: tests/test_remediation_capability.py::test_pdf_auto_entries_clear
+    builds a PDF with a failing push button and asserts 2.5.3 both fires and clears. That test
+    needs the analysis engines and skips in a bare container; this one does not, so the wiring
+    stays pinned wherever the suite runs.
+    """
+    from office_structure import pdf_label_in_name_checks  # noqa: F401
+    src = (Path(__file__).resolve().parent.parent / "api" / "office_structure.py").read_text()
+    dispatch = src.split('if ext == ".pdf":', 1)[1].split("if ext ==", 1)[0]
+    assert "pdf_label_in_name_checks(path)" in dispatch, (
+        "the wrapper exists but checks_for's .pdf branch does not call it — which is exactly the "
+        "state 2.5.3 was in")
