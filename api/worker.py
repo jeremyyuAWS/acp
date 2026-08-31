@@ -24,6 +24,24 @@ import threading
 import time
 import uuid
 
+import joblog
+
+
+def _log(event, **fields):
+    """Emit a diagnostic that CANNOT affect the job.
+
+    joblog.emit is already defensive internally, but that is the logger promising to behave, and
+    the worker's correctness must not rest on it: a fault in the logging path — a broken stream,
+    a future edit above its own try, a monkeypatched emit — would otherwise propagate out of
+    run_once and leave a job neither completed nor failed. Two independent guards, because the
+    cost of the outer one is a bare except and the cost of not having it is lost work.
+    Pinned by test_a_logging_failure_cannot_change_a_job_outcome.
+    """
+    try:
+        joblog.emit(event, **fields)
+    except Exception:                              # noqa: BLE001 — never fail a job to log it
+        pass
+
 # Registry: job type -> handler(payload: dict, job: dict) -> None
 HANDLERS: dict[str, callable] = {}
 
@@ -246,8 +264,40 @@ class JobWorker:
         job = self.store.claim_job(self.worker_id)
         if job is None:
             return False
+        # Flushed the moment the job is claimed, BEFORE any handler runs. A native crash
+        # (2026-08-30: exit 139 after glibc heap corruption) never unwinds, so anything emitted
+        # after this point may not survive — and anything emitted before it is the only record
+        # that this process had this job open. See joblog's header for why buffering would make
+        # the instrumentation useless at precisely the moment it is needed.
+        _logf = {"job_id": job["id"], "scan_id": job.get("scan_id"),
+                "job_type": job.get("type"), "attempt": job.get("attempts"),
+                "worker_id": self.worker_id}
+        _log("job.claim", max_attempts=job.get("max_attempts"), **_logf)
+
+        def _emit_persisted(event, **extra):
+            """Record an outcome from the row as it now STANDS, never from the transition we
+            believe we just made.
+
+            The two are not the same. store.fail_job dead-letters on `attempts >= max_attempts`
+            of its own accord, and mark_job_cancelled/complete_job are both guarded against a
+            zombie worker whose write the reclaim-race check suppresses — so "we called
+            complete_job" is a statement about intent, and the row is the statement about fact.
+            Re-reading costs one query on a path that has just done real work.
+
+            `status` is what the row says; when the read itself fails the record says so rather
+            than asserting a status nothing confirmed. This never raises: a diagnostic that can
+            fail a job is worse than no diagnostic (see test_a_logging_failure_cannot_change_a_
+            job_outcome)."""
+            status = None
+            try:
+                fresh = self.store.get_job(job["id"])
+                status = (fresh or {}).get("status") or "missing"
+            except Exception:                       # noqa: BLE001 — never fail a job to log it
+                status = "unread"
+            _log(event, status=status, **extra, **_logf)
         fn = HANDLERS.get(job["type"])
         if fn is None:
+            _log("job.no_handler", **_logf)
             self.store.fail_job(job["id"], f"no handler for job type '{job['type']}'",
                                 backoff_seconds=_backoff_seconds(job["attempts"]))
             return True
@@ -279,26 +329,51 @@ class JobWorker:
                 raise JobCancelledError(f"job {job['id']} was cancelled")
         _cancel_local.check = _do_cancel_check
         try:
-            fn(job.get("payload", {}), job)
+            # The job's identity travels with the work. Handlers fan out across threads — and
+            # handlers._analyse_and_persist_one spawns another inside that — so a stage record
+            # emitted next to a native call is one or two hops from here. joblog.bind() carries
+            # this context over those hops; without it those records name a document and no job.
+            with joblog.job_context(job_id=job["id"], scan_id=job.get("scan_id"),
+                                    job_type=job.get("type"), attempt=job.get("attempts"),
+                                    worker_id=self.worker_id):
+                fn(job.get("payload", {}), job)
             # Handler finished — honour a cancellation that arrived while it was running
             # (the handler may not have called check_cancel() at all).
             if self.store.is_job_cancelled(job["id"]):
                 self.store.mark_job_cancelled(job["id"])
+                _emit_persisted("job.cancelled", when="after_handler")
             else:
                 self.store.complete_job(job["id"])
+                _emit_persisted("job.complete")
         except JobCancelledError:
             self.store.mark_job_cancelled(job["id"])
+            _emit_persisted("job.cancelled", when="during_handler")
         except FatalJobError as e:
+            # error_type only — the message can carry a filename or a Drive URL, and these lines
+            # go to a container log with a different audience from the database.
             self.store.fail_job(job["id"], f"fatal: {e}", force_dead=True,
                                 error_class=TRANSIENT)
+            _emit_persisted("job.dead", reason="fatal", error_type=type(e).__name__)
         except Exception as e:
             eclass = classify_job_error(e)
             # Use the human-readable Drive message for auth failures so the queue panel
             # shows something actionable rather than a google-auth traceback.
             msg = drive_session_expired(e) or str(e)
             force_dead, backoff = job_retry_policy(eclass, job["attempts"])
-            self.store.fail_job(job["id"], msg, backoff_seconds=backoff,
-                                force_dead=force_dead, error_class=eclass)
+            outcome = self.store.fail_job(job["id"], msg, backoff_seconds=backoff,
+                                          force_dead=force_dead, error_class=eclass)
+            # Logged from fail_job's OWN return, not from the policy's `force_dead`. Those
+            # disagree in the case this instrumentation exists for: fail_job also dead-letters
+            # on `attempts >= max_attempts`, so an attempts-exhausted death — exactly what the
+            # sweeper recorded for db40880c03de4b89 — arrives with force_dead False and would
+            # have been logged as a retry. Caught by
+            # test_attempts_exhausted_records_a_death_so_the_log_shows_retries_stopped.
+            # Caveat, per the note below: this return reads 'queued' even when a zombie
+            # worker's write was suppressed by the reclaim-race guard. That is the right
+            # reading here anyway — these records say what THIS process did.
+            _emit_persisted({"dead": "job.dead", "queued": "job.retry"}.get(outcome, "job.fail"),
+                            outcome=outcome, error_class=eclass, error_type=type(e).__name__,
+                            backoff_s=backoff)
             # fail_job returns "queued" even when a zombie worker's write was actually
             # suppressed by the reclaim-race guard (see test_job_completion_race.py) — a
             # second worker may already have completed or dead-lettered this exact job_id.

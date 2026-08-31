@@ -2300,7 +2300,11 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
         except BaseException as e:   # noqa: BLE001 — re-raised on the caller thread below
             outcome["error"] = e
 
-    th = threading.Thread(target=_work, name=f"scanfile:{item.get('file')}", daemon=True)
+    # joblog.bind: contextvars do not cross a thread start, so without this the per-document
+    # stage records emitted downstream would carry a document and no job — exactly the
+    # correlation the diagnostic exists for. Captured here, re-entered inside the thread.
+    import joblog as _jl
+    th = threading.Thread(target=_jl.bind(_work), name=f"scanfile:{item.get('file')}", daemon=True)
     th.start()
     th.join(cap)
     if th.is_alive():
@@ -2481,7 +2485,12 @@ def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _l
                     # fan-out path (ADR 0007) — run_scan's in-process pool is the local one — so
                     # without it the line works in development and is silent where users are.
                     _an_t0 = _time.monotonic()
-                    fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii, scan_id=scan_id)
+                    # doc_ref: the Drive file id, already opaque and already in the database, so
+                    # the crash diagnostics name documents by a real identifier rather than by a
+                    # digest of the filename. Absent for a source that has no such id, where
+                    # joblog falls back.
+                    fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii, scan_id=scan_id,
+                                                      doc_ref=item.get("id"))
                     _timings.add("analyse", _time.monotonic() - _an_t0)   # ADR 0037 Step 0
             except Exception as e:
                 # A credential failure is true of the whole scan, so it is named once, acted on
@@ -2764,8 +2773,12 @@ def _scan_batch(payload: dict, job: dict) -> None:
             _run_one(it)
     else:
         import concurrent.futures
+        import joblog as _jl
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(workers, len(items))) as ex:
-            futures = [ex.submit(_run_one, it) for it in items]
+            # Bound for the same reason as the Thread above: submit() does not carry the
+            # caller's context into the pool thread. This is the OUTER of the two hops between
+            # worker.run_once and the per-document stage records.
+            futures = [ex.submit(_jl.bind(_run_one), it) for it in items]
         # collect results after all complete; re-raise first exception if any
         exc = None
         for f in futures:

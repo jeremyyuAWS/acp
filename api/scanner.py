@@ -3456,7 +3456,7 @@ def rescore_reused(issues: list[dict], filename: str, status: str | None = None,
 
 
 def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
-                       scan_id: str | None = None):
+                       scan_id: str | None = None, doc_ref: str | None = None):
     """Analyse + rubric-assess ONE already-downloaded file (fan-out path, ADR 0007).
     `tmp` is a directory containing `name`. Returns (assessed_file_dict, pii_info),
     or (None, None) for an unsupported extension. Engines catch their own errors and
@@ -3475,26 +3475,51 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
     _t0 = time.monotonic()
     print(f"[scan] analysing {name} ({ext or '?'}) …", flush=True)
     import activity as _act
+    import joblog as _jl
+    # Prefer the Drive file id, which is ALREADY an opaque system identifier, over a digest of
+    # the filename — an unkeyed hash of a low-entropy name is a pseudonym, not anonymity, and
+    # joblog's header says so plainly. Stable across attempts, replicas and restarts either way,
+    # which is what makes "this one was open on all three crashes" sayable; keyed on the document
+    # alone, deliberately not on scan_id, so a retry's separate run still correlates.
+    #
+    # NOTE, and this is a limit on what this change achieves: the `[scan] analysing {name} …`
+    # line printed above is PRE-EXISTING and still writes the filename to this same stream. So
+    # the no-filename property belongs to the joblog records, NOT to the log stream as a whole,
+    # and must not be described as though it did. Redacting that line is its own change.
+    doc = _jl.doc_id(name, opaque_ref=doc_ref)
     _act.record_file(scan_id, name, phase="analysing",
                      action="running the accessibility engine", force=True)
+    # Each engine below is a NATIVE entry point, and the enter line is flushed before the call:
+    # pdf goes through pikepdf/qpdf, office shells out to the .NET CLI (already out-of-process,
+    # so a crash there cannot take this worker down), html through the python parser stack.
+    # Which of them — if any — corrupted the heap on 2026-08-30 is exactly what was not
+    # recoverable from the logs, and is not assumed here.
     if ext == ".pdf":
-        raw = {"engine": "python/pdf", **_analyse_pdf(tmp / name)}
+        with _jl.stage("analyse.pdf", doc=doc, scan_id=scan_id, ext=ext):
+            raw = {"engine": "python/pdf", **_analyse_pdf(tmp / name)}
     elif ext in OFFICE:
-        office = _analyse_office(tmp)                 # .NET CLI over the one-file dir
+        with _jl.stage("analyse.office", doc=doc, scan_id=scan_id, ext=ext):
+            office = _analyse_office(tmp)             # .NET CLI over the one-file dir
         raw = {"engine": ".net/office",
                **office.get(name, {"succeeded": False, "issues": [], "errors": ["no engine result"]})}
     elif ext in HTML_EXTS:
-        raw = {"engine": "python/html", **_analyse_html(tmp / name)}
+        with _jl.stage("analyse.html", doc=doc, scan_id=scan_id, ext=ext):
+            raw = {"engine": "python/html", **_analyse_html(tmp / name)}
     else:
+        _jl.emit("analyse.skip", doc=doc, scan_id=scan_id, ext=ext, reason="unsupported_ext")
         return None, None
     # 1.4.5 / 1.4.9 Images of Text — OCR embedded images; self-gates + never raises.
     _act.record_file(scan_id, name, sc="1.4.5", phase="analysing",
                      action="reading text baked into images")
     try:
         import ocr as _ocr_mod
-        raw["issues"] = (list(raw.get("issues", []))
-                          + _ocr_mod.images_of_text(tmp / name, ext)
-                          + _ocr_mod.images_of_text_no_exception(tmp / name, ext))
+        # Pillow decodes and tesseract runs in-process, so this block is native too — and it is
+        # bracketed even though the enclosing `except Exception: pass` swallows Python-level
+        # failures, because a segfault is not an exception and would leave an enter with no exit.
+        with _jl.stage("analyse.ocr", doc=doc, scan_id=scan_id, ext=ext):
+            raw["issues"] = (list(raw.get("issues", []))
+                              + _ocr_mod.images_of_text(tmp / name, ext)
+                              + _ocr_mod.images_of_text_no_exception(tmp / name, ext))
     except Exception:
         pass
     # 1.3.3 Sensory Characteristics + 3.1.2 Language of Parts — text-content checks.
@@ -3504,9 +3529,11 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
         import pii as _pii_mod2
         import textchecks as _txt_mod
         import office_structure as _off_lang
-        raw["issues"] = list(raw.get("issues", [])) + _txt_mod.content_findings(
-            _pii_mod2.extract_text(tmp / name),
-            _off_lang.language_marked_spans(tmp / name, ext))
+        # extract_text reaches native extractors (pikepdf/qpdf for .pdf, lxml for OOXML parts).
+        with _jl.stage("analyse.text", doc=doc, scan_id=scan_id, ext=ext):
+            raw["issues"] = list(raw.get("issues", [])) + _txt_mod.content_findings(
+                _pii_mod2.extract_text(tmp / name),
+                _off_lang.language_marked_spans(tmp / name, ext))
     except Exception:
         pass
     # 2.4.6 / 2.4.9 / 1.4.3 / 1.4.6 — first-party OOXML/PDF structural checks
@@ -3516,7 +3543,9 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
                      action="checking headings, links and contrast")
     try:
         import office_structure as _off_mod
-        raw["issues"] = list(raw.get("issues", [])) + _off_mod.checks_for(tmp / name, ext)
+        # PDF contrast measurement here rasterises through the native pdf stack.
+        with _jl.stage("analyse.structure", doc=doc, scan_id=scan_id, ext=ext):
+            raw["issues"] = list(raw.get("issues", [])) + _off_mod.checks_for(tmp / name, ext)
     except Exception:
         pass
     raw["issues"] = _collapse_duplicate_alt(_collapse_reading_order(raw["issues"]))
@@ -3810,7 +3839,10 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         # `raw`/`assessed` are keyed by filename and `aggregate` sums over values.
         analysed = []
         with _cf.ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as _ex:
-            _futs = [_ex.submit(_analyse_one, it) for it in items]
+            # Bound so the stage records _analyse_one emits keep the claiming job's identity;
+            # submit() starts each pool thread from an empty context. See joblog's header.
+            import joblog as _jl_bind
+            _futs = [_ex.submit(_jl_bind.bind(_analyse_one), it) for it in items]
             for _done_n, _fut in enumerate(_cf.as_completed(_futs), start=1):
                 _res = _fut.result()
                 if _res is not None:
