@@ -93,14 +93,31 @@ def _assess(data: bytes) -> set[str]:
 
 
 def _locators(data: bytes) -> list[str]:
-    """The locators the DETECTOR emits, read off a real scan rather than constructed here — a
-    hand-built locator that happens to match is not evidence the two agree."""
-    from scanner import analyse_and_assess
-    with tempfile.TemporaryDirectory() as d:
-        (Path(d) / FILE).write_bytes(data)
-        fd, _ = analyse_and_assess(Path(d), FILE, detect_pii=False)
-    return [i["locator"] for i in (fd or {}).get("issues", [])
-            if "1.1.1" in (i.get("wcag") or "") and i.get("locator")]
+    """The locators the FIRST-PARTY detector emits, read off the detector rather than off a full
+    scan — and that distinction is the whole reason this helper exists.
+
+    A full scan is not a stable source for these. `scanner._collapse_duplicate_alt` deliberately
+    DROPS the first-party 1.1.1 findings whenever the .NET partner engine also reported 1.1.1
+    ("the engine is the richer detector, so it wins where it ran"), and the engine's finding
+    carries `page`/`location` rather than the `locator` an applier resolves. So on a host with no
+    Office CLI the scan yields PPTX_IMAGE_NO_ALT with its locator, and on CI — where the engine
+    IS built — it yields the engine's finding with none.
+
+    The first draft of this file read locators off `analyse_and_assess` and passed locally for
+    exactly that reason, then failed CI with `assert []`. Nothing was wrong with the lane: the
+    test was asking a question whose answer depends on which engines happen to be installed.
+    Asking the detector directly makes it environment-independent, and it is also the right
+    question — the applier's locator contract is with the first-party detector, since that is
+    the one that mints `part#name`.
+    """
+    from formats.pptx.detectors import non_text_content
+    return [f["locator"] for f in non_text_content.detect(_spill(data)) if f.get("locator")]
+
+
+def _spill(data: bytes) -> Path:
+    p = Path(tempfile.mkdtemp()) / FILE
+    p.write_bytes(data)
+    return p
 
 
 def _slide_xml(data: bytes) -> str:
