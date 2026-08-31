@@ -76,3 +76,26 @@ def test_source_connection_does_not_enumerate_files(gated, monkeypatch):
     assert r.status_code == 200
     assert r.json()[0]["files"] is None
     svc.files.assert_not_called()
+
+
+def test_folder_name_lookup_is_metadata_only_and_uses_callers_service(gated, monkeypatch):
+    import core
+    svc = MagicMock()
+    svc.files.return_value.get.return_value.execute.return_value = {
+        "id": "folder_123", "name": "Clinical Guidelines", "mimeType": "application/vnd.google-apps.folder"}
+    monkeypatch.setattr(core, "drive_service", lambda request: svc)
+    response = gated.get('/drive/folder-name?id=folder_123', headers=_ms())
+    assert response.status_code == 200
+    assert response.json()['name'] == 'Clinical Guidelines'
+    svc.files.return_value.list.assert_not_called()
+    assert svc.files.return_value.get.call_args.kwargs['supportsAllDrives'] is True
+
+
+def test_folder_name_requires_authentication_and_rejects_nonfolder(gated, monkeypatch):
+    import core
+    svc = MagicMock()
+    svc.files.return_value.get.return_value.execute.return_value = {'name': 'Document', 'mimeType': 'application/pdf'}
+    monkeypatch.setattr(core, 'drive_service', lambda request: svc)
+    assert gated.get('/drive/folder-name?id=x').status_code == 401
+    assert gated.get('/drive/folder-name?id=x', headers=_ms()).status_code == 404
+    assert gated.get('/drive/folder-name?id=bad/id', headers=_ms()).status_code == 400

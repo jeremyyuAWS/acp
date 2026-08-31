@@ -734,7 +734,8 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   const states = journeyStates(st, effectiveRemediated ? { done: true } : remNow)
 
   const sizeKB = file.sizeKB ?? file.size_kb   // SIM uses sizeKB; real scans store size_kb
-  const hasAnyMeta = file.modifiedAge || file.lastAccessed || file.views90d != null || sizeKB || file.duration || file.pages || file.sheets || file.owner || overrideOwner
+  const sourceModified = file.source_modified && Number.isFinite(Date.parse(file.source_modified)) ? new Date(file.source_modified).toLocaleString() : null
+  const hasAnyMeta = sourceModified || file.modifiedAge || file.lastAccessed || file.views90d != null || sizeKB != null || file.duration || file.pages || file.sheets || file.owner || overrideOwner
   const metaBlock = (
     <>
       <h4 className="drawerh">Document metadata</h4>
@@ -744,10 +745,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         <div><span className="muted">Source</span><b>{file.sourceName || '—'}</b></div>
         <div><span className="muted">Department</span><b>{file.department || file.dept || '—'}</b></div>
         {hasAnyMeta ? (<>
-          <div><span className="muted">Last modified</span><b>{file.modifiedAge || '—'}</b></div>
+          <div><span className="muted">Last modified</span><b>{sourceModified || file.modifiedAge || 'Not recorded'}</b></div>
           <div><span className="muted">Last accessed</span><b>{file.lastAccessed || '—'}</b></div>
           <div><span className="muted">Views · 90d</span><b>{file.views90d != null ? file.views90d.toLocaleString() : '—'}</b></div>
-          <div><span className="muted">Size</span><b>{sizeKB ? (sizeKB >= 1024 ? `${(sizeKB / 1024).toFixed(1)} MB` : `${sizeKB} KB`) : '—'}</b></div>
+          <div><span className="muted">Size</span><b>{sizeKB != null ? (sizeKB >= 1024 ? `${(sizeKB / 1024).toFixed(1)} MB` : `${sizeKB} KB`) : '—'}</b></div>
           <div><span className="muted">{file.duration ? 'Duration' : file.sheets ? 'Sheets' : 'Pages'}</span><b>{file.duration || file.pages || file.sheets || '—'}</b></div>
           <div><span className="muted">Owner</span><b>{overrideOwner || file.owner || '—'}{delegatedFrom && <span className="badge" style={{ marginLeft: 6, background: '#E7F0DC', color: '#3B6D11', fontSize: 10, fontWeight: 400 }}>delegated from {delegatedFrom}</span>}</b></div>
         </>) : (

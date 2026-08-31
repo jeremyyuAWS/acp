@@ -1743,3 +1743,7 @@ export const fetchScopedEligibility = (codes = null) => {
   const q = list.join(',')
   return fetch(`${BASE}/assess/eligibility/scoped${q ? `?codes=${encodeURIComponent(q)}` : ''}`, { headers: headers() }).then(j)
 }
+
+// Only displayed result folders are resolved, after results render; this never delays a scan.
+export const getDriveFolderName = (id) => (SIM ? sim({ id, name: 'Demo folder' })
+  : fetch(`${BASE}/drive/folder-name?id=${encodeURIComponent(id)}`, { headers: headers(), signal: AbortSignal.timeout(8000) }).then(j))

@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import DiscoveryLifecycleResults, { supportedDiscoveryRow } from './DiscoveryLifecycleResults.jsx'
+import DiscoveryFolderLabel from './DiscoveryFolderLabel.jsx'
 import Term from './Term.jsx'
 import {
   NOT_RECORDED, acknowledgementSummary, estateSummary, estateTypeReconciliation, plural,
@@ -112,7 +114,7 @@ const Reconciliation = ({ id, heading, note, rec, renderLabel }) => (
 )
 
 export default function DiscoveryResults({
-  files = null, inventory = null, invRows = null, scopeLine = null, runAt = null, policies = null,
+  source = null, files = null, inventory = null, invRows = null, scopeLine = null, runAt = null, policies = null,
   reasonOf = undefined,
   reasonSampleOf = null, reasonFetchLikely = null,
   acknowledged = false, onAcknowledge = null,
@@ -167,7 +169,7 @@ export default function DiscoveryResults({
   const fetchFiles = fetchBuckets.reduce((n, b) => n + b.count, 0)
   const ageDist = ageBucketDistribution(invRows)
   const sizeDist = sizeBucketDistribution(invRows)
-  const folderDist = folderDistribution(invRows)
+  const folderDist = folderDistribution(invRows?.filter(supportedDiscoveryRow))
 
   const recRows = recommendationRows(files, policies)
   const recRec = recommendationReconciliation(files)
@@ -425,9 +427,9 @@ export default function DiscoveryResults({
             {folderDist.buckets.map((b) => (
               <div className="critrow" key={b.key} style={{ gridTemplateColumns: '1fr 1fr 56px' }}>
                 <span className="critlabel" title={b.label}
-                      style={{ fontSize: 12, fontFamily: 'monospace', overflow: 'hidden',
+                      style={{ fontSize: 12, overflow: 'hidden',
                                textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {b.label}
+                  <DiscoveryFolderLabel folder={b.label} source={source} />
                 </span>
                 <span className="track">
                   <i style={{ width: `${(b.count / Math.max(1, ...folderDist.buckets.map((x) => x.count))) * 100}%`,
@@ -492,6 +494,8 @@ export default function DiscoveryResults({
           </div>
         )}
       </div>
+
+      <DiscoveryLifecycleResults rows={invRows} policies={policies} scanId={scanId} />
 
       {/* RECOMMENDATIONS — rendered only when the per-file lifecycle outcome reached this screen.
           An empty table and an unread field must never look the same. */}

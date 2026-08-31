@@ -222,7 +222,7 @@ export default function SignIn({ onSignedIn, notice = null }) {
               {notice}
             </p>
           )}
-          {err && <p style={{ color: 'var(--red, #dc2626)', fontSize: 13, margin: '8px 0 0' }}>{err}</p>}
+          {err && <p role="alert" style={{ color: 'var(--red, #dc2626)', fontSize: 13, margin: '8px 0 0' }}>{err}</p>}
           <div className="ssorow" style={{ marginTop: 24 }}>
             <button className="ssobtn google-sso" onClick={signInWithGoogle} disabled={busy}>
               <GoogleIcon />
@@ -236,7 +236,7 @@ export default function SignIn({ onSignedIn, notice = null }) {
             )}
           </div>
           <p className="muted signin-foot" style={{ marginTop: 20 }}>
-            Authorized accounts only · documents never retained
+            Authorized accounts only · Discovery reads metadata only
           </p>
           <BuildStamp />
         </div>
@@ -289,7 +289,7 @@ export default function SignIn({ onSignedIn, notice = null }) {
           ))}
         </div>
 
-        <p className="muted signin-foot">SSO &amp; role-based access · scans run read-only · documents never retained</p>
+        <p className="muted signin-foot">SSO &amp; role-based access · Review recommendations before applying changes</p>
         <BuildStamp />
       </div>
     </div>

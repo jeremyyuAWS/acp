@@ -1278,7 +1278,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                                     onShowPrevious={() => setShowPreviousResults(true)} />
       ) : (
       <div id="discover-inventory-table">
-      <DiscoveryResults files={estateFiles} inventory={scope?.inventory || null} invRows={inv?.rows ?? null} scopeLine={scopeLine} runAt={runAt}
+      <DiscoveryResults files={estateFiles} source={run?.source} inventory={scope?.inventory || null} invRows={inv?.rows ?? null} scopeLine={scopeLine} runAt={runAt}
                         reasonOf={why ? why.reasonOf : undefined}
                         reasonSampleOf={why ? why.sampleOf : null}
                         reasonFetchLikely={why ? why.fetchLikely : null}
@@ -1513,7 +1513,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       )}
 
       {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); f._estateOnly ? setEstOnlyFile(f) : setSel(f) }} />}
-      {sel && <FileDrawer file={sel} context="discover" onClose={() => setSel(null)} overrideOwner={ownerOf(sel)} delegatedFrom={isDelegated(sel) ? sel.owner : null} scanId={scanId} />}
+      {sel && <FileDrawer file={mergeLifecycle([sel], inv)[0]} context="discover" onClose={() => setSel(null)} overrideOwner={ownerOf(sel)} delegatedFrom={isDelegated(sel) ? sel.owner : null} scanId={scanId} />}
       {estOnlyFile && <EstateOnlyDrawer file={estOnlyFile} onClose={() => setEstOnlyFile(null)} />}
     </>
   )

@@ -119,6 +119,11 @@ def test_drive_upload_no_longer_hardcodes_the_folder_name():
     code = _code(DRIVE_ROUTE)
     # No string literal 'Remediated' anywhere in executable code.
     assert not re.search(r"""["']Remediated["']""", code)
-    # And no second find-or-create: exactly one folder mimeType reference remains, the
-    # /drive/folders browser (which lists a caller-supplied parent, not the mirror).
-    assert code.count("vnd.google-apps.folder") == 1
+    # Protect the upload handler from reintroducing its own find-or-create operation.
+    # Read-only folder browser/name routes may legitimately reference the folder MIME type.
+    import ast
+    tree = ast.parse(DRIVE_ROUTE)
+    upload = next(node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                  and any(isinstance(d, ast.Call) and any(isinstance(a, ast.Constant) and a.value == '/drive/upload'
+                                                         for a in d.args) for d in node.decorator_list))
+    assert 'vnd.google-apps.folder' not in ast.get_source_segment(DRIVE_ROUTE, upload)

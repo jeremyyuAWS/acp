@@ -74,7 +74,7 @@ describe('DiscoverCompleteSummary renders completion state', () => {
 
   it('shows lifecycle rules count', () => {
     const html = render(BASE)
-    expect(html).toContain('3 matched lifecycle rules')
+    expect(html).toContain('3 lifecycle rules')
   })
 
   it('omits metadata-only row when count is 0', () => {
@@ -114,9 +114,10 @@ describe('DiscoverCompleteSummary renders completion state', () => {
     expect(ariaLabels).toContain('What does "Metadata-only" mean?')
   })
 
-  it('shows "No lifecycle rules enabled" when count is null', () => {
+  it('does not confuse unrecorded lifecycle status with no enabled rules', () => {
     const html = render({ ...BASE, lifecycleRulesCount: null })
-    expect(html).toContain('No lifecycle rules enabled')
+    expect(html).toContain('Lifecycle rule status was not recorded')
+    expect(html).not.toContain('No lifecycle rules enabled')
   })
 
   it('shows CTA with assessable document count', () => {
@@ -228,7 +229,7 @@ describe('CTA gating', () => {
 describe('singular lifecycle rule label', () => {
   it('uses singular "lifecycle rule" when count is 1', () => {
     const html = render({ ...BASE, lifecycleRulesCount: 1 })
-    expect(html).toContain('1 matched lifecycle rule')
+    expect(html).toContain('1 lifecycle rule')
     expect(html).not.toContain('1 lifecycle rules')
   })
 })
@@ -481,7 +482,7 @@ describe('key stats render as real bulleted lists', () => {
 
   it('the lifecycle-rules count renders as an <li> item', () => {
     const html = render(BASE)
-    expect(html).toMatch(/<li[^>]*>(?:(?!<\/li>)[\s\S])*matched lifecycle rule(?:(?!<\/li>)[\s\S])*<\/li>/)
+    expect(html).toMatch(/<li[^>]*>(?:(?!<\/li>)[\s\S])*lifecycle rule(?:(?!<\/li>)[\s\S])*<\/li>/)
   })
 
   it('"No lifecycle rules enabled" is still a real list item when there are none', () => {
@@ -503,5 +504,22 @@ describe('key stats render as real bulleted lists', () => {
     const html = render({ ...BASE, scannableCount: 173, publishedAt: '2026-08-28T23:07:00Z' })
     const uls = html.match(/<ul[^>]*>/g) || []
     expect(uls.length).toBeGreaterThanOrEqual(3)
+  })
+})
+
+ describe('lifecycle completion clarity', () => {
+  it('distinguishes enabled rules from zero matches', () => {
+    const html = render({ ...BASE, archiveCandidates: 0, deleteCandidates: 0, tagged: 0 })
+    expect(html).toContain('3 lifecycle rules')
+    expect(html).not.toContain('matched lifecycle')
+    expect(html).toContain('No files matched these rules')
+  })
+  it('does not invent zero matches when the breakdown is missing', () => {
+    expect(render(BASE)).not.toContain('No files matched these rules')
+  })
+  it('explains that candidates require review, not source changes', () => {
+    const html = render({ ...BASE, archiveCandidates: 5 })
+    expect(html).toContain('Candidates are recommendations')
+    expect(html).toContain('No source files were moved or deleted')
   })
 })
