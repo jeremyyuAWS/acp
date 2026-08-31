@@ -494,47 +494,6 @@ for s in json.loads(os.environ.get("APP_SECRETS_JSON") or "[]"):
     echo "   worker-tier az call failed: $(grep -oE '\([A-Za-z]+\)' /tmp/acp_az_worker_err | head -1 || echo '(unknown)') — full output suppressed (may contain secret material); see /tmp/acp_az_worker_err locally" >&2
     return 1
   }
-  # ── autoscale on queue depth ───────────────────────────────────────────────────────────────
-  # WHY THIS EXISTS. The worker app was created with --max-replicas 3 and NO scale rule, and it
-  # has no ingress — so ACA's default HTTP rule can never fire and nothing else ever asked for a
-  # second replica. It sat at 1 replica x ACP_WORKERS threads no matter how deep the backlog got;
-  # `--max-replicas 3` was decorative.
-  #
-  # KEDA's postgresql scaler counts queued jobs and ACA scales replicas = ceil(count/target).
-  # `connection` comes from the `database-url` secret the block above guarantees exists (it
-  # refuses to create the app without it), so no new secret and no connection string in argv.
-  #
-  # HONEST ABOUT WHAT THIS DOES NOT DO: KEDA polls on an interval (~30s) and ACA applies a
-  # scale-down cooldown, so this raises THROUGHPUT under load — it does not make any single job
-  # start sooner. What makes Discovery start sooner is queue precedence (store.job_priority) and
-  # the reserved lane; this stops the two of them from competing for one replica's worth of
-  # threads once an Assess fan-out is running.
-  # APPLIED AS ITS OWN STEP, AFTER the create/update below, and deliberately NOT folded into
-  # them. This script has never run against a real subscription from here, and `--scale-rule-auth`
-  # is not supported by every az version. Folded into the update call, one unsupported flag turns
-  # a working deploy into a failed one; as a separate step the worst case is a warning and a
-  # worker tier that scales exactly as badly as it does today. Idempotent — re-applying the same
-  # rule is a no-op.
-  _apply_worker_scale_rule() {
-    if az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER_APP" \
-         --scale-rule-name jobs-queued \
-         --scale-rule-type postgresql \
-         --scale-rule-metadata "query=SELECT count(*) FROM jobs WHERE status='queued'" \
-                               "targetQueryValue=5" \
-         --scale-rule-auth "connection=database-url" \
-         -o none 2>/tmp/acp_scale_err; then
-      echo "   worker autoscale: jobs-queued (postgresql, target 5 queued/replica)"
-      return 0
-    fi
-    echo "   NOTE: could not apply the worker autoscale rule — the tier still runs, pinned at" >&2
-    echo "   --min-replicas. Error code: $(grep -oE '\([A-Za-z]+\)' /tmp/acp_scale_err | head -1 || echo '(unknown)')" >&2
-    # Deliberately NOT a copy-pasteable command. Anything printed here would be pasted without
-    # --subscription, which is the mis-scope tests/test_az_subscription_scope.py exists to
-    # prevent — it caught exactly that in this message. Point at the script, which scopes itself.
-    echo "   Re-run this script once az is up to date; see _apply_worker_scale_rule in deploy.sh." >&2
-    return 0   # never fail the deploy over autoscaling
-  }
-
   if az containerapp show "${AZ[@]}" -g "$RG" -n "$WORKER_APP" -o none 2>/dev/null; then
     _az_scrubbed az containerapp secret set "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --secrets "${WORKER_SECRETS[@]}" -o none
     _retry az containerapp registry set "${AZ[@]}" -g "$RG" -n "$WORKER_APP" \
@@ -554,7 +513,6 @@ for s in json.loads(os.environ.get("APP_SECRETS_JSON") or "[]"):
     echo "   the '$BLOB_ACCOUNT' account so its remediation Blob writes don't 403 — exact"
     echo "   commands are in docs/adr/0013-worker-durability-hardening.md (§2 runbook)."
   fi
-  _apply_worker_scale_rule
   # ADR 0013 §2: hand job processing to the worker tier — flip the API to serve-only.
   WORKERS_ENV="ACP_WORKERS=0"
   echo "   API → ACP_WORKERS=0 (job processing handed to $WORKER_APP)"
