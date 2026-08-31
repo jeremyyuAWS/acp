@@ -7567,23 +7567,80 @@ class Store:
                   "no-op (requeue suppressed)", flush=True)
         return "queued"
 
+    # The phase a reclaimed job carries while it waits to be picked up again.
+    #
+    # DISTINCT FROM 'retrying' ON PURPOSE. Both are legitimate waiting states, but they answer
+    # different questions. 'retrying' means a handler raised and fail_job requeued it with
+    # backoff — the process is fine, the work failed. 'reclaimed' means the worker DIED holding
+    # the job: nothing failed, nothing was reported, the lease simply expired. An operator
+    # reading "a previous attempt failed" about a SIGSEGV is being told the wrong thing.
+    RECLAIMED_PHASE = "reclaimed"
+
     def reclaim_stuck_jobs(self, lease_seconds: int = 600) -> int:
         """Requeue jobs stuck in 'running' past their lease (worker died mid-job).
 
         Uses lease_expires_at < now() when the column is set (all jobs claimed after the
         migration), falling back to the locked_at+lease_seconds arithmetic for rows that
         pre-date the column (no lease_expires_at) — so the sweeper is correct across a
-        rolling deploy."""
+        rolling deploy.
+
+        WHY THIS ALSO NARRATES. A worker killed by the OS runs no code on the way out: no
+        `except` clause, no `on_retry` hook, no event. The graceful failure path emits
+        `scan.retrying` carrying the attempt number (worker.py), which is the ONLY way an
+        attempt count reaches the UI — routes/scans.py threads `attempt` out of scan_events and
+        nowhere else. So a crash produced complete silence, and the run went on rendering an
+        ordinary in-progress checklist as though nothing had happened.
+
+        Measured on 2026-08-31 against a production Discovery job: the worker logged
+        `double free or corruption (!prev)` and Azure recorded exit 139; the job was reclaimed
+        EIGHT MINUTES later and re-claimed as attempt 2, and no surface anywhere said so. Worse
+        than the silence, `claim_job` sets `phase=NULL` on every claim — so once attempt 2
+        started it was indistinguishable from a first attempt.
+
+        This closes both halves: the requeued row carries RECLAIMED_PHASE while it waits, and a
+        `scan.interrupted` event carries the attempt into the SSE stream the UI already reads.
+        `scan.interrupted` was already in SCAN_EVENT_KINDS and already rendered by
+        frontend/src/scanHistory.js as "Interrupted" — the vocabulary and the reader existed;
+        only the emitter was missing.
+
+        The event write is best-effort by construction (append_scan_event swallows everything but
+        a programming error), and it happens AFTER the UPDATE: narration must never be able to
+        stop a job being reclaimed. A reclaim that lands with no event is a gap in the story, not
+        a job left stuck.
+        """
         from datetime import datetime, timezone, timedelta
         now = self._now()
         cutoff = (datetime.now(timezone.utc) - timedelta(seconds=lease_seconds)).isoformat()
+        # Read the doomed rows BEFORE the UPDATE clears locked_by and bumps nothing else: the
+        # event wants the worker that died and the attempt it died on, and both are gone from
+        # the row a moment later.
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id, scan_id, locked_by, attempts, type FROM jobs "
+                "WHERE status='running' AND (lease_expires_at<%s OR locked_at<%s)",
+                (now, cutoff))
+            doomed = self._db.fetchall(cur) or []
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "UPDATE jobs SET status='queued', locked_at=NULL, locked_by=NULL, "
-                "lease_expires_at=NULL, updated_at=%s "
+                "lease_expires_at=NULL, updated_at=%s, phase=%s "
                 "WHERE status='running' AND (lease_expires_at<%s OR locked_at<%s)",
-                (now, now, cutoff))
-            return getattr(cur, "rowcount", 0) or 0
+                (now, self.RECLAIMED_PHASE, now, cutoff))
+            n = getattr(cur, "rowcount", 0) or 0
+        for row in doomed:
+            if not row.get("scan_id"):
+                continue
+            try:
+                self.append_scan_event(
+                    row["scan_id"], "scan.interrupted",
+                    phase=self.RECLAIMED_PHASE, job_id=row.get("id"),
+                    worker_id=row.get("locked_by"), attempt=row.get("attempts"),
+                    detail={"reason": "lease expired — the worker stopped without reporting",
+                            "job_type": row.get("type")})
+            except Exception as e:  # noqa: BLE001 — narration must not fail the reclaim
+                print(f"[sweeper] could not record scan.interrupted for job "
+                      f"{row.get('id')}: {e}", flush=True)
+        return n
 
     def sweep_exhausted_jobs(self) -> int:
         """Dead-letter queued jobs that have already used all their attempts.
