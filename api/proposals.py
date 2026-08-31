@@ -757,24 +757,51 @@ def extract_office_links(path, ext: str) -> list[tuple[str, str]]:
                         if href:
                             out.append(("".join(_os._AT.findall(run_inner)), href))
             elif ext == "xlsx":
-                # Cell hyperlinks: <hyperlink ref="A1" r:id="rId1" display="click here"/>. The
-                # detector (office_structure.xlsx_structure_checks) judges the `display` text, so
-                # the proposer reads the SAME attribute — a link with no display is skipped there
-                # and here alike (its label is the cell value, which we don't rewrite blindly).
+                # Cell hyperlinks: <hyperlink ref="A1" r:id="rId1" display="click here"/>, or the
+                # same tag with no display= at all, whose label is the value of the cell at `ref`.
+                # BOTH are judged by the detector (office_structure.xlsx_structure_checks resolves
+                # the cell value through the shared-string table), so both are read here.
+                #
+                # This comment used to assert the opposite — that the detector judged `display`
+                # only, so skipping display-less links kept proposer and detector in parity. It
+                # was wrong in the direction that costs a user something: the detector raised
+                # 2.4.4 and the proposer offered nothing, so a reviewer looking at a spreadsheet
+                # openpyxl produced saw a finding with no fix to approve.
                 import re as _re
-                for ws_name in sorted(n for n in zf.namelist()
+                names = zf.namelist()
+                ss = (_os._read(zf, "xl/sharedStrings.xml") or ""
+                      if "xl/sharedStrings.xml" in names else "")
+                shared = _os._xlsx_shared_strings(ss) if ss else []
+                for ws_name in sorted(n for n in names
                                       if _re.fullmatch(r"xl/worksheets/sheet\d+\.xml", n)):
                     xml = _os._read(zf, ws_name) or ""
                     num = _re.search(r"sheet(\d+)\.xml", ws_name).group(1)
                     rels = _os._relationships(zf, f"xl/worksheets/_rels/sheet{num}.xml.rels")
+                    cell_vals = _os._xlsx_cell_text_values(xml, shared)
                     for tag in _os._XLSX_HL.findall(xml):
                         disp = _os._HL_DISPLAY.search(tag)
                         rid = _re.search(r'r:id="(rId\w+)"', tag)
-                        if not disp or not rid:
+                        if not rid:
                             continue
                         href = rels.get(rid.group(1))
-                        if href:
+                        if not href:
+                            continue
+                        if disp:
                             out.append((disp.group(1), href))
+                            continue
+                        # No display= — the label a reader sees IS the cell value, and
+                        # xlsx_structure_checks has resolved it that way since it was written.
+                        # This branch used to `continue`, with a comment claiming parity with
+                        # the detector, so every 2.4.4 finding on a link authored without the
+                        # attribute reached a reviewer with nothing to approve. openpyxl and
+                        # most non-Excel generators write hyperlinks exactly that way, so this
+                        # was not an edge case.
+                        ref_m = _os._HL_REF.search(tag)
+                        if not ref_m:
+                            continue
+                        val = cell_vals.get(ref_m.group(1).split(":")[0])
+                        if val:
+                            out.append((val, href))
     except Exception:
         return []
     return out
