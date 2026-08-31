@@ -241,3 +241,66 @@ def test_an_empty_queue_returns_none_rather_than_raising(pg):
     """The Postgres branch returns None when the subquery selects nothing — a different code path
     from SQLite's, which checks a fetchone() before updating."""
     assert pg.claim_job("w1") is None
+
+
+# ── the folder counter's exactly-once claim, on the engine that decides it ─────────────────────
+
+def test_a_suppressed_insert_reports_no_row_on_postgres(pg):
+    """INSERT … ON CONFLICT DO NOTHING must report rowcount 0 when it inserted nothing.
+
+    `increment_completed_folders` advances scan_runs.completed_folders only for the caller whose
+    claim on (scan_id, folder_id) actually inserted, and it decides that from `cur.rowcount`. If
+    psycopg2 reported 1 for a suppressed insert, every SQLite test of that method would still
+    pass — they would simply be exercising a first call — while production counted a reclaimed
+    folder job twice and finalized the scan over a partial estate.
+
+    Here rather than in tests/test_folder_counted_once.py because this is exactly the kind of
+    claim this file exists to stop being inferred from SQLite: the semantics belong to the driver
+    and the server, not to the calling code, and the SQLite answer is evidence about SQLite.
+    """
+    with pg._db.cursor() as cur:
+        pg._db.execute(cur,
+            "INSERT INTO scan_folder_completions(scan_id, folder_id, counted_at) "
+            "VALUES (%s,%s,%s) ON CONFLICT(scan_id, folder_id) DO NOTHING", ("s1", "fA", "t0"))
+        assert cur.rowcount == 1, "the first claim did not report the row it inserted"
+        pg._db.execute(cur,
+            "INSERT INTO scan_folder_completions(scan_id, folder_id, counted_at) "
+            "VALUES (%s,%s,%s) ON CONFLICT(scan_id, folder_id) DO NOTHING", ("s1", "fA", "t1"))
+        assert cur.rowcount == 0, (
+            "a suppressed insert reported a row on PostgreSQL — increment_completed_folders "
+            "would advance the counter twice for one folder")
+
+
+def test_the_folder_counter_is_idempotent_on_postgres(pg):
+    """The method itself, end to end, on the real engine — not just the SQL primitive under it."""
+    pg.init_scan_run("s-pg-folders", "drive", 0, "2026-08-31T00:00:00Z", "r", "h",
+                     owner="demo@example.com", status="running")
+    pg.set_total_folders("s-pg-folders", 2)
+
+    assert pg.increment_completed_folders("s-pg-folders", "fA") == (1, 2)
+    assert pg.increment_completed_folders("s-pg-folders", "fA") == (1, 2), (
+        "the same folder was counted twice on PostgreSQL")
+    assert pg.increment_completed_folders("s-pg-folders", "fB") == (2, 2)
+
+
+def test_concurrent_workers_counting_one_folder_advance_it_once(pg):
+    """Eight workers call the increment for the SAME folder at once — the shape a reclaimed job
+    and its zombie predecessor actually take, and one SQLite cannot express because it serialises
+    writers. Exactly one may win the claim."""
+    pg.init_scan_run("s-pg-race", "drive", 0, "2026-08-31T00:00:00Z", "r", "h",
+                     owner="demo@example.com", status="running")
+    pg.set_total_folders("s-pg-race", 8)
+    start = threading.Barrier(8)
+
+    def bump(_):
+        start.wait()                       # maximise the overlap rather than hoping for it
+        return pg.increment_completed_folders("s-pg-race", "fA")
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        list(ex.map(bump, range(8)))
+
+    with pg._db.cursor() as cur:
+        pg._db.execute(cur,
+            "SELECT completed_folders FROM scan_runs WHERE id=%s", ("s-pg-race",))
+        assert pg._db.fetchone(cur)["completed_folders"] == 1, (
+            "concurrent increments for one folder advanced the counter more than once")

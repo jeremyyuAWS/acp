@@ -1392,7 +1392,11 @@ def _scan_folder(payload: dict, job: dict) -> None:
                                   user=user, job=job)
         check_cancel()
 
-    done, total = core.store.increment_completed_folders(scan_id)
+    # folder_id, not just scan_id: this line runs again for the same folder whenever the job
+    # does — a reclaim after the increment but before the row reaches 'done', or a retry after
+    # the enqueue below raises. Counting it twice makes `done >= total` true while other folders
+    # are still running, and the scan finalizes over a partial estate reporting it complete.
+    done, total = core.store.increment_completed_folders(scan_id, folder_id)
     if total > 0 and done >= total:
         core.store.enqueue_job(
             "scan_finalize",

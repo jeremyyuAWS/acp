@@ -669,6 +669,26 @@ _SCHEMA = [
     # Together they drive the finalization trigger and the "N/M folders scanned" UI.
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS total_folders INT",
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS completed_folders INT",
+    # Which folders that counter has already counted. The counter alone cannot answer that —
+    # `completed_folders + 1` is a fact about how many times the increment RAN, and the thing it
+    # is read as ("how many folders are done") is a fact about the folder SET. Those two diverge
+    # the moment a folder job runs twice, which is a routine event and not a rare one: a worker
+    # reclaimed after it incremented but before its job row reached 'done' re-lists the same
+    # folder and increments again, and so does a retry of a job whose enqueue_job("scan_finalize")
+    # raised. The overshoot is not the damage — a scan of two folders that counts one of them
+    # twice reaches `done >= total` while the OTHER folder is still being scanned, so both the
+    # in-handler trigger and rescue_unfinalized_scans finalize a partial estate and report it
+    # complete. A silent wrong answer, in the direction of claiming more coverage than was read.
+    #
+    # PRIMARY KEY(scan_id, folder_id) is what makes the second increment a no-op: the claim is
+    # an INSERT … ON CONFLICT DO NOTHING, so deduplication is the database's, decided in one
+    # statement, and two workers racing on the same folder cannot both win it.
+    """CREATE TABLE IF NOT EXISTS scan_folder_completions (
+      scan_id TEXT NOT NULL,
+      folder_id TEXT NOT NULL,
+      counted_at TEXT,
+      PRIMARY KEY (scan_id, folder_id)
+    )""",
     # Discovery acknowledgement (PRD §EX-10): the operator reviews lifecycle recommendations
     # and explicitly acknowledges the snapshot before Assess can consume it.
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS acknowledged BOOLEAN DEFAULT FALSE",
@@ -1322,8 +1342,11 @@ class _PgAdapter:
     # BUMP THIS whenever _SCHEMA or _PG_VIEWS changes. Forgetting is caught, not trusted:
     # _SCHEMA_CHECKSUM_AT_VERSION below pins the DDL this version corresponds to, and
     # test_the_schema_version_was_bumped_with_the_schema fails when they drift apart.
-    _SCHEMA_VERSION = 1
-    _SCHEMA_CHECKSUM_AT_VERSION = "e92e54c9d97b4b20c2a2886e5f8e4ece"
+    # v2 adds scan_folder_completions (additive, per docs/adr/0045 — an older replica keeps
+    # serving: it neither reads nor writes that table, and the counter it guards behaves for
+    # that replica exactly as it did at v1).
+    _SCHEMA_VERSION = 2
+    _SCHEMA_CHECKSUM_AT_VERSION = "ead8f8295ec9671adcd63c924b1514e7"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -2697,6 +2720,7 @@ class Store:
                          "org_memory", "remediation_state", "remediation_diff", "applied_fixes",
                          "ai_calls", "finding_comments",
                          "scan_inputs",  # Stage 1 item 3: per-scan enqueue snapshots are customer data
+                         "scan_folder_completions",  # which folders of a scan were counted done
                          "active_discovery_guard",  # transient lock state — cleared on reset
                          "sync_cursors",  # connector sync position is customer-derived, not config
                          "overview_snapshots",  # derived from scan results — customer data, not config
@@ -2728,7 +2752,8 @@ class Store:
                                "file_stage_timings", "scan_file_manifests", "scan_inventory",
                                "file_tags", "pii_findings", "hitl_queue", "hitl_events",
                                "remediation_diff", "applied_fixes", "ai_calls", "finding_comments",
-                               "jobs", "overview_snapshots", "scan_events", "orchestration_events"]
+                               "jobs", "overview_snapshots", "scan_events", "orchestration_events",
+                               "scan_folder_completions"]
     # Tables that key on doc_id (not scan_id), scoped via a documents.owner_email join.
     _RESET_USER_DOC_TABLES = ["disposition_audit", "remediation_state"]
 
@@ -3270,20 +3295,77 @@ class Store:
         return row
 
     def set_total_folders(self, scan_id: str, count: int) -> None:
-        """Record how many scan_folder jobs were emitted for this scan (ADR 0004 item 6)."""
+        """Record how many scan_folder jobs were emitted for this scan (ADR 0004 item 6).
+
+        Clears the per-folder claims along with the counter they explain. The two are one fact
+        and resetting only half of it is worse than resetting neither: a second fan-out over the
+        same scan_id would find every folder already claimed, so `increment_completed_folders`
+        would no-op for all of them and `completed_folders` would sit at 0 forever — a wedge,
+        which is precisely the failure mode the claims exist to avoid causing.
+        """
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "UPDATE scan_runs SET total_folders=%s, completed_folders=0 WHERE id=%s",
                 (count, scan_id))
+            self._db.execute(cur,
+                "DELETE FROM scan_folder_completions WHERE scan_id=%s", (scan_id,))
 
-    def increment_completed_folders(self, scan_id: str) -> tuple:
-        """Atomically increment completed_folders and return (completed, total) so the caller
-        can trigger finalization when all folders are done (ADR 0004 item 6).
+    def increment_completed_folders(self, scan_id: str, folder_id: str | None = None) -> tuple:
+        """Count one folder as done and return (completed, total) so the caller can trigger
+        finalization when all folders are done (ADR 0004 item 6).
 
-        Uses a single UPDATE + SELECT in one cursor to avoid the completed count being
-        stale by the time it is read. scan_finalize is idempotent (mark_finalized), so if
-        two folder jobs both see done >= total concurrently, the duplicate enqueue is fine."""
+        IDEMPOTENT PER FOLDER when `folder_id` is given: calling it twice for the same folder
+        advances the counter once. That is the contract callers actually need, and the plain
+        `+1` this used to be could not provide it. `_scan_folder` increments near the end of its
+        body, and there are at least two ordinary ways for that to happen twice for one folder:
+
+          * the worker dies (or its lease expires) AFTER the increment and BEFORE the job row
+            reaches 'done'. reclaim_stuck_jobs requeues it, a worker re-lists the same folder,
+            and the increment runs a second time.
+          * the `enqueue_job("scan_finalize", …)` immediately after the increment raises. The
+            job fails, retries, and increments again on the next attempt.
+
+        Neither is exotic and neither leaves a trace. The consequence is not a cosmetic overshoot
+        past total_folders: with two folders and one counted twice, `done >= total` is true while
+        the second folder is still being scanned, so this method's own caller enqueues
+        scan_finalize — and rescue_unfinalized_scans agrees — and the run finalizes over an
+        estate it has not finished reading, reporting it as complete.
+
+        HOW. The claim is an INSERT … ON CONFLICT DO NOTHING against scan_folder_completions,
+        and the counter moves only for the caller that won it. One statement decides it, so two
+        workers racing on the same folder cannot both see "not yet counted"; `rowcount` after a
+        DO NOTHING is 1 for the insert that happened and 0 for the one that did not, on both
+        engines (asserted for SQLite in tests/test_folder_counted_once.py and for PostgreSQL in
+        tests/test_pg_job_queue.py, rather than assumed from one of them).
+
+        WITHOUT `folder_id` it is the old unguarded `+1`, because a caller that cannot name the
+        folder has nothing to deduplicate ON — silently counting such a call as some arbitrary
+        folder would be worse than counting it twice. Every production caller can name one and
+        does; test_every_folder_counter_caller_names_its_folder holds that line, so a new caller
+        that omits it fails rather than quietly reintroducing the overshoot above.
+
+        Still returns a live (completed, total) read in the same cursor as the write, so the
+        count a caller decides on is never stale. scan_finalize remains idempotent
+        (mark_finalized), so a duplicate enqueue from two folders genuinely finishing at once is
+        still fine — that was always true and is not what this guards.
+        """
         with self._db.cursor() as cur:
+            if folder_id is not None:
+                self._db.execute(cur,
+                    "INSERT INTO scan_folder_completions(scan_id, folder_id, counted_at) "
+                    "VALUES (%s,%s,%s) ON CONFLICT(scan_id, folder_id) DO NOTHING",
+                    (scan_id, folder_id, self._now()))
+                if (getattr(cur, "rowcount", 0) or 0) < 1:
+                    # Already counted. Report the current numbers rather than a fabricated
+                    # advance — a caller re-running after a reclaim still gets a truthful
+                    # (completed, total) and can still act on a genuine done >= total.
+                    self._db.execute(cur,
+                        "SELECT completed_folders, total_folders FROM scan_runs WHERE id=%s",
+                        (scan_id,))
+                    row = self._db.fetchone(cur)
+                    if not row:
+                        return (0, 0)
+                    return (row.get("completed_folders") or 0, row.get("total_folders") or 0)
             self._db.execute(cur,
                 "UPDATE scan_runs SET completed_folders=COALESCE(completed_folders,0)+1 "
                 "WHERE id=%s", (scan_id,))
@@ -7396,10 +7478,17 @@ class Store:
         the dead-letter view still reports what happened. What changes is only that the run can
         reach a terminal state — reporting a partial scan is a fact, hanging at 0% is not.
 
-        MUST be called only once the terminal UPDATE has WON. Unlike _record_dead_scan_files,
-        whose per-document write is an upsert and so survives being repeated, an increment is not
-        idempotent: running it for a zombie worker's refused dead-letter would over-count and
-        finalize a scan whose folders are still being processed.
+        Still called only once the terminal UPDATE has WON, but that ordering is no longer the
+        only thing standing between this and an over-count. It used to be, and the reason is
+        worth keeping: unlike _record_dead_scan_files, whose per-document write is an upsert and
+        so survives being repeated, an increment was not idempotent, and running it for a zombie
+        worker's refused dead-letter would finalize a scan whose folders were still being
+        processed. Ordering answers that for the zombie. It never answered the case where the
+        SAME folder is counted by two different paths — an attempt that incremented on its success
+        path and then died before its row reached 'done', requeued, exhausting its retries here —
+        because the two calls are both legitimate and neither is a loser to be suppressed. Passing
+        the folder makes the counter idempotent per folder, which decides all of it structurally
+        rather than by call ordering.
 
         Best-effort by construction, for the same reason as its sibling: telemetry must never turn
         a dead-letter into an exception inside the queue.
@@ -7409,10 +7498,18 @@ class Store:
         scan_id = job.get("scan_id")
         if not scan_id:
             return
+        payload = job.get("payload") or {}
+        if isinstance(payload, str):
+            import json as _j
+            try:
+                payload = _j.loads(payload)
+            except Exception:
+                payload = {}
+        folder_id = payload.get("folder_id") if isinstance(payload, dict) else None
         try:
-            done, total = self.increment_completed_folders(scan_id)
+            done, total = self.increment_completed_folders(scan_id, folder_id)
             print(f"[acp] dead folder job accounted for: scan={scan_id} "
-                  f"folders {done}/{total}", flush=True)
+                  f"folder={folder_id or '?'} folders {done}/{total}", flush=True)
         except Exception as e:  # noqa: BLE001 — see the best-effort note above
             print(f"[acp] _record_dead_scan_folder: could not advance the folder counter for "
                   f"scan {scan_id}: {e}", flush=True)
