@@ -352,9 +352,19 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
             })
             .catch(() => { /* best-effort detail — never block or fail the assessment on it */ })
         }
-        // The first file with no score yet is the one in flight. `currentFile` state has
-        // existed since this component was written but was never populated or rendered, so a
-        // long scan showed a moving bar and no indication of what it was moving through.
+        // The first file WITHOUT A RESULT YET — deliberately not "the one in flight", which is
+        // what this used to claim and could not know. There is no per-file execution signal to
+        // read: file_records rows are INSERTed when a file FINISHES, so an unfinished file simply
+        // has no record and getScan surfaces it from scan_inventory as 'discovered'. `score ==
+        // null` means "no result yet", not "a worker has this open".
+        //
+        // Assessment is also CONCURRENT — production runs a 12-slot pool (readyz: pool_size: 12)
+        // — so roughly twelve documents are in flight at once and picking the first is arbitrary
+        // even when it happens to be right. The list order is the query's, not the worker's.
+        //
+        // The name is still worth showing: it tells a user where a long run has reached, which is
+        // why it was added. What changed is the CLAIM the UI makes about it — see the label at
+        // the render site.
         setCurrentFile(nameOf(fs.find((x) => x.score == null)))
         if (run.assessed_at || run.finalized_at) {
           clearInterval(timer.current)
@@ -465,7 +475,23 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docs.length])
 
-  const pct = phase === 'running' ? Math.round((progress / Math.max(1, assessN, docs.length)) * 100) : 0
+  // ONE denominator, the same one `progress` is measured against. `progress` is
+  // `Math.min(scored.length, run.files)` — a SERVER-scale numerator — while `assessN` and
+  // `docs.length` come from the `files` PROP, so dividing by those divided two unrelated scales.
+  // Math.max did not reconcile them; it just picked the larger client number.
+  //
+  // On the deferred path (ADR 0020) the prop legitimately lags the server — Assess is running
+  // precisely BECAUSE the files have no scores yet — so this was the normal case, not an edge
+  // one. With 148 documents server-side and 12 scored, the bar rendered 60% beside a caption
+  // reading "12 of 148", which is 8%.
+  //
+  // `liveTotal` is that server count, and its own declaration already calls it "the REAL total,
+  // not docs.length". The caption, the "Computing conformance · N documents" line and the
+  // no-workers banner all read it; the percentage was the one consumer that did not. The
+  // fallbacks keep the immediate (non-deferred) path and the first render — before any poll has
+  // landed — working exactly as before.
+  const pct = phase === 'running'
+    ? Math.round((progress / Math.max(1, liveTotal || assessN || docs.length)) * 100) : 0
 
   // How many criteria the in-flight file is actually being weighed against. This is the SAME
   // list the result tile and the "By WCAG criterion" table reconcile to — the agreed scope
@@ -608,19 +634,36 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                       : assessStartedAt && <span className="muted">Running · {fmtElapsed(nowTick - assessStartedAt)}</span>}
               </div>
             )}
-            {/* Zero-workers warning: only for local pool management, not externally-managed tiers */}
+            {/* Zero-workers warning — LOCAL POOL ONLY, and gated on TOPOLOGY, not health.
+                `workerSnap.workers` is this API container's own in-process pool, which in the
+                split topology (#113) is 0 BY DESIGN — production's readyz reports
+                `pool_size: 12, local_pool: 0`. So that half of the test is permanently true in
+                every real deployment, and the banner used to be held back by nothing but
+                `alive`.
+                Pairing it with `runtime_mode === 'distributed' && alive` conflated TOPOLOGY (is
+                there a separate worker tier?) with HEALTH (is it heartbeating this instant?) —
+                the same defect fixed in Discover.jsx and QueuePanel.jsx. One stale heartbeat poll
+                flipped `alive`, lifted the suppression, and rendered "nothing is processing them"
+                directly beneath the line reporting the job claimed by a worker that was in fact
+                running it. Reproduced in assessStatusContradiction.test.jsx.
+                A distributed tier's health is not this banner's subject: when one exists, the
+                local pool being 0 says nothing about whether work is progressing, so the banner
+                simply does not apply. */}
             {workerSnap && workerSnap.workers === 0 && !workersDown
-              && !(workerSnap.runtime_mode === 'distributed' && workerSnap.alive) && (
+              && workerSnap.runtime_mode !== 'distributed' && (
               <div role="alert" style={{ margin: '8px 0', padding: '10px 14px', borderRadius: 8,
                    fontSize: 13, background: '#FBE9E7', border: '1px solid #E7B4AC', color: '#8A2A20',
                    display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                 <span>⛔ <b>No local workers active</b> — {(liveTotal || docs.length).toLocaleString()} documents are queued but nothing is processing them.</span>
-                <button onClick={() => adjustWorkers(+1)} disabled={workerBusy}
-                        style={{ padding: '4px 12px', borderRadius: 5, border: '1px solid #C0392B',
-                                 background: '#C0392B', color: '#fff', fontSize: 12, fontWeight: 600,
-                                 cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                  Start {workerSnap.suggested ?? 4} workers
-                </button>
+                {/* The inline "Start N workers" button is deliberately gone. Choosing worker
+                    concurrency is an infrastructure decision, and the worker-provisioning PRD is
+                    explicit that no ordinary-user surface should expose one. The remedy is not
+                    removed, only moved to where an operator already manages it — adjustWorkers()
+                    and setWorkers stay in this file for Settings' own control, so restoring this
+                    button is one line if that decision is reversed. */}
+                <span className="muted" style={{ fontSize: 12 }}>
+                  Worker capacity is managed in Settings → Worker Configuration.
+                </span>
               </div>
             )}
             {workerSnap && workerSnap.workers > 0 && assessStartedAt && (() => {
@@ -693,7 +736,14 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
           })()}
             {(currentFile || currentPhase) && (
               <div className="assessfile">
-                {currentFile && <span className="assessfname" title={currentFile}>{currentFile}</span>}
+                {/* Say what this name IS. Rendered bare inside a running card, beside "Opening &
+                    assessing N of M…", a filename reads as "this is the document we are working
+                    on now" — a claim nothing here can support (see the setCurrentFile comment).
+                    Labelling it as the first document still awaiting a result says exactly what
+                    `score == null` does support, and keeps the information that made it worth
+                    showing. */}
+                {currentFile && <span className="assessfilelabel muted">Awaiting result:</span>}
+                {currentFile && <span className="assessfname" title={`${currentFile} — the first document with no result yet. Assessment runs several documents at once, so this is not necessarily the one being opened at this instant.`}>{currentFile}</span>}
                 {currentFile && <span className="assessengine" title={`The ${ruleCount} criteria in your ${SCOPE_LABEL} that block at level ${level} — the same list the result below is scored over`}>{ruleCount} criteria in scope</span>}
                 {currentPhase && <span className="muted assessphase">{currentPhase}</span>}
               </div>
