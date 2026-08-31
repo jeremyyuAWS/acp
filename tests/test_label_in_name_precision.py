@@ -39,17 +39,26 @@ pairs are a demonstration that the failure mode is real and reachable, NOT an es
 production false-positive rate. The proportion of real PDFs whose captions carry a curly
 apostrophe is not measured anywhere and is not claimed here.
 
-WHAT IS STILL OWED. This measures the PREDICATE in isolation. It does not exercise real scan
-dispatch, and it does not test the two applicability risks found by reading the source rather
-than running it, which are recorded in the last test below as an explicit gap. Evaluating 2.5.3
-through a real scan with positive and negative controls is separate work, and until it is done
-the cell stays uninvoked and unproven.
+REAL SCAN DISPATCH, AND WHAT IT FOUND. The second half of this file builds real AcroForm PDFs
+and calls the detector's own entry point, with positive and negative controls. Two results:
+
+  * the normalization false positives reproduce end to end — they are not an artefact of testing
+    the predicate in isolation;
+  * the two applicability risks previously recorded as UNMEASURED are both real. A push button
+    whose /MK or /Ff sits on its widget annotation rather than on the merged field dictionary is
+    invisible to the detector, and that is the ordinary shape for any field with more than one
+    widget. Three of four variants of the same genuine failure are missed.
+
+So 2.5.3's real scope is narrower than "push buttons": push buttons whose field and widget are
+one dictionary. The cell stays uninvoked and unproven.
 """
 from __future__ import annotations
 
 import sys
 import unicodedata
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT / "api") not in sys.path:
@@ -152,3 +161,161 @@ def test_two_applicability_risks_found_by_reading_are_NOT_measured_here():
         "the /MK read changed — re-check whether widget /Kids captions are now found")
     # And the helpers this file's numbers depend on still exist with the same meaning.
     assert callable(_is_pushbutton) and callable(_accessible_name)
+
+
+# ── real scan dispatch: the same questions, asked of real PDFs ───────────────────
+#
+# Everything above measures the PREDICATE. This section builds real AcroForm documents with
+# pikepdf and calls `label_in_name.detect(path)` — the detector's actual entry point — so what is
+# asserted is what a scan would report, not what a helper computes. The header's note that real
+# dispatch was "still owed" is discharged here.
+FLAG_PUSHBUTTON = 1 << 16
+
+
+def _form(path, buttons, *, pushbutton=True):
+    """A real single-page AcroForm. `buttons` is (caption, accessible name, field name);
+    caption None means no /MK at all."""
+    import pikepdf
+    pdf = pikepdf.new()
+    pdf.add_blank_page(page_size=(300, 200))
+    fields, annots = [], []
+    for cap, tu, t in buttons:
+        d = {"/Type": pikepdf.Name.Annot, "/Subtype": pikepdf.Name.Widget,
+             "/FT": pikepdf.Name.Btn, "/Ff": FLAG_PUSHBUTTON if pushbutton else 0,
+             "/Rect": pikepdf.Array([10, 10, 100, 40]), "/T": pikepdf.String(t)}
+        if cap is not None:
+            d["/MK"] = pikepdf.Dictionary(CA=pikepdf.String(cap))
+        if tu is not None:
+            d["/TU"] = pikepdf.String(tu)
+        obj = pdf.make_indirect(pikepdf.Dictionary(d))
+        fields.append(obj)
+        annots.append(obj)
+    pdf.pages[0].Annots = pikepdf.Array(annots)
+    pdf.Root.AcroForm = pdf.make_indirect(pikepdf.Dictionary(
+        Fields=pikepdf.Array(fields), DA=pikepdf.String("/Helv 0 Tf 0 g")))
+    pdf.save(str(path))
+    return path
+
+
+def _detect(path):
+    from formats.pdf.detectors import label_in_name
+    return label_in_name.detect(path)
+
+
+def test_REAL_DISPATCH_positive_control(tmp_path):
+    """A genuine 2.5.3 failure through the real detector: the visible caption is "Go" and the
+    accessible name is a developer identifier, so a speech-input user saying "Go" cannot
+    activate it."""
+    pdf = _form(tmp_path / "fail.pdf", [("Go", "btn_primary_47", "f1")])
+    found = _detect(pdf)
+    assert len(found) == 1, f"the positive control was not reported: {found}"
+    assert found[0]["ruleId"] == "PDF_LABEL_NOT_IN_NAME"
+    assert found[0]["wcag"].startswith("2.5.3")
+
+
+@pytest.mark.parametrize("caption,name,why", [
+    ("Submit", "Submit the application form", "name contains the label"),
+    ("Save", "save the document", "case difference only"),
+])
+def test_REAL_DISPATCH_negative_controls(tmp_path, caption, name, why):
+    """Compliant buttons through the real detector. Without these, "it reported the failure"
+    would be consistent with "it reports everything"."""
+    pdf = _form(tmp_path / "ok.pdf", [(caption, name, "f1")])
+    assert _detect(pdf) == [], f"a compliant button was reported ({why})"
+
+
+@pytest.mark.parametrize("caption,name,hazard", [
+    ("Don\u2019t Save", "Don't Save changes", "curly vs straight apostrophe"),
+    ("Save" + NBSP + "File", "Save File now", "non-breaking space"),
+])
+def test_REAL_DISPATCH_the_normalization_false_positives_reproduce(tmp_path, caption, name, hazard):
+    """The correction this file exists for, confirmed end to end rather than in the predicate
+    alone: these buttons work fine for a speech-input user, and a real scan reports them
+    SERIOUS."""
+    pdf = _form(tmp_path / "fp.pdf", [(caption, name, "f1")])
+    assert len(_detect(pdf)) == 1, (
+        f"{hazard} no longer false-positives through real dispatch — if the comparison learned "
+        f"to normalize, update this file's numbers and its header")
+
+
+def test_REAL_DISPATCH_out_of_scope_controls(tmp_path):
+    """Two things the detector correctly declines to judge: a button with no visible caption
+    (nothing to compare against) and a checkbox — not a push button, and /MK /CA on one holds the
+    check STYLE character rather than a label, so comparing it would be nonsense."""
+    no_caption = _form(tmp_path / "nocap.pdf", [(None, "anything", "f1")])
+    assert _detect(no_caption) == []
+    checkbox = _form(tmp_path / "cb.pdf", [("4", "Agree to terms", "f1")], pushbutton=False)
+    assert _detect(checkbox) == []
+
+
+def _kids_form(path, *, ff_on_parent: bool, mk_on_parent: bool):
+    """A field whose widget is a separate /Kids entry — the ordinary shape for any field with
+    more than one widget, and what many form designers emit even for one. The button is the same
+    genuine 2.5.3 failure in every variant: caption "Go", accessible name "btn_primary_47"."""
+    import pikepdf
+    pdf = pikepdf.new()
+    pdf.add_blank_page(page_size=(300, 200))
+    widget = {"/Type": pikepdf.Name.Annot, "/Subtype": pikepdf.Name.Widget,
+              "/Rect": pikepdf.Array([10, 10, 100, 40])}
+    parent = {"/FT": pikepdf.Name.Btn, "/T": pikepdf.String("f1"),
+              "/TU": pikepdf.String("btn_primary_47")}
+    (parent if ff_on_parent else widget)["/Ff"] = FLAG_PUSHBUTTON
+    (parent if mk_on_parent else widget)["/MK"] = pikepdf.Dictionary(CA=pikepdf.String("Go"))
+    w = pdf.make_indirect(pikepdf.Dictionary(widget))
+    p = pdf.make_indirect(pikepdf.Dictionary(parent))
+    p.Kids = pikepdf.Array([w])
+    w.Parent = p
+    pdf.pages[0].Annots = pikepdf.Array([w])
+    pdf.Root.AcroForm = pdf.make_indirect(pikepdf.Dictionary(
+        Fields=pikepdf.Array([p]), DA=pikepdf.String("/Helv 0 Tf 0 g")))
+    pdf.save(str(path))
+    return path
+
+
+@pytest.mark.parametrize("ff_parent,mk_parent,detected", [
+    (True, True, True),      # field and widget merged into one dictionary
+    (True, False, False),    # /MK on the widget
+    (False, True, False),    # /Ff on the widget
+    (False, False, False),   # both on the widget — the commonest real shape
+])
+def test_REAL_DISPATCH_the_two_applicability_risks_are_REAL_false_negatives(
+        tmp_path, ff_parent, mk_parent, detected):
+    """THE GAP, measured instead of merely recorded.
+
+    An earlier version of this file listed two risks found by READING — /Ff is an inheritable
+    attribute but is read only off the terminal field, and /MK lives on the widget annotation —
+    and said confirming either needed a real PDF and a real scan. Built and run:
+
+        /Ff on parent, /MK on parent  -> detected
+        /Ff on parent, /MK on widget  -> MISSED
+        /Ff on widget, /MK on parent  -> MISSED
+        /Ff on widget, /MK on widget  -> MISSED
+
+    Both are real, and only the fully-merged shape is seen. So 2.5.3's actual scope is narrower
+    than its registration's "push buttons": it is push buttons whose FIELD AND WIDGET ARE ONE
+    DICTIONARY. Every variant here is the same genuine failure; three of four are invisible.
+
+    This is a COVERAGE gap, not a precision one — it causes missed detections, never false
+    reports — so it does not move the numbers at the top of this file. It does mean the
+    registration's PARTIAL coverage is optimistic about which fields it can see."""
+    pdf = _kids_form(tmp_path / f"kids-{ff_parent}-{mk_parent}.pdf",
+                     ff_on_parent=ff_parent, mk_on_parent=mk_parent)
+    found = _detect(pdf)
+    if detected:
+        assert len(found) == 1, "the merged field/widget shape must still be detected"
+    else:
+        assert found == [], (
+            "a /Kids shape is now detected — good, but this file's scope claim and the "
+            "registration's coverage both need restating")
+
+
+def test_the_cell_is_still_uninvoked_by_any_scan():
+    """Everything above calls `detect` directly, which is what "real scan dispatch" can mean for
+    this detector: `office_structure.checks_for` — what an actual scan calls — never invokes it.
+    Measuring it does not enable it, and it stays disabled pending its own decision."""
+    import office_structure
+    src = Path(office_structure.__file__).read_text()
+    body = src[src.index("def checks_for"):][:8000]
+    assert "label_in_name" not in body, (
+        "label_in_name is now reachable from checks_for. That is a product decision — record it "
+        "in tests/test_orphaned_detectors.py and delete this assertion")
