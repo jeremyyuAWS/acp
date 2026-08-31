@@ -1355,8 +1355,11 @@ class _PgAdapter:
     # v2 adds scan_folder_completions (additive, per docs/adr/0045 — an older replica keeps
     # serving: it neither reads nor writes that table, and the counter it guards behaves for
     # that replica exactly as it did at v1).
-    _SCHEMA_VERSION = 2
-    _SCHEMA_CHECKSUM_AT_VERSION = "ead8f8295ec9671adcd63c924b1514e7"
+    # v3 adds scan_runs.content_workspace_version_id (ADR 0044) plus its partial index
+    # (additive — a NULL-defaulting nullable column and an index neither read nor written by
+    # an older replica, which keeps serving every connector-sourced scan exactly as before).
+    _SCHEMA_VERSION = 3
+    _SCHEMA_CHECKSUM_AT_VERSION = "c76fed99be999d5b86073afe53408d58"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
