@@ -133,6 +133,16 @@ export function deriveDiscoverProcessingState({
       pickupUnavailable: true,
     }
   }
+  if (busy && ['preparing', 'submitting'].includes(phase)) {
+    return {
+      state: phase,
+      headline: phase === 'preparing' ? 'Checking scan setup' : 'Submitting Discovery',
+      detail: phase === 'preparing'
+        ? 'Checking the selected folders and connection before submitting the scan.'
+        : 'Waiting for the server to confirm acceptance. No queued job has been confirmed yet.',
+      severity: 'active', recommendedAction: null,
+    }
+  }
   if (busy && phase === 'queued') {
     if (jobClaimed) {
       return {
