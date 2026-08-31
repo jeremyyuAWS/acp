@@ -16,7 +16,7 @@
  *      age: nobody can tell it is wrong.
  */
 import { describe, it, expect } from 'vitest'
-import { secondsSince, deriveRunAge, ageText } from './queueAge.js'
+import { secondsSince, deriveRunAge, submittedText } from './queueAge.js'
 
 const fmt = (s) => `${s}s`
 const NOW = Date.parse('2026-08-31T06:00:00Z')
@@ -75,23 +75,27 @@ describe('deriveRunAge', () => {
   })
 })
 
-describe('ageText', () => {
+// Was `ageText`, which returned "45s ago" and left the caller to write "created " in front of
+// it. That composition is what produced "· created submission time unavailable" on screen, so
+// the function now returns the whole phrase and the caller writes nothing. Same contract
+// otherwise, and these are the same assertions.
+describe('submittedText', () => {
   it('says the time is unavailable instead of inventing one', () => {
-    expect(ageText(deriveRunAge({ startedAt: null }), fmt)).toBe('submission time unavailable')
+    expect(submittedText(deriveRunAge({ startedAt: null }), fmt)).toBe('submission time unavailable')
   })
 
   it('never emits a bare number for an unavailable age', () => {
     // Belt and braces against the old shape: even a caller that formats it cannot get digits out.
-    expect(ageText({ seconds: null, source: 'unavailable' }, fmt)).not.toMatch(/\d/)
+    expect(submittedText({ seconds: null, source: 'unavailable' }, fmt)).not.toMatch(/\d/)
   })
 
-  it('formats a real age with the caller\'s formatter', () => {
-    expect(ageText(deriveRunAge({ startedAt: iso(45), now: NOW }), fmt)).toBe('45s ago')
+  it('carries its own "created", so no caller can prefix the unavailable phrase', () => {
+    expect(submittedText(deriveRunAge({ startedAt: iso(45), now: NOW }), fmt)).toBe('created 45s ago')
   })
 
   it('refuses a malformed age object rather than trusting its number', () => {
     // `seconds` present but source not 'server' means somebody built it by hand. Distrust it.
-    expect(ageText({ seconds: 12, source: 'unavailable' }, fmt)).toBe('submission time unavailable')
-    expect(ageText(null, fmt)).toBe('submission time unavailable')
+    expect(submittedText({ seconds: 12, source: 'unavailable' }, fmt)).toBe('submission time unavailable')
+    expect(submittedText(null, fmt)).toBe('submission time unavailable')
   })
 })

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import WorkerCard from './WorkerCard.jsx'
 import LiveCounter from './LiveCounter.jsx'
 import { nextMilestone } from './discoveryMilestone.js'
-import { deriveRunAge, ageText, elapsedText, startedText } from './queueAge.js'
+import { deriveRunAge, submittedText, elapsedText, startedText } from './queueAge.js'
 
 // The Discover RUNNING screen: a per-step checklist showing what the discovery agent is doing.
 // This replaces the generic scan-progress banner on the Discover tab so the screen stays scoped
@@ -412,7 +412,9 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
     // rendered it in the same words ("created 4s ago"), so a fabricated age was indistinguishable
     // from a real one — and it reset to zero on every tab switch, which is exactly when someone
     // is checking whether the run is stuck. deriveRunAge returns null rather than a number when
-    // there is no persisted instant, and ageText says so in words.
+    // there is no persisted instant, and submittedText says so in words — the WHOLE phrase,
+    // including the "created" that used to be a literal here. Prefixing a self-contained phrase
+    // rendered "· created submission time unavailable" on the one path that matters.
     const queuedAge = runAge
     return (
       <section className="discover-run-progress" role="region" aria-label="Discovery queued"
@@ -435,7 +437,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
             <span style={{ fontSize: 13.5 }}>
               Waiting for an available worker
               <span className="muted" style={{ marginLeft: 8, fontVariantNumeric: 'tabular-nums' }}>
-                · created {ageText(queuedAge, fmtElapsedSecs)}
+                · {submittedText(queuedAge, fmtElapsedSecs)}
               </span>
             </span>
           </div>

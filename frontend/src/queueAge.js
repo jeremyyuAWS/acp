@@ -55,17 +55,28 @@ export function deriveRunAge({ startedAt, now = Date.now() } = {}) {
 }
 
 /**
- * What to show for a run's age. Returns the phrase, never a bare number, so the "unavailable"
- * case cannot be formatted into something that looks measured.
+ * The queued card's phrasing: when the run was SUBMITTED.
+ *
+ * A separate function rather than a "created " prefix at the call site, and that is not a style
+ * preference — the prefix was there and it produced, verbatim:
+ *
+ *     · created submission time unavailable
+ *
+ * because the phrase function returns a whole phrase and the caller added a word in front of
+ * it. Every
+ * function here returns the complete phrase for exactly this reason: a caller that composes one
+ * has to get both branches right, and the branch it gets wrong is always the one nobody looks at.
+ * Caught by the remount test, not by reading.
  */
-export function ageText(age, fmt) {
+export function submittedText(age, fmt) {
   if (!age || age.source !== 'server' || age.seconds === null) return 'submission time unavailable'
-  return `${fmt(age.seconds)} ago`
+  return `created ${fmt(age.seconds)} ago`
 }
 
 /**
  * The same instant read as a DURATION rather than an age — for a run that is still going, where
- * "N elapsed" is the natural phrasing. Same contract as ageText: a whole phrase, so a missing
+ * "N elapsed" is the natural phrasing. Same contract as submittedText: a whole phrase, so a
+ * missing
  * timestamp cannot be formatted into a number that looks measured.
  */
 export function elapsedText(age, fmt) {
