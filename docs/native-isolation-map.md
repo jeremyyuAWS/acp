@@ -75,8 +75,12 @@ happened.
 - **Per job:** `ACP_JOB_MAX_LEASE_S=3600` stops lease extension, letting the sweeper reclaim.
 - **Retry:** `job_retry_policy` + `max_attempts`. **There is no per-document poison guard** — a
   document that crashes the worker is re-claimed after the lease lapses and can crash it again.
-  `db40880c03de4b89` reached attempts-exhausted this way, which is the queue behaving as designed
-  and also the thing that turned one bad document into three container restarts.
+  `db40880c03de4b89` reached attempts-exhausted this way, which is the queue behaving as designed.
+  Whether a single document drove the three restarts is a HYPOTHESIS, not a finding: nothing
+  available correlates a document with a restart, and an earlier draft of this section asserted
+  it anyway — the same overreach the header warns against, two sections later. What the retry
+  path establishes is only that a crashing document *would* be re-claimed and could crash the
+  worker again; establishing that it *did* needs the correlated records #1068 now emits.
 
 ---
 
