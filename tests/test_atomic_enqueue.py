@@ -194,3 +194,45 @@ def test_cancel_queued_job_stamps_enqueued_scan_cancelled(isolated_store):
     assert s.cancel_queued_job("scan-ae16") is True
     run = s.get_scan(scan_id, owner=OWNER)["run"]
     assert run["status"] == "cancelled"
+
+
+# ── content_workspace_version_id (ADR 0044) ──────────────────────────────────
+
+def test_enqueue_scan_links_a_content_workspace_version(isolated_store):
+    s = isolated_store
+    scan_id, _ = s.enqueue_scan("scan-ae17", "workspace", OWNER, "workspace_scan_file", {},
+                                content_workspace_version_id="v-abc")
+    with s._db.cursor() as cur:
+        s._db.execute(cur, "SELECT content_workspace_version_id FROM scan_runs WHERE id=%s",
+                      (scan_id,))
+        row = s._db.fetchone(cur)
+    assert row["content_workspace_version_id"] == "v-abc"
+
+
+def test_a_connector_sourced_scan_has_no_content_workspace_version(isolated_store):
+    s = isolated_store
+    scan_id, _ = s.enqueue_scan("scan-ae18", "drive", OWNER, "scan_discover", {})
+    with s._db.cursor() as cur:
+        s._db.execute(cur, "SELECT content_workspace_version_id FROM scan_runs WHERE id=%s",
+                      (scan_id,))
+        row = s._db.fetchone(cur)
+    assert row["content_workspace_version_id"] is None
+
+
+def test_init_scan_run_preserves_the_content_workspace_version_link(isolated_store):
+    """The worker-side promotion (init_scan_run, ON CONFLICT DO UPDATE) must not clear the link
+    set atomically at enqueue time — it isn't in that statement's SET clause, and this pins that
+    it stays that way."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    s = isolated_store
+    scan_id, _ = s.enqueue_scan("scan-ae19", "workspace", OWNER, "workspace_scan_file", {},
+                                content_workspace_version_id="v-xyz")
+    s.init_scan_run(scan_id, "workspace", total=1, started_at=now,
+                    rubric_name="WCAG 2.1 AA", rubric_hash="abc123",
+                    owner=OWNER, status="running")
+    with s._db.cursor() as cur:
+        s._db.execute(cur, "SELECT content_workspace_version_id FROM scan_runs WHERE id=%s",
+                      (scan_id,))
+        row = s._db.fetchone(cur)
+    assert row["content_workspace_version_id"] == "v-xyz"

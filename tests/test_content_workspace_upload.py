@@ -889,3 +889,128 @@ def test_safe_disposition_filename_strips_control_characters():
 def test_safe_disposition_filename_falls_back_when_nothing_printable_survives():
     import routes.content_workspaces as cw
     assert cw._safe_disposition_filename("\r\n\t") == "download"
+
+
+# ── assess / assessment (connects a stored upload to the scan engine) ───────
+
+def _ready_version(gated_client, monkeypatch, ws, *, filename="report.pdf"):
+    doc_id, version_id = _start_upload(gated_client, ws, filename=filename)
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws, doc_id, version_id, content_hash="h1")
+    return doc_id, version_id
+
+
+def _assess(gated_client, ws, doc_id, version_id, *, owner=OWNER):
+    return gated_client(owner).post(
+        f"/content-workspaces/{ws}/documents/{doc_id}/versions/{version_id}/assess")
+
+
+def _assessment(gated_client, ws, doc_id, version_id, *, owner=OWNER):
+    return gated_client(owner).get(
+        f"/content-workspaces/{ws}/documents/{doc_id}/versions/{version_id}/assessment")
+
+
+def test_assess_happy_path_enqueues_a_scan(gated_client, monkeypatch, isolated_store):
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _ready_version(gated_client, monkeypatch, ws)
+    enqueued = []
+
+    def fake_enqueue_scan(*a, **kw):
+        enqueued.append((a, kw))
+        return "scan-1", "job-1"
+    monkeypatch.setattr(isolated_store, "enqueue_scan", fake_enqueue_scan)
+
+    r = _assess(gated_client, ws, doc_id, version_id)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body == {"scan_id": "scan-1", "job_id": "job-1", "status": "queued"}
+    assert len(enqueued) == 1
+    args, kwargs = enqueued[0]
+    assert args[1] == "workspace"          # source
+    assert args[2] == OWNER                # owner
+    assert args[3] == "workspace_scan_file"  # job_type
+    assert args[4]["workspace_id"] == ws
+    assert args[4]["document_id"] == doc_id
+    assert args[4]["version_id"] == version_id
+    assert args[4]["file"] == "report.pdf"
+    assert kwargs["content_workspace_version_id"] == version_id
+
+
+def test_assess_404s_for_a_nonexistent_document(gated_client):
+    ws = _make_workspace(gated_client)
+    r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/does-not-exist/"
+                                 f"versions/v1/assess")
+    assert r.status_code == 404
+
+
+def test_assess_404s_for_a_nonexistent_version(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc_id, _ = _start_upload(gated_client, ws)
+    r = _assess(gated_client, ws, doc_id, "does-not-exist")
+    assert r.status_code == 404
+
+
+def test_assess_404s_for_a_foreign_owner(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client, owner=OWNER)
+    doc_id, version_id = _ready_version(gated_client, monkeypatch, ws)
+    r = _assess(gated_client, ws, doc_id, version_id, owner=OTHER)
+    assert r.status_code == 404
+
+
+def test_assess_409s_for_a_quarantined_version(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws, filename="report.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"not a pdf")  # bad signature
+    r = _complete(gated_client, ws, doc_id, version_id)
+    assert r.json()["status"] == "quarantined"
+
+    r2 = _assess(gated_client, ws, doc_id, version_id)
+    assert r2.status_code == 409
+
+
+def test_assess_409s_for_a_still_uploading_document(gated_client):
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws)  # never completed
+    r = _assess(gated_client, ws, doc_id, version_id)
+    assert r.status_code == 404  # the version row doesn't exist until complete_upload creates it
+
+
+def test_assess_is_logged(gated_client, monkeypatch, isolated_store):
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _ready_version(gated_client, monkeypatch, ws)
+    monkeypatch.setattr(isolated_store, "enqueue_scan",
+                        lambda *a, **kw: ("scan-1", "job-1"))
+
+    _assess(gated_client, ws, doc_id, version_id)
+
+    decisions = isolated_store.list_decisions()
+    assert any(d["action"] == "content_workspace.assess_enqueued" for d in decisions)
+
+
+def test_assessment_404s_when_never_assessed(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _ready_version(gated_client, monkeypatch, ws)
+    r = _assessment(gated_client, ws, doc_id, version_id)
+    assert r.status_code == 404
+
+
+def test_assessment_returns_the_scan_after_assess_was_triggered(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _ready_version(gated_client, monkeypatch, ws)
+
+    r1 = _assess(gated_client, ws, doc_id, version_id)
+    assert r1.status_code == 200, r1.text
+    scan_id = r1.json()["scan_id"]
+
+    r2 = _assessment(gated_client, ws, doc_id, version_id)
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["id"] == scan_id
+    assert r2.json()["status"] == "queued"
+
+
+def test_assessment_404s_for_a_foreign_owner(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client, owner=OWNER)
+    doc_id, version_id = _ready_version(gated_client, monkeypatch, ws)
+    _assess(gated_client, ws, doc_id, version_id)
+    r = _assessment(gated_client, ws, doc_id, version_id, owner=OTHER)
+    assert r.status_code == 404
