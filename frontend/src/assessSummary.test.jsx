@@ -376,3 +376,53 @@ describe('what the component is not allowed to derive itself', () => {
     expect(src, 'the component counts files itself').not.toMatch(/files\.(filter|length|reduce)/)
   })
 })
+
+// ── merged from AssessSummary.test.jsx (#721) ────────────────────────────────
+// These four arrived in a SECOND test file for this component, named
+// AssessSummary.test.jsx — differing from this one only in the case of its first
+// letter. On a case-insensitive filesystem (macOS, core.ignorecase=true) both index
+// entries map to one physical file, so only one of the two could ever exist on disk,
+// and vitest.config.js discovers by glob over files that EXIST. The result: these
+// assertions ran in CI on Linux and on no developer machine, while the uppercase path
+// reported permanently "modified" in every worktree in the repo.
+//
+// They keep their own fixtures rather than being rewritten onto this file's `mount`
+// helper: they assert about the run's scope, not about criteria coverage, and the
+// point of the merge is to relocate them unchanged, not to restate them.
+describe('lifecycle exclusion count in the header', () => {
+  const LC_CRITERIA = new Set(['1.1.1'])
+  const LC_CAP = { docx: { '1.1.1': 'auto' } }
+  const LC_ASMT = { docx: { '1.1.1': 'auto' } }
+  const LC_FILES = [{ file: 'a.docx', name: 'a.docx', status: 'analysed', issues: [] }]
+
+  async function render(props) {
+    const { root, container } = createTestRoot()
+    await act(async () => {
+      root.render(createElement(AssessSummary, { files: LC_FILES, cap: LC_CAP, assessment: LC_ASMT,
+                                                 criteria: LC_CRITERIA, ...props }))
+    })
+    return container
+  }
+
+  it('shows the excluded count when lifecycle_eligible_excluded is non-zero', async () => {
+    const run = { status: 'done', scope: { lifecycle_eligible_excluded: 7 } }
+    const c = await render({ run })
+    expect(c.textContent).toMatch(/7 excluded by lifecycle policy/)
+  })
+
+  it('omits the exclusion note when lifecycle_eligible_excluded is zero', async () => {
+    const run = { status: 'done', scope: { lifecycle_eligible_excluded: 0 } }
+    const c = await render({ run })
+    expect(c.textContent).not.toMatch(/excluded by lifecycle policy/)
+  })
+
+  it('omits the exclusion note when run has no scope', async () => {
+    const c = await render({ run: { status: 'done' } })
+    expect(c.textContent).not.toMatch(/excluded by lifecycle policy/)
+  })
+
+  it('omits the exclusion note when run is absent', async () => {
+    const c = await render({})
+    expect(c.textContent).not.toMatch(/excluded by lifecycle policy/)
+  })
+})
