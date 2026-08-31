@@ -125,3 +125,10 @@ describe('DiscoverQueueCard', () => {
     expect([...c.querySelectorAll('button')].find((b) => b.textContent.includes('View in Monitor'))).toBeFalsy()
   })
 })
+
+it('warns on a measured long wait, but never invents a delay', async () => {
+ const c = await mount({ submittedSecsAgo: 35 })
+ expect(c.querySelector('[role="alert"]').textContent).toMatch(/more than 30 seconds/)
+ await act(async () => root.render(createElement(DiscoverQueueCard, { submittedSecsAgo: null })))
+ expect(c.querySelector('[role="alert"]')).toBeNull()
+})

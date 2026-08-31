@@ -15,13 +15,13 @@ import { fmtPickupRange } from './pickupEstimateFmt.js'
 // there, and duplicating a second progress readout beside the real one is exactly the
 // contradiction this exists to remove.
 function fmtAgo(secs) {
-  if (secs == null) return null
-  const s = Math.round(secs)
+  if (secs == null || !Number.isFinite(secs)) return null
+  const s = Math.max(0, Math.round(secs))
   return s < 60 ? `${s}s ago` : `${Math.round(s / 60)}m ago`
 }
 
 const row = (label, value) => (value == null ? null : (
-  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13 }}>
+  <div key={label} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13 }}>
     <span className="muted">{label}</span>
     <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{value}</span>
   </div>
@@ -78,6 +78,13 @@ export default function DiscoverQueueCard({
           ? 'Your request is queued, but no worker is online to pick it up yet.'
           : 'Your request is safely stored and will start automatically.'}
       </div>
+
+      {Number.isFinite(submittedSecsAgo) && submittedSecsAgo >= 30 && (
+        <div role="alert" style={{ marginTop: 10, color: 'var(--ink-2, #48505C)' }}>
+          Discovery has been queued for more than 30 seconds. Check Monitor for worker
+          availability and job details. You can cancel this request; do not submit a duplicate.
+        </div>
+      )}
 
       {provisioning && (
         <div style={{ fontSize: 12.5, marginBottom: 10, padding: '6px 10px', borderRadius: 6,
