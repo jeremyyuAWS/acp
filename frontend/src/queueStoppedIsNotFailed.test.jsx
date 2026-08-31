@@ -135,3 +135,62 @@ describe('an API that has not been split yet', () => {
     expect(c.textContent).not.toMatch(/stopped/)
   })
 })
+
+/* "Stopped" is not the same claim as "the work has stopped".
+ *
+ * store.dead_letter_breakdown splits the stopped bucket by whether a worker ACKNOWLEDGED the
+ * cancellation (status='cancelled', written only after the handler returned or raised) or was
+ * merely marked terminal by the cancellation itself, which happens in one UPDATE while the
+ * handler may still be mid-flight.
+ *
+ * The chip counts both, and that is right: "this run was stopped" is true of all of them, which
+ * is what the chip asserts. The finer fact — whether the process actually ceased — belongs where
+ * it can be stated precisely rather than implied by a bare number.
+ */
+describe('the stopped chip does not overclaim that execution ceased', () => {
+  const withSplit = (n, acknowledged) => ({
+    workers: 0, worker_tier_alive: true, runtime_mode: 'auto', jobs: [],
+    stats: { dead: n },
+    dead_letters: {
+      failed: { n: 0, affected_runs: 0 },
+      stopped: { n, acknowledged, unacknowledged: n - acknowledged, affected_runs: 1 },
+      by_type: {}, top_errors: [],
+    },
+  })
+
+  it('says how many were actually confirmed stopped by their worker', async () => {
+    getJobs.mockResolvedValue(withSplit(10, 3))
+    const c = await mount()
+    await settle()
+    const chip = [...c.querySelectorAll('span')].find((s) => /10 stopped/.test(s.textContent))
+    expect(chip).toBeTruthy()
+    expect(chip.title).toMatch(/3 of 10 were confirmed stopped by their worker/)
+    expect(chip.title).toMatch(/may not have acknowledged it yet/)
+  })
+
+  it('still counts every ended-by-decision job in the chip itself', async () => {
+    // The chip's claim is "this run was stopped", which holds whether or not the worker has
+    // noticed. Narrowing it to the acknowledged count would under-report jobs that really did
+    // end, and re-open the failure/decision confusion this whole card exists to fix.
+    getJobs.mockResolvedValue(withSplit(10, 3))
+    const c = await mount()
+    await settle()
+    expect(c.textContent).toMatch(/10 stopped/)
+    expect(c.textContent).not.toMatch(/failed permanently/)
+  })
+
+  it('falls back to the plain wording when the server sends no split', async () => {
+    // An older API, mid-rollout. Saying nothing about acknowledgement is correct there; making
+    // one up from the total is exactly the overclaim being removed.
+    getJobs.mockResolvedValue({
+      workers: 0, worker_tier_alive: true, runtime_mode: 'auto', jobs: [],
+      stats: { dead: 4 },
+      dead_letters: { failed: { n: 0 }, stopped: { n: 4 }, by_type: {}, top_errors: [] },
+    })
+    const c = await mount()
+    await settle()
+    const chip = [...c.querySelectorAll('span')].find((s) => /4 stopped/.test(s.textContent))
+    expect(chip.title).toMatch(/not because anything failed\.$/)
+    expect(chip.title).not.toMatch(/confirmed stopped/)
+  })
+})
