@@ -24,6 +24,8 @@ import threading
 import time
 import uuid
 
+import joblog
+
 # Registry: job type -> handler(payload: dict, job: dict) -> None
 HANDLERS: dict[str, callable] = {}
 
@@ -246,8 +248,18 @@ class JobWorker:
         job = self.store.claim_job(self.worker_id)
         if job is None:
             return False
+        # Flushed the moment the job is claimed, BEFORE any handler runs. A native crash
+        # (2026-08-30: exit 139 after glibc heap corruption) never unwinds, so anything emitted
+        # after this point may not survive — and anything emitted before it is the only record
+        # that this process had this job open. See joblog's header for why buffering would make
+        # the instrumentation useless at precisely the moment it is needed.
+        _log = {"job_id": job["id"], "scan_id": job.get("scan_id"),
+                "job_type": job.get("type"), "attempt": job.get("attempts"),
+                "worker_id": self.worker_id}
+        joblog.emit("job.claim", max_attempts=job.get("max_attempts"), **_log)
         fn = HANDLERS.get(job["type"])
         if fn is None:
+            joblog.emit("job.no_handler", **_log)
             self.store.fail_job(job["id"], f"no handler for job type '{job['type']}'",
                                 backoff_seconds=_backoff_seconds(job["attempts"]))
             return True
@@ -283,12 +295,18 @@ class JobWorker:
             # Handler finished — honour a cancellation that arrived while it was running
             # (the handler may not have called check_cancel() at all).
             if self.store.is_job_cancelled(job["id"]):
+                joblog.emit("job.cancelled", when="after_handler", **_log)
                 self.store.mark_job_cancelled(job["id"])
             else:
+                joblog.emit("job.complete", **_log)
                 self.store.complete_job(job["id"])
         except JobCancelledError:
+            joblog.emit("job.cancelled", when="during_handler", **_log)
             self.store.mark_job_cancelled(job["id"])
         except FatalJobError as e:
+            # error_type only — the message can carry a filename or a Drive URL, and these lines
+            # go to a container log with a different audience from the database.
+            joblog.emit("job.dead", reason="fatal", error_type=type(e).__name__, **_log)
             self.store.fail_job(job["id"], f"fatal: {e}", force_dead=True,
                                 error_class=TRANSIENT)
         except Exception as e:
@@ -297,8 +315,20 @@ class JobWorker:
             # shows something actionable rather than a google-auth traceback.
             msg = drive_session_expired(e) or str(e)
             force_dead, backoff = job_retry_policy(eclass, job["attempts"])
-            self.store.fail_job(job["id"], msg, backoff_seconds=backoff,
-                                force_dead=force_dead, error_class=eclass)
+            outcome = self.store.fail_job(job["id"], msg, backoff_seconds=backoff,
+                                          force_dead=force_dead, error_class=eclass)
+            # Logged from fail_job's OWN return, not from the policy's `force_dead`. Those
+            # disagree in the case this instrumentation exists for: fail_job also dead-letters
+            # on `attempts >= max_attempts`, so an attempts-exhausted death — exactly what the
+            # sweeper recorded for db40880c03de4b89 — arrives with force_dead False and would
+            # have been logged as a retry. Caught by
+            # test_attempts_exhausted_records_a_death_so_the_log_shows_retries_stopped.
+            # Caveat, per the note below: this return reads 'queued' even when a zombie
+            # worker's write was suppressed by the reclaim-race guard. That is the right
+            # reading here anyway — these records say what THIS process did.
+            joblog.emit({"dead": "job.dead", "queued": "job.retry"}.get(outcome, "job.fail"),
+                        outcome=outcome, error_class=eclass, error_type=type(e).__name__,
+                        backoff_s=backoff, **_log)
             # fail_job returns "queued" even when a zombie worker's write was actually
             # suppressed by the reclaim-race guard (see test_job_completion_race.py) — a
             # second worker may already have completed or dead-lettered this exact job_id.

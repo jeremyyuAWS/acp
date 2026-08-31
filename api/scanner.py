@@ -3475,26 +3475,47 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
     _t0 = time.monotonic()
     print(f"[scan] analysing {name} ({ext or '?'}) …", flush=True)
     import activity as _act
+    import joblog as _jl
+    # Opaque and stable: the same document reads as the same `doc` across attempts, replicas and
+    # restarts, which is what makes "this one was open on all three crashes" sayable. Keyed on
+    # the document identity ALONE, deliberately not on scan_id — a per-scan id could not
+    # correlate the same file across the separate runs a retry produces. The plaintext
+    # `[scan] analysing {name}` line above is pre-existing and untouched here; nothing added by
+    # this change reproduces it. See joblog's header on why filenames stay out of these records.
+    doc = _jl.doc_id(name)
     _act.record_file(scan_id, name, phase="analysing",
                      action="running the accessibility engine", force=True)
+    # Each engine below is a NATIVE entry point, and the enter line is flushed before the call:
+    # pdf goes through pikepdf/qpdf, office shells out to the .NET CLI (already out-of-process,
+    # so a crash there cannot take this worker down), html through the python parser stack.
+    # Which of them — if any — corrupted the heap on 2026-08-30 is exactly what was not
+    # recoverable from the logs, and is not assumed here.
     if ext == ".pdf":
-        raw = {"engine": "python/pdf", **_analyse_pdf(tmp / name)}
+        with _jl.stage("analyse.pdf", doc=doc, scan_id=scan_id, ext=ext):
+            raw = {"engine": "python/pdf", **_analyse_pdf(tmp / name)}
     elif ext in OFFICE:
-        office = _analyse_office(tmp)                 # .NET CLI over the one-file dir
+        with _jl.stage("analyse.office", doc=doc, scan_id=scan_id, ext=ext):
+            office = _analyse_office(tmp)             # .NET CLI over the one-file dir
         raw = {"engine": ".net/office",
                **office.get(name, {"succeeded": False, "issues": [], "errors": ["no engine result"]})}
     elif ext in HTML_EXTS:
-        raw = {"engine": "python/html", **_analyse_html(tmp / name)}
+        with _jl.stage("analyse.html", doc=doc, scan_id=scan_id, ext=ext):
+            raw = {"engine": "python/html", **_analyse_html(tmp / name)}
     else:
+        _jl.emit("analyse.skip", doc=doc, scan_id=scan_id, ext=ext, reason="unsupported_ext")
         return None, None
     # 1.4.5 / 1.4.9 Images of Text — OCR embedded images; self-gates + never raises.
     _act.record_file(scan_id, name, sc="1.4.5", phase="analysing",
                      action="reading text baked into images")
     try:
         import ocr as _ocr_mod
-        raw["issues"] = (list(raw.get("issues", []))
-                          + _ocr_mod.images_of_text(tmp / name, ext)
-                          + _ocr_mod.images_of_text_no_exception(tmp / name, ext))
+        # Pillow decodes and tesseract runs in-process, so this block is native too — and it is
+        # bracketed even though the enclosing `except Exception: pass` swallows Python-level
+        # failures, because a segfault is not an exception and would leave an enter with no exit.
+        with _jl.stage("analyse.ocr", doc=doc, scan_id=scan_id, ext=ext):
+            raw["issues"] = (list(raw.get("issues", []))
+                              + _ocr_mod.images_of_text(tmp / name, ext)
+                              + _ocr_mod.images_of_text_no_exception(tmp / name, ext))
     except Exception:
         pass
     # 1.3.3 Sensory Characteristics + 3.1.2 Language of Parts — text-content checks.
@@ -3504,9 +3525,11 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
         import pii as _pii_mod2
         import textchecks as _txt_mod
         import office_structure as _off_lang
-        raw["issues"] = list(raw.get("issues", [])) + _txt_mod.content_findings(
-            _pii_mod2.extract_text(tmp / name),
-            _off_lang.language_marked_spans(tmp / name, ext))
+        # extract_text reaches native extractors (pikepdf/qpdf for .pdf, lxml for OOXML parts).
+        with _jl.stage("analyse.text", doc=doc, scan_id=scan_id, ext=ext):
+            raw["issues"] = list(raw.get("issues", [])) + _txt_mod.content_findings(
+                _pii_mod2.extract_text(tmp / name),
+                _off_lang.language_marked_spans(tmp / name, ext))
     except Exception:
         pass
     # 2.4.6 / 2.4.9 / 1.4.3 / 1.4.6 — first-party OOXML/PDF structural checks
@@ -3516,7 +3539,9 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
                      action="checking headings, links and contrast")
     try:
         import office_structure as _off_mod
-        raw["issues"] = list(raw.get("issues", [])) + _off_mod.checks_for(tmp / name, ext)
+        # PDF contrast measurement here rasterises through the native pdf stack.
+        with _jl.stage("analyse.structure", doc=doc, scan_id=scan_id, ext=ext):
+            raw["issues"] = list(raw.get("issues", [])) + _off_mod.checks_for(tmp / name, ext)
     except Exception:
         pass
     raw["issues"] = _collapse_duplicate_alt(_collapse_reading_order(raw["issues"]))
