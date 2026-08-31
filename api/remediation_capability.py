@@ -298,7 +298,16 @@ REMEDIATION: dict[str, dict[str, str]] = {
                              # and there is no PDF link write-back, so an approval could never
                              # be honoured. Assessed and routed to a human, never proposed.
         "2.4.6": ASSISTED,   # tagged PDF, no headings — heading map derived from the font hierarchy, human confirms
-        "2.5.3": HUMAN,      # label in name — push button /MK /CA not in /TU or /T; no write-back built yet
+        "2.5.3": AUTO,       # label in name — /TU rewritten to lead with the button's own visible
+                             # caption (/MK /CA) by _fix_pdf_label_in_name, keeping any existing
+                             # tooltip after it. Deterministic in the strong sense: unlike 4.1.2
+                             # above, which must decide what a field should be CALLED, the correct
+                             # value here is already in the file — 2.5.3 asks only that the name
+                             # CONTAIN the visible label. Nothing is invented, so nothing is
+                             # approved. Same rule and same "{visible} — {old}" shape as html
+                             # 2.5.3 (remediate._fix_label_in_name), which has been ⚡ throughout.
+                             # Round-trip proven in tests/test_pdf_label_in_name_fix.py, including
+                             # the case where the 4.1.2 pass above CREATES the 2.5.3 failure.
         "3.1.1": AUTO,       # catalog /Lang
         "3.1.2": ASSISTED,
         "3.1.5": ASSISTED,
@@ -424,6 +433,23 @@ ASSESSMENT_OVERRIDES: dict[tuple[str, str], str] = {
     # have. When that lands and coverage moves to FULL, delete this line.
     ("pdf", "2.4.3"): A_REVIEW,   # /Tabs = /S is a proxy for tab order — can't certify the sequence
     ("pdf", "4.1.2"): A_REVIEW,   # AcroForm-only detector — can't certify the whole criterion
+    # pdf 2.5.3 needed this brake in the same breath as its remediation lane moved to ⚡, for the
+    # third time in this list and for exactly the reason the two entries above give. _assessment()
+    # derives 🟢 from AUTO, so flipping the lane alone would have started certifying Label in Name
+    # on PDFs — the false-PASS direction ADR 0016 exists to prevent, and the one a passing test
+    # suite would not have caught, because the fixer genuinely does work.
+    #
+    # What the fix proves and what it does not: _fix_pdf_label_in_name aligns every PUSH BUTTON's
+    # /TU with its /MK /CA caption, and a clean re-scan proves exactly that. 2.5.3 covers every
+    # labelled control, and a text field, checkbox or radio button displays its label as a
+    # separate text object drawn on the page with no reference to the field object — so ACP can
+    # neither read that label nor compare it, and a form of unnamed text inputs scans clean while
+    # failing the criterion outright. The registry already says so on its own axis
+    # (label_in_name registers PARTIAL: "only push buttons carry a caption in the AcroForm
+    # dictionary"); this keeps the two axes agreeing rather than letting the derivation overrule
+    # the detector's own stated limit. When a page-text-to-field association lands and coverage
+    # moves to FULL, delete this line.
+    ("pdf", "2.5.3"): A_REVIEW,   # push-button-only comparison — can't certify the criterion
     # docx 4.1.2 is the same shape and needed the same brake THE MOMENT its remediation lane
     # moved to ⚡. _assessment() derives 🟢 from AUTO, so flipping the lane without this line
     # would have silently started certifying the criterion — the false-PASS direction, and the

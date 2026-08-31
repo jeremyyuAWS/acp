@@ -445,6 +445,21 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
                                "surfaced as a review card · 4.1.2")
         except Exception:
             swallowed("remediate_pdf.remediate_pdf: fixing the PDF form fields failed", scan_id)
+        # 2.5.3 label in name — align each push button's accessible name (/TU) with the visible
+        # caption it displays (/MK /CA). Runs AFTER the 4.1.2 pass on purpose: that pass may have
+        # just written a /TU derived from the field name, and if that name does not contain the
+        # button's caption it is a 2.5.3 failure ACP created itself. Ordering it second means the
+        # second pass sees the first pass's output and repairs it, rather than the two writing
+        # conflicting names to the same key depending on which ran last.
+        try:
+            for _cap, _before, _after in (_fix_pdf_label_in_name(pdf)
+                                          if _sc_ok(in_scope, "2.5.3") else []):
+                applied.append(f"Accessible name aligned with the visible label “{_cap}” on a "
+                               "push button · 2.5.3")
+                _rec("2.5.3", _before, _after,
+                     "speech-input users can activate the button by the label they can see")
+        except Exception:
+            swallowed("remediate_pdf.remediate_pdf: aligning PDF label-in-name failed", scan_id)
         # 1.4.3/1.4.6 — recolour failing text colours in the content streams (deterministic,
         # text-scoped only; shapes/backgrounds untouched), each against the background
         # resolved behind its own glyphs. Verified by the post-fix re-scan.
@@ -718,6 +733,89 @@ def _fix_pdf_form_fields(pdf, *, proposals=None, applied_fixes=None) -> tuple[li
                     source="field name is a generic auto-name — human authors",
                     kind="pdf-field-name"))
     return applied, deferred
+
+
+# ── 2.5.3 Label in Name — align the accessible name with the visible caption ────
+# THE GAP THIS CLOSES, in the table's own words. remediation_capability had
+# `"2.5.3": HUMAN,  # ... no write-back built yet` on pdf while the SAME criterion on html has
+# been ⚡ AUTO for as long as remediate._fix_label_in_name has existed. The detector
+# (formats/pdf/detectors/label_in_name) already extracts BOTH strings it needs — the visible
+# caption from /MK /CA and the accessible name from /TU or /T — and then had nowhere to send
+# them. Nothing was missing but the write.
+#
+# WHY THIS IS DETERMINISTIC, which is what separates it from the 4.1.2 fixer directly above.
+# 4.1.2 asks what a field should be CALLED, and when /T is a generic auto-name ("Text1") there is
+# no honest machine answer, so it defers to a human. 2.5.3 asks a narrower question with the
+# answer already in the file: the accessible name must contain the VISIBLE LABEL, and the visible
+# label is sitting in /MK /CA. There is nothing to invent, so nothing to approve.
+#
+# THE VALUE IS MIRRORED FROM THE HTML FIXER, not designed fresh: remediate._fix_label_in_name
+# writes `f"{visible} — {old}"` onto aria-label, keeping the author's text and putting the visible
+# label FIRST (the "accessible name starts with the visible label" technique speech input relies
+# on). /TU is PDF's aria-label, so it takes the same rule.
+#
+# /T IS NEVER TOUCHED. It is the field's partial name — the key form data is submitted under and
+# JavaScript addresses fields by — so rewriting it to fix a label would corrupt the form while
+# reporting a fix. Same lesson as w:alias-not-w:tag in apply_field_name.py. When a field has no
+# /TU at all and its /T is what the detector compared against, the repair is to ADD a /TU, which
+# leaves /T exactly as it was.
+_LABEL_FLAG_PUSHBUTTON = 1 << 16          # Ff bit 17 (ISO 32000 Table 227), 0-indexed here
+
+
+def _fix_pdf_label_in_name(pdf) -> list[tuple[str, str, str]]:
+    """WCAG 2.5.3 — make each push button's accessible name contain its visible caption.
+
+    Returns one `(caption, before, after)` per field rewritten, so the caller can build both the
+    applied message and the remediation diff without re-deriving anything. Mutates pdf in place.
+    Never raises: a fixer that cannot read a field leaves it alone.
+
+    Scoped to push buttons for the same reason the detector is — they are the only PDF field type
+    carrying a caption in the field object. A text field's label is a separate text object drawn
+    on the page with no link to the field, so there is nothing to compare and nothing to align.
+    That is why the assessment axis stays 🟡 review (see ASSESSMENT_OVERRIDES): this clears every
+    2.5.3 failure ACP can SEE, which is not the same as clearing the criterion.
+    """
+    import pikepdf
+    from formats.pdf import acroform
+
+    try:
+        root = pdf.Root
+        if not acroform.has_fields(root):
+            return []
+        fields: list = []
+        seen: set[int] = set()
+        for f in root["/AcroForm"]["/Fields"]:
+            acroform.terminal_fields(f, fields, seen)
+    except Exception:
+        return []
+
+    out: list[tuple[str, str, str]] = []
+    for fld in fields:
+        try:
+            if str(fld.get("/FT", "")) != "/Btn":
+                continue
+            if not int(fld.get("/Ff") or 0) & _LABEL_FLAG_PUSHBUTTON:
+                continue
+            mk = fld.get("/MK")
+            cap = str(mk.get("/CA")).strip() if mk is not None and mk.get("/CA") is not None else ""
+            if not cap:
+                continue                      # no visible caption — nothing to align to
+            tu = str(fld.get("/TU", "") or "").strip()
+            # EXACTLY the detector's own comparison, including its /T fallback: a button named
+            # "Print this page" via /T already contains "Print" and is not a finding, so it must
+            # not be rewritten either. A fixer that repaired more than the detector reports would
+            # be editing documents over a rule nothing had stated.
+            compared = tu or str(fld.get("/T", "") or "").strip()
+            if cap.lower() in compared.lower():
+                continue
+            after = f"{cap} — {tu}" if tu else cap
+            fld["/TU"] = pikepdf.String(after)
+            out.append((cap, tu or "(no accessible name — /TU absent)", after))
+        except Exception:
+            swallowed("remediate_pdf._fix_pdf_label_in_name: aligning one push button's "
+                      "accessible name failed")
+            continue
+    return out
 
 
 def apply_pdf_field_name(data: bytes, values: dict) -> tuple[bytes, list[dict], list[str]]:
