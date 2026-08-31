@@ -7,7 +7,11 @@
 //   current    — the file path currently being processed (may be null / empty)
 //   filesDone  — files processed so far
 //   filesTotal — total files found (used for the progress bar denominator)
-//   elapsed    — elapsed wall-clock seconds (tracked in DiscoverRunProgress)
+//   elapsed    — wall-clock seconds THE RUN has been going, derived from the server's own
+//                started_at (DiscoverRunProgress). null when the server has no timestamp for it,
+//                which suppresses the rate and the ETA — both are quotients of this, so a wrong
+//                denominator does not produce a slightly-off number, it produces a confident
+//                impossible one.
 
 function truncatePath(path, maxLen = 54) {
   if (!path || path.length <= maxLen) return path || ''
@@ -31,10 +35,10 @@ function fmtSpeed(fps) {
   return fps >= 10 ? `${Math.round(fps)} files/s` : `${fps.toFixed(1)} files/s`
 }
 
-export default function WorkerCard({ current, filesDone = 0, filesTotal = 0, elapsed = 0 }) {
+export default function WorkerCard({ current, filesDone = 0, filesTotal = 0, elapsed = null }) {
   const hasCurrent = !!current
   const pct = filesTotal > 0 ? Math.min(100, (filesDone / filesTotal) * 100) : null
-  const speed = elapsed >= 3 && filesDone > 0 ? filesDone / elapsed : null
+  const speed = elapsed != null && elapsed >= 3 && filesDone > 0 ? filesDone / elapsed : null
   const remaining = filesTotal > filesDone ? filesTotal - filesDone : 0
   const eta = speed && remaining > 0 ? Math.ceil(remaining / speed) : null
 

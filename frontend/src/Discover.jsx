@@ -815,7 +815,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           the live SSE push has died) takes priority over run.freshness — the latter is a snapshot
           from the last GET /scans/{id} the outer `scan` state holds, which during an active run
           can be the PREVIOUS scan's terminal value until this one settles. */}
-      <DiscoverRunProgress progress={progress} busy={busy} onStop={onStop} onContinue={onAdvance} sources={sources} inv={inv} preflightDegraded={preflightDegraded} freshness={progress?.freshness ?? run?.freshness ?? null} />
+      <DiscoverRunProgress progress={progress} busy={busy} onStop={onStop} onContinue={onAdvance} sources={sources} inv={inv} preflightDegraded={preflightDegraded} freshness={progress?.freshness ?? run?.freshness ?? null} runStartedAt={run?.started_at ?? null} />
 
       {(() => {
         const jobClaimed = !!(discoverJobInfo && discoverJobInfo.status && discoverJobInfo.status !== 'queued')

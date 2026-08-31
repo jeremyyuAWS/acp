@@ -1781,6 +1781,7 @@ export default function App() {
             onReview={() => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
             onContinue={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
             preflightDegraded={preflightDegraded}
+            runStartedAt={run?.started_at ?? null}
           />
         </div>
       )}
