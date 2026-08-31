@@ -67,7 +67,7 @@ export default function WorkerAvailability({ snap, busy, msg, onAdjust,
                 // jobs" here regardless of `alive`, directly beside "Worker service online" —
                 // a false alarm on every deployment where jobs run on a separate worker
                 // container with the in-process pool left at its default of 0.
-                ? 'Jobs run on the dedicated worker container — the concurrency below only adds extra in-process workers'
+                ? 'Jobs run on the dedicated stage service; capacity is managed automatically'
                 : 'Processing capacity is off — no worker will pick up new jobs')
             : `${snap.workers} worker${snap.workers === 1 ? '' : 's'} available to pick up jobs`}
         </span>
@@ -105,26 +105,7 @@ export default function WorkerAvailability({ snap, busy, msg, onAdjust,
               Worker capacity is managed by your deployment administrator.
             </span>
           )
-        ) : onAdjust && (
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 4 }}>
-            <span className="muted" style={{ fontSize: 11 }}>Worker concurrency:</span>
-            <button onClick={() => onAdjust(-1)} disabled={busy || snap.workers <= 0}
-                    aria-label="Remove a worker"
-                    style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
-                             background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
-                             cursor: 'pointer', display: 'inline-flex', alignItems: 'center',
-                             justifyContent: 'center', padding: 0 }}>−</button>
-            <span style={{ fontSize: 13, fontWeight: 600, minWidth: 18, textAlign: 'center' }}>{snap.workers}</span>
-            <button onClick={() => onAdjust(1)} disabled={busy || snap.workers >= 16}
-                    aria-label="Add a worker"
-                    style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
-                             background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
-                             cursor: 'pointer', display: 'inline-flex', alignItems: 'center',
-                             justifyContent: 'center', padding: 0 }}>+</button>
-            {msg && <span style={{ fontSize: 11, color: msg.startsWith('Failed') ? '#8A2A20' : '#1a7f37',
-                                    fontWeight: 600, marginLeft: 2 }}>{msg}</span>}
-          </span>
-        )}
+        ) : null}
       </div>
       {stalled && (
         <div role="alert" style={{ fontSize: 12, color: '#8A2A20', display: 'flex',

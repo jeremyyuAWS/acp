@@ -30,6 +30,9 @@ globalThis.__BUILD_VERSION__ = '2026.8.1'
 
 const startScanQueued = vi.fn(async () => { throw new Error('test stub — do not run the poll loop') })
 const startScan = vi.fn(async () => { throw new Error('test stub — do not run the poll loop') })
+const getScanLocations = vi.fn(async () => ({
+  locations: { drive: [{ id: 'old-filter', name: 'Previous filtered folder' }] },
+}))
 
 // Spread the real api and override only what App's startup + a scan touch, so a new export never
 // silently breaks this mount. getConfig → demo mode (persona picker); the scan API throws so the
@@ -45,6 +48,7 @@ vi.mock('./api.js', async (importActual) => ({
   updateSettings: vi.fn(async () => ({ scan_scope: '' })),
   getScan: vi.fn(async () => ({ run: { id: 's1', status: 'done' }, files: [] })),
   getDecisions: vi.fn(async () => ({})),
+  getScanLocations,
   startScanQueued,
   // The Durable toggle is no longer on the modal, so a default confirm takes the NON-queued path
   // and THIS is the call that has to be observable. Throws for the same reason startScanQueued
@@ -55,7 +59,7 @@ vi.mock('./api.js', async (importActual) => ({
 const { default: App } = await import('./App.jsx')
 
 afterEach(unmountAll)
-beforeEach(() => { startScanQueued.mockClear(); startScan.mockClear() })
+beforeEach(() => { startScanQueued.mockClear(); startScan.mockClear(); getScanLocations.mockClear() })
 
 const flush = async () => { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() }) }
 const click = async (el) => { await act(async () => { el.click() }); await flush() }
@@ -127,6 +131,8 @@ describe('the universal scan gate (App)', () => {
     // Confirm dispatched the scan (source 'all' for "Re-scan all sources") and closed the gate.
     expect(startScanQueued).toHaveBeenCalled()
     expect(startScanQueued.mock.calls[0][0]).toBe('all')
+    expect(startScanQueued.mock.calls[0][6]).toEqual([])
+    expect(startScanQueued.mock.calls[0][7]).toEqual([])
     expect(startScan).not.toHaveBeenCalled()
     expect(dialog(c)).toBeNull()
   })
