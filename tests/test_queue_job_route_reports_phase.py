@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import held
+
 ACP = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ACP / "api"))
 
@@ -46,7 +48,7 @@ def _seed_scan_and_job(st, *, status="queued", phase=None):
             st.set_job_phase(jid, phase)
         elif status == "dead":
             for _ in range(10):
-                st.fail_job(jid, "boom", backoff_seconds=0)
+                st.fail_job(jid, "boom", backoff_seconds=0, **held(st, jid))
                 nxt = st.claim_job("worker-1")
                 if nxt is None:
                     break
@@ -106,7 +108,7 @@ def test_a_retried_job_reports_its_incremented_attempts_with_the_same_ceiling(cl
     c, st = client
     jid = _seed_scan_and_job(st, status="queued")
     st.claim_job("worker-1")
-    st.fail_job(jid, "transient", backoff_seconds=0)
+    st.fail_job(jid, "transient", backoff_seconds=0, **held(st, jid))
     body = c.get(f"/jobs/{jid}").json()
     assert body["attempts"] == 1
     assert body["max_attempts"] == 5

@@ -286,6 +286,13 @@ class JobWorker:
                 "job_type": job.get("type"), "attempt": job.get("attempts"),
                 "worker_id": self.worker_id}
         _log("job.claim", max_attempts=job.get("max_attempts"), **_logf)
+        # The identity of THIS claim, captured once at claim time and passed to every write that
+        # publishes an outcome for the job. If the sweeper reclaims the job while the handler is
+        # wedged and another worker takes it over, these stop matching the row and this process's
+        # late outcome is refused rather than landing on top of its replacement. Same values the
+        # heartbeat renews with — one claim identity, used by every write, so the two cannot
+        # drift apart. See store.complete_job and tests/test_outcome_claim_ownership.py.
+        _claim = {"worker_id": self.worker_id, "attempt": job.get("attempts")}
 
         def _emit_persisted(event, **extra):
             """Record an outcome from the row as it now STANDS, never from the transition we
@@ -312,7 +319,7 @@ class JobWorker:
         if fn is None:
             _log("job.no_handler", **_logf)
             self.store.fail_job(job["id"], f"no handler for job type '{job['type']}'",
-                                backoff_seconds=_backoff_seconds(job["attempts"]))
+                                backoff_seconds=_backoff_seconds(job["attempts"]), **_claim)
             return True
         # Heartbeat: extend the lease every 2 min while the handler runs, so a
         # slow-but-alive job (e.g. a long PII scan) isn't reclaimed by the sweeper —
@@ -358,19 +365,19 @@ class JobWorker:
             # Handler finished — honour a cancellation that arrived while it was running
             # (the handler may not have called check_cancel() at all).
             if self.store.is_job_cancelled(job["id"]):
-                self.store.mark_job_cancelled(job["id"])
+                self.store.mark_job_cancelled(job["id"], **_claim)
                 _emit_persisted("job.cancelled", when="after_handler")
             else:
-                self.store.complete_job(job["id"])
+                self.store.complete_job(job["id"], **_claim)
                 _emit_persisted("job.complete")
         except JobCancelledError:
-            self.store.mark_job_cancelled(job["id"])
+            self.store.mark_job_cancelled(job["id"], **_claim)
             _emit_persisted("job.cancelled", when="during_handler")
         except FatalJobError as e:
             # error_type only — the message can carry a filename or a Drive URL, and these lines
             # go to a container log with a different audience from the database.
             self.store.fail_job(job["id"], f"fatal: {e}", force_dead=True,
-                                error_class=TRANSIENT)
+                                error_class=TRANSIENT, **_claim)
             _emit_persisted("job.dead", reason="fatal", error_type=type(e).__name__)
         except Exception as e:
             eclass = classify_job_error(e)
@@ -379,24 +386,25 @@ class JobWorker:
             msg = drive_session_expired(e) or str(e)
             force_dead, backoff = job_retry_policy(eclass, job["attempts"])
             outcome = self.store.fail_job(job["id"], msg, backoff_seconds=backoff,
-                                          force_dead=force_dead, error_class=eclass)
+                                          force_dead=force_dead, error_class=eclass, **_claim)
             # Logged from fail_job's OWN return, not from the policy's `force_dead`. Those
             # disagree in the case this instrumentation exists for: fail_job also dead-letters
             # on `attempts >= max_attempts`, so an attempts-exhausted death — exactly what the
             # sweeper recorded for db40880c03de4b89 — arrives with force_dead False and would
             # have been logged as a retry. Caught by
             # test_attempts_exhausted_records_a_death_so_the_log_shows_retries_stopped.
-            # Caveat, per the note below: this return reads 'queued' even when a zombie
-            # worker's write was suppressed by the reclaim-race guard. That is the right
-            # reading here anyway — these records say what THIS process did.
+            # A suppressed write now returns 'stale' rather than naming an outcome it did not
+            # record, so this maps to 'job.fail' with outcome='stale' — and _emit_persisted
+            # reads the row, so the record carries the status the REPLACEMENT put there.
             _emit_persisted({"dead": "job.dead", "queued": "job.retry"}.get(outcome, "job.fail"),
                             outcome=outcome, error_class=eclass, error_type=type(e).__name__,
                             backoff_s=backoff)
-            # fail_job returns "queued" even when a zombie worker's write was actually
-            # suppressed by the reclaim-race guard (see test_job_completion_race.py) — a
-            # second worker may already have completed or dead-lettered this exact job_id.
-            # Re-read the row rather than trusting that return value, so a zombie's late
-            # failure can never announce "retrying" over a job that already finished.
+            # Re-read the row rather than trusting fail_job's return, so a zombie's late failure
+            # can never announce "retrying" over a job that already finished. fail_job now says
+            # 'stale' when it refused the write, so the return alone would mostly do — but only
+            # mostly: it reports what THIS call did, and the announcement below is about what the
+            # ROW now says. A concurrent writer can still move the row between the two. The
+            # re-read is the authority; 'stale' is the better diagnostic, not a replacement.
             if self.on_retry:
                 try:
                     fresh = self.store.get_job(job["id"])

@@ -16,6 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
+from conftest import held  # noqa: E402
+
 import worker as w
 
 
@@ -56,7 +58,7 @@ def test_request_cancellation_returns_false_for_done(isolated_store):
     st = isolated_store
     jid = _enqueue(st)
     st.claim_job("w1")
-    st.complete_job(jid)
+    st.complete_job(jid, **held(st, jid))
     assert st.request_job_cancellation(jid) is False
 
 
@@ -64,7 +66,7 @@ def test_request_cancellation_returns_false_for_dead(isolated_store):
     st = isolated_store
     jid = _enqueue(st)
     st.claim_job("w1")
-    st.fail_job(jid, "fatal", force_dead=True)
+    st.fail_job(jid, "fatal", force_dead=True, **held(st, jid))
     assert st.request_job_cancellation(jid) is False
 
 
@@ -89,7 +91,7 @@ def test_mark_job_cancelled_sets_status(isolated_store):
     st = isolated_store
     jid = _enqueue(st)
     st.claim_job("w1")
-    st.mark_job_cancelled(jid)
+    st.mark_job_cancelled(jid, **held(st, jid))
     assert st.get_job(jid)["status"] == "cancelled"
 
 

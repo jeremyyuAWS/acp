@@ -14,6 +14,8 @@ from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
+from conftest import held  # noqa: E402
+
 import sweeper as sw
 
 
@@ -72,7 +74,7 @@ def test_sweep_exhausted_jobs_skips_done(isolated_store):
     st = isolated_store
     jid = _enqueue(st)
     st.claim_job("w1")
-    st.complete_job(jid)
+    st.complete_job(jid, **held(st, jid))
     with st._db.cursor() as cur:
         st._db.execute(cur,
             "UPDATE jobs SET attempts=max_attempts WHERE id=%s", (jid,))

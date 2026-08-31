@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import held
+
 ACP = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ACP / "api"))
 
@@ -34,7 +36,7 @@ def test_enqueue_claim_complete(store):
     # Queue is now empty — nothing else to claim.
     assert store.claim_job("w1") is None
 
-    store.complete_job(jid)
+    store.complete_job(jid, **held(store, jid))
     assert store.get_job(jid)["status"] == "done"
 
 
@@ -49,26 +51,26 @@ def test_retry_then_dead_letter(store):
     jid = store.enqueue_job("t", {}, max_attempts=2)
 
     store.claim_job("w1")                              # attempt 1
-    assert store.fail_job(jid, "boom", backoff_seconds=0) == "queued"
+    assert store.fail_job(jid, "boom", backoff_seconds=0, **held(store, jid)) == "queued"
     assert store.get_job(jid)["status"] == "queued"
     assert store.get_job(jid)["last_error"] == "boom"
 
     store.claim_job("w1")                              # attempt 2 == max
-    assert store.fail_job(jid, "boom again", backoff_seconds=0) == "dead"
+    assert store.fail_job(jid, "boom again", backoff_seconds=0, **held(store, jid)) == "dead"
     assert store.get_job(jid)["status"] == "dead"
 
 
 def test_force_dead(store):
     jid = store.enqueue_job("t", {}, max_attempts=10)
     store.claim_job("w1")
-    assert store.fail_job(jid, "fatal", force_dead=True) == "dead"
+    assert store.fail_job(jid, "fatal", force_dead=True, **held(store, jid)) == "dead"
     assert store.get_job(jid)["status"] == "dead"
 
 
 def test_backoff_gate_hides_job(store):
     jid = store.enqueue_job("t", {})
     store.claim_job("w1")
-    store.fail_job(jid, "transient", backoff_seconds=3600)   # run_after in the future
+    store.fail_job(jid, "transient", backoff_seconds=3600, **held(store, jid))   # run_after in the future
     # Not eligible yet → claim returns nothing.
     assert store.claim_job("w1") is None
 
@@ -86,7 +88,7 @@ def test_job_stats(store):
     a = store.enqueue_job("t", {})
     store.enqueue_job("t", {})
     store.claim_job("w1")
-    store.complete_job(a) if store.get_job(a)["status"] == "running" else None
+    store.complete_job(a, **held(store, a)) if store.get_job(a)["status"] == "running" else None
     stats = store.job_stats()
     assert stats.get("queued", 0) + stats.get("done", 0) >= 1
 
@@ -106,7 +108,7 @@ def test_oldest_queued_job_ignores_claimed_and_done_jobs(store):
     jid = store.enqueue_job("t", {})
     store.claim_job("w1")                              # now 'running', not 'queued'
     assert store.oldest_queued_job() is None
-    store.complete_job(jid)
+    store.complete_job(jid, **held(store, jid))
     assert store.oldest_queued_job() is None
 
 
@@ -116,7 +118,7 @@ def test_oldest_queued_job_ignores_a_job_still_in_backoff(store):
     itself uses."""
     jid = store.enqueue_job("t", {})
     store.claim_job("w1")
-    store.fail_job(jid, "transient", backoff_seconds=3600)   # run_after far in the future
+    store.fail_job(jid, "transient", backoff_seconds=3600, **held(store, jid))   # run_after far in the future
     assert store.oldest_queued_job() is None
 
 
@@ -252,7 +254,7 @@ def test_worker_on_retry_does_not_fire_when_a_zombie_lost_the_completion_race(st
         store.reclaim_stuck_jobs(lease_seconds=0)     # this job's lease "expires" immediately
         reclaimed = store.claim_job("w2")              # a second worker reclaims the SAME job
         assert reclaimed["id"] == job["id"]
-        assert store.complete_job(job["id"]) is True   # ...and finishes it successfully
+        assert store.complete_job(job["id"], **held(store, job["id"])) is True   # ...and finishes it successfully
         raise ValueError("zombie's late failure")       # only now does the zombie's own call fail
 
     jid = store.enqueue_job("zombie_flavor", {}, max_attempts=5)

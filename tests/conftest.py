@@ -86,6 +86,37 @@ def isolated_store(monkeypatch):
     return store_mod.Store()
 
 
+def held(store, job_id: str) -> dict:
+    """The claim currently on the row, as the ownership kwargs the outcome writers require:
+    `store.fail_job(jid, "boom", force_dead=True, **held(store, jid))`.
+
+    complete_job / mark_job_cancelled / fail_job require (worker_id, attempt) so a stale claim
+    cannot publish an outcome over the replacement that took its job over — see
+    store.complete_job and tests/test_outcome_claim_ownership.py. Most tests that call those
+    methods are not about that guard at all (they are about error_class persistence, dead-file
+    accounting, retry policy), and spelling the claim out in each would be noise.
+
+    DELIBERATELY ALWAYS SATISFIES THE GUARD, because it reads the row rather than remembering
+    what a caller claimed earlier. That is what makes it right for "as whoever holds this now"
+    and WRONG for anything testing the guard itself: a zombie-writer test built on this would
+    pass no matter what the predicate said. Those tests pass the identity literally — see
+    test_outcome_claim_ownership.py and test_job_completion_race.py, neither of which uses this.
+    """
+    job = store.get_job(job_id)
+    # A job nobody holds cannot have an outcome published for it, so the writers would refuse the
+    # call and return 'stale'. Silently: the row simply does not move, and a test asserting on
+    # something else entirely goes green having exercised nothing. Caught exactly that way — the
+    # ownership kwargs were added to test_job_phase's fail_job mechanically, the job there was
+    # never claimed, and the test passed on claim_job clearing the phase instead of on the retry
+    # it names. Assert rather than return None, so the next one is loud.
+    assert job is not None, f"held(): no such job {job_id}"
+    assert job["status"] == "running" and job["locked_by"], (
+        f"held(): job {job_id} is {job['status']!r} and held by {job['locked_by']!r} — nothing "
+        "can publish an outcome for it, so this call would be refused and the test would pass "
+        "without exercising the path it names. Claim the job first.")
+    return {"worker_id": job["locked_by"], "attempt": job["attempts"]}
+
+
 def pdf_engine_available() -> bool:
     """Is the partner PDF engine importable?
 

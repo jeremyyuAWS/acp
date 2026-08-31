@@ -123,16 +123,35 @@ class _FakeStore:
         j, self._job = self._job, None
         return j
 
-    def fail_job(self, job_id, error, backoff_seconds=0.0, force_dead=False, error_class=None):
+    # These mirror the real Store signatures exactly, ownership kwargs included. A double that
+    # accepts less than the real thing is a hole, not a simplification: `touch_job(self, job_id)`
+    # here went stale when #1075 made the heartbeat's (worker_id, attempt) required, and nothing
+    # failed — the worker wraps heartbeats in try/except, so the TypeError was swallowed every
+    # run and this double went on "renewing" a lease with a call the real store would reject.
+    # They are required here for the same reason they are there: so the mismatch is loud.
+    def fail_job(self, job_id, error, backoff_seconds=0.0, force_dead=False, error_class=None,
+                 *, worker_id, attempt):
         self.calls.append({"error": error, "force_dead": force_dead,
-                           "backoff": backoff_seconds})
+                           "backoff": backoff_seconds,
+                           "worker_id": worker_id, "attempt": attempt})
         return "dead" if force_dead else "queued"
 
-    def complete_job(self, job_id):
-        self.calls.append({"done": True})
+    def complete_job(self, job_id, *, worker_id, attempt):
+        self.calls.append({"done": True, "worker_id": worker_id, "attempt": attempt})
+        return True
 
-    def touch_job(self, job_id):
+    def mark_job_cancelled(self, job_id, *, worker_id, attempt):
+        self.calls.append({"cancelled": True, "worker_id": worker_id, "attempt": attempt})
+        return True
+
+    def touch_job(self, job_id, *, worker_id, attempt):
         pass
+
+    def is_job_cancelled(self, job_id):
+        return False
+
+    def get_job(self, job_id):
+        return {"id": job_id, "status": "dead"}
 
 
 def _run(monkeypatch, exc):
@@ -141,7 +160,12 @@ def _run(monkeypatch, exc):
     monkeypatch.setitem(worker.HANDLERS, "scan_file", lambda p, j: (_ for _ in ()).throw(exc))
     w = worker.JobWorker(st, worker_id="w1")
     assert w.run_once() is True
-    return st.calls[-1]
+    call = st.calls[-1]
+    # The outcome must be published AS the claim that ran the job, or a stale worker can write
+    # over the replacement that took its job over (tests/test_outcome_claim_ownership.py).
+    assert call["worker_id"] == "w1" and call["attempt"] == job["attempts"], (
+        "the worker published an outcome without the identity of the claim it was running")
+    return call
 
 
 def test_an_expired_token_dead_letters_immediately(monkeypatch):

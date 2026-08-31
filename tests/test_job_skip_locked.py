@@ -13,6 +13,8 @@ from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
+from conftest import held  # noqa: E402
+
 
 def _enqueue(st, *, type="test", run_after=None):
     return st.enqueue_job(type, {"x": 1}, run_after=run_after)
@@ -175,7 +177,7 @@ def test_complete_job_leaves_done_status(isolated_store):
     st = isolated_store
     _enqueue(st)
     job = st.claim_job("w1")
-    st.complete_job(job["id"])
+    st.complete_job(job["id"], **held(st, job["id"]))
     assert st.get_job(job["id"])["status"] == "done"
 
 
@@ -183,6 +185,6 @@ def test_fail_job_requeues_within_attempts(isolated_store):
     st = isolated_store
     _enqueue(st)
     job = st.claim_job("w1")
-    result = st.fail_job(job["id"], "transient error", backoff_seconds=0)
+    result = st.fail_job(job["id"], "transient error", backoff_seconds=0, **held(st, job["id"]))
     assert result == "queued"
     assert st.get_job(job["id"])["status"] == "queued"

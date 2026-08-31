@@ -12,6 +12,8 @@ from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
+from conftest import held  # noqa: E402
+
 import worker as w
 
 
@@ -110,7 +112,7 @@ def test_fail_job_persists_error_class_on_requeue(isolated_store):
     st = isolated_store
     jid = _enqueue(st)
     st.claim_job("w1")
-    st.fail_job(jid, "too many requests", backoff_seconds=0, error_class=w.RATE_LIMIT)
+    st.fail_job(jid, "too many requests", backoff_seconds=0, error_class=w.RATE_LIMIT, **held(st, jid))
     job = st.get_job(jid)
     assert job["error_class"] == w.RATE_LIMIT
 
@@ -119,7 +121,7 @@ def test_fail_job_persists_error_class_on_dead(isolated_store):
     st = isolated_store
     jid = _enqueue(st)
     st.claim_job("w1")
-    st.fail_job(jid, "token expired", force_dead=True, error_class=w.AUTH)
+    st.fail_job(jid, "token expired", force_dead=True, error_class=w.AUTH, **held(st, jid))
     job = st.get_job(jid)
     assert job["status"] == "dead"
     assert job["error_class"] == w.AUTH
@@ -129,7 +131,7 @@ def test_fail_job_error_class_none_is_ok(isolated_store):
     st = isolated_store
     jid = _enqueue(st)
     st.claim_job("w1")
-    st.fail_job(jid, "something happened", backoff_seconds=0)
+    st.fail_job(jid, "something happened", backoff_seconds=0, **held(st, jid))
     job = st.get_job(jid)
     assert job["error_class"] is None
 
