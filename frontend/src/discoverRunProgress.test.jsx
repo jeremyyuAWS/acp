@@ -677,10 +677,31 @@ describe('stopped card (§9): scan ended before completion', () => {
     expect(render(null, false)).toBe('')
   })
 
-  it('shows elapsed time in stopped card', () => {
+  // INVERTED. This asserted `toContain('0s')` — and the '0s' was the defect, not the feature.
+  //
+  // The stopped card rendered the component's own MOUNT clock, which only ticks while `busy`,
+  // so on any fresh load of an already-stopped scan it was always exactly zero. The test passed
+  // because it asked for the literal string the bug produced. A scan that ran for forty minutes
+  // and stopped last Tuesday said "0s", every time, to everyone.
+  //
+  // It also could not have been fixed by server-anchoring alone: (now - started_at) on a
+  // terminal run grows forever, so "6d elapsed" would replace one wrong number with another.
+  // A finished run's DURATION is not recorded — scan_runs.completed_at stays NULL for a run that
+  // stopped or died — so the card now states the true fact that IS available: when it started.
+  it('states when a stopped run started, rather than a mount-relative zero', () => {
+    const prog = { phase: 'lifecycle', files_found: 100 }
+    const started = new Date(Date.now() - 45 * 60 * 1000).toISOString()
+    const html = renderToStaticMarkup(createElement(DiscoverRunProgress, {
+      progress: prog, busy: false, runStartedAt: started }))
+    expect(html).toContain('started 45m ago')
+    expect(html).not.toContain('>0s<')
+  })
+
+  it('says the start time is unavailable rather than showing a zero it cannot justify', () => {
     const prog = { phase: 'lifecycle', files_found: 100 }
     const html = render(prog, false)
-    expect(html).toContain('0s')
+    expect(html).toContain('start time unavailable')
+    expect(html).not.toContain('>0s<')
   })
 
   it('shows file count when inv has rows', () => {
