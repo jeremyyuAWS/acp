@@ -803,7 +803,8 @@ def propose_images_of_text(path, ext: str) -> list[dict]:
                         rationale = ("The vision model reads this image as a logotype/brand "
                                      "mark. " + rationale)
                 except Exception:
-                    pass
+                    swallowed("proposals.propose_images_of_text: asking the vision model whether the image "
+                              "is a logotype failed")
             out.append(proposal(
                 locator=f"image {i + 1}",
                 before="text baked into an image — assistive technology cannot read it",
@@ -1356,6 +1357,7 @@ def propose_autoplay_fix(path, ext: str) -> list[dict]:
 # (every number is the chart's own, nothing fabricated). Distinct from the images-of-text /
 # vision proposers, which handle images WITHOUT recoverable data.
 import re as _re
+from swallowed import swallowed
 
 _C_SER = _re.compile(r"<c:ser\b.*?</c:ser>", _re.S)
 _C_V = _re.compile(r"<c:v>([^<]*)</c:v>")

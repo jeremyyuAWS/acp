@@ -6,6 +6,7 @@ import os
 from fastapi import APIRouter, HTTPException, Query, Request
 
 import core
+from swallowed import swallowed
 
 router = APIRouter()
 
@@ -223,7 +224,7 @@ def ai_suggest(request: Request, scan_id: str = Query(...), file: str = Query(..
                 if txt:
                     result["ocr_text"] = txt
         except Exception:
-            pass
+            swallowed("routes.ai.ai_suggest: reading OCR text for the suggestion failed", scan_id)
     # Opt-in second-opinion cross-check (#123): the model independently re-describes the image and we
     # compare — 'consistent' raises confidence toward auto-approve, 'divergent' hands the reviewer the
     # second description as evidence. Additive; only for a real vision draft, and best-effort.
@@ -233,7 +234,7 @@ def ai_suggest(request: Request, scan_id: str = Query(...), file: str = Query(..
             if v:
                 result["validation"] = v
         except Exception:
-            pass
+            swallowed("routes.ai.ai_suggest: validating the suggested alt text failed", scan_id)
     return result
 
 

@@ -15,6 +15,8 @@ tests/test_pdf_figure_parity.py pins the two views equal on the same document.
 """
 from __future__ import annotations
 
+from swallowed import swallowed
+
 
 def collect_figures(node, figures: list | None = None) -> list:
     """Every /Figure struct element reachable from `node` (normally /StructTreeRoot).
@@ -42,7 +44,7 @@ def collect_figures(node, figures: list | None = None) -> list:
             for item in node:
                 collect_figures(item, figures)
     except Exception:
-        pass
+        swallowed("formats.pdf.structure.collect_figures: collecting a figure from the tag tree failed")
     return figures
 
 
@@ -88,5 +90,5 @@ def page_number(figure, pdf) -> int | None:
             if page.obj.objgen == pg_ref.objgen:
                 return i + 1
     except Exception:
-        pass
+        swallowed("formats.pdf.structure.page_number: resolving a figure's page number failed")
     return None

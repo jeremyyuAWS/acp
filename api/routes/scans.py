@@ -16,6 +16,7 @@ import core
 from scanner import run_scan
 from report import build_report
 from report_tagged import build_tagged_report
+from swallowed import swallowed
 
 router = APIRouter()
 
@@ -48,7 +49,8 @@ def _scan_freshness(scan_id: str, run: dict) -> str:
                     if age < _FRESHNESS_LIVE_THRESHOLD_S:
                         return "live"
                 except Exception:
-                    pass
+                    swallowed("routes.scans._scan_freshness: computing the scan's freshness "
+                              "failed", scan_id)
     if run.get("live_checkpoint_at"):
         return "checkpoint"
     return "stale"
@@ -432,7 +434,8 @@ async def remediate_scan(sid: str, request: Request):
         if isinstance(body.get("scope"), list):
             scope_set = set(body["scope"])
     except Exception:
-        pass  # missing or non-JSON body — treat as no scope filter
+        # missing or non-JSON body — treat as no scope filter
+        swallowed("routes.scans.remediate_scan: reading the remediate request body failed")
 
     # Create the single 'Remediated' folder ONCE here (single-threaded), then pass
     # its id to every job — avoids concurrent workers each creating their own.
@@ -1122,7 +1125,7 @@ def open_trace(sid: str, request: Request, kind: str, level: str = Query("AA")):
             from handlers import ensure_assess_trace
             ensure_assess_trace(sid, level)
         except Exception:
-            pass
+            swallowed("routes.scans.open_trace: ensuring the assess trace exists failed")
     # Wait briefly for Langfuse ingestion (async after flush) so the detail view doesn't
     # 404 the instant we land on it — best-effort; redirect anyway after ~5s.
     for _ in range(8):
@@ -1180,7 +1183,8 @@ def file_trace_data(sid: str, filename: str, level: str = Query("AA")):
             from handlers import ensure_assess_trace
             ensure_assess_trace(sid, level)
         except Exception:
-            pass
+            swallowed("routes.scans.file_trace_data: ensuring the assess trace exists for the file "
+                      "trace data failed")
         import time
         for _ in range(5):
             time.sleep(0.6)
@@ -1232,7 +1236,8 @@ def open_file_trace(sid: str, filename: str, level: str = Query("AA")):
             from handlers import ensure_assess_trace
             ensure_assess_trace(sid, level)
         except Exception:
-            pass
+            swallowed("routes.scans.open_file_trace: ensuring the assess trace exists for the open "
+                      "file trace failed")
     for _ in range(8):
         if _lf.trace_exists(trace_id):
             break
@@ -2007,7 +2012,8 @@ def _source_bytes_for_render(request: Request, scan_id: str, filename: str, owne
             if p.is_file():
                 return p.read_bytes()
         except Exception:
-            pass
+            swallowed("routes.scans._source_bytes_for_render: reading the source bytes from the "
+                      "local path failed", scan_id)
 
     drive_file_id = core.store.get_file_drive_id(scan_id, filename)
     if drive_file_id:
@@ -2015,7 +2021,8 @@ def _source_bytes_for_render(request: Request, scan_id: str, filename: str, owne
             svc = core.drive_service(request)
             return svc.files().get_media(fileId=drive_file_id).execute()
         except Exception:
-            pass
+            swallowed("routes.scans._source_bytes_for_render: downloading the source bytes from "
+                      "Drive failed", scan_id)
 
     try:
         import blob as _blob

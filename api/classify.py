@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 import zipfile
 from pathlib import Path
+from swallowed import swallowed
 
 _RASTER = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".emf", ".wmf")
 _SLIDE = re.compile(r"^ppt/slides/slide\d+\.xml$")
@@ -58,7 +59,7 @@ def _pdf(path: Path) -> dict:
                 imgs = getattr(pg, "images", {}) or {}
                 images += len(imgs)
     except Exception:
-        pass
+        swallowed("classify._pdf: reading page and image counts from the PDF failed")
     try:
         import pdfminer.high_level as _hl
         text_len = len((_hl.extract_text(str(path), maxpages=5) or "").strip())

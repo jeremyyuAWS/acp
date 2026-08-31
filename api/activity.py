@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import threading
 import time
+from swallowed import swallowed
 
 # Criterion names for the human-readable line. Kept here rather than imported from
 # assessment_policy because that module builds a much larger structure and this needs four words
@@ -107,7 +108,8 @@ def record(scan_id: str | None, *, file: str | None = None, sc: str | None = Non
             "action": action, "detail": detail, "phase": phase, "at": now,
         })
     except Exception:
-        pass          # a progress line must never be able to fail the work it describes
+        # a progress line must never be able to fail the work it describes
+        swallowed("activity.record: publishing the activity line to the job state failed", scan_id)
 
 
 def current(scan_id: str) -> dict | None:
@@ -172,7 +174,7 @@ def _publish(scan_id: str, payload: dict | None, *, force: bool) -> None:
         import core
         core.set_job(f"activity:{scan_id}", payload or {"text": None, "in_flight": 0, "at": now})
     except Exception:
-        pass
+        swallowed("activity._publish: publishing in-flight file state to the job state failed", scan_id)
 
 
 def record_file(scan_id: str | None, file: str, *, sc: str | None = None, action: str = "",
@@ -190,7 +192,7 @@ def record_file(scan_id: str | None, file: str, *, sc: str | None = None, action
             payload = _render_inflight(scan_id, now)
         _publish(scan_id, payload, force=force)
     except Exception:
-        pass
+        swallowed("activity.record_file: recording an in-flight file failed", scan_id)
 
 
 def finish_file(scan_id: str | None, file: str) -> None:
@@ -208,4 +210,4 @@ def finish_file(scan_id: str | None, file: str) -> None:
             payload = _render_inflight(scan_id, time.time())
         _publish(scan_id, payload, force=True)
     except Exception:
-        pass
+        swallowed("activity.finish_file: clearing a finished in-flight file failed", scan_id)

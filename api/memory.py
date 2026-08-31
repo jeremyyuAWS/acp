@@ -13,6 +13,7 @@ safe-dark property Rollout stage 1 depends on.
 from __future__ import annotations
 
 import os
+from swallowed import swallowed
 
 
 def enabled() -> bool:
@@ -142,7 +143,7 @@ def derive_org_memory(store, org: str, *, window_days: int = DERIVE_WINDOW_DAYS,
             proposed.append({"id": mid, "rule_id": rule_id, "guidance": guidance,
                              "evidence": evidence})
         except Exception:
-            pass
+            swallowed("memory._propose: proposing a derived org-memory rule failed")
 
     for rid, deltas in shorten_deltas.items():
         if len(deltas) >= min_evidence:

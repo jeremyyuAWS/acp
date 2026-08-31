@@ -22,6 +22,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from scanner import run_scan
 from store import Store
 from rubric import Rubric
+from swallowed import swallowed
 
 ACP = Path(__file__).resolve().parent.parent
 
@@ -190,7 +191,7 @@ def email_allowed(email: str) -> bool:
         if email in get_store().get_allowlist():
             return True
     except Exception:
-        pass
+        swallowed("core.email_allowed: reading the e-mail allowlist failed")
     return any(email.endswith("@" + d.lower()) for d in ALLOWED_DOMAINS)
 
 
@@ -220,7 +221,7 @@ def seed_allowlist_once(st: Store) -> None:
             st.set_allowlist(sorted(set(st.get_allowlist()) | ALLOWED_EMAILS))
         st.set_setting("allowlist_seeded", "true")
     except Exception:
-        pass
+        swallowed("core.seed_allowlist_once: seeding the allowlist once failed")
 DRIVE_SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/drive.file",
@@ -579,7 +580,7 @@ def emit_remediation_span(scan_id: str, filename: str, drive_write_url: str | No
                            fixes_skipped=fixes_skipped, per_rule=per_rule)
         _lf.flush()
     except Exception:
-        pass
+        swallowed("core.emit_remediation_span: emitting the remediation span failed", scan_id)
 
 
 # ── Background scheduler (periodic local scans) ───────────────────────────────
@@ -1138,7 +1139,7 @@ def stop_workers() -> None:
         try:
             w.stop()
         except Exception:
-            pass
+            swallowed("core.stop_workers: stopping a worker failed")
     deadline = _t.monotonic() + float(os.environ.get("ACP_SHUTDOWN_DRAIN_SECONDS", "20"))
     for _w, t in _worker_handles:
         remaining = deadline - _t.monotonic()
@@ -1146,14 +1147,14 @@ def stop_workers() -> None:
             try:
                 t.join(timeout=remaining)
             except Exception:
-                pass
+                swallowed("core.stop_workers: joining a worker thread failed")
     _worker_handles.clear()
     WORKERS = 0
     try:
         import lf as _lf
         _lf.flush()
     except Exception:
-        pass
+        swallowed("core.stop_workers: flushing Langfuse on shutdown failed")
 
 
 def reset_langfuse_traces() -> int:
@@ -1185,7 +1186,7 @@ def reset_langfuse_traces() -> int:
                 if resp.status_code < 300:
                     deleted += len(ids[i:i + 100])
     except Exception:
-        pass
+        swallowed("core.reset_langfuse_traces: resetting Langfuse traces failed")
     return deleted
 
 
@@ -1226,7 +1227,8 @@ def register_scan_tokens(scan_id: str, *, drive: str | None = None, sp: str | No
             r.set(f"scantok:{scan_id}", _j.dumps(toks), ex=_TOKEN_TTL)
             return
         except Exception:
-            pass                          # fall through to in-memory
+            # fall through to in-memory
+            swallowed("core.register_scan_tokens: registering the scan tokens in Redis failed", scan_id)
     SCAN_TOKENS[scan_id] = toks
 
 
@@ -1239,7 +1241,7 @@ def get_scan_tokens(scan_id: str) -> dict:
             if v:
                 return _j.loads(v)
         except Exception:
-            pass
+            swallowed("core.get_scan_tokens: reading the scan tokens from Redis failed", scan_id)
     return SCAN_TOKENS.get(scan_id, {})
 
 
@@ -1249,7 +1251,7 @@ def clear_scan_tokens(scan_id: str) -> None:
         try:
             r.delete(f"scantok:{scan_id}")
         except Exception:
-            pass
+            swallowed("core.clear_scan_tokens: clearing the scan tokens from Redis failed", scan_id)
     SCAN_TOKENS.pop(scan_id, None)
 
 
@@ -1321,7 +1323,7 @@ def _maybe_checkpoint(job_id: str, patch: dict) -> None:
     try:
         get_store().checkpoint_scan_progress(scan_id, dict(acc), patch["updated_at"])
     except Exception:
-        pass
+        swallowed("core._maybe_checkpoint: checkpointing scan progress failed")
 
 
 def _write_scan_job_mapping(scan_id: str, job_id: str) -> None:
@@ -1331,7 +1333,8 @@ def _write_scan_job_mapping(scan_id: str, job_id: str) -> None:
             r.set(f"scan_to_job:{scan_id}", job_id, ex=_JOB_TTL)
             return
         except Exception:
-            pass
+            swallowed("core._write_scan_job_mapping: writing the scan-to-job mapping to Redis "
+                      "failed", scan_id)
     _SCAN_JOB_MAP[scan_id] = job_id
 
 
@@ -1343,7 +1346,8 @@ def get_job_id_for_scan(scan_id: str) -> str | None:
         try:
             return r.get(f"scan_to_job:{scan_id}")
         except Exception:
-            pass
+            swallowed("core.get_job_id_for_scan: reading the job id for this scan from Redis "
+                      "failed", scan_id)
     return _SCAN_JOB_MAP.get(scan_id)
 
 # A job stuck on a replica that died (redeploy, crash, OOM) leaves NO trace: the thread that
@@ -1424,7 +1428,8 @@ def set_job(job_id: str, state: dict) -> None:
                 _write_scan_job_mapping(state["scan_id"], job_id)
             return
         except Exception:
-            pass                           # fall through to in-memory
+            # fall through to in-memory
+            swallowed("core.set_job: writing the job state to Redis failed")
     if not REDIS_URL:
         import logging as _log
         _log.warning("REDIS_URL not set — job %s state stored in-memory only; "
@@ -1467,7 +1472,7 @@ def update_job(job_id: str, patch: dict) -> None:
                     _write_scan_job_mapping(patch["scan_id"], job_id)
                 return
             except Exception:
-                pass
+                swallowed("core.update_job: patching the job state in Redis failed")
     # scan_id mapping must be written even when the coalesce window suppressed the main write.
     if patch.get("scan_id"):
         _write_scan_job_mapping(patch["scan_id"], job_id)
@@ -1500,7 +1505,7 @@ def get_job_state(job_id: str) -> dict | None:
                 if v:
                     state = _j.loads(v)
             except Exception:
-                pass
+                swallowed("core.get_job_state: reading the job state from Redis failed")
     if state is None:
         state = JOBS.get(job_id)
     if state is None:

@@ -17,6 +17,8 @@ import sqlite3
 import uuid
 from pathlib import Path
 
+from swallowed import swallowed
+
 logger = logging.getLogger(__name__)
 
 _DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -1672,7 +1674,7 @@ class Store:
                                      triage_score=tscore, triage_rationale=rationale,
                                      classify=f.get("classify"), size_kb=f.get("size_kb"))
         except Exception:
-            pass
+            swallowed("store.save_scan: upserting the document row while saving the scan failed")
         # PRD Phase 3: this MONOLITHIC path (core._do_scheduled_scan, and routes/scans.py's
         # sync/thread branches when ACP_DEFER_ANALYSIS_TO_ASSESS=0) never wrote scan_inventory
         # before this — only ADR 0020's deferred discovery path did (handlers._scan_discover's
@@ -2052,7 +2054,9 @@ class Store:
                 if age_s > ceiling_s:
                     stale = True
             except Exception:
-                pass  # an unparseable timestamp must never crash a scan start — treat as live
+                # an unparseable timestamp must never crash a scan start — treat as live
+                swallowed("store.acquire_discovery_guard: reading the discovery guard's acquired_at "
+                          "failed", scan_id)
 
         if not stale:
             return holder
@@ -5913,7 +5917,9 @@ class Store:
             self.log_decision("system", "file.certified", scan_id=scan_id, file=file,
                               detail="All review items approved; no unapplied approved content")
         except Exception:
-            pass   # certification itself must not fail on a logging error
+            # certification itself must not fail on a logging error
+            swallowed("store.mark_file_compliant_if_reviewed: logging the revalidation decision "
+                      "failed", scan_id)
         self.refresh_scan_aggregate(scan_id)
         return True
 
@@ -6169,7 +6175,7 @@ class Store:
                 "error": (error or None) and str(error)[:400],
             }))
         except Exception:
-            pass
+            swallowed("store.record_sweep_outcome: recording the sweep outcome failed", scan_id)
 
     def get_last_sweep(self) -> dict | None:
         """The last recorded sweep outcome, or None if none has run since this was added."""
@@ -6994,7 +7000,7 @@ class Store:
             try:
                 row["payload"] = _json.loads(row["payload"])
             except Exception:
-                pass
+                swallowed("store.get_job: decoding the job payload failed")
         return row
 
     @staticmethod
@@ -7449,7 +7455,7 @@ class Store:
                     "compliant": 0, "skipped_rules": 0, "issues": [],
                     "drive_file_id": r.get("drive_file_id")}, now_iso)
             except Exception:
-                pass
+                swallowed("store._record_dead_scan_files: saving an error row for a dead scan file failed")
             # The REASON, in the one place the UI already looks for it: fileErrorReason.js reads
             # `scan.file_error` rows to say why a document has no findings, and refuses to invent a
             # reason when none was recorded. Without this the drawer would say the reason was not
@@ -7458,7 +7464,7 @@ class Store:
                 self.log_decision("system", "scan.file_error", scan_id=scan_id, file=r["file"],
                                   detail=f"job dead-lettered: {error}"[:200])
             except Exception:
-                pass
+                swallowed("store._record_dead_scan_files: logging the dead-scan-files decision failed")
 
     def fail_job(self, job_id: str, error: str, backoff_seconds: float = 0.0,
                  force_dead: bool = False, error_class: str | None = None,
@@ -7549,7 +7555,8 @@ class Store:
                             "AND status IN ('queued','running')",
                             (job["scan_id"],))
                 except Exception:
-                    pass  # best-effort — the dead-letter itself must still be recorded
+                    # best-effort — the dead-letter itself must still be recorded
+                    swallowed("store.fail_job: rolling back the fail_job transaction failed")
             return "dead"
         run_after = (now + timedelta(seconds=backoff_seconds)).isoformat()
         # Same reclaimed-job guard as the dead-letter branch above: a zombie's late transient

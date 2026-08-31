@@ -64,6 +64,7 @@ import re
 import zipfile
 from collections import Counter
 from pathlib import Path
+from swallowed import swallowed
 
 # `/?>` so the PAIRED spelling `<w:pStyle w:val="Heading1"></w:pStyle>` matches too. Both are
 # valid OOXML; only Word consistently self-closes. A document from another producer had no
@@ -680,7 +681,7 @@ def docx_checks(path: Path) -> list[dict]:
                                "them out of the visual reading order")
                 findings.append(f)
     except Exception:
-        pass
+        swallowed("office_structure.docx_checks: running the docx structure checks failed")
     return findings
 
 
@@ -883,7 +884,7 @@ def pptx_checks(path: Path) -> list[dict]:
                                              "2.4.4 Link Purpose (In Context)", link_places)
             findings += _duplicate_href_findings(all_links, "PPTX_LINK_PURPOSE_AMBIGUOUS", "2.4.9 Link Purpose (Link Only)")
     except Exception:
-        pass
+        swallowed("office_structure.pptx_checks: running the pptx structure checks failed")
     return findings
 
 

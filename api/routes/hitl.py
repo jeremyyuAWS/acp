@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 import core
+from swallowed import swallowed
 
 router = APIRouter()
 
@@ -135,7 +136,7 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
         try:
             core.store.approve_proposal_values(item_id, body.approved_values)
         except Exception:
-            pass
+            swallowed("routes.hitl.hitl_update: approving the proposal values failed")
     # Immutable audit trail: WHO decided what, when, on which finding — include the
     # approved value itself so the log is self-sufficient compliance evidence.
     #
@@ -169,7 +170,7 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
             reviewer=(getattr(request.state, "user_email", None) if request is not None else None),
             reject_reason=(body.reject_reason if body.status == "rejected" else None))
     except Exception:
-        pass
+        swallowed("routes.hitl.hitl_update: recording the HITL event failed")
     # Observability: the human decision joins the file's Langfuse trace (audit P1 — HITL
     # decisions were previously untraced). Best-effort; never blocks the review.
     try:
@@ -178,7 +179,7 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
                                 body.status, note=body.reviewer_note,
                                 approved_value=body.approved_value)
     except Exception:
-        pass
+        swallowed("routes.hitl.hitl_update: tracing the HITL decision failed")
     # ADR 0003 Phase 2: HITL resolution is an explicit remediation_state transition.
     # approved (AI draft accepted) -> complete; rejected (a human said it's wrong, still
     # needs work) -> in_progress; skipped (deferred, still needs attention) -> unchanged
@@ -193,7 +194,7 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
             doc_id = resolve_doc_id(source, ident.get("drive_file_id"), file, ident.get("checksum"))
             core.store.upsert_remediation_state(doc_id, item["rule_id"], _STATE_FOR[body.status], scan_id)
         except Exception:
-            pass
+            swallowed("routes.hitl.hitl_update: reading the scan run for the HITL update failed")
     # Write the approved content into the document. Approving alt text used to store the text
     # and stop — the images stayed undescribed, so mark_file_compliant_if_reviewed below
     # refused to certify and the file could never reach Publish. The job applies the values to
@@ -215,7 +216,7 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
                                    {"scan_id": item["scan_id"], "file": item["file"]},
                                    scan_id=item["scan_id"])
         except Exception:
-            pass
+            swallowed("routes.hitl.hitl_update: enqueueing the follow-up job for the HITL decision failed")
     # Re-validate → certify: once a remediated file's every review item is approved AND every
     # approved value has been written in, it is fully conformant (auto fixes verified + human
     # findings signed off) and advances to Publish. A file still holding unwritten approved
@@ -227,7 +228,7 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
                     "system", "revalidate.certified", scan_id=item["scan_id"], file=item["file"],
                     detail="all findings resolved (auto-fixed + human-approved) — certified & advanced to Publish")
         except Exception:
-            pass
+            swallowed("routes.hitl.hitl_update: marking the file compliant after review failed")
     # Notify external systems of terminal decisions (approved / rejected / skipped).
     # Uses the resolved item dict so the payload includes the reviewer note and approved value.
     if body.status in {"approved", "rejected", "skipped"} and updated:
