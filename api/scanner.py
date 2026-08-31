@@ -274,7 +274,11 @@ def _drive_service(drive_token: str | None = None):
     import httplib2
     from google_auth_httplib2 import AuthorizedHttp
     http = AuthorizedHttp(creds, http=httplib2.Http(timeout=_DRIVE_HTTP_TIMEOUT_S))
-    return build("drive", "v3", http=http, cache_discovery=False)
+    # Folder BFS shares this service between threads. Its default httplib2 pool
+    # cannot be shared: each execute owns and closes a bounded transport.
+    from drive_http import isolated_request_builder
+    return build("drive", "v3", http=http, cache_discovery=False,
+                 requestBuilder=isolated_request_builder(creds, _DRIVE_HTTP_TIMEOUT_S))
 
 
 def drive_account_id(svc) -> str | None:
