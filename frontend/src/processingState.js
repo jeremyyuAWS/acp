@@ -27,6 +27,24 @@ export function deriveProcessingState({
   if (phase !== 'running') {
     return { state: 'idle', headline: null, detail: null, recommendedAction: null, severity: 'info' }
   }
+  // Scan-scoped execution evidence outranks a stale capacity snapshot. During the handoff from
+  // queued → claimed, queue-estimate and /jobs can land one poll apart; production then showed
+  // "no worker" above "2 processing" for the same run. A file actively being processed is the
+  // strongest signal this component has, so evaluate it before any capacity diagnosis.
+  if (processingCount > 0) {
+    return {
+      state: 'assessing',
+      headline: currentFile ? `Assessing ${currentFile}` : 'Assessing documents',
+      detail: [
+        `${completedCount} of ${totalCount} completed`,
+        `${processingCount} processing`,
+        waitingCount > 0 ? `${waitingCount} waiting` : null,
+        currentPhase || null,
+      ].filter(Boolean).join(' · '),
+      recommendedAction: null,
+      severity: 'active',
+    }
+  }
   if (noCapacity) {
     const remaining = Math.max(0, totalCount - completedCount)
     return {
@@ -58,20 +76,6 @@ export function deriveProcessingState({
       detail: `${completedCount} of ${totalCount} documents processed.`,
       recommendedAction: null,
       severity: 'info',
-    }
-  }
-  if (processingCount > 0) {
-    return {
-      state: 'assessing',
-      headline: currentFile ? `Assessing ${currentFile}` : 'Assessing documents',
-      detail: [
-        `${completedCount} of ${totalCount} completed`,
-        `${processingCount} processing`,
-        waitingCount > 0 ? `${waitingCount} waiting` : null,
-        currentPhase || null,
-      ].filter(Boolean).join(' · '),
-      recommendedAction: null,
-      severity: 'active',
     }
   }
   const pickupRange = pickupEstimate?.state === 'estimated' && pickupEstimate.earliest_at && pickupEstimate.latest_at
