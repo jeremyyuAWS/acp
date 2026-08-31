@@ -65,8 +65,17 @@ import store as _store_mod  # noqa: E402 — must follow the sys.path.insert abo
 #     compete for a retention slot.
 #   * Prune only a directory whose OWNING PROCESS IS DEAD — the pid is in the name and
 #     `os.kill(pid, 0)` asks the kernel. A live sibling, or a whole other session on the same
-#     machine, is never a deletion candidate however many there are. Age is only a backstop
-#     against pid reuse, never the primary test.
+#     machine, is never a deletion candidate however many there are, AND HOWEVER OLD.
+#
+#     That last clause was not true when this was written: the guard read `alive AND younger
+#     than 24h`, so a live session whose directory aged past the backstop became a deletion
+#     candidate — the one outcome this whole mechanism exists to prevent, since deleting a
+#     running session's fixtures surfaces as FileNotFoundError in SOMEBODY ELSE'S terminal.
+#     The reasoning behind it was pid reuse (an ancient dir whose pid is alive is probably a
+#     different process now), but that trade is backwards: a wrongly-kept directory costs disk,
+#     a wrongly-deleted one costs another session its run — which is exactly what
+#     `_acp_pid_alive` already says about ambiguity. Age now only ever condemns a run whose
+#     process is already gone, where it is free.
 #
 # Never a blanket wipe of the system temp directory: other processes keep real state there, and
 # deleting it is what destroyed this environment's commit-signing helper.
@@ -102,11 +111,14 @@ def _acp_claim_tmpdir() -> None:
             mtime = d.stat().st_mtime
         except OSError:
             continue
-        if _acp_pid_alive(int(m.group(1))) and (now - mtime) < _TMP_MAX_AGE_S:
-            continue                      # a live run — never a candidate
+        if _acp_pid_alive(int(m.group(1))):
+            continue                      # a live run — never a candidate, HOWEVER OLD
         finished.append((mtime, d))
-    for _, d in sorted(finished, reverse=True)[_TMP_KEEP_DEAD:]:
-        shutil.rmtree(d, ignore_errors=True)
+    # Newest dead runs first: keep a couple to inspect, delete the rest. Age condemns a run only
+    # once its process is already gone, so it can never reach a live session.
+    for i, (mtime, d) in enumerate(sorted(finished, reverse=True)):
+        if i >= _TMP_KEEP_DEAD or (now - mtime) >= _TMP_MAX_AGE_S:
+            shutil.rmtree(d, ignore_errors=True)
     claimed = tempfile.mkdtemp(prefix=f"run-{os.getpid()}-", dir=_TMP_ROOT)
     os.environ["ACP_PYTEST_TMP"] = claimed   # xdist workers inherit this
     tempfile.tempdir = claimed
