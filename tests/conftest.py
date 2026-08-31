@@ -8,6 +8,8 @@ rule-trigger documents the assertions were written against. Regenerate them with
 scripts/generate_test_corpus.py.
 """
 import os
+import time
+import re
 import shutil
 import sys
 import tempfile
@@ -47,18 +49,71 @@ import store as _store_mod  # noqa: E402 — must follow the sys.path.insert abo
 # This runs at conftest import — before any test module is imported — because the fixtures are
 # built at module scope in several files, so a fixture-scoped hook would be too late for them.
 #
-# Retention mirrors pytest's own tmp_path policy: keep the most recent few runs so a failure
-# can still be inspected, delete the rest. Never a blanket wipe of the system temp directory:
-# other processes (and, on a developer box, other sessions) keep real state there.
-_TMP_KEEP_RUNS = 3
+# CONCURRENCY IS THE WHOLE DIFFICULTY, and getting it wrong is worse than the leak. CI runs
+# `pytest -n auto --dist loadfile`, so one shard is several worker PROCESSES. The first attempt
+# here gave each process its own `run-<pid>` directory and kept "the 3 most recent", which meant
+# the fourth worker to start deleted the first worker's directory while it was still using it:
+#
+#     FileNotFoundError: '/tmp/acp-pytest/run-2923-kdzgs4b2/tmp0ufceig1'
+#
+# 418 errors across all four shards. It passed locally because pytest-xdist is not installed
+# there, so the local run was single-process and could not express the bug at all.
+#
+# Two rules keep it safe:
+#   * ONE directory per pytest SESSION, not per process. The first process to arrive publishes
+#     it in the environment and xdist workers inherit that, so siblings share rather than
+#     compete for a retention slot.
+#   * Prune only a directory whose OWNING PROCESS IS DEAD — the pid is in the name and
+#     `os.kill(pid, 0)` asks the kernel. A live sibling, or a whole other session on the same
+#     machine, is never a deletion candidate however many there are. Age is only a backstop
+#     against pid reuse, never the primary test.
+#
+# Never a blanket wipe of the system temp directory: other processes keep real state there, and
+# deleting it is what destroyed this environment's commit-signing helper.
+_TMP_KEEP_DEAD = 2          # finished runs kept so a failure can still be inspected
+_TMP_MAX_AGE_S = 24 * 3600  # backstop for a dead run whose pid has since been reused
 _TMP_ROOT = Path(tempfile.gettempdir()) / "acp-pytest"
-try:
+
+
+def _acp_pid_alive(pid: int) -> bool:
+    """Is this process still running? Anything ambiguous answers True — the cost of keeping a
+    stale directory is disk, and the cost of deleting a live one is a suite-wide failure."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _acp_claim_tmpdir() -> None:
+    inherited = os.environ.get("ACP_PYTEST_TMP")
+    if inherited and os.path.isdir(inherited):
+        tempfile.tempdir = inherited      # an xdist worker: share the session's directory
+        return
     _TMP_ROOT.mkdir(exist_ok=True)
-    _runs = sorted((d for d in _TMP_ROOT.iterdir() if d.is_dir()),
-                   key=lambda d: d.stat().st_mtime, reverse=True)
-    for _old in _runs[_TMP_KEEP_RUNS - 1:]:
-        shutil.rmtree(_old, ignore_errors=True)
-    tempfile.tempdir = tempfile.mkdtemp(prefix=f"run-{os.getpid()}-", dir=_TMP_ROOT)
+    now, finished = time.time(), []
+    for d in _TMP_ROOT.iterdir():
+        m = re.match(r"run-(\d+)-", d.name)
+        if not (m and d.is_dir()):
+            continue
+        try:
+            mtime = d.stat().st_mtime
+        except OSError:
+            continue
+        if _acp_pid_alive(int(m.group(1))) and (now - mtime) < _TMP_MAX_AGE_S:
+            continue                      # a live run — never a candidate
+        finished.append((mtime, d))
+    for _, d in sorted(finished, reverse=True)[_TMP_KEEP_DEAD:]:
+        shutil.rmtree(d, ignore_errors=True)
+    claimed = tempfile.mkdtemp(prefix=f"run-{os.getpid()}-", dir=_TMP_ROOT)
+    os.environ["ACP_PYTEST_TMP"] = claimed   # xdist workers inherit this
+    tempfile.tempdir = claimed
+
+
+try:
+    _acp_claim_tmpdir()
 except OSError:
     # A read-only or full temp dir must not stop the suite from running; the leak is a
     # housekeeping problem, not a correctness one.
