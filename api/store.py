@@ -287,6 +287,12 @@ _SCHEMA = [
     # decorative" — and the file was left owing the document a value nobody ever meant to write.
     "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS resolution TEXT",
     "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS assignee TEXT",
+    # Where the finding IS, in words, for the formats that have no page number. `page`/`pages`
+    # above are integers and answer this for PDF only; a spreadsheet's answer is "Sheet
+    # 'Findings' cell B2" and a deck's is "Slide 3". Without this column the review card's
+    # location chip was empty for every Office finding — the detectors emit `location` and
+    # issue_records stores it, but the queue row carried only the integer.
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS location TEXT",
     # Per-file, per-rule-id (from rule-catalog.json) execution manifest.
     # PASS = rule ran, no findings; FAIL = findings found; ERROR = engine error.
     """CREATE TABLE IF NOT EXISTS scan_file_manifests (
@@ -5094,6 +5100,31 @@ class Store:
                  if _extract_sc(r["wcag"]) == sc and r["page"]}
         return sorted(pages)
 
+    def _location_for(self, cur, scan_id: str, file: str, rule_id: str) -> str | None:
+        """The finding's position IN WORDS for this (file, criterion) — "Slide 3", "Sheet
+        'Findings' cell B2" — or None when no detector could say.
+
+        The sibling of `_pages_for`, and needed because that one answers in integers. A page
+        number is the right answer for PDF and there is no such thing for a worksheet or a
+        deck, so `pages` came back empty for every Office finding and the review card's
+        location chip rendered nothing. The detectors have emitted `location` for these all
+        along and `_loc()` has stored it; only the queue row was missing it.
+
+        First non-null wins, matching the finding it describes: these rules report one row per
+        file carrying one example, so there is one location to carry.
+        """
+        sc = _extract_sc(rule_id)
+        if not sc:
+            return None
+        self._db.execute(cur,
+            "SELECT wcag, location FROM issue_records "
+            "WHERE scan_id=%s AND file=%s AND location IS NOT NULL",
+            (scan_id, file))
+        for r in self._db.fetchall(cur):
+            if _extract_sc(r["wcag"]) == sc and r["location"]:
+                return r["location"]
+        return None
+
     def queue_hitl_items(self, scan_id: str) -> list[dict]:
         """Auto-populate HITL queue from ai-assisted FAILs in a saved scan.
 
@@ -5121,15 +5152,17 @@ class Store:
             item_id = uuid.uuid4().hex[:12]
             with self._db.cursor() as cur:
                 pages = self._pages_for(cur, scan_id, c["file"], c["rule_id"])
+                location = self._location_for(cur, scan_id, c["file"], c["rule_id"])
                 self._db.execute(cur,
-                    "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status,page,pages) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
+                    "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status,page,pages,location) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s)",
                     (item_id, now, scan_id, c["file"], c["rule_id"], c["rule_name"], c["finding_count"],
-                     pages[0] if pages else None, _pages_csv(pages)))
+                     pages[0] if pages else None, _pages_csv(pages), location))
             created.append({"id": item_id, "scan_id": scan_id, "file": c["file"],
                              "rule_id": c["rule_id"], "rule_name": c["rule_name"],
                              "finding_count": c["finding_count"], "status": "pending", "created_at": now,
-                             "page": pages[0] if pages else None, "pages": _pages_csv(pages)})
+                             "page": pages[0] if pages else None, "pages": _pages_csv(pages),
+                             "location": location})
         return created
 
     def queue_hitl_deferral(self, scan_id: str, file: str, note: str, count: int = 1,

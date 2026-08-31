@@ -70,11 +70,22 @@ export const pageNoun = (file) => (String(file || '').split('.').pop().toLowerCa
 // eleven. Absent pages produce null — we show no location rather than a wrong one.
 export function locationLabel(item) {
   const pages = String(item?.pages || '').split(',').map((n) => parseInt(n, 10)).filter(Number.isFinite)
-  if (!pages.length) return null
-  const noun = pageNoun(item?.file)
-  const shown = pages.slice(0, 6)
-  const more = pages.length - shown.length
-  return `${noun}${pages.length > 1 ? 's' : ''} ${shown.join(', ')}${more > 0 ? ` +${more}` : ''}`
+  if (pages.length) {
+    const noun = pageNoun(item?.file)
+    const shown = pages.slice(0, 6)
+    const more = pages.length - shown.length
+    return `${noun}${pages.length > 1 ? 's' : ''} ${shown.join(', ')}${more > 0 ? ` +${more}` : ''}`
+  }
+  // No page number does not mean no location. `pages` is a list of INTEGERS, which is the right
+  // answer for PDF and does not exist for a worksheet or a deck — so every Office finding fell
+  // through here and the card's 📍 chip rendered nothing, however precisely the detector knew
+  // where the problem was. `location` is that same answer in words ("Slide 3", "Sheet 'Findings'
+  // cell B2"), carried on the queue row by store._location_for.
+  //
+  // Ordered pages-first deliberately: where both exist the integer is what the page-preview and
+  // its bounding box are keyed on, so the chip should agree with the picture beside it.
+  const words = String(item?.location || '').trim()
+  return words || null
 }
 
 // What the review actually was — recorded on hitl_events so the workspace can report REVIEWER
@@ -285,7 +296,10 @@ export function buildEvidenceCard(item, diffs = []) {
     // The proposals themselves + their rationale, so the card can show WHY, not just what.
     proposal,
     // { track: auto|assisted|human, action: 'Approve & Apply'|…, badge } — the primary CTA.
-    track: remediationTrack({ sc }),
+    // `fmt` was already computed above and was NOT being passed — so the badge and primary
+    // action were decided without knowing the file's format, for a question whose answer
+    // differs by format on eleven criteria.
+    track: remediationTrack({ sc, fmt }),
     // { level: {key,label,rank}, basis } — the WHY, never a fabricated %. A proposal awaiting
     // approval is never High: nothing an AI proposed is trusted until a human accepts it.
     confidence: confidenceForFinding({ sc, proposal }),

@@ -446,7 +446,25 @@ def _is_vague_link_text(text: str) -> bool:
     return bool(re.match(r"^(https?://|www\.)", t))
 
 
-def _vague_link_findings(texts: list[str], rule_id: str, wcag: str) -> list[dict]:
+def _where(places: list[str]) -> str | None:
+    """A human-readable "where is it?" for a finding that names ONE example out of several.
+
+    The review card renders `location` as a 📍 chip and shows nothing at all when it is absent
+    (frontend/src/EvidenceCard.jsx: "the reviewer gets no location rather than a wrong one"), so
+    this returns None rather than a guess whenever the position is not actually known.
+
+    The lead place is the one the finding's `detail` quotes, so the chip and the example agree;
+    the remainder is counted rather than listed, because a chip naming nine slides is not a
+    location any more. Duplicates collapse — three bad links on one slide is one place.
+    """
+    seen = [p for p in dict.fromkeys(places) if p]
+    if not seen:
+        return None
+    return seen[0] if len(seen) == 1 else f"{seen[0]} (+{len(seen) - 1} more)"
+
+
+def _vague_link_findings(texts: list[str], rule_id: str, wcag: str,
+                         wheres: list[str] | None = None) -> list[dict]:
     """2.4.4 — display text that names nothing about where the link goes ("click here", a
     bare URL). One finding per file carrying the count and a REAL example off the document,
     so the review card shows what actually tripped it.
@@ -458,13 +476,25 @@ def _vague_link_findings(texts: list[str], rule_id: str, wcag: str) -> list[dict
     Empty text is skipped rather than flagged: a hyperlink with no text of its own wraps a
     drawing, and an image link's purpose comes from the image's alt text — 1.1.1's subject,
     not this one. Flagging it here would report one problem twice.
+
+    `wheres` is an OPTIONAL list positionally parallel to `texts` ("Slide 3", "Sheet
+    'Findings' cell B2"). Optional because not every caller can say where its links are, and a
+    caller that cannot must not be forced to invent something: omitting it leaves the finding
+    with no `location`, which is what the card is built to handle. It is filtered alongside
+    `texts` rather than after, so the place reported is the place of the example quoted in
+    `detail` — computing them separately is how a chip comes to point at a different link than
+    the one the reviewer is reading about.
     """
-    vague = [s for t in texts if (s := (t or "").strip()) and _is_vague_link_text(s)]
-    if not vague:
+    pairs = [(s, (wheres[i] if wheres and i < len(wheres) else None))
+             for i, t in enumerate(texts)
+             if (s := (t or "").strip()) and _is_vague_link_text(s)]
+    if not pairs:
         return []
     f = _finding(rule_id, wcag, "MODERATE")
-    f["detail"] = (f"{len(vague)} hyperlink(s) with unclear text (e.g. “{vague[0]}”) — "
+    f["detail"] = (f"{len(pairs)} hyperlink(s) with unclear text (e.g. “{pairs[0][0]}”) — "
                    "a screen-reader user cannot tell where the link goes")
+    if (where := _where([w for _, w in pairs])):
+        f["location"] = where
     return [f]
 
 
@@ -696,6 +726,33 @@ def _xlsx_cell_text_values(sheet_xml: str, shared: list[str]) -> dict[str, str]:
     return values
 
 
+def _xlsx_sheet_titles(zf: zipfile.ZipFile) -> dict[str, str]:
+    """{"xl/worksheets/sheet1.xml": "Findings"} — the NAME a user sees on the tab, per part.
+
+    Resolved through xl/_rels/workbook.xml.rels rather than by assuming sheet1.xml is the first
+    tab. The two agree in files Excel writes and need not in general: <sheet> elements carry an
+    r:id, and a workbook whose tabs have been reordered or deleted keeps the original part names.
+    Guessing would put a reviewer on the wrong tab, which is worse than the bare cell reference
+    this degrades to.
+    """
+    try:
+        wb = _read(zf, "xl/workbook.xml") or ""
+        rels = _relationships(zf, "xl/_rels/workbook.xml.rels")
+    except Exception:
+        return {}
+    out: dict[str, str] = {}
+    for tag in re.findall(r"<sheet\b[^>]*/?>", wb):
+        name_m = re.search(r'\bname="([^"]*)"', tag)
+        rid_m = re.search(r'r:id="(rId\w+)"', tag)
+        if not (name_m and rid_m):
+            continue
+        target = rels.get(rid_m.group(1)) or ""
+        target = target.split("/")[-1]
+        if target:
+            out[f"xl/worksheets/{target}"] = name_m.group(1)
+    return out
+
+
 def xlsx_structure_checks(path: Path) -> list[dict]:
     """2.4.4 Link Purpose (In Context) — cell hyperlinks whose display text is vague or a
     raw URL. 2.4.6 Headings and Labels — uninformative structure labels (multiple default 'SheetN'
@@ -708,25 +765,39 @@ def xlsx_structure_checks(path: Path) -> list[dict]:
             # cell value (no display= attribute). Shared strings are parsed once and reused.
             ss_xml = _read(zf, "xl/sharedStrings.xml") or "" if "xl/sharedStrings.xml" in names else ""
             shared = _xlsx_shared_strings(ss_xml) if ss_xml else []
+            titles = _xlsx_sheet_titles(zf)
             displays: list[str] = []
+            places: list[str] = []
+
+            def _place(part: str, ref: str | None) -> str | None:
+                """"Sheet 'Findings' cell B2", degrading a piece at a time rather than to a guess:
+                no tab name gives "cell B2", no cell reference gives the sheet alone, neither
+                gives None and the finding carries no location."""
+                title = titles.get(part)
+                if title and ref:
+                    return f"Sheet “{title}” cell {ref}"
+                return f"cell {ref}" if ref else (f"Sheet “{title}”" if title else None)
+
             for n in names:
                 if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", n):
                     xml = _read(zf, n) or ""
                     cell_vals = _xlsx_cell_text_values(xml, shared)
                     for tag in _XLSX_HL.findall(xml):
+                        ref_m = _HL_REF.search(tag)
+                        ref = ref_m.group(1).split(":")[0] if ref_m else None
                         m = _HL_DISPLAY.search(tag)
                         if m:
                             displays.append(m.group(1))
+                            places.append(_place(n, ref))
                         else:
                             # No display= — label is the cell value; resolve it now.
-                            ref_m = _HL_REF.search(tag)
-                            if ref_m:
-                                ref = ref_m.group(1).split(":")[0]
+                            if ref:
                                 val = cell_vals.get(ref)
                                 if val:
                                     displays.append(val)
+                                    places.append(_place(n, ref))
             findings += _vague_link_findings(displays, "XLSX_LINK_PURPOSE_VAGUE",
-                                             "2.4.4 Link Purpose (In Context)")
+                                             "2.4.4 Link Purpose (In Context)", places)
 
             # 2.4.6 — uninformative labels. A lone default 'Sheet1' is normal, so require either
             # several default sheet tabs or a default table-column header before flagging.
@@ -745,6 +816,10 @@ def xlsx_structure_checks(path: Path) -> list[dict]:
                 if default_cols:
                     bits.append(f"{len(default_cols)} default table column label(s) (e.g. “{default_cols[0]}”)")
                 f["detail"] = "Uninformative labels: " + "; ".join(bits)
+                # The tabs ARE the location here — the finding is about them, not about
+                # something sitting on one of them.
+                if (where := _where([f"Sheet “{nm}”" for nm in default_sheets])):
+                    f["location"] = where
                 findings.append(f)
     except Exception:
         return []
@@ -759,10 +834,15 @@ def pptx_checks(path: Path) -> list[dict]:
                 n for n in zf.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)
             )
             all_links: list[tuple[str, str]] = []
+            link_places: list[str] = []
             for slide_name in slide_names:
                 xml = _read(zf, slide_name)
                 if not xml:
                     continue
+                # Hoisted above the title check: both findings below want it, and the reviewer's
+                # first question about a deck is which slide to open.
+                slide_num = re.search(r"slide(\d+)\.xml", slide_name).group(1)
+                where = f"Slide {slide_num}"
 
                 # 2.4.6 — a title placeholder exists on this slide's layout but
                 # was left empty (blank-layout slides with no title slot at all
@@ -775,7 +855,9 @@ def pptx_checks(path: Path) -> list[dict]:
                     after = xml[title_ph.end():]
                     shape_text = after.split("</p:sp>", 1)[0]
                     if not _AT.search(shape_text) or not "".join(_AT.findall(shape_text)).strip():
-                        findings.append(_finding("PPTX_TITLE_EMPTY", "2.4.6 Headings and Labels", "MODERATE"))
+                        t = _finding("PPTX_TITLE_EMPTY", "2.4.6 Headings and Labels", "MODERATE")
+                        t["location"] = where
+                        findings.append(t)
 
                 # 2.4.4 — link text that conveys nothing about its destination, and 2.4.9 —
                 # display text reused for a different destination (both judged once, after the
@@ -786,7 +868,6 @@ def pptx_checks(path: Path) -> list[dict]:
                 # <a:t> text — the link and its text share a <a:r>...</a:r> run,
                 # so extract both from within the same run rather than scanning
                 # for "nearest preceding text" (which finds the WRONG run's text).
-                slide_num = re.search(r"slide(\d+)\.xml", slide_name).group(1)
                 rels = _relationships(zf, f"ppt/slides/_rels/slide{slide_num}.xml.rels")
                 for run_inner in _A_RUN.findall(xml):
                     m = _A_HLINK.search(run_inner)
@@ -797,8 +878,9 @@ def pptx_checks(path: Path) -> list[dict]:
                         continue
                     text = "".join(_AT.findall(run_inner))
                     all_links.append((text, href))
+                    link_places.append(where)
             findings += _vague_link_findings([t for t, _ in all_links], "PPTX_LINK_PURPOSE_VAGUE",
-                                             "2.4.4 Link Purpose (In Context)")
+                                             "2.4.4 Link Purpose (In Context)", link_places)
             findings += _duplicate_href_findings(all_links, "PPTX_LINK_PURPOSE_AMBIGUOUS", "2.4.9 Link Purpose (Link Only)")
     except Exception:
         pass
