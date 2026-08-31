@@ -263,8 +263,24 @@ def test_the_checksum_ignores_only_whitespace():
 _PG = os.environ.get("DATABASE_URL", "")
 requires_pg = pytest.mark.skipif(
     not _PG.startswith("postgres"),
-    reason="needs a real PostgreSQL; set DATABASE_URL. CI has no Postgres service, so the lock "
-           "behaviour is not exercised there — see this module's docstring.")
+    reason="needs a real PostgreSQL; set DATABASE_URL (the 'Postgres integration' CI job does).")
+
+
+def test_the_postgres_tests_are_not_silently_skipped():
+    """A skipping integration job is worse than no job: it reports green while proving nothing,
+    and the thing it would have proved is the one that took production down.
+
+    So the 'Postgres integration' job sets ACP_REQUIRE_PG=1, and under that flag a missing or
+    non-Postgres DATABASE_URL is a FAILURE rather than a skip. Locally the flag is unset and the
+    two tests below skip as normal.
+
+    This test itself always runs — it is the thing that cannot be skipped.
+    """
+    if os.environ.get("ACP_REQUIRE_PG") != "1":
+        pytest.skip("not the CI integration job")
+    assert _PG.startswith("postgres"), (
+        f"ACP_REQUIRE_PG=1 but DATABASE_URL is {_PG!r} — the integration job would have skipped "
+        "the only tests that exercise real lock behaviour and still reported success")
 
 
 @requires_pg

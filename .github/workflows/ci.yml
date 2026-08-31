@@ -301,6 +301,71 @@ jobs:
         if: always()
         run: python scripts/check_engines.py --require office,pdf,ocr
 
+  postgres:
+    # The lock-regression job. The backend shards run SQLite, so nothing there exercises the
+    # behaviour that actually took production down on 2026-08-30: concurrent replica boots taking
+    # ACCESS EXCLUSIVE on 40 tables while live readers hold ACCESS SHARE on the same tables in
+    # opposite orders. SQLite has no such lock modes and no deadlock detector, so those tests can
+    # only ever be written against a real server — and until this job existed they were written,
+    # then skipped, which reports green while proving nothing.
+    #
+    # DISPOSABLE AND ISOLATED BY CONSTRUCTION: a service container created for this job and
+    # destroyed with it, on the runner's own network, reachable only from these steps. It holds
+    # nothing but the schema and whatever a test seeds. No production or staging database is
+    # touched, and none of their credentials appear here.
+    name: Postgres integration (schema/lock regressions)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: acp-ci-throwaway     # local to this container, never a real secret
+          POSTGRES_DB: acp_ci
+        ports:
+          - 5432:5432
+        # Without this the steps can start before the server accepts connections, and the job
+        # fails on a connection error that looks exactly like a code failure.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install API + test dependencies
+        run: python -m pip install --quiet -r api/requirements.txt -r tests/requirements.txt
+
+      - name: Schema and lock regressions against a real PostgreSQL
+        env:
+          DATABASE_URL: postgresql://postgres:acp-ci-throwaway@localhost:5432/acp_ci
+          # Turns a missing DATABASE_URL into a FAILURE instead of a skip — see
+          # test_the_postgres_tests_are_not_silently_skipped. A misconfigured integration job
+          # that quietly skips is the failure mode this whole job exists to avoid.
+          ACP_REQUIRE_PG: '1'
+        run: |
+          python -m pytest tests/test_schema_boot_locks.py -v --no-header -p no:warnings
+
+      - name: Fail if the real-server tests did not actually run
+        env:
+          DATABASE_URL: postgresql://postgres:acp-ci-throwaway@localhost:5432/acp_ci
+          ACP_REQUIRE_PG: '1'
+        # Belt and braces on top of the in-test guard: assert by NAME that both real-server tests
+        # were selected and passed. `pytest` exits 0 on a skip, so neither the exit status above
+        # nor a green tick here would otherwise distinguish "the lock behaviour is correct" from
+        # "the lock behaviour was never tested".
+        run: |
+          set -euo pipefail
+          python -m pytest tests/test_schema_boot_locks.py -q --no-header -p no:warnings \
+            -k "against_a_real_server" > /tmp/pg.txt 2>&1 || { cat /tmp/pg.txt; exit 1; }
+          cat /tmp/pg.txt
+          grep -qE "^2 passed" /tmp/pg.txt || {
+            echo "::error::the real-server lock tests did not both run and pass"; exit 1; }
+
   frontend:
     name: Frontend tests + build
     runs-on: ubuntu-latest
