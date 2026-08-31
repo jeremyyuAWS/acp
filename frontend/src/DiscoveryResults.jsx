@@ -1,8 +1,10 @@
 import { useState } from 'react'
+import DiscoveryLifecycleResults, { supportedDiscoveryRow } from './DiscoveryLifecycleResults.jsx'
+import DiscoveryFolderLabel from './DiscoveryFolderLabel.jsx'
 import Term from './Term.jsx'
 import {
   NOT_RECORDED, acknowledgementSummary, estateSummary, estateTypeReconciliation, plural,
-  recommendationReconciliation, recommendationRows, typeReconciliation, unreadableReasons,
+  recommendationBucketOf, recommendationReconciliation, recommendationRows, typeReconciliation, unreadableReasons,
 } from './discoveryRecommendations.js'
 import { contentTypeBreakdown } from './contentTypeBreakdown.js'
 import { ageBucketDistribution, sizeBucketDistribution, folderDistribution } from './discoveryDistributions.js'
@@ -111,8 +113,34 @@ const Reconciliation = ({ id, heading, note, rec, renderLabel }) => (
   </table>
 )
 
+const FileBucket = ({ bucket, files }) => {
+  const [open, setOpen] = useState(false)
+  const rows = files.filter((file) => recommendationBucketOf(file) === bucket.key)
+  return (
+    <details open={open}>
+      <summary onClick={(event) => { event.preventDefault(); setOpen((value) => !value) }}
+               style={{ cursor: 'pointer', fontSize: 13, padding: '9px 0' }}>
+        <span style={{ display: 'inline-flex', width: 'calc(100% - 18px)',
+                       justifyContent: 'space-between', gap: 16 }}>
+          <span>{bucket.label}</span>
+          <b>{bucket.count.toLocaleString()}</b>
+        </span>
+      </summary>
+      {open && (
+        <ul style={{ margin: '0 0 10px 20px', padding: 0, fontSize: 12.5, lineHeight: 1.65 }}>
+          {rows.map((file, index) => (
+            <li key={`${file.id || file.file || file.path || 'file'}-${index}`}>
+              {file.file || file.name || file.path || NOT_RECORDED}
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
+  )
+}
+
 export default function DiscoveryResults({
-  files = null, inventory = null, invRows = null, scopeLine = null, runAt = null, policies = null,
+  source = null, files = null, inventory = null, invRows = null, scopeLine = null, runAt = null, policies = null,
   reasonOf = undefined,
   reasonSampleOf = null, reasonFetchLikely = null,
   acknowledged = false, onAcknowledge = null,
@@ -167,7 +195,7 @@ export default function DiscoveryResults({
   const fetchFiles = fetchBuckets.reduce((n, b) => n + b.count, 0)
   const ageDist = ageBucketDistribution(invRows)
   const sizeDist = sizeBucketDistribution(invRows)
-  const folderDist = folderDistribution(invRows)
+  const folderDist = folderDistribution(invRows?.filter(supportedDiscoveryRow))
 
   const recRows = recommendationRows(files, policies)
   const recRec = recommendationReconciliation(files)
@@ -425,9 +453,9 @@ export default function DiscoveryResults({
             {folderDist.buckets.map((b) => (
               <div className="critrow" key={b.key} style={{ gridTemplateColumns: '1fr 1fr 56px' }}>
                 <span className="critlabel" title={b.label}
-                      style={{ fontSize: 12, fontFamily: 'monospace', overflow: 'hidden',
+                      style={{ fontSize: 12, overflow: 'hidden',
                                textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {b.label}
+                  <DiscoveryFolderLabel folder={b.label} source={source} />
                 </span>
                 <span className="track">
                   <i style={{ width: `${(b.count / Math.max(1, ...folderDist.buckets.map((x) => x.count))) * 100}%`,
@@ -492,6 +520,8 @@ export default function DiscoveryResults({
           </div>
         )}
       </div>
+
+      <DiscoveryLifecycleResults rows={invRows} policies={policies} scanId={scanId} />
 
       {/* RECOMMENDATIONS — rendered only when the per-file lifecycle outcome reached this screen.
           An empty table and an unread field must never look the same. */}
@@ -577,8 +607,19 @@ export default function DiscoveryResults({
       {recRec && (
         <div className="panel">
           <h2>EVERY DISCOVERED FILE, IN ONE BUCKET</h2>
-          <Reconciliation id="discres-recon" rec={recRec}
-                          heading={`Bucket · ${recRec.population}`} />
+          <div aria-label={`Bucket · ${recRec.population}`}>
+            {recRec.buckets.map((bucket) => (
+              <FileBucket key={bucket.key} bucket={bucket} files={files} />
+            ))}
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16,
+                          borderTop: '1px solid var(--line)', paddingTop: 9,
+                          fontSize: 13, fontWeight: 600 }}>
+              <span>{recRec.balanced
+                ? `Total · ${recRec.population}`
+                : `⚠ Total · ${recRec.population} — ${recRec.total.toLocaleString()} expected`}</span>
+              <span>{recRec.sum.toLocaleString()}</span>
+            </div>
+          </div>
           <p className="muted" style={{ fontSize: 11.5, margin: '12px 0 0', lineHeight: 1.5 }}>
             {recRec.balanced
               ? `The buckets add up to the ${recRec.total.toLocaleString()} ${plural(recRec.total, 'file', 'files')} discovered, so no file is counted twice and none is missing.`

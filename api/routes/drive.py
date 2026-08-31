@@ -375,3 +375,22 @@ async def drive_upload(request: Request):
         core.emit_remediation_span(scan_id, filename, drive_write_url=web_url)
 
     return {"url": web_url, "file_id": result.get("id", "")}
+
+
+@router.get("/drive/folder-name")
+def folder_name(request: Request, id: str):
+    """Resolve a displayed folder ID using the caller's own Drive permissions, without listing files."""
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", id):
+        raise HTTPException(400, "Invalid folder ID")
+    try:
+        folder = core.drive_service(request).files().get(
+            fileId=id, fields="id,name,mimeType", supportsAllDrives=True,
+        ).execute()
+        if folder.get("mimeType") != "application/vnd.google-apps.folder":
+            raise HTTPException(404, "Folder not found")
+        return {"id": id, "name": folder.get("name")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _drive_error(e)

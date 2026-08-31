@@ -931,8 +931,8 @@ export default function App() {
   // regression, not a review step. FolderPicker's `layout="inline"` is already what the wizard's
   // own step 1 embeds for "Specific folders" (see FolderPicker.jsx's own header), so the fix is
   // routing straight there instead of opening a second, separate instance of the same picker.
-  const requestScan = (source, folder = null, { folderFirst = false } = {}) =>
-    setPendingScan({ source, folder, folderFirst })
+  const requestScan = (source, folder = null, { folderFirst = false, allFolders = false } = {}) =>
+    setPendingScan({ source, folder, folderFirst, allFolders })
 
   // The DEFAULT (session-scoped, non-durable) scan path has no scan_runs row until AFTER its
   // crawl finishes — _scan_discover creates it partway through its own function body, well past
@@ -2041,6 +2041,7 @@ export default function App() {
         <ScanReviewModal
           source={pendingScan.source} folder={pendingScan.folder}
           startInFolderMode={pendingScan.folderFirst}
+          startInAllMode={pendingScan.allFolders}
           deepScan={deepScan} setDeepScan={setDeepScan}
           queuedScan={queuedScan} setQueuedScan={setQueuedScan}
           excludeRemediated={excludeRemediated} setExcludeRemediated={setExcludeRemediated}

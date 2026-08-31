@@ -210,7 +210,8 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                                           // re-asking a question already answered. See the
                                           // scopeModeTouched seed below for why this has to win over
                                           // the saved-locations fetch, not just set the initial value.
-                                          startInFolderMode = false }) {
+                                          startInFolderMode = false,
+                                          startInAllMode = false }) {
   // ── FOLDER SCOPE (PRD §6, step 1) ──────────────────────────────────────────────────────────
   //
   // WHOSE ANSWER IS THIS? The Sources card stores a folder set per CONNECTION; this wizard
@@ -252,7 +253,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   // Seeded from `startInFolderMode`, not just `scopeMode`'s own initial value above: without this
   // the saved-locations fetch still treats 'some' as untouched and can overwrite it (or the
   // folders it seeds) the instant it resolves, the exact race this ref exists to prevent.
-  const scopeModeTouched = useRef(startInFolderMode)
+  const scopeModeTouched = useRef(startInFolderMode || startInAllMode)
 
   useEffect(() => {
     if (!locKey) { setSavedFolders([]); return undefined }
@@ -261,11 +262,13 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
       if (!alive) return
       const inc = (r.locations || {})[locKey] || []
       const exc = ((r.locations || {})._exclude || {})[locKey] || []
-      setFolders(inc); setExcluded(exc); setSavedFolders(inc)
+      setFolders(startInAllMode ? [] : inc)
+      setExcluded(startInAllMode ? [] : exc)
+      setSavedFolders(inc)
       if (inc.length && !scopeModeTouched.current) setScopeMode('some')
     }).catch(() => { if (alive) setSavedFolders([]) })
     return () => { alive = false }
-  }, [locKey])
+  }, [locKey, startInAllMode])
 
   // Diverging from the card is legitimate — it is what "this run only" means — but it must be
   // SAID. An unremarked difference between the card and the run is the whole failure mode.
@@ -574,7 +577,10 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
     if (saveFolders && locKey) {
       try { await setScanLocations(locKey, folders, excluded) } catch { /* the run still goes */ }
     }
-    onStartScan?.({ folders, exclude: excluded })
+    onStartScan?.({
+      folders: scopeMode === 'all' ? [] : folders,
+      exclude: scopeMode === 'all' ? [] : excluded,
+    })
   }
 
   const dirty = (() => {

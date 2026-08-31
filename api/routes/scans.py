@@ -931,7 +931,9 @@ def get_queue_estimate(sid: str, request: Request, kind: str = Query(...)):
     # than reported as 0 — the same "online, capacity unknown" distinction WorkerAvailability.jsx
     # draws, not a real measurement. It plays no part in the wait math (see queue_estimate's
     # docstring); it is display-only.
-    ready_workers = core.WORKERS if core.WORKERS > 0 else (1 if core.store.worker_tier_alive() else 0)
+    from worker_stage_capacity import worker_role_alive
+    ready_workers = core.WORKERS if core.WORKERS > 0 else (
+        1 if worker_role_alive(core.store, kind) else 0)
     return core.store.queue_estimate(sid, kind, owner=owner, ready_workers=ready_workers)
 
 
