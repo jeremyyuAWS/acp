@@ -128,6 +128,20 @@ function ManualSteps({ f }) {
         ))}
       </div>
       <p style={{ fontSize: 13.5, lineHeight: 1.5, margin: 0 }}>{text || 'Open the document in its native editor and correct the flagged item, then upload the revised file to recheck.'}</p>
+      {/* Present only on the criteria a menu path cannot resolve (1.4.1, 1.4.11, 2.1.2, 2.4.3).
+          Knowing where to click does not tell a reviewer when they are DONE, and for these ACP
+          cannot check the result at all — saying so is what separates guidance from a false
+          sense of completion. Empty for every other criterion, so nothing renders. */}
+      {steps?.completion && (
+        <p style={{ fontSize: 13.5, lineHeight: 1.5, margin: '10px 0 0' }}>
+          <b>Done when:</b> {steps.completion}
+        </p>
+      )}
+      {steps?.limits && (
+        <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, margin: '8px 0 0' }}>
+          <b>ACP cannot verify this:</b> {steps.limits}
+        </p>
+      )}
     </div>
   )
 }

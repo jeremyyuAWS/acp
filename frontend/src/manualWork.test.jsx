@@ -18,6 +18,8 @@ import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import { CAPABILITY_FALLBACK, ASSESSMENT_FALLBACK, modeFor } from './capability.js'
 import { manualWork, manualBasis, labelFor } from './manualWork.js'
+import { hasGuidance } from './remediationGuide.js'
+import { WCAG } from './wcagCatalog.js'
 import ManualWork from './ManualWork.jsx'
 
 afterEach(unmountAll)
@@ -173,12 +175,31 @@ describe('ManualWork rendering', () => {
     expect(c.textContent.length).toBeGreaterThan(0)
   })
 
-  it('says when the only instruction it has is the app\'s generic checker', async () => {
-    // 2.4.3 has no entry in remediationGuide, so fixSteps returns the Accessibility Checker path.
-    const c = await mount({ files: [file('policy.docx', 'docx', [['SC_2_4_3']])], cap, assessment })
-    const toggle = [...c.querySelectorAll('button')].find((b) => /How to fix this in Word/.test(b.textContent))
-    await act(async () => { toggle.click() })
-    expect(c.textContent).toMatch(/built-in checker rather than a path specific/)
+  it('NOTHING that reaches this lane is answered with the generic checker any more', () => {
+    // This test used to mount a 2.4.3 finding and assert the "built-in checker rather than a path
+    // specific to this" disclaimer appeared. That scenario no longer exists: 1.4.1, 1.4.11, 2.1.2
+    // and 2.4.3 gained criterion-specific guidance, and they were the last criteria able to reach
+    // the manual lane without it. Swapping in another criterion does not work either — measured
+    // across the whole catalog × four formats, exactly 14 (criterion, format) pairs surface here
+    // and all 14 now have specific guidance.
+    //
+    // So the assertion is inverted rather than deleted, which is the stronger statement and the
+    // one worth keeping: no pair that can reach a reviewer is answered with a generic checker
+    // line. The disclaimer code in ManualWork.jsx stays — it becomes reachable again the moment a
+    // criterion enters this lane without guidance, and this test is what will say so.
+    const surfaced = []
+    for (const c of WCAG) {
+      const tag = 'SC_' + c.sc.replace(/\./g, '_')
+      for (const fmt of ['docx', 'xlsx', 'pptx', 'pdf']) {
+        const w = manualWork([file(`x.${fmt}`, fmt, [[tag]])], opts)
+        if (w.documents.length) surfaced.push([c.sc, fmt])
+      }
+    }
+    expect(surfaced.length).toBeGreaterThan(0)   // the sweep must actually find something
+    const bare = surfaced.filter(([sc]) => !hasGuidance(sc)).map(([sc, fmt]) => `${sc}/${fmt}`)
+    expect(bare, 'these reach the manual lane with only the generic Accessibility Checker line, '
+      + 'which does not test them — give each an inspection procedure, a "done when" and a '
+      + 'statement of what ACP cannot verify, as 1.4.1/1.4.11/2.1.2/2.4.3 have').toEqual([])
   })
 
   it('reports an unopened document as holding no findings, not as clean', async () => {

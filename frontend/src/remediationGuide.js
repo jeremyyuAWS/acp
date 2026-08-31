@@ -256,13 +256,108 @@ const G = {
 export function fixSteps(sc, fmt) {
   const e = G[sc]
   const gen = genericFor(fmt)
-  if (!e) return { where: '', mac: gen.mac, win: gen.win }
+  if (!e) return { where: '', mac: gen.mac, win: gen.win, completion: '', limits: '' }
   const f = e.fmt[fmt] || gen
-  return { where: e.where || '', mac: f.mac, win: f.win }
+  return {
+    where: e.where || '',
+    mac: f.mac,
+    win: f.win,
+    // `completion` and `limits` are optional and criterion-wide (not per platform or format).
+    // They exist for the criteria where a menu path is not the answer: knowing WHERE to click
+    // does not tell a reviewer when they are done, and for some criteria ACP cannot check the
+    // result at all. Saying so is the difference between guidance and a false sense of
+    // completion — see the four entries that carry them.
+    completion: e.completion || '',
+    limits: e.limits || '',
+  }
 }
 
 // True when we have a criterion-specific entry (used only to order the checklist so the
 // most actionable rows come first; unknown criteria still render with the generic checker path).
+
+// ── The four criteria a menu path cannot resolve ────────────────────────────────
+//
+// These carried no entry at all and fell through to the generic Accessibility Checker line.
+// That was worse than unspecific, it was misleading: Word/Excel/PowerPoint's checker does NOT
+// detect any of these four. Colour-alone meaning, non-text contrast, keyboard traps and focus
+// order are outside what it inspects, so "run the Accessibility Checker" reports a clean result
+// on a document that fails all four, and a reviewer could reasonably read that as completion.
+//
+// So each carries an inspection procedure instead of a menu path, plus two fields the others do
+// not need: `completion` (how a reviewer knows they are done) and `limits` (what ACP itself
+// cannot check, so nobody mistakes a silent scan for a pass). Nothing here names a menu location
+// that has not been verified — the procedures are things a reviewer does by looking, and are the
+// same on Mac and Windows.
+const FOUR = {
+  '1.4.1': {
+    where: 'Anywhere colour alone carries meaning — red/green status cells, chart series told '
+      + 'apart only by colour, required-field markers, "items in red are overdue", conditional '
+      + 'formatting, legends that map colour to category.',
+    completion: 'Every distinction that colour makes is ALSO available without it: a text label, '
+      + 'an icon, a pattern or hatch fill, a shape difference, or a word in the cell. The quick '
+      + 'test is to view the document in greyscale and ask whether anything became ambiguous.',
+    limits: 'ACP cannot verify this. Whether a colour difference CARRIES MEANING is a semantic '
+      + 'judgement about intent — a red cell may be a status or may be house style — so no scan '
+      + 'result, clean or otherwise, should be read as evidence for or against this criterion.',
+    fmt: {
+      docx: both('Work through the document looking only for places colour carries meaning, then add a non-colour cue to each: a word in the cell, an icon, a data label, or a pattern fill on the chart series. Re-read it in greyscale to confirm nothing became ambiguous. NOTE: the built-in Accessibility Checker does NOT test this, so a clean checker result is not evidence that this passes.'),
+      xlsx: both('Work through the document looking only for places colour carries meaning, then add a non-colour cue to each: a word in the cell, an icon, a data label, or a pattern fill on the chart series. Re-read it in greyscale to confirm nothing became ambiguous. NOTE: the built-in Accessibility Checker does NOT test this, so a clean checker result is not evidence that this passes.'),
+      pptx: both('Work through the document looking only for places colour carries meaning, then add a non-colour cue to each: a word in the cell, an icon, a data label, or a pattern fill on the chart series. Re-read it in greyscale to confirm nothing became ambiguous. NOTE: the built-in Accessibility Checker does NOT test this, so a clean checker result is not evidence that this passes.'),
+      pdf: both('Work through the document looking only for places colour carries meaning, then add a non-colour cue to each: a word in the cell, an icon, a data label, or a pattern fill on the chart series. Re-read it in greyscale to confirm nothing became ambiguous. NOTE: the built-in Accessibility Checker does NOT test this, so a clean checker result is not evidence that this passes.'),
+    },
+  },
+  '1.4.11': {
+    where: 'Meaningful non-text things that must be seen to be understood: chart lines, bars and '
+      + 'slices against their background and against each other, informational icons, form-field '
+      + 'borders, and focus indicators.',
+    completion: 'Each boundary a reader must perceive measures at least 3:1 against the colour '
+      + 'adjacent to it, checked with a colour picker or contrast tool. Purely decorative '
+      + 'graphics are out of scope and need no ratio.',
+    limits: 'ACP measures TEXT contrast (1.4.3) only. It does not extract chart geometry or icon '
+      + 'vector fills, and it cannot tell a decorative graphic from an informational one, so it '
+      + 'reports nothing here either way. The ratios have to be measured by a person.',
+    fmt: {
+      docx: both('Sample each meaningful boundary with a colour picker \u2014 chart series against the plot background and against each other, icon against its surround, field border against the page \u2014 and compare each against 3:1 with a contrast tool. Restyle anything below it. NOTE: the built-in Accessibility Checker does NOT test this.'),
+      xlsx: both('Sample each meaningful boundary with a colour picker \u2014 chart series against the plot background and against each other, icon against its surround, field border against the page \u2014 and compare each against 3:1 with a contrast tool. Restyle anything below it. NOTE: the built-in Accessibility Checker does NOT test this.'),
+      pptx: both('Sample each meaningful boundary with a colour picker \u2014 chart series against the plot background and against each other, icon against its surround, field border against the page \u2014 and compare each against 3:1 with a contrast tool. Restyle anything below it. NOTE: the built-in Accessibility Checker does NOT test this.'),
+      pdf: both('Sample each meaningful boundary with a colour picker \u2014 chart series against the plot background and against each other, icon against its surround, field border against the page \u2014 and compare each against 3:1 with a contrast tool. Restyle anything below it. NOTE: the built-in Accessibility Checker does NOT test this.'),
+    },
+  },
+  '2.1.2': {
+    where: 'Embedded objects — media players, add-in or ActiveX content, embedded frames, and '
+      + 'anything hosted inside the document rather than drawn by it. In a document these are '
+      + 'the only places keyboard focus can be captured.',
+    completion: 'Tab into each embedded object, then confirm that Tab, Shift+Tab or Esc moves '
+      + 'focus back out again WITHOUT touching the mouse. If any object holds focus, it fails.',
+    limits: 'ACP cannot verify this at all. A keyboard trap is a runtime behaviour of the '
+      + 'embedded component inside a specific host application; it is not a property of the '
+      + 'file\'s bytes, so static analysis cannot observe it even in principle.',
+    fmt: {
+      docx: both('Put the keyboard focus into each embedded object in turn, then try to leave it using Tab, Shift+Tab and Esc without touching the mouse. Any object that keeps focus is a trap and has to be replaced or removed. NOTE: the built-in Accessibility Checker does NOT test this, and neither can any static scan.'),
+      xlsx: both('Put the keyboard focus into each embedded object in turn, then try to leave it using Tab, Shift+Tab and Esc without touching the mouse. Any object that keeps focus is a trap and has to be replaced or removed. NOTE: the built-in Accessibility Checker does NOT test this, and neither can any static scan.'),
+      pptx: both('Put the keyboard focus into each embedded object in turn, then try to leave it using Tab, Shift+Tab and Esc without touching the mouse. Any object that keeps focus is a trap and has to be replaced or removed. NOTE: the built-in Accessibility Checker does NOT test this, and neither can any static scan.'),
+      pdf: both('Put the keyboard focus into each embedded object in turn, then try to leave it using Tab, Shift+Tab and Esc without touching the mouse. Any object that keeps focus is a trap and has to be replaced or removed. NOTE: the built-in Accessibility Checker does NOT test this, and neither can any static scan.'),
+    },
+  },
+  '2.4.3': {
+    where: 'The order focus moves through interactive elements — form fields, buttons and links '
+      + '— and whether that order matches the order the content is meant to be read in.',
+    completion: 'Starting from the top, Tab reaches every interactive element, in an order that '
+      + 'follows the intended reading order, with no jump that loses the reader\'s place. '
+      + 'Confirm by tabbing through once from the beginning.',
+    limits: 'ACP can read a declared order in some formats but cannot know the INTENDED one, so '
+      + 'it cannot judge whether the two agree. On PDF it has no trustworthy order signal at '
+      + 'all: pdf.reading-order (1.3.2) is a known open defect and reports nothing on any input.',
+    fmt: {
+      docx: both('From the very start of the document, press Tab repeatedly and note the order in which interactive elements receive focus. Compare that with the order the content is meant to be read in, and correct anything that jumps. NOTE: the built-in Accessibility Checker does NOT test this.'),
+      xlsx: both('From the very start of the document, press Tab repeatedly and note the order in which interactive elements receive focus. Compare that with the order the content is meant to be read in, and correct anything that jumps. NOTE: the built-in Accessibility Checker does NOT test this.'),
+      pptx: both('From the very start of the document, press Tab repeatedly and note the order in which interactive elements receive focus. Compare that with the order the content is meant to be read in, and correct anything that jumps. NOTE: the built-in Accessibility Checker does NOT test this.'),
+      pdf: both('From the very start of the document, press Tab repeatedly and note the order in which interactive elements receive focus. Compare that with the order the content is meant to be read in, and correct anything that jumps. NOTE: the built-in Accessibility Checker does NOT test this.'),
+    },
+  },
+}
+Object.assign(G, FOUR)
+
 export const hasGuidance = (sc) => !!G[sc]
 
 export default G
