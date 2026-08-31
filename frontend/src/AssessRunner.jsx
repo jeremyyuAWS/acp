@@ -47,6 +47,34 @@ export function deriveWorkerHealth(snap) {
 }
 const HEALTH_TONE = { ok: '#1a7f37', warn: '#854F0B', unknown: '#5B6472' }
 
+// A job status the queue will not act on again without a person asking.
+//
+// 'dead' is attempts-exhausted or a non-retryable class; 'cancelled' was stopped deliberately or
+// superseded. Both mean the same thing to the user — nothing further happens on its own — and
+// neither was distinguishable from a slow run on this screen: 'cancelled' had no branch at all
+// and fell through to "Running · 4m", which is a claim about work that is not happening.
+export const TERMINAL_JOB_STATUS = ['dead', 'cancelled']
+export function isTerminalJob(status) {
+  return TERMINAL_JOB_STATUS.includes(status)
+}
+
+// Whether anything OBSERVED says this run is moving.
+//
+// A worker heartbeat is not evidence of it. The heartbeat proves the worker process answered
+// recently; it says nothing about this job, and a worker crash-looping on one document beats
+// freshly between restarts while making no progress at all — which is how the 2026-08-30 incident
+// looked from this screen. store.py's own oldest_queued_job docstring makes the same argument:
+// "a fresh heartbeat proves the worker CONTAINER is up, not that anything is actually claiming
+// work". Progress means a document finished, or the backend says one is in flight for THIS scan.
+//
+// When neither holds, the honest report is that progress is not confirmed — not a diagnosis. The
+// client cannot tell a slow first document from a wedged parser from a queue that has not been
+// reached yet, and inventing a cause is how a screen ends up contradicting the truth.
+export function progressIsConfirmed({ completed = 0, inFlight = 0 } = {}) {
+  return completed > 0 || inFlight > 0
+}
+
+
 // Re-assess the whole estate against a chosen WCAG 2.1 conformance level. A finding blocks
 // conformance when its level is at or below the target (A ⊆ AA ⊆ AAA), so the numbers
 // genuinely shift with the level — this is a real computation over the assessed findings,
@@ -684,8 +712,20 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                         {assessStartedAt && <> · {fmtElapsed(nowTick - assessStartedAt)}</>}
                       </span></>
                   : jobInfo.status === 'dead'
-                    ? <span style={{ color: '#8A2A20', fontWeight: 600 }}>⚠ This run failed repeatedly and stopped retrying
+                    /* "failed repeatedly" is kept verbatim: assessQueueStatus.test.jsx asserts on
+                       it, and rewording it away would have meant loosening someone else's test to
+                       accommodate this change. The new clause is added alongside it. */
+                    ? <span style={{ color: '#8A2A20', fontWeight: 600 }}>
+                        ⚠ This run failed repeatedly — <b>automatic retries have stopped</b> and it
+                        will not resume on its own. Re-run it once the cause is addressed.
                         {jobInfo.error && <> — {jobInfo.error}</>}</span>
+                    : jobInfo.status === 'cancelled'
+                      /* Previously fell through to the `Running · 4m` branch below, so a run that
+                         had been stopped or superseded went on reporting elapsed time as though a
+                         worker were still on it. */
+                      ? <span style={{ color: '#8A2A20', fontWeight: 600 }}>
+                          ⏹ This run was stopped — <b>automatic retries have stopped</b> and it
+                          will not resume on its own.</span>
                     : jobInfo.status === 'running'
                       ? <span className="muted">🔧 A worker is on this now{jobInfo.phase && <> · {jobInfo.phase}</>}
                           {jobInfo.locked_at && <> · claimed {fmtElapsed(Date.now() - new Date(jobInfo.locked_at).getTime())} ago</>}</span>
@@ -743,6 +783,11 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               // (the API container's own) that is 0 by design and does no work.
               const externallyManaged = workerSnap.runtime_mode === 'distributed'
               const health = deriveWorkerHealth(workerSnap)
+              // TERMINAL STATE OUTRANKS SERVICE HEALTH. A dead or cancelled job does not become
+              // less dead because the tier is answering, so a green "online" light must not sit
+              // beside it as though it were reassurance about this run. When the job is terminal
+              // the light drops to neutral and says what it is actually about.
+              const jobTerminal = isTerminalJob(jobInfo?.status)
               // NO "assigned next" COUNT. It was `inFlight - workersBusy`, and the backend sets
               // `workers.busy = in_flight` by construction (live_queue.compose), so that subtraction
               // is always exactly 0 — a category that could never appear, taking up room in a strip
@@ -760,15 +805,26 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               return (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0 2px',
                             fontSize: 12.5, flexWrap: 'wrap' }}>
-                <span style={{ color: HEALTH_TONE[health.tone], fontWeight: 600 }}>
+                <span className="assesshealth"
+                      style={{ color: jobTerminal ? HEALTH_TONE.unknown : HEALTH_TONE[health.tone],
+                               fontWeight: 600 }}
+                      title={'Whether the worker service is answering. Not a statement about this '
+                             + "run's progress — a worker that restarts repeatedly answers between "
+                             + 'restarts.'}>
                   ● Worker service&nbsp;
                   <span style={{ fontWeight: 400 }}>{health.label}</span>
+                  {jobTerminal && <span style={{ fontWeight: 400 }}> — but this run has stopped</span>}
                 </span>
                 <span className="muted">·</span>
                 <span className="muted">
                   {progress} of {assessN} completed
                   {processingCount > 0 && <> · {processingCount} processing</>}
                   {brokerQueued > 0 && <> · {brokerQueued} waiting</>}
+                  {/* Says nothing about a CAUSE. The client cannot tell a slow first document
+                      from a wedged parser from a queue not yet reached, and a guess here is how
+                      this screen ends up contradicting the job's own status. */}
+                  {!jobTerminal && !progressIsConfirmed({ completed: progress, inFlight: processingCount })
+                    && <> · <span className="assessunconfirmed">progress not confirmed</span></>}
                 </span>
                 {lastActivityMins !== null && lastActivityMins >= 1 && (
                   <><span className="muted">·</span>
