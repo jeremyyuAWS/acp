@@ -96,8 +96,10 @@ def test_mark_job_cancelled_sets_status(isolated_store):
 # ── check_cancel outside worker turn ─────────────────────────────────────────
 
 def test_check_cancel_noop_outside_worker_turn():
-    # No _cancel_local.check installed — must not raise
-    w._cancel_local.check = None
+    # No hook installed — must not raise. The hook moved from a threading.local to a ContextVar
+    # so it can cross the pool threads that do the work (see test_cancel_crosses_threads.py);
+    # the assertion is unchanged, only the mechanism it reads.
+    assert w._cancel_cv.get() is None
     w.check_cancel()  # should not raise
 
 
@@ -199,8 +201,9 @@ def test_check_cancel_is_cleared_after_run_once(isolated_store):
         pass
 
     _make_worker(st).run_once()
-    # After the turn, the thread-local must be cleared
-    assert getattr(w._cancel_local, "check", None) is None
+    # After the turn the hook must be cleared, or a stale check leaks into the next job. Now a
+    # ContextVar reset by token rather than a thread-local set to None — same guarantee.
+    assert w._cancel_cv.get() is None
 
 
 def test_cancel_flag_does_not_affect_other_job(isolated_store):
