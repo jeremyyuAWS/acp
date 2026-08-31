@@ -8,6 +8,9 @@ rule-trigger documents the assertions were written against. Regenerate them with
 scripts/generate_test_corpus.py.
 """
 import os
+import time
+import re
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -26,6 +29,97 @@ sys.path.insert(0, str(ACP / "api"))
 # monkeypatch.setattr then restores to THIS temp path rather than to the real acp.db.
 # Session-scoped and deliberately never restored.
 import store as _store_mod  # noqa: E402 — must follow the sys.path.insert above
+
+# ── every mkdtemp in the suite lands somewhere that gets cleaned up ───────────
+#
+# THE LEAK. 139 call sites across ~60 test modules build fixtures with a bare
+# `tempfile.mkdtemp()`, which has no cleanup at all — the directory and the .docx/.pptx/
+# .xlsx/.pdf inside it survive the process. Two proof modules alone leak 57 directories per
+# run. Across eight full-suite runs on 2026-08-31 this reached 30 GB and exhausted the
+# session's disk, at which point writes fail while deletes still succeed, so the suite starts
+# reporting errors that look like code faults and are not.
+#
+# WHY THIS AND NOT `tmp_path`. `tmp_path` is the right tool and would need 139 signature
+# changes across modules owned by other work in flight — a large diff whose merge conflicts
+# would cost more than the leak. Redirecting `tempfile.tempdir` fixes every call site at once,
+# including any added later, and needs no test to know about it. The trade is that cleanup is
+# per-RUN rather than per-test, which is the granularity that actually matters: within a run
+# the suite peaks a few hundred MB, and it was accumulation ACROSS runs that filled the disk.
+#
+# This runs at conftest import — before any test module is imported — because the fixtures are
+# built at module scope in several files, so a fixture-scoped hook would be too late for them.
+#
+# CONCURRENCY IS THE WHOLE DIFFICULTY, and getting it wrong is worse than the leak. CI runs
+# `pytest -n auto --dist loadfile`, so one shard is several worker PROCESSES. The first attempt
+# here gave each process its own `run-<pid>` directory and kept "the 3 most recent", which meant
+# the fourth worker to start deleted the first worker's directory while it was still using it:
+#
+#     FileNotFoundError: '/tmp/acp-pytest/run-2923-kdzgs4b2/tmp0ufceig1'
+#
+# 418 errors across all four shards. It passed locally because pytest-xdist is not installed
+# there, so the local run was single-process and could not express the bug at all.
+#
+# Two rules keep it safe:
+#   * ONE directory per pytest SESSION, not per process. The first process to arrive publishes
+#     it in the environment and xdist workers inherit that, so siblings share rather than
+#     compete for a retention slot.
+#   * Prune only a directory whose OWNING PROCESS IS DEAD — the pid is in the name and
+#     `os.kill(pid, 0)` asks the kernel. A live sibling, or a whole other session on the same
+#     machine, is never a deletion candidate however many there are. Age is only a backstop
+#     against pid reuse, never the primary test.
+#
+# Never a blanket wipe of the system temp directory: other processes keep real state there, and
+# deleting it is what destroyed this environment's commit-signing helper.
+_TMP_KEEP_DEAD = 2          # finished runs kept so a failure can still be inspected
+_TMP_MAX_AGE_S = 24 * 3600  # backstop for a dead run whose pid has since been reused
+_TMP_ROOT = Path(tempfile.gettempdir()) / "acp-pytest"
+
+
+def _acp_pid_alive(pid: int) -> bool:
+    """Is this process still running? Anything ambiguous answers True — the cost of keeping a
+    stale directory is disk, and the cost of deleting a live one is a suite-wide failure."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _acp_claim_tmpdir() -> None:
+    inherited = os.environ.get("ACP_PYTEST_TMP")
+    if inherited and os.path.isdir(inherited):
+        tempfile.tempdir = inherited      # an xdist worker: share the session's directory
+        return
+    _TMP_ROOT.mkdir(exist_ok=True)
+    now, finished = time.time(), []
+    for d in _TMP_ROOT.iterdir():
+        m = re.match(r"run-(\d+)-", d.name)
+        if not (m and d.is_dir()):
+            continue
+        try:
+            mtime = d.stat().st_mtime
+        except OSError:
+            continue
+        if _acp_pid_alive(int(m.group(1))) and (now - mtime) < _TMP_MAX_AGE_S:
+            continue                      # a live run — never a candidate
+        finished.append((mtime, d))
+    for _, d in sorted(finished, reverse=True)[_TMP_KEEP_DEAD:]:
+        shutil.rmtree(d, ignore_errors=True)
+    claimed = tempfile.mkdtemp(prefix=f"run-{os.getpid()}-", dir=_TMP_ROOT)
+    os.environ["ACP_PYTEST_TMP"] = claimed   # xdist workers inherit this
+    tempfile.tempdir = claimed
+
+
+try:
+    _acp_claim_tmpdir()
+except OSError:
+    # A read-only or full temp dir must not stop the suite from running; the leak is a
+    # housekeeping problem, not a correctness one.
+    pass
+
+
 
 _store_mod._SQLITE_PATH = Path(tempfile.mkdtemp()) / "acp-session.db"
 
