@@ -22,14 +22,21 @@ THE DATA WAS ALREADY THERE. Those rows carry `cancel_requested_at`, set by the s
 that marks them dead. Nothing read it that way. So this is not new bookkeeping — it is reading
 what was already recorded.
 
-THREE STATES, which is the vocabulary the queue lacked:
+THREE STATES, which is the vocabulary the queue lacked — and only two are provable from a row:
 
-    requested   cancel_requested_at is set. Work may still be running.
-    observed    a worker's check_cancel() raised. That execution knows.
-    stopped     the row is terminal AND cancel_requested_at is set — nothing belonging to this
-                job can still run or write, and it ended by decision rather than by fault.
+    requested       cancel_requested_at is set. Work may still be running, and nothing here
+                    says whether anyone has noticed.
+    acknowledged    status='cancelled'. The strong one, and provable: mark_job_cancelled is the
+                    only writer of that status on this table, and worker.py calls it in exactly
+                    two places, both AFTER the handler returned or raised.
+    ended-by-decision   the row is terminal and cancel_requested_at is set. The job will not be
+                    retried and did not fail. It does NOT follow that the process stopped.
 
-`stopped` is the one that had no representation anywhere. It does now.
+`stopped` counts the third, which is the right bucket for a FAULT diagnostic — the question it
+answers is "is this an incident", and a pressed button is not one either way. It carries the
+acknowledged/unacknowledged split so the stronger question, whether the work has actually
+ceased, has a real answer rather than an implied one. See the correction at the foot of this
+file for what the first version of this paragraph claimed and why it was wrong.
 """
 from __future__ import annotations
 
@@ -200,3 +207,94 @@ def test_a_worker_acknowledged_cancellation_also_reads_as_stopped(st):
     assert out["stopped"]["n"] == 1, (
         f"a worker-acknowledged cancellation was not counted as stopped: {out['stopped']}")
     assert out["failed"]["n"] == 0
+
+
+# ── "stopped" is not the same claim as "the work has stopped" ──────────────────────────────────
+#
+# CORRECTION, 2026-08-31. The vocabulary at the top of this file originally defined the third
+# state as "the row is terminal AND cancel_requested_at is set — nothing belonging to this job
+# can still run or write". That was false, and it is the same species of overclaim this file was
+# written to remove: a label asserting more than its data supports.
+#
+# _end_running_scan writes status='dead' AND cancel_requested_at in ONE statement, while a
+# handler may still be mid-flight — the worker does not stop until its next check_cancel()
+# checkpoint. The row goes terminal immediately; the execution does not.
+#
+# The strong fact IS available, and was already in the data: status='cancelled' is written only
+# by mark_job_cancelled, from worker.py's two call sites, both AFTER the handler returned or
+# raised. So the split below is not new bookkeeping either — it is, again, reading what was
+# already recorded.
+
+def test_a_stop_the_worker_has_not_noticed_is_not_reported_as_acknowledged(st):
+    """THE correction. cancel_scan marks the job terminal while its handler may still be
+    running; nothing here has heard from that worker."""
+    _scan_with_jobs(st, "s-unacked", 3)
+    st.claim_job("w1")
+    st.cancel_scan("s-unacked", owner="demo@example.com")
+
+    out = st.dead_letter_breakdown()
+    assert out["stopped"]["n"] == 3
+    assert out["stopped"]["acknowledged"] == 0, (
+        "a job marked terminal by the cancellation itself was reported as confirmed-stopped — "
+        "no worker has acknowledged it, and it may still be between checkpoints")
+    assert out["stopped"]["unacknowledged"] == 3
+
+
+def test_a_worker_that_confirmed_it_stopped_is_counted_as_acknowledged(st):
+    """The other side. mark_job_cancelled runs only after the handler returned or raised, so this
+    status is real evidence the execution ended."""
+    _scan_with_jobs(st, "s-acked", 1)
+    job = st.claim_job("w1")
+    assert st.request_job_cancellation(job["id"]) is True
+    assert st.mark_job_cancelled(job["id"], **held(st, job["id"])) is True
+
+    out = st.dead_letter_breakdown()
+    assert out["stopped"]["acknowledged"] == 1
+    assert out["stopped"]["unacknowledged"] == 0
+
+
+def test_the_two_are_counted_separately_in_one_estate(st):
+    """The case the single number hid: some workers acknowledged, some have not, and the total
+    alone cannot tell an operator whether the work has actually ceased."""
+    _scan_with_jobs(st, "s-mixed-ack", 1)
+    job = st.claim_job("w1")
+    st.request_job_cancellation(job["id"])
+    st.mark_job_cancelled(job["id"], **held(st, job["id"]))
+
+    _scan_with_jobs(st, "s-mixed-unacked", 4)
+    st.claim_job("w2")
+    st.cancel_scan("s-mixed-unacked", owner="demo@example.com")
+
+    out = st.dead_letter_breakdown()
+    assert out["stopped"]["n"] == 5
+    assert out["stopped"]["acknowledged"] == 1
+    assert out["stopped"]["unacknowledged"] == 4
+    assert out["stopped"]["acknowledged"] + out["stopped"]["unacknowledged"] == out["stopped"]["n"]
+
+
+def test_the_split_never_goes_negative_or_exceeds_the_total(st):
+    """unacknowledged is derived by subtraction, and Postgres returns SUM() as a Decimal while
+    SQLite returns an int. A type slip there would surface as a nonsense count rather than an
+    error, so pin the invariant rather than the arithmetic."""
+    _scan_with_jobs(st, "s-inv", 2)
+    st.claim_job("w1")
+    st.cancel_scan("s-inv", owner="demo@example.com")
+
+    s = st.dead_letter_breakdown()["stopped"]
+    assert 0 <= s["acknowledged"] <= s["n"]
+    assert 0 <= s["unacknowledged"] <= s["n"]
+    assert isinstance(s["acknowledged"], int) and isinstance(s["unacknowledged"], int)
+
+
+def test_a_real_failure_is_in_neither_bucket(st):
+    """The control. An exhausted-retry death is not a decision at all, so it must not appear in
+    either half of the stopped split."""
+    _scan_with_jobs(st, "s-ack-control", 1)
+    job = st.claim_job("w1")
+    st.fail_job(job["id"], "drive said no", force_dead=True, **held(st, job["id"]))
+
+    out = st.dead_letter_breakdown()
+    assert out["stopped"]["n"] == 0
+    assert out["stopped"]["acknowledged"] == 0
+    assert out["stopped"]["unacknowledged"] == 0
+    assert out["failed"]["n"] == 1

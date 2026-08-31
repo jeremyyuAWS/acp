@@ -234,6 +234,11 @@ export default function QueuePanel({ focusScanId = null, onClearFocus = null }) 
   const split = q?.dead_letters?.failed
   const failedCount = split ? (split.n || 0) : (stats.dead || 0)
   const stoppedCount = q?.dead_letters?.stopped?.n || 0
+  // How many of those a worker actually confirmed stopping. The rest were marked terminal by the
+  // cancellation itself and may still be between checkpoints — see store.dead_letter_breakdown.
+  // Kept distinct from the chip's own count on purpose: "the run was stopped" is true of all of
+  // them, "the process stopped" is only true of these.
+  const stoppedAcked = q?.dead_letters?.stopped?.acknowledged ?? null
   const order = ['queued', 'running', 'done', 'failed', 'dead']
   const counts = { ...stats, dead: failedCount }
   const shown = order.filter((s) => counts[s])
@@ -445,7 +450,12 @@ export default function QueuePanel({ focusScanId = null, onClearFocus = null }) 
             display: 'inline-flex', alignItems: 'center', gap: 7,
             padding: '5px 12px', borderRadius: 9, background: '#EDEDEA', color: '#5C5C57',
             fontSize: 13, fontWeight: 600,
-          }} title="Jobs that ended because a run was stopped or superseded, not because anything failed.">
+          }} title={stoppedAcked === null
+            ? 'Jobs that ended because a run was stopped or superseded, not because anything failed.'
+            : `Jobs that ended because a run was stopped or superseded, not because anything `
+              + `failed. ${stoppedAcked} of ${stoppedCount} were confirmed stopped by their `
+              + `worker; the rest were marked stopped when the run was cancelled and may not `
+              + `have acknowledged it yet.`}>
             {stoppedCount} stopped
           </span>
         )}
