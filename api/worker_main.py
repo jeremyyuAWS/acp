@@ -89,20 +89,21 @@ def run(poll_seconds: float = 2.0, _install_signals: bool = True) -> None:
     # tiers' answers are comparable strings. The absent case is reserved for a worker that
     # predates this field, which is a different fact and reads as null on the API side.
     _build_version = (os.environ.get("ACP_BUILD_VERSION") or "").strip() or "dev"
+    _worker_role = (os.environ.get("ACP_WORKER_ROLE") or "mixed").strip().lower()
     last_beat = 0.0
     while not _stop.is_set():
         now = time.monotonic()
         if now - last_beat >= 15:
             last_beat = now
             try:
-                core.get_store().set_setting(
-                    "worker_tier_heartbeat",
-                    json.dumps({
+                heartbeat = json.dumps({
                         "at": datetime.now(timezone.utc).isoformat(),
                         "pool_size": core.WORKERS,
                         "version": _build_version,
-                    }),
-                )
+                        "role": _worker_role,
+                    })
+                core.get_store().set_setting("worker_tier_heartbeat", heartbeat)
+                core.get_store().set_setting(f"worker_tier_heartbeat:{_worker_role}", heartbeat)
             except Exception:
                 swallowed("worker_main.run: recording the worker-tier heartbeat setting failed")
         time.sleep(poll_seconds)

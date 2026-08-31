@@ -77,6 +77,21 @@ def test_json_envelope_heartbeat_round_trips_pool_size(isolated_store):
     assert s.worker_tier_alive() is True
 
 
+def test_role_heartbeats_report_stage_capacity_independently(isolated_store):
+    from worker_stage_capacity import worker_role_alive
+    isolated_store.set_setting("worker_tier_heartbeat:assess", _envelope(5, pool_size=3))
+    isolated_store.set_setting("worker_tier_heartbeat:remediate", _envelope(600, pool_size=2))
+    assert worker_role_alive(isolated_store, "assess") is True
+    assert worker_role_alive(isolated_store, "remediate") is False
+
+
+def test_role_heartbeat_falls_back_to_global_during_rolling_deploy(isolated_store):
+    from worker_stage_capacity import worker_role_alive
+    isolated_store.set_setting("worker_tier_heartbeat", _envelope(5, pool_size=2))
+    assert worker_role_alive(isolated_store, "assess") is True
+    assert worker_role_alive(isolated_store, "remediate") is True
+
+
 def test_old_bare_timestamp_heartbeat_still_works_with_pool_size_none(isolated_store):
     """Rolling-deploy compatibility: an old worker_main container (bare-ISO writer) hasn't
     redeployed yet, or the value predates this change. Must read as alive, with pool_size
@@ -135,6 +150,8 @@ def test_worker_main_loop_beats(monkeypatch, isolated_store):
     assert not t.is_alive()
     assert isolated_store.worker_tier_alive() is True
     assert isolated_store.worker_tier_status()["pool_size"] == 12
+    from worker_stage_capacity import worker_role_alive
+    assert worker_role_alive(isolated_store, "mixed") is True
 
 
 def test_routes_report_tier_and_client_guard_accepts_it():

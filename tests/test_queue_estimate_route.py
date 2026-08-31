@@ -8,6 +8,7 @@ split-topology worker tier.
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -71,7 +72,10 @@ def test_split_topology_floors_ready_workers_at_one_when_tier_alive(client, isol
     _seed(isolated_store, "s1")
     isolated_store.enqueue_job("scan_batch", {"scan_id": "s1"}, scan_id="s1")
     monkeypatch.setattr(core, "WORKERS", 0)
-    monkeypatch.setattr(isolated_store, "worker_tier_alive", lambda *a, **k: True)
+    isolated_store.set_setting(
+        "worker_tier_heartbeat:discover",
+        datetime.now(timezone.utc).isoformat(),
+    )
 
     r = client.get("/scans/s1/queue-estimate?kind=discover").json()
     assert r["ready_workers"] == 1
@@ -82,7 +86,6 @@ def test_no_worker_anywhere_reports_zero_ready_workers(client, isolated_store, m
     _seed(isolated_store, "s1")
     isolated_store.enqueue_job("scan_batch", {"scan_id": "s1"}, scan_id="s1")
     monkeypatch.setattr(core, "WORKERS", 0)
-    monkeypatch.setattr(isolated_store, "worker_tier_alive", lambda *a, **k: False)
 
     r = client.get("/scans/s1/queue-estimate?kind=discover").json()
     assert r["state"] == "no_worker_available"

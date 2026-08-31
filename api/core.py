@@ -1111,6 +1111,14 @@ def _discovery_reservation(pool_size):
 # one content job. It gets queue precedence (store.job_priority) but no dedicated slot.
 DISCOVERY_LANE_JOB_TYPES = ("scan_discover", "scan_folder")
 
+# Stage-owned queues. These tuples are intentionally disjoint: once the generic processing
+# service is retired, an Assess backlog cannot consume Remediate capacity and vice versa.
+ASSESS_LANE_JOB_TYPES = (
+    "scan", "scan_assess", "scan_batch", "scan_file", "workspace_scan_file",
+    "scan_finalize", "assess_trace",
+)
+REMEDIATE_LANE_JOB_TYPES = ("remediate_file", "rescore_file", "apply_approved_values")
+
 
 def _worker_job_types(index, pool_size):
     """Route dedicated services before falling back to the mixed pool reservation."""
@@ -1118,6 +1126,10 @@ def _worker_job_types(index, pool_size):
     role = os.environ.get("ACP_WORKER_ROLE", "mixed").strip().lower()
     if role == "discovery":
         return DISCOVERY_LANE_JOB_TYPES
+    if role == "assess":
+        return ASSESS_LANE_JOB_TYPES
+    if role == "remediate":
+        return REMEDIATE_LANE_JOB_TYPES
     if role == "processing":
         # Excludes the WHOLE Discovery stage, not just its entry job. Otherwise "isolate
         # Discovery and processing by role" leaks: processing workers claim the scan_folder
@@ -1125,7 +1137,7 @@ def _worker_job_types(index, pool_size):
         # and the reason a dedicated discovery service would sit idle mid-scan.
         return tuple(sorted(n for n in HANDLERS if n not in DISCOVERY_LANE_JOB_TYPES))
     if role != "mixed":
-        raise ValueError("ACP_WORKER_ROLE must be mixed, discovery, or processing")
+        raise ValueError("ACP_WORKER_ROLE must be mixed, discovery, assess, remediate, or processing")
     return DISCOVERY_LANE_JOB_TYPES if index < _discovery_reservation(pool_size) else None
 
 
