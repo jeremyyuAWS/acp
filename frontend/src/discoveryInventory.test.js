@@ -193,3 +193,9 @@ describe('the estate-only rows the scanned files never included', () => {
     expect(rows[0].type).toBe('OTHER')
   })
 })
+
+it('preserves saved source metadata for the file drawer even without a lifecycle match', () => {
+  const metadata = { file: 'a.pdf', source_modified: '2026-08-01T12:00:00Z', created_at: '2025-01-01', owner: 'Reviewer', size_kb: 0, parent_folder: 'folder-id' }
+  const result = mergeLifecycle([{ file: 'a.pdf' }], { rows: [metadata] })[0]
+  expect(result).toMatchObject(metadata)
+})

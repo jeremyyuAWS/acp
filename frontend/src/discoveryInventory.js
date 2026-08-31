@@ -84,6 +84,11 @@ export function lifecycleIndex(rows) {
       lifecycle_overridden_at: r.lifecycle_overridden_at ?? null,
       path: r.path ?? null,
       content_type: r.content_type ?? null,
+      source_modified: r.source_modified ?? null,
+      created_at: r.created_at ?? null,
+      owner: r.owner ?? null,
+      size_kb: r.size_kb ?? null,
+      parent_folder: r.parent_folder ?? null,
     })
   })
   return byFile
@@ -125,6 +130,9 @@ export function mergeLifecycle(files, inventory) {
       out.lifecycle_overridden_at = hit.lifecycle_overridden_at
     }
     if (hit.content_type != null) out.content_type = hit.content_type
+    for (const key of ['source_modified', 'created_at', 'owner', 'size_kb', 'parent_folder']) {
+      if (hit[key] != null) out[key] = hit[key]
+    }
     return out
   })
 }
