@@ -75,6 +75,19 @@ def run(poll_seconds: float = 2.0, _install_signals: bool = True) -> None:
     # here — that needs instrumentation inside worker.py's pool itself, a separate problem; a
     # caller can cheaply approximate "busy" from GET /jobs' `stats.running` once pool_size is
     # real, without any further change here.
+    #
+    # `version` — this container's ACP_BUILD_VERSION, the same string /healthz reports for the
+    # API tier. It is here because acp-worker has NO INGRESS: nothing outside the cluster can ask
+    # the worker anything, so before this there was no way to find out which image it was running.
+    # That matters because app and worker deploy from different images with nothing sequencing
+    # them (ADR 0045 §6), so "the app is on the new build" said nothing about the worker. Read
+    # once, outside the loop — an env var does not change under a running process, and re-reading
+    # it 5,760 times a day to get the same answer is just noise.
+    #
+    # "dev" rather than None when unstamped, matching _build_info()/healthz exactly so the two
+    # tiers' answers are comparable strings. The absent case is reserved for a worker that
+    # predates this field, which is a different fact and reads as null on the API side.
+    _build_version = (os.environ.get("ACP_BUILD_VERSION") or "").strip() or "dev"
     last_beat = 0.0
     while not _stop.is_set():
         now = time.monotonic()
@@ -86,6 +99,7 @@ def run(poll_seconds: float = 2.0, _install_signals: bool = True) -> None:
                     json.dumps({
                         "at": datetime.now(timezone.utc).isoformat(),
                         "pool_size": core.WORKERS,
+                        "version": _build_version,
                     }),
                 )
             except Exception:

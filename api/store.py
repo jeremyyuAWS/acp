@@ -37,22 +37,41 @@ _PII_SEV_RANK = {"critical": 3, "moderate": 2, "low": 1}
 _ISSUE_SEV_RANK = {"CRITICAL": 4, "SERIOUS": 3, "MODERATE": 2, "MINOR": 1}
 
 
-def _parse_worker_tier_heartbeat(raw: str) -> tuple[str, int | None]:
-    """Split a `worker_tier_heartbeat` setting value into (iso_timestamp, pool_size).
+def _parse_worker_tier_heartbeat(raw: str) -> tuple[str, int | None, str | None]:
+    """Split a `worker_tier_heartbeat` setting value into (iso_timestamp, pool_size, version).
 
-    Two formats have to coexist across a rolling deploy: the OLD bare ISO string
-    (`worker_main.py` before this change, or any value written before it) and the NEW JSON
-    envelope `{"at": "<iso>", "pool_size": <int>}` (worker_main.py's own `core.WORKERS` at
-    process start). Either a pre-rollout API reading a post-rollout worker's beat, or the
-    reverse, must keep working — so this tries JSON first and falls back to treating `raw`
-    itself as the bare timestamp whenever it isn't a `{"at": ...}` dict. `pool_size` is None
-    for the old format, and for a JSON envelope that omits or mistypes it — never a crash.
+    Formats have to coexist across a rolling deploy: the OLD bare ISO string (`worker_main.py`
+    before the envelope landed, or any value written before it) and the JSON envelope
+    `{"at": "<iso>", "pool_size": <int>, "version": "<calver>"}`. Any mix of pre- and
+    post-rollout API and worker must keep working — so this tries JSON first and falls back to
+    treating `raw` itself as the bare timestamp whenever it isn't a `{"at": ...}` dict. Every
+    optional field is None when the format is older, or when the envelope omits or mistypes it —
+    never a crash.
+
+    WHY `version` IS HERE. It is the only way to find out which image the worker tier is running.
+    The API tier answers that about ITSELF on /healthz, but acp-worker has NO INGRESS — nothing
+    can be asked of it directly — and the heartbeat carried only a timestamp and a pool size, so
+    "did the worker actually take the deploy?" had no answer at all from outside the cluster.
+    That question is not academic: app and worker deploy from different images with nothing
+    sequencing them (ADR 0045 §6), so they are routinely, briefly, on different code.
+
+    The `worker_instances` table would have carried this properly (it has `revision_name` and
+    `software_version` columns) but has NO WRITER — deliberately, as PR 1 of a 5-PR plan whose
+    emit sites are explicitly deferred for human review. This does not pre-empt any of that: it
+    adds one string to an envelope that already exists.
+
+    None and "dev" are DIFFERENT ANSWERS and must not be collapsed. None means the beat came from
+    a worker that predates this field — the deploy has not reached the worker tier, which is
+    itself the answer somebody was looking for. "dev" means the worker is running an image that
+    never went through deploy.sh, matching what /healthz reports for the API tier so the two are
+    directly comparable strings.
 
     A module-level function, not a method: test_readiness.py's FakeStore borrows
     `worker_tier_status`/`worker_tier_alive` straight off the real class without instantiating
     it as a full Store, so this must not depend on `self`.
     """
     pool_size: int | None = None
+    version: str | None = None
     iso = raw
     try:
         obj = json.loads(raw)
@@ -63,7 +82,10 @@ def _parse_worker_tier_heartbeat(raw: str) -> tuple[str, int | None]:
         ps = obj.get("pool_size")
         if isinstance(ps, int) and not isinstance(ps, bool):
             pool_size = ps
-    return iso, pool_size
+        v = obj.get("version")
+        if isinstance(v, str) and v.strip():
+            version = v.strip()
+    return iso, pool_size, version
 
 
 def _issue_location(i: dict) -> str | None:
@@ -6257,15 +6279,25 @@ class Store:
         `pool_size` is the worker container's own `core.WORKERS` at process start, carried in
         the heartbeat's JSON envelope (see `_parse_worker_tier_heartbeat`). It's None when the
         beat is old-format (bare ISO string) or never carried one — never a crash either way.
+
+        `version` is the worker image's ACP_BUILD_VERSION, and it is the only way to learn which
+        image the worker tier is running: acp-worker has no ingress, so nothing can ask it
+        directly, and app and worker deploy from different images with nothing sequencing them
+        (ADR 0045 §6). Compare it against /healthz's `version` to see whether a deploy reached
+        both tiers. None means the beat predates the field — which is itself the answer, not a
+        gap — and is deliberately not conflated with "dev" (an image that never went through
+        deploy.sh). See _parse_worker_tier_heartbeat for why those must stay distinct.
         """
         from datetime import datetime, timezone
         raw = self.get_setting("worker_tier_heartbeat")
         out = {"alive": False, "heartbeat_at": raw or None, "age_s": None,
-               "window_s": window_s, "ever_seen": bool(raw), "pool_size": None}
+               "window_s": window_s, "ever_seen": bool(raw), "pool_size": None,
+               "version": None}
         if not raw:
             return out
-        iso, pool_size = _parse_worker_tier_heartbeat(raw)
+        iso, pool_size, version = _parse_worker_tier_heartbeat(raw)
         out["pool_size"] = pool_size
+        out["version"] = version
         out["heartbeat_at"] = iso or None
         try:
             beat = datetime.fromisoformat(iso)
@@ -6294,7 +6326,7 @@ class Store:
         raw = self.get_setting("worker_tier_heartbeat")
         if not raw:
             return False
-        iso, _pool_size = _parse_worker_tier_heartbeat(raw)
+        iso, _pool_size, _version = _parse_worker_tier_heartbeat(raw)
         try:
             beat = datetime.fromisoformat(iso)
         except (ValueError, TypeError):
@@ -7240,10 +7272,47 @@ class Store:
             print(f"[acp] mark_job_cancelled: job {job_id} already terminal — zombie-worker no-op", flush=True)
         return won
 
+    # A job that reached 'dead' because someone STOPPED it, not because it failed.
+    #
+    # THREE STATES, and this predicate is where the third becomes visible in the data:
+    #
+    #   requested  cancel_requested_at is set. A user pressed Stop, or a newer run superseded
+    #              this one. Work may still be running.
+    #   observed   a worker's check_cancel() raised. That execution knows.
+    #   stopped    the row is terminal AND cancel_requested_at is set — nothing belonging to
+    #              this job can still run or write, and the reason it ended was a decision
+    #              rather than a fault.
+    #
+    # WHY IT LOOKS LIKE A FAILURE TODAY. _end_running_scan (cancel_scan and supersede_scan both
+    # route through it) sets status='dead' on every queued/running job of the scan, and its own
+    # comment records the consequence as deliberate: the worker's later mark_job_cancelled is
+    # guarded `status NOT IN ('done','dead','cancelled')`, so it no-ops and "the job KEEPS its
+    # 'dead' status — dead-letter accounting is unchanged".
+    #
+    # Unchanged, and wrong for the operator. dead_letter_breakdown answers "why are jobs dying",
+    # and every Stop press was landing in that answer as a failure — inflating `n`,
+    # `affected_runs` and `total_attempts`, and grouping under whatever last_error happened to be
+    # on the row. A pressed button is not an incident, and a diagnostic that cannot tell them
+    # apart makes the real incidents harder to see, which is the opposite of its purpose.
+    #
+    # The data to separate them was already there: those rows carry cancel_requested_at. Nothing
+    # read it that way. Kept as one predicate rather than inlined, so a future query cannot apply
+    # the distinction in one place and forget it in another — which is how it was lost the first
+    # time.
+    _STOPPED = " AND cancel_requested_at IS NOT NULL"
+    _FAILED = " AND cancel_requested_at IS NULL"
+
     def dead_letter_breakdown(self, owner: str | None = None) -> dict:
-        """Diagnostic: dead-lettered jobs grouped by type + the most common errors.
+        """Diagnostic: jobs that FAILED, grouped by type + the most common errors — and,
+        separately, jobs that were STOPPED.
         owner scopes to the caller's own jobs so error text (which can name a file)
         never leaks across tenants.
+
+        `by_type`, `top_errors` and `failed` exclude deliberately-stopped jobs (see _STOPPED).
+        They used to include them, because a Stop marks its jobs 'dead' and this read status
+        alone — so pressing Stop on a 200-document scan added 200 "failures" to the operator's
+        why-are-jobs-dying view. `stopped` reports that count instead of hiding it: the jobs are
+        still terminal and still worth seeing, they are simply not faults.
 
         Each `top_errors` group also carries incident-shaped context for the UI (Monitor's
         dead-letter banner): a scan (run) fans out into many jobs — scan_file/scan_batch/
@@ -7258,13 +7327,32 @@ class Store:
         sp = (owner,) if owner else ()
         out: dict = {}
         with self._db.cursor() as cur:
-            self._db.execute(cur, "SELECT type, COUNT(*) AS n FROM jobs WHERE status='dead'" + scope + " GROUP BY type", sp)
+            self._db.execute(cur, "SELECT type, COUNT(*) AS n FROM jobs WHERE status='dead'"
+                             + self._FAILED + scope + " GROUP BY type", sp)
             out["by_type"] = {r["type"]: r["n"] for r in self._db.fetchall(cur)}
+            # Deliberate stops, counted and reported rather than dropped: a user who stopped a
+            # run should still be able to see that its jobs ended, and an operator should not
+            # have to subtract them from a failure count by eye.
+            self._db.execute(cur, "SELECT COUNT(*) AS n, COUNT(DISTINCT scan_id) AS runs "
+                             "FROM jobs WHERE status IN ('dead','cancelled')"
+                             + self._STOPPED + scope, sp)
+            _st = self._db.fetchone(cur) or {}
+            out["stopped"] = {"n": _st.get("n") or 0, "affected_runs": _st.get("runs") or 0}
+            # The number the operator's red banner is ENTITLED to describe as "failed
+            # permanently". It equals sum(by_type.values()) by construction, but affected_runs
+            # is not derivable from by_type, and a caller that has to sum a dict to learn the
+            # headline figure will eventually sum the wrong one — QueuePanel read `stats.dead`,
+            # which is that mistake with a different source.
+            self._db.execute(cur, "SELECT COUNT(*) AS n, COUNT(DISTINCT scan_id) AS runs "
+                             "FROM jobs WHERE status='dead'" + self._FAILED + scope, sp)
+            _fl = self._db.fetchone(cur) or {}
+            out["failed"] = {"n": _fl.get("n") or 0, "affected_runs": _fl.get("runs") or 0}
             self._db.execute(cur,
                 "SELECT type, SUBSTR(last_error,1,200) AS err, COUNT(*) AS n, "
                 "COUNT(DISTINCT scan_id) AS affected_runs, SUM(attempts) AS total_attempts, "
                 "MIN(created_at) AS first_seen, MAX(updated_at) AS last_seen FROM jobs "
-                "WHERE status='dead'" + scope + " GROUP BY type, SUBSTR(last_error,1,200) ORDER BY n DESC LIMIT 15", sp)
+                "WHERE status='dead'" + self._FAILED + scope
+                + " GROUP BY type, SUBSTR(last_error,1,200) ORDER BY n DESC LIMIT 15", sp)
             out["top_errors"] = [{"type": r["type"], "n": r["n"], "error": r["err"],
                                   "affected_runs": r["affected_runs"],
                                   "total_attempts": r["total_attempts"],
@@ -7356,6 +7444,54 @@ class Store:
                     for it in payload["items"] if isinstance(it, dict) and it.get("file")]
         return [{"file": payload["file"], "drive_file_id": payload.get("drive_file_id")}] \
             if payload.get("file") else []
+
+    # The per-FOLDER checkpoint unit (ADR 0004 item 6). Its own _COUNTED_FILE_JOBS equivalent,
+    # kept separate because the accounting is a different one: a dead scan_file is missing a
+    # file_records ROW, a dead scan_folder is missing a COUNTER increment.
+    _FOLDER_CHECKPOINT_JOBS = ("scan_folder",)
+
+    def _record_dead_scan_folder(self, job: dict) -> None:
+        """Advance completed_folders for a folder job that will never come back to do it itself.
+
+        WHY THIS EXISTS — the same failure _record_dead_scan_files describes, on the other
+        counter, and it was not covered. `_scan_folder` calls increment_completed_folders only on
+        its success path, and rescue_unfinalized_scans finalizes a per-folder scan only when
+        `completed_folders >= total_folders`. A folder job that dead-letters returns through
+        neither:
+
+            completed_folders   incremented by _scan_folder's success path   -> never runs
+            finalize trigger    fires at completed >= total                  -> never reached
+            rescue sweeper      requires completed >= total                  -> cannot help
+
+        so the run sits at 'running' with no outstanding work and nothing able to end it. Measured
+        rather than reasoned: tests/test_dead_folder_job_wedges_the_scan.py drives one folder job
+        to 'dead' and rescue_unfinalized_scans returns 0.
+
+        Counted as ACCOUNTED FOR, not as succeeded. The folder's documents were never scanned and
+        this writes no file_records rows claiming otherwise; the dead job row keeps the error, so
+        the dead-letter view still reports what happened. What changes is only that the run can
+        reach a terminal state — reporting a partial scan is a fact, hanging at 0% is not.
+
+        MUST be called only once the terminal UPDATE has WON. Unlike _record_dead_scan_files,
+        whose per-document write is an upsert and so survives being repeated, an increment is not
+        idempotent: running it for a zombie worker's refused dead-letter would over-count and
+        finalize a scan whose folders are still being processed.
+
+        Best-effort by construction, for the same reason as its sibling: telemetry must never turn
+        a dead-letter into an exception inside the queue.
+        """
+        if job.get("type") not in self._FOLDER_CHECKPOINT_JOBS:
+            return
+        scan_id = job.get("scan_id")
+        if not scan_id:
+            return
+        try:
+            done, total = self.increment_completed_folders(scan_id)
+            print(f"[acp] dead folder job accounted for: scan={scan_id} "
+                  f"folders {done}/{total}", flush=True)
+        except Exception as e:  # noqa: BLE001 — see the best-effort note above
+            print(f"[acp] _record_dead_scan_folder: could not advance the folder counter for "
+                  f"scan {scan_id}: {e}", flush=True)
 
     def _record_dead_scan_files(self, job: dict, error: str, now_iso: str) -> None:
         """Leave an 'error' file_records row for every document a dead-lettered job was carrying.
@@ -7474,6 +7610,9 @@ class Store:
             # (Log Analytics scheduled query) keys on 'job dead-lettered'.
             print(f"[acp] job dead-lettered: id={job_id} type={job.get('type')} "
                   f"class={error_class or 'unclassified'} error={error[:160]}", flush=True)
+            # AFTER `won`, deliberately — the increment is not idempotent. See the method's own
+            # docstring for why a folder job that dies without this wedges the whole run.
+            self._record_dead_scan_folder(job)
             # The scan/scan_discover job IS the scan — unlike a per-file job (remediate_file,
             # apply_approved_values) whose death doesn't mean the whole run failed. Without
             # this, a discover job that exhausts retries (an unexpected exception the handler's

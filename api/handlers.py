@@ -1298,25 +1298,40 @@ def _list_folder_files(source: str, folder_id: str, toks: dict) -> list:
 
     SECURITY: toks is the result of core.get_scan_tokens() called at execution time by the
     scan_folder handler — credentials are never stored in the job payload itself."""
-    if source == "drive":
-        try:
-            from scanner import _drive_service, _search_folder
-            drive_token = toks.get("drive")
-            if not drive_token:
-                return []
-            svc = _drive_service(drive_token)
-            return _search_folder(svc, folder_id)
-        except JobCancelledError:
-            # Not an empty folder. `return []` is a defensible answer to "we could not list it"
-            # and the worst possible answer to "the user stopped it": a cancelled listing would
-            # report the folder as EMPTY, and the scan_folder job would go on to record that as
-            # the folder's contents — a wrong result rather than a visible failure. Found by
-            # test_no_blanket_handler_over_cancellable_work_omits_a_cancellation_clause, not by
-            # reading, which is the whole argument for that guard.
-            raise
-        except Exception:
-            return []
-    return []
+    if source != "drive":
+        # A source this function cannot list is not a source with nothing in it. Naming it in the
+        # error matters: the payload is built by scan_discover, so an unexpected value here means
+        # the fan-out and the handler disagree, and "the folder was empty" is the one report that
+        # would hide that from everybody.
+        raise FatalJobError(f"cannot list folder {folder_id}: unsupported source {source!r}")
+    from scanner import _drive_service, _search_folder
+    drive_token = toks.get("drive")
+    if not drive_token:
+        # No credential is an AUTH failure, not an empty folder, and no number of retries will
+        # produce one — so dead-letter it immediately rather than burning five attempts.
+        raise FatalJobError(f"cannot list folder {folder_id}: no Drive credential for this scan")
+    try:
+        svc = _drive_service(drive_token)
+        return _search_folder(svc, folder_id)
+    except JobCancelledError:
+        # Not an empty folder, and not a listing failure either. Distinct from the clause below
+        # so a Stop is never recorded as a fault. Found by
+        # test_no_blanket_handler_over_cancellable_work_omits_a_cancellation_clause, not by
+        # reading, which is the whole argument for that guard.
+        raise
+    except Exception as e:
+        # WHY THIS NO LONGER RETURNS []. It used to, and the old comment called that "a defensible
+        # answer to 'we could not list it'". It is not: the caller does not distinguish the two,
+        # so a rate-limited Drive, an expired token or a 500 was recorded as the folder's real
+        # contents — zero files — and the scan then finalized reporting FULL coverage of an
+        # estate it had never read. A wrong result that looks complete is worse than a visible
+        # failure, and this was the one place in the folder path that could produce one.
+        #
+        # Raising is only safe because a dead scan_folder job now advances the folder counter
+        # (store._record_dead_scan_folder). Before that, this raise would have traded a silent
+        # wrong answer for a permanently wedged scan — which is why the two changes ship
+        # together and why the store test exists.
+        raise RuntimeError(f"could not list folder {folder_id}: {e}") from e
 
 
 def _process_scan_folder_item(scan_id: str, item: dict, *, source: str,

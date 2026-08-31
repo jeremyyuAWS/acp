@@ -218,8 +218,25 @@ export default function QueuePanel({ focusScanId = null, onClearFocus = null }) 
     }
     return seen.size
   })()
+  // A job reaches 'dead' two ways that mean opposite things to whoever is reading this panel:
+  // it exhausted its retries (a fault), or someone pressed Stop and a newer run superseded it
+  // (a decision — _end_running_scan marks every outstanding job of the scan 'dead'). The status
+  // alone cannot tell those apart, so `stats.dead` counted both and this panel called all of
+  // them "failed permanently": stopping a 200-document scan raised a red banner announcing 200
+  // permanent failures, and offered "See server logs for details" about a button press.
+  //
+  // dead_letters splits them server-side now (store.dead_letter_breakdown reads
+  // cancel_requested_at alongside the status), so read those numbers instead of the raw status
+  // count. When the split is absent — an older API behind a newer bundle, which the app's
+  // blue-green cutover can produce for a few seconds — fall back to the unsplit count. That is
+  // exactly what this panel did before the split, and quietly under-reporting a real failure is
+  // the worse of the two mistakes.
+  const split = q?.dead_letters?.failed
+  const failedCount = split ? (split.n || 0) : (stats.dead || 0)
+  const stoppedCount = q?.dead_letters?.stopped?.n || 0
   const order = ['queued', 'running', 'done', 'failed', 'dead']
-  const shown = order.filter((s) => stats[s])
+  const counts = { ...stats, dead: failedCount }
+  const shown = order.filter((s) => counts[s])
   const deadReason = q?.dead_letters?.top_errors?.[0]?.error
   // Real-time worker state: each 'running' job occupies one worker, so active ≈ running.
   const running = stats.running || 0
@@ -414,24 +431,38 @@ export default function QueuePanel({ focusScanId = null, onClearFocus = null }) 
               fontSize: 13, fontWeight: 600,
             }}>
               {s === 'running' && <span className="pulsedot" aria-hidden="true" />}
-              {stats[s]} {label}
+              {counts[s]} {label}
             </span>
           )
         })}
+        {/* Stopped jobs get their own chip in a neutral colour rather than a red one, because
+            "you stopped this" is not a condition anybody needs to act on. It is shown at all —
+            rather than simply subtracted out of the dead count — so that the jobs do not appear
+            to have evaporated: they really did end, and a user who pressed Stop should be able
+            to see the consequence of having done so. */}
+        {stoppedCount > 0 && (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 7,
+            padding: '5px 12px', borderRadius: 9, background: '#EDEDEA', color: '#5C5C57',
+            fontSize: 13, fontWeight: 600,
+          }} title="Jobs that ended because a run was stopped or superseded, not because anything failed.">
+            {stoppedCount} stopped
+          </span>
+        )}
       </div>
 
       {/* Dead-letters: show WHY they failed, what to do about it, and a clear-the-records
           action that is deliberately NOT phrased as the fix — it removes the diagnostic
           evidence, it doesn't touch whatever actually made the jobs fail. Retrying means
           re-running the originating action once the real cause is addressed. */}
-      {stats.dead > 0 && (
+      {failedCount > 0 && (
         <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 9,
                       background: '#FCEBEB', border: '1px solid #F3C9C9',
                       display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                         gap: 12, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 12.5, color: '#7A2020' }}>
-              <strong>{stats.dead} job{stats.dead !== 1 ? 's' : ''} failed permanently.</strong>{' '}
+              <strong>{failedCount} job{failedCount !== 1 ? 's' : ''} failed permanently.</strong>{' '}
               {deadReason ? `Reason: ${deadReason}` : 'See server logs for details.'}
               {deadReason?.includes('Drive token') &&
                 ' — re-run remediation while signed in to retry the work.'}
