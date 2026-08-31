@@ -8,6 +8,7 @@ rule-trigger documents the assertions were written against. Regenerate them with
 scripts/generate_test_corpus.py.
 """
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -26,6 +27,44 @@ sys.path.insert(0, str(ACP / "api"))
 # monkeypatch.setattr then restores to THIS temp path rather than to the real acp.db.
 # Session-scoped and deliberately never restored.
 import store as _store_mod  # noqa: E402 — must follow the sys.path.insert above
+
+# ── every mkdtemp in the suite lands somewhere that gets cleaned up ───────────
+#
+# THE LEAK. 139 call sites across ~60 test modules build fixtures with a bare
+# `tempfile.mkdtemp()`, which has no cleanup at all — the directory and the .docx/.pptx/
+# .xlsx/.pdf inside it survive the process. Two proof modules alone leak 57 directories per
+# run. Across eight full-suite runs on 2026-08-31 this reached 30 GB and exhausted the
+# session's disk, at which point writes fail while deletes still succeed, so the suite starts
+# reporting errors that look like code faults and are not.
+#
+# WHY THIS AND NOT `tmp_path`. `tmp_path` is the right tool and would need 139 signature
+# changes across modules owned by other work in flight — a large diff whose merge conflicts
+# would cost more than the leak. Redirecting `tempfile.tempdir` fixes every call site at once,
+# including any added later, and needs no test to know about it. The trade is that cleanup is
+# per-RUN rather than per-test, which is the granularity that actually matters: within a run
+# the suite peaks a few hundred MB, and it was accumulation ACROSS runs that filled the disk.
+#
+# This runs at conftest import — before any test module is imported — because the fixtures are
+# built at module scope in several files, so a fixture-scoped hook would be too late for them.
+#
+# Retention mirrors pytest's own tmp_path policy: keep the most recent few runs so a failure
+# can still be inspected, delete the rest. Never a blanket wipe of the system temp directory:
+# other processes (and, on a developer box, other sessions) keep real state there.
+_TMP_KEEP_RUNS = 3
+_TMP_ROOT = Path(tempfile.gettempdir()) / "acp-pytest"
+try:
+    _TMP_ROOT.mkdir(exist_ok=True)
+    _runs = sorted((d for d in _TMP_ROOT.iterdir() if d.is_dir()),
+                   key=lambda d: d.stat().st_mtime, reverse=True)
+    for _old in _runs[_TMP_KEEP_RUNS - 1:]:
+        shutil.rmtree(_old, ignore_errors=True)
+    tempfile.tempdir = tempfile.mkdtemp(prefix=f"run-{os.getpid()}-", dir=_TMP_ROOT)
+except OSError:
+    # A read-only or full temp dir must not stop the suite from running; the leak is a
+    # housekeeping problem, not a correctness one.
+    pass
+
+
 
 _store_mod._SQLITE_PATH = Path(tempfile.mkdtemp()) / "acp-session.db"
 
