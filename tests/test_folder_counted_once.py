@@ -161,6 +161,53 @@ def test_a_reclaimed_folder_job_does_not_count_its_folder_twice(st, folder_worke
         "estate as a complete one")
 
 
+def test_a_folder_that_succeeded_then_dead_lettered_is_counted_once(st, folder_worker,
+                                                                    monkeypatch):
+    """The two counting paths must not both count the same folder.
+
+    store._record_dead_scan_folder (#1104) advances this counter for a folder job that dies, so a
+    dead-letter cannot wedge the run. Its docstring guards against over-counting by ORDERING —
+    call it only once the terminal UPDATE has won — which correctly suppresses a zombie worker's
+    refused dead-letter. It cannot reach this case: folder A increments on its success path, dies
+    before its row reaches 'done', is requeued, and then exhausts its retries. Both calls are
+    legitimate, neither is a loser to suppress, and the folder gets counted twice — finalizing the
+    scan while folder B has not been read.
+
+    Ordering cannot decide this; naming the folder can.
+    """
+    from conftest import held
+
+    w, listed = folder_worker
+    jobs = _fan_out(st, "s-dead", ["fA", "fB"])
+    _hold_back(st, jobs["fB"])
+
+    real_complete, crashed = st.complete_job, []
+
+    def _complete(*a, **k):
+        if not crashed:
+            crashed.append(1)
+            return "stale"
+        return real_complete(*a, **k)
+
+    monkeypatch.setattr(st, "complete_job", _complete)
+    assert w.run_once() is True                      # counted folder A, then "crashed"
+    assert _progress(st, "s-dead") == (1, 2)
+
+    assert st.reclaim_stuck_jobs(lease_seconds=0) == 1
+    again = st.claim_job("w-dead")
+    assert again["id"] == jobs["fA"]
+    assert st.fail_job(again["id"], "drive 500", force_dead=True,
+                       **held(st, again["id"])) == "dead"
+
+    done, total = _progress(st, "s-dead")
+    assert (done, total) == (1, 2), (
+        f"folder A was counted {done} times — once on its success path and again when it "
+        f"dead-lettered")
+    assert st.get_job(jobs["fB"])["status"] == "queued"
+    assert _queued(st, "s-dead", "scan_finalize") == 0, (
+        "the scan was finalized while folder B had not been read")
+
+
 def test_a_retry_after_the_finalize_enqueue_fails_does_not_count_twice(st, folder_worker,
                                                                       monkeypatch):
     """The second path: the increment succeeds, then the enqueue right after it raises. The job

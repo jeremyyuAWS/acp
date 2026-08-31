@@ -7472,10 +7472,17 @@ class Store:
         the dead-letter view still reports what happened. What changes is only that the run can
         reach a terminal state — reporting a partial scan is a fact, hanging at 0% is not.
 
-        MUST be called only once the terminal UPDATE has WON. Unlike _record_dead_scan_files,
-        whose per-document write is an upsert and so survives being repeated, an increment is not
-        idempotent: running it for a zombie worker's refused dead-letter would over-count and
-        finalize a scan whose folders are still being processed.
+        Still called only once the terminal UPDATE has WON, but that ordering is no longer the
+        only thing standing between this and an over-count. It used to be, and the reason is
+        worth keeping: unlike _record_dead_scan_files, whose per-document write is an upsert and
+        so survives being repeated, an increment was not idempotent, and running it for a zombie
+        worker's refused dead-letter would finalize a scan whose folders were still being
+        processed. Ordering answers that for the zombie. It never answered the case where the
+        SAME folder is counted by two different paths — an attempt that incremented on its success
+        path and then died before its row reached 'done', requeued, exhausting its retries here —
+        because the two calls are both legitimate and neither is a loser to be suppressed. Passing
+        the folder makes the counter idempotent per folder, which decides all of it structurally
+        rather than by call ordering.
 
         Best-effort by construction, for the same reason as its sibling: telemetry must never turn
         a dead-letter into an exception inside the queue.
@@ -7485,10 +7492,18 @@ class Store:
         scan_id = job.get("scan_id")
         if not scan_id:
             return
+        payload = job.get("payload") or {}
+        if isinstance(payload, str):
+            import json as _j
+            try:
+                payload = _j.loads(payload)
+            except Exception:
+                payload = {}
+        folder_id = payload.get("folder_id") if isinstance(payload, dict) else None
         try:
-            done, total = self.increment_completed_folders(scan_id)
+            done, total = self.increment_completed_folders(scan_id, folder_id)
             print(f"[acp] dead folder job accounted for: scan={scan_id} "
-                  f"folders {done}/{total}", flush=True)
+                  f"folder={folder_id or '?'} folders {done}/{total}", flush=True)
         except Exception as e:  # noqa: BLE001 — see the best-effort note above
             print(f"[acp] _record_dead_scan_folder: could not advance the folder counter for "
                   f"scan {scan_id}: {e}", flush=True)
