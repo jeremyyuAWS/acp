@@ -120,7 +120,13 @@ export default function QueuePanel({ focusScanId = null, onClearFocus = null }) 
   // capacity changes rather than duplicating the control here", and Settings' Worker Configuration
   // tab (WorkerReplicaControl.jsx) is where that decision lives. Adding a second +/- here would
   // silently reopen a question the codebase already answered — this only adds visibility.
-  const externallyManaged = q?.runtime_mode === 'distributed' && q?.worker_tier_alive
+  // TOPOLOGY, not health — see the same split in Discover.jsx. `&& worker_tier_alive` meant the
+  // estate-wide Azure evidence below vanished the moment the worker tier stopped heartbeating,
+  // which is when an operator most needs to see whether replicas exist at all, how many are
+  // draining, and which revision is serving. The replica/capacity block this gates is read-only
+  // and permission-checked server-side, so it is safe to show while the tier is down — and far
+  // more useful then than while everything is healthy.
+  const externallyManaged = q?.runtime_mode === 'distributed'
   const [replicas, setReplicas] = useState(null)
   useEffect(() => {
     if (!externallyManaged) return undefined
