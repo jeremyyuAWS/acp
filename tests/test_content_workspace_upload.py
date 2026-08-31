@@ -8,6 +8,7 @@ server-side size verification, and document/version bookkeeping).
 """
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -49,11 +50,23 @@ def gated_client(monkeypatch, isolated_store):
 @pytest.fixture(autouse=True)
 def _blob_enabled(monkeypatch):
     """Default: workspace_blob acts configured, generate_upload_authorization succeeds. Tests
-    that want the unconfigured/failure paths override these explicitly."""
+    that want the unconfigured/failure paths override these explicitly.
+
+    Mints a fresh version_id per call (v-001, v-002, ...) — matching production's uuid4-per-call
+    behavior closely enough that two upload sessions in the same test never collide. complete_upload
+    now requires a PENDING version row reserved at session-creation time, so a reused id would
+    silently clobber a different session's reservation instead of creating a second one."""
+    import itertools
     import workspace_blob
+    counter = itertools.count(1)
     monkeypatch.setattr(workspace_blob, "enabled", lambda: True)
-    monkeypatch.setattr(workspace_blob, "generate_upload_authorization",
-                        lambda owner, ws, doc, **kw: dict(_FAKE_AUTH))
+
+    def _auth(owner, ws, doc, **kw):
+        auth = dict(_FAKE_AUTH)
+        auth["version_id"] = f"v-{next(counter):03d}"
+        return auth
+
+    monkeypatch.setattr(workspace_blob, "generate_upload_authorization", _auth)
 
 
 def _make_workspace(gated_client, owner=OWNER):
@@ -147,7 +160,7 @@ def test_upload_session_quota_accounts_for_bytes_already_stored(gated_client, mo
     ws = _make_workspace(gated_client)
     doc_id, version_id = _start_upload(gated_client, ws, filename="a.pdf", size_bytes=900)
     _mock_uploaded(monkeypatch, size=900, prefix=b"%PDF-1.7")
-    r1 = _complete(gated_client, ws, doc_id, version_id, content_hash="h1", size_bytes=900)
+    r1 = _complete(gated_client, ws, doc_id, version_id, size_bytes=900)
     assert r1.json()["status"] == "ready"
 
     r2 = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/upload-session",
@@ -166,7 +179,7 @@ def test_upload_session_quota_is_scoped_to_the_workspace(gated_client, monkeypat
     ws2 = _make_workspace(gated_client)
     doc_id, version_id = _start_upload(gated_client, ws1, filename="a.pdf", size_bytes=900)
     _mock_uploaded(monkeypatch, size=900, prefix=b"%PDF-1.7")
-    _complete(gated_client, ws1, doc_id, version_id, content_hash="h1", size_bytes=900)
+    _complete(gated_client, ws1, doc_id, version_id, size_bytes=900)
 
     r = gated_client(OWNER).post(f"/content-workspaces/{ws2}/documents/upload-session",
                                  json={"filename": "b.pdf", "size_bytes": 900})
@@ -211,21 +224,17 @@ def _new_version_session(gated_client, ws, doc_id, *, owner=OWNER, filename="rep
 
 
 def test_new_version_session_happy_path(gated_client, monkeypatch):
-    """`_new_version_session`'s version_id is whatever workspace_blob.generate_upload_
-    authorization mints — a fresh uuid in production; this fixture always returns the fixed
-    "v-001" regardless of call, so the check here is on the fields that don't depend on that
-    (the endpoint returning the SAME document_id it was called with, and 200), not on
-    uniqueness the fixture can't simulate."""
     ws = _make_workspace(gated_client)
     doc_id, v1 = _start_upload(gated_client, ws, filename="report.pdf")
     _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
-    _complete(gated_client, ws, doc_id, v1, content_hash="h1")
+    _complete(gated_client, ws, doc_id, v1)
 
     r = _new_version_session(gated_client, ws, doc_id)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["document_id"] == doc_id
     assert body["version_id"]
+    assert body["version_id"] != v1
 
 
 def test_new_version_session_404s_for_a_nonexistent_document(gated_client):
@@ -245,7 +254,7 @@ def test_new_version_session_rejects_an_unsupported_extension(gated_client, monk
     ws = _make_workspace(gated_client)
     doc_id, v1 = _start_upload(gated_client, ws, filename="report.pdf")
     _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
-    _complete(gated_client, ws, doc_id, v1, content_hash="h1")
+    _complete(gated_client, ws, doc_id, v1)
 
     r = _new_version_session(gated_client, ws, doc_id, filename="malware.exe")
     assert r.status_code == 422
@@ -257,22 +266,32 @@ def test_new_version_session_respects_the_workspace_quota(gated_client, monkeypa
     ws = _make_workspace(gated_client)
     doc_id, v1 = _start_upload(gated_client, ws, filename="a.pdf", size_bytes=900)
     _mock_uploaded(monkeypatch, size=900, prefix=b"%PDF-1.7")
-    _complete(gated_client, ws, doc_id, v1, content_hash="h1", size_bytes=900)
+    _complete(gated_client, ws, doc_id, v1, size_bytes=900)
 
     r = _new_version_session(gated_client, ws, doc_id, size_bytes=200)
     assert r.status_code == 413
 
 
-def test_new_version_session_updates_the_document_display_name(gated_client, monkeypatch, isolated_store):
-    """So complete_upload's magic-byte check and the version's own original_filename track the
-    upload actually in flight, not whatever the document was originally created with — see
-    store.update_content_workspace_document_display_name's docstring."""
+def test_new_version_session_does_not_rename_the_document_until_it_completes(
+        gated_client, monkeypatch, isolated_store):
+    """The original_filename for a new version now lives on its own PENDING version row
+    (reserved at session-creation time, keyed by the immutable version_id) rather than being
+    written straight onto the document's mutable display_name — display_name only updates once
+    complete_upload actually resolves that row. Writing it eagerly at session-creation time was
+    racy across concurrent upload sessions for the same document (two sessions' filenames could
+    interleave), which is exactly what the pending-row design fixes."""
     ws = _make_workspace(gated_client)
     doc_id, v1 = _start_upload(gated_client, ws, filename="report.pdf")
     _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
-    _complete(gated_client, ws, doc_id, v1, content_hash="h1")
+    _complete(gated_client, ws, doc_id, v1)
 
-    _new_version_session(gated_client, ws, doc_id, filename="report_renamed.docx")
+    r_new = _new_version_session(gated_client, ws, doc_id, filename="report_renamed.docx")
+    doc = isolated_store.get_content_workspace_document(doc_id, owner_email=OWNER)
+    assert doc["display_name"] == "report.pdf"  # unchanged — the new session hasn't completed yet
+
+    v2 = r_new.json()["version_id"]
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"PK\x03\x04\x14\x00\x06\x00")
+    _complete(gated_client, ws, doc_id, v2)
     doc = isolated_store.get_content_workspace_document(doc_id, owner_email=OWNER)
     assert doc["display_name"] == "report_renamed.docx"
 
@@ -281,7 +300,7 @@ def test_new_version_session_sets_status_back_to_uploading(gated_client, monkeyp
     ws = _make_workspace(gated_client)
     doc_id, v1 = _start_upload(gated_client, ws, filename="report.pdf")
     _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
-    _complete(gated_client, ws, doc_id, v1, content_hash="h1")
+    _complete(gated_client, ws, doc_id, v1)
 
     _new_version_session(gated_client, ws, doc_id)
     doc = isolated_store.get_content_workspace_document(doc_id, owner_email=OWNER)
@@ -292,7 +311,7 @@ def test_new_version_session_is_logged(gated_client, monkeypatch, isolated_store
     ws = _make_workspace(gated_client)
     doc_id, v1 = _start_upload(gated_client, ws, filename="report.pdf")
     _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
-    _complete(gated_client, ws, doc_id, v1, content_hash="h1")
+    _complete(gated_client, ws, doc_id, v1)
 
     _new_version_session(gated_client, ws, doc_id)
     decisions = isolated_store.list_decisions()
@@ -308,11 +327,12 @@ def test_completing_a_new_version_session_with_a_different_extension_verifies_th
     ws = _make_workspace(gated_client)
     doc_id, v1 = _start_upload(gated_client, ws, filename="report.pdf")
     _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
-    _complete(gated_client, ws, doc_id, v1, content_hash="h1")
+    _complete(gated_client, ws, doc_id, v1)
 
-    _new_version_session(gated_client, ws, doc_id, filename="report.docx")
+    r_new = _new_version_session(gated_client, ws, doc_id, filename="report.docx")
+    v2 = r_new.json()["version_id"]
     _mock_uploaded(monkeypatch, size=2048, prefix=b"PK\x03\x04\x14\x00\x06\x00")  # real docx magic
-    r = _complete(gated_client, ws, doc_id, "v-002", content_hash="h2", size_bytes=2048)
+    r = _complete(gated_client, ws, doc_id, v2, size_bytes=2048)
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "ready"   # would wrongly quarantine if still checking %PDF-
 
@@ -328,35 +348,43 @@ def _start_upload(gated_client, ws, *, filename="report.pdf", size_bytes=1024):
 def _mock_uploaded(monkeypatch, *, size=1024, prefix=b"%PDF-1.7"):
     """Defaults to a valid PDF signature so existing tests exercise the happy (non-quarantine)
     path without each needing to know about magic-byte verification; tests that care about
-    quarantine behavior override `prefix` explicitly."""
+    quarantine behavior override `prefix` explicitly. `prefix=None` simulates the blob having
+    become unreadable by completion time (download_document_bytes returns None).
+
+    Returns the real sha256 hex digest of the bytes this configures download_document_bytes to
+    return (or None when prefix=None) — complete_upload now independently recomputes this hash
+    server-side from the downloaded bytes and rejects a client-claimed value that doesn't match,
+    so callers must pass this real value as content_hash rather than an arbitrary literal."""
     import workspace_blob
+    data = (prefix + b"\x00" * max(0, size - len(prefix)))[:size] if prefix is not None else None
     monkeypatch.setattr(workspace_blob, "get_uploaded_blob_properties",
                         lambda *a, **kw: {"size": size, "content_md5": None})
-    monkeypatch.setattr(workspace_blob, "download_document_prefix", lambda *a, **kw: prefix)
+    monkeypatch.setattr(workspace_blob, "download_document_bytes", lambda *a, **kw: data)
+    return hashlib.sha256(data).hexdigest() if data is not None else None
 
 
 def test_complete_happy_path(gated_client, monkeypatch):
     ws = _make_workspace(gated_client)
     doc_id, version_id = _start_upload(gated_client, ws)
-    _mock_uploaded(monkeypatch, size=1024)
+    content_hash = _mock_uploaded(monkeypatch, size=1024)
 
     r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
-                                 json={"version_id": version_id, "content_hash": "h1",
+                                 json={"version_id": version_id, "content_hash": content_hash,
                                        "size_bytes": 1024, "mime_type": "application/pdf"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["status"] == "ready"
     assert len(body["versions"]) == 1
-    assert body["versions"][0]["content_hash"] == "h1"
+    assert body["versions"][0]["content_hash"] == content_hash
     assert body["versions"][0]["version_seq"] == 1
 
 
 def test_complete_updates_document_status_to_ready(gated_client, monkeypatch, isolated_store):
     ws = _make_workspace(gated_client)
     doc_id, version_id = _start_upload(gated_client, ws)
-    _mock_uploaded(monkeypatch, size=1024)
+    content_hash = _mock_uploaded(monkeypatch, size=1024)
     gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
-                             json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+                             json={"version_id": version_id, "content_hash": content_hash, "size_bytes": 1024})
     assert isolated_store.get_content_workspace_document(doc_id, owner_email=OWNER)["status"] == "ready"
 
 
@@ -405,10 +433,10 @@ def test_complete_never_trusts_a_client_supplied_blob_path(gated_client, monkeyp
     import workspace_blob
     ws = _make_workspace(gated_client)
     doc_id, version_id = _start_upload(gated_client, ws)
-    _mock_uploaded(monkeypatch, size=1024)
+    content_hash = _mock_uploaded(monkeypatch, size=1024)
 
     r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
-                                 json={"version_id": version_id, "content_hash": "h1",
+                                 json={"version_id": version_id, "content_hash": content_hash,
                                        "size_bytes": 1024, "blob_path": "workspace/someone-else/x/y/source/z/original"})
     assert r.status_code == 200
     expected = workspace_blob.blob_path(OWNER, ws, doc_id, version_id)
@@ -416,18 +444,17 @@ def test_complete_never_trusts_a_client_supplied_blob_path(gated_client, monkeyp
 
 
 def test_completing_a_second_upload_against_the_same_document_is_version_2(gated_client, monkeypatch):
-    """create_upload_session always mints a brand-new document (item 21 will add proper
-    reuse/new-version UX) — but complete_upload itself has no opinion on whether a document
-    already has a version, so two completions against the SAME document_id (as item 21's
-    'upload as a new version' flow will eventually drive) already produce seq 1 then 2."""
+    """A new-version upload session (item 21's 'upload as a new version' flow) reserves a second
+    pending row against the SAME document_id — completing it produces seq 2 alongside seq 1."""
     ws = _make_workspace(gated_client)
     doc_id, v1 = _start_upload(gated_client, ws)
-    _mock_uploaded(monkeypatch, size=1024)
+    content_hash = _mock_uploaded(monkeypatch, size=1024)
     gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
-                             json={"version_id": v1, "content_hash": "h1", "size_bytes": 1024})
+                             json={"version_id": v1, "content_hash": content_hash, "size_bytes": 1024})
 
+    v2 = _new_version_session(gated_client, ws, doc_id).json()["version_id"]
     gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
-                             json={"version_id": "v-002", "content_hash": "h2", "size_bytes": 1024})
+                             json={"version_id": v2, "content_hash": content_hash, "size_bytes": 1024})
 
     doc = gated_client(OWNER).get(f"/content-workspaces/{ws}/documents/{doc_id}").json()
     seqs = sorted(v["version_seq"] for v in doc["versions"])
@@ -439,9 +466,9 @@ def test_completing_a_second_upload_against_the_same_document_is_version_2(gated
 def test_list_documents_in_a_workspace(gated_client, monkeypatch):
     ws = _make_workspace(gated_client)
     doc_id, version_id = _start_upload(gated_client, ws, filename="a.pdf")
-    _mock_uploaded(monkeypatch)
+    content_hash = _mock_uploaded(monkeypatch)
     gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
-                             json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+                             json={"version_id": version_id, "content_hash": content_hash, "size_bytes": 1024})
 
     r = gated_client(OWNER).get(f"/content-workspaces/{ws}/documents")
     assert r.status_code == 200
@@ -458,9 +485,9 @@ def test_list_documents_404s_for_a_foreign_workspace(gated_client):
 def test_get_document_includes_its_versions(gated_client, monkeypatch):
     ws = _make_workspace(gated_client)
     doc_id, version_id = _start_upload(gated_client, ws)
-    _mock_uploaded(monkeypatch)
+    content_hash = _mock_uploaded(monkeypatch)
     gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
-                             json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+                             json={"version_id": version_id, "content_hash": content_hash, "size_bytes": 1024})
 
     r = gated_client(OWNER).get(f"/content-workspaces/{ws}/documents/{doc_id}")
     assert r.status_code == 200
@@ -504,36 +531,36 @@ def test_upload_session_accepts_every_prd_supported_extension(gated_client, file
 def test_complete_quarantines_a_pdf_with_the_wrong_signature(gated_client, monkeypatch):
     ws = _make_workspace(gated_client)
     doc_id, version_id = _start_upload(gated_client, ws, filename="report.pdf")
-    _mock_uploaded(monkeypatch, size=1024, prefix=b"not a pdf")
+    content_hash = _mock_uploaded(monkeypatch, size=1024, prefix=b"not a pdf")
 
     r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
-                                 json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+                                 json={"version_id": version_id, "content_hash": content_hash, "size_bytes": 1024})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["status"] == "quarantined"
     assert body["versions"][0]["lifecycle_state"] == "quarantined"
 
 
-def test_complete_quarantines_when_the_prefix_read_fails(gated_client, monkeypatch):
-    """download_document_prefix returning None (blob missing, ranged read failed, ...) is
-    treated the same as an outright mismatch — 'can't verify' is not 'verified clean'."""
+def test_complete_409s_when_the_bytes_cannot_be_downloaded(gated_client, monkeypatch):
+    """download_document_bytes returning None (blob missing, download failed, ...) after the
+    blob's properties were already verified is treated as 'upload not found', the same as the
+    blob never having landed at all — 'can't retrieve it' is not 'verified clean'."""
     ws = _make_workspace(gated_client)
     doc_id, version_id = _start_upload(gated_client, ws, filename="report.pdf")
     _mock_uploaded(monkeypatch, size=1024, prefix=None)
 
     r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
-                                 json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
-    assert r.status_code == 200, r.text
-    assert r.json()["status"] == "quarantined"
+                                 json={"version_id": version_id, "content_hash": "irrelevant", "size_bytes": 1024})
+    assert r.status_code == 409
 
 
 def test_complete_accepts_a_matching_pdf_signature(gated_client, monkeypatch):
     ws = _make_workspace(gated_client)
     doc_id, version_id = _start_upload(gated_client, ws, filename="report.pdf")
-    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    content_hash = _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
 
     r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
-                                 json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+                                 json={"version_id": version_id, "content_hash": content_hash, "size_bytes": 1024})
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "ready"
 
@@ -541,10 +568,10 @@ def test_complete_accepts_a_matching_pdf_signature(gated_client, monkeypatch):
 def test_complete_accepts_a_matching_office_zip_signature(gated_client, monkeypatch):
     ws = _make_workspace(gated_client)
     doc_id, version_id = _start_upload(gated_client, ws, filename="brief.docx")
-    _mock_uploaded(monkeypatch, size=1024, prefix=b"PK\x03\x04\x14\x00\x06\x00")
+    content_hash = _mock_uploaded(monkeypatch, size=1024, prefix=b"PK\x03\x04\x14\x00\x06\x00")
 
     r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
-                                 json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+                                 json={"version_id": version_id, "content_hash": content_hash, "size_bytes": 1024})
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "ready"
 
@@ -554,10 +581,10 @@ def test_complete_does_not_signature_check_html(gated_client, monkeypatch):
     enforced at completion time (see _SIGNATURES' docstring)."""
     ws = _make_workspace(gated_client)
     doc_id, version_id = _start_upload(gated_client, ws, filename="page.html")
-    _mock_uploaded(monkeypatch, size=1024, prefix=b"<!doctype html>")
+    content_hash = _mock_uploaded(monkeypatch, size=1024, prefix=b"<!doctype html>")
 
     r = gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
-                                 json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+                                 json={"version_id": version_id, "content_hash": content_hash, "size_bytes": 1024})
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "ready"
 
@@ -567,9 +594,9 @@ def test_quarantined_version_still_gets_a_row_and_is_not_dropped(gated_client, m
     version row is still created so the bytes and their fate are recorded."""
     ws = _make_workspace(gated_client)
     doc_id, version_id = _start_upload(gated_client, ws, filename="report.pdf")
-    _mock_uploaded(monkeypatch, size=1024, prefix=b"not a pdf")
+    content_hash = _mock_uploaded(monkeypatch, size=1024, prefix=b"not a pdf")
     gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
-                             json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+                             json={"version_id": version_id, "content_hash": content_hash, "size_bytes": 1024})
 
     versions = isolated_store.list_content_workspace_document_versions(doc_id)
     assert len(versions) == 1
@@ -581,9 +608,9 @@ def test_every_new_version_is_stamped_not_scanned(gated_client, monkeypatch, iso
     fabricating a 'clean' result."""
     ws = _make_workspace(gated_client)
     doc_id, version_id = _start_upload(gated_client, ws)
-    _mock_uploaded(monkeypatch)
+    content_hash = _mock_uploaded(monkeypatch)
     gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
-                             json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+                             json={"version_id": version_id, "content_hash": content_hash, "size_bytes": 1024})
 
     versions = isolated_store.list_content_workspace_document_versions(doc_id)
     assert versions[0]["malware_status"] == "not_scanned"
@@ -592,9 +619,9 @@ def test_every_new_version_is_stamped_not_scanned(gated_client, monkeypatch, iso
 def test_quarantine_is_logged_distinctly_from_a_normal_completion(gated_client, monkeypatch, isolated_store):
     ws = _make_workspace(gated_client)
     doc_id, version_id = _start_upload(gated_client, ws, filename="report.pdf")
-    _mock_uploaded(monkeypatch, size=1024, prefix=b"not a pdf")
+    content_hash = _mock_uploaded(monkeypatch, size=1024, prefix=b"not a pdf")
     gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
-                             json={"version_id": version_id, "content_hash": "h1", "size_bytes": 1024})
+                             json={"version_id": version_id, "content_hash": content_hash, "size_bytes": 1024})
 
     decisions = isolated_store.list_decisions()
     assert any(d["action"] == "content_workspace.upload_quarantined" for d in decisions)
@@ -602,21 +629,33 @@ def test_quarantine_is_logged_distinctly_from_a_normal_completion(gated_client, 
 
 # ── duplicate detection (PRD §12) ────────────────────────────────────────────
 
-def _complete(gated_client, ws, doc_id, version_id, *, content_hash="h1", size_bytes=1024):
+def _complete(gated_client, ws, doc_id, version_id, *, content_hash=None, size_bytes=1024):
+    """content_hash defaults to the REAL sha256 of whatever bytes workspace_blob.
+    download_document_bytes is currently mocked to return (set by _mock_uploaded) — complete_upload
+    now independently recomputes and verifies this hash server-side, so a stale literal like the
+    old "h1" placeholder would 422. Passing content_hash explicitly still works, for tests that
+    want to exercise a deliberate mismatch."""
+    if content_hash is None:
+        import workspace_blob
+        data = workspace_blob.download_document_bytes(OWNER, ws, doc_id, version_id)
+        content_hash = hashlib.sha256(data).hexdigest() if data is not None else "unmocked-bytes"
     return gated_client(OWNER).post(f"/content-workspaces/{ws}/documents/{doc_id}/complete",
                                     json={"version_id": version_id, "content_hash": content_hash,
                                           "size_bytes": size_bytes})
 
 
 def test_complete_flags_a_duplicate_against_a_different_document(gated_client, monkeypatch):
+    """Neither completion re-mocks download_document_bytes between them, so both download the
+    SAME bytes and therefore hash identically — the real-world condition PRD §12 duplicate
+    detection is about (content_hash equality is now server-computed, not client-claimed)."""
     ws = _make_workspace(gated_client)
     doc1, v1 = _start_upload(gated_client, ws, filename="a.pdf")
     _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
-    r1 = _complete(gated_client, ws, doc1, v1, content_hash="same-hash")
+    r1 = _complete(gated_client, ws, doc1, v1)
     assert r1.json()["status"] == "ready"
 
-    doc2, _ = _start_upload(gated_client, ws, filename="b.pdf")
-    r2 = _complete(gated_client, ws, doc2, "v-002", content_hash="same-hash")
+    doc2, v2 = _start_upload(gated_client, ws, filename="b.pdf")
+    r2 = _complete(gated_client, ws, doc2, v2)
     assert r2.status_code == 200, r2.text
     body = r2.json()
     assert body["status"] == "duplicate"
@@ -631,22 +670,25 @@ def test_reuploading_the_same_document_with_the_same_hash_is_not_a_duplicate(gat
     ws = _make_workspace(gated_client)
     doc_id, v1 = _start_upload(gated_client, ws, filename="a.pdf")
     _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
-    _complete(gated_client, ws, doc_id, v1, content_hash="same-hash")
+    _complete(gated_client, ws, doc_id, v1)
 
-    r2 = _complete(gated_client, ws, doc_id, "v-002", content_hash="same-hash")
+    v2 = _new_version_session(gated_client, ws, doc_id, filename="a.pdf").json()["version_id"]
+    r2 = _complete(gated_client, ws, doc_id, v2)
     assert r2.json()["status"] == "ready"
     assert "duplicate_of" not in r2.json()
 
 
 def test_quarantine_takes_precedence_over_duplicate_detection(gated_client, monkeypatch):
+    """doc2 reuses doc1's exact bytes (no re-mock) — a duplicate by content — but declares them
+    as a .docx, so the magic-byte check (expecting a PK zip signature) fails first. Quarantine
+    wins over duplicate detection."""
     ws = _make_workspace(gated_client)
     doc1, v1 = _start_upload(gated_client, ws, filename="a.pdf")
     _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
-    _complete(gated_client, ws, doc1, v1, content_hash="same-hash")
+    _complete(gated_client, ws, doc1, v1)
 
-    doc2, _ = _start_upload(gated_client, ws, filename="b.pdf")
-    _mock_uploaded(monkeypatch, size=1024, prefix=b"not a pdf")  # bad signature
-    r2 = _complete(gated_client, ws, doc2, "v-002", content_hash="same-hash")
+    doc2, v2 = _start_upload(gated_client, ws, filename="b.docx")
+    r2 = _complete(gated_client, ws, doc2, v2)
     body = r2.json()
     assert body["status"] == "quarantined"
     assert "duplicate_of" not in body
@@ -656,10 +698,10 @@ def test_duplicate_is_logged_distinctly(gated_client, monkeypatch, isolated_stor
     ws = _make_workspace(gated_client)
     doc1, v1 = _start_upload(gated_client, ws, filename="a.pdf")
     _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
-    _complete(gated_client, ws, doc1, v1, content_hash="same-hash")
+    _complete(gated_client, ws, doc1, v1)
 
-    doc2, _ = _start_upload(gated_client, ws, filename="b.pdf")
-    _complete(gated_client, ws, doc2, "v-002", content_hash="same-hash")
+    doc2, v2 = _start_upload(gated_client, ws, filename="b.pdf")
+    _complete(gated_client, ws, doc2, v2)
 
     decisions = isolated_store.list_decisions()
     assert any(d["action"] == "content_workspace.upload_duplicate" for d in decisions)
@@ -672,10 +714,10 @@ def test_duplicate_detection_is_scoped_to_the_workspace(gated_client, monkeypatc
     ws2 = _make_workspace(gated_client)
     doc1, v1 = _start_upload(gated_client, ws1, filename="a.pdf")
     _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
-    _complete(gated_client, ws1, doc1, v1, content_hash="same-hash")
+    _complete(gated_client, ws1, doc1, v1)
 
-    doc2, _ = _start_upload(gated_client, ws2, filename="b.pdf")
-    r2 = _complete(gated_client, ws2, doc2, "v-002", content_hash="same-hash")
+    doc2, v2 = _start_upload(gated_client, ws2, filename="b.pdf")
+    r2 = _complete(gated_client, ws2, doc2, v2)
     assert r2.json()["status"] == "ready"
 
 
@@ -684,10 +726,10 @@ def test_duplicate_detection_is_scoped_to_the_workspace(gated_client, monkeypatc
 def _make_duplicate(gated_client, monkeypatch, ws):
     doc1, v1 = _start_upload(gated_client, ws, filename="a.pdf")
     _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
-    _complete(gated_client, ws, doc1, v1, content_hash="same-hash")
-    doc2, _ = _start_upload(gated_client, ws, filename="b.pdf")
-    _complete(gated_client, ws, doc2, "v-002", content_hash="same-hash")
-    return doc2, "v-002"
+    _complete(gated_client, ws, doc1, v1)
+    doc2, v2 = _start_upload(gated_client, ws, filename="b.pdf")
+    _complete(gated_client, ws, doc2, v2)
+    return doc2, v2
 
 
 def test_resolve_duplicate_rejects_an_unknown_action(gated_client, monkeypatch):
@@ -782,7 +824,7 @@ def test_download_returns_the_bytes_and_content_type(gated_client, monkeypatch):
     ws = _make_workspace(gated_client)
     doc_id, version_id = _start_upload(gated_client, ws, filename="report.pdf")
     _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
-    _complete(gated_client, ws, doc_id, version_id, content_hash="h1", size_bytes=1024)
+    _complete(gated_client, ws, doc_id, version_id, size_bytes=1024)
     monkeypatch.setattr(workspace_blob, "download_document_bytes",
                         lambda *a, **kw: b"%PDF-1.7 fake pdf bytes")
 
@@ -819,9 +861,9 @@ def test_download_404s_for_a_version_belonging_to_a_different_document(gated_cli
     ws = _make_workspace(gated_client)
     doc1, v1 = _start_upload(gated_client, ws, filename="a.pdf")
     _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
-    _complete(gated_client, ws, doc1, v1, content_hash="hash-a")
-    doc2, _ = _start_upload(gated_client, ws, filename="b.pdf")
-    _complete(gated_client, ws, doc2, "v-002", content_hash="hash-b")
+    _complete(gated_client, ws, doc1, v1)
+    doc2, v2 = _start_upload(gated_client, ws, filename="b.pdf")
+    _complete(gated_client, ws, doc2, v2)
 
     r = _download(gated_client, ws, doc2, v1)  # v1 belongs to doc1, not doc2
     assert r.status_code == 404
@@ -896,7 +938,7 @@ def test_safe_disposition_filename_falls_back_when_nothing_printable_survives():
 def _ready_version(gated_client, monkeypatch, ws, *, filename="report.pdf"):
     doc_id, version_id = _start_upload(gated_client, ws, filename=filename)
     _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
-    _complete(gated_client, ws, doc_id, version_id, content_hash="h1")
+    _complete(gated_client, ws, doc_id, version_id)
     return doc_id, version_id
 
 
@@ -969,10 +1011,13 @@ def test_assess_409s_for_a_quarantined_version(gated_client, monkeypatch):
 
 
 def test_assess_409s_for_a_still_uploading_document(gated_client):
+    """upload-session already reserves a PENDING version row (Slice 1) — the row exists, but
+    its lifecycle_state isn't "ready" until complete_upload resolves it, so assess 409s rather
+    than 404s."""
     ws = _make_workspace(gated_client)
-    doc_id, version_id = _start_upload(gated_client, ws)  # never completed
+    doc_id, version_id = _start_upload(gated_client, ws)  # never completed — still "pending"
     r = _assess(gated_client, ws, doc_id, version_id)
-    assert r.status_code == 404  # the version row doesn't exist until complete_upload creates it
+    assert r.status_code == 409
 
 
 def test_assess_is_logged(gated_client, monkeypatch, isolated_store):

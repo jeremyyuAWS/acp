@@ -5,18 +5,21 @@ unrelated `api/routes/workspace.py` (`GET /workspace/bootstrap` — the app-shel
 optimization; nothing to do with this PRD).
 
 Also implements PRD §9's upload flow — POST .../documents/upload-session (issue a constrained,
-short-lived direct-to-Blob upload authorization via workspace_blob.generate_upload_authorization)
-and POST .../documents/{document_id}/complete (verify the upload actually landed — size checked
-server-side against workspace_blob.get_uploaded_blob_properties, never trusted from the client —
-then create the content_workspace_document_version row).
+short-lived direct-to-Blob upload authorization via workspace_blob.generate_upload_authorization,
+AND reserve a PENDING content_workspace_document_version row keyed on the version_id the SAS was
+minted for — see create_pending_content_workspace_document_version) and POST .../documents/
+{document_id}/complete (verify the upload actually landed and resolve that pending row —
+server-computed size AND content_hash, never the client's own claims about either; see
+complete_upload's own docstring for why, and for why completion is idempotent on retry).
 
 Also implements the part of PRD §13's security/quarantine pipeline that's decidable without a
 real malware scanner: an extension allow-list at session-creation time (reusing
 scanner.OFFICE/HTML_EXTS — the exact set PRD §8 already commits to supporting, not a second
-list to keep in sync) and a magic-byte signature check at completion time, via
-workspace_blob.download_document_prefix's ranged read. A signature mismatch does not fail the
+list to keep in sync) and a magic-byte signature check at completion time, against the full
+downloaded bytes (the same read the server-side hash verification above already pays for — one
+download doing both jobs, not two separate blob reads). A signature mismatch does not fail the
 request — PRD §8 lists "Quarantined" alongside "Ready for Discovery" as a normal terminal
-upload state, not an error condition — it creates the version row with lifecycle_state
+upload state, not an error condition — it resolves the version row to lifecycle_state
 "quarantined" and leaves the document there for a human/later workflow to resolve, rather than
 enqueueing Discovery. `malware_status` is stamped "not_scanned" on every version: there is no
 real AV integration behind it (yet), and claiming "clean" without one would be worse than
@@ -54,10 +57,12 @@ single file against _MAX_UPLOAD_BYTES.
 Also implements the document-scoped upload-session variant named as deferred by every prior PR
 in this series: `POST .../documents/{document_id}/versions/upload-session` adds a new version
 to an EXISTING document (unlike `create_upload_session`, which always mints a brand-new one).
-Shares all the same validation (`_validate_new_upload`) and updates the document's
-`display_name` to the new upload's filename at session-creation time, so `complete_upload`'s
-magic-byte check and the new version's `original_filename` stay correct even when a version's
-filename (and therefore extension) differs from the document's previous one. This is general
+Shares all the same validation (`_validate_new_upload`) and reserves its own pending version
+row exactly as `create_upload_session` does — filename/extension live on THAT row, not on a
+write to the document's mutable `display_name` (an earlier version of this endpoint did exactly
+that, and it was a real bug: two sessions for the same document in flight at once could race
+and cross-contaminate which extension got verified against which upload; see
+`create_pending_content_workspace_document_version`'s docstring). This is general
 document-versioning UX, not specific to duplicate resolution — PRD §12's fourth
 duplicate-resolution path ("attach this content as a new version of the OTHER, already-existing
 document it duplicates") still isn't implemented: that needs moving/copying an already-uploaded
@@ -86,6 +91,7 @@ contract.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import uuid
@@ -288,6 +294,14 @@ def create_upload_session(workspace_id: str, body: UploadSessionCreate, request:
         core.store.update_content_workspace_document_status(document_id, "failed")
         raise HTTPException(503, "could not obtain an upload authorization")
 
+    # Reserve the version row NOW, pending, keyed on the version_id the SAS was just minted
+    # for — see create_pending_content_workspace_document_version's own docstring for why this
+    # (not a later write to the mutable document row) is what fixes the completion-time race.
+    version_seq = core.store.next_content_workspace_document_version_seq(document_id)
+    core.store.create_pending_content_workspace_document_version(
+        auth["version_id"], document_id=document_id, version_seq=version_seq,
+        original_filename=body.filename.strip(), uploaded_by=owner)
+
     core.store.log_decision(owner, "content_workspace.upload_session_created",
                             detail=f"{workspace_id}/{document_id}: {body.filename.strip()}")
     return {"document_id": document_id, **auth}
@@ -317,36 +331,74 @@ def create_new_version_upload_session(workspace_id: str, document_id: str,
     if auth is None:
         raise HTTPException(503, "could not obtain an upload authorization")
 
-    # See update_content_workspace_document_display_name's own docstring: complete_upload
-    # derives both the magic-byte signature to verify against and the new version's
-    # original_filename from this column, so it must track the filename of the upload actually
-    # in flight — updated here, at session-creation time, not deferred to completion (the
-    # completion request carries no filename of its own; see UploadComplete).
-    core.store.update_content_workspace_document_display_name(document_id, body.filename.strip())
+    # Reserve the version row NOW, pending, exactly as create_upload_session does for a
+    # brand-new document. This is also what fixes the race the old design had: filename is
+    # per-version data on THIS row, not a write to the document's own mutable display_name, so
+    # two sessions for the same document in flight at once (retry, double-click) can never
+    # cross-contaminate which extension gets verified against which upload.
+    version_seq = core.store.next_content_workspace_document_version_seq(document_id)
+    core.store.create_pending_content_workspace_document_version(
+        auth["version_id"], document_id=document_id, version_seq=version_seq,
+        original_filename=body.filename.strip(), uploaded_by=owner)
     core.store.update_content_workspace_document_status(document_id, "uploading")
     core.store.log_decision(owner, "content_workspace.new_version_upload_session_created",
                             detail=f"{workspace_id}/{document_id}: {body.filename.strip()}")
     return {"document_id": document_id, **auth}
 
 
+def _duplicate_of_for_response(workspace_id: str, document_id: str, owner: str,
+                               content_hash: str) -> dict | None:
+    if not content_hash:
+        return None
+    dup = core.store.find_content_workspace_document_version_by_hash(
+        workspace_id, content_hash, owner_email=owner)
+    if dup is not None and dup["document_id"] != document_id:
+        return {"document_id": dup["document_id"], "version_id": dup["id"]}
+    return None
+
+
 @router.post("/content-workspaces/{workspace_id}/documents/{document_id}/complete")
 def complete_upload(workspace_id: str, document_id: str, body: UploadComplete, request: Request):
-    """PRD §9: 'ACP verifies completion, size, hash, and ownership' — the blob's ACTUAL size
-    (read from Azure via workspace_blob, never the client's own claim about itself) must match
-    what the client now reports; a mismatch means the upload is incomplete, was tampered with
-    in transit, or targets the wrong blob, and the version row is never created. The blob path
-    itself is RECOMPUTED here (workspace_blob.blob_path), never accepted from the client — see
-    that function's own docstring for why trusting a client-supplied path would be unsafe.
-    `content_hash` is recorded as reported (used by a later PR's duplicate detection, item 21)
-    rather than independently re-verified — Azure's own Content-MD5 validation (enforced at
-    PUT time by the browser's own upload, if it sets that header) is the integrity check that
-    actually matters for 'did the right bytes arrive'; this endpoint's job is size + ownership +
-    that a blob genuinely exists at the expected path."""
+    """PRD §9: 'ACP verifies completion, size, hash, and ownership'.
+
+    Requires a PENDING version row already reserved by upload-session
+    (create_pending_content_workspace_document_version) — body.version_id must name one, never
+    trusted as a bare client-supplied identifier that could point at an arbitrary blob path.
+    Idempotent on retry: if the row is no longer 'pending' (a previous call already resolved
+    it — network blip, duplicate submit, a lost response the client is now re-sending), this
+    reconciles to the existing result rather than re-verifying, re-writing, or erroring — "the
+    same upload session produces one document version, with no duplicate records or generic
+    server error on replay."
+
+    Size is checked against the blob's ACTUAL size (workspace_blob.get_uploaded_blob_properties,
+    never the client's own claim). content_hash is INDEPENDENTLY COMPUTED server-side from the
+    downloaded bytes (hashlib.sha256) and checked against the client's claim — a mismatch is
+    rejected (422), since duplicate detection is keyed on this hash and a browser-supplied
+    value alone is not authoritative evidence of what was actually uploaded. The same download
+    also serves the magic-byte signature check (PRD §13), one full read doing both jobs rather
+    than two separate blob reads. The blob path itself is RECOMPUTED here (workspace_blob.
+    blob_path), never accepted from the client — see that function's own docstring for why
+    trusting a client-supplied path would be unsafe."""
     owner = _owner(request)
     _require_workspace(workspace_id, owner)
     doc = core.store.get_content_workspace_document(document_id, owner_email=owner)
     if doc is None or doc["workspace_id"] != workspace_id:
         raise HTTPException(404, "document not found")
+    version = core.store.get_content_workspace_document_version(body.version_id,
+                                                                 document_id=document_id)
+    if version is None:
+        raise HTTPException(404, "upload session not found — call the upload-session endpoint "
+                             "first, and complete against the version_id it returned")
+
+    if version.get("lifecycle_state") != "pending":
+        # Already resolved by an earlier call. Reconcile, don't re-verify or error.
+        result = get_content_workspace_document(workspace_id, document_id, request)
+        if version.get("lifecycle_state") == "duplicate":
+            dup = _duplicate_of_for_response(workspace_id, document_id, owner,
+                                             version.get("content_hash") or "")
+            if dup is not None:
+                result = {**result, "duplicate_of": dup}
+        return result
 
     props = workspace_blob.get_uploaded_blob_properties(owner, workspace_id, document_id,
                                                         body.version_id)
@@ -356,32 +408,34 @@ def complete_upload(workspace_id: str, document_id: str, body: UploadComplete, r
         raise HTTPException(422, f"declared size {body.size_bytes} does not match the "
                              f"uploaded blob's actual size {props['size']}")
 
-    # PRD §13: verify the bytes that actually landed match what the extension claims, via a
-    # cheap ranged read (workspace_blob.download_document_prefix) rather than downloading the
-    # whole file server-side. A mismatch is a normal terminal state (PRD §8's "Quarantined"),
-    # not a request error — the version row is still created so the upload isn't silently
-    # dropped, just routed away from Discovery for a human/later workflow to resolve.
-    ext = _extension(doc.get("display_name") or "")
+    data = workspace_blob.download_document_bytes(owner, workspace_id, document_id, body.version_id)
+    if data is None:
+        raise HTTPException(409, "upload not found — the browser may not have finished uploading")
+    if len(data) != body.size_bytes:
+        raise HTTPException(422, f"declared size {body.size_bytes} does not match the "
+                             f"downloaded content ({len(data)} bytes)")
+    computed_hash = hashlib.sha256(data).hexdigest()
+    if computed_hash != body.content_hash:
+        raise HTTPException(422, "content_hash does not match the uploaded bytes — a "
+                             "browser-reported hash alone is not authoritative")
+
+    # PRD §13: verify the bytes that actually landed match what the extension claims. HTML has
+    # no reliable leading signature and is never checked (see _SIGNATURES). A mismatch is a
+    # normal terminal state (PRD §8's "Quarantined"), not a request error — the version row is
+    # still resolved so the upload isn't silently dropped, just routed away from Discovery for
+    # a human/later workflow to resolve.
+    ext = _extension(version.get("original_filename") or "")
     expected_sig = _SIGNATURES.get(ext)
-    quarantined = False
-    if expected_sig is not None:
-        prefix = workspace_blob.download_document_prefix(owner, workspace_id, document_id,
-                                                          body.version_id, n=len(expected_sig))
-        quarantined = prefix is None or not prefix.startswith(expected_sig)
+    quarantined = expected_sig is not None and not data.startswith(expected_sig)
 
     # PRD §12: is this exact content already uploaded elsewhere in the workspace? A match
     # against THIS SAME document is a normal re-upload/new-version, not a duplicate — only a
     # match against a DIFFERENT document is flagged. Skipped once already quarantined: a
     # security hold takes precedence, and dedup status on a file that isn't going to Discovery
     # anyway isn't useful.
-    duplicate_of = None
-    if not quarantined:
-        dup = core.store.find_content_workspace_document_version_by_hash(
-            workspace_id, body.content_hash, owner_email=owner)
-        if dup is not None and dup["document_id"] != document_id:
-            duplicate_of = {"document_id": dup["document_id"], "version_id": dup["id"]}
+    duplicate_of = None if quarantined else _duplicate_of_for_response(
+        workspace_id, document_id, owner, computed_hash)
 
-    version_seq = core.store.next_content_workspace_document_version_seq(document_id)
     path = workspace_blob.blob_path(owner, workspace_id, document_id, body.version_id)
     if quarantined:
         lifecycle_state = "quarantined"
@@ -389,12 +443,22 @@ def complete_upload(workspace_id: str, document_id: str, body: UploadComplete, r
         lifecycle_state = "duplicate"
     else:
         lifecycle_state = "ready"
-    core.store.create_content_workspace_document_version(
-        body.version_id, document_id=document_id, version_seq=version_seq,
-        content_hash=body.content_hash, mime_type=body.mime_type, size_bytes=body.size_bytes,
-        blob_path=path, original_filename=doc.get("display_name"), uploaded_by=owner,
-        lifecycle_state=lifecycle_state, malware_status="not_scanned")
+    resolved = core.store.complete_content_workspace_document_version(
+        body.version_id, document_id=document_id, content_hash=computed_hash,
+        mime_type=body.mime_type, size_bytes=body.size_bytes, blob_path=path,
+        uploaded_by=owner, lifecycle_state=lifecycle_state, malware_status="not_scanned")
+    if not resolved:
+        # Lost a race to a concurrent completion of the SAME pending row between our lookup
+        # above and this write — reconcile to whatever the winner actually wrote, exactly like
+        # the already-resolved branch at the top of this function.
+        result = get_content_workspace_document(workspace_id, document_id, request)
+        if duplicate_of is not None:
+            result = {**result, "duplicate_of": duplicate_of}
+        return result
+
     core.store.update_content_workspace_document_status(document_id, lifecycle_state)
+    core.store.update_content_workspace_document_display_name(
+        document_id, version.get("original_filename") or doc.get("display_name"))
     core.store.log_decision(
         owner, f"content_workspace.upload_{lifecycle_state}"
         if lifecycle_state != "ready" else "content_workspace.upload_completed",
