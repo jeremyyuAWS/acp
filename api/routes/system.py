@@ -10,6 +10,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict
 
 import core
+from swallowed import swallowed
 
 router = APIRouter()
 
@@ -125,7 +126,7 @@ async def alert_webhook(request: Request, key: str = Query("")):
                 {"name": (a.get("labels", {}) or {}).get("alertname"),
                  "status": a.get("status")} for a in alerts]}, timeout=6)
         except Exception:
-            pass
+            swallowed("routes.system.alert_webhook: posting the alert webhook failed")
     return {"received": len(alerts)}
 
 
@@ -708,7 +709,8 @@ def update_settings(body: SettingsUpdate, request: Request):
             _ai._override_checked["at"] = 0.0
             _ai._maybe_refresh_endpoint()
         except Exception:
-            pass
+            swallowed("routes.system.update_settings: refreshing the AI endpoint after a settings "
+                      "update failed")
     if body.auto_apply_validated is not None:
         core.store.set_auto_apply_validated(body.auto_apply_validated)
         core.store.log_decision(

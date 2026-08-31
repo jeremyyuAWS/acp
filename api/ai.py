@@ -19,6 +19,7 @@ to a faithful source or human review.
 from __future__ import annotations
 import os
 import re
+from swallowed import swallowed
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL    = os.environ.get("OLLAMA_MODEL", "llama3.2")
@@ -230,7 +231,7 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
                           provider=provider, zone=zn, cost=cost_usd,
                           prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
     except Exception:
-        pass
+        swallowed("ai._trace_ai: emitting the AI-call trace failed", scan_id)
     # ADR 0019 Phase 0b — persist an ai_calls provenance row (provider/model/local-or-cloud zone/
     # latency/cost), the queryable + certification-embeddable record behind the card's "Generated
     # by …" line and the governance rollup. Best-effort + lazy import so it never fails the AI call.
@@ -241,7 +242,7 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
                                   scan_id=scan_id, file=file, reason=reason,
                                   temperature=temperature, prompt_version=prompt_version)
     except Exception:
-        pass
+        swallowed("ai._trace_ai: recording the AI call failed", scan_id)
 
 
 def explain_finding(
@@ -368,7 +369,7 @@ def _maybe_refresh_endpoint() -> None:
             print(f"[ai] endpoint switched to {OLLAMA_BASE_URL} "
                   f"(vision={OLLAMA_VISION_MODEL}, text={OLLAMA_MODEL})", flush=True)
     except Exception:
-        pass
+        swallowed("ai._maybe_refresh_endpoint: re-reading the AI endpoint settings failed")
 
 
 def is_available() -> bool:

@@ -62,6 +62,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from swallowed import swallowed
 
 # Azure Container Apps injects both. Absent off-platform (local runs, CI, pytest), where the
 # fallbacks keep every line well-formed rather than raising inside a diagnostic.
@@ -151,7 +152,7 @@ def emit(event: str, **fields) -> None:
     try:
         rec.update({k: v for k, v in (_job_cv.get() or {}).items() if v is not None})
     except Exception:
-        pass
+        swallowed("joblog.emit: merging the ambient job context into the record failed")
     rec.update({k: v for k, v in fields.items() if v is not None})
     try:
         line = json.dumps(rec, default=repr)
@@ -162,7 +163,7 @@ def emit(event: str, **fields) -> None:
             sys.stdout.write(line + "\n")
             sys.stdout.flush()
     except Exception:
-        pass
+        swallowed("joblog.emit: writing the job-log line to stdout failed")
 
 
 def _safe(event, **fields):
@@ -172,7 +173,7 @@ def _safe(event, **fields):
     try:
         emit(event, **fields)
     except Exception:                                  # noqa: BLE001 — observation is never fatal
-        pass
+        swallowed("joblog._safe: emitting a job-log record failed")
 
 
 @contextmanager

@@ -25,6 +25,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 import core
+from swallowed import swallowed
 
 # Azure Container Apps replica control — optional; gracefully absent when env vars are unset.
 # Required env vars: AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP, WORKER_APP_NAME (defaults
@@ -277,7 +278,8 @@ def get_capacity():
             replica_list = list(replicas)
         result["current_replicas"] = len(replica_list)
     except Exception:  # noqa: BLE001 — current_replicas stays None: an honest "couldn't measure"
-        pass           # rather than a fabricated 0, same rule this codebase applies everywhere.
+        # rather than a fabricated 0, same rule this codebase applies everywhere.
+        swallowed("routes.control.get_capacity: listing the container-app revision replicas failed")
 
     try:
         metrics = _monitor_client().metrics.list(
@@ -350,7 +352,8 @@ def get_capacity():
                     result["revision_traffic_percent"] = getattr(t, "weight", None)
                     break
     except Exception:  # noqa: BLE001 — revision_traffic_percent stays None; everything gathered
-        pass           # above is still returned rather than lost.
+        # above is still returned rather than lost.
+        swallowed("routes.control.get_capacity: reading a replica's capacity fields failed")
 
     return result
 
@@ -415,7 +418,8 @@ def get_revisions():
             if name:
                 traffic_by_revision[name] = getattr(t, "weight", None)
     except Exception:  # noqa: BLE001 — every revision's traffic_percent stays None below;
-        pass           # the revision list itself is unaffected.
+        # the revision list itself is unaffected.
+        swallowed("routes.control.get_revisions: reading a revision's fields failed")
 
     try:
         revisions = client.container_apps_revisions.list_revisions(_AZ_RG, _AZ_APP)

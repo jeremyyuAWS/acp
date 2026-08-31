@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone
+from swallowed import swallowed
 
 # Same sys.path convention app.py relies on, so `python worker_main.py` resolves siblings.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -103,7 +104,7 @@ def run(poll_seconds: float = 2.0, _install_signals: bool = True) -> None:
                     }),
                 )
             except Exception:
-                pass
+                swallowed("worker_main.run: recording the worker-tier heartbeat setting failed")
         time.sleep(poll_seconds)
 
     try:

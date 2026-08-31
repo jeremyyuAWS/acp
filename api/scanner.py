@@ -76,6 +76,7 @@ SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 sys.path.insert(0, str(ACP / "scripts"))
 from rubric import Rubric
+from swallowed import swallowed
 
 OFFICE = (".docx", ".pptx", ".xlsx")
 HTML_EXTS = (".html", ".htm")
@@ -2108,7 +2109,7 @@ def _sp_describe(token: str, drive_id: str, item_id: str, text: str) -> None:
                              "Content-Type": "application/json"},
                     json={"description": text}, timeout=30, follow_redirects=True)
     except Exception:      # noqa: BLE001 — a label is not worth failing a successful write over
-        pass
+        swallowed("scanner._sp_describe: patching the SharePoint description failed")
 
 
 def _sp_upload(token: str, drive_id: str, folder: str, filename: str,
@@ -2548,7 +2549,7 @@ def cache_source_bytes(tmp: Path, name: str, scan_id: str, user: str | None,
             return
         blob.upload_source(user, scan_id, name, (tmp / name).read_bytes(), checksum=checksum)
     except Exception:
-        pass
+        swallowed("scanner.cache_source_bytes: caching the source bytes to blob storage failed", scan_id)
 
 
 def read_cached_source(scan_id: str, name: str, user: str | None,
@@ -3369,7 +3370,7 @@ def detect_acp_stamp(path: Path, ext: str) -> str | None:
                 m = re.search(r"remediated (\d{4}-\d\d-\d\d)", txt)
                 return m.group(1) if m else "yes"
     except Exception:
-        pass
+        swallowed("scanner.detect_acp_stamp: detecting the ACP stamp failed")
     return None
 
 
@@ -3396,7 +3397,7 @@ def _file_extent(path: Path, ext: str) -> dict:
                 out["sheets"] = sum(1 for n in z.namelist()
                                     if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", n)) or None
     except Exception:
-        pass
+        swallowed("scanner._file_extent: measuring the file's extent failed")
     return {k: v for k, v in out.items() if v is not None}
 
 
@@ -3601,7 +3602,7 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
                               + _ocr_mod.images_of_text(tmp / name, ext)
                               + _ocr_mod.images_of_text_no_exception(tmp / name, ext))
     except Exception:
-        pass
+        swallowed("scanner.analyse_and_assess: running the images-of-text (OCR) checks failed", scan_id)
     # 1.3.3 Sensory Characteristics + 3.1.2 Language of Parts — text-content checks.
     _act.record_file(scan_id, name, sc="1.3.3", phase="analysing",
                      action="checking wording and language changes")
@@ -3615,7 +3616,7 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
                 _pii_mod2.extract_text(tmp / name),
                 _off_lang.language_marked_spans(tmp / name, ext))
     except Exception:
-        pass
+        swallowed("scanner.analyse_and_assess: running the text content checks failed", scan_id)
     # 2.4.6 / 2.4.9 / 1.4.3 / 1.4.6 — first-party OOXML/PDF structural checks
     # (docx/pptx headings + link-purpose, PDF contrast); partner engine doesn't
     # reach these for these formats. Self-contained; never raises.
@@ -3627,7 +3628,7 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
         with _jl.stage("analyse.structure", doc=doc, scan_id=scan_id, ext=ext):
             raw["issues"] = list(raw.get("issues", [])) + _off_mod.checks_for(tmp / name, ext)
     except Exception:
-        pass
+        swallowed("scanner.analyse_and_assess: running the Office structure checks failed", scan_id)
     raw["issues"] = _collapse_duplicate_alt(_collapse_reading_order(raw["issues"]))
     raw["issues"] = [i for i in raw["issues"] if i["ruleId"] not in rb.disabled]
     raw["errors"] = [e for e in raw["errors"]
@@ -3665,7 +3666,7 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
         import classify as _cls
         fdict["classify"] = _cls.classify(tmp / name, ext)
     except Exception:
-        pass
+        swallowed("scanner.analyse_and_assess: classifying the document failed", scan_id)
     pinfo = None
     if detect_pii:
         import pii as _pii_mod
@@ -3738,7 +3739,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                 _act.record(scan_id, file=d.get("current"),
                             action=_SCAN_ACTIONS.get(phase, phase), phase=phase, force=changed)
         except Exception:
-            pass          # a progress line must never be able to fail the scan it describes
+            # a progress line must never be able to fail the scan it describes
+            swallowed("scanner.progress: rendering the progress activity line failed")
         _inner_progress(d)
 
     tmp = Path(tempfile.mkdtemp(prefix="acp-api-scan-"))
@@ -3815,14 +3817,16 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                         if isinstance(_dl_exc, _httpx.HTTPStatusError):
                             _status = _dl_exc.response.status_code
                     except Exception:
-                        pass
+                        swallowed("scanner.run_scan: probing whether the download error was an httpx status "
+                                  "error failed", scan_id)
                     if _status is None:
                         try:
                             from googleapiclient.errors import HttpError as _HttpError
                             if isinstance(_dl_exc, _HttpError) and getattr(_dl_exc, "resp", None):
                                 _status = int(_dl_exc.resp.status)
                         except Exception:
-                            pass
+                            swallowed("scanner.run_scan: probing whether the download error was a Google API "
+                                      "HttpError failed", scan_id)
                     if _status == 404:
                         exc_deleted_during_scan += 1
                     elif _status in (401, 403):
@@ -3882,7 +3886,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                                 + _ocr_mod.images_of_text(tmp / name, ext)
                                 + _ocr_mod.images_of_text_no_exception(tmp / name, ext))
             except Exception:
-                pass
+                swallowed("scanner._analyse_one: running the images-of-text (OCR) checks failed")
             # 1.3.3 Sensory Characteristics + 3.1.2 Language of Parts — text-content checks.
             _act.record_file(scan_id, name, sc="1.3.3", phase="analysing",
                              action="checking wording and language changes")
@@ -3891,20 +3895,20 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                     _pii_mod.extract_text(tmp / name),
                     _off_mod.language_marked_spans(tmp / name, ext))
             except Exception:
-                pass
+                swallowed("scanner._analyse_one: running the text content checks failed")
             # 2.4.6 / 2.4.9 / 1.4.3 / 1.4.6 — first-party OOXML/PDF structural checks.
             _act.record_file(scan_id, name, sc="1.4.3", phase="analysing",
                              action="checking headings, links and contrast")
             try:
                 r["issues"] = list(r.get("issues", [])) + _off_mod.checks_for(tmp / name, ext)
             except Exception:
-                pass
+                swallowed("scanner._analyse_one: running the Office structure checks failed")
             r["issues"] = _collapse_duplicate_alt(_collapse_reading_order(r["issues"]))
             try:                                          # ADR 0020 stage 2 — inventory peek
                 import classify as _cls
                 r["classify"] = _cls.classify(tmp / name, ext)
             except Exception:
-                pass
+                swallowed("scanner._analyse_one: classifying the document failed")
             pinfo = _pii_mod.detect_file(tmp / name) if detect_pii else None
             # Drop it from the headline. Forced inside finish_file, because a stale entry here
             # names a document that has FINISHED while others are still running — the one way

@@ -262,13 +262,14 @@ def _ollama_prewarm():
                            headers=_ai._OLLAMA_HEADERS,
                            timeout=60)
             except Exception:
-                pass
+                swallowed("app._loop: the Ollama keep-alive ping failed")
             time.sleep(600)
 
     threading.Thread(target=_loop, daemon=True, name="ollama-prewarm").start()
 
 
 from fastapi.staticfiles import StaticFiles
+from swallowed import swallowed
 
 
 class SpaStaticFiles(StaticFiles):

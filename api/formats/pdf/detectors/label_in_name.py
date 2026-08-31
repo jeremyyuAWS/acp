@@ -23,6 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from formats.pdf import acroform
+from swallowed import swallowed
 
 # PDF Ff bit positions (0-indexed).  See ISO 32000 Table 227.
 _FLAG_PUSHBUTTON = 1 << 16   # bit 17 in 1-indexed PDF spec notation
@@ -61,7 +62,8 @@ def _accessible_name(field) -> str:
             if text:
                 return text
     except Exception:
-        pass
+        swallowed("formats.pdf.detectors.label_in_name._accessible_name: reading the field's "
+                  "accessible name failed")
     try:
         t = field.get("/T")
         return str(t).strip() if t is not None else ""

@@ -14,6 +14,7 @@ file-storage abstraction (ADR 0010's own non-goals).
 from __future__ import annotations
 import logging
 import os
+from swallowed import swallowed
 
 _ACCOUNT = os.environ.get("ACP_BLOB_ACCOUNT", "")
 _CONTAINER = os.environ.get("ACP_BLOB_CONTAINER", "remediated")
@@ -112,7 +113,8 @@ def upload_render(owner: str | None, scan_id: str, filename: str, data: bytes) -
         try:
             svc.create_container(_RENDER_CONTAINER)
         except Exception:
-            pass  # already exists (race) or can't create — fall through to the retry
+            # already exists (race) or can't create — fall through to the retry
+            swallowed("blob.upload_render: creating the render container failed", scan_id)
         try:
             blob.upload_blob(data, overwrite=True, content_settings=settings)
             return blob.url
@@ -178,7 +180,8 @@ def upload_source(owner: str | None, scan_id: str, filename: str, data: bytes,
         try:
             svc.create_container(_SOURCES_CONTAINER)
         except Exception:
-            pass  # already exists (race) or can't create — fall through to the retry
+            # already exists (race) or can't create — fall through to the retry
+            swallowed("blob.upload_source: creating the source container failed", scan_id)
         try:
             blob.upload_blob(data, overwrite=True, content_settings=settings)
             return blob.url
@@ -236,7 +239,8 @@ def purge_all(owner: str | None = None) -> dict:
                     cc.delete_blob(b.name)
                     n += 1
                 except Exception:
-                    pass  # blob vanished mid-iteration or a lease — skip, keep going
+                    # blob vanished mid-iteration or a lease — skip, keep going
+                    swallowed("blob.purge_all: deleting a blob during purge_all failed")
             out[cname] = n
         except Exception:
             out[cname] = -1  # container missing / listing failed — surface, don't abort the rest
@@ -274,7 +278,7 @@ def purge_scan(owner: str, scan_id: str, checksums: list[str] | None = None) -> 
                     cc.delete_blob(b.name)
                     n += 1
                 except Exception:
-                    pass
+                    swallowed("blob.purge_scan: deleting a scan's blob failed", scan_id)
             out[cname] = n
         except Exception:
             out[cname] = -1
@@ -287,8 +291,10 @@ def purge_scan(owner: str, scan_id: str, checksums: list[str] | None = None) -> 
                     cc.delete_blob(_checksum_key(owner, checksum))
                     extra += 1
                 except Exception:
-                    pass  # never cached under this checksum, or already gone — not an error
+                    # never cached under this checksum, or already gone — not an error
+                    swallowed("blob.purge_scan: deleting a scan's checksum-keyed blob failed", scan_id)
             out[_SOURCES_CONTAINER] = out.get(_SOURCES_CONTAINER, 0) + extra
         except Exception:
-            pass  # container missing — the prefix sweep above already recorded that
+            # container missing — the prefix sweep above already recorded that
+            swallowed("blob.purge_scan: purging the scan's blobs failed", scan_id)
     return out
