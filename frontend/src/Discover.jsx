@@ -232,10 +232,17 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
     if (!busy || (phase && phase !== 'queued')) return undefined
     // Shared subscription, not a private timer (jobsFeed.js). Every other consumer asking for
     // the same query rides the same request instead of adding five more pool acquisitions.
-    return subscribeJobs('queued', (d) => {
+    // `meta.fetchedAt`, not Date.now(). The feed shares one GET /jobs and deliberately keeps its
+    // payload across unmount so a remount draws immediately — which is only safe because it hands
+    // every subscriber the REAL time of the fetch that produced that payload. Its own header says
+    // "Mounting must not make old data look new"; stamping Date.now() here defeated exactly that,
+    // at the ONE surface that displays freshness. A mount onto a warm cache rendered "Queue
+    // updated 0s ago" for a payload 45s old and already flagged stale.
+    return subscribeJobs('queued', (d, meta) => {
       const ahead = (d.jobs || []).filter((j) => DISCOVERY_JOB_TYPES.has(j.type) && j.id !== jobId).length
       setQueueSnap({ compatibleJobsAhead: ahead, workersTotal: d.workers ?? null,
-                     workersOnline: !!d.worker_tier_alive, polledAt: Date.now() })
+                     workersOnline: !!d.worker_tier_alive,
+                     polledAt: meta?.fetchedAt ?? Date.now() })
     }, { intervalMs: 5000 })
   }, [busy, jobId, progress?.phase])
   // The actual "estimated pickup: X–Y minutes" range (GET /scans/{id}/queue-estimate), on top of
