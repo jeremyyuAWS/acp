@@ -15,6 +15,38 @@ import { coreStats } from './coreStats.js'
 import { scOfWcag } from './coreStats.js'
 import { SCOPE_SCS, SCOPE_LABEL } from './activeScope.js'
 
+// Worker-tier health, as THREE states plus the local case — not the boolean the strip used to
+// render.
+//
+// `worker_tier_alive` is `age <= 120s`, so `false` collapses two different facts: a tier that
+// beat 140s ago and is late, and a tier that has never beaten at all. store.py's
+// worker_tier_status() keeps them apart deliberately — "Age is None when no worker has EVER
+// beaten […] which is a different failure from one that stopped, and reads differently in an
+// alert" — and /jobs has carried `worker_heartbeat_age_s` all along. This file discarded it and
+// printed a confident "offline" for both, which is a claim the client cannot support: absence of
+// a heartbeat is absence of evidence, and it must not read as evidence of absence OR of health.
+//
+// TOPOLOGY decides which signal even applies. In an in-process deployment there is no separate
+// tier, so its heartbeat is permanently absent and says nothing; health there is simply whether
+// the local pool has workers. Reading the tier heartbeat in that deployment is how "Worker
+// service offline" appeared beside a local pool that was busily working.
+export function deriveWorkerHealth(snap) {
+  if (!snap) return { state: 'unknown', label: 'status unknown', tone: 'unknown' }
+  if (snap.runtime_mode !== 'distributed') {
+    return snap.workers > 0
+      ? { state: 'local', label: 'online', tone: 'ok' }
+      : { state: 'no_local', label: 'no local workers', tone: 'warn' }
+  }
+  if (snap.heartbeatAgeS === null || snap.heartbeatAgeS === undefined) {
+    return { state: 'unknown', label: 'status unknown', tone: 'unknown' }
+  }
+  if (snap.alive) return { state: 'online', label: 'online', tone: 'ok' }
+  const mins = Math.floor(snap.heartbeatAgeS / 60)
+  const ago = mins >= 1 ? `${mins}m` : `${Math.round(snap.heartbeatAgeS)}s`
+  return { state: 'stale', label: `not responding · last beat ${ago} ago`, tone: 'warn' }
+}
+const HEALTH_TONE = { ok: '#1a7f37', warn: '#854F0B', unknown: '#5B6472' }
+
 // Re-assess the whole estate against a chosen WCAG 2.1 conformance level. A finding blocks
 // conformance when its level is at or below the target (A ⊆ AA ⊆ AAA), so the numbers
 // genuinely shift with the level — this is a real computation over the assessed findings,
@@ -146,6 +178,15 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     return subscribeJobs(null, (d) => {
       setWorkerSnap({ workers: d.workers ?? 0, running: d.stats?.running ?? 0,
                       queued: d.stats?.queued ?? 0, alive: !!d.worker_tier_alive,
+                      // The heartbeat's AGE, not just its boolean. /jobs has carried both since
+                      // system.py exposed worker_tier_status(); this file threw them away and
+                      // rendered `alive` as a hard binary, which cannot express the third state
+                      // (see deriveWorkerHealth). `age_s` is null when no worker has EVER beaten
+                      // or when the stored timestamp is unparseable — both "we cannot say",
+                      // which is different from "we know it is down".
+                      heartbeatAgeS: typeof d.worker_heartbeat_age_s === 'number'
+                        ? d.worker_heartbeat_age_s : null,
+                      heartbeatAt: d.worker_heartbeat_at ?? null,
                       suggested: d.suggested_workers ?? 4,
                       runtime_mode: d.runtime_mode ?? 'auto' })
     }, { intervalMs: 10000 })
@@ -168,6 +209,15 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   // Per-scan queue snapshot from GET /scans/{id}/live — accurate in-flight/waiting counts
   // for THIS scan only, unlike workerSnap which counts across all jobs system-wide.
   const [liveQueue, setLiveQueue] = useState(null)   // {inFlight, queued, workersBusy, workersMax}
+  // RETIRED, NOT DELETED (2026-08-31). Nothing in this file calls adjustWorkers any more: the ±
+  // concurrency buttons and the panel's "Start workers" button were the only two callers, and both
+  // were ordinary-user affordances for an infrastructure decision. Kept per this repo's convention
+  // — remove the mount, keep the code, and write down that it is retired — so restoring a control
+  // is one line if that decision is reversed. `workerBusy`/`workerMsg` below belong to it and are
+  // kept for the same reason. assessTopologyHealth.test.jsx asserts no such control renders, and
+  // will fail if one is wired back in, which is the reminder to delete this note rather than a
+  // regression. The AUTHORIZED path is unaffected: WorkerReplicaControl adjusts Azure warm
+  // replicas and gates its buttons on `me?.is_admin`.
   const adjustWorkers = (delta) => {
     if (!workerSnap || workerBusy) return
     // First click from zero: jump straight to the server's suggested count rather than to 1.
@@ -576,8 +626,14 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                 those banners' own conditions) rather than deriving a second, possibly-diverging
                 notion of the same thing. */}
             {(() => {
+              // Gated on TOPOLOGY, exactly like the banner below — these must agree, and the
+              // comment above says they do. Before this they did not: #1060 changed the banner
+              // and left this reading `!(distributed && alive)`, so one stale heartbeat made
+              // `noCapacity` true and the panel announced "no worker is currently online to
+              // process them" — the same claim the banner had just been fixed to withhold,
+              // rendered ABOVE it, with a "Start workers" button attached.
               const noCapacity = !!(workerSnap && workerSnap.workers === 0 && !workersDown
-                && !(workerSnap.runtime_mode === 'distributed' && workerSnap.alive))
+                && workerSnap.runtime_mode !== 'distributed')
               const stalled = !!(workerSnap && workerSnap.workers > 0 && assessStartedAt && (() => {
                 const lastActivityMs = Math.max(lastProgressRef.current ?? 0, lastInFlightRef.current ?? 0) || assessStartedAt
                 return lastActivityMs < nowTick - 5 * 60 * 1000
@@ -591,9 +647,11 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                 processingCount, waitingCount, lastActivityMins, currentFile, currentPhase,
                 pickupEstimate,
               })
+              // No `onStartWorkers`. The panel renders its "Start workers" button only when the
+              // caller supplies the handler, so withholding it removes the affordance without
+              // touching the panel — which still serves Settings, where an operator may keep one.
               return (
-                <ProcessingStatusPanel derived={derived} onViewMonitor={onViewMonitor}
-                                       onStartWorkers={() => adjustWorkers(+1)} />
+                <ProcessingStatusPanel derived={derived} onViewMonitor={onViewMonitor} />
               )
             })()}
             {workersDown && (
@@ -678,7 +736,13 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               </div>
             )}
             {workerSnap && (() => {
-              const externallyManaged = workerSnap.runtime_mode === 'distributed' && workerSnap.alive
+              // TOPOLOGY, not health. Whether a separate worker tier exists does not stop being
+              // true because one heartbeat poll came back late — and this value decided whether
+              // an ordinary user saw the ± concurrency buttons, so a stale beat handed out
+              // infrastructure controls in a deployment where those controls adjust a pool
+              // (the API container's own) that is 0 by design and does no work.
+              const externallyManaged = workerSnap.runtime_mode === 'distributed'
+              const health = deriveWorkerHealth(workerSnap)
               // NO "assigned next" COUNT. It was `inFlight - workersBusy`, and the backend sets
               // `workers.busy = in_flight` by construction (live_queue.compose), so that subtraction
               // is always exactly 0 — a category that could never appear, taking up room in a strip
@@ -696,9 +760,9 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               return (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0 2px',
                             fontSize: 12.5, flexWrap: 'wrap' }}>
-                <span style={{ color: workerSnap.alive ? '#1a7f37' : '#854F0B', fontWeight: 600 }}>
+                <span style={{ color: HEALTH_TONE[health.tone], fontWeight: 600 }}>
                   ● Worker service&nbsp;
-                  <span style={{ fontWeight: 400 }}>{workerSnap.alive ? 'online' : 'offline'}</span>
+                  <span style={{ fontWeight: 400 }}>{health.label}</span>
                 </span>
                 <span className="muted">·</span>
                 <span className="muted">
@@ -710,26 +774,23 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                   <><span className="muted">·</span>
                   <span className="muted">{workerCount} worker{workerCount === 1 ? '' : 's'} · Last activity {lastActivityMins} min ago</span></>
                 )}
-                {externallyManaged
-                  ? <span className="muted" style={{ marginLeft: 4, fontStyle: 'italic' }}>
-                      Worker capacity is managed by your deployment administrator.
-                    </span>
-                  : <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 4 }}>
-                      <span className="muted" style={{ fontSize: 11 }}>Worker concurrency:</span>
-                      <button onClick={() => adjustWorkers(-1)} disabled={workerBusy || workerSnap.workers <= 0}
-                              aria-label="Remove an in-process worker"
-                              style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
-                                       background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
-                                       cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>−</button>
-                      <span style={{ fontSize: 13, fontWeight: 600, minWidth: 18, textAlign: 'center' }}>{workerSnap.workers}</span>
-                      <button onClick={() => adjustWorkers(+1)} disabled={workerBusy || workerSnap.workers >= 16}
-                              aria-label="Add an in-process worker"
-                              style={{ width: 20, height: 20, borderRadius: 5, border: '1px solid var(--line)',
-                                       background: '#fff', color: 'var(--ink)', fontSize: 14, lineHeight: 1,
-                                       cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>+</button>
-                      {workerMsg && <span style={{ fontSize: 11, color: workerMsg.startsWith('Failed') ? '#8A2A20' : '#1a7f37',
-                                                  fontWeight: 600, marginLeft: 2 }}>{workerMsg}</span>}
-                    </span>}
+                {/* The ± worker-concurrency buttons are deliberately gone from this view. They
+                    called setWorkers() with NO admin check at all — unlike WorkerReplicaControl
+                    mounted three lines below, which shows its count to everyone and its buttons
+                    only when `me?.is_admin`, the same value the backend's _require_admin reads.
+                    The right pattern was already in this file, next to the wrong one.
+                    Choosing worker concurrency is an infrastructure decision and the
+                    worker-provisioning PRD is explicit that no ordinary-user surface should
+                    expose one. Both branches now say where capacity is actually managed, which
+                    differs by topology: a separate tier is the deployment's, a local pool is
+                    Settings'. Nothing is deleted — adjustWorkers()/setWorkers stay in this file
+                    (see their retirement note) so restoring a control is one line, and the
+                    authorized path (WorkerReplicaControl) is untouched. */}
+                <span className="muted" style={{ marginLeft: 4, fontStyle: 'italic' }}>
+                  {externallyManaged
+                    ? 'Worker capacity is managed by your deployment administrator.'
+                    : 'Worker capacity is managed in Settings → Worker Configuration.'}
+                </span>
                 <WorkerReplicaControl leadingSeparator me={me} />
               </div>
             )
