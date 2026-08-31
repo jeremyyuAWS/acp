@@ -2939,6 +2939,163 @@ def _scan_file(payload: dict, job: dict) -> None:
                                 "ai": bool(payload.get("ai", True)), "pii": pii}, scan_id=scan_id)
 
 
+@handler("workspace_scan_discover")
+def _workspace_scan_discover(payload: dict, job: dict) -> None:
+    """Enumerate a content workspace and fan out one workspace_scan_file per eligible document.
+
+    The Discover step for the upload-first flow (ADR 0044): the same shape as _scan_discover —
+    list the source, fix the run's file total, enqueue the per-file work — against a source that
+    is a DATABASE TABLE rather than a connector.
+
+    WHY THIS IS A SEPARATE HANDLER AND NOT A BRANCH IN _scan_discover, for the same reason #1116
+    gave for not reusing _scan_file: that function is connector-shaped throughout. It builds a
+    Drive service, raises when no Drive token is present, walks paginated listings, and threads
+    tokens into every downstream call. A workspace has none of those things, and adding a fifth
+    source kind to that state machine would mean carrying its token checks past a path that can
+    never have a token.
+
+    AND THIS IS THE PART THAT MATTERS BEYOND TIDINESS. The enumeration that has been crashing in
+    production is _scan_discover's initial _list(...) walk — minutes of connector traffic before
+    any checkpoint exists, which is exactly why ACP_PER_FOLDER_SCAN_JOBS could not have protected
+    it: the fan-out block sits below that walk. Here the enumeration is one indexed SELECT over
+    rows that were durably written at upload time. There is no long walk to interrupt, no token
+    to expire mid-enumeration, and no re-listing on a retry. A workspace-sourced run does not
+    need the durable-checkpoint work the connector path still needs; it does not have the
+    problem.
+
+    RESUMABLE BY CONSTRUCTION. A reclaim re-runs this handler from the top. It re-reads the
+    workspace (the authoritative population, not a snapshot from the route) and enqueues only
+    documents that have no workspace_scan_file job yet, so a fan-out interrupted at file 300 of
+    500 resumes at 301 instead of enqueueing 500 more.
+
+    payload: {scan_id, workspace_id, user}
+    """
+    scan_id = payload["scan_id"]
+    workspace_id = payload["workspace_id"]
+    user = payload.get("user")
+
+    _phase(job, f"listing documents in workspace {workspace_id}")
+    eligible, excluded = _workspace_scan_population(workspace_id, user)
+
+    # HONEST COUNTS, both halves. `files` must be the population actually enqueued or the run can
+    # never finalize — count_files_done compares file_records against it, and a document that was
+    # never enqueued writes no row (the wedge _record_dead_scan_files exists to prevent, arrived
+    # at from the other direction). But a quarantined or duplicate upload silently vanishing from
+    # the total is its own dishonesty: the customer uploaded it, and "12 of 12 assessed" over an
+    # estate of 15 is a worse answer than "12 assessed, 3 excluded". So the excluded rows are
+    # recorded as decisions, where fileErrorReason.js already looks for a per-document reason,
+    # rather than being dropped on the floor.
+    for doc_name, reason in excluded:
+        try:
+            core.store.log_decision(user or "system", "content_workspace.excluded_from_scan",
+                                    scan_id=scan_id, file=doc_name, detail=reason[:200])
+        except Exception:
+            swallowed("_workspace_scan_discover: logging an excluded document failed", scan_id)
+
+    core.store.set_scan_files(scan_id, len(eligible))
+    # scan.listing_complete, from the closed SCAN_EVENT_KINDS vocabulary — not a new kind for a
+    # new source. append_scan_event RAISES on an unknown kind by design, and the emit-site guard
+    # at handlers.py:1152 checks every call in this file against that set, so inventing
+    # "scan.listed" here would have failed CI rather than degrading quietly.
+    #
+    # `excluded` rides in the detail because it is the half a bare count cannot express: a run
+    # that lists 12 of 15 uploads is complete, not truncated, and the difference has a reason
+    # per document recorded above.
+    scan_event(scan_id, "scan.listing_complete", phase="discovering", job_id=job.get("id"),
+               worker_id=job.get("locked_by"), attempt=job.get("attempts", 1),
+               owner_email=user,
+               detail={"source": "workspace", "workspace_id": workspace_id,
+                       "files_found": len(eligible), "excluded": len(excluded)})
+
+    if not eligible:
+        # Mirrors _enqueue_analysis's own empty-items branch. Without it a workspace with nothing
+        # assessable in it leaves a 'queued' run that nothing will ever finalize, because the
+        # trigger is a per-file job completing and there are no per-file jobs.
+        core.store.enqueue_job("scan_finalize",
+                               {"scan_id": scan_id, "source": "workspace",
+                                "ai": False, "pii": False}, scan_id=scan_id)
+        return
+
+    already = _already_enqueued_version_ids(scan_id)
+    _phase(job, f"enqueuing {len(eligible) - len(already & {e['version_id'] for e in eligible})} "
+                f"of {len(eligible)} document(s)")
+    for item in eligible:
+        check_cancel()
+        if item["version_id"] in already:
+            continue
+        core.store.enqueue_job("workspace_scan_file", {
+            "scan_id": scan_id, "workspace_id": workspace_id,
+            "document_id": item["document_id"], "version_id": item["version_id"],
+            "file": item["file"], "checksum": item.get("checksum"), "user": user},
+            scan_id=scan_id)
+
+
+def _workspace_scan_population(workspace_id: str, user: str | None) -> tuple[list[dict], list[tuple[str, str]]]:
+    """Split a workspace's documents into what this scan will assess and what it will not.
+
+    Returns (eligible, excluded) where `excluded` carries a REASON per document. Module-level so
+    tests can exercise the partition without a queue, and so the route can report the same split
+    back to the caller before anything is enqueued.
+
+    ELIGIBILITY IS THE LATEST VERSION'S lifecycle_state, and only "ready" qualifies. The other
+    states are all deliberate outcomes of the upload pipeline, not errors:
+
+      quarantined  its magic bytes did not match its extension. PRD §13 treats this as a normal
+                   terminal upload state; assessing it anyway would defeat the check.
+      duplicate    the same content_hash already exists elsewhere in this workspace. Assessing
+                   both would double-count one document in every total the run reports.
+      expired      the retention sweep deleted its blob. The row survives; the bytes do not.
+
+    A document with no version at all is excluded too — an upload session that was created and
+    never completed leaves exactly that, and it has no bytes to assess.
+
+    Filenames come from the version's original_filename, falling back to the document's display
+    name: a workspace document's relative_path preserves the customer's folder structure, and
+    two files with the same base name in different folders are ordinary. The path is what makes
+    them distinguishable, so it is what the scan records.
+    """
+    eligible: list[dict] = []
+    excluded: list[tuple[str, str]] = []
+    docs = core.store.list_content_workspace_documents(workspace_id, owner_email=user or "")
+    for doc in docs:
+        name = doc.get("relative_path") or doc.get("display_name") or doc["id"]
+        version = core.store.get_latest_content_workspace_document_version(doc["id"])
+        if version is None:
+            excluded.append((name, "no uploaded version — the upload was never completed"))
+            continue
+        state = version.get("lifecycle_state")
+        if state != "ready":
+            excluded.append((name, f"lifecycle_state={state!r}, not 'ready'"))
+            continue
+        eligible.append({
+            "document_id": doc["id"], "version_id": version["id"],
+            "file": version.get("original_filename") or name,
+            "checksum": version.get("content_hash"),
+        })
+    return eligible, excluded
+
+
+def _already_enqueued_version_ids(scan_id: str) -> set[str]:
+    """Which versions this scan has ALREADY fanned out to, so a reclaimed discover resumes.
+
+    Reads the queue rather than a marker column: the queue is the thing that would be duplicated,
+    so it is the honest source for whether it already was. A payload that will not parse is
+    treated as not-enqueued — re-enqueuing one document is a wasted job, whereas skipping one on
+    a parse error loses it from the run entirely, and save_file_result upserts so the duplicate
+    is harmless.
+    """
+    import json as _json
+    out: set[str] = set()
+    for row in core.store.list_scan_jobs_of_type(scan_id, "workspace_scan_file"):
+        try:
+            vid = (_json.loads(row.get("payload") or "{}") or {}).get("version_id")
+        except Exception:
+            continue
+        if vid:
+            out.add(vid)
+    return out
+
+
 @handler("workspace_scan_file")
 def _workspace_scan_file(payload: dict, job: dict) -> None:
     """Assess ONE content-workspace document version (ADR 0044 / PRD upload-and-remediate).

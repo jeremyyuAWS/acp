@@ -1059,3 +1059,104 @@ def test_assessment_404s_for_a_foreign_owner(gated_client, monkeypatch):
     _assess(gated_client, ws, doc_id, version_id)
     r = _assessment(gated_client, ws, doc_id, version_id, owner=OTHER)
     assert r.status_code == 404
+
+
+# ── workspace-wide assess (POST /content-workspaces/{id}/assess) ────────────────
+
+def _assess_workspace(gated_client, ws, *, owner=OWNER):
+    return gated_client(owner).post(f"/content-workspaces/{ws}/assess")
+
+
+@pytest.fixture()
+def unique_versions(monkeypatch):
+    """The module-level _blob_enabled fixture hands every upload the SAME version_id ("v-001"),
+    which is fine for the single-document tests above and collides on the second insert here.
+    These tests are specifically about MULTIPLE documents in one workspace, so they mint a fresh
+    id per session — the only difference from the shared fixture."""
+    import workspace_blob
+    seen = {"n": 0}
+
+    def _auth(owner, ws, doc, **kw):
+        seen["n"] += 1
+        a = dict(_FAKE_AUTH)
+        a["version_id"] = f"v-{seen['n']:03d}"
+        return a
+    monkeypatch.setattr(workspace_blob, "generate_upload_authorization", _auth)
+
+
+def test_workspace_assess_enqueues_one_run_for_the_whole_workspace(gated_client, monkeypatch,
+                                                                   isolated_store, unique_versions):
+    """The customer-facing shape: upload a folder, assess what was uploaded, ONE run with one
+    total and one completion — not N per-version scans the caller has to correlate."""
+    ws = _make_workspace(gated_client)
+    # DIFFERENT BYTES per document, not different literal hashes. complete_upload recomputes the
+    # hash server-side from the downloaded bytes and 422s a claimed value that doesn't match, so
+    # two uploads have to actually differ — varying `size` does that while keeping a valid PDF
+    # signature. And they must differ at all: identical content is correctly flagged DUPLICATE,
+    # which would leave one eligible and read as a fan-out bug rather than as dedup working.
+    for name, size in (("a.pdf", 1024), ("b.pdf", 2048)):
+        # The DECLARED size must match what the blob reports too: complete_upload checks the
+        # actual size server-side against the session, so varying one without the other 422s.
+        doc_id, version_id = _start_upload(gated_client, ws, filename=name, size_bytes=size)
+        _mock_uploaded(monkeypatch, size=size, prefix=b"%PDF-1.7")
+        _complete(gated_client, ws, doc_id, version_id, size_bytes=size)
+
+    r = _assess_workspace(gated_client, ws)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "queued"
+    assert body["preview"]["eligible"] == 2
+    assert body["preview"]["excluded"] == 0
+
+    # ONE discover job, not one job per document — the fan-out is the worker's to do.
+    jobs = isolated_store.list_scan_jobs_of_type(body["scan_id"], "workspace_scan_discover")
+    assert len(jobs) == 1
+    assert isolated_store.list_scan_jobs_of_type(body["scan_id"], "workspace_scan_file") == []
+
+
+def test_workspace_assess_reports_what_it_will_skip_and_why(gated_client, monkeypatch,
+                                                           unique_versions):
+    """A quarantined upload is part of the estate the customer uploaded. The preview names it,
+    rather than letting an eligible-count silently stand in for a file count."""
+    ws = _make_workspace(gated_client)
+    good_doc, good_v = _start_upload(gated_client, ws, filename="good.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"%PDF-1.7")
+    _complete(gated_client, ws, good_doc, good_v)
+    doc_id, version_id = _start_upload(gated_client, ws, filename="suspect.pdf", size_bytes=2048)
+    _mock_uploaded(monkeypatch, size=2048, prefix=b"not a pdf")
+    _complete(gated_client, ws, doc_id, version_id, size_bytes=2048)
+
+    body = _assess_workspace(gated_client, ws).json()
+    assert body["preview"]["eligible"] == 1
+    assert body["preview"]["excluded"] == 1
+    reason = body["preview"]["excluded_documents"][0]
+    assert "suspect.pdf" in reason["file"]
+    assert "quarantined" in reason["reason"]
+
+
+def test_workspace_assess_409s_rather_than_running_over_nothing(gated_client, monkeypatch):
+    """A run over zero documents finalizes instantly at 0 of 0 and reads as a successful
+    assessment of the workspace. The reasons come back so "3 uploads, all quarantined" is
+    distinguishable from "you have not uploaded anything"."""
+    ws = _make_workspace(gated_client)
+    doc_id, version_id = _start_upload(gated_client, ws, filename="suspect.pdf")
+    _mock_uploaded(monkeypatch, size=1024, prefix=b"not a pdf")
+    _complete(gated_client, ws, doc_id, version_id)
+
+    r = _assess_workspace(gated_client, ws)
+    assert r.status_code == 409
+    assert r.json()["detail"]["excluded"][0]["file"].endswith("suspect.pdf")
+
+
+def test_workspace_assess_404s_for_a_foreign_owner(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client, owner=OWNER)
+    _ready_version(gated_client, monkeypatch, ws, filename="a.pdf")
+    assert _assess_workspace(gated_client, ws, owner=OTHER).status_code == 404
+
+
+def test_workspace_assess_503s_when_blob_is_not_configured(gated_client, monkeypatch):
+    ws = _make_workspace(gated_client)
+    _ready_version(gated_client, monkeypatch, ws, filename="a.pdf")
+    import workspace_blob
+    monkeypatch.setattr(workspace_blob, "enabled", lambda: False)
+    assert _assess_workspace(gated_client, ws).status_code == 503

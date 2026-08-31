@@ -8010,6 +8010,27 @@ class Store:
             self._db.execute(cur, "SELECT * FROM jobs" + where + " ORDER BY updated_at DESC LIMIT %s", tuple(params))
             return self._db.fetchall(cur)
 
+    def list_scan_jobs_of_type(self, scan_id: str, job_type: str) -> list[dict]:
+        """Every job of one type already enqueued for one scan, whatever its status.
+
+        The RESUME primitive for a fan-out handler. enqueue_job has no idempotency key, so a
+        fan-out that is interrupted half-way and then reclaimed would enqueue the whole
+        population a second time — the first half twice, and `files` (set from the population,
+        not from the queue) describing neither. Reading what is already there lets the second
+        attempt enqueue only the remainder, which is what makes the fan-out a checkpoint rather
+        than a restart.
+
+        Status is deliberately NOT filtered: a job that already ran and is 'done', or one that
+        dead-lettered, must both count as enqueued. Re-enqueuing a done file would redo work the
+        results already reflect, and re-enqueuing a dead-lettered one would resurrect a job the
+        queue has deliberately given up on.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id, type, status, payload FROM jobs WHERE scan_id=%s AND type=%s",
+                (scan_id, job_type))
+            return self._db.fetchall(cur)
+
     # Job `type` -> the user-facing phase it belongs to, for the pickup-estimate panel on
     # Discover/Assess/Remediate. Several types (scan_finalize) are shared tail-of-pipeline
     # steps; classified under the phase that enqueues them in the common case.
