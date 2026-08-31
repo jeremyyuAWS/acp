@@ -77,6 +77,7 @@ SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 sys.path.insert(0, str(ACP / "scripts"))
 from rubric import Rubric
 from swallowed import swallowed
+import scan_formats
 
 OFFICE = (".docx", ".pptx", ".xlsx")
 HTML_EXTS = (".html", ".htm")
@@ -88,16 +89,29 @@ EXPORT_MAP = {
     "application/vnd.google-apps.presentation": ("application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx"),
 }
 
-# All MIME types we can scan (uploaded files + Google Workspace natives)
-_SCANNABLE_MIME = list(EXPORT_MAP.keys()) + [
-    "application/pdf",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "text/html",
-]
+# All MIME types Discovery may list — uploaded files in scope, plus the Google Workspace natives
+# whose export target is in scope (a Google Doc rides on docx; see scan_formats).
+#
+# FUNCTIONS, not the module-level constants they replaced. The scope is env-configurable
+# (ACP_SCAN_FORMATS) and a value computed at import time latches whatever the environment said at
+# first import — the exact shape of the incident api/worker_main.py's header records, where an
+# import-time int() beat an env var set afterwards and the container ran with zero workers while
+# reporting itself healthy. Cheap enough to call per page: frozenset construction over ~7 strings.
+def _scannable_mime() -> frozenset[str]:
+    """Every MIME type a listing may keep, for the CURRENT format scope."""
+    return scan_formats.upload_mimes() | scan_formats.google_native_in_scope(EXPORT_MAP)
 
-_DRIVE_MIME_Q = " or ".join(f"mimeType='{m}'" for m in _SCANNABLE_MIME)
+
+def _drive_mime_q() -> str:
+    """The `mimeType=...` disjunction, for the callers that still build a Drive query from it.
+
+    NOTE for anyone reaching for this in the scan path: `_search_drive` deliberately does NOT use
+    it. A mimeType clause is served by Drive's SEARCH INDEX, which lags the live file store badly
+    enough to hide freshly-uploaded files (see `_search_drive`'s docstring for the measurement).
+    Sorted so the query string is stable across calls — it is otherwise set-ordered, which makes
+    it differ run to run and defeats both caching and log comparison.
+    """
+    return " or ".join(f"mimeType='{m}'" for m in sorted(_scannable_mime()))
 
 
 def _noop(_):
@@ -510,7 +524,7 @@ def _debug_dump_account(svc, max_files: int = 60) -> None:
     listing; turn it on to answer 'why did the scan only see N files?' and off again after.
     A best-effort diagnostic: it must never break a scan."""
     try:
-        scannable = set(_SCANNABLE_MIME) | {"application/vnd.google-apps.folder"}
+        scannable = _scannable_mime() | {"application/vnd.google-apps.folder"}
         resp = svc.files().list(
             q="trashed=false", pageSize=max_files, orderBy="modifiedTime desc",
             fields="files(id,name,mimeType,owners(emailAddress))",
@@ -527,8 +541,8 @@ def _debug_dump_account(svc, max_files: int = 60) -> None:
 
 
 def _is_scannable_mime(f: dict) -> bool:
-    """Does this Drive file have a type we can assess? Applied in Python, deliberately."""
-    return f.get("mimeType") in _SCANNABLE_MIME
+    """Is this Drive file in Discovery's format scope? Applied in Python, deliberately."""
+    return f.get("mimeType") in _scannable_mime()
 
 
 def _is_drive_rate_limit_error(exc: BaseException) -> bool:
@@ -1447,7 +1461,13 @@ def _sp_site_name(token: str, site_id: str) -> str | None:
         return None
 
 
-_SP_SCANNABLE_EXTS = {".docx", ".pptx", ".xlsx", ".pdf", ".html", ".htm"}
+def _sp_scannable_exts() -> frozenset[str]:
+    """The file extensions a SharePoint/OneDrive walk may keep, for the CURRENT format scope.
+
+    Extension rather than MIME because that is what the Graph listing gives us to filter on
+    before fetching anything — the connector-side filter the intake boundary depends on. Same
+    read-per-call reasoning as `_scannable_mime` above."""
+    return scan_formats.extensions()
 
 
 def _sp_skip_folders(exclude_remediated: bool) -> set[str]:
@@ -1598,7 +1618,7 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
     analysed a second time, and surfaces in the UI as "x2 copies". Each source is responsible
     for yielding unique IDENTITIES; _dedupe_names only disambiguates genuine NAME collisions
     between different items."""
-    exts = _SP_SCANNABLE_EXTS
+    exts = _sp_scannable_exts()
     skip_folders = _sp_skip_folders(exclude_remediated)
     files: list[dict] = []
     # Keyed by (drive, item) — an item id is unique only within its drive, so a bare id would
@@ -1930,7 +1950,7 @@ def sp_reconstructed_listing(prior_files: list[dict], changed_files: list[dict],
             continue
         drive_id = (item.get("parentReference") or {}).get("driveId")
         classified = _sp_classify_item(item, drive_id=drive_id, skip_folders=skip_folders,
-                                       exts=_SP_SCANNABLE_EXTS)
+                                       exts=_sp_scannable_exts())
         if classified is None:
             continue
         est_files.append(classified["est_row"])

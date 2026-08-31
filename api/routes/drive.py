@@ -54,7 +54,7 @@ def me(request: Request):
 
 @router.get("/sources")
 def sources(request: Request):
-    from scanner import _DRIVE_MIME_Q
+    from scanner import _drive_mime_q
     token = request.headers.get("x-drive-token")
     # No Google Drive token in GIS mode = the user is authenticated some other way (a Microsoft /
     # SharePoint sign-in never has one) or simply hasn't connected Drive. That is NOT an error:
@@ -76,7 +76,7 @@ def sources(request: Request):
             page_token = None
             while True:
                 resp = svc.files().list(
-                    q=f"({_DRIVE_MIME_Q}) and trashed=false",
+                    q=f"({_drive_mime_q()}) and trashed=false",
                     fields="files(id)", pageSize=1000, pageToken=page_token,
                 ).execute()
                 n += len(resp.get("files", []))

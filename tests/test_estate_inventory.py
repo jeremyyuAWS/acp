@@ -29,10 +29,42 @@ def test_supported_formats_are_assessable():
         ("b.pdf", PDF, "pdf"),
         ("c.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", "pptx"),
         ("d.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"),
-        ("e.html", "text/html", "html"),
     ]:
         r = inv.classify(_f("1", name, mime))
         assert r["format"] == fmt and r["status"] == inv.ASSESSABLE, r
+
+
+def test_html_is_out_of_scope_by_default_but_still_classified_as_html():
+    """HTML left the scan scope on 2026-08-31 (PDF/DOCX/XLSX/PPTX only).
+
+    The format bucket is unchanged — an .html file is still recognised AS html, and the estate
+    inventory still counts it — but it is no longer `assessable`, because no listing will produce
+    it for Assess to receive. This assertion used to live in the loop above and is broken out so
+    the change is a statement rather than a deletion.
+    """
+    r = inv.classify(_f("1", "e.html", "text/html"))
+    assert r["format"] == "html"
+    assert r["status"] == inv.UNSUPPORTED
+
+
+def test_assessable_follows_the_configured_scan_scope(monkeypatch):
+    """The capability status is DERIVED from the scan scope, not written down beside it.
+
+    The bite check for scan_formats' whole reason to exist: put HTML back in scope and the same
+    file must become assessable again, with no other edit anywhere. If this passes while
+    `_status_of` holds its own literal list, the two have silently drifted — which is the failure
+    (an inflated assessment-eligible denominator) the module was created to make impossible.
+    """
+    html = _f("1", "e.html", "text/html")
+    assert inv.classify(html)["status"] == inv.UNSUPPORTED
+
+    monkeypatch.setenv("ACP_SCAN_FORMATS", "pdf,docx,xlsx,pptx,html")
+    assert inv.classify(html)["status"] == inv.ASSESSABLE
+
+    # And narrowing further takes a format out in the same breath.
+    monkeypatch.setenv("ACP_SCAN_FORMATS", "pdf")
+    assert inv.classify(_f("2", "a.docx", DOC))["status"] == inv.UNSUPPORTED
+    assert inv.classify(_f("3", "b.pdf", PDF))["status"] == inv.ASSESSABLE
 
 
 def test_google_native_assesses_as_its_export_format():
