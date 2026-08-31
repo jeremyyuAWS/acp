@@ -1571,6 +1571,41 @@ class _PgAdapter:
     supports_skip_locked: bool = True
 
 
+# ── Queue precedence ─────────────────────────────────────────────────────────
+# `claim_job` orders by (priority, run_after) and idx_jobs_claim2 indexes exactly that, so
+# precedence has always been supported by the schema — it was simply never used. Every job was
+# enqueued at the default 100, which made the queue pure FIFO: a Discovery job arriving during
+# an Assess fan-out waited behind every scan_file already queued, and on a large estate that is
+# thousands of downloads. The wait was invisible in the UI, which showed the scan as "queued"
+# with no indication of what it was queued behind.
+DEFAULT_JOB_PRIORITY = 100
+
+# LOWER is claimed first. Discovery-stage jobs list and classify metadata — they open no file
+# and download nothing (ADR 0020) — so they are short, and letting one overtake content work
+# costs that work a few hundred milliseconds. The reverse costs Discovery the length of an
+# entire Assess backlog.
+DISCOVERY_JOB_PRIORITY = 10
+
+# The three job types that make up the Discovery stage:
+#   scan_discover — lists the source, persists the inventory, fans out
+#   scan_folder   — one per top-level folder, the per-folder BFS enumeration it fans out TO
+#   scan          — the monolithic entry job; under ACP_DEFER_ANALYSIS_TO_ASSESS=1 (the shipped
+#                   default, and what deploy/public/deploy.sh sets) it discovers and stops
+#
+# scan_folder matters most and is the one easiest to miss. #1121's reserved-slot lane claims
+# only `scan_discover`, so the entry job starts at once and then its folder jobs — the work that
+# actually enumerates the estate — drop back into the general queue behind the backlog. A
+# reserved lane without this covers the starting gun and not the race.
+_DISCOVERY_JOB_TYPES = frozenset({"scan_discover", "scan_folder", "scan"})
+
+
+def job_priority(job_type: str) -> int:
+    """Queue precedence for a job type. Callers may still pass `priority=` explicitly to
+    override — this only decides what happens when they say nothing, which is every caller
+    in this codebase today."""
+    return DISCOVERY_JOB_PRIORITY if job_type in _DISCOVERY_JOB_TYPES else DEFAULT_JOB_PRIORITY
+
+
 # ── Store ────────────────────────────────────────────────────────────────────
 
 class Store:
@@ -1777,7 +1812,7 @@ class Store:
                      job_type: str, payload: dict, *,
                      idempotency_key: str | None = None,
                      inputs: dict | None = None,
-                     priority: int = 100, max_attempts: int = 5,
+                     priority: int | None = None, max_attempts: int = 5,
                      run_after: str | None = None,
                      content_workspace_version_id: str | None = None) -> tuple[str, str]:
         """Create a scan_runs stub and its initial job in a single atomic transaction.
@@ -1797,6 +1832,8 @@ class Store:
         import json as _json
         now = self._now()
         job_id = uuid.uuid4().hex[:16]
+        if priority is None:
+            priority = job_priority(job_type)
         with self._db.cursor() as cur:
             if idempotency_key is not None:
                 self._db.execute(cur,
@@ -7169,12 +7206,14 @@ class Store:
         return datetime.now(timezone.utc).isoformat()
 
     def enqueue_job(self, type: str, payload: dict | None = None, *,
-                    priority: int = 100, max_attempts: int = 5,
+                    priority: int | None = None, max_attempts: int = 5,
                     run_after: str | None = None, scan_id: str | None = None,
                     campaign_id: str | None = None, batch_id: str | None = None) -> str:
         import json as _json
         now = self._now()
         job_id = uuid.uuid4().hex[:16]
+        if priority is None:
+            priority = job_priority(type)
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
