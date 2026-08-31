@@ -465,7 +465,23 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docs.length])
 
-  const pct = phase === 'running' ? Math.round((progress / Math.max(1, assessN, docs.length)) * 100) : 0
+  // ONE denominator, the same one `progress` is measured against. `progress` is
+  // `Math.min(scored.length, run.files)` — a SERVER-scale numerator — while `assessN` and
+  // `docs.length` come from the `files` PROP, so dividing by those divided two unrelated scales.
+  // Math.max did not reconcile them; it just picked the larger client number.
+  //
+  // On the deferred path (ADR 0020) the prop legitimately lags the server — Assess is running
+  // precisely BECAUSE the files have no scores yet — so this was the normal case, not an edge
+  // one. With 148 documents server-side and 12 scored, the bar rendered 60% beside a caption
+  // reading "12 of 148", which is 8%.
+  //
+  // `liveTotal` is that server count, and its own declaration already calls it "the REAL total,
+  // not docs.length". The caption, the "Computing conformance · N documents" line and the
+  // no-workers banner all read it; the percentage was the one consumer that did not. The
+  // fallbacks keep the immediate (non-deferred) path and the first render — before any poll has
+  // landed — working exactly as before.
+  const pct = phase === 'running'
+    ? Math.round((progress / Math.max(1, liveTotal || assessN || docs.length)) * 100) : 0
 
   // How many criteria the in-flight file is actually being weighed against. This is the SAME
   // list the result tile and the "By WCAG criterion" table reconcile to — the agreed scope
