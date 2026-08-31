@@ -1090,6 +1090,15 @@ _worker_seq = 0          # monotonic id source so scaled-in workers get fresh id
 _MAX_WORKERS = 16        # safety cap on live scaling
 
 
+def _discovery_reservation(pool_size):
+    # Reserve existing capacity, never the last general-purpose slot.
+    try:
+        requested = int(os.environ.get("ACP_DISCOVERY_RESERVED_WORKERS", "0"))
+    except ValueError:
+        requested = 0
+    return max(0, min(requested, pool_size - 1))
+
+
 def _spawn_worker() -> None:
     import threading
     from worker import JobWorker
@@ -1098,7 +1107,8 @@ def _spawn_worker() -> None:
     # poll/SSE stream without worker.py importing core (it is deliberately infra-only — see its
     # own docstring). See _job_is_stale's phase=='retrying' exemption below for why this signal
     # can outlive the normal 90s staleness window (backoff can run up to 600s).
-    w = JobWorker(get_store(), worker_id=f"w{_worker_seq}", on_retry=update_job)
+    w = JobWorker(get_store(), worker_id=f"w{_worker_seq}", on_retry=update_job,
+                  job_types=("scan_discover",) if len(_worker_handles) < _discovery_reservation(WORKERS) else None)
     t = threading.Thread(target=w.run_forever, daemon=True, name=f"jobworker-{_worker_seq}")
     _worker_seq += 1
     t.start()
@@ -1122,6 +1132,8 @@ def set_worker_count(n: int) -> int:
             w.stop()                       # exits after the current job (if any)
         del _worker_handles[n:]
     WORKERS = n
+    for index, (worker, _thread) in enumerate(_worker_handles):
+        worker.job_types = ("scan_discover",) if index < _discovery_reservation(n) else None
     return len(_worker_handles)
 
 

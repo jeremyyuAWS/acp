@@ -7203,7 +7203,7 @@ class Store:
             os.environ.get("ACP_JOB_LEASE_S", "600"))
         return (datetime.now(timezone.utc) + timedelta(seconds=secs)).isoformat()
 
-    def claim_job(self, worker_id: str) -> dict | None:
+    def claim_job(self, worker_id: str, *, job_types=None) -> dict | None:
         """Atomically claim the next eligible job. Returns the claimed job (with
         attempts already incremented), or None if the queue is empty.
 
@@ -7211,6 +7211,10 @@ class Store:
         RETURNING * — each worker atomically grabs a distinct row with no round-trip race.
         SQLite: two-step optimistic CAS — SELECT then conditional UPDATE on status='queued'
         (SQLite serialises writers, so the window between the two is closed in practice)."""
+        if job_types is not None and not job_types:
+            return None
+        types = tuple(job_types or ())
+        clause = " AND type IN (" + ",".join(["%s"] * len(types)) + ") " if types else " "
         now = self._now()
         expires = self._lease_expiry()
         if self._db.supports_skip_locked:
@@ -7222,10 +7226,10 @@ class Store:
                     "WHERE id = ("
                     "  SELECT id FROM jobs "
                     "  WHERE status='queued' AND run_after<=%s "
-                    "  ORDER BY priority, run_after "
+                    + clause + "  ORDER BY priority, run_after "
                     "  FOR UPDATE SKIP LOCKED LIMIT 1"
                     ") RETURNING id",
-                    (now, worker_id, now, expires, now))
+                    (now, worker_id, now, expires, now, *types))
                 row = self._db.fetchone(cur)
             if not row:
                 return None
@@ -7235,7 +7239,7 @@ class Store:
             with self._db.cursor() as cur:
                 self._db.execute(cur,
                     "SELECT id FROM jobs WHERE status='queued' AND run_after<=%s "
-                    "ORDER BY priority, run_after LIMIT 1", (now,))
+                    + clause + "ORDER BY priority, run_after LIMIT 1", (now, *types))
                 row = self._db.fetchone(cur)
                 if not row:
                     return None
