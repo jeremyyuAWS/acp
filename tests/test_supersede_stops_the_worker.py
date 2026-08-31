@@ -62,9 +62,16 @@ def test_superseding_signals_the_running_worker_to_stop(isolated_store):
         "worker.check_cancel() reads — so a worker already executing it never stops")
 
 
-def test_the_job_still_reads_as_dead_so_accounting_is_unchanged(isolated_store):
-    """The signal must not quietly reclassify the job. dead_letter_breakdown counts status='dead',
-    and a superseded run's jobs have always been counted there."""
+def test_the_job_still_reads_as_dead(isolated_store):
+    """The signal must not quietly reclassify the job: setting cancel_requested_at is additive,
+    the row stays terminal in the same status it already had.
+
+    This used to be named ..._so_accounting_is_unchanged, on the reasoning that
+    dead_letter_breakdown counts status='dead' so a superseded run's jobs land in the failure
+    count. True at the time, and the wrong thing to preserve — see test_stopped_is_not_failed.py:
+    the breakdown now reads cancel_requested_at alongside the status, so these rows report as
+    STOPPED rather than as failures. The status is what this test pins; the accounting is that
+    file's."""
     s = isolated_store
     scan_id, job_id = _scan_with_claimed_job(s)
     s.supersede_scan(scan_id, owner=OWNER)
