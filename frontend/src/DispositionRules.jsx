@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { confirm } from './ConfirmDialog.jsx'
 import {
   listDispositionPolicies, createDispositionPolicy, setDispositionPolicyEnabled, previewDispositionPolicy,
@@ -620,6 +620,41 @@ function PrecedenceNote() {
  * them again is the duplicate-header defect, and a disclosure the user must open to see the step
  * they navigated to is a step that looks empty.
  */
+/**
+ * Decides whether an async result is still allowed to become state.
+ *
+ * WHY A BOOLEAN IS NOT ENOUGH, and this is the part that bites. The obvious guard is a single
+ * `alive` flag set false on unmount. Under StrictMode React deliberately mounts, runs cleanup,
+ * and mounts again with the SAME component instance and the same refs — so that flag is already
+ * false by the time the real mount is running, and every result is dropped forever. Reset it on
+ * the second mount and the opposite happens: a request started before the cleanup is now
+ * accepted, which is precisely the stale write the guard existed to stop. One boolean cannot
+ * separate "this component is gone" from "this request belongs to a previous life of it".
+ *
+ * Two numbers can. `epoch` counts mounts and is bumped by every cleanup, so a result carries the
+ * life it was born in; `seq` counts requests PER STREAM, so a slow first request cannot overwrite
+ * a fast second one. A result applies only when both still match.
+ *
+ * Per-stream, not global: the rules list and the conflict check write different state and must
+ * not invalidate each other — sharing one counter would mean opening the conflicts panel silently
+ * discarded an in-flight reload of the rules.
+ */
+export function useRequestGate() {
+  const epoch = useRef(0)
+  const seqs = useRef(new Map())
+  useEffect(() => {
+    const mine = epoch.current
+    return () => { epoch.current = mine + 1 }
+  }, [])
+  // Call at REQUEST START; the returned predicate is asked at settle time.
+  return useCallback((stream) => {
+    const seq = (seqs.current.get(stream) ?? 0) + 1
+    seqs.current.set(stream, seq)
+    const startedIn = epoch.current
+    return () => seqs.current.get(stream) === seq && epoch.current === startedIn
+  }, [])
+}
+
 export default function DispositionRules({ embedded = false }) {
   // Embedded, it starts open and stays open — there is nothing else on the screen to collapse in
   // favour of.
@@ -628,12 +663,22 @@ export default function DispositionRules({ embedded = false }) {
   const [counts, setCounts] = useState({})   // policy_id -> would_match, only once actually asked
   const [err, setErr] = useState('')
 
-  const load = useCallback(() => Promise.resolve(listDispositionPolicies())
-    .then((rows) => {
-      setRules((Array.isArray(rows) ? rows : []).filter((p) => LIFECYCLE_ACTIONS.has(p.action)))
-      setErr('')
-    })
-    .catch((e) => setErr(refusalText(e))), [])
+  const beginRequest = useRequestGate()
+
+  // Both branches are guarded, not just the failure one. The reported crash came through
+  // `.catch` — a rejection landing after the environment was gone — but a late SUCCESS calls
+  // setRules on exactly the same dead component, and is additionally the one that can overwrite
+  // newer data when two loads overlap.
+  const load = useCallback(() => {
+    const current = beginRequest('rules')
+    return Promise.resolve(listDispositionPolicies())
+      .then((rows) => {
+        if (!current()) return
+        setRules((Array.isArray(rows) ? rows : []).filter((p) => LIFECYCLE_ACTIONS.has(p.action)))
+        setErr('')
+      })
+      .catch((e) => { if (current()) setErr(refusalText(e)) })
+  }, [beginRequest])
 
   useEffect(() => { if (open && rules == null && !err) load() }, [open, rules, err, load])
 
@@ -644,10 +689,13 @@ export default function DispositionRules({ embedded = false }) {
   const onCreated = useCallback((policyId) => {
     load()
     if (!policyId) return
+    // Keyed per policy so two rules previewing at once cannot invalidate each other, while a
+    // second preview of the SAME rule still supersedes the first.
+    const current = beginRequest(`preview:${policyId}`)
     Promise.resolve(previewDispositionPolicy(policyId))
-      .then((r) => setCount(policyId, r?.would_match ?? null))
+      .then((r) => { if (current()) setCount(policyId, r?.would_match ?? null) })
       .catch(() => { /* the count stays unasked rather than becoming a zero */ })
-  }, [load, setCount])
+  }, [load, setCount, beginRequest])
 
   // Duplicate = create a new rule with the same match/action/approval, a distinguishing name, and
   // no backend route of its own — createDispositionPolicy already makes it disabled, so a
@@ -676,10 +724,13 @@ export default function DispositionRules({ embedded = false }) {
   const [conflictsBusy, setConflictsBusy] = useState(false)
   const checkConflicts = () => {
     setConflictsBusy(true); setConflictsErr('')
+    const current = beginRequest('conflicts')
     Promise.resolve(listDispositionConflicts())
-      .then((r) => setConflicts(Array.isArray(r?.conflicts) ? r.conflicts : []))
-      .catch((e) => setConflictsErr(refusalText(e)))
-      .finally(() => setConflictsBusy(false))
+      .then((r) => { if (current()) setConflicts(Array.isArray(r?.conflicts) ? r.conflicts : []) })
+      .catch((e) => { if (current()) setConflictsErr(refusalText(e)) })
+      // `finally` too: it clears the busy flag, which is state like any other, and a late one
+      // would otherwise be the single remaining unguarded write on this component.
+      .finally(() => { if (current()) setConflictsBusy(false) })
   }
 
   const enabledCount = rules == null ? null : rules.filter((p) => p.enabled).length
