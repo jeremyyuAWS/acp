@@ -122,10 +122,11 @@ describe('the Assess status contradiction', () => {
   it('does not claim nothing is processing while a worker is running the job', async () => {
     await runWithClaimedJobAndStaleHeartbeat()
 
-    const saysNothingIsProcessing = /nothing is processing them/i.test(text())
-    const saysAWorkerHasIt = /No local workers active/i.test(text()) === false || true
-
-    expect(saysNothingIsProcessing).toBe(false)
+    // `saysAWorkerHasIt` used to be computed here as `… === false || true`, which is the constant
+    // `true` and was never asserted. Removed rather than fixed: assessTopologyHealth.test.jsx
+    // asserts the claimed-job line for this same scenario, and against every wording of the
+    // no-capacity claim rather than this one banner's sentence.
+    expect(/nothing is processing them/i.test(text())).toBe(false)
   })
 
   it('does not offer a "Start N workers" control to an ordinary user', async () => {
