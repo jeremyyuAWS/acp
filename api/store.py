@@ -948,6 +948,16 @@ _SCHEMA = [
       software_version TEXT
     )""",
     "CREATE INDEX IF NOT EXISTS idx_worker_instances_state ON worker_instances(state)",
+    # ADR 0044 — links a scan_runs row back to the content_workspace_document_versions row it
+    # assessed, when the scan's source is "workspace" rather than a connector. NULL for every
+    # connector-sourced scan (the overwhelming majority). App-level reference, not a DB FK,
+    # matching every other cross-table pointer in this schema (scan_id on file_records, etc.).
+    # Set atomically at enqueue time (see enqueue_scan) so a scan_runs row is never observable
+    # without its link, the same "no orphan stubs" guarantee idempotency_key already gives that
+    # insert.
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS content_workspace_version_id TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_scan_runs_cw_version ON scan_runs(content_workspace_version_id) "
+    "WHERE content_workspace_version_id IS NOT NULL",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -1749,7 +1759,8 @@ class Store:
                      idempotency_key: str | None = None,
                      inputs: dict | None = None,
                      priority: int = 100, max_attempts: int = 5,
-                     run_after: str | None = None) -> tuple[str, str]:
+                     run_after: str | None = None,
+                     content_workspace_version_id: str | None = None) -> tuple[str, str]:
         """Create a scan_runs stub and its initial job in a single atomic transaction.
 
         Returns (scan_id, job_id). All rows are committed together; a failure at any point
@@ -1760,7 +1771,10 @@ class Store:
         `inputs` is the immutable input snapshot (Stage 1 item 3). When provided it is
         inserted into scan_inputs in the same transaction. SECURITY: inputs must not contain
         access tokens, credentials, or secrets — callers are responsible for omitting them.
-        """
+
+        `content_workspace_version_id` (ADR 0044): set for a workspace-sourced scan so the
+        link is present from the very first (queued) row — never an orphan stub without it,
+        the same guarantee this method already gives idempotency_key."""
         import json as _json
         now = self._now()
         job_id = uuid.uuid4().hex[:16]
@@ -1778,9 +1792,10 @@ class Store:
                     existing_job = self._db.fetchone(cur)
                     return existing_scan_id, (existing_job["id"] if existing_job else job_id)
             self._db.execute(cur,
-                "INSERT INTO scan_runs(id,source,status,owner_email,started_at,idempotency_key) "
-                "VALUES(%s,%s,'queued',%s,%s,%s) ON CONFLICT(id) DO NOTHING",
-                (scan_id, source, owner, now, idempotency_key))
+                "INSERT INTO scan_runs(id,source,status,owner_email,started_at,idempotency_key,"
+                "content_workspace_version_id) "
+                "VALUES(%s,%s,'queued',%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
+                (scan_id, source, owner, now, idempotency_key, content_workspace_version_id))
             self._db.execute(cur,
                 "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
                 "run_after,scan_id,created_at,updated_at) "
@@ -8697,6 +8712,18 @@ class Store:
             self._db.execute(cur,
                 "SELECT * FROM content_workspace_document_versions WHERE id=%s AND document_id=%s",
                 (version_id, document_id))
+            return self._db.fetchone(cur)
+
+    def get_content_workspace_version_scan(self, version_id: str) -> dict | None:
+        """The most recent scan_runs row assessing this version (ADR 0044) — a document can be
+        re-assessed (e.g. after a Discover/Assess rule set change), so this is 'the current
+        answer', not 'the only one'. Returns the full scan_runs row (status, files_done/files,
+        rubric_name, started_at, finalized_at, ...) so the caller can render it the same way
+        every other scan-status read in this app already does, rather than a bespoke shape."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM scan_runs WHERE content_workspace_version_id=%s "
+                "ORDER BY started_at DESC LIMIT 1", (version_id,))
             return self._db.fetchone(cur)
 
     def update_content_workspace_document_version_lifecycle_state(

@@ -344,6 +344,54 @@ def test_storage_bytes_is_scoped_to_the_workspace_and_owner(isolated_store, ws):
     assert isolated_store.get_content_workspace_storage_bytes(ws, owner_email=OTHER) == 0
 
 
+def test_get_version_scan_returns_none_when_never_assessed(isolated_store, ws):
+    doc_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)
+    version_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document_version(
+        version_id, document_id=doc_id, version_seq=1, content_hash="h1")
+
+    assert isolated_store.get_content_workspace_version_scan(version_id) is None
+
+
+def test_get_version_scan_finds_the_linked_scan(isolated_store, ws):
+    doc_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)
+    version_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document_version(
+        version_id, document_id=doc_id, version_seq=1, content_hash="h1")
+
+    scan_id, _ = isolated_store.enqueue_scan(
+        uuid.uuid4().hex[:12], "workspace", OWNER, "workspace_scan_file", {},
+        content_workspace_version_id=version_id)
+
+    scan = isolated_store.get_content_workspace_version_scan(version_id)
+    assert scan is not None
+    assert scan["id"] == scan_id
+    assert scan["status"] == "queued"
+
+
+def test_get_version_scan_returns_the_most_recent_of_several(isolated_store, ws):
+    doc_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)
+    version_id = uuid.uuid4().hex[:12]
+    isolated_store.create_content_workspace_document_version(
+        version_id, document_id=doc_id, version_seq=1, content_hash="h1")
+
+    isolated_store.enqueue_scan(uuid.uuid4().hex[:12], "workspace", OWNER, "workspace_scan_file",
+                                {}, content_workspace_version_id=version_id)
+    # A second (later) scan for the same version — e.g. a re-assessment.
+    scan_id2, _ = isolated_store.enqueue_scan(
+        uuid.uuid4().hex[:12], "workspace", OWNER, "workspace_scan_file", {},
+        content_workspace_version_id=version_id)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, "UPDATE scan_runs SET started_at=%s WHERE id=%s",
+                                   ("2099-01-01T00:00:00+00:00", scan_id2))
+
+    scan = isolated_store.get_content_workspace_version_scan(version_id)
+    assert scan["id"] == scan_id2
+
+
 def test_admin_reset_wipes_documents_and_versions(isolated_store, ws):
     doc_id = uuid.uuid4().hex[:12]
     isolated_store.create_content_workspace_document(doc_id, workspace_id=ws, owner_email=OWNER)

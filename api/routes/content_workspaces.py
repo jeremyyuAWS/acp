@@ -64,6 +64,21 @@ document it duplicates") still isn't implemented: that needs moving/copying an a
 blob between documents, a different operation from this one, which is always a fresh
 client-driven upload.
 
+Also connects a stored upload to ACP's existing scan/assess engine: `POST .../documents/
+{document_id}/versions/{version_id}/assess` enqueues a real, durable scan (via
+store.enqueue_scan + a new "workspace_scan_file" job — api/handlers.py) against that ONE
+version, and `GET .../assessment` reports its current status. This is deliberately the ONLY new
+code — the per-file analysis itself is the exact engine every Drive/SharePoint scan already
+uses (_analyse_and_persist_one), reached via `_download`'s existing item["path"] local-read
+branch rather than a new "workspace" source kind bolted onto the connector-shaped scan/discover
+state machine. In particular this needs no Drive/SharePoint-style connector session: the
+worker reads the file with its OWN managed identity (workspace_blob), the same one it already
+writes with, so a slow queue or a worker restart cannot orphan the job the way an expired
+per-user connector token can. Remediation (turning an assessment into a corrected downloadable
+version) is not implemented yet — a later PR, since api/handlers.py's `_remediate_file` is
+tightly coupled to a Drive file id/token unlike the assess path and needs its own review before
+reuse.
+
 Owner-scoped throughout: `owner_email` is the tenant boundary this whole app already uses
 (ADR 0044). `GET /content-workspaces/{id}` 404s — never 403 — for a foreign id, matching
 `test_foreign_scan_404.py`'s established "an id is never an existence oracle across owners"
@@ -481,3 +496,66 @@ def download_content_workspace_document_version(workspace_id: str, document_id: 
     safe_filename = _safe_disposition_filename(filename)
     return Response(data, media_type=media_type,
                     headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'})
+
+
+# ── Assess (connects a stored upload to the existing scan/assess engine) ────────
+
+@router.post("/content-workspaces/{workspace_id}/documents/{document_id}/versions/{version_id}/assess")
+def assess_content_workspace_document_version(workspace_id: str, document_id: str,
+                                               version_id: str, request: Request):
+    """Enqueues a real scan (durable, worker-processed) against this ONE stored version,
+    reusing the existing engine end to end via workspace_scan_file (api/handlers.py) — no
+    separate 'workspace assessment' logic. Deliberately a user-triggered action, not automatic
+    on upload completion: a batch upload of many files should not silently fan out N scans the
+    moment each one lands.
+
+    Requires lifecycle_state="ready" — a quarantined or flagged-duplicate upload is not a
+    supported scan input; the caller resolves that first (POST .../resolve-duplicate, or this
+    stays quarantined for a human to review)."""
+    owner = _owner(request)
+    _require_workspace(workspace_id, owner)
+    doc = core.store.get_content_workspace_document(document_id, owner_email=owner)
+    if doc is None or doc["workspace_id"] != workspace_id:
+        raise HTTPException(404, "document not found")
+    version = core.store.get_content_workspace_document_version(version_id, document_id=document_id)
+    if version is None:
+        raise HTTPException(404, "version not found")
+    if version.get("lifecycle_state") != "ready":
+        raise HTTPException(409, f"version is not ready for assessment "
+                             f"(lifecycle_state={version.get('lifecycle_state')!r})")
+    if not workspace_blob.enabled():
+        raise HTTPException(503, "workspace uploads are not configured on this deployment")
+
+    scan_id = uuid.uuid4().hex[:12]
+    filename = version.get("original_filename") or doc.get("display_name") or "document"
+    scan_id, job_id = core.store.enqueue_scan(
+        scan_id, "workspace", owner, "workspace_scan_file",
+        {"scan_id": scan_id, "workspace_id": workspace_id, "document_id": document_id,
+         "version_id": version_id, "file": filename, "checksum": version.get("content_hash"),
+         "user": owner},
+        inputs={"source": "workspace", "workspace_id": workspace_id, "document_id": document_id,
+                "version_id": version_id, "actor": owner},
+        content_workspace_version_id=version_id)
+    core.store.log_decision(owner, "content_workspace.assess_enqueued",
+                            detail=f"{workspace_id}/{document_id}/{version_id}: scan {scan_id}")
+    return {"scan_id": scan_id, "job_id": job_id, "status": "queued"}
+
+
+@router.get("/content-workspaces/{workspace_id}/documents/{document_id}/versions/{version_id}/assessment")
+def get_content_workspace_document_version_assessment(workspace_id: str, document_id: str,
+                                                       version_id: str, request: Request):
+    """The current (most recent) assessment scan for this version, or 404 if none has ever
+    been triggered — distinct from a 200 with an in-progress/queued status, which means one
+    HAS been triggered and the caller should keep polling."""
+    owner = _owner(request)
+    _require_workspace(workspace_id, owner)
+    doc = core.store.get_content_workspace_document(document_id, owner_email=owner)
+    if doc is None or doc["workspace_id"] != workspace_id:
+        raise HTTPException(404, "document not found")
+    version = core.store.get_content_workspace_document_version(version_id, document_id=document_id)
+    if version is None:
+        raise HTTPException(404, "version not found")
+    scan = core.store.get_content_workspace_version_scan(version_id)
+    if scan is None:
+        raise HTTPException(404, "no assessment has been run for this version")
+    return scan

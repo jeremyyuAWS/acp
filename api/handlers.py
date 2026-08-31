@@ -2931,6 +2931,74 @@ def _scan_file(payload: dict, job: dict) -> None:
                                 "ai": bool(payload.get("ai", True)), "pii": pii}, scan_id=scan_id)
 
 
+@handler("workspace_scan_file")
+def _workspace_scan_file(payload: dict, job: dict) -> None:
+    """Assess ONE content-workspace document version (ADR 0044 / PRD upload-and-remediate).
+
+    Unlike every other scan source, this one needs no connector session at all: the file is
+    already durably stored in Blob, and workers read it with their OWN managed identity
+    (workspace_blob._service_client), not a per-user Drive/SharePoint token cached in Redis
+    with a one-hour expiry. That is the whole point of building this on stored uploads rather
+    than routing queued processing through a browser-session-bound connector token — a worker
+    restart or a slow queue cannot orphan this job the way a token expiry can for `scan_file`.
+
+    So this does NOT reuse `_scan_file`: `_make_svc`/`get_scan_tokens` assume a connector
+    source and would raise for one that carries neither a Drive token nor "local"/"sharepoint".
+    Instead it downloads the blob to a local temp file itself, then hands off to the SAME
+    per-file engine every connector-sourced file goes through (_analyse_and_persist_one) via
+    `_download`'s existing `item["path"]` local-read branch — no new analysis code, only a new
+    way to arrive at a local file.
+
+    payload: {scan_id, workspace_id, document_id, version_id, file, checksum, user}"""
+    import lf as _lf
+    import tempfile as _tempfile
+    from pathlib import Path as _Path
+    import workspace_blob
+
+    scan_id = payload["scan_id"]
+    workspace_id = payload["workspace_id"]
+    document_id = payload["document_id"]
+    version_id = payload["version_id"]
+    filename = payload["file"]
+    user = payload.get("user")
+    now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+
+    # Same pause checkpoint as _scan_file's ADR 0038 note — harmless here today (nothing yet
+    # pauses a workspace scan), kept so a future generic "stop" mechanism keyed on scan_id
+    # covers this source without a separate code path to remember.
+    if not scan_paused(scan_id):
+        data = workspace_blob.download_document_bytes(user, workspace_id, document_id, version_id)
+        if data is None:
+            # Not configured, or the object is gone — the same "can't verify" = "can't proceed"
+            # stance every other workspace_blob read in this codebase takes. Recorded as an
+            # error file (not a FatalJobError) so the scan still finalizes with an honest result
+            # instead of leaving files_done permanently short.
+            core.store.save_file_result(scan_id, {
+                "file": filename, "engine": "n/a", "status": "error", "score": None,
+                "compliant": 0, "skipped_rules": 0, "issues": [],
+                "drive_file_id": None}, now)
+            core.store.log_decision("system", "content_workspace.assess_blob_unreadable",
+                                    scan_id=scan_id,
+                                    detail=f"{workspace_id}/{document_id}/{version_id}")
+        else:
+            tmp = _Path(_tempfile.mkdtemp(prefix="acp-wsscan-"))
+            local_path = tmp / filename
+            local_path.write_bytes(data)
+            item = {"file": filename, "path": str(local_path), "checksum": payload.get("checksum")}
+            # incremental=False: cross-scan reuse (find_prior_analysis) is keyed on
+            # drive_file_id, which a workspace file has none of — deliberately not attempted,
+            # rather than reused on a mismatch that would never actually match.
+            _analyse_and_persist_one(scan_id, item, "workspace", False, None, {}, now, _lf,
+                                     user=user, rubric_hash=core.active_rubric().hash,
+                                     incremental=False)
+    _lf.flush()
+    done, total = core.store.count_files_done(scan_id)
+    if done >= total > 0:
+        core.store.enqueue_job("scan_finalize",
+                               {"scan_id": scan_id, "source": "workspace", "ai": False, "pii": False},
+                               scan_id=scan_id)
+
+
 @handler("scan_finalize")
 def _scan_finalize(payload: dict, job: dict) -> None:
     """Aggregate the per-file results into the scan summary and run the shared post-scan
