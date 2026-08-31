@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import held
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
 
@@ -32,8 +34,14 @@ def test_a_fresh_job_has_no_phase(st):
 
 def test_claiming_clears_a_stale_phase_from_a_previous_attempt(st):
     jid = st.enqueue_job("remediate_file", {"file": "deck.pptx"})
+    # Claimed BEFORE the phase is set, because that is the only order in which the sequence this
+    # test names can happen: a phase is written by a running attempt, and only a running attempt
+    # can fail. Left unclaimed the fail_job below is refused outright ('stale') and the assertion
+    # passes on claim_job clearing the phase of a job that never had an attempt to inherit from.
+    st.claim_job("worker-0")
     st.set_job_phase(jid, "writing the corrected copy to Drive")
-    st.fail_job(jid, "boom", backoff_seconds=0)          # back to queued for a retry
+    st.fail_job(jid, "boom", backoff_seconds=0, **held(st, jid))   # back to queued for a retry
+    assert st.get_job(jid)["status"] == "queued", "the retry never happened"
     claimed = st.claim_job("worker-1")
     assert claimed is not None and claimed["id"] == jid
     assert claimed["phase"] is None, "a retry must not inherit the last attempt's phase"

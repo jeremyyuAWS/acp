@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import held
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
 OWNER = "owner@example.com"
@@ -76,9 +78,14 @@ def test_the_workers_own_cancel_write_cannot_clobber_that(isolated_store):
     fires; against an already-dead job it must no-op rather than flip the status to 'cancelled'."""
     s = isolated_store
     scan_id, job_id = _scan_with_claimed_job(s)
+    # The claim as it stood BEFORE supersede killed the job — held() reads the row, and by then
+    # the row is 'dead' with no holder. This is the worker's own in-memory claim, which is what
+    # it would still be passing when its handler finally returns.
+    claim = {"worker_id": s.get_job(job_id)["locked_by"],
+             "attempt": s.get_job(job_id)["attempts"]}
     s.supersede_scan(scan_id, owner=OWNER)
 
-    assert s.mark_job_cancelled(job_id) is False, "expected a no-op against a terminal job"
+    assert s.mark_job_cancelled(job_id, **claim) is False, "expected a no-op against a terminal job"
     assert s.get_job(job_id)["status"] == "dead"
 
 

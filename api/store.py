@@ -6897,7 +6897,27 @@ class Store:
             data.pop(k, None)
         return _j.dumps(data)
 
-    def complete_job(self, job_id: str) -> bool:
+    # The identity of a claim: which worker holds the job, on which attempt. claim_job sets
+    # both, so both are available to every caller that legitimately holds the job.
+    _CLAIM_OWNED = " AND status='running' AND locked_by=%s AND attempts=%s"
+
+    def _claim_is_current(self, job_id: str, worker_id: str, attempt: int) -> bool:
+        """True if (worker_id, attempt) is still the claim running this job.
+
+        Advisory only — the authority is the ownership predicate compiled into each outcome
+        UPDATE, which is atomic. This exists so a caller can skip SIDE EFFECTS it would
+        otherwise perform before that UPDATE ever runs (fail_job writes dead file rows before
+        it writes the status). Racy by construction: a job can be reclaimed between this
+        returning True and the UPDATE, which is exactly why the UPDATE keeps its own guard.
+        """
+        job = self.get_job(job_id)
+        if not job:
+            return False
+        return (job.get("status") == "running"
+                and job.get("locked_by") == worker_id
+                and job.get("attempts") == attempt)
+
+    def complete_job(self, job_id: str, *, worker_id: str, attempt: int) -> bool:
         """Mark the job done. Guarded against a reclaimed job's original (zombie) worker
         completing AFTER a second worker already finished it: reclaim_stuck_jobs() requeues a
         job whose lease expired so a SECOND worker can claim and run it, but does nothing to
@@ -6907,19 +6927,31 @@ class Store:
         when both happen to write 'done', but a real clobber (a completed job flipped back to
         'dead'/'cancelled') if the zombie instead hits fail_job/mark_job_cancelled. Whichever
         writer's terminal state lands first now wins; every later one is a safe no-op.
-        Returns True if this call's write applied, False if the job was already terminal."""
+        Returns True if this call's write applied, False if it did not.
+
+        ONLY THE CURRENT CLAIM MAY PUBLISH AN OUTCOME. The terminal guard above stops a zombie
+        overwriting a job that already FINISHED; it does nothing about one overwriting a job
+        still RUNNING under a replacement claim, because 'running' is not in the guarded set.
+        That is the live half of the same race: worker-B is mid-run when worker-A's stale
+        handler returns, A's completion lands, and B's own write is then refused as "already
+        terminal" — the suppression message naming the wrong writer. So `locked_by` and
+        `attempts` must both match, exactly as touch_job requires them (#1075): a worker can
+        legitimately re-claim a job it ran before, and the earlier execution must not publish
+        for the later one. Both are REQUIRED keyword arguments, deliberately — an optional
+        guard is one a future caller forgets, silently. Pinned by
+        tests/test_outcome_claim_ownership.py."""
         scrubbed = self._scrub_payload_secrets(job_id)
         with self._db.cursor() as cur:
             if scrubbed is not None:
                 self._db.execute(cur,
                     "UPDATE jobs SET status='done', updated_at=%s, last_error=NULL, payload=%s "
-                    "WHERE id=%s AND status NOT IN ('done','dead','cancelled')",
-                    (self._now(), scrubbed, job_id))
+                    "WHERE id=%s AND status NOT IN ('done','dead','cancelled')" + self._CLAIM_OWNED,
+                    (self._now(), scrubbed, job_id, worker_id, attempt))
             else:
                 self._db.execute(cur,
                     "UPDATE jobs SET status='done', updated_at=%s, last_error=NULL "
-                    "WHERE id=%s AND status NOT IN ('done','dead','cancelled')",
-                    (self._now(), job_id))
+                    "WHERE id=%s AND status NOT IN ('done','dead','cancelled')" + self._CLAIM_OWNED,
+                    (self._now(), job_id, worker_id, attempt))
             won = (getattr(cur, "rowcount", 0) or 0) > 0
         if not won:
             print(f"[acp] complete_job: job {job_id} already terminal — zombie-worker no-op", flush=True)
@@ -6947,18 +6979,22 @@ class Store:
             row = self._db.fetchone(cur)
         return bool(row and row.get("cancel_requested_at"))
 
-    def mark_job_cancelled(self, job_id: str) -> bool:
+    def mark_job_cancelled(self, job_id: str, *, worker_id: str, attempt: int) -> bool:
         """Stamp the job as status='cancelled' after cooperative cancellation completes.
 
         Same reclaimed-job guard as complete_job (see its docstring): a late call arriving
         after the job already reached a DIFFERENT terminal state — e.g. a second worker's
         complete_job already ran following a lease reclaim — is a safe no-op, never a clobber.
-        Returns True if this call's write applied, False if the job was already terminal."""
+        Ownership is required for the same reason it is on complete_job (see there): a stale
+        attempt's JobCancelledError must not stop the replacement that took its job over. That
+        matters more since #1079 — cancellation now reaches the pool threads, so more attempts
+        can raise it and arrive here.
+        Returns True if this call's write applied, False if it did not."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "UPDATE jobs SET status='cancelled', updated_at=%s "
-                "WHERE id=%s AND status NOT IN ('done','dead','cancelled')",
-                (self._now(), job_id))
+                "WHERE id=%s AND status NOT IN ('done','dead','cancelled')" + self._CLAIM_OWNED,
+                (self._now(), job_id, worker_id, attempt))
             won = (getattr(cur, "rowcount", 0) or 0) > 0
         if not won:
             print(f"[acp] mark_job_cancelled: job {job_id} already terminal — zombie-worker no-op", flush=True)
@@ -7131,16 +7167,39 @@ class Store:
                 pass
 
     def fail_job(self, job_id: str, error: str, backoff_seconds: float = 0.0,
-                 force_dead: bool = False, error_class: str | None = None) -> str:
+                 force_dead: bool = False, error_class: str | None = None,
+                 *, worker_id: str, attempt: int) -> str:
         """Requeue a failed job with backoff, or dead-letter it once attempts are
         exhausted (or immediately when force_dead). Returns 'queued' or 'dead'.
 
         error_class ('rate_limit', 'auth', 'corrupt', 'transient') is persisted on the
-        row for operator diagnostics; pass it from the worker's classify_job_error()."""
+        row for operator diagnostics; pass it from the worker's classify_job_error().
+
+        Requires the current claim (worker_id, attempt), as complete_job does — see there. Two
+        failure shapes rather than one: a stale DEAD-letter writes failure rows for documents
+        the replacement is processing successfully, and a stale REQUEUE is worse than a lost
+        update — it flips a running job back to 'queued' with locked_by=NULL, so a third worker
+        can claim it alongside the one still running and every document is processed twice.
+
+        Returns 'queued' or 'dead' when this call's write applied, 'missing' if the job is gone,
+        and 'stale' when the caller no longer holds the claim — including when the job has since
+        gone terminal. 'stale' replaces the old behaviour of returning 'queued'/'dead' for a
+        write that was actually suppressed, which said an outcome had been recorded when none
+        had."""
         from datetime import datetime, timezone, timedelta
         job = self.get_job(job_id)
         if job is None:
             return "missing"
+        # Bail BEFORE the side effects, not just before the status write. The dead branch calls
+        # _record_dead_scan_files first, which writes a failure row per document — so a stale
+        # claim whose UPDATE is about to be refused would still record its documents as failed,
+        # over a replacement that is processing them successfully. The UPDATE's own ownership
+        # predicate remains the authority (this read is racy by construction); this only stops
+        # the writes that happen on the way there.
+        if not self._claim_is_current(job_id, worker_id, attempt):
+            print(f"[acp] fail_job: job {job_id} is no longer held by {worker_id} "
+                  f"attempt={attempt} — outcome refused (stale claim)", flush=True)
+            return "stale"
         now = datetime.now(timezone.utc)
         if force_dead or job["attempts"] >= job["max_attempts"]:
             # BEFORE the payload is scrubbed — scrubbing is what removes the file names this needs.
@@ -7155,13 +7214,17 @@ class Store:
                 if scrubbed is not None:
                     self._db.execute(cur,
                         "UPDATE jobs SET status='dead', last_error=%s, error_class=%s, "
-                        "updated_at=%s, payload=%s WHERE id=%s AND status NOT IN ('done','dead','cancelled')",
-                        (error[:2000], error_class, now.isoformat(), scrubbed, job_id))
+                        "updated_at=%s, payload=%s WHERE id=%s "
+                        "AND status NOT IN ('done','dead','cancelled')" + self._CLAIM_OWNED,
+                        (error[:2000], error_class, now.isoformat(), scrubbed, job_id,
+                         worker_id, attempt))
                 else:
                     self._db.execute(cur,
                         "UPDATE jobs SET status='dead', last_error=%s, error_class=%s, "
-                        "updated_at=%s WHERE id=%s AND status NOT IN ('done','dead','cancelled')",
-                        (error[:2000], error_class, now.isoformat(), job_id))
+                        "updated_at=%s WHERE id=%s "
+                        "AND status NOT IN ('done','dead','cancelled')" + self._CLAIM_OWNED,
+                        (error[:2000], error_class, now.isoformat(), job_id,
+                         worker_id, attempt))
                 won = (getattr(cur, "rowcount", 0) or 0) > 0
             if not won:
                 print(f"[acp] fail_job: job {job_id} already terminal — zombie-worker "
@@ -7198,8 +7261,9 @@ class Store:
             self._db.execute(cur,
                 "UPDATE jobs SET status='queued', run_after=%s, locked_at=NULL, "
                 "locked_by=NULL, last_error=%s, error_class=%s, updated_at=%s "
-                "WHERE id=%s AND status NOT IN ('done','dead','cancelled')",
-                (run_after, error[:2000], error_class, now.isoformat(), job_id))
+                "WHERE id=%s AND status NOT IN ('done','dead','cancelled')" + self._CLAIM_OWNED,
+                (run_after, error[:2000], error_class, now.isoformat(), job_id,
+                 worker_id, attempt))
             won = (getattr(cur, "rowcount", 0) or 0) > 0
         if not won:
             print(f"[acp] fail_job: job {job_id} already terminal — zombie-worker "

@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import held
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
 # Two of the three samples are Office formats, and the assertion below is that ALL of them
@@ -44,7 +46,7 @@ def _run_queue(core):
             HANDLERS[j["type"]](pl, j)
         finally:
             try:
-                core.store.complete_job(j["id"])
+                core.store.complete_job(j["id"], **held(core.store, j["id"]))
             except Exception:
                 pass
 

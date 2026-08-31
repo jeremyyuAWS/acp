@@ -38,6 +38,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import held
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
 
@@ -61,7 +63,7 @@ def test_a_reclaimed_job_cannot_be_renewed_by_the_previous_worker(st):
     a_attempt = a["attempts"]
 
     # The sweeper reclaims it and worker-B takes over.
-    st.fail_job(jid, "lease lapsed", backoff_seconds=0)
+    st.fail_job(jid, "lease lapsed", backoff_seconds=0, **held(st, jid))
     b = st.claim_job("worker-B")
     assert b["id"] == jid and b["locked_by"] == "worker-B"
     assert b["attempts"] > a_attempt
@@ -89,7 +91,7 @@ def test_a_later_attempt_by_the_SAME_worker_is_still_a_different_claim(st):
     earlier execution's heartbeat must not renew the later one."""
     jid = st.enqueue_job("t_lease", {})
     first = st.claim_job("worker-A")
-    st.fail_job(jid, "retry", backoff_seconds=0)
+    st.fail_job(jid, "retry", backoff_seconds=0, **held(st, jid))
     second = st.claim_job("worker-A")
     assert second["attempts"] > first["attempts"]
 
@@ -102,7 +104,7 @@ def test_renewing_a_finished_job_is_a_no_op(st):
     """Unchanged behaviour, kept explicit: the status guard still applies."""
     jid = st.enqueue_job("t_lease", {})
     job = st.claim_job("worker-A")
-    st.complete_job(jid)
+    st.complete_job(jid, **held(st, jid))
 
     st.touch_job(jid, worker_id="worker-A", attempt=job["attempts"])
     assert st.get_job(jid)["status"] == "done"

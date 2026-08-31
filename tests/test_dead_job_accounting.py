@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import held
+
 ACP = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ACP / "api"))
 
@@ -44,7 +46,7 @@ def test_a_dead_scan_file_job_still_advances_the_finalize_counter(store):
     store.claim_job("w1")
     assert store.count_files_done(sid) == (0, 1)
 
-    assert store.fail_job(jid, "boom", force_dead=True) == "dead"
+    assert store.fail_job(jid, "boom", force_dead=True, **held(store, jid)) == "dead"
 
     done, total = store.count_files_done(sid)
     assert (done, total) == (1, 1), "the dead document must count, or finalize can never fire"
@@ -57,8 +59,8 @@ def test_an_expired_token_force_dead_is_the_path_that_wedged_a_whole_estate(stor
     j1 = store.enqueue_job("scan_file", {"scan_id": sid, "file": "a.docx"}, scan_id=sid)
     j2 = store.enqueue_job("scan_file", {"scan_id": sid, "file": "b.pdf"}, scan_id=sid)
     store.claim_job("w1"); store.claim_job("w1")
-    store.fail_job(j1, "Your Google Drive session expired", force_dead=True)
-    store.fail_job(j2, "Your Google Drive session expired", force_dead=True)
+    store.fail_job(j1, "Your Google Drive session expired", force_dead=True, **held(store, j1))
+    store.fail_job(j2, "Your Google Drive session expired", force_dead=True, **held(store, j2))
     assert store.count_files_done(sid) == (2, 2)
 
 
@@ -69,7 +71,7 @@ def test_a_dead_BATCH_job_records_every_document_it_was_carrying(store):
     jid = store.enqueue_job("scan_batch", {"scan_id": sid, "items": [
         {"file": "a.docx"}, {"file": "b.pdf"}, {"file": "c.pptx"}]}, scan_id=sid)
     store.claim_job("w1")
-    store.fail_job(jid, "batch died", force_dead=True)
+    store.fail_job(jid, "batch died", force_dead=True, **held(store, jid))
     assert store.count_files_done(sid) == (3, 3)
 
 
@@ -78,7 +80,7 @@ def test_the_document_is_recorded_as_an_error_not_as_missing(store):
     sid = _scan(store, files=1)
     jid = store.enqueue_job("scan_file", {"scan_id": sid, "file": "a.docx"}, scan_id=sid)
     store.claim_job("w1")
-    store.fail_job(jid, "boom", force_dead=True)
+    store.fail_job(jid, "boom", force_dead=True, **held(store, jid))
     run = store.get_scan(sid)["run"]
     # run.error is what live_snapshot publishes as "unable to assess".
     assert run.get("error") == 1
@@ -91,7 +93,7 @@ def test_the_reason_is_logged_where_the_ui_already_looks_for_it(store):
     sid = _scan(store, files=1)
     jid = store.enqueue_job("scan_file", {"scan_id": sid, "file": "a.docx"}, scan_id=sid)
     store.claim_job("w1")
-    store.fail_job(jid, "Your Google Drive session expired", force_dead=True)
+    store.fail_job(jid, "Your Google Drive session expired", force_dead=True, **held(store, jid))
     rows = [d for d in store.list_decisions(scan_id=sid)
             if d.get("action") == "scan.file_error" and d.get("file") == "a.docx"]
     assert rows, "the dead-letter reason must reach the decision log"
@@ -105,7 +107,7 @@ def test_a_retryable_failure_records_nothing_it_is_not_dead_yet(store):
     sid = _scan(store, files=1)
     jid = store.enqueue_job("scan_file", {"scan_id": sid, "file": "a.docx"}, scan_id=sid)
     store.claim_job("w1")
-    assert store.fail_job(jid, "transient", backoff_seconds=30) == "queued"
+    assert store.fail_job(jid, "transient", backoff_seconds=30, **held(store, jid)) == "queued"
     assert store.count_files_done(sid) == (0, 1)
 
 
@@ -115,7 +117,7 @@ def test_a_dead_NON_file_job_records_nothing(store):
     sid = _scan(store, files=2)
     jid = store.enqueue_job("scan_discover", {"scan_id": sid, "source": "drive"}, scan_id=sid)
     store.claim_job("w1")
-    store.fail_job(jid, "source unreachable", force_dead=True)
+    store.fail_job(jid, "source unreachable", force_dead=True, **held(store, jid))
     assert store.count_files_done(sid) == (0, 2)
 
 
@@ -125,7 +127,7 @@ def test_a_late_real_result_replaces_the_error_row_rather_than_double_counting(s
     sid = _scan(store, files=1)
     jid = store.enqueue_job("scan_file", {"scan_id": sid, "file": "a.docx"}, scan_id=sid)
     store.claim_job("w1")
-    store.fail_job(jid, "boom", force_dead=True)
+    store.fail_job(jid, "boom", force_dead=True, **held(store, jid))
     store.save_file_result(sid, {"file": "a.docx", "engine": "docx", "status": "analysed",
                                  "score": 92, "compliant": 1, "skipped_rules": 0, "issues": []},
                            "2026-08-23T00:00:00Z")
@@ -140,7 +142,7 @@ def test_a_dead_scan_discover_job_marks_the_scan_failed(store):
     sid = _scan(store, files=2)
     jid = store.enqueue_job("scan_discover", {"scan_id": sid, "source": "drive"}, scan_id=sid)
     store.claim_job("w1")
-    store.fail_job(jid, "source unreachable", force_dead=True)
+    store.fail_job(jid, "source unreachable", force_dead=True, **held(store, jid))
     assert store.get_scan(sid)["run"]["status"] == "failed"
 
 
@@ -149,7 +151,7 @@ def test_a_dead_scan_job_marks_the_scan_failed_too(store):
     sid = _scan(store, files=2)
     jid = store.enqueue_job("scan", {"scan_id": sid, "source": "drive"}, scan_id=sid)
     store.claim_job("w1")
-    store.fail_job(jid, "boom", force_dead=True)
+    store.fail_job(jid, "boom", force_dead=True, **held(store, jid))
     assert store.get_scan(sid)["run"]["status"] == "failed"
 
 
@@ -160,7 +162,7 @@ def test_a_dead_scan_discover_job_never_overwrites_an_already_terminal_scan(stor
     jid = store.enqueue_job("scan_discover", {"scan_id": sid, "source": "drive"}, scan_id=sid)
     store.claim_job("w1")
     store.set_scan_status(sid, "discovered")
-    store.fail_job(jid, "source unreachable", force_dead=True)
+    store.fail_job(jid, "source unreachable", force_dead=True, **held(store, jid))
     assert store.get_scan(sid)["run"]["status"] == "discovered"
 
 
@@ -170,7 +172,7 @@ def test_a_dead_PER_FILE_job_does_not_touch_scan_status(store):
     sid = _scan(store, files=1)
     jid = store.enqueue_job("scan_file", {"scan_id": sid, "file": "a.docx"}, scan_id=sid)
     store.claim_job("w1")
-    store.fail_job(jid, "boom", force_dead=True)
+    store.fail_job(jid, "boom", force_dead=True, **held(store, jid))
     assert store.get_scan(sid)["run"]["status"] == "running"
 
 
@@ -178,4 +180,4 @@ def test_a_dead_job_with_no_scan_id_is_ignored_rather_than_raising(store):
     # The queue must never be broken by this bookkeeping.
     jid = store.enqueue_job("scan_file", {"file": "orphan.docx"})
     store.claim_job("w1")
-    assert store.fail_job(jid, "boom", force_dead=True) == "dead"
+    assert store.fail_job(jid, "boom", force_dead=True, **held(store, jid)) == "dead"

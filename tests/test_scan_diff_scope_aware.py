@@ -25,6 +25,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "api"))
 
+
 import assessment_policy as pol  # noqa: E402
 
 WIDE = {"1.1.1": ["docx", "pdf"], "1.3.1": ["docx"], "1.4.3": ["pdf"]}
