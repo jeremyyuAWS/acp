@@ -94,3 +94,35 @@ describe('remediationTrack reads the per-format capability table', () => {
     expect(remediationTrack({ sc: '2.1.1' }).track).toBe('human')
   })
 })
+
+// ── the location chip: where a finding IS, for formats with no page number ──
+//
+// A correction. The detectors emit `location` ("Slide 3", "Sheet 'Findings' cell B2") and
+// issue_records stores it, but locationLabel read only `item.pages` — a list of INTEGERS that
+// exists for PDF and never for a worksheet or a deck. So the chip was empty for every Office
+// finding, however precisely the detector knew where the problem was.
+import { locationLabel } from './reviewCard.js'
+
+describe('locationLabel falls back to the words when there is no page number', () => {
+  it('uses the page numbers when it has them', () => {
+    expect(locationLabel({ file: 'a.pdf', pages: '3' })).toBe('Page 3')
+    expect(locationLabel({ file: 'a.pptx', pages: '2,5' })).toBe('Slides 2, 5')
+  })
+
+  it('uses the location words when there are no page numbers', () => {
+    expect(locationLabel({ file: 'b.xlsx', pages: null, location: 'Sheet “Q3” cell B2' }))
+      .toBe('Sheet “Q3” cell B2')
+    expect(locationLabel({ file: 'c.pptx', pages: '', location: 'Slide 3' })).toBe('Slide 3')
+  })
+
+  it('prefers the page numbers when it has both', () => {
+    // The page preview and its bounding box are keyed on the integer, so the chip must agree
+    // with the picture beside it rather than with a second description of the same place.
+    expect(locationLabel({ file: 'd.pdf', pages: '4', location: 'Page four, top' })).toBe('Page 4')
+  })
+
+  it('still returns null when the finding knows no position at all', () => {
+    expect(locationLabel({ file: 'e.docx' })).toBeNull()
+    expect(locationLabel({ file: 'e.docx', pages: '', location: '   ' })).toBeNull()
+  })
+})
