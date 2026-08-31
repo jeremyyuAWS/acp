@@ -112,3 +112,50 @@ def test_a_retried_job_reports_its_incremented_attempts_with_the_same_ceiling(cl
     body = c.get(f"/jobs/{jid}").json()
     assert body["attempts"] == 1
     assert body["max_attempts"] == 5
+
+
+# ── attempt / max_attempts (2026-08-31) ───────────────────────────────────────────────────────
+#
+# Added for the same reason phase and locked_at were: the UI could only ever say "attempt 2"
+# while a live SSE frame happened to be in hand, because routes/scans.py threads `attempt` out of
+# scan_events and this slim view carried nothing. A page reload dropped the number, and the retry
+# and interrupted cards silently degraded to cards that do not say which attempt you are
+# watching. The store already had the counter; the route just wasn't returning it.
+#
+# Named `attempt`, not `attempts`, to match the SSE frame — one name for the fact whichever way
+# it reached the reader.
+
+def test_the_route_reports_which_attempt_the_job_is_on(client):
+    c, st = client
+    jid = _seed_scan_and_job(st, status="running")
+    body = c.get(f"/jobs/{jid}").json()
+    assert body["attempt"] == st.get_job(jid)["attempts"], (
+        "the attempt count is not on the payload, so a reader that missed the SSE frame — or "
+        "reloaded the page — cannot say which attempt it is watching")
+    assert body["max_attempts"] == st.get_job(jid)["max_attempts"]
+
+
+def test_a_reclaimed_job_reports_both_its_phase_and_its_new_attempt(client):
+    """The crashed-worker case end to end, from the poll the UI actually makes. A job whose
+    worker died is requeued with phase='reclaimed' (store.reclaim_stuck_jobs); this route is
+    where DiscoverRunProgress's interrupted card learns both facts on a fresh page load."""
+    c, st = client
+    jid = _seed_scan_and_job(st, status="running")
+    with st._db.cursor() as cur:                       # expire the lease, as time would
+        st._db.execute(cur,
+            "UPDATE jobs SET lease_expires_at=%s, locked_at=%s WHERE id=%s",
+            ("1970-01-01T00:00:00+00:00", "1970-01-01T00:00:00+00:00", jid))
+    assert st.reclaim_stuck_jobs() == 1
+
+    body = c.get(f"/jobs/{jid}").json()
+    assert body["status"] == "queued"
+    assert body["phase"] == "reclaimed"
+    assert body["attempt"] == 1, "the attempt that died is not reportable after a reload"
+
+
+def test_a_never_claimed_job_reports_attempt_zero_not_null(client):
+    """Zero attempts is a real answer — nothing has run yet. It must not read as 'unknown', which
+    is what the card treats a null as and would render by saying nothing at all."""
+    c, st = client
+    jid = _seed_scan_and_job(st, status="queued")
+    assert c.get(f"/jobs/{jid}").json()["attempt"] == 0
