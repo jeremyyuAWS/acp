@@ -114,7 +114,7 @@ describe('the live banner while a scan is queued (not yet claimed by a worker)',
       files: [], scope: null, busy: true, run: { id: 's1', status: 'queued' },
       progress: { phase: 'queued', started_at: '2026-08-28T17:00:00Z' },
     })
-    expect(t).toMatch(/Discovery queued/)
+    expect(t).toMatch(/Discovery\s*Queued/)
     expect(t).not.toMatch(/documents discovered/i)
   })
 

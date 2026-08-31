@@ -48,6 +48,8 @@ describe('Worker-assignment signal on Discover', () => {
     await settle()
     expect(getQueueJob).toHaveBeenCalledWith('j1')
     expect(c.textContent).toMatch(/worker assigned/i)
+    expect(c.textContent).not.toMatch(/Waiting for an available worker/i)
+    expect(c.querySelector('[aria-label="Discovery queued"]')).toBeNull()
     expect(c.textContent).toMatch(/claimed this job \d+s ago/i)
   })
 
