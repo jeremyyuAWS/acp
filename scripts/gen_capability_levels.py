@@ -103,6 +103,23 @@ REMEDIATION_VERIFIED: dict[tuple[str, str], str] = {
         "repointed, with uniqueCount bumped and count left alone); the workbook opens; a re-scan "
         "no longer reports 2.4.4. A formula-labelled cell is REFUSED with a reason rather than "
         "rewritten, and never gets its display= written as a consolation"),
+    ("1.1.1", "pptx"): (
+        "tests/test_remediation_verified_pptx_alt.py — a real assessment reports 1.1.1 on an "
+        "undescribed picture and carries a locator apply_alt.parse_locator resolves; a "
+        "reviewer-authored description goes through handlers._apply_approved_values with the "
+        "re-scan UNPATCHED; the saved deck carries the descr, the title and body copy survive, "
+        "python-pptx re-opens it, and a second real assessment no longer reports 1.1.1. The "
+        "load-bearing control is a TWO-picture deck with one description approved: the write "
+        "succeeds, the criterion still fails, and nothing is credited or published"),
+    ("3.1.2", "docx"): (
+        "tests/test_remediation_verified_docx_language.py — the only lane whose whole chain is "
+        "deterministic, so the test starts from the document and takes the reviewer's value from "
+        "the draft propose_language_parts actually offers. A real assessment reports 3.1.2 on an "
+        "unmarked French passage, the approved code goes through handlers._apply_approved_values "
+        "with the re-scan UNPATCHED, the passage's runs gain w:lang, and a second real assessment "
+        "no longer reports it. Because a language mark is metadata, the assertion is stronger "
+        "than elsewhere: the whole extracted text is byte-identical before and after. A value "
+        "that is not a language code is refused rather than written where AT reads a language"),
 }
 
 # WHAT NEITHER ENTRY ABOVE CLAIMS, written here rather than left to be inferred from their
