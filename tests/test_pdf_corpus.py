@@ -182,6 +182,13 @@ def test_only_the_certifiable_pairs_claim_pass(corpus):
 
 # ── the labels are EARNED ────────────────────────────────────────────────────────
 
+
+# Criteria that ONLY the OCR lane can report — read out of a page's PIXELS, so unreachable
+# without tesseract however correct the fixture is. Kept as an explicit set rather than inferred:
+# inferring it would mean running the lane to find out, which is the thing being gated.
+_OCR_ONLY_SC = {"1.4.5", "1.4.9"}
+
+
 @pytest.mark.parametrize("name,sc", [
     ("figure-no-alt", "1.1.1"),
     ("untagged-document", "1.3.1"),
@@ -201,6 +208,20 @@ def test_only_the_certifiable_pairs_claim_pass(corpus):
 def test_each_violation_fixture_is_actually_detected(corpus, name, sc):
     """The load-bearing test. A declared pair whose fixture nothing detects inflates coverage
     without adding any."""
+    # THE SKIP THE DOCSTRING ALREADY PROMISED. `_ocr_wcags` says the 1.4.5 assertions "skip
+    # rather than fail on a bare checkout"; they did not — there was no guard here, so a
+    # developer without tesseract got three hard FAILURES from a complete, correct checkout.
+    # That is worse than noise: a suite that is red for an environmental reason trains everyone
+    # to read red as "probably the usual three", which is exactly how a real regression gets
+    # waved through.
+    #
+    # Skipping loses no coverage, because losing it in CI is caught separately and loudly:
+    # test_ocr_is_present_in_ci asserts _ocr.is_available() whenever CI/TF_BUILD is
+    # set, so a pipeline that stopped installing tesseract fails there rather than quietly
+    # skipping here. Both halves are needed — this one keeps a bare checkout honest, that one
+    # keeps CI honest.
+    if sc in _OCR_ONLY_SC and not _ocr.is_available():
+        pytest.skip(f"{sc} is only reachable through the OCR lane and tesseract is unavailable")
     fired = _wcags(_path(corpus, name))
     assert sc in fired, (
         f"{name} declares {sc} but a real scan reported {sorted(fired) or 'nothing'} — the "
