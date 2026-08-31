@@ -235,11 +235,25 @@ def _remediation_scope(filename: str, scan_id: str):
         return None
 
 
+def _verify_residual(fixed_bytes: bytes, filename: str):
+    """Re-scan the remediated bytes and return a `proposals.Verification` — verified-cleared,
+    verified-still-failing, or COULD-NOT-VERIFY. Delegates to the single shared implementation
+    in api/proposals.py — the proposal lane and this loop must use the exact same residual
+    re-scan (one whole-file path, never a divergent copy).
+
+    Both credit-granting call sites below go through this, and ask `Verification.cleared()`
+    rather than testing the residual themselves. That is the whole point: a re-scan that could
+    not run returns `ok=False`, and `cleared()` refuses to credit it. The previous shim
+    returned `set | None` and every caller read `None` as "credit it", which published
+    unreadable documents as remediated."""
+    from proposals import verify_residual
+    return verify_residual(fixed_bytes, filename)
+
+
 def _verify_residual_scs(fixed_bytes: bytes, filename: str):
-    """Re-scan the remediated bytes; return the set of WCAG SCs STILL failing, so a reported
-    fix that did not actually clear is never credited. Delegates to the single shared
-    implementation in api/proposals.py — the proposal lane and this loop must use the exact
-    same residual re-scan (one whole-file path, never a divergent copy)."""
+    """OBSERVATIONAL shim kept for tests that ask what a scan reports. NOT for granting
+    credit — use `_verify_residual` and `Verification.cleared()`. See the docstring on
+    proposals.verify_residual_scs for why the distinction is load-bearing."""
     from proposals import verify_residual_scs
     return verify_residual_scs(fixed_bytes, filename)
 
@@ -840,7 +854,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
     # ACTUALLY cleared; the rest stay failing for review, so the app never shows a fix
     # that did not take.
     _phase(job, "re-verifying the corrected copy")
-    residual = _verify_residual_scs(fixed_bytes, filename)
+    verification = _verify_residual(fixed_bytes, filename)
     # Enqueue the inline AI proposals (2.4.4 link text …) now that the re-scan has run, so a
     # deterministic fix that verifiably cleared carries validated=True (confidence.js reads
     # it as a High, one-click confirm) while a fix still failing / a model draft stays
@@ -855,16 +869,17 @@ def _remediate_file(payload: dict, job: dict) -> None:
             if not _sc:
                 continue
             _applied_any = any(p.get("applied") for p in _ps)
-            _cleared = residual is not None and _sc not in residual
+            _cleared = verification.cleared({_sc})
             _enqueue_proposals(scan_id, filename, _sc, _PROPOSAL_RULE_NAMES.get(_sc, _sc),
                                [{k: v for k, v in p.items() if k not in ("sc", "applied")} for p in _ps],
                                validated=bool(_applied_any and _cleared))
-    # Truthfulness gate: keep a before→after record only when its criterion is NOT still
-    # failing on the re-scan (or when the re-scan could not run — same "credit it" posture
-    # as remediation_state below). A fix that did not actually clear never reaches the PDF.
+    # Truthfulness gate: keep a before→after record ONLY when the re-scan actually ran and
+    # observed that criterion cleared. A fix that did not clear never reaches the PDF — and
+    # neither does one nobody could verify. This used to read `residual is None or ...`, so a
+    # re-scan that could not run published every before→after pair as though confirmed.
     try:
         verified_diffs = [d for d in rem_diffs
-                          if residual is None or d.get("rule_id") not in residual]
+                          if verification.cleared({d.get("rule_id")})]
         core.store.record_remediation_diffs(scan_id, filename, verified_diffs)
     except Exception:
         pass
@@ -875,14 +890,21 @@ def _remediate_file(payload: dict, job: dict) -> None:
         cleared: set[str] = set()   # rule_ids this run verifiably auto-cleared
         kept = []
         for rule_id in auto_rules:
-            if residual is not None and rule_id in residual:
-                kept.append(rule_id)                       # reported fix did not clear -> leave failing
+            if not verification.cleared({rule_id}):
+                # Either the criterion is still failing, or verification could not run at all.
+                # Both leave the rule failing and reviewable — "complete" is a claim about the
+                # document that nothing here is entitled to make. Before the fail-closed fix
+                # this branch was `residual is not None and rule_id in residual`, so a re-scan
+                # that could not run marked EVERY auto-fixable rule complete.
+                kept.append(rule_id)
                 continue
             core.store.upsert_remediation_state(doc_id, rule_id, "complete", scan_id)
             cleared.add(rule_id)
-        if residual is not None and kept:
+        if kept:
+            _why = ("still failing on re-scan" if verification.ok
+                    else f"unverifiable ({verification.reason})")
             core.store.log_decision("system", "remediate.unverified", scan_id=scan_id, file=filename,
-                                    detail=f"{len(cleared)} verified cleared; {len(kept)} reported-fixed but still failing on re-scan (kept for review): {', '.join(sorted(kept))}")
+                                    detail=f"{len(cleared)} verified cleared; {len(kept)} reported-fixed but {_why} (kept for review): {', '.join(sorted(kept))}")
         # Tie the HITL review queue to the remediate action. Every FAILing finding this run
         # did NOT verifiably auto-clear — contrast sign-off, link purpose, structure, or an
         # auto fix that didn't take — must reach a human here, or it silently vanishes: the
@@ -3151,15 +3173,28 @@ def _apply_one_value_kind(
         return working, False
 
     _phase(job, f"re-verifying the corrected copy ({noun})")
-    residual = _verify_residual_scs(fixed, filename)
-    cleared = residual is None or not (scs_to_clear & residual)
-    if not cleared:
+    verification = _verify_residual(fixed, filename)
+    if not verification.ok:
+        # COULD NOT VERIFY — the document was unreadable, the scan errored or timed out, an
+        # engine was missing, or a rule threw and its criterion is simply absent from the
+        # result. None of that is evidence the fix worked, so nothing is credited: the row
+        # stays unapplied (the approved value is preserved on it for a retry) and the file
+        # stays uncertified. Returning `working` — the bytes as they were BEFORE this lane —
+        # is what keeps an unverified write out of the published copy.
+        core.store.log_decision(
+            "system", "apply.unverified", scan_id=scan_id, file=filename,
+            detail=f"wrote {len(applied)} {noun} value(s) but could not verify "
+                   f"{sorted(scs_to_clear)}: {verification.reason}. Credit withheld; "
+                   f"the approved value is kept for retry")
+        return working, False
+    if not verification.cleared(scs_to_clear):
         # The value went in but the criterion still fails (content we never saw, or the engine
         # reads it differently). Credit nothing: the row stays unapplied and the file stays
         # uncertified, which is what is actually true of the document.
         core.store.log_decision(
             "system", "apply.unverified", scan_id=scan_id, file=filename,
-            detail=f"wrote {len(applied)} {noun} value(s) but {sorted(scs_to_clear)} still fails on re-scan")
+            detail=f"wrote {len(applied)} {noun} value(s) but "
+                   f"{sorted(verification.still_failing(scs_to_clear))} still fails on re-scan")
         return working, False
 
     try:

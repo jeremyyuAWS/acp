@@ -76,7 +76,13 @@ def _run_handler(monkeypatch, store, blob, *, residual, file=FILE):
     import core, handlers
     monkeypatch.setattr(core, "store", store)
     monkeypatch.setitem(sys.modules, "blob", blob)
-    monkeypatch.setattr(handlers, "_verify_residual_scs", lambda b, f: residual)
+    # The seam is `_verify_residual`, which returns a three-state Verification. `ok=True`
+    # here says "the re-scan RAN"; `residual` is what it saw. A stub returning a bare set
+    # could not express "could not verify", which is the outcome the fail-closed tests need
+    # (see tests/test_verification_fail_closed.py).
+    from proposals import Verification
+    monkeypatch.setattr(handlers, "_verify_residual",
+                        lambda b, f: Verification(True, residual or ()))
     handlers._apply_approved_values({"scan_id": SID, "file": file}, {})
 
 

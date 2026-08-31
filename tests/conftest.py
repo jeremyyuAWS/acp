@@ -143,3 +143,41 @@ requires_pdf_engine = pytest.mark.skipif(
     not pdf_engine_available(),
     reason="partner PDF engine not available — set ACP_PDF_ENGINE to a worker-python checkout",
 )
+
+
+# ── the Office analyser, for the remediation-verified lane proofs ─────────────
+#
+# WHY THIS EXISTS. Since verification fails closed (api/proposals.py `verify_residual`), a
+# scan grades `analysed` — and may therefore grant credit — only when every engine actually
+# ran. Office analysis shells out to the .NET CLI, so on a host without it EVERY Office scan
+# grades `error`, and every Office remediation lane correctly withholds credit.
+#
+# That is the intended production behaviour (tests/test_verification_engine_missing.py asserts
+# it deliberately). But it makes the 17 lane proofs untestable on a developer box: they exist
+# to prove that an approved value is WRITTEN, RE-SCANNED and CREDITED, and without an analyser
+# they can only ever prove the withholding. Before the fail-closed change they passed here by
+# accident — the residual was read off `issues` while the failed status was discarded, which
+# is the very defect being fixed.
+#
+# So: when the real analyser is present (CI, and any box with the SDK) this does NOTHING and
+# the proofs run against the real engine. Only when it is absent does it stand in, with a run
+# that SUCCEEDED and found nothing of its own — the first-party detectors still supply every
+# finding the proofs assert on, so the only thing this changes is whether the scan is graded
+# trustworthy. It is scoped to the proof modules by name; nothing else in the suite sees it,
+# and in particular the engine-missing tests keep observing the real (absent) engine.
+@pytest.fixture(autouse=True)
+def _office_analyser_for_lane_proofs(request, monkeypatch):
+    module = getattr(request.node, "module", None)
+    name = getattr(module, "__name__", "") or ""
+    if not name.startswith("test_remediation_verified_"):
+        return
+    import engines
+    if engines.OFFICE_OK:
+        return                      # the real CLI is here — use it, stand in for nothing
+    import scanner
+
+    def _stand_in(dest):
+        return {p.name: {"succeeded": True, "errors": [], "issues": []}
+                for p in Path(dest).iterdir()}
+
+    monkeypatch.setattr(scanner, "_analyse_office", _stand_in)
