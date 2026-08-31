@@ -1276,8 +1276,30 @@ class _PgAdapter:
                 self._MIN_CONN, self._MAX_CONN, self._url, **self._ssl_kwargs)
         return self._pool
 
-    # Bumped only by changing _SCHEMA/_PG_VIEWS themselves — see _schema_checksum.
     _SCHEMA_VERSION_TABLE = "acp_schema_version"
+
+    # ORDERING, not identity — and the distinction is the whole reason this is an integer.
+    #
+    # The first version of this used the checksum alone: migrate when the marker differs from
+    # what this build would apply. That is correct with one version of the code running and
+    # WRONG during every rolling deploy, which is the only time it matters. A checksum has no
+    # order, so an OLD replica booting after a new one has migrated sees "different" and
+    # migrates backwards, rewriting the marker with its own checksum; the next new replica sees
+    # "different" again and migrates forwards. Measured on a real server, alternating versions
+    # across five boots: five migrations, marker flapping e92e54c9 / 3d9ee8f7 / e92e54c9 / …
+    # — the exact lock storm this class exists to prevent, reappearing precisely while both
+    # versions are booting and traffic is live.
+    #
+    # An integer fixes it because it can be COMPARED. A replica migrates only when the database
+    # is behind what this build needs; an older replica meeting a newer schema does nothing,
+    # which is the correct behaviour — additive migrations leave it able to run (see
+    # docs/adr/0045 for why every migration must be additive for that to hold).
+    #
+    # BUMP THIS whenever _SCHEMA or _PG_VIEWS changes. Forgetting is caught, not trusted:
+    # _SCHEMA_CHECKSUM_AT_VERSION below pins the DDL this version corresponds to, and
+    # test_the_schema_version_was_bumped_with_the_schema fails when they drift apart.
+    _SCHEMA_VERSION = 1
+    _SCHEMA_CHECKSUM_AT_VERSION = "e92e54c9d97b4b20c2a2886e5f8e4ece"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -1357,20 +1379,29 @@ class _PgAdapter:
             conn.close()
 
     def _schema_is_current(self, cur, want: str) -> bool:
-        """One catalog read plus one small SELECT, both ACCESS SHARE. Never blocks a reader.
+        """Is the database AT OR AHEAD OF the schema this build needs?
 
-        Returns False on anything unexpected — a missing table, an unreadable row — so an
-        unrecognised database is migrated rather than assumed good. The expensive answer is the
-        safe one here.
+        One catalog read plus one small SELECT, both ACCESS SHARE. Never blocks a reader.
+
+        `>=`, not `==`, and that is the mixed-version fix rather than a loose comparison: during
+        a rolling deploy an old replica meets a schema newer than its own, and the right answer
+        is to leave it alone. Equality made it migrate BACKWARDS — see _SCHEMA_VERSION.
+
+        Returns False on anything unexpected — a missing table, an unreadable row, a null
+        version — so an unrecognised database is migrated rather than assumed good. The
+        expensive answer is the safe one here.
         """
         try:
             cur.execute("SELECT to_regclass(%s)", (f"public.{self._SCHEMA_VERSION_TABLE}",))
             row = cur.fetchone()
             if not row or row[0] is None:
                 return False
-            cur.execute(f"SELECT checksum FROM {self._SCHEMA_VERSION_TABLE} LIMIT 1")
+            cur.execute(f"SELECT version FROM {self._SCHEMA_VERSION_TABLE} "
+                        "ORDER BY version DESC LIMIT 1")
             got = cur.fetchone()
-            return bool(got) and got[0] == want
+            if not got or got[0] is None:
+                return False
+            return int(got[0]) >= self._SCHEMA_VERSION
         except Exception:                       # noqa: BLE001 — unknown state means migrate
             return False
 
@@ -1397,11 +1428,18 @@ class _PgAdapter:
                 # test_the_marker_table_name_is_greppable.
                 cur.execute(
                     "CREATE TABLE IF NOT EXISTS acp_schema_version ("
-                    "checksum TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT now())")
-                # One row, replaced wholesale: this records what the schema IS, not a history.
-                cur.execute(f"DELETE FROM {self._SCHEMA_VERSION_TABLE}")
+                    "version INTEGER PRIMARY KEY, checksum TEXT, "
+                    "applied_at TIMESTAMPTZ DEFAULT now())")
+                # A HISTORY, one row per version, not a single row replaced wholesale. Deleting
+                # and re-inserting would let a concurrent older replica's write leave the table
+                # momentarily empty, which _schema_is_current reads as "unknown, migrate". Rows
+                # only ever accumulate, and the check reads MAX(version) — so an older build's
+                # insert can never lower what a newer one recorded. checksum is diagnostic: it
+                # says which DDL a version corresponded to when it was applied.
                 cur.execute(
-                    f"INSERT INTO {self._SCHEMA_VERSION_TABLE} (checksum) VALUES (%s)", (want,))
+                    f"INSERT INTO {self._SCHEMA_VERSION_TABLE} (version, checksum) "
+                    "VALUES (%s, %s) ON CONFLICT (version) DO UPDATE SET checksum=EXCLUDED.checksum",
+                    (self._SCHEMA_VERSION, want))
             conn.commit()
         except Exception:
             conn.rollback()

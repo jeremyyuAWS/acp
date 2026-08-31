@@ -21,12 +21,25 @@ touch the same tables in opposite orders. Both exist in production:
 Five of six replica boots failed with DeadlockDetected inside init_schema; with the change,
 six of six succeed, exactly one runs DDL, and no reader deadlocks at all.
 
-WHAT THESE TESTS CAN AND CANNOT SHOW. CI has no Postgres service and no DATABASE_URL, so the
-lock behaviour itself is NOT exercised there — the tests below that need a real server skip
-unless DATABASE_URL is set, exactly as the PDF-engine and OCR suites gate on their own optional
-dependencies. What runs everywhere is the DECISION: given a database that is already current, no
-DDL is issued and no lock is taken. That is the regression worth pinning, because it is the one
-that reintroduces the outage.
+WHERE EACH TEST RUNS. Most drive a fake connection and run everywhere: they pin the DECISION —
+given a database already at or ahead of this build, no DDL is issued and no lock is taken. The
+two marked `requires_pg` need a real server, because SQLite has neither ACCESS EXCLUSIVE/ACCESS
+SHARE lock modes nor a deadlock detector, so the actual failure cannot be expressed there. The
+`Postgres integration (schema/lock regressions)` CI job runs them against a disposable
+postgres:16 service container and sets ACP_REQUIRE_PG=1, under which a missing DATABASE_URL is a
+FAILURE rather than a skip — a skipping integration job reports green while proving nothing, and
+`pytest` exits 0 on a skip.
+
+MIXED VERSIONS, and why the marker is an INTEGER rather than a checksum. The first version of
+this compared a content checksum: migrate when the database differs from what this build would
+apply. Correct with one version running, wrong during every rolling deploy — which is the only
+time it matters. A checksum has no order, so an OLD replica booting after a new one migrated saw
+"different" and migrated BACKWARDS, and the next new replica migrated forwards again. Measured on
+a real server, alternating versions across five boots: five migrations, marker flapping
+e92e54c9 / 3d9ee8f7 / e92e54c9 / … — the exact lock storm this change exists to prevent,
+reappearing precisely while both versions are booting and traffic is live. With an integer and a
+`>=` comparison the same sequence produces two migrations for two real version transitions, and
+an older replica meeting a newer schema correctly does nothing.
 """
 from __future__ import annotations
 
@@ -63,15 +76,15 @@ class _FakeCursor:
         if "to_regclass" in s:
             return (("public." + store._PgAdapter._SCHEMA_VERSION_TABLE)
                     if self.conn.marker_table_exists else None,)
-        if "SELECT checksum" in s:
-            return (self.conn.marker_checksum,) if self.conn.marker_checksum else None
+        if "SELECT version" in s:
+            return (self.conn.marker_version,) if self.conn.marker_version is not None else None
         return None
 
 
 class _FakeConn:
-    def __init__(self, marker_table_exists=True, marker_checksum=None, raise_on=None):
+    def __init__(self, marker_table_exists=True, marker_version=None, raise_on=None):
         self.marker_table_exists = marker_table_exists
-        self.marker_checksum = marker_checksum
+        self.marker_version = marker_version
         self.raise_on = raise_on
         self.sql: list[str] = []
         self.params: list = []
@@ -127,7 +140,7 @@ def test_a_current_schema_issues_no_ddl_and_takes_no_lock(fake_connect):
     """THE test. Every replica used to run 139 DDL statements here, each taking ACCESS EXCLUSIVE
     before discovering it had nothing to do."""
     a = _adapter()
-    conn = fake_connect(_FakeConn(marker_checksum=a._schema_checksum()))
+    conn = fake_connect(_FakeConn(marker_version=a._SCHEMA_VERSION))
 
     a.init_schema()
 
@@ -142,7 +155,7 @@ def test_a_current_schema_issues_no_ddl_and_takes_no_lock(fake_connect):
 
 def test_the_verification_itself_is_only_reads(fake_connect):
     a = _adapter()
-    conn = fake_connect(_FakeConn(marker_checksum=a._schema_checksum()))
+    conn = fake_connect(_FakeConn(marker_version=a._SCHEMA_VERSION))
     a.init_schema()
     assert all(s.startswith("SELECT") for s in conn.sql), (
         f"verification wrote something: {[s for s in conn.sql if not s.startswith('SELECT')]}")
@@ -152,7 +165,7 @@ def test_the_verification_itself_is_only_reads(fake_connect):
 
 def test_a_changed_schema_migrates_under_the_advisory_lock(fake_connect):
     a = _adapter()
-    conn = fake_connect(_FakeConn(marker_checksum="stale-checksum"))
+    conn = fake_connect(_FakeConn(marker_version=a._SCHEMA_VERSION - 1))
 
     a.init_schema()
 
@@ -164,6 +177,46 @@ def test_a_changed_schema_migrates_under_the_advisory_lock(fake_connect):
     lock_at = next(i for i, s in enumerate(conn.sql) if "pg_advisory_lock" in s)
     first_ddl = next(i for i, s in enumerate(conn.sql) if s in conn.ddl())
     assert lock_at < first_ddl, "the lock was taken after the DDL had already started"
+
+
+def test_an_older_build_does_not_migrate_backwards(fake_connect):
+    """THE mixed-version regression, and the reason the marker is an integer.
+
+    During a rolling deploy an old replica boots against a schema newer than its own. Under the
+    checksum this read as "different" and it migrated BACKWARDS, rewriting the marker with its
+    own checksum — after which the next new replica migrated forwards again, and so on. Measured
+    on a real server before the fix: five migrations across five alternating boots. Every one
+    takes ACCESS EXCLUSIVE on 40 tables, while traffic is live and both versions are starting.
+
+    The correct answer for an old replica meeting a newer schema is to do nothing, which is only
+    safe because every migration is additive — see docs/adr/0045.
+    """
+    a = _adapter()
+    conn = fake_connect(_FakeConn(marker_version=a._SCHEMA_VERSION + 1))
+
+    a.init_schema()
+
+    assert conn.ddl() == [], (
+        f"a build needing schema v{a._SCHEMA_VERSION} migrated a database already at "
+        f"v{a._SCHEMA_VERSION + 1} — it is rolling the schema backwards during a deploy")
+    assert conn.advisory() == [], "it also took the migration lock to do so"
+
+
+def test_the_schema_version_was_bumped_with_the_schema():
+    """The forget-guard. _SCHEMA_VERSION has to be bumped by hand when the DDL changes, and a
+    hand-maintained number is one somebody forgets — after which replicas skip a migration they
+    needed and run against a schema missing its columns, which is a worse failure than the one
+    this whole change fixes.
+
+    So the checksum is still computed, and pinned here. Changing _SCHEMA or _PG_VIEWS without
+    bumping _SCHEMA_VERSION fails this test with the value to record.
+    """
+    got = store._PgAdapter._schema_checksum()
+    assert got == store._PgAdapter._SCHEMA_CHECKSUM_AT_VERSION, (
+        f"the schema changed but _SCHEMA_VERSION was not bumped. Set _SCHEMA_VERSION to "
+        f"{store._PgAdapter._SCHEMA_VERSION + 1} and _SCHEMA_CHECKSUM_AT_VERSION to {got!r}. "
+        f"Every migration must be additive — an existing replica keeps serving against the new "
+        f"schema without restarting (docs/adr/0045).")
 
 
 def test_a_missing_marker_table_migrates_rather_than_assuming_good(fake_connect):
@@ -178,25 +231,28 @@ def test_the_migration_bounds_its_lock_wait(fake_connect):
     """Unbounded, a migration that cannot get its lock holds every reader behind a transaction
     that is itself waiting — which is how the outage propagated from boot to the queue reads."""
     a = _adapter()
-    conn = fake_connect(_FakeConn(marker_checksum="stale-checksum"))
+    conn = fake_connect(_FakeConn(marker_version=a._SCHEMA_VERSION - 1))
     a.init_schema()
     assert any("lock_timeout" in s for s in conn.sql), "the migration can wait forever"
 
 
 def test_the_marker_is_written_so_the_next_boot_can_skip(fake_connect):
     a = _adapter()
-    conn = fake_connect(_FakeConn(marker_checksum="stale-checksum"))
+    conn = fake_connect(_FakeConn(marker_version=a._SCHEMA_VERSION - 1))
     a.init_schema()
     assert any(f"INSERT INTO {a._SCHEMA_VERSION_TABLE}" in s for s in conn.sql), (
         "no marker was recorded, so every future boot re-runs the whole migration")
-    assert a._schema_checksum() in [p[0] for p in conn.params if isinstance(p, tuple) and p], (
-        "the marker did not record the checksum actually applied")
+    inserted = [p for p in conn.params if isinstance(p, tuple) and len(p) == 2
+                and p[0] == a._SCHEMA_VERSION]
+    assert inserted, "the marker did not record the version actually applied"
+    assert inserted[0][1] == a._schema_checksum(), (
+        "the marker recorded a checksum other than the DDL it applied")
 
 
 def test_the_advisory_lock_is_released_even_when_the_migration_fails(fake_connect):
     """A held session lock would block every subsequent boot until the connection died."""
     a = _adapter()
-    conn = fake_connect(_FakeConn(marker_checksum="stale", raise_on="CREATE TABLE IF NOT EXISTS jobs"))
+    conn = fake_connect(_FakeConn(marker_version=a._SCHEMA_VERSION - 1, raise_on="CREATE TABLE IF NOT EXISTS jobs"))
 
     with pytest.raises(Exception):
         a.init_schema()
