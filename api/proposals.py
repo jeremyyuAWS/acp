@@ -165,15 +165,82 @@ def thumb_b64(img_bytes: bytes, *, max_edge: int = 96) -> str | None:
 
 
 # ── Shared residual re-scan validator (promoted from api/handlers.py) ──────────
-def verify_residual_scs(fixed_bytes: bytes, filename: str):
-    """Re-scan the remediated bytes; return the set of WCAG SCs STILL failing, so a reported
-    fix that did not actually clear is never credited. None when the re-scan cannot run — the
-    callers treat that as "credit it" (never penalise remediation on an infra hiccup). Uses
-    the same SC normalisation (`store._extract_sc`) as the scan traces so the ids line up.
+#
+# THREE OUTCOMES, NEVER TWO. A re-scan can say "the criterion is gone", "the criterion is
+# still there", or "I could not tell" — and the third is not a variety of the first.
+#
+# It used to be. `verify_residual_scs` returned `None` when the re-scan could not run and
+# every caller read that as "credit it (never penalise remediation on an infra hiccup)", so
+# an unreadable document, a dead engine or a timeout all published as CLEARED. Worse, a scan
+# that ran but FAILED still returned a set — an empty one — because the residual was read off
+# `issues` while `status` was discarded: nothing failing to report is indistinguishable from
+# nothing wrong. Measured on this repo before the fix:
+#
+#     healthy pdf (fails 1.1.1) -> ['1.1.1', '1.4.11', '2.4.2', '3.1.1']
+#     truncated pdf             -> []            # status="error", credited as fully cleared
+#
+# `Verification` below keeps those three apart, and `Verification.cleared()` is the only way
+# to ask "may this be credited?" — it answers False whenever verification itself failed.
+#
+# THE GATE IS THE RUBRIC'S OWN, not a new judgement invented here. scripts/rubric.py already
+# grades every scan ANALYSED / UNCERTAIN / ERROR and documents them as:
+#
+#     ERROR     file unopenable          -> unscored, not certifiable
+#     UNCERTAIN >=1 rule threw & skipped -> score is an UPPER BOUND, not certifiable
+#     ANALYSED  full run                 -> trustworthy; only this can be certified
+#
+# So "only ANALYSED may grant credit" is that policy honoured rather than extended. The old
+# code computed the status and threw it away one line later.
+#
+# WHAT THIS COSTS, stated plainly: a missing engine now withholds credit. On a host with no
+# .NET Office analyser every Office scan grades ERROR (`succeeded: False`), so an Office lane
+# there verifies nothing and credits nothing — even though the first-party detectors ran and
+# would have observed the criterion. That is the intended reading of "a missing engine must
+# produce Could not verify", and it is why the lane proofs stand in for the analyser rather
+# than quietly depending on whether one happens to be installed.
 
-    Single source of truth for the residual re-scan: api/handlers.py `_remediate_file`
-    delegates here rather than re-implementing it, so there is exactly one whole-file
-    re-scan path (never a second, per-element one)."""
+
+class Verification:
+    """The outcome of a residual re-scan: verified-and-cleared, verified-and-still-failing,
+    or could-not-verify. Immutable, and deliberately NOT a set — a caller that wants to grant
+    credit has to go through `cleared()`, which cannot be fooled by an empty residual that
+    came from a scan which never ran."""
+
+    __slots__ = ("ok", "residual", "reason")
+
+    def __init__(self, ok: bool, residual=frozenset(), reason: str = ""):
+        object.__setattr__(self, "ok", bool(ok))
+        object.__setattr__(self, "residual", frozenset(residual))
+        object.__setattr__(self, "reason", reason)
+
+    def __setattr__(self, *_a):
+        raise AttributeError("Verification is immutable")
+
+    def __repr__(self):
+        return (f"Verification(ok={self.ok}, residual={sorted(self.residual)!r}, "
+                f"reason={self.reason!r})")
+
+    def cleared(self, scs) -> bool:
+        """May the criteria in `scs` be credited? True ONLY when the re-scan actually ran to
+        a trustworthy result AND none of `scs` is still failing. A failed verification is
+        never a pass: `ok=False` returns False whatever the residual looks like."""
+        return self.ok and not (set(scs) & self.residual)
+
+    def still_failing(self, scs) -> set:
+        """The subset of `scs` the re-scan OBSERVED still failing. Empty when verification
+        failed — nothing was observed — which is why this must not be read as "cleared"."""
+        return set(scs) & self.residual if self.ok else set()
+
+
+def verify_residual(fixed_bytes: bytes, filename: str) -> "Verification":
+    """Re-scan the remediated bytes and report one of three outcomes. THIS is the function to
+    use before granting remediation credit or publication eligibility; `verify_residual_scs`
+    below is observational only.
+
+    Uses the same SC normalisation (`store._extract_sc`) as the scan traces so the ids line
+    up. Single source of truth for the residual re-scan: api/handlers.py delegates here rather
+    than re-implementing it, so there is exactly one whole-file re-scan path (never a second,
+    per-element one)."""
     try:
         import tempfile
         from pathlib import Path as _P
@@ -183,11 +250,44 @@ def verify_residual_scs(fixed_bytes: bytes, filename: str):
         with tempfile.TemporaryDirectory(prefix="acp-verify-") as _d:
             (_P(_d) / filename).write_bytes(fixed_bytes)
             fd, _ = analyse_and_assess(_P(_d), filename, detect_pii=False)
-        if not fd:
-            return None
-        return {sc for i in fd.get("issues", []) if (sc := _extract_sc(i.get("wcag", "")))}
-    except Exception:
+    except Exception as exc:
+        # A raise here is the re-scan failing, not the document passing.
+        return Verification(False, reason=f"rescan raised {type(exc).__name__}")
+    if not fd:
+        # Unsupported extension, or no result at all: nothing was verified.
+        return Verification(False, reason="no scan result")
+    status = str(fd.get("status") or "")
+    residual = {sc for i in fd.get("issues", []) if (sc := _extract_sc(i.get("wcag", "")))}
+    if status != "analysed":
+        # ERROR (unopenable / engine dead / engine missing) or UNCERTAIN (a rule threw, so its
+        # criterion is absent from `issues` for a reason that has nothing to do with the fix).
+        # Either way the absence of a finding proves nothing. Carry the residual we did see —
+        # it is real evidence of STILL FAILING — but `cleared()` refuses to credit on it.
+        skipped = fd.get("skipped_rules")
+        return Verification(False, residual,
+                            reason=f"scan status {status or 'missing'!r}"
+                                   + (f", {skipped} rule(s) skipped" if skipped else ""))
+    return Verification(True, residual)
+
+
+def verify_residual_scs(fixed_bytes: bytes, filename: str):
+    """OBSERVATIONAL ONLY — what does a scan of these bytes report? Returns the set of WCAG
+    SCs reported, or None if the re-scan could not run at all.
+
+    DO NOT USE THIS TO GRANT CREDIT. It cannot distinguish "the criterion is gone" from "the
+    scan could not see it", which is the exact confusion that let unreadable documents publish
+    as remediated. Call `verify_residual` and ask `Verification.cleared()` instead;
+    tests/test_verification_fail_closed.py asserts both production callers do.
+
+    Kept because ~15 tests and several detector docstrings use it to ask a genuinely
+    observational question ("does a scan of this fixture report 1.1.1?"), where a scan that
+    graded ERROR because no Office analyser is installed still usefully reports what the
+    first-party detectors found."""
+    v = verify_residual(fixed_bytes, filename)
+    if not v.ok and not v.residual and (v.reason.startswith("rescan raised")
+                                        or v.reason == "no scan result"):
         return None
+    return set(v.residual)
 
 
 # ── 2.4.4 Link Purpose — vague-link detection + deterministic text derivation ──
