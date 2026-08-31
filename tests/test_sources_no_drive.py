@@ -91,6 +91,26 @@ def test_folder_name_lookup_is_metadata_only_and_uses_callers_service(gated, mon
     assert svc.files.return_value.get.call_args.kwargs['supportsAllDrives'] is True
 
 
+def test_folder_name_lookup_returns_a_breadcrumb_for_duplicate_leaf_names(gated, monkeypatch):
+    import core
+    svc = MagicMock()
+    svc.files.return_value.get.return_value.execute.side_effect = [
+        {"id": "working", "name": "Working", "mimeType": "application/vnd.google-apps.folder",
+         "parents": ["cardiology"]},
+        {"id": "cardiology", "name": "Cardiology", "mimeType": "application/vnd.google-apps.folder",
+         "parents": ["departments"]},
+        {"id": "departments", "name": "Department Drives", "mimeType": "application/vnd.google-apps.folder"},
+    ]
+    monkeypatch.setattr(core, "drive_service", lambda request: svc)
+
+    response = gated.get('/drive/folder-name?id=working', headers=_ms())
+
+    assert response.status_code == 200
+    assert response.json()['name'] == 'Working'
+    assert response.json()['path'] == 'Department Drives / Cardiology / Working'
+    svc.files.return_value.list.assert_not_called()
+
+
 def test_folder_name_requires_authentication_and_rejects_nonfolder(gated, monkeypatch):
     import core
     svc = MagicMock()

@@ -4,7 +4,9 @@ import { createTestRoot, unmountAll } from './testRoots.js'
 import DiscoveryLifecycleResults from './DiscoveryLifecycleResults.jsx'
 import DiscoveryFolderLabel from './DiscoveryFolderLabel.jsx'
 import { getDriveFolderName } from './api.js'
-vi.mock('./api.js', () => ({ getDriveFolderName: vi.fn(async () => ({ name: 'Clinical Guidelines' })), listDispositionPolicies: vi.fn(async () => []) }))
+vi.mock('./api.js', () => ({ getDriveFolderName: vi.fn(async () => ({
+  name: 'Working', path: 'Department Drives / Cardiology / Working',
+})), listDispositionPolicies: vi.fn(async () => []) }))
 afterEach(() => { unmountAll(); vi.clearAllMocks() })
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 it('filters supported files by enabled winning rule and reveals saved metadata', async () => {
@@ -34,7 +36,7 @@ it('shows a readable Drive folder name instead of its ID', async () => {
   const { root, container } = createTestRoot()
   const id = '1abcdefghijklmnopqrstuvwxyz'
   await act(async () => root.render(<DiscoveryFolderLabel source="drive" folder={id} />))
-  expect(container.textContent).toBe('Clinical Guidelines')
+  expect(container.textContent).toBe('Department Drives / Cardiology / Working')
   expect(container.textContent).not.toContain(id)
   expect(container.querySelector('span').title).toContain(id)
   expect(getDriveFolderName).toHaveBeenCalledWith(id)
