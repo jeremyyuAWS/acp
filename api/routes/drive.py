@@ -379,17 +379,38 @@ async def drive_upload(request: Request):
 
 @router.get("/drive/folder-name")
 def folder_name(request: Request, id: str):
-    """Resolve a displayed folder ID using the caller's own Drive permissions, without listing files."""
+    """Resolve a displayed folder ID and its readable ancestry without listing files."""
     import re
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", id):
         raise HTTPException(400, "Invalid folder ID")
     try:
-        folder = core.drive_service(request).files().get(
-            fileId=id, fields="id,name,mimeType", supportsAllDrives=True,
+        files = core.drive_service(request).files()
+        folder = files.get(
+            fileId=id, fields="id,name,mimeType,parents", supportsAllDrives=True,
         ).execute()
         if folder.get("mimeType") != "application/vnd.google-apps.folder":
             raise HTTPException(404, "Folder not found")
-        return {"id": id, "name": folder.get("name")}
+
+        # Immediate folder names are often reused (for example, many departments can each have a
+        # folder named "Working"). Walk a bounded parent chain so the UI can distinguish them.
+        # This remains metadata-only: no file listing or document content is requested.
+        names = [folder.get("name") or "Unnamed folder"]
+        parents = folder.get("parents") or []
+        seen = {id}
+        while parents and len(names) < 8:
+            parent_id = parents[0]
+            if parent_id in seen:
+                break
+            seen.add(parent_id)
+            parent = files.get(
+                fileId=parent_id, fields="id,name,mimeType,parents", supportsAllDrives=True,
+            ).execute()
+            if parent.get("mimeType") != "application/vnd.google-apps.folder":
+                break
+            names.append(parent.get("name") or "Unnamed folder")
+            parents = parent.get("parents") or []
+        names.reverse()
+        return {"id": id, "name": folder.get("name"), "path": " / ".join(names)}
     except HTTPException:
         raise
     except Exception as e:
