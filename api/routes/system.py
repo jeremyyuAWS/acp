@@ -927,7 +927,15 @@ def queue_job(job_id: str, request: Request):
     owner = getattr(request.state, "user_email", None) or "demo"
     if j is None or not j.get("scan_id") or core.store.get_scan(j["scan_id"], owner=owner) is None:
         raise HTTPException(404, "job not found")
+    # `attempt`/`max_attempts` are named for the SSE frame, not the column (jobs.attempts), so a
+    # reader has ONE name for this fact whichever way it arrived. Without them the retry and
+    # interrupted cards could only ever say "attempt N" while a live event frame happened to be
+    # in hand — a page reload dropped the number, and the card silently degraded to a card that
+    # does not mention which attempt you are watching.
+    #
+    # Safe for the slim view: a counter is not tenant data. The payload stays excluded.
     return {"id": j["id"], "type": j["type"], "status": j["status"],
+            "attempt": j.get("attempts"), "max_attempts": j.get("max_attempts"),
             "attempts": j.get("attempts"), "max_attempts": j.get("max_attempts"), "error": j.get("last_error"),
             "scan_id": j.get("scan_id"), "phase": j.get("phase"), "locked_at": j.get("locked_at")}
 
