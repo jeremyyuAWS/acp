@@ -3207,9 +3207,25 @@ class Store:
             has_active_job = (self._db.fetchone(cur) or {}).get("cnt", 0) > 0
             if row.get("status") != "running" and not has_active_job:
                 return False
+            # cancel_requested_at, not just status='dead'. Marking the row terminal stops the
+            # queue handing this job out again; it does NOT stop a worker that has already
+            # CLAIMED it, because worker.check_cancel() reads exactly one field and this was not
+            # setting it. finalize_scan_run's docstring names the cost: "The window is not small.
+            # It is the whole remaining duration of the superseded run, because nothing interrupts
+            # it" — a superseded discovery kept listing Drive, kept holding pool connections, and
+            # kept competing with the run that replaced it.
+            #
+            # Safe to set both. The worker's cancellation path calls mark_job_cancelled(), whose
+            # UPDATE is guarded `status NOT IN ('done','dead','cancelled')`, so against a job this
+            # already marked 'dead' that write no-ops and the job KEEPS its 'dead' status —
+            # dead-letter accounting is unchanged. COALESCE preserves an EARLIER explicit
+            # cancellation stamp: when a user pressed Stop first, that timestamp is evidence of
+            # when they asked, and superseding afterwards must not rewrite it.
             self._db.execute(cur,
-                "UPDATE jobs SET status='dead', updated_at=%s "
-                "WHERE scan_id=%s AND status IN ('queued','running')", (self._now(), sid))
+                "UPDATE jobs SET status='dead', updated_at=%s, "
+                "cancel_requested_at=COALESCE(cancel_requested_at, %s) "
+                "WHERE scan_id=%s AND status IN ('queued','running')",
+                (self._now(), self._now(), sid))
             # No status guard on this UPDATE: the jobs check above already established there was
             # genuinely something to stop, and gating on scan_runs.status=='running' here would
             # silently no-op the transition for the exact drifted-status case this fix exists for.
