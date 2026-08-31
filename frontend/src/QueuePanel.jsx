@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { getJobs, setWorkers, clearDeadJobs, getWorkerReplicas } from './api.js'
 import { subscribeJobs } from './jobsFeed.js'
+import { deriveFeedState, hasConfirmedData, needsFreshnessLabel, ageLabel, statusLine, topologyIsKnown } from './queueFreshness.js'
 import { TraceChip } from './Transparency.jsx'
 import { phaseLine, isStalled, STALLED_AFTER_S } from './jobPhase.js'
 import { diagnoseWorkerHealth } from './workerDiagnosis.js'
@@ -73,6 +74,11 @@ const STATUS = {
 // out dropping every other job from the list, so this only highlights + banners, never filters.
 export default function QueuePanel({ focusScanId = null, onClearFocus = null }) {
   const [q, setQ] = useState(null)
+  // jobsFeed hands every callback `{ fetchedAt, ageMs, stale }`. This panel used to discard it
+  // and derive everything from `q` alone with `?? 0` fallbacks — so before the first response it
+  // rendered "queue empty" and a bold "0 workers", two factual claims no successful read had
+  // established. See queueFreshness.js for the four states that replaces.
+  const [meta, setMeta] = useState(null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
@@ -86,8 +92,8 @@ export default function QueuePanel({ focusScanId = null, onClearFocus = null }) 
     // Shared subscription (jobsFeed.js) — QueuePanel, Discover, AssessRunner, FailureLane and
     // FixOutcomes all want this same unfiltered response, and each private timer cost another
     // 5 connection-pool acquisitions per tick.
-    const onData = (d) => {
-      setQ(d); setErr('')
+    const onData = (d, m) => {
+      setQ(d); setErr(''); setMeta(m || null)
       const now = Date.now()
       const done = d?.stats?.done ?? 0
       const hist = [...historyRef.current, { t: now, done }].filter((s) => now - s.t <= 5 * 60 * 1000)
@@ -104,7 +110,10 @@ export default function QueuePanel({ focusScanId = null, onClearFocus = null }) 
     // same request rather than adding a second one.
     return subscribeJobs(null, onData, {
       intervalMs: 2000,
-      onError: (e) => setErr(e.message || 'unavailable'),
+      // The cached counts stay on screen, labelled with their age, rather than being blanked
+      // or — worse — falling back to zeros that read as fact. meta carries the age of whatever
+      // is still cached, which is exactly what makes "last known 4m ago" possible.
+      onError: (e, m) => { setErr(e.message || 'unavailable'); setMeta(m || null) },
     })
   }, [])
 
@@ -183,7 +192,13 @@ export default function QueuePanel({ focusScanId = null, onClearFocus = null }) 
   }
 
   const stats = q?.stats || {}
-  const workers = q?.workers ?? 0
+  const feedState = deriveFeedState({ data: q, meta, error: err || null })
+  const confirmed = hasConfirmedData(feedState)
+  // `?? 0` is what turned "we have not read the queue" into "there are zero workers". null now
+  // means unknown, and every consumer below has to decide what to do about that rather than
+  // being handed a number that looks measured.
+  const workers = q?.workers ?? null
+  const workerCount = workers ?? 0
   const total = Object.values(stats).reduce((a, b) => a + b, 0)
   // Distinct scans & documents behind those jobs — so the count reads as "2 scans · 1
   // file · 8 jobs" instead of implying 8 documents. Each scan fans out into several
@@ -209,8 +224,8 @@ export default function QueuePanel({ focusScanId = null, onClearFocus = null }) 
   // Real-time worker state: each 'running' job occupies one worker, so active ≈ running.
   const running = stats.running || 0
   const queued = stats.queued || 0
-  const active = Math.min(running, workers)
-  const idle = Math.max(0, workers - active)
+  const active = Math.min(running, workerCount)
+  const idle = Math.max(0, workerCount - active)
   const initializing = note.includes('initializing')
   // The in-process pool is legitimately, permanently 0 whenever a dedicated worker tier is
   // doing the real work (split topology, #113) — that is the SAME condition the "✓ worker
@@ -221,19 +236,24 @@ export default function QueuePanel({ focusScanId = null, onClearFocus = null }) 
   // mean what it looks like it means". Collapsing it behind a disclosure only in THIS case —
   // never when the pool is the genuine capacity control (workers > 0, or no tier heartbeat at
   // all) — keeps the control reachable without it dominating the healthy, common case.
-  const poolDecorative = !!(q && workers === 0 && q.worker_tier_alive)
+  const poolDecorative = !!(q && workerCount === 0 && q.worker_tier_alive)
+  // Worker controls require BOTH a confirmed read and a known topology. Offering +/- against an
+  // unread queue puts a control in front of someone for a number nothing has measured; offering
+  // it when runtime_mode is absent asks them to scale a pool that may not be the thing actually
+  // running their work (the split topology of #113). Unknown is not zero.
+  const showPoolControls = confirmed && topologyIsKnown(q)
   const poolBlock = (
     <>
       <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button onClick={() => scaleWorkers(workers - 1)}
-                  disabled={busy || workers <= 0} aria-label="Remove a worker"
-                  title={workers <= 0 ? 'Already at 0 — nothing to remove' : 'Remove a worker'}
+          <button onClick={() => scaleWorkers(workerCount - 1)}
+                  disabled={busy || workerCount <= 0} aria-label="Remove a worker"
+                  title={workerCount <= 0 ? 'Already at 0 — nothing to remove' : 'Remove a worker'}
                   style={WBTN}>−</button>
-          <span style={{ fontSize: 22, fontWeight: 700, minWidth: 22, textAlign: 'center' }}>{workers}</span>
-          <button onClick={() => scaleWorkers(workers + 1)}
-                  disabled={busy || workers >= 16} aria-label="Add a worker"
-                  title={workers >= 16 ? 'Pool cap is 16 workers' : 'Add a worker'}
+          <span style={{ fontSize: 22, fontWeight: 700, minWidth: 22, textAlign: 'center' }}>{workerCount}</span>
+          <button onClick={() => scaleWorkers(workerCount + 1)}
+                  disabled={busy || workerCount >= 16} aria-label="Add a worker"
+                  title={workerCount >= 16 ? 'Pool cap is 16 workers' : 'Add a worker'}
                   style={WBTN}>+</button>
         </span>
         <span className="muted" style={{ fontSize: 11, color: note ? '#185FA5' : undefined }}>
@@ -242,9 +262,9 @@ export default function QueuePanel({ focusScanId = null, onClearFocus = null }) 
       </span>
       {/* Real-time worker state — what the pool is doing right now. */}
       <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
-        {workers > 0 && (
+        {workerCount > 0 && (
           <span className="workerdots" aria-hidden="true" style={{ marginBottom: 3 }}>
-            {Array.from({ length: workers }, (_, i) => (
+            {Array.from({ length: workerCount }, (_, i) => (
               <span key={i} className={i < active ? 'activedot' : 'idledot'} />
             ))}
           </span>
@@ -284,14 +304,14 @@ export default function QueuePanel({ focusScanId = null, onClearFocus = null }) 
       {/* Split topology (#113): jobs normally run on the standalone worker service, whose
           heartbeat is worker_tier_alive — its liveness, not this container's local pool,
           is what says whether the queue is manned. */}
-      {q && workers === 0 && q.worker_tier_alive && (
+      {q && workerCount === 0 && q.worker_tier_alive && (
         <p className="muted" style={{ marginTop: 8, fontSize: 13 }}>
           <span style={{ color: '#1a7f37', fontWeight: 600 }}>✓ worker service online</span>{' '}
           — jobs run on the dedicated worker container. The controls below scale extra
           in-process workers in this container (normally unneeded).
         </p>
       )}
-      {q && workers === 0 && !q.worker_tier_alive && (
+      {q && workerCount === 0 && !q.worker_tier_alive && (
         <p className="muted" style={{ marginTop: 8, fontSize: 13 }}>
           No workers available — the worker service isn't reporting a heartbeat, and this
           container has no in-process pool. Queued scans and remediation jobs won't process.
@@ -355,7 +375,7 @@ export default function QueuePanel({ focusScanId = null, onClearFocus = null }) 
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap', marginTop: 12 }}
            role="status" aria-live="polite">
-        {poolDecorative ? (
+        {showPoolControls && (poolDecorative ? (
           <details>
             <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>
               Advanced: emergency in-process workers
@@ -364,14 +384,26 @@ export default function QueuePanel({ focusScanId = null, onClearFocus = null }) 
               {poolBlock}
             </div>
           </details>
-        ) : poolBlock}
+        ) : poolBlock)}
         {fullList && scanCount > 0 && <Stat label={`scan${scanCount !== 1 ? 's' : ''}`} value={scanCount} />}
         {fullList && fileCount > 0 && <Stat label={`file${fileCount !== 1 ? 's' : ''}`} value={fileCount} />}
-        <Stat label="total jobs" value={total}
-              title="Each scan fans out into several durable jobs — discover, one per file, finalize, then assess — so this counts pipeline steps across all your scans, not documents." />
+        {confirmed && <Stat label="total jobs" value={total}
+              title="Each scan fans out into several durable jobs — discover, one per file, finalize, then assess — so this counts pipeline steps across all your scans, not documents." />}
         {throughput != null && <Stat label="throughput" value={`${throughput < 10 ? throughput.toFixed(1) : Math.round(throughput)}/min`} />}
-        {shown.length === 0 && !err && (
+        {/* "empty" is a CLAIM about the queue, so it needs a response that established it. This
+            used to render on `shown.length === 0 && !err`, which is true before the first poll has
+            returned — so a freshly-mounted panel asserted an empty queue it had never read. */}
+        {confirmed && shown.length === 0 && (
           <span className="muted" style={{ fontSize: 13 }}>queue empty — nothing in flight</span>
+        )}
+        {!confirmed && (
+          <span className="muted" style={{ fontSize: 13 }}>{statusLine(feedState)}</span>
+        )}
+        {needsFreshnessLabel(feedState) && (
+          <span className="muted" style={{ fontSize: 12 }} title={
+            meta?.fetchedAt ? new Date(meta.fetchedAt).toISOString() : undefined}>
+            {statusLine(feedState, { ageMs: meta?.ageMs })}
+          </span>
         )}
         {shown.map((s) => {
           const [fg, bg, label] = STATUS[s]
