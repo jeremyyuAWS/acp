@@ -144,7 +144,22 @@ const sim = (value, ms = 220) => new Promise((res) => setTimeout(() => res(value
 // threading a prop through the tree. Null until the first getConfig resolves — callers tolerate it.
 let _aiProv = null
 export const aiProvenance = () => _aiProv
-export const getConfig = () => (SIM ? sim({ google_client_id: null, auth: 'demo', sim: true, ai: { provider: 'ollama', model: 'llama3.1', vision_model: 'llava:13b', zone: 'local', host: 'localhost' }, langfuse_trace_base: 'https://acp-langfuse.demo/project/acp-compliance/traces' }) : fetch(`${BASE}/config`).then(j)).then((c) => { _aiProv = c.ai || _aiProv; return c })
+
+// /config gates the whole sign-in screen, so it is the one request whose FAILURE MODE MATTERS MOST —
+// and it had none. There was no timeout, and `AbortSignal.timeout` is what the rest of this module
+// already uses for exactly this (see the preflight and folder-name calls). Without it a request that
+// HANGS never settles, so SignIn's `if (!cfg)` branch renders "Loading…" under the logo forever: no
+// error, no retry, nothing but a reload to escape. A caller's `.catch` cannot help, because a hung
+// fetch never rejects.
+//
+// That is not hypothetical. On 2026-09-01 the production /readyz probe timed out at 03:41 while
+// /healthz stayed green — a brief dependency stall — and a tab open across that window sat on
+// "Loading…" long after the backend recovered.
+//
+// 8s matches the other two timed calls in this file. Generous for a small JSON read, short enough
+// that a stalled boot becomes a visible, retryable error rather than a dead screen.
+export const CONFIG_TIMEOUT_MS = 8000
+export const getConfig = () => (SIM ? sim({ google_client_id: null, auth: 'demo', sim: true, ai: { provider: 'ollama', model: 'llama3.1', vision_model: 'llava:13b', zone: 'local', host: 'localhost' }, langfuse_trace_base: 'https://acp-langfuse.demo/project/acp-compliance/traces' }) : fetch(`${BASE}/config`, { signal: AbortSignal.timeout(CONFIG_TIMEOUT_MS) }).then(j)).then((c) => { _aiProv = c.ai || _aiProv; return c })
 // Lightweight backend reachability probe. /healthz is always public (no auth header needed).
 // Returns true when the backend responds with HTTP 2xx, false on network error or non-2xx.
 // SIM mode always reports healthy — there is no real server to probe.
