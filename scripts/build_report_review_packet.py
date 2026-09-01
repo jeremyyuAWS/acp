@@ -32,6 +32,7 @@ than one that says the baseline is missing.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from pathlib import Path
 
@@ -48,6 +49,34 @@ from test_report_weasy_structure import _FILES, _META, _RUN  # noqa: E402
 # suite uses — including the ACP_VERAPDF override. A second copy of that logic is a packet that
 # reports "not installed" on a machine where the tests are validating happily.
 from verapdf import NO_VERAPDF, VERAPDF_OK, validate  # noqa: E402
+
+
+@contextlib.contextmanager
+def frozen_clock():
+    """Stamp both renderers with the same "Report generated" time.
+
+    `_prepare_context` calls `datetime.now()`, and the two builds happen seconds apart, so
+    without this the reports differ on a line that has nothing to do with either renderer. That
+    difference lands in the diff images a reviewer is asked to read, and a spurious highlight is
+    worse than none: it teaches them to discount the highlights that are real.
+
+    Patched on `report_tagged`, whose module-global `datetime` both renderers resolve through —
+    `report_weasy` imports `_prepare_context` from it rather than defining its own. The renderers
+    themselves are untouched; freezing a clock for a comparison is the harness's job.
+    """
+    import report_tagged
+    real = report_tagged.datetime
+
+    class _Frozen(real):
+        @classmethod
+        def now(cls, tz=None):
+            return real(2026, 1, 1, 0, 0, 0, tzinfo=tz)
+
+    report_tagged.datetime = _Frozen
+    try:
+        yield
+    finally:
+        report_tagged.datetime = real
 
 
 def _render_pages(pdf: Path, out: Path, prefix: str, scale: float = 1.5) -> list:
@@ -97,7 +126,8 @@ def main() -> int:
 
     import report_weasy
     candidate = out / "candidate.pdf"
-    candidate.write_bytes(report_weasy.build_weasy_report(_RUN, _FILES, _META))
+    with frozen_clock():
+        candidate.write_bytes(report_weasy.build_weasy_report(_RUN, _FILES, _META))
     cand_imgs = _render_pages(candidate, pages, "candidate")
     print(f"candidate.pdf  {candidate.stat().st_size} bytes, {len(cand_imgs)} page(s)")
 
@@ -108,7 +138,8 @@ def main() -> int:
     try:
         import report_tagged
         shipped = out / "shipped.pdf"
-        shipped.write_bytes(report_tagged.build_tagged_report(_RUN, _FILES, _META))
+        with frozen_clock():
+            shipped.write_bytes(report_tagged.build_tagged_report(_RUN, _FILES, _META))
         ship_imgs = _render_pages(shipped, pages, "shipped")
         diff_lines = _diff_pages(ship_imgs, cand_imgs, pages)
         print(f"shipped.pdf    {shipped.stat().st_size} bytes, {len(ship_imgs)} page(s)")
@@ -175,7 +206,23 @@ this packet is the evidence for deciding whether to.
 A percentage here locates a page; it does not judge it. Content sits a uniform ~7px (at 1.5x
 raster, about 4.7pt) lower from mid-page down — constant across horizontal bands rather than
 accumulating, which is a text-engine rhythm difference and not content moving relative to other
-content. Offsets reported in the bottom bands are blank aligning on blank.
+content. Offsets in the bottom bands are blank aligning on blank.
+
+### How to read `diff-p*.png`, because it is easy to read wrong
+
+The differences are amplified 6x, and at that gain **almost every glyph lights up** — two
+different text engines never rasterise type identically, so near-total glow is the expected
+baseline, not a finding. What the image is good for is the two things that stand out from it:
+
+- **One-sided content**, present in one document and absent from the other. On page 1 that is
+  Chromium's header strip along the top and its footer along the bottom — the footer being the
+  `file:///tmp/...` path leak. Nothing else on either page should be one-sided.
+- **Ghosting**: an element that appears twice, offset slightly. That is the ~7px shift, and it
+  marks where it starts.
+
+Both reports are stamped with the same frozen "Report generated" time so that line does not
+appear as a difference. It is not one — it is the clock — and a spurious highlight teaches you to
+discount the real ones.
 """)
     print(f"\nwrote {out}/  — read REVIEW.md")
     return 0
