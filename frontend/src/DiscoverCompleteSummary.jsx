@@ -201,8 +201,8 @@ export default function DiscoverCompleteSummary({
           {scannableCount != null && (
             <li style={{ fontSize: 12.5, color: 'var(--muted)' }}>
               {n(scannableCount)} of {n(discoveredCount)} are scannable document types
-              (PDF, DOCX, XLSX) — HTML, PowerPoint, and every other type remain inventoried but
-              are excluded by file type before assessment eligibility is even checked.
+              (PDF, DOCX, XLSX, PPTX) — HTML and every other type remain inventoried but are
+              excluded by file type before assessment eligibility is even checked.
             </li>
           )}
         </ul>

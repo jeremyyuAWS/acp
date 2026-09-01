@@ -1,6 +1,6 @@
 """Discovery's format scope — one source of truth, and the two connector filters that read it.
 
-WHAT THESE PIN. The scope narrowed to PDF/DOCX/XLSX on 2026-09-01. The risk in that change
+WHAT THESE PIN. The scope is PDF/DOCX/XLSX/PPTX without HTML. The risk in that change
 is not the narrowing itself, it is DRIFT: the set is consumed by a Drive MIME filter, a
 SharePoint extension filter, and the estate inventory's `assessable` status, and before
 api/scan_formats those were three independent literals. A file the connectors stop listing but
@@ -31,8 +31,8 @@ GSLIDES = "application/vnd.google-apps.presentation"
 
 
 # ── the scope itself ────────────────────────────────────────────────────────────────────────
-def test_default_scope_is_pdf_docx_xlsx_only():
-    assert scan_formats.formats() == frozenset({"pdf", "docx", "xlsx"})
+def test_default_scope_is_pdf_docx_xlsx_pptx_without_html():
+    assert scan_formats.formats() == frozenset({"pdf", "docx", "xlsx", "pptx"})
 
 
 def test_env_var_widens_and_narrows_the_scope(monkeypatch):
@@ -85,9 +85,8 @@ def test_google_native_types_are_in_scope_via_their_export_target():
     which makes this the most expensive way to get the scope decision wrong.
     """
     mimes = scanner._scannable_mime()
-    for native in (GDOC, GSHEET):
+    for native in (GDOC, GSHEET, GSLIDES):
         assert native in mimes, native
-    assert GSLIDES not in mimes
 
 
 def test_google_native_leaves_scope_with_its_export_format(monkeypatch):
@@ -109,7 +108,7 @@ def test_drive_scannable_mimes_follow_the_scope(monkeypatch):
     assert scanner._is_scannable_mime({"mimeType": PDF})
     assert scanner._is_scannable_mime({"mimeType": DOCX})
     assert scanner._is_scannable_mime({"mimeType": XLSX})
-    assert not scanner._is_scannable_mime({"mimeType": PPTX})
+    assert scanner._is_scannable_mime({"mimeType": PPTX})
     assert not scanner._is_scannable_mime({"mimeType": HTML})
     assert not scanner._is_scannable_mime({"mimeType": "text/plain"})
 
@@ -133,7 +132,7 @@ def test_drive_mime_query_is_stable_and_scoped(monkeypatch):
 
 # ── the SharePoint filter ───────────────────────────────────────────────────────────────────
 def test_sharepoint_extensions_follow_the_scope(monkeypatch):
-    assert scanner._sp_scannable_exts() == frozenset({".pdf", ".docx", ".xlsx"})
+    assert scanner._sp_scannable_exts() == frozenset({".pdf", ".docx", ".xlsx", ".pptx"})
 
     # html is the one format with two extensions; both come and go together.
     monkeypatch.setenv("ACP_SCAN_FORMATS", "html")
@@ -175,9 +174,9 @@ def test_local_walk_uses_the_same_default_scope(monkeypatch, tmp_path):
     inventory = []
     items = scanner._list("local", inventory_out=inventory)
 
-    assert {item["name"] for item in items} == {"policy.pdf", "policy.docx", "policy.xlsx"}
+    assert {item["name"] for item in items} == {"policy.pdf", "policy.docx", "policy.xlsx", "deck.pptx"}
     # Out-of-scope files remain visible in the estate inventory instead of disappearing.
-    assert {row["file"] for row in inventory} >= {"page.html", "deck.pptx"}
+    assert {row["file"] for row in inventory} >= {"page.html"}
 
 
 # ── the three consumers agree ───────────────────────────────────────────────────────────────

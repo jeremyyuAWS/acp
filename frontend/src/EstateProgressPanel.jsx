@@ -279,7 +279,7 @@ export default function EstateProgressPanel({
           label="eligible"
           value={eligible}
           ofLabel={eligible != null && discovered ? `${pctLabel(eligible, discovered)} of discovered` : undefined}
-          title="Files in an assessable format — PDF, DOCX, XLSX, PPTX, HTML. The assessment denominator."
+          title="Files in an assessable format — PDF, DOCX, XLSX, PPTX. The assessment denominator."
           color="#46303F"
         />
         <KpiCard

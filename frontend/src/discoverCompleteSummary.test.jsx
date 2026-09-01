@@ -83,10 +83,10 @@ describe('DiscoverCompleteSummary renders completion state', () => {
     expect(html).toContain('200 did not match')
   })
 
-  it('names the exact scannable formats and says HTML and PowerPoint remain inventoried', () => {
+  it('names the exact scannable formats and says HTML remains inventoried', () => {
     const html = render({ ...BASE, scannableCount: 170 })
-    expect(html).toContain('(PDF, DOCX, XLSX)')
-    expect(html).toContain('HTML, PowerPoint, and every other type remain inventoried')
+    expect(html).toContain('(PDF, DOCX, XLSX, PPTX)')
+    expect(html).toContain('HTML and every other type remain inventoried')
     expect(html).not.toContain('PDF, Office, HTML')
   })
 

@@ -27,23 +27,15 @@ def test_supported_formats_are_assessable():
     for name, mime, fmt in [
         ("a.docx", DOC, "docx"),
         ("b.pdf", PDF, "pdf"),
+        ("c.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", "pptx"),
         ("d.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"),
     ]:
         r = inv.classify(_f("1", name, mime))
         assert r["format"] == fmt and r["status"] == inv.ASSESSABLE, r
 
 
-def test_html_and_pptx_are_inventoried_but_not_assessable_by_default():
-    for name, mime, fmt in [
-        ("page.html", "text/html", "html"),
-        ("deck.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", "pptx"),
-    ]:
-        r = inv.classify(_f("1", name, mime))
-        assert r["format"] == fmt and r["status"] == inv.UNSUPPORTED, r
-
-
 def test_html_is_out_of_scope_by_default_but_still_classified_as_html():
-    """HTML is outside the PDF/DOCX/XLSX scan scope but retains its inventory format.
+    """HTML is outside the PDF/DOCX/XLSX/PPTX scan scope but retains its inventory format.
 
     The format bucket is unchanged — an .html file is still recognised AS html, and the estate
     inventory still counts it — but it is no longer `assessable`, because no listing will produce
