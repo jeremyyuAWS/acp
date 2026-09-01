@@ -12,8 +12,8 @@
 #
 # WHY A SCRIPT RATHER THAN TWO az COMMANDS IN A RUNBOOK.
 #
-#   1. THE APP AND THE WORKER MUST MOVE TOGETHER. Scanning happens in acp-worker (ADR 0013 §2:
-#      the API runs ACP_WORKERS=0 and serves only). Langfuse configured on acp-app alone gives
+#   1. THE APP AND ALL STAGE WORKERS MUST MOVE TOGETHER. The API runs ACP_WORKERS=0 and serves
+#      only. Langfuse configured on acp-app alone gives
 #      you traces for the API and NOTHING for Discover — which looks like "tracing is broken"
 #      rather than "tracing is half-configured". redeploy.sh's header already warns that the two
 #      running different configs is a real failure mode; this enforces it instead of describing
@@ -45,7 +45,10 @@ set -euo pipefail
 
 RG="${ACP_RG:-mdk-accessibility}"
 APP="${ACP_APP:-acp-app}"
-WORKER="${ACP_WORKER:-acp-worker}"
+DISCOVERY_WORKER="${ACP_DISCOVERY_WORKER:-acp-discovery}"
+ASSESS_WORKER="${ACP_ASSESS_WORKER:-acp-assess}"
+REMEDIATE_WORKER="${ACP_REMEDIATE_WORKER:-acp-remediate}"
+STAGE_WORKERS=("$DISCOVERY_WORKER" "$ASSESS_WORKER" "$REMEDIATE_WORKER")
 DRY="${ACP_SET_ENV_DRY_RUN:-0}"
 
 # Same defaults deploy.sh carries, so this script and that one cannot disagree about which
@@ -107,13 +110,11 @@ TARGETS=()
 az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" -o none 2>/dev/null \
   || die "no container app '$APP' in resource group '$RG' — check ACP_RG/ACP_APP"
 TARGETS+=("$APP")
-if az containerapp show "${AZ[@]}" -g "$RG" -n "$WORKER" -o none 2>/dev/null; then
-  TARGETS+=("$WORKER")
-else
-  # Not fatal: a single-tier deployment (ACP_DEPLOY_WORKER unset) genuinely has no worker. Said
-  # out loud, because "the worker was skipped" and "there is no worker" must not look alike.
-  warn "no container app '$WORKER' in '$RG' — single-tier deployment, configuring '$APP' only"
-fi
+for A in "${STAGE_WORKERS[@]}"; do
+  az containerapp show "${AZ[@]}" -g "$RG" -n "$A" -o none 2>/dev/null \
+    || die "no stage worker '$A' in '$RG' — refusing to split integration configuration"
+  TARGETS+=("$A")
+done
 say "targets: ${TARGETS[*]}  (rg=$RG)"
 [ "$DRY" = 1 ] && warn "DRY RUN — nothing will be changed"
 
@@ -137,14 +138,14 @@ else
     fi
     _scrubbed az containerapp secret set "${AZ[@]}" -g "$RG" -n "$A" \
       --secrets "langfuse-pk=$LF_PK" "langfuse-sk=$LF_SK" -o none \
-      || die "could not set Langfuse secrets on $A — stopping so '$APP' and '$WORKER' do not end up on different configs"
+      || die "could not set Langfuse secrets on $A — stopping before the stage workers drift"
     # --set-env-vars is ADDITIVE: it updates only the names listed and leaves DATABASE_URL, the
     # RunPod vars and everything else untouched. That is what makes this safe against a live app,
     # and it is the same semantic deploy.sh relies on.
     _retry az containerapp update "${AZ[@]}" -g "$RG" -n "$A" --set-env-vars \
       "LANGFUSE_HOST=$LF_HOST" "LANGFUSE_PUBLIC_KEY=secretref:langfuse-pk" \
       "LANGFUSE_SECRET_KEY=secretref:langfuse-sk" -o none \
-      || die "could not set Langfuse env on $A — '$APP' and '$WORKER' may now disagree; re-run before deploying"
+      || die "could not set Langfuse env on $A — the stage workers may now disagree; re-run before deploying"
   done
 fi
 
@@ -204,11 +205,11 @@ else
     fi
     _scrubbed az containerapp secret set "${AZ[@]}" -g "$RG" -n "$A" \
       --secrets "runpod-api-key=$RP_KEY" -o none \
-      || die "could not set the RunPod key on $A — stopping so '$APP' and '$WORKER' do not end up on different configs"
+      || die "could not set the RunPod key on $A — stopping before the stage workers drift"
     _retry az containerapp update "${AZ[@]}" -g "$RG" -n "$A" --set-env-vars \
       "ACP_VISION_PROVIDER=runpod_serverless" "RUNPOD_ENDPOINT_ID=$RP_EID" \
       "RUNPOD_API_KEY=secretref:runpod-api-key" "RUNPOD_VISION_MODEL=$RP_MODEL" -o none \
-      || die "could not set GPU vision env on $A — '$APP' and '$WORKER' may now disagree; re-run before scanning"
+      || die "could not set GPU vision env on $A — the stage workers may now disagree; re-run before scanning"
   done
   # An ADMIN SETTING OVERRIDES THE ENV, and this script cannot see or change it: providers.py
   # reads store.get_setting('ai_vision_provider') after the env and lets it win. So the env being

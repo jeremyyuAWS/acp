@@ -14,7 +14,7 @@
 # OPTIONAL
 #   ACP_RG               Resource group          (default: mdk-accessibility)
 #   ACP_APP              App container app name  (default: acp-app)
-#   ACP_WORKER           Worker container app    (default: acp-worker)
+#   ACP_*_WORKER         Stage worker names      (defaults: acp-discovery/assess/remediate)
 #   ACP_SUBSCRIPTION     Azure subscription ID   (default: resolved from az account show)
 #   ACP_BUILD_VERSION    CalVer to assert on green /healthz (default: not checked)
 #   ACP_REVISION_SUFFIX  Revision name suffix    (default: g<unix-epoch>)
@@ -26,7 +26,7 @@
 # FQDN while production still serves blue, and takes traffic in a single weight change that
 # reverses just as fast — that is real blue-green.
 #
-# acp-worker has NO INGRESS. Both revisions pull from the same shared job queue — blue and green
+# Stage workers have NO INGRESS. Both revisions pull from the same shared job queue — blue and green
 # would race over live production jobs. There is no ingress weight to split. The worker therefore
 # cuts over at promotion; that step is not protected by this script. Saying so is the point; a
 # script that implied otherwise would be worse than one that never claimed blue-green at all.
@@ -40,7 +40,10 @@ set -euo pipefail
 IMG="${ACP_IMG:?ACP_IMG is required — set it to the full image reference already in ACR}"
 RG="${ACP_RG:-mdk-accessibility}"
 APP="${ACP_APP:-acp-app}"
-WORKER="${ACP_WORKER:-acp-worker}"
+DISCOVERY_WORKER="${ACP_DISCOVERY_WORKER:-acp-discovery}"
+ASSESS_WORKER="${ACP_ASSESS_WORKER:-acp-assess}"
+REMEDIATE_WORKER="${ACP_REMEDIATE_WORKER:-acp-remediate}"
+LANE_WORKERS=("$DISCOVERY_WORKER" "$ASSESS_WORKER" "$REMEDIATE_WORKER")
 DRY="${ACP_DRY_RUN:-0}"
 BUILD_VERSION="${ACP_BUILD_VERSION:-}"
 
@@ -58,7 +61,7 @@ AZ=(--subscription "$SUB")
 say "pre-flight"
 FQDN="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" \
           --query properties.configuration.ingress.fqdn -o tsv)"
-for a in "$APP" "$WORKER"; do
+for a in "$APP" "${LANE_WORKERS[@]}"; do
   st="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$a" --query properties.runningStatus -o tsv)"
   [ "$st" = "Running" ] || die "$a is '$st' before we started — fix that first; do not deploy onto a stopped app"
 done
@@ -87,7 +90,7 @@ if [ "$DRY" = 1 ]; then
   echo "  blue (keeps 100%)  : $BLUE"
   echo "  green (at 0%)      : $GREEN"
   echo "  green smoke-test   : https://$GREEN.$ENV_DOMAIN/healthz"
-  echo "  worker cutover     : $WORKER -> $IMG  (not blue-green — no ingress)"
+  echo "  worker cutover     : ${LANE_WORKERS[*]} -> $IMG  (not blue-green — no ingress)"
   [ -n "$BUILD_VERSION" ] && echo "  version asserted   : $BUILD_VERSION"
   say "DRY RUN — stopped before any change"
   exit 0
@@ -164,14 +167,18 @@ az containerapp ingress traffic set "${AZ[@]}" -g "$RG" -n "$APP" \
   --revision-weight "$GREEN=100" "$BLUE=0" >/dev/null
 
 # ── Worker cutover (NOT blue-green — no ingress to split) ────────────────────
-say "cutting $WORKER over to the same image"
-az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER" --image "$IMG" --no-wait >/dev/null
-printf '  %s ' "$WORKER"
-for _ in $(seq 1 60); do
-  img="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$WORKER" \
-           --query properties.template.containers[0].image -o tsv 2>/dev/null || true)"
-  [ "$img" = "$IMG" ] && { printf ' ✓\n'; break; }
-  printf '.'; sleep 5
+say "cutting ${LANE_WORKERS[*]} over to the same image"
+for a in "${LANE_WORKERS[@]}"; do
+  az containerapp update "${AZ[@]}" -g "$RG" -n "$a" --image "$IMG" --no-wait >/dev/null
+done
+for a in "${LANE_WORKERS[@]}"; do
+  printf '  %s ' "$a"
+  for _ in $(seq 1 60); do
+    img="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$a" \
+             --query properties.template.containers[0].image -o tsv 2>/dev/null || true)"
+    [ "$img" = "$IMG" ] && { printf ' ✓\n'; break; }
+    printf '.'; sleep 5
+  done
 done
 
 # ── Verify on the public FQDN ─────────────────────────────────────────────────
@@ -195,12 +202,14 @@ ok "green ($GREEN) is live on $APP — blue ($BLUE) kept at 0%% for instant roll
 # ── Rollback commands (printed with real names; paste, do not reconstruct) ───
 cat <<ROLLBACK
 
-  Rollback — app traffic is an instant weight change; the worker needs ~20 s to pull:
+  Rollback — app traffic is an instant weight change; the workers need ~20 s to pull:
 
     az containerapp ingress traffic set -g $RG -n $APP --revision-weight $BLUE=100 $GREEN=0
-    az containerapp update -g $RG -n $WORKER --image $BLUE_IMG
+    az containerapp update -g $RG -n $DISCOVERY_WORKER --image $BLUE_IMG
+    az containerapp update -g $RG -n $ASSESS_WORKER --image $BLUE_IMG
+    az containerapp update -g $RG -n $REMEDIATE_WORKER --image $BLUE_IMG
 
-  Run BOTH. A new worker under an old app leaves the system in a mixed-version state.
+  Run ALL FOUR. New workers under an old app leave the system in a mixed-version state.
   The app will stay in Multiple-revision mode (blue at 0%, green at 100%) until you
   either roll back or manually switch it to Single mode.
 ROLLBACK

@@ -1,12 +1,12 @@
 # Dedicated production Discovery service
 
-Target: `acp-discovery` in `mdk-accessibility`, same Container Apps environment and private database/Redis as `acp-worker`. No ingress. One minimum and maximum replica, 2 vCPU / 4 GiB; three worker threads, all restricted by `ACP_WORKER_ROLE=discovery`. Metadata-only, four-format scope remains enabled. This is three concurrent jobs, not three CPUs. A single replica can still fail; durable leases/retries recover work.
+Target: `acp-discovery` in `mdk-accessibility`, alongside `acp-assess` and `acp-remediate` in the same Container Apps environment and private database/Redis. The retired generic `acp-worker` no longer exists in production. No ingress. One minimum and maximum replica, 2 vCPU / 4 GiB; three worker threads, all restricted by `ACP_WORKER_ROLE=discovery`. Metadata-only, four-format scope remains enabled. This is three concurrent jobs, not three CPUs. A single replica can still fail; durable leases/retries recover work.
 
-`ACP_WORKER_ROLE=processing` on the existing worker excludes `scan_discover` using the registered handler types. Default `mixed` preserves the existing topology. Invalid roles fail closed. Role selection applies at startup and live pool resizing. A processing pool with no eligible handlers claims nothing.
+Production uses three disjoint roles: `discovery`, `assess`, and `remediate`. Tests sweep the registered handlers and fail if any job type is missing from those lanes or appears in more than one. Default `mixed` remains available for local and staging topologies. Invalid roles fail closed.
 
-The normal production redeploy updates `acp-app`, `acp-worker`, and `acp-discovery` to the same
-version-stamped application image. The container app's `command: acp-worker` and
-`ACP_WORKER_ROLE=discovery` retain the dedicated role. This lockstep update is required: lifecycle
+The normal production redeploy updates `acp-app`, `acp-discovery`, `acp-assess`, and
+`acp-remediate` to the same version-stamped application image. Each container app keeps its
+`command: acp-worker` and dedicated `ACP_WORKER_ROLE`. This lockstep update is required: lifecycle
 evaluation schemas live in the shared handler/store code, and a stale Discovery image can write
 candidate statuses without the evidence ledger a newer API expects. The Dockerfile here remains
 for initial provisioning and explicit engine experiments, not routine releases.
