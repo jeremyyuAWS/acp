@@ -2,6 +2,7 @@
 remediation endpoints."""
 from __future__ import annotations
 import hashlib
+import json as _json
 import logging
 import os
 import threading
@@ -1466,6 +1467,48 @@ def scan_inventory_list(sid: str, request: Request,
             "rows": [_inv_capability(r) for r in rows]}
 
 
+def _lifecycle_scan_owner(sid: str, request: Request) -> str:
+    owner = _owner(request)
+    if core.store.get_scan_head(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    return owner
+
+
+@router.get("/scans/{sid}/lifecycle/summary")
+def lifecycle_summary(sid: str, request: Request):
+    """One mutually-exclusive estate reconciliation from the persisted scan snapshot."""
+    owner = _lifecycle_scan_owner(sid, request)
+    return core.store.lifecycle_summary(sid, owner)
+
+
+@router.get("/scans/{sid}/lifecycle/rules")
+def lifecycle_rule_results(sid: str, request: Request):
+    owner = _lifecycle_scan_owner(sid, request)
+    return {"scan_id": sid, "data_version": core.store.lifecycle_data_version(sid),
+            "rules": core.store.list_lifecycle_rule_results(sid, owner)}
+
+
+@router.get("/scans/{sid}/lifecycle/files")
+def lifecycle_files(sid: str, request: Request, status: str | None = Query(None),
+                    policy_id: str | None = Query(None), offset: int = Query(0, ge=0),
+                    limit: int = Query(200, ge=1, le=1000)):
+    owner = _lifecycle_scan_owner(sid, request)
+    rows = core.store.list_lifecycle_files(sid, owner, status=status, policy_id=policy_id,
+                                           limit=limit, offset=offset)
+    return {"scan_id": sid, "data_version": core.store.lifecycle_data_version(sid),
+            "offset": offset, "limit": limit, "rows": [_inv_capability(r) for r in rows]}
+
+
+@router.get("/scans/{sid}/lifecycle/files/{document_id:path}")
+def lifecycle_file_detail(sid: str, document_id: str, request: Request):
+    owner = _lifecycle_scan_owner(sid, request)
+    row = core.store.lifecycle_file_detail(sid, document_id, owner)
+    if row is None:
+        raise HTTPException(404, "document not found in this scan")
+    return {**_inv_capability(row), "evaluations": row.get("evaluations", []),
+            "data_version": core.store.lifecycle_data_version(sid)}
+
+
 @router.get("/scans/{sid}/inventory.csv")
 def scan_inventory_csv(sid: str, request: Request):
     """The whole per-file estate inventory as CSV (owner-scoped) — every discovered file, source
@@ -1483,6 +1526,7 @@ def scan_inventory_csv(sid: str, request: Request):
     # not in place of it.
     cols = ["file", "owner", "size_kb", "mime", "format", "status", "doc_class",
             "lifecycle_status", "lifecycle_rule_id", "lifecycle_reason",
+            "policy_version", "evaluation_result", "evidence_json",
             "lifecycle_override_reason", "lifecycle_overridden_by", "lifecycle_overridden_at",
             "path", "parent_folder", "created_at", "source_modified",
             "discovered_at", "drive_file_id"]
@@ -1491,6 +1535,13 @@ def scan_inventory_csv(sid: str, request: Request):
     w.writerow(cols)
     for r in core.store.list_inventory(sid):
         e = _inv_capability(r)
+        detail = core.store.lifecycle_file_detail(sid, r.get("file"), _owner(request)) or {}
+        evaluations = detail.get("evaluations") or []
+        winning = next((x for x in evaluations if str(x.get("policy_id")) == str(r.get("lifecycle_rule_id"))), None)
+        if winning:
+            e["policy_version"] = winning.get("policy_version")
+            e["evaluation_result"] = winning.get("result")
+            e["evidence_json"] = _json.dumps(winning.get("evidence") or {}, separators=(",", ":"))
         w.writerow([e.get(c, "") if e.get(c) is not None else "" for c in cols])
     return Response(buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="inventory-{sid}.csv"'})

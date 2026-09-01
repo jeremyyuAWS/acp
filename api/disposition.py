@@ -255,6 +255,17 @@ def evaluate(doc: dict, match: list[dict]) -> dict:
     return {"matched": all_passed, "conditions": rows}
 
 
+def evaluation_result(evaluation: dict) -> str:
+    """Classify a detailed evaluation without changing evaluate()'s long-standing public shape.
+    A missing value is required evidence except for ``ne``: that operator explicitly models
+    absence as "not equal" and existing policies rely on that documented behavior."""
+    missing = any(row.get("observed_value") is None and row.get("op") != "ne"
+                  for row in evaluation.get("conditions", []))
+    if missing:
+        return "unevaluable"
+    return "matched" if evaluation.get("matched") else "not_matched"
+
+
 # ── Candidate precedence (PRD §6) ───────────────────────────────────────────────
 # Moved here from api/handlers._evaluate_discover_lifecycle_rules (Lifecycle Rules build-plan
 # item #6, "identify which rule wins") so the discover-time evaluator and the conflicts report
@@ -299,6 +310,10 @@ def resolve_candidate(matched: list[dict], actor: str | None) -> tuple[dict | No
     archive_p = next((p for p in matched if p.get("action") == "archive"), None)
     delete_p = next((p for p in matched if p.get("action") == "delete"), None)
     if delete_p and archive_p:
+        if delete_p.get("priority") is not None and delete_p.get("priority") == archive_p.get("priority"):
+            return None, "Conflict — review required", (
+                f"equal-priority rules '{archive_p.get('name')}' and '{delete_p.get('name')}' "
+                "recommend different destructive actions; neither action was selected")
         try:
             dcfg = json.loads(delete_p.get("action_config") or "{}")
         except Exception:

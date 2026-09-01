@@ -517,6 +517,22 @@ _SCHEMA = [
     # max on create (see create_disposition_policy), so it starts last too — the safe default —
     # rather than silently jumping ahead of rules that were already there.
     "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS priority INTEGER",
+    "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1",
+    "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS description TEXT",
+    "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS updated_at TEXT",
+    """CREATE TABLE IF NOT EXISTS lifecycle_evaluation (
+      evaluation_id TEXT PRIMARY KEY, scan_id TEXT, document_id TEXT,
+      policy_id TEXT, policy_version INTEGER, result TEXT, evidence_json TEXT,
+      proposed_action TEXT, priority INTEGER, evaluated_at TEXT, owner_email TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS effective_disposition (
+      document_id TEXT, scan_id TEXT, winning_evaluation_id TEXT,
+      lifecycle_status TEXT, precedence_reason TEXT, approval_status TEXT,
+      override_reason TEXT, updated_at TEXT, owner_email TEXT,
+      PRIMARY KEY(scan_id, document_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_lifecycle_evaluation_scan ON lifecycle_evaluation(scan_id, owner_email)",
+    "CREATE INDEX IF NOT EXISTS idx_lifecycle_evaluation_file ON lifecycle_evaluation(scan_id, document_id)",
     # Per-file WCAG scope rules (Discover/Assess Lifecycle PRD §4.4 / AC-09, "C4"). A rule
     # targets files by folder / owner / department and assigns a Core-17 subset; the effective
     # code-set for a file is resolved from matching rules (union, or a higher-priority override
@@ -1374,8 +1390,8 @@ class _PgAdapter:
     # (v3 was independently assigned to two different additive changes by two concurrent
     # sessions — this repo squash-merges, so both landed — and is renumbered to v4 here rather
     # than picking one side's checksum over the other's real, both-present DDL.)
-    _SCHEMA_VERSION = 4
-    _SCHEMA_CHECKSUM_AT_VERSION = "02b549db6c9f9f400496f13781ac2425"
+    _SCHEMA_VERSION = 5
+    _SCHEMA_CHECKSUM_AT_VERSION = "8814ae61e2657d94a2b6005d2e3cad7c"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -2405,8 +2421,9 @@ class Store:
     # ── Lifecycle status (Discover-completeness PRD §4.3 / §4.5) ─────────────────
     # The 7 statuses a discovered file can hold. Active is the default; a rule run or a manual
     # action moves it. Kept here (not an enum type) so the sqlite/postgres split needs no DDL.
-    LIFECYCLE_STATUSES = ("Active", "Archive Candidate", "Archived", "Delete Candidate",
-                          "Deleted", "Failed", "Exempted")
+    LIFECYCLE_STATUSES = ("Active", "Already archived", "Archive Candidate", "Archived",
+                          "Delete Candidate", "Deleted", "Failed", "Exempted", "Reactivated",
+                          "Unevaluable", "Conflict — review required")
     # Statuses Assess excludes by default (PRD §4.5): archive/delete-flagged and terminal.
     LIFECYCLE_EXCLUDED_DEFAULT = ("Archive Candidate", "Archived", "Delete Candidate", "Deleted")
 
@@ -2484,6 +2501,107 @@ class Store:
                 "FROM scan_inventory WHERE scan_id=%s GROUP BY COALESCE(lifecycle_status,'Active')",
                 (scan_id,))
             return {r["s"]: r["n"] for r in self._db.fetchall(cur)}
+
+    def bulk_create_lifecycle_evaluations(self, rows: list[tuple]) -> None:
+        """Persist immutable rule/file evidence snapshots. A deterministic evaluation id makes
+        retries idempotent; an existing snapshot is never rewritten by a later rule edit."""
+        if not rows:
+            return
+        with self._db.cursor() as cur:
+            self._db.executemany(cur,
+                "INSERT INTO lifecycle_evaluation(evaluation_id,scan_id,document_id,policy_id,"
+                "policy_version,result,evidence_json,proposed_action,priority,evaluated_at,owner_email) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(evaluation_id) DO NOTHING", rows)
+
+    def bulk_upsert_effective_dispositions(self, rows: list[tuple]) -> None:
+        if not rows:
+            return
+        with self._db.cursor() as cur:
+            self._db.executemany(cur,
+                "INSERT INTO effective_disposition(document_id,scan_id,winning_evaluation_id,"
+                "lifecycle_status,precedence_reason,approval_status,override_reason,updated_at,owner_email) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,document_id) DO UPDATE SET "
+                "winning_evaluation_id=EXCLUDED.winning_evaluation_id,lifecycle_status=EXCLUDED.lifecycle_status,"
+                "precedence_reason=EXCLUDED.precedence_reason,approval_status=EXCLUDED.approval_status,"
+                "override_reason=EXCLUDED.override_reason,updated_at=EXCLUDED.updated_at,owner_email=EXCLUDED.owner_email",
+                rows)
+
+    def lifecycle_summary(self, scan_id: str, owner: str) -> dict:
+        counts = self.count_lifecycle_by_status(scan_id)
+        total = self.count_inventory(scan_id)
+        normalized = {
+            "active": counts.get("Active", 0),
+            "already_archived": counts.get("Already archived", 0) + counts.get("Archived", 0),
+            "archive_candidate": counts.get("Archive Candidate", 0),
+            "delete_candidate": counts.get("Delete Candidate", 0),
+            "deleted": counts.get("Deleted", 0),
+            "exempt": counts.get("Exempted", 0),
+            "reactivated": counts.get("Reactivated", 0),
+            "unevaluable": counts.get("Unevaluable", 0) + counts.get("Conflict — review required", 0),
+            "failed": counts.get("Failed", 0),
+        }
+        return {"scan_id": scan_id, "total": total, "reconciled_total": sum(normalized.values()),
+                "counts": normalized,
+                "assessment_excluded": normalized["already_archived"] + normalized["archive_candidate"] + normalized["delete_candidate"] + normalized["deleted"],
+                "data_version": self.lifecycle_data_version(scan_id),
+                "recommendations_only": True}
+
+    def lifecycle_data_version(self, scan_id: str) -> str | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT MAX(evaluated_at) AS v FROM lifecycle_evaluation WHERE scan_id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+            return row.get("v") if row else None
+
+    def list_lifecycle_rule_results(self, scan_id: str, owner: str) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT le.policy_id,le.policy_version,COALESCE(dp.name,le.policy_id) AS name,"
+                "le.priority,le.proposed_action,MAX(le.evaluated_at) AS evaluated_at,COUNT(*) AS evaluated,"
+                "SUM(CASE WHEN le.result='matched' THEN 1 ELSE 0 END) AS matched,"
+                "SUM(CASE WHEN le.result IN ('skipped','exempt') THEN 1 ELSE 0 END) AS skipped,"
+                "SUM(CASE WHEN le.result='unevaluable' THEN 1 ELSE 0 END) AS unevaluable,"
+                "SUM(CASE WHEN le.result='conflict' THEN 1 ELSE 0 END) AS conflicts "
+                "FROM lifecycle_evaluation le LEFT JOIN disposition_policy dp ON dp.policy_id=le.policy_id "
+                "WHERE le.scan_id=%s AND le.owner_email=%s GROUP BY le.policy_id,le.policy_version,dp.name,le.priority,le.proposed_action "
+                "ORDER BY le.priority, name", (scan_id, owner))
+            return self._db.fetchall(cur)
+
+    def list_lifecycle_files(self, scan_id: str, owner: str, *, status: str | None = None,
+                             policy_id: str | None = None, limit: int = 200, offset: int = 0) -> list[dict]:
+        where, args = ["si.scan_id=%s", "EXISTS (SELECT 1 FROM scan_runs sr WHERE sr.id=si.scan_id AND sr.owner_email=%s)"], [scan_id, owner]
+        if status == "already_archived":
+            where.append("COALESCE(si.lifecycle_status,'Active') IN ('Already archived','Archived')")
+        elif status == "unevaluable":
+            where.append("COALESCE(si.lifecycle_status,'Active') IN ('Unevaluable','Conflict — review required')")
+        elif status:
+            where.append("COALESCE(si.lifecycle_status,'Active')=%s"); args.append(status)
+        if policy_id:
+            where.append("si.lifecycle_rule_id=%s"); args.append(policy_id)
+        args.extend([limit, offset])
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT {self._INV_COLS} FROM scan_inventory si WHERE {' AND '.join(where)} ORDER BY si.file LIMIT %s OFFSET %s",
+                tuple(args))
+            return self._db.fetchall(cur)
+
+    def lifecycle_file_detail(self, scan_id: str, document_id: str, owner: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, f"SELECT {self._INV_COLS} FROM scan_inventory WHERE scan_id=%s AND file=%s "
+                             "AND EXISTS (SELECT 1 FROM scan_runs sr WHERE sr.id=scan_inventory.scan_id AND sr.owner_email=%s)",
+                             (scan_id, document_id, owner))
+            row = self._db.fetchone(cur)
+            if not row:
+                return None
+            self._db.execute(cur,
+                "SELECT evaluation_id,policy_id,policy_version,result,evidence_json,proposed_action,priority,evaluated_at "
+                "FROM lifecycle_evaluation WHERE scan_id=%s AND document_id=%s AND owner_email=%s ORDER BY priority,policy_id",
+                (scan_id, document_id, owner))
+            evaluations = self._db.fetchall(cur)
+            for evaluation in evaluations:
+                try: evaluation["evidence"] = json.loads(evaluation.pop("evidence_json") or "{}")
+                except Exception: evaluation["evidence"] = {}
+            return {**row, "evaluations": evaluations}
 
     # ── Per-file tags (PRD §4.2 Tag action / §3 auto-tagging) ───────────────────
     def add_file_tags(self, scan_id: str, file: str, tags: list[str], *,
@@ -2935,6 +3053,7 @@ class Store:
                          "file_stage_timings", "scan_file_manifests", "scan_inventory", "file_tags",
                          "scan_decisions", "pii_findings", "hitl_queue", "hitl_events",
                          "disposition_audit", "decision_log", "inventory", "jobs", "documents",
+                         "lifecycle_evaluation", "effective_disposition",
                          "org_memory", "remediation_state", "remediation_diff", "applied_fixes",
                          "ai_calls", "finding_comments",
                          "scan_inputs",  # Stage 1 item 3: per-scan enqueue snapshots are customer data

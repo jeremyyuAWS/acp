@@ -323,7 +323,7 @@ def test_size_kb_none_does_not_match(isolated_store, monkeypatch):
             [{"field": "size_kb", "op": "gt", "value": 0}])
     _discover()
 
-    assert st.get_lifecycle_status("s1", "nosizeinfo.docx")["lifecycle_status"] == "Active"
+    assert st.get_lifecycle_status("s1", "nosizeinfo.docx")["lifecycle_status"] == "Unevaluable"
 
 
 # ── multi-condition AND: realistic combined policy ────────────────────────────────
