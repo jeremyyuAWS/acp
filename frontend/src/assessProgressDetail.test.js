@@ -33,7 +33,7 @@ describe('per-document detail under the bar', () => {
 
   it('renders a row per document with its state', () => {
     expect(src).toMatch(/className="assesslist"/)
-    expect(src).toMatch(/f\.done \? 'done' : 'pending'/)
+    expect(src).toMatch(/f\.done \? 'done' : activeStage \? 'active' : 'pending'/)
   })
 
   it('shows the criteria a finished document FAILED, by number', () => {
