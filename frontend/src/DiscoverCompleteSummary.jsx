@@ -79,6 +79,9 @@ export default function DiscoverCompleteSummary({
   excludedCount,
   folderCount,
   lifecycleRulesCount,
+  lifecycleFilesEvaluated,
+  lifecycleMatches,
+  lifecycleUnevaluable,
   archiveCandidates,
   deleteCandidates,
   tagged,
@@ -198,8 +201,8 @@ export default function DiscoverCompleteSummary({
           {scannableCount != null && (
             <li style={{ fontSize: 12.5, color: 'var(--muted)' }}>
               {n(scannableCount)} of {n(discoveredCount)} are scannable document types
-              (PDF, Office, HTML) — everything else is excluded by file type before assessment
-              eligibility is even checked.
+              (PDF, DOCX, XLSX, PPTX) — HTML and every other type remain inventoried but are
+              excluded by file type before assessment eligibility is even checked.
             </li>
           )}
         </ul>
@@ -270,6 +273,17 @@ export default function DiscoverCompleteSummary({
             {hasLifecycleRules ? (
               <li>
                 {n(lifecycleRulesCount)} lifecycle rule{lifecycleRulesCount === 1 ? '' : 's'}
+                {lifecycleFilesEvaluated != null && (
+                  <div style={{ color: 'var(--muted)', fontSize: 12.5, marginTop: 3 }}>
+                    Evaluated {n(lifecycleFilesEvaluated)} inventoried file{lifecycleFilesEvaluated === 1 ? '' : 's'}
+                    {lifecycleMatches != null
+                      ? ` · ${n(lifecycleMatches)} matched · ${n(Math.max(0, lifecycleFilesEvaluated - lifecycleMatches - (lifecycleUnevaluable ?? 0)))} did not match`
+                      : ''}
+                    {(lifecycleUnevaluable ?? 0) > 0
+                      ? ` · ${n(lifecycleUnevaluable)} could not be evaluated`
+                      : ''}
+                  </div>
+                )}
                 {lifecycleBreakdown.length > 0 && (
                   <div style={{ color: 'var(--muted)', fontSize: 12.5, marginTop: 3 }}>
                     {lifecycleBreakdown.join(' · ')}
@@ -282,7 +296,9 @@ export default function DiscoverCompleteSummary({
                 ? 'No lifecycle rules enabled' : 'Lifecycle rule status was not recorded'}</li>
             )}
             {hasLifecycleRules && archiveCandidates === 0 && deleteCandidates === 0 && tagged === 0 && (
-              <li style={{ color: 'var(--muted)' }}>No files matched these rules.</li>
+              <li style={{ color: 'var(--muted)' }}>
+                No files matched these rules. The rules ran; no source files were changed.
+              </li>
             )}
             {/* NOT a comparison against a previous scan, however the field name reads.
                 `add_inventory` (api/store.py) upserts scoped to THIS scan_id alone — "new" vs

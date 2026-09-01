@@ -157,7 +157,13 @@ describe('App composes the Assess tab the way the board specifies', () => {
     // resultsReady is the two-way gate: finished this session (done) OR a prior-session assessed scan.
     expect(s).toMatch(/const resultsReady =[\s\S]{0,80}assessPhase === 'done'[\s\S]{0,120}?assessPhase === 'idle'[\s\S]{0,120}?assessed_at[\s\S]{0,60}?justAssessed !== run\?\.id/)
     // the results are gated on it…
-    expect(s).toMatch(/assessed && resultsReady && !runDetails && !assessFile && <><AssessSummary/)
+    //
+    // The GATE is the property here, not which component is first inside the fragment it guards.
+    // This read `<><AssessSummary` and went red when the Run integrity gate was mounted ahead of
+    // the summary — a correct, unrelated addition reported as a regression in the empty-panel
+    // rule. So: pin the gate, and pin separately that the summary is still behind it.
+    expect(s).toMatch(/assessed && resultsReady && !runDetails && !assessFile && <>/)
+    expect(s).toMatch(/assessed && resultsReady && !runDetails && !assessFile && <>[\s\S]{0,400}?<AssessSummary\b/)
     // …and NOT purely on 'done' any more (the exact shape that produced the empty panel).
     expect(s).not.toMatch(/assessed && assessPhase === 'done' && !runDetails/)
   })

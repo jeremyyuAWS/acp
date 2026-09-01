@@ -10,9 +10,10 @@ assessment-eligible denominator with files Assess will never receive — the "un
 never read as passed" failure the product model (docs/discovery-assessment-remediation.md) exists
 to prevent. All three now derive from `formats()` below.
 
-THE SCOPE, AND HOW TO CHANGE IT. Discovery covers PDF, DOCX, XLSX and PPTX (2026-08-31 scope
-decision). HTML was in scope before that date and is still fully implemented downstream — the
-detectors, fixers and report paths for it are untouched — so it is one env var away:
+THE SCOPE, AND HOW TO CHANGE IT. Discovery covers PDF, DOCX, XLSX and PPTX (2026-09-01 scope
+decision). HTML was previously in scope and is still fully implemented downstream — the detectors,
+fixers and report paths for it are untouched — so it remains available behind an explicit operator
+override:
 
     ACP_SCAN_FORMATS=pdf,docx,xlsx,pptx,html
 
@@ -64,7 +65,7 @@ _MIME_OF: dict[str, str] = {
 # would list files Assess is guaranteed to fail on, which is worse than ignoring the typo.
 KNOWN_FORMATS: frozenset[str] = frozenset(_EXT_OF)
 
-# The 2026-08-31 scope decision. Ordered widest-value-first only for readable log output; every
+# The 2026-09-01 scope decision. Ordered widest-value-first only for readable log output; every
 # consumer treats it as a set.
 DEFAULT_FORMATS: tuple[str, ...] = ("pdf", "docx", "xlsx", "pptx")
 
