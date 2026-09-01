@@ -521,7 +521,39 @@ esac
 # business. Roles outside LANE_ROLES are reported as a NOTE, not a warning, so that a service
 # somebody adds without adding it here is still visible.
 say "verifying worker services (per role — they have no ingress to curl)"
+#
+# ONE CLEAN POLL IS NOT AN ANSWER, and this loop used to break on the first one.
+#
+# Measured on 2026-09-01, deploy of 2026.9.1.36 (run 33568634537). Step 9b printed
+# `✓ every deployed worker role is running 2026.9.1.36` at 23:03:55.5585. Discovery's row:
+#
+#     23:03:39.570  beat, version 2026.9.1.30
+#    ~23:03:55.5    step 9b polls, sees .36, BREAKS, prints the tick
+#     23:03:55.581  beat, version 2026.9.1.30
+#     23:03:56.35   the workflow's own /readyz: discovery .30, age 0.5s
+#
+# Discovery beats every 15s (worker_main.py), and .30 was written at :39.57 and :55.58 — 16s
+# apart, one replica's cadence. A .36 write in between is a SECOND WRITER. Two replicas, one on
+# each image, both writing worker_tier_heartbeat:discovery, because the role-scoped key is
+# last-writer-wins across REPLICAS and not merely across services. Breaking on the first clean
+# poll turns that into a check that retries until it gets a green sample and then stops — it
+# converges on green rather than being able to go red, which is the same defect as the f-string.
+#
+# So a role must stay clean across a span LONGER THAN ONE HEARTBEAT INTERVAL. An old replica
+# still beating writes its version at least once per interval, so a window wider than that has
+# to contain one of its writes to be observed. Any dirty poll resets the streak to zero.
+#
+# THIS IS PROBABILISTIC, NOT A PROOF, and pretending otherwise is how the last version of this
+# check got believed. The row holds whichever write landed last; if the old replica's beat is
+# consistently overwritten by the new one within a second or two, a 5s poll cadence can still
+# miss it. That is why the revision-count check below exists — ACA can be asked how many
+# revisions are actually running, which is an answer rather than a sample.
+_HEARTBEAT_S=15                 # worker_main.py: `if now - last_beat >= 15`
+_MIN_CLEAN_SPAN=$(( _HEARTBEAT_S + 5 ))
 _ROLES_JSON=""
+_STREAK_START=""
+_SUSTAINED=0
+_STALE="startup"                # non-empty until a poll says otherwise
 for _ in $(seq 1 24); do
   _ROLES_JSON="$(curl -s --max-time 20 "https://$FQDN/readyz" || true)"
   # Every DEPLOYED role that is not running this build, one "role=problem" per line.
@@ -557,9 +589,25 @@ for role in required:
         # Right image, no longer beating: the replica wrote one beat and died.
         print(role + "=stale-" + str(r.get("age_s")) + "s")
 ' "$BUILD_VERSION" "${LANE_ROLES[@]}" 2>/dev/null || true)"
-  [ -z "$_STALE" ] && break
+  if [ -n "$_STALE" ]; then
+    _STREAK_START=""            # any dirty poll starts the span over
+  else
+    [ -n "$_STREAK_START" ] || _STREAK_START="$SECONDS"
+    if [ $(( SECONDS - _STREAK_START )) -ge "$_MIN_CLEAN_SPAN" ]; then
+      _SUSTAINED=1
+      break
+    fi
+  fi
   sleep 5
 done
+
+# THE VERDICT IS `_SUSTAINED`, NOT `_STALE`, and that distinction is load-bearing. On exhaustion
+# `_STALE` holds only the LAST poll's result, so a run that flapped for two minutes and happened
+# to end on a clean poll would leave it empty and print the tick — exactly the bug this block was
+# rewritten to remove, reintroduced one level up. An unsustained streak is not a pass.
+if [ "${_SUSTAINED:-0}" != 1 ] && [ -z "$_STALE" ]; then
+  _STALE="roles=never-clean-for-${_MIN_CLEAN_SPAN}s (last poll was clean; earlier ones were not)"
+fi
 
 # Roles that reported but are not ours to deploy. Informational: a retired service's row lives on
 # (see above), and a NEW service missing from LANE_ROLES should be noticed rather than warned about.
@@ -579,9 +627,51 @@ if [ -n "$_OTHER" ]; then
   printf '  note: roles reporting that this script does not deploy: %s\n' "$(printf '%s' "$_OTHER" | tr '\n' ' ')"
 fi
 
-if [ -z "$_STALE" ]; then
-  printf '\033[32m  ✓ every deployed worker role (%s) is running %s\033[0m\n' \
+# ── 9c. ASK ACA, rather than sampling a key it does not own ────────────────────────────────
+#
+# The heartbeat check above answers "is the running image the new one". This answers "is there
+# exactly ONE running image", which is the question the heartbeat cannot: two replicas on
+# different images both write worker_tier_heartbeat:<role> and the row keeps whichever landed
+# last, so a sample is evidence and a revision count is an answer.
+#
+# It is also the thing the warning below has always told the reader to run by hand. Running it
+# here costs one `az` call per lane worker on a deploy that has already spent minutes building,
+# and it removes the step where a human is trusted to go and look.
+#
+# Step 8's restore already set these apps to Single mode, under which ACA deactivates the
+# previous revision — so more than one active revision here means that did not take effect, which
+# is precisely the silent state these no-ingress apps drift into (nothing strands an extra
+# revision at 0% traffic the way it would for $APP; it just keeps claiming jobs).
+_EXTRA_REVS=""
+for a in "${LANE_WORKERS[@]}"; do
+  # `|| true` on the query, then a numeric guard: a failed az call must not read as "1 revision".
+  _n="$(az containerapp revision list "${AZ[@]}" -g "$RG" -n "$a" \
+          --query "length([?properties.active])" -o tsv 2>/dev/null || true)"
+  case "$_n" in
+    1) ;;
+    ''|*[!0-9]*) _EXTRA_REVS="$_EXTRA_REVS $a=unreadable" ;;
+    *) _EXTRA_REVS="$_EXTRA_REVS $a=${_n}-active-revisions" ;;
+  esac
+done
+
+if [ -z "$_STALE" ] && [ -z "$_EXTRA_REVS" ]; then
+  printf '\033[32m  ✓ every deployed worker role (%s) is running %s, one active revision each\033[0m\n' \
     "${LANE_ROLES[*]}" "$BUILD_VERSION"
+elif [ -z "$_STALE" ]; then
+  printf '\n\033[33m  ! worker roles report %s, but ACA cannot confirm one revision each:\033[0m\n' \
+    "$BUILD_VERSION" >&2
+  printf '     %s\n' $_EXTRA_REVS >&2
+  cat >&2 <<REVWARN
+    The heartbeat says the new image is running; the revision count says an OLD one is running
+    TOO. Both are true — they are different questions. A second active revision has no ingress to
+    strand it, so it keeps claiming jobs from the shared queue, and the role key reports whichever
+    replica beat last. This is why the tick above is not on its own a pass.
+
+      az containerapp revision list -g $RG -n ${LANE_WORKERS[0]} \\
+        --query "[?properties.active].{rev:name,created:properties.createdTime,img:properties.template.containers[0].image}" -o table
+
+    Deactivate the old revision, or check why --mode single did not take.
+REVWARN
 else
   printf '\n\033[33m  ! deployed worker roles NOT running %s:\033[0m\n' "$BUILD_VERSION" >&2
   printf '      %s\n' $_STALE >&2
