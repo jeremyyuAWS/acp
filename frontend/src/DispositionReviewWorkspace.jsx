@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { approveDispositionBatch, getLifecycleFileDetail, getLifecycleFileHistory, getLifecycleFiles } from './api.js'
 import LifecycleEvidencePanel from './LifecycleEvidencePanel.jsx'
+import { recoveryFor, recoveryLine, canUndo } from './recoveryPolicy.js'
 
 // PRD §7.4 default sort. Conflicts first because they are the only state where NO rule won and
 // the estate is waiting on a person; holds next because approving around one is the costliest
@@ -35,7 +36,7 @@ export function ageInDays(row, now = Date.now()) {
 }
 
 export default function DispositionReviewWorkspace({
-  scanId, status = '', policyId = '', candidateOnly = true,
+  scanId, status = '', policyId = '', candidateOnly = true, source = null,
 }) {
   const [rows, setRows] = useState([])
   const [selected, setSelected] = useState(null)
@@ -301,6 +302,18 @@ export default function DispositionReviewWorkspace({
             {activeGroup.rule} · version {String(activeGroup.policyVersion)} · {activeGroup.action}.
             {' '}This records the decision. No source file is moved or deleted here.
           </p>
+          {/* PRD §3/§8, "Recoverability is visible". Two different statements, and conflating
+              them is what makes either one a lie: what the action MEANS at the source, and what
+              actually happens when this button is pressed. recoveryPolicy holds the first; the
+              second is record-only for every candidate in this queue (#1182). No Undo control is
+              offered because canUndo() is false for every case ACP can produce today — the
+              before-state of a move or rename is discarded rather than recorded. */}
+          <p className="muted" style={{ fontSize: 12 }}>
+            <b>Recovery:</b> {recoveryLine(recoveryFor({ action: activeGroup.action, source }))}
+          </p>
+          {canUndo(recoveryFor({ action: activeGroup.action, source })) && <p role="status">
+            This action can be undone from ACP.
+          </p>}
           <label style={{ display: 'block', fontSize: 13 }}>
             Reason{destructive ? ' (required for delete)' : ' (optional)'}
             <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={2}

@@ -11,7 +11,7 @@ const NATIVE = { 'application/vnd.google-apps.document': 'docx', 'application/vn
 export const supportedDiscoveryRow = row => FORMATS.has(NATIVE[row.mime] || formatBucketOf(row))
 const showDate = value => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : 'Not recorded'
 
-export default function DiscoveryLifecycleResults({ rows, policies, scanId }) {
+export default function DiscoveryLifecycleResults({ rows, policies, scanId, source = null }) {
   const [rule, setRule] = useState('all')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(0)
@@ -59,7 +59,7 @@ export default function DiscoveryLifecycleResults({ rows, policies, scanId }) {
       onReview={() => { setReviewStatus(''); setReviewPolicy(''); setReviewCandidates(true); document.getElementById('lifecycle-review')?.scrollIntoView() }}
       onRules={() => document.getElementById('lifecycle-rules')?.scrollIntoView()} />}
     {summary && <div id="lifecycle-rules"><LifecycleRuleLedger rules={ruleResults} integrity={summary.integrity} onSelect={(policyId) => { setReviewPolicy(policyId); setReviewStatus(''); setReviewCandidates(false); document.getElementById('lifecycle-review')?.scrollIntoView() }} /></div>}
-    {summary && <div id="lifecycle-review"><DispositionReviewWorkspace scanId={scanId} status={reviewStatus} policyId={reviewPolicy} candidateOnly={reviewCandidates} /></div>}
+    {summary && <div id="lifecycle-review"><DispositionReviewWorkspace scanId={scanId} status={reviewStatus} policyId={reviewPolicy} candidateOnly={reviewCandidates} source={source} /></div>}
     <h2>Lifecycle results · supported documents</h2>
     <p className="muted">PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), including their Google equivalents. Results are saved from this scan; changing a rule requires a new scan.</p>
     {error && <p role="alert">{error}</p>}
