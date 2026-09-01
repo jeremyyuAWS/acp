@@ -1533,10 +1533,15 @@ def scan_inventory_csv(sid: str, request: Request):
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(cols)
+    # ONE grouped read for the whole scan, not lifecycle_file_detail per row. This loop is
+    # unbounded by construction ("it IS the export"), and that call costs two queries each, so
+    # the estate that most needs an export — 6,000+ files — paid ~12,000 round trips for it.
+    # tests/test_inventory_read_amplification.py measures ROWS and so was blind to this: with no
+    # evaluations recorded the extra queries return nothing at all. Its new sibling counts queries.
+    evaluations_by_document = core.store.lifecycle_evaluations_by_document(sid, _owner(request))
     for r in core.store.list_inventory(sid):
         e = _inv_capability(r)
-        detail = core.store.lifecycle_file_detail(sid, r.get("file"), _owner(request)) or {}
-        evaluations = detail.get("evaluations") or []
+        evaluations = evaluations_by_document.get(r.get("file")) or []
         winning = next((x for x in evaluations if str(x.get("policy_id")) == str(r.get("lifecycle_rule_id"))), None)
         if winning:
             e["policy_version"] = winning.get("policy_version")

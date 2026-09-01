@@ -2585,6 +2585,37 @@ class Store:
                 tuple(args))
             return self._db.fetchall(cur)
 
+    def lifecycle_evaluations_by_document(self, scan_id: str, owner: str) -> dict[str, list[dict]]:
+        """Every lifecycle evaluation in one scan, grouped by document_id, in ONE query.
+
+        The per-file sibling below is right for a detail view and wrong for an export.
+        scan_inventory_csv called it once per inventory row over an endpoint whose own docstring
+        says "Not paginated: it IS the export" — and lifecycle_file_detail costs TWO queries
+        (the inventory row, then its evaluations), so a 6,000-file estate paid ~12,000 extra
+        round trips to decorate a single CSV. The rows were never the problem: with no
+        evaluations recorded the read amplification is zero and the query amplification is
+        still 2N, which is why tests/test_inventory_read_amplification.py's row counter did not
+        catch it and this one is guarded by a QUERY count instead.
+
+        Served by idx_lifecycle_evaluation_scan(scan_id, owner_email), which already existed."""
+        out: dict[str, list[dict]] = {}
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT document_id,evaluation_id,policy_id,policy_version,result,evidence_json,"
+                "proposed_action,priority,evaluated_at FROM lifecycle_evaluation "
+                "WHERE scan_id=%s AND owner_email=%s ORDER BY document_id,priority,policy_id",
+                (scan_id, owner))
+            for row in self._db.fetchall(cur):
+                # Same decode as lifecycle_file_detail, including its fail-soft: a row whose
+                # evidence will not parse still reports its policy and result rather than
+                # taking the whole export down.
+                try:
+                    row["evidence"] = json.loads(row.pop("evidence_json") or "{}")
+                except Exception:
+                    row["evidence"] = {}
+                out.setdefault(row.get("document_id"), []).append(row)
+        return out
+
     def lifecycle_file_detail(self, scan_id: str, document_id: str, owner: str) -> dict | None:
         with self._db.cursor() as cur:
             self._db.execute(cur, f"SELECT {self._INV_COLS} FROM scan_inventory WHERE scan_id=%s AND file=%s "
