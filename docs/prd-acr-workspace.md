@@ -1,6 +1,6 @@
 # PRD — ACP Accessibility Conformance Report Workspace
 
-Status: Phase 1 delivered · Phases 2–6 planned
+Status: Phases 1–2 delivered · Phases 3–6 planned
 Design decisions: [ADR 0047](adr/0047-acr-workspace-data-model.md)
 
 ## Purpose
@@ -77,7 +77,7 @@ Stale records stay visible for audit history and cannot independently support pu
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Domain model, standards catalog, decision rules, validation, roles, thin vertical slice | **delivered** |
-| 2 | Evidence workspace: report CRUD, criteria navigation, richer attachment flows | planned |
+| 2 | Evidence workspace — **rescoped**, see below | **delivered** |
 | 3 | Guided manual test plans (PRD §14's 20 plans), tester metadata, gap detection | planned |
 | 4 | Publication validation, reviewer sign-off, immutable snapshots, revision history | planned |
 | 5 | Vendored ITI VPAT 2.5Rev template + accessible Word export + export accessibility gate | planned |
@@ -104,6 +104,41 @@ and the draft export preview.
 **Vertical slice.** WCAG 1.4.3 Contrast (Minimum) end to end — chosen because it is the criterion
 where ACP genuinely has an automated check against its own UI, so the slice runs on real evidence
 rather than a fabricated demo result.
+
+## Phase 2 — what shipped, and why it is not what the table originally said
+
+Phase 2 was planned as "report CRUD, criteria navigation, evidence attachment, decision rules,
+validation". **Phase 1's vertical slice delivered all five** — 14 endpoints and 18 store methods —
+so building Phase 2 as written would have re-implemented working code. It was rescoped to what was
+actually missing to use the workspace across all 55 criteria rather than one.
+
+**Bulk axe-core ingestion** (`api/acr_axe.py`, `POST /acr/{id}/evidence/axe`). Phase 1 attached
+evidence one row at a time, which is right for a keyboard test and hopeless for automation. The
+design turns on axe's four result buckets not being three passes and a fail:
+
+| axe bucket | becomes | why |
+|---|---|---|
+| `violations` | `fail` | a real defect |
+| `passes` | `pass` | the rule's checks held |
+| `incomplete` | `blocked` | axe could not decide; mapping this to a pass turns "I don't know" into "it conforms" |
+| `inapplicable` | **not evidence at all** | a page with no `<video>` says nothing about whether the product captions its videos |
+
+Every row declares PARTIAL coverage, so ingesting a perfectly green axe run still moves nothing to
+"Supports". `preview: true` reports what would be written without writing it — the interesting part
+of the operation is what it drops, and `acr_evidence` is append-only.
+
+**Report metadata editor** (`AcrMetadataForm.jsx`). Phase 1 shipped the PATCH endpoint and a
+read-only Overview, so no report could reach a publishable state through the UI at all — §16's
+gate could never open. Which fields are required is derived from the validation endpoint's own
+blockers rather than a second hardcoded list, so the form cannot mark a field optional that the
+publish gate refuses.
+
+**Evidence gaps** (`GET /acr/{id}/gaps`, PRD §7.8), split into three kinds because each implies
+different work: no evidence at all, automated-only (a tool looked; still a gap), stale-only.
+
+**Applicability marking** (PRD §9) and criteria filtering. Applicability is deliberately unable to
+write a conformance status — marking a criterion inapplicable is workspace triage, not the
+"Not Applicable" decision a customer reads, and it does not let a report publish undecided.
 
 ## Explicitly not delivered in Phase 1
 

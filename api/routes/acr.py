@@ -41,6 +41,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 import acr_authz
+import acr_axe
 import acr_catalog
 import acr_export_preview
 import acr_freshness
@@ -194,6 +195,23 @@ class Decide(BaseModel):
     remarks: str | None = None
 
 
+class IngestAxe(BaseModel):
+    """One axe-core result object, as `axe.run()` returns it."""
+    result: dict
+    environment: str | None = None
+    workflow: str | None = None
+    product_version: str | None = None
+    build_id: str | None = None
+    # Report what would be written without writing it. The interesting part of this operation is
+    # what it drops, and acr_evidence is append-only — a preview is cheaper than a retraction.
+    preview: bool = False
+
+
+class SetApplicability(BaseModel):
+    applicable: bool
+    rationale: str | None = None
+
+
 # ── reports ────────────────────────────────────────────────────────────────────
 
 @router.post("/acr")
@@ -304,6 +322,143 @@ def get_criterion(report_id: str, criterion_num: str, request: Request):
         "evidence": [dict(e.__dict__, stale_reason=stale.get(e.id)) for e in evidence],
         "assessment": acr_rules.summarize(criterion_num, evidence, set(stale)),
     }
+
+
+@router.post("/acr/{report_id}/evidence/axe")
+def ingest_axe(report_id: str, body: IngestAxe, request: Request):
+    """Ingest one axe-core run over ACP's own screens as evidence (PRD §7.6, §13).
+
+    `preview=true` reports what WOULD be written and writes nothing — worth having because the
+    interesting part of this operation is what it DROPS, and a user should be able to see that
+    before committing a few hundred rows to an append-only table.
+
+    The honesty rules are all in api/acr_axe.py, not here: `incomplete` becomes BLOCKED rather
+    than a pass, `inapplicable` is not evidence at all, and every row declares PARTIAL coverage —
+    so a perfectly clean axe run moves nothing to Supports. See that module's docstring.
+    """
+    owner = _tenant()
+    report = _report_or_404(report_id, owner)
+    if report.get("status") == "published":
+        raise HTTPException(409, "this report is published — changes create a new draft revision")
+    who = _require(acr_authz.ROLE_EVALUATOR, request, report_id)
+
+    known = {c["criterion_num"] for c in core.store.list_acr_criteria(report_id, owner_email=owner)}
+    try:
+        summary = acr_axe.summarize(body.result)
+        records, ingest_report = acr_axe.to_evidence(
+            body.result, report_id=report_id,
+            product_version=body.product_version or report.get("product_version"),
+            build_id=body.build_id or report.get("build_id"),
+            environment=body.environment, workflow=body.workflow, tester=who,
+            known_criteria=known)
+    except (acr_axe.AxeIngestError, AcrValidationError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    if body.preview:
+        return {"preview": True, "run": summary, "would_ingest": ingest_report}
+
+    for ev in records:
+        core.store.add_acr_evidence(ev.to_row(), owner_email=owner)
+    core.store.append_acr_decision_log(
+        report_id, owner_email=owner, actor=who, action="evidence.axe_ingested",
+        detail=(f"{ingest_report['ingested']} record(s) over "
+                f"{len(ingest_report['criteria'])} criteria from {summary.get('tested_url') or '?'}; "
+                f"{ingest_report['dropped_inapplicable']} inapplicable dropped"))
+
+    # Recompute ACP's draft suggestion for every criterion the run touched. Still only ever a
+    # suggestion — save_acr_draft_status cannot reach final_status (PRD §20).
+    ev_by = _evidence_objects(report_id, owner)
+    stale = _stale_for(report, ev_by)
+    drafts: dict[str, str | None] = {}
+    for sc in ingest_report["criteria"]:
+        draft, _why = acr_rules.may_draft(sc, ev_by.get(sc, []), set(stale))
+        core.store.save_acr_draft_status(report_id, sc, owner_email=owner, draft_status=draft,
+                                         workflow_state=acr_catalog.NEEDS_REVIEW)
+        drafts[sc] = draft
+    return {"preview": False, "run": summary, "ingested": ingest_report, "drafts": drafts}
+
+
+@router.get("/acr/{report_id}/gaps")
+def gaps(report_id: str, request: Request):
+    """PRD §7.8 — "ACP identifies criteria that have no adequate evidence".
+
+    Distinct from /validation, which answers "can this publish" and is keyed on decisions. This
+    answers "where does a human still need to go and look", which is the question an analyst has
+    while the report is still being built and every criterion is undecided.
+
+    The three buckets are deliberately different kinds of gap, because the work each implies is
+    different:
+      no_evidence        nobody has looked at this criterion at all
+      automated_only     a tool looked; PRD §4.3 says that is not enough on its own
+      stale_only         someone looked, but not at this version of the product
+    """
+    owner = _tenant()
+    report = _report_or_404(report_id, owner)
+    criteria = core.store.list_acr_criteria(report_id, owner_email=owner)
+    ev_by = _evidence_objects(report_id, owner)
+    stale = set(_stale_for(report, ev_by))
+
+    buckets: dict[str, list[dict]] = {"no_evidence": [], "automated_only": [], "stale_only": []}
+    covered = 0
+    for crit in criteria:
+        sc = crit["criterion_num"]
+        rows = ev_by.get(sc, [])
+        live = [e for e in rows if e.id not in stale]
+        row = {"criterion_num": sc, "criterion_name": crit.get("criterion_name"),
+               "level": crit.get("level"), "principle": crit.get("principle"),
+               "final_status": crit.get("final_status"),
+               "evidence_total": len(rows), "evidence_live": len(live)}
+        if not rows:
+            buckets["no_evidence"].append(row)
+        elif not live:
+            buckets["stale_only"].append(row)
+        elif not acr_rules.has_human_evaluation(rows, stale):
+            buckets["automated_only"].append(row)
+        else:
+            covered += 1
+
+    return {
+        "total": len(criteria),
+        "with_human_evidence": covered,
+        "counts": {k: len(v) for k, v in buckets.items()},
+        "buckets": buckets,
+        "note": ("A criterion with only automated evidence is a gap, not a result: an automated "
+                 "pass covers part of a criterion and never establishes conformance (PRD §4.3)."),
+    }
+
+
+@router.post("/acr/{report_id}/criteria/{criterion_num}/applicability")
+def set_applicability(report_id: str, criterion_num: str, body: SetApplicability, request: Request):
+    """Mark a criterion applicable or not (PRD §9's applicability column).
+
+    NOT the same act as deciding "Not Applicable", and the difference is worth keeping. The
+    conformance decision is what a customer reads in the exported table and needs remarks
+    explaining why the criterion does not apply (PRD §10). This flag is the workspace's own
+    triage — "we do not expect to evaluate this" — and marking it does not write a status.
+
+    Marking a criterion inapplicable therefore does NOT let a report publish with it undecided:
+    acr_validation still requires a final status for every row. That is deliberate; an ACR reports
+    on every applicable criterion in the standard, and "we decided not to look" is not one of the
+    four VPAT terms.
+    """
+    owner = _tenant()
+    report = _report_or_404(report_id, owner)
+    if report.get("status") == "published":
+        raise HTTPException(409, "this report is published — changes create a new draft revision")
+    who = _require(acr_authz.ROLE_EDITOR, request, report_id)
+
+    if core.store.get_acr_criterion(report_id, criterion_num, owner_email=owner) is None:
+        raise HTTPException(404, "no such criterion in this report")
+    if not body.applicable and not (body.rationale or "").strip():
+        raise HTTPException(422, "marking a criterion inapplicable requires a rationale")
+
+    core.store.set_acr_criterion_applicability(report_id, criterion_num, owner_email=owner,
+                                               applicable=body.applicable)
+    core.store.append_acr_decision_log(
+        report_id, owner_email=owner, actor=who, action="criterion.applicability_changed",
+        criterion_num=criterion_num,
+        detail=f"applicable={body.applicable}: {(body.rationale or '').strip()[:180]}")
+    return {"criterion_num": criterion_num, "applicable": body.applicable}
 
 
 @router.post("/acr/{report_id}/criteria/{criterion_num}/evidence")

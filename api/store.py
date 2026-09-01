@@ -9990,6 +9990,21 @@ class Store:
                 "WHERE report_id=%s AND criterion_num=%s AND owner_email=%s",
                 (draft_status, workflow_state, self._now(), report_id, criterion_num, owner_email))
 
+    def set_acr_criterion_applicability(self, report_id: str, criterion_num: str, *,
+                                        owner_email: str, applicable: bool) -> None:
+        """The workspace's own triage flag (PRD §9's applicability column).
+
+        Deliberately CANNOT write final_status. Deciding "Not Applicable" is a conformance
+        judgement that a customer reads and that PRD §10 requires remarks for; this is only
+        "we do not expect to evaluate this". Keeping them in separate code paths is what stops
+        a triage click from becoming an exported conformance claim.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE acr_criterion SET applicable=%s,updated_at=%s "
+                "WHERE report_id=%s AND criterion_num=%s AND owner_email=%s",
+                (1 if applicable else 0, self._now(), report_id, criterion_num, owner_email))
+
     def approve_acr_criterion(self, report_id: str, criterion_num: str, *, owner_email: str,
                               reviewer: str) -> None:
         with self._db.cursor() as cur:
