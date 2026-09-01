@@ -32,6 +32,105 @@ const detailHeading = () => container.querySelector('h3')?.textContent
 
 describe('RemediationInbox — workflow-status queue', () => {
 
+  // ── Clustered rows: many like findings, one row, one decision (PRD Tier C) ───────────────────
+  // The failure this exists to stop: a production run put 265 findings into this queue, largely for
+  // one criterion. A flat list that long is a rubber-stamping machine however good each row is.
+
+  // Five 1.1.1 AI drafts — four .docx and one .pdf — which are ONE cluster, because format is not
+  // part of the cluster key. Plus one 2.4.2, which is a different criterion and so its own row.
+  const CLUSTERED = [
+    { id: 101, file: 'a.docx', title: 'DOCX \u00b7 Image needs alt text', rule_id: '1.1.1', severity: 'SERIOUS', hasProposal: true, after: 'alt A' },
+    { id: 102, file: 'b.docx', title: 'DOCX \u00b7 Image needs alt text', rule_id: '1.1.1', severity: 'SERIOUS', hasProposal: true, after: 'alt B' },
+    { id: 103, file: 'c.docx', title: 'DOCX \u00b7 Image needs alt text', rule_id: '1.1.1', severity: 'CRITICAL', hasProposal: true, after: 'alt C' },
+    { id: 104, file: 'c.docx', title: 'DOCX \u00b7 Image needs alt text', rule_id: '1.1.1', severity: 'SERIOUS', hasProposal: true, after: 'alt D' },
+    { id: 105, file: 'e.pdf', title: 'PDF \u00b7 Image needs alt text', rule_id: '1.1.1', severity: 'SERIOUS', hasProposal: true, after: 'alt E' },
+    { id: 106, file: 'f.docx', title: 'DOCX \u00b7 Document has no title', rule_id: '2.4.2', severity: 'MINOR', hasProposal: true, after: 'A title' },
+  ]
+  const rows = () => [...container.querySelectorAll('.rinbox-row')]
+
+  it('groups like findings into one row by default, and says how big the group is', async () => {
+    await render({ queue: CLUSTERED, decisions: {} })
+    // Six findings, but five of them are one decision — so two rows, not six.
+    expect(rows().length).toBe(2)
+    const cluster = rows().find((r) => r.textContent.includes('5 findings'))
+    expect(cluster).toBeTruthy()
+    expect(cluster.textContent).toContain('4 documents')   // a, b, c (twice), e → 4 distinct files
+    expect(cluster.textContent).toContain('1.1.1')
+    // Severity is NOT what groups a cluster, so the mix it spans is stated rather than hidden.
+    expect(cluster.textContent).toContain('1 critical')
+    expect(cluster.textContent).toContain('4 serious')
+  })
+
+  it('spans document formats, and says on the row that it does', async () => {
+    // Format is deliberately not part of the cluster key (the owner's call, 2026-09-01: keying on
+    // it split the large single-criterion runs clustering exists to collapse). The compensating
+    // control is disclosure — the breadth is stated, never implied.
+    await render({ queue: CLUSTERED, decisions: {} })
+    const cluster = rows().find((r) => r.textContent.includes('5 findings'))
+    expect(cluster.textContent).toContain('DOCX and PDF')
+    // …and the spoken label carries it too, so it is not a sighted-only fact.
+    expect(cluster.getAttribute('aria-label')).toContain('DOCX and PDF')
+  })
+
+  it('selecting a cluster opens its first undecided finding for review', async () => {
+    await render({ queue: CLUSTERED, decisions: {} })
+    const cluster = rows().find((r) => r.textContent.includes('5 findings'))
+    await click(cluster)
+    expect(detailHeading()).toBe('Image needs alt text')
+    // The representative is the first UNDECIDED member — id 101.
+    expect(container.querySelector('#rinbox-row-101')).toBeTruthy()
+  })
+
+  it('the cluster row follows the decisions: its representative moves on as members are decided', async () => {
+    await render({ queue: CLUSTERED, decisions: { 101: { state: 'accepted' } } })
+    // An accepted finding LEAVES Needs review for Awaiting validation, so the group in this tab is
+    // now three, and the row it shows has moved on from 101 to 102. Both halves matter: the count
+    // tracks the tab it is in (never claiming work that is no longer here), and the representative
+    // is always the next thing actually needing a decision.
+    const cluster = rows().find((r) => r.textContent.includes('4 findings'))
+    expect(cluster).toBeTruthy()
+    expect(rows().some((r) => r.textContent.includes('5 findings'))).toBe(false)
+    expect(container.querySelector('#rinbox-row-102')).toBeTruthy()
+    expect(container.querySelector('#rinbox-row-101')).toBeFalsy()
+  })
+
+  it('expands to the individual findings when the reviewer wants them', async () => {
+    await render({ queue: CLUSTERED, decisions: {} })
+    const toggle = [...container.querySelectorAll('button')]
+      .find((b) => /Expand the 5 findings/.test(b.getAttribute('aria-label') || ''))
+    expect(toggle).toBeTruthy()
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    await click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    // All five members are now individually selectable — including the .pdf one, so a reviewer who
+    // does want to treat a format separately can still reach it.
+    for (const id of [101, 102, 103, 104, 105]) {
+      expect(container.querySelector(`#rinbox-row-${id}`)).toBeTruthy()
+    }
+  })
+
+  it('a collapsed cluster is ONE step for the keyboard, not five', async () => {
+    await render({ queue: CLUSTERED, decisions: {} })
+    const list = container.querySelector('[aria-label^="Findings"]')
+    // Two rows → "1 of 2", and ArrowDown moves to the next ROW, skipping the cluster's interior.
+    expect(container.textContent).toContain('1 of 2')
+    await act(async () => {
+      list.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    })
+    expect(container.textContent).toContain('2 of 2')
+  })
+
+  it('still offers the by-document lens, and switching to it un-clusters the queue', async () => {
+    await render({ queue: CLUSTERED, decisions: {} })
+    const select = container.querySelector('select[aria-label="Group findings"]')
+    expect(select).toBeTruthy()
+    expect(select.value).toBe('issue')
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set
+    await act(async () => { setValue.call(select, 'document'); select.dispatchEvent(new Event('change', { bubbles: true })) })
+    // By document, every finding is its own row again (grouped under their files).
+    expect(rows().length).toBe(6)
+  })
+
   // ── A decision is not made until it is SAVED (PRD §5.8) ──────────────────────────────────────
   // The failure mode these cover is specific and was real: `onDecide` was fire-and-forget, so a
   // server refusal still auto-advanced the reviewer, and the only signal was a banner rendered
