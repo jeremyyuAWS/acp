@@ -22,7 +22,7 @@ from routes.openapi_health import HEALTH_OPENAPI_SPEC  # noqa: E402
 # Every path this document claims to describe must actually exist in the live route table —
 # otherwise the "document" is describing an endpoint nobody can call.
 EXPECTED_PATHS = {
-    "/healthz", "/readyz", "/monitor/estate", "/schedule", "/ai/status", "/jobs",
+    "/healthz", "/readyz", "/probe/readyz", "/monitor/estate", "/schedule", "/ai/status", "/jobs",
     "/jobs/{job_id}", "/discovery/preflight", "/scans/active", "/scans/{sid}/status",
     "/scans/{sid}/live", "/scans/{sid}/remediation-status", "/scans/{sid}/source-status",
     "/control/estate", "/capability", "/alerts/webhook",

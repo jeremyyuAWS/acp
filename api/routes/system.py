@@ -4,6 +4,7 @@ from __future__ import annotations
 import hmac
 import json
 import re
+import threading
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -363,6 +364,84 @@ def readyz():
         "sources": {"smb": smb_ready},
         "service": "acp",
     }
+
+
+# ── Container-local readiness: the ONE route a platform probe may point at ────────────────
+#
+# WHY THIS EXISTS AS A THIRD HEALTH ROUTE. Neither of the two above can be a probe target.
+#
+#   /healthz  answers "is this the image deploy.sh stamped". It touches no dependency at all,
+#             so it returns 200 from a replica that cannot reach the database — which is
+#             exactly the replica a readiness gate has to hold traffic away from.
+#   /readyz   answers "can this DEPLOYMENT do work" — worker tier, PDF engine. Its own
+#             docstring says why pointing a probe at it would be a mistake: a worker-tier
+#             outage would evict the API container, which cannot fix a worker tier and loses
+#             the API too. `ready` there goes false for faults this container did not cause
+#             and cannot cure by restarting.
+#
+# THE GAP THAT LEFT. With no probe configured, Azure Container Apps decides a new replica is
+# ready as soon as its port accepts a TCP connection. uvicorn binds that port after the app's
+# startup handlers finish, but binding is not the same as being able to serve, and on this
+# deployment the difference is measurable. Sampled live during the deploy of #1151, against a
+# single-replica app being swapped revision-for-revision:
+#
+#     t+20s   /healthz 200 in 0.39s      /readyz 000 after 25s     /config 000 after 25s
+#     t+40s   /healthz 200 in 0.43s      /readyz 200 in 0.46s      /config 200 in 0.75s
+#
+# The non-database route was fast throughout; every database-backed route hung for the whole
+# sampling window and then recovered on its own. Traffic was being sent to a replica that could
+# not yet answer a database read. That window is what stranded a browser mid-submit on
+# 2026-09-01 (the Discovery request that produced no preflight, no POST /scans and no job) —
+# the client-side half of which is fixed in #1151; this is the server-side half, and it is the
+# half that stops the window existing rather than making the browser survive it.
+#
+# WHAT THIS ROUTE CHECKS IS DELIBERATELY NARROW: this process, this container, its database.
+# Nothing about the worker tier, the PDF engine, the vision model or any source adapter — all
+# of which are legitimately absent or broken on a replica that is nonetheless perfectly able
+# to serve, and none of which a restart of THIS container can repair. Adding a dependency here
+# is not a small change: it hands the platform a new reason to take the API down.
+#
+# IT ANSWERS WITH A STATUS CODE, not a field. An httpGet probe reads the code and nothing else,
+# so a 200 carrying {"ready": false} would be read as ready. Failure is 503.
+
+# One in-flight database check at a time, process-wide.
+#
+# A sync FastAPI route runs on anyio's bounded worker threadpool (40 by default). A probe fires
+# every few seconds forever, so if the database stops answering — the precise case this route
+# exists to detect — an unguarded implementation parks one pooled thread per probe until the
+# threadpool is gone, and takes down the replica's ability to serve anything at all. The gate
+# turns that into at most one parked thread: while a check is outstanding, further probes are
+# answered immediately and negatively, which is both the truthful answer and the cheap one.
+_PROBE_DB_LOCK = threading.Lock()
+
+
+def _probe_database() -> tuple[bool, str]:
+    """(reachable, reason) for one database round-trip, never blocking on another probe."""
+    if not _PROBE_DB_LOCK.acquire(blocking=False):
+        # An earlier probe is still waiting on the database. Not "unknown" — a replica whose
+        # last database read has not come back is not ready, and saying so is the point.
+        return False, "db_check_in_flight"
+    try:
+        core.store.ping()
+        return True, ""
+    except Exception as exc:  # noqa: BLE001 — any failure to reach the DB means not ready
+        # Class name only. This body is served to an unauthenticated caller, and a psycopg2
+        # OperationalError's message carries the host, port and user from the DSN.
+        return False, f"db_unreachable: {exc.__class__.__name__}"
+    finally:
+        _PROBE_DB_LOCK.release()
+
+
+@router.get("/probe/readyz")
+def probe_readyz(response: Response):
+    """Is THIS container able to serve a database-backed request right now?
+
+    The rollout gate. See the block comment above for why /healthz and /readyz cannot be it.
+    """
+    ok, reason = _probe_database()
+    if not ok:
+        response.status_code = 503
+    return {"ready": ok, "checks": {"db": "ok" if ok else reason}, "service": "acp"}
 
 
 # How many recent scans the estate summary reports. The monitor decides what counts as a

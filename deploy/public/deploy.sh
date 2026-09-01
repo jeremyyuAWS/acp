@@ -577,6 +577,85 @@ else
     --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 1 -o none
 fi
 
+# ── Readiness gate: stop ingress reaching a replica that cannot serve yet ────────────────
+#
+# THE WINDOW THIS CLOSES. With no probe configured, ACA decides a new replica is ready as soon
+# as its port accepts a TCP connection. uvicorn binds that port once the app's startup handlers
+# finish, and binding is not the same as being able to serve. Sampled live during the deploy of
+# #1151, against this app being swapped revision-for-revision at min-replicas 1:
+#
+#     t+20s   /healthz 200 in 0.39s   /readyz 000 after 25s   /config 000 after 25s
+#     t+40s   /healthz 200 in 0.43s   /readyz 200 in 0.46s    /config 200 in 0.75s
+#
+# The route that touches no database was fast throughout; every database-backed route hung for
+# the whole window and then recovered unaided. Traffic was being sent to a replica that could
+# not answer a database read — which is what stranded a browser mid-submit on 2026-09-01, with
+# no preflight, no POST /scans and no job to show for it.
+#
+# WHY /probe/readyz AND NOT THE ROUTES THAT ALREADY EXIST. /healthz touches no dependency, so it
+# answers 200 from exactly the replica this needs to exclude. /readyz answers for the whole
+# DEPLOYMENT — worker tier, PDF engine — so gating on it would take the API off ingress over a
+# worker-tier outage the API cannot fix. api/routes/system.py has the long version.
+#
+# ONLY A READINESS PROBE IS EVER WRITTEN. Liveness on the same endpoint would be actively
+# harmful: /probe/readyz answers 503 when the database is unreachable, and liveness reads 503 as
+# "restart the container" — a crash loop that cannot fix a database. See
+# scripts/aca_readiness_probe.py, where that rule lives and is tested.
+#
+# THIS IS EFFECTIVELY ONE-TIME. Probes live on the container app's template and survive
+# `az containerapp update --image`, so on every later deploy the helper reports "nothing to do"
+# and no write happens at all. It stays in the deploy rather than being a runbook step so that a
+# rebuilt or restored app cannot come back without its gate.
+#
+# AND IT NEVER FAILS THE DEPLOY, mirroring _apply_worker_scale_rule above. Every path that does
+# not end in a confirmed patch leaves the app exactly as the deploy left it — which is the state
+# production ran in before this existed.
+#
+# THE ONE WAY IT CAN BITE, AND THE WAY OUT. Because probes survive an image change, pinning a
+# deploy to an image that predates /probe/readyz leaves the gate asking for a route that answers
+# 404: that revision never becomes ready. ACA then holds traffic on the last healthy revision
+# rather than going dark, so it fails safe — but it fails, and the deploy will say so. To lift
+# the gate, run scripts/aca_readiness_probe.py with --remove over the app's current template and
+# apply the result the same way this function does. Deliberately not spelled out as a
+# copy-pasteable command here: anything printed gets pasted without --subscription, which is the
+# mis-scope tests/test_az_subscription_scope.py exists to prevent.
+_apply_readiness_probe() {
+  if [ "${ACP_SKIP_READINESS_PROBE:-0}" = "1" ]; then
+    echo "   readiness probe: skipped (ACP_SKIP_READINESS_PROBE=1)"
+    return 0
+  fi
+  local tmpl patch rc=0
+  if ! tmpl="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" \
+                 --query properties.template -o json 2>/tmp/acp_probe_err)"; then
+    echo "   NOTE: could not read $APP's template — readiness probe not applied." >&2
+    echo "   $(grep -oE '\([A-Za-z]+\)' /tmp/acp_probe_err | head -1 || echo '(unknown)')" >&2
+    return 0
+  fi
+  # mktemp, not a fixed path: the template carries literal env values (HITL_WEBHOOK_URL,
+  # ACP_ALLOWED_EMAILS) even though every real secret in it is a secretref. Removed below
+  # whatever happens, and never cat'd.
+  patch="$(mktemp)"
+  printf '%s' "$tmpl" | python3 scripts/aca_readiness_probe.py \
+    --container "$APP" --path /probe/readyz --port 8077 >"$patch" 2>/tmp/acp_probe_err || rc=$?
+  case "$rc" in
+    3) echo "   readiness probe: already gating on /probe/readyz — nothing to do"
+       rm -f "$patch"; return 0 ;;
+    0) ;;
+    *) echo "   NOTE: readiness probe not applied — $(head -c 300 /tmp/acp_probe_err)" >&2
+       rm -f "$patch"; return 0 ;;
+  esac
+  if _retry az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --yaml "$patch" -o none; then
+    echo "   readiness probe: ACA now holds ingress off a replica until GET /probe/readyz answers"
+  else
+    echo "   NOTE: could not write the readiness probe. The deploy itself is unaffected — the" >&2
+    echo "   app is running the image above, ungated, exactly as it was before. Re-run this" >&2
+    echo "   script; see _apply_readiness_probe in deploy.sh." >&2
+  fi
+  rm -f "$patch"
+  return 0
+}
+_apply_readiness_probe
+
 echo "== 5/5 done =="
 FQDN="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)"
 
