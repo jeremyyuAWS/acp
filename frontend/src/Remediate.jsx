@@ -482,16 +482,21 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
   const runServerRemediation = async (scopeFiles) => {
     if (!runId || remBusy || remStartRef.current) return
+    // The page-level controls pass file records; RemediationWork's deterministic batch passes
+    // filenames because it partitions findings rather than owning the scan records. Normalize
+    // both entry points here so they reach the same durable Remediate queue and progress watcher.
+    const scope = (scopeFiles || [])
+      .map((f) => typeof f === 'string' ? f : f?.file)
+      .filter(Boolean)
     // Say why nothing will happen, BEFORE the round trip. The old path posted an empty scope,
     // the server answered enqueued:0, and the UI said "no eligible files with issues" — true,
     // useless, and indistinguishable from a button that did nothing at all.
-    if (!scopeFiles || scopeFiles.length === 0) {
+    if (scope.length === 0) {
       setRemMsg(emptyScopeReason(files, scopeOpts))
       return
     }
     remStartRef.current = true
     setRemBusy(true); setRemMsg(''); setRemProg(null)
-    const scope = scopeFiles?.map((f) => f.file)
     try {
       const r = await remediateScan(runId, scope)
       if (!r.enqueued) {
@@ -928,7 +933,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           a regression impossible to attribute. The removal is its own commit. */}
 
       {/* R2 · the work, partitioned once — and R3, the deterministic batch inside it. */}
-      <RemediationWork files={files} cap={cap} assessment={assessment} />
+      <RemediationWork files={files} cap={cap} assessment={assessment}
+                       onApplyAutomatic={readOnly ? undefined : runServerRemediation}
+                       applying={remBusy} />
 
       {/* R5 · the approval queue. Fed the SAME pending queue the Review section below reads, so
           the two cannot disagree about what is waiting; the handlers are the existing ones. */}
