@@ -14,9 +14,9 @@
 #      (LibreOffice + a downloaded .NET 10 runtime), pip install, and npm install. `az acr build`
 #      has no --cache-from (checked, az 2.86.0), so a QuickRun cannot reuse layers and was
 #      re-running all of that for a one-line CSS change. Bases rebuild only when the hash moves.
-#   2. acp-app and acp-worker are updated CONCURRENTLY (--no-wait, then poll). Sequential
-#      updates also left a window where the two ran DIFFERENT images; they must move together
-#      (same image, different entrypoint — scanning happens in the worker).
+#   2. acp-app and all three stage-owned workers are updated CONCURRENTLY (--no-wait, then poll).
+#      Sequential updates left a window where stages ran DIFFERENT images; they must move together
+#      (same image, different roles — Discovery, Assess, and Remediate own disjoint queues).
 #
 # Guards, all of which are scar tissue from 2026-07-29 (see docs/pipeline.md):
 #   - pin to a sha and refuse to build from a dirty or shared tree
@@ -29,8 +29,10 @@ set -euo pipefail
 RG="${ACP_RG:-mdk-accessibility}"
 ACR="${ACP_ACR:-mdkaccessibilityacr}"
 APP="${ACP_APP:-acp-app}"
-WORKER="${ACP_WORKER:-acp-worker}"
 DISCOVERY_WORKER="${ACP_DISCOVERY_WORKER:-acp-discovery}"
+ASSESS_WORKER="${ACP_ASSESS_WORKER:-acp-assess}"
+REMEDIATE_WORKER="${ACP_REMEDIATE_WORKER:-acp-remediate}"
+LANE_WORKERS=("$DISCOVERY_WORKER" "$ASSESS_WORKER" "$REMEDIATE_WORKER")
 BUILD_TZ="${BUILD_TZ:-America/Los_Angeles}"
 MIN_MODULES=41                  # engine/pdf-analyser is tracked; this guards against truncation
 DRY="${ACP_DRY_RUN:-0}"
@@ -234,9 +236,9 @@ fi
 FQDN="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)"
 BEFORE="$(curl -s --max-time 20 "https://$FQDN/healthz" || echo '{}')"
 say "before: $BEFORE"
-# Both apps must already be running, or a 404 afterwards is unattributable — on 2026-07-29 both
-# turned out to have been Stopped before the deploy that appeared to break them.
-for a in "$APP" "$WORKER"; do
+# The app and every stage worker must already be running, or a stalled queue afterwards is
+# unattributable. The retired generic acp-worker is deliberately absent from this list.
+for a in "$APP" "${LANE_WORKERS[@]}"; do
   st="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$a" --query properties.runningStatus -o tsv)"
   [ "$st" = "Running" ] || die "$a is '$st' before we started — fix that first, do not deploy onto it"
 done
@@ -257,7 +259,7 @@ if [ "$DRY" = 1 ]; then
     echo "  blue (keeps traffic until promotion): $BLUE"
     echo "  green (would provision at 0%)      : $APP--$SUFFIX"
     echo "  green smoke-test url               : https://$APP--$SUFFIX.$ENV_DOMAIN/healthz"
-    echo "  worker cutover                     : $WORKER -> $IMG  (NOT blue-green)"
+    echo "  worker cutover                     : ${LANE_WORKERS[*]} -> $IMG  (NOT blue-green)"
   fi
   say "DRY RUN — stopping before anything is changed"
   exit 0
@@ -271,7 +273,7 @@ fi
 # green provisions at 0%, is smoke-tested on its own FQDN while production still serves blue, and
 # takes traffic in one weight change that reverses just as fast.
 #
-# acp-worker has NO INGRESS (properties.configuration.ingress is null). It takes work by pulling
+# Stage workers have NO INGRESS (properties.configuration.ingress is null). They take work by pulling
 # from a shared job queue, so a second worker on a different image would pull from that SAME
 # queue — blue and green racing over live production jobs, picked at random. There is no weight
 # to set and nothing to split. The worker therefore CUTS OVER at promotion, and that step is not
@@ -343,10 +345,11 @@ if [ "$BG" = 1 ]; then
   az containerapp ingress traffic set "${AZ[@]}" -g "$RG" -n "$APP" \
     --revision-weight "$GREEN=100" "$BLUE=0" >/dev/null
 
-  say "cutting $WORKER + $DISCOVERY_WORKER over to the same image (NOT blue-green — see header)"
-  az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER" --image "$IMG" --no-wait >/dev/null
-  az containerapp update "${AZ[@]}" -g "$RG" -n "$DISCOVERY_WORKER" --image "$IMG" --no-wait >/dev/null
-  for a in "$WORKER" "$DISCOVERY_WORKER"; do
+  say "cutting ${LANE_WORKERS[*]} over to the same image (NOT blue-green — see header)"
+  for a in "${LANE_WORKERS[@]}"; do
+    az containerapp update "${AZ[@]}" -g "$RG" -n "$a" --image "$IMG" --no-wait >/dev/null
+  done
+  for a in "${LANE_WORKERS[@]}"; do
     printf '  %s ' "$a"
     for _ in $(seq 1 60); do
       img="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$a" --query properties.template.containers[0].image -o tsv 2>/dev/null || true)"
@@ -373,26 +376,29 @@ if [ "$BG" = 1 ]; then
   # real names filled in: recovery should be a paste, not a reconstruction under pressure.
   cat <<ROLLBACK
 
-  Rollback — app is instant (a weight change, nothing provisions); the worker needs ~20s:
+  Rollback — app is instant (a weight change, nothing provisions); the workers need ~20s:
 
     az containerapp ingress traffic set -g $RG -n $APP --revision-weight $BLUE=100 $GREEN=0
-    az containerapp update -g $RG -n $WORKER --image $BLUE_IMG
+    az containerapp update -g $RG -n $DISCOVERY_WORKER --image $BLUE_IMG
+    az containerapp update -g $RG -n $ASSESS_WORKER --image $BLUE_IMG
+    az containerapp update -g $RG -n $REMEDIATE_WORKER --image $BLUE_IMG
 
-  Run BOTH. A new worker under an old app is the mixed-version state promotion exists to close.
+  Run ALL FOUR. New workers under an old app are the mixed-version state promotion exists to close.
 ROLLBACK
   exit 0
 fi
 
-# ── 8. update BOTH, concurrently ───────────────────────────────────────────────────────────
-# Same image, different entrypoint. Scanning happens in the worker, so updating only the app
+# ── 8. update app and stage workers, concurrently ──────────────────────────────────────────
+# Same image, different roles. Scanning happens in the workers, so updating only the app
 # ships the fixes nowhere useful. --no-wait so the two revisions provision in parallel and the
 # window where they run different images is as short as it can be.
-say "updating $APP + $WORKER + $DISCOVERY_WORKER concurrently"
-az containerapp update "${AZ[@]}" -g "$RG" -n "$APP"    --image "$IMG" --no-wait >/dev/null
-az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER" --image "$IMG" --no-wait >/dev/null
-az containerapp update "${AZ[@]}" -g "$RG" -n "$DISCOVERY_WORKER" --image "$IMG" --no-wait >/dev/null
+say "updating $APP + ${LANE_WORKERS[*]} concurrently"
+az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$IMG" --no-wait >/dev/null
+for a in "${LANE_WORKERS[@]}"; do
+  az containerapp update "${AZ[@]}" -g "$RG" -n "$a" --image "$IMG" --no-wait >/dev/null
+done
 
-for a in "$APP" "$WORKER" "$DISCOVERY_WORKER"; do
+for a in "$APP" "${LANE_WORKERS[@]}"; do
   printf '  %s ' "$a"
   for _ in $(seq 1 60); do
     img="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$a" --query properties.template.containers[0].image -o tsv 2>/dev/null || true)"
