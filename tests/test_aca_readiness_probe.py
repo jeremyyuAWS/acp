@@ -12,6 +12,7 @@ through, because `az containerapp update --yaml` REPLACES the template it is han
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -255,6 +256,7 @@ import shutil    # noqa: E402
 import textwrap  # noqa: E402
 
 DEPLOY_SH = ACP / "deploy" / "public" / "deploy.sh"
+PROBE_SH = ACP / "deploy" / "public" / "readiness_probe.sh"
 
 _STUB_AZ = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$AZ_LOG"
@@ -278,7 +280,7 @@ exit 0
 def _extract(name: str) -> str:
     """The named shell function, verbatim from deploy.sh — so the test runs the shipped code
     rather than a copy of it that can drift."""
-    src = DEPLOY_SH.read_text()
+    src = PROBE_SH.read_text() if name.startswith("_readiness_probe") or name == "_apply_readiness_probe" else DEPLOY_SH.read_text()
     start = src.index(f"{name}() {{")
     end = src.index("\n}\n", start) + len("\n}\n")
     return src[start:end]
@@ -302,7 +304,7 @@ def probe_step(tmp_path, monkeypatch):
         AZ=(--subscription 11111111-2222-3333-4444-555555555555)
         RG=mdk-accessibility
         APP=acp-app
-        """) + _extract("_retry") + _extract("_apply_readiness_probe") + "\n_apply_readiness_probe\n")
+        """) + _extract("_readiness_probe_retry") + _extract("_apply_readiness_probe") + "\n_apply_readiness_probe\n")
 
     def run(template: dict, **env):
         # Each invocation starts from an empty log, so "did this deploy write?" is answerable
@@ -321,6 +323,17 @@ def probe_step(tmp_path, monkeypatch):
         return res
 
     return run
+
+
+def test_the_script_run_by_the_deploy_workflow_applies_the_shared_probe():
+    """Follow deploy.yml's command instead of assuming which similarly named script ships."""
+    workflow = (ACP / ".github" / "workflows" / "deploy.yml").read_text()
+    match = re.search(r"^\s*run:\s+bash\s+(deploy/public/[^\s]+\.sh)\s*$", workflow, re.MULTILINE)
+    assert match, "deploy workflow no longer has a directly traceable deployment script"
+    shipped = (ACP / match.group(1)).read_text()
+    assert "readiness_probe.sh" in shipped
+    assert "_apply_readiness_probe" in shipped
+    assert shipped.index("_apply_readiness_probe") > shipped.index('if [ "$BG" = 1 ]')
 
 
 needs_bash = pytest.mark.skipif(not shutil.which("bash"), reason="bash required")

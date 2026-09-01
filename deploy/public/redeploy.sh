@@ -35,6 +35,10 @@ MIN_MODULES=41                  # engine/pdf-analyser is tracked; this guards ag
 DRY="${ACP_DRY_RUN:-0}"
 BG="${ACP_BLUE_GREEN:-0}"       # 1 => green provisions at 0% traffic, is tested, then promoted
 
+# Keep the gate installer shared with the first-deploy path. This script is what deploy.yml
+# actually executes for production releases.
+source "$(cd "$(dirname "$0")" && pwd)/readiness_probe.sh"
+
 say() { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
 die() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
@@ -413,6 +417,10 @@ if [ "$MODE" != "Single" ]; then
   say "returning $APP to single-revision mode (was $MODE) so the new revision takes traffic"
   az containerapp revision set-mode "${AZ[@]}" -g "$RG" -n "$APP" --mode single >/dev/null
 fi
+
+# Apply only on the normal path. The blue-green path exits above: patching its template during
+# promotion would create a third revision and invalidate the blue/green pair being verified.
+_apply_readiness_probe
 
 # ── 9. verify ──────────────────────────────────────────────────────────────────────────────
 say "verifying"
