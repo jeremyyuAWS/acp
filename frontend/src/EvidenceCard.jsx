@@ -499,6 +499,15 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   // performs — the same lie the server-side flag stops the certify gate believing (api/store.py
   // _row_approved_values). So the map renders read-only and the card asks for a confirmation.
   const explainOnly = proposalList.length > 0 && proposalList.every((p) => p.explain_only)
+  // A COMPANION row is the case explain-only was wrongly used for, and it is nearly its opposite
+  // here. Its value is a FILE delivered beside the document — a caption track for a video, a
+  // transcript for a recording — so nothing is written into the source, exactly as for a
+  // structure map. But the reviewer AUTHORS it: the draft is machine transcription, the card
+  // itself says to check the names and numbers, and the corrected text is the artefact that
+  // ships. Rendered under `explainOnly` (which is how captions first shipped, in #1177) the box
+  // is read-only and `approvedValues` is suppressed, so a reviewer is told to fix a transcript
+  // they cannot edit and whose edits would be discarded on approval.
+  const companionRow = proposalList.length > 0 && proposalList.every((p) => p.companion_file)
   // A DECORATIVE row is the same shape of mistake in the other direction. Its draft reads "Mark
   // as decorative — no alt text needed": an instruction to the reviewer, not a description of the
   // image. Rendered as an editable alt box — which is what happens today — the card invites
@@ -509,8 +518,9 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   // the picture and ask for the yes.
   const decorativeRow = proposalList.length > 0
     && proposalList.every((p) => p.kind === 'decorative')
+  // `companionRow` is deliberately NOT excluded here: editing is the whole point of one.
   const editable = !explainOnly && !decorativeRow
-    && card.track.track !== 'auto' && (isValueFix(card.sc) || !!card.proposal)
+    && card.track.track !== 'auto' && (isValueFix(card.sc) || !!card.proposal || companionRow)
   // The primary button reads by workflow (primaryAction, above) — "Approve AI fix" / "Confirm
   // fix" / "Approve description". The honest "writes into the document vs records sign-off"
   // distinction stays in the "What you need to do" prose below, not on the button.
@@ -588,6 +598,13 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
     // routes it to the marker writer, which ignores the value — so it sends none. The draft is an
     // instruction to the reviewer; recording it as their approved TEXT misdescribes what they
     // signed, and it is the string that used to reach the document before #43.
+    //
+    // A COMPANION row IS sent, and that is the one exception to the pattern above. Its value is
+    // not content for the document — store._row_approved_values skips it, so the certify gate is
+    // untouched — but it IS the deliverable, and store.approve_proposal_values is the only thing
+    // that records the reviewer's text at all. Suppressing it here (which is what happened while
+    // captions rode the explain-only branch) discards the correction at the moment of approval,
+    // silently, because the machine's draft and the corrected file are both valid WebVTT.
     const approvedValues = (status === 'approved' && !resolution && !explainOnly && !decorativeRow
                             && instances.length)
       ? (multi ? values : [value || ''])
@@ -929,6 +946,28 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
           ) : card.recommendation ? (
             <p className="evcard-rec-static"><b>AI recommendation:</b> {card.recommendation}</p>
           ) : null}
+
+          {/* THE ARTEFACT'S WAY OUT. A companion row's value is a FILE that ships beside the
+              media, and until #1177's follow-up nothing could hand it back: the WebVTT lived in
+              a JSON column no route read, so a reviewer could approve the finding and still not
+              obtain the thing they approved.
+
+              A plain <a href>, not a fetch-and-blob: the endpoint sets Content-Disposition, so
+              the browser saves it under the right name with no script, which also means it works
+              for a keyboard user and a screen reader without any of the focus handling a
+              scripted download needs. Shown for a companion row whether or not it is approved —
+              a reviewer checking a transcript against the audio needs the file in a player
+              BEFORE deciding, and making them approve it to find out whether they should is
+              backwards. */}
+          {companionRow && item?.id && (
+            <p className="evcard-companion-download" style={{ fontSize: 12.5, margin: '6px 0 0' }}>
+              <a href={`/hitl/queue/${encodeURIComponent(item.id)}/companion`}
+                 download={proposalList[0]?.companion_file || undefined}>
+                Download {proposalList[0]?.companion_file || 'the caption file'}
+              </a>
+              <span className="muted"> — ships beside the media; the file itself is not changed.</span>
+            </p>
+          )}
 
           {/* W6 — provenance ON THE SURFACE, not behind the audit disclosure. A reviewer approving an
               AI value must see where it ran WITHOUT expanding anything, because the whole risk is a

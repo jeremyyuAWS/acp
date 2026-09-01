@@ -14,17 +14,23 @@ So no `remediate_file` job is enqueued for a `.mp4`, and if one were, the handle
 before `_propose_text_findings` ran. A reviewer opening the 1.2.2 card got a finding and a blank
 box — the "author it yourself" state the whole proposal lane exists to remove.
 
-WHY A CAPTION DRAFT IS `explain_only`, which is the design decision most worth arguing with. The
-proposal module's own rule: `explain_only=True` means "this value IS the deliverable; it is never
-written into the file". A caption track COULD be muxed into an .mp4, and doing that re-encodes and
-re-authors a customer's video — precisely what ADR 0016 refuses for PDF re-tagging. The approved
-WebVTT is delivered as a COMPANION file instead, which is also what WCAG asks for: a caption file
-beside the media is a conforming alternative, and it is how every player already expects to find
-one.
+WHY A CAPTION DRAFT IS NOT WRITTEN INTO THE FILE. A caption track COULD be muxed into an .mp4,
+and doing that re-encodes and re-authors a customer's video — precisely what ADR 0016 refuses for
+PDF re-tagging. The approved WebVTT is delivered as a COMPANION file instead, which is also what
+WCAG asks for: a caption file beside the media is a conforming alternative, and it is how every
+player already expects to find one.
 
-That flag is load-bearing rather than decorative. `store._row_approved_values` skips explain-only
-values, so confirming the card RESOLVES the finding. Without it the certify gate counts a promise
-no applier can keep and the file can never certify — on an approval that was entirely correct.
+THIS SLICE SHIPPED THAT AS `explain_only=True`, AND IT WAS HALF RIGHT. It bought the property that
+matters to the certify gate — `store._row_approved_values` skips such a value, so the file is not
+wedged forever owing content no applier will write. It also bought three things nobody wanted: the
+card rendered READ-ONLY, approving sent NO value, and no route could hand the file back. ACP told
+the reviewer to check a machine transcript for misheard names and gave them no way to change a
+word of it.
+
+The follow-up (`tests/test_caption_companion_file.py`) splits the two meanings: `companion_file`
+keeps the gate property and makes the value editable, stored and downloadable. The assertion below
+moved with it — deliberately, and by rewriting rather than deleting, because what it was really
+protecting is the gate, and the gate has not changed.
 
 WHAT IS DELIBERATELY NOT CLAIMED HERE. The draft is machine transcription: it is never
 auto-applied, never `validated=True`, and the card says which model wrote it. ASR gets names,
@@ -140,9 +146,16 @@ def test_a_captionless_video_produces_an_approvable_caption_file(tmp_path, monke
     assert props, "no caption proposal for a captionless video with a soundtrack"
 
     p = props[0]
-    assert p["explain_only"] is True, (
-        "a caption draft that is not explain_only makes the file uncertifiable: the gate counts "
-        "an approved value no applier will ever write into an .mp4")
+    assert p.get("companion_file"), (
+        "the caption draft declares no companion filename, so nothing can deliver it under a name "
+        "a player will look for")
+    from store import Store
+    row = {"proposals": [dict(p, approved_value=p["proposed_value"])], "evidence": [],
+           "approved_value": "", "resolution": None}
+    assert Store._row_approved_values(row) == {}, (
+        "the caption value entered the applier's work list; nothing will ever write it into an "
+        "mp4, so the file could never certify — the property explain_only originally bought and "
+        "companion_file now carries")
     assert p["sc"] == "1.2.2", "a caption draft filed under any other criterion misroutes the card"
     assert p["proposed_value"].startswith("WEBVTT"), p["proposed_value"][:80]
     assert cap.parse_cues(p["proposed_value"]), "what was written must read back as cues"

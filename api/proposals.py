@@ -82,7 +82,7 @@ from urllib.parse import unquote, urlparse
 
 def proposal(locator, before, proposed_value, rationale, source, thumb=None, kind=None,
              explain_only=False, sc=None, why_review=None, context=None,
-             model: str | None = None) -> dict:
+             model: str | None = None, companion_file: str | None = None) -> dict:
     """One review card's worth of state.
 
     `why_review` and `context` exist because of what a reviewer was previously NOT told. A card
@@ -113,6 +113,27 @@ def proposal(locator, before, proposed_value, rationale, source, thumb=None, kin
         p["kind"] = kind   # e.g. 'decorative' → the card offers "Mark decorative", not an alt field
     if explain_only:
         p["explain_only"] = True
+    if companion_file:
+        # A COMPANION FILE, which is the third thing a proposal's value can be — and the
+        # distinction `explain_only` was made to carry two of, badly. Three cases:
+        #
+        #   content       alt text, a link label. Written INTO the document by an applier.
+        #   explain_only  a PDF structure map. CONFIRMED, never authored, never handed back.
+        #   companion     a caption file. AUTHORED by the reviewer, delivered as a SEPARATE
+        #                 file beside the source, never written into it.
+        #
+        # A companion is like explain_only in the one way the certify gate cares about (no
+        # applier will ever write it in, so counting it as outstanding content wedges the file)
+        # and its opposite in every way the reviewer cares about: they edit it, and their text
+        # is the deliverable. #1177 shipped captions as explain_only and got exactly that
+        # trade: a machine transcript a reviewer was told to check and could not change, whose
+        # corrections would have been discarded, and which no route could hand back.
+        #
+        # The VALUE IS THE FILENAME, not True. The artefact has to be delivered under a name a
+        # player will look for — talk.en.vtt beside talk.mp4 — and a boolean would leave that to
+        # whichever consumer wrote the file first. Two consumers inventing it separately is how
+        # one artefact ends up with two names.
+        p["companion_file"] = companion_file
     if sc:
         # WHICH criterion this proposal answers. Optional, and absent means 1.1.1 — every
         # proposal remediate_office produced before this was a vision alt, and the caller
@@ -1749,6 +1770,15 @@ def propose_captions(path, ext: str) -> list[dict]:
 
     note = (f"Drafted by ACP using {result.model}; awaiting human approval. "
             f"Machine transcription — check names, numbers and punctuation before approving.")
+    # The delivered filename. `.vtt` for cues, `.txt` for prose — a player handed a .vtt of
+    # flowing text with no timings shows nothing, so the extension is a correctness question
+    # rather than a convention. The language tag is the sidecar naming every player already
+    # looks for (talk.en.vtt), and it is OMITTED rather than guessed when the transcriber
+    # reported no language: `talk.und.vtt` would be a claim about the audio nobody made.
+    lang = (result.language or "").strip().lower()
+    suffix = "vtt" if kind == "video" else "txt"
+    companion = f"{p.stem}.{lang}.{suffix}" if lang else f"{p.stem}.{suffix}"
+
     if kind == "video":
         sc, rule = "1.2.2", "captions"
         value = _cap.to_webvtt(cues, language=result.language, note=note)
@@ -1781,7 +1811,10 @@ def propose_captions(path, ext: str) -> list[dict]:
         rationale=rationale,
         source=f"local speech recognition ({result.model}) — companion file, not written into "
                f"the media",
-        explain_only=True,
+        # A COMPANION, not explain_only — see `proposal()`. #1177 shipped this as explain_only,
+        # which made the card read-only and discarded the reviewer's corrections: ACP told them
+        # to check the machine's wording and gave them no way to change it.
+        companion_file=companion,
         sc=sc,
         why_review=why_review,
         model=result.model,
