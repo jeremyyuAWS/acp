@@ -722,6 +722,21 @@ export const NOT_MODIFIED = Symbol('scan-not-modified')
 // 45s is far longer than any healthy response and still finite, which is the only property the
 // hang needs.
 export const SCAN_READ_TIMEOUT_MS = 45000
+// The per-rule execution manifest, for the Assessment Run Integrity Gate (runIntegrity.js).
+//
+// Bounded like every other read added since #1149/#1150: a hang here is worse than a failure,
+// because the gate's whole job is to withhold a conformance claim it cannot justify, and a fetch
+// that never settles leaves it in `pending` — claiming nothing, but also never telling anyone why.
+// A rejection reaches runIntegrity as `unavailable`, which is an answer.
+//
+// Its own constant rather than SCAN_READ_TIMEOUT_MS's 45s: this endpoint reads two indexed tables
+// keyed by scan_id and does no joins or reconciliation, so it has none of the properties that
+// argued for the long ceiling there.
+export const MANIFEST_READ_TIMEOUT_MS = 15000
+export const getScanManifest = (id) => (SIM ? sim(null) : fetch(
+  `${BASE}/scans/${encodeURIComponent(id)}/manifest`,
+  { headers: headers(), cache: 'no-store', signal: AbortSignal.timeout(MANIFEST_READ_TIMEOUT_MS) },
+).then(j))
 export const getScan = (id, knownRevision = null) => (SIM ? sim(simGetScan(id)) : fetch(`${BASE}/scans/${id}`, {
   headers: headers(knownRevision != null ? { 'If-None-Match': `W/"${knownRevision}"` } : {}),
   cache: 'no-store',
