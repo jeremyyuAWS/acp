@@ -49,12 +49,6 @@ from report_tagged import (  # noqa: F401  (re-exported for tests)
     _sc_label,
 )
 
-_FONT_STACK = '"Liberation Sans", "DejaVu Sans", Arial, sans-serif'
-# Liberation Sans is metric-compatible with Arial (what Chromium actually rendered with), so it
-# holds the visual parity. It does NOT carry U+2713 ✓ or U+2717 ✗, which the File Inventory
-# table prints directly — measured with fontTools, not assumed — so DejaVu Sans follows it in
-# the stack purely to supply those two glyphs. Both embed; PDF/UA requires embedded fonts.
-
 
 # ── Charts ───────────────────────────────────────────────────────────────────
 #
@@ -123,12 +117,24 @@ def _ring_alt(score: int) -> str:
 
 
 def _bars_alt(rows: list[tuple[str, int]], total_files: int) -> str:
+    """The chart's text alternative — a sentence, read aloud, so it has to parse as one.
+
+    The first draft built the plural by appending "s" to "criterion" and left the verb fixed,
+    producing "2 further criterions also has open issues" in the /Alt of a shipped accessibility
+    report. Nothing structural would ever have caught it: the Figure had an /Alt, veraPDF was
+    happy, and the only reader affected is the one who cannot see the chart. Both the noun and
+    the verb inflect here for that reason.
+    """
     if not rows:
         return "No criteria have open issues."
     top, top_n = rows[0]
     others = len(rows) - 1
-    tail = f" {others} further criterion" + ("s" if others != 1 else "") + " also has open issues." \
-        if others else ""
+    if others == 1:
+        tail = " 1 further criterion also has open issues."
+    elif others > 1:
+        tail = f" {others} further criteria also have open issues."
+    else:
+        tail = ""
     return (f"Open issues by criterion. {top} affects the most files, {top_n} of {total_files}."
             f"{tail} Exact counts follow in the table below.")
 
@@ -148,7 +154,20 @@ _TEMPLATE = r"""<!DOCTYPE html>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 @page { size: Letter; margin: 0.7in 0.7in 0.75in 0.7in; }
 body {
-  font-family: {{ font_stack }};
+  /* Written out here rather than interpolated from a constant. A Jinja variable looked
+     tidier and was a bug: this environment autoescapes, so the quotes arrived as
+     &#34;Liberation Sans&#34; — invalid CSS, silently dropped, and the whole report rendered
+     in WeasyPrint's default serif. Nothing structural noticed, because tagging does not
+     depend on the font: veraPDF passed with zero failures and every structural test stayed
+     green. Only rendering the page and looking at it caught it, which is why the regression
+     test asserts the EMBEDDED FONT rather than this string.
+
+     Liberation Sans is metric-compatible with Arial, which is what Chromium rendered with, so
+     it is what holds the visual parity. It does not carry U+2713 or U+2717 — the tick and
+     cross the File Inventory prints directly, measured with fontTools against the font file
+     rather than assumed — so DejaVu Sans follows it purely to supply those two glyphs. Both
+     embed; PDF/UA requires embedded fonts. */
+  font-family: "Liberation Sans", "DejaVu Sans", Arial, sans-serif;
   font-size: 9.5pt;
   color: #2B2330;
   line-height: 1.45;
@@ -179,11 +198,17 @@ a { color: #46303F; }
 table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 8.5pt; }
 caption { text-align: left; font-weight: 600; font-size: 9pt; color: #46303F;
           padding-bottom: 4px; }
-th { background: #f0edf2; color: #46303F; font-weight: 600; text-align: left;
+th[scope="col"] { background: #f0edf2; color: #46303F; font-weight: 600; text-align: left;
      padding: 5px 8px; border-bottom: 1.5px solid #c8c2cc; }
-td { padding: 4px 8px; border-bottom: 1px solid #e4e0e8; vertical-align: top; }
-tr:last-child td { border-bottom: none; }
-tr:nth-child(even) td { background: #faf8fb; }
+/* A row header is a TH for the structure tree's sake, and must look like the TD it replaced.
+   The shipped Chromium report renders this column as an ordinary cell, and the default TH
+   styling above — bold, shaded, heavier rule — is a visual change PDF/UA never asked for:
+   14289 wants the cell TAGGED as a header, and says nothing about its weight. Styling all TH
+   alike is how a semantics fix quietly becomes a redesign. */
+th[scope="row"], td { padding: 4px 8px; border-bottom: 1px solid #e4e0e8; vertical-align: top;
+     font-weight: 400; text-align: left; background: none; color: inherit; }
+tr:last-child th[scope="row"], tr:last-child td { border-bottom: none; }
+tr:nth-child(even) th[scope="row"], tr:nth-child(even) td { background: #faf8fb; }
 .score-ok { color: #3B6D11; font-weight: 600; }
 .score-warn { color: #854F0B; font-weight: 600; }
 .score-bad { color: #A32D2D; font-weight: 600; }
@@ -411,7 +436,6 @@ def render_html(run: dict, files: list, meta: dict, facts: dict | None = None) -
         ctx["bars_uri"] = ctx["bars_alt"] = ""
         ctx["bars_w"] = ctx["bars_h"] = 0
 
-    ctx["font_stack"] = _FONT_STACK
     return _jinja_env.from_string(_TEMPLATE).render(**ctx)
 
 
