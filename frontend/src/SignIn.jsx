@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { getConfig, setLangfuseBase } from './api.js'
 import { PERSONAS } from './sim.js'
 import Logo from './Logo.jsx'
@@ -87,13 +87,29 @@ function LockIcon() {
 // explanation cannot tell an expired token from an app that lost their work.
 export default function SignIn({ onSignedIn, notice = null }) {
   const [cfg, setCfg] = useState(null)
+  const [cfgErr, setCfgErr] = useState(null)   // /config could not be read — NOT the same as "demo"
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const isStaging = window.location.hostname.includes('staging')
 
-  useEffect(() => {
-    getConfig().then((c) => { setCfg(c); setLangfuseBase(c?.langfuse_trace_base) }).catch(() => setCfg({ auth: 'demo' }))
+  // A failed /config used to fall through to `setCfg({ auth: 'demo' })`, which renders the persona
+  // cards — "explore a role — demo", with invented names and roles. On a real deployment that is a
+  // fabricated sign-in surface shown because a request failed: the user is offered accounts that do
+  // not exist, on a production URL, with nothing saying the server was unreachable.
+  //
+  // Not knowing how to sign in is a different state from being told to sign in as a demo persona, so
+  // it is now its own state with its own screen and a way out. SIM builds are untouched — getConfig
+  // resolves `auth: 'demo'` there without a network call, so the personas still appear where they
+  // are real.
+  const loadCfg = useCallback(() => {
+    setCfg(null); setCfgErr(null)
+    getConfig()
+      .then((c) => { setCfg(c); setLangfuseBase(c?.langfuse_trace_base) })
+      .catch((e) => setCfgErr(e?.name === 'TimeoutError'
+        ? 'The server did not respond in time.'
+        : (e?.message || 'The server could not be reached.')))
   }, [])
+  useEffect(() => { loadCfg() }, [loadCfg])
 
   const signInWithGoogle = () => {
     if (!window.google?.accounts?.oauth2) {
@@ -172,6 +188,27 @@ export default function SignIn({ onSignedIn, notice = null }) {
     } finally {
       setBusy(false)
     }
+  }
+
+  // Could not read /config. Say so, and offer the retry — the state this replaces was a dead screen.
+  if (cfgErr) {
+    return (
+      <div className="signin">
+        <div className="signin-card wide">
+          <Logo big />
+          <p role="alert" className="signin-sub" style={{ marginTop: 10 }}>
+            Can’t reach the server
+          </p>
+          <p className="muted" style={{ fontSize: 13, margin: '8px 0 0' }}>
+            {cfgErr} Your work is safe — nothing was lost. This is usually brief.
+          </p>
+          <div className="ssorow" style={{ marginTop: 20 }}>
+            <button className="ssobtn" onClick={loadCfg}>Try again</button>
+          </div>
+          <BuildStamp />
+        </div>
+      </div>
+    )
   }
 
   if (!cfg) {
