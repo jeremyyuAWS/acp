@@ -6429,6 +6429,27 @@ class Store:
         except Exception:
             return None
 
+    def ping(self) -> None:
+        """One cheap round-trip to the database. Returns nothing; raises if it cannot be done.
+
+        WHAT THIS IS FOR, AND WHY IT READS NO TABLE. The container-local readiness probe
+        (routes/system.py `probe_readyz`) has to answer one question — can THIS process reach
+        the database and get an answer back — and it has to answer it about the replica the
+        platform is deciding whether to send traffic to. Any query over real data would make
+        the answer depend on what happens to be stored, which is a different question and one
+        a rollout gate must not be able to fail on. `SELECT 1` still exercises the whole path:
+        pool checkout, socket, server, response parse.
+
+        Deliberately NOT bounded here. `_getconn` already caps the pool wait at 5s, and the
+        probe's own `timeoutSeconds` bounds the rest from outside the process; a second timeout
+        inside would be a third number to keep in sync with those two, and it could not stop
+        the underlying thread anyway. See probe_readyz for how a hung ping is prevented from
+        piling up.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT 1")
+            self._db.fetchone(cur)
+
     def worker_tier_status(self, window_s: int = 120) -> dict:
         """The heartbeat with its AGE, not just a boolean.
 
