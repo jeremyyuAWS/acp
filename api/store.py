@@ -1525,8 +1525,13 @@ class _PgAdapter:
     # (v3 was independently assigned to two different additive changes by two concurrent
     # sessions — this repo squash-merges, so both landed — and is renumbered to v4 here rather
     # than picking one side's checksum over the other's real, both-present DDL.)
-    _SCHEMA_VERSION = 4
-    _SCHEMA_CHECKSUM_AT_VERSION = "02b549db6c9f9f400496f13781ac2425"
+    # v5 adds the seven ACR workspace tables (ADR 0047) and their indexes. Additive on the same
+    # terms, and additive in BEHAVIOUR for the reason that matters here: a v4 replica has no ACR
+    # code at all, so it never reads or writes these tables. There is no old-replica path through
+    # them to break, unlike v4's fence — the new tables are inert until a replica carrying
+    # api/acr_*.py serves a request against them.
+    _SCHEMA_VERSION = 5
+    _SCHEMA_CHECKSUM_AT_VERSION = "963a0eeced20dfa790f641d52dbb6a9c"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -3038,10 +3043,31 @@ class Store:
                          "content_workspaces",  # ADR 0044 — a customer's own workspace, not config
                          "content_workspace_documents", "content_workspace_document_versions",
                          "orchestration_events",  # operational log — carries owner_email, customer data
-                         "worker_instances"]  # not customer data, but not genuine config either (no
+                         "worker_instances",  # not customer data, but not genuine config either (no
                          # owner_email, nothing a customer authors) — a fresh worker re-registers
                          # itself on the next heartbeat, same reasoning as active_discovery_guard's
                          # "transient lock state — cleared on reset" above.
+                         # ── ACR workspace (ADR 0047). All seven are DATA, on this file's existing
+                         # rule that RULES survive a reset and RECORDS do not: disposition_policy
+                         # survives while disposition_audit is wiped, and decision_log — the
+                         # append-only audit record — is wiped too. A conformance report is a
+                         # record about a product version, authored by a customer; none of it is
+                         # config.
+                         "acr_report", "acr_criterion", "acr_evidence", "acr_manual_test",
+                         "acr_decision_log",
+                         # Published snapshots included, and the tension is worth naming: they are
+                         # immutable, which means never MODIFIED — not exempt from an explicit,
+                         # owner-authorised wipe of the whole account. overview_snapshots is
+                         # already classified this way for the same reason.
+                         "acr_snapshot",
+                         # Role grants go too, which is the one genuinely arguable call here.
+                         # Report-scoped grants dangle the instant their report is wiped, and a
+                         # surviving approver grant is exactly the kind of residue "completely
+                         # fresh" promises there will not be. Safe to wipe because it cannot lock
+                         # anyone out: acr_authz gives the protected ACP_OWNER_EMAIL every role
+                         # unconditionally, so the owner can always grant the first role again —
+                         # the same anti-lockout property core.is_owner exists to provide.
+                         "acr_role"]
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
