@@ -73,7 +73,7 @@ describe('the Remediate page has one navigation system, not two', () => {
   })
 
   it('still offers Publish as the next step — as the primary action', () => {
-    expect(read('Remediate.jsx')).toMatch(/label: 'Publish Certified Copy →'/)
+    expect(read('Remediate.jsx')).toMatch(/label: 'Publish certified copies'/)
   })
 
   it('keeps the contextual workflow status the spec asked for in the rail’s place', () => {

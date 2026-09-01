@@ -3,10 +3,11 @@ import AssessmentScopeCard from './AssessmentScopeCard.jsx'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
 import RemediationInbox from './RemediationInbox.jsx'
+import RemediationRunHeader from './RemediationRunHeader.jsx'
+import RemediationRunDetails from './RemediationRunDetails.jsx'
 // The approved-board core (R2/R3, R5, R6, R9, R11, R12). Every one of these shipped to main
 // unmounted; this is the pass that puts them on the screen they were written for.
 import RemediationWork from './RemediationWork.jsx'
-import RemediationApprovals from './RemediationApprovals.jsx'
 import ManualWork from './ManualWork.jsx'
 import RemediationVerify from './RemediationVerify.jsx'
 import DeliveryPanel from './DeliveryPanel.jsx'
@@ -32,6 +33,7 @@ import QueuePanel from './QueuePanel.jsx'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
 import { deriveRemediateProcessingState } from './remediateProcessingState.js'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
+import { remediationWork, batchScope } from './remediationWork.js'
 import { firstProposed, firstBefore, firstThumb, firstKind, firstRationale, firstSource, pageOf,
          appliedFixAlt } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
@@ -401,6 +403,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [remProg, setRemProg] = useState(null)   // { total, done, latest, failed }
   const [serverFixed, setServerFixed] = useState(0)  // files fixed server-side this scan (persists after each batch)
   const [staleDismissed, setStaleDismissed] = useState(false)
+  const [runDetailsOpen, setRunDetailsOpen] = useState(false)  // the Run details disclosure (PRD §11)
   const pollRef = useRef(null)
   const remStartRef = useRef(false)   // synchronous guard — remBusy is state, two clicks in one frame both read false
   useEffect(() => () => clearInterval(pollRef.current), [])
@@ -482,16 +485,21 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
   const runServerRemediation = async (scopeFiles) => {
     if (!runId || remBusy || remStartRef.current) return
+    // The page-level controls pass file records; RemediationWork's deterministic batch passes
+    // filenames because it partitions findings rather than owning the scan records. Normalize
+    // both entry points here so they reach the same durable Remediate queue and progress watcher.
+    const scope = (scopeFiles || [])
+      .map((f) => typeof f === 'string' ? f : f?.file)
+      .filter(Boolean)
     // Say why nothing will happen, BEFORE the round trip. The old path posted an empty scope,
     // the server answered enqueued:0, and the UI said "no eligible files with issues" — true,
     // useless, and indistinguishable from a button that did nothing at all.
-    if (!scopeFiles || scopeFiles.length === 0) {
+    if (scope.length === 0) {
       setRemMsg(emptyScopeReason(files, scopeOpts))
       return
     }
     remStartRef.current = true
     setRemBusy(true); setRemMsg(''); setRemProg(null)
-    const scope = scopeFiles?.map((f) => f.file)
     try {
       const r = await remediateScan(runId, scope)
       if (!r.enqueued) {
@@ -537,17 +545,24 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 + `${err?.message || err}. It is back in the queue — try again.`)
   }
 
+  // Returns a promise that RESOLVES when the decision is durably recorded and REJECTS when the
+  // server refused it. That return value is the contract the review pane's auto-advance is built on:
+  // it awaits this, and a rejection keeps the reviewer on the finding with the error stated inline
+  // instead of advancing them past it behind a banner they have already scrolled away from.
+  // `undoAct` still performs the local rollback; the re-throw is what makes the failure visible.
   const act = (id, kind, editedValue, approvedValues, resolution = null) => {
     const item = queue.find((x) => x.id === id)
     setActError(null)
     setQueue((q) => q.filter((x) => x.id !== id))
     setSelItem(null)
-    if (kind === 'self') { if (item) setSelf((s) => [{ ...item, status: 'awaiting' }, ...s]); return }
+    if (kind === 'self') { if (item) setSelf((s) => [{ ...item, status: 'awaiting' }, ...s]); return Promise.resolve() }
     if (kind === 'deferred') {
       if (item) setDeferredItems((d) => [...d, item])
       setActed((a) => ({ ...a, deferred: a.deferred + 1 }))
-      if (!SIM && item?.id) updateHitlItem(item.id, 'skipped').catch((e) => undoAct(item, 'deferred', e))
-      return
+      if (!SIM && item?.id) {
+        return updateHitlItem(item.id, 'skipped').catch((e) => { undoAct(item, 'deferred', e); throw e })
+      }
+      return Promise.resolve()
     }
     setActed((a) => ({ ...a, [kind]: a[kind] + 1 }))
     // W2 — rejecting an AI fix routes it back to the inbox as a manual-handling item instead of
@@ -578,15 +593,16 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       // Two-arg then, NOT .then().catch(): a chained catch would also see a rejection from
       // onRefresh() and roll back a decision the server had already accepted. The refresh is
       // cosmetic; only the write's own failure may undo the decision.
-      p.then(
+      return p.then(
         () => {
           if (apiStatus !== 'approved') return
           try { const r = onRefresh?.(); if (r && typeof r.catch === 'function') r.catch(() => {}) }
           catch { /* the refresh is cosmetic — never let it disturb a saved decision */ }
         },
-        (e) => undoAct(item, kind, e),
+        (e) => { undoAct(item, kind, e); throw e },
       )
     }
+    return Promise.resolve()
   }
   const draftAi = (item) => suggestFix(item.scanId || runId, item.file, item.ruleId).then((r) => r?.suggestion)
   const rescan = (id) => {
@@ -689,6 +705,16 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // queue.length that excluded unconfirmed auto-fixes; keyed on reviewCount so the badge refreshes when
   // a decision or an auto-fix acknowledgement changes the needs-review population.
   useEffect(() => { onHitlCount?.(reviewCount) }, [reviewCount, onHitlCount])
+  // The automation-first summary's numbers. Every one counts something the run actually produced —
+  // applied-fix evidence, the live HITL queue, the workflow partition — computed from the same
+  // sources the panels below use, so the header can never advertise a different total than they do.
+  const workflowCount = (k) => inboxQueue.filter((f) => matchesWorkflow(f, k, inboxDecisions)).length
+  const manualCount = workflowCount('manual')
+  const revalidatingCount = workflowCount('awaiting-validation')
+  const blockedCount = workflowCount('blocked')
+  // The deterministic batch, taken from the SAME partition RemediationWork's own button uses.
+  const autoBatch = batchScope(remediationWork(files, { cap, assessment }))
+
   const fixGroups = groupFixesByRule(fixSource)
   const impact = summarizeImpact(fixSource)
   const fixedCount = totalFixes(fixSource)
@@ -801,13 +827,26 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // review queue — the step that unblocks remediation — was exactly what removed the button
   // that runs it. The two branches were mutually exclusive and nobody could reach the second.
   const remRunning = remBusy || (remProg != null && remProg.done < remProg.total)
+  // ONE action, and which one it is follows the state of the run (PRD §5.2): apply what ACP can do
+  // unattended, then work the exceptions, then publish. It never approves an AI draft — the automatic
+  // branch is scoped to `autoBatch`, the deterministic partition, and drafts are not in it.
+  //
+  // There is deliberately NO "Revalidate approved work" button. Revalidation is something the server
+  // does when an approval is written; the only re-scan this frontend can trigger re-reads the
+  // ORIGINAL document (see RemediationVerify's own footnote), which is not a re-run over the
+  // corrected copy. A button claiming otherwise would claim an action ACP cannot perform, so the
+  // awaiting-revalidation count is reported as state in the summary line instead.
   const primary = readOnly ? null
-    : queue.length > 0 ? { label: `Review ${queue.length} Remaining Issue${queue.length === 1 ? '' : 's'} →`,
-        onClick: () => { setOpenId(queue[0]?.id ?? null); requestAnimationFrame(() => document.getElementById('rem-review')?.scrollIntoView({ behavior: 'smooth', block: 'start' })) } }
-    : remRunning ? { label: '⏳ Remediating…', disabled: true }
-    : verifyState === 'running' ? { label: '⏳ Verifying…', disabled: true }
-    : remediable.length > 0 ? { label: '⚡ Run Remediation →', onClick: () => runServerRemediation(remediable), disabled: !runId }
-    : (verifyState === 'complete' || revalidated.length > 0) ? { label: 'Publish Certified Copy →', onClick: () => onNavigate?.('publish') }
+    : remRunning ? { label: 'Applying fixes…', disabled: true }
+    : autoBatch && autoBatch.count > 0
+      ? { label: `Apply ${autoBatch.count} automatic fix${autoBatch.count === 1 ? '' : 'es'}`,
+          onClick: () => runServerRemediation(autoBatch.files), disabled: !runId }
+    : reviewCount > 0
+      ? { label: 'Review next finding',
+          onClick: () => document.getElementById('rem-review')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
+    : verifyState === 'running' ? { label: 'Revalidating…', disabled: true }
+    : (verifyState === 'complete' || revalidated.length > 0)
+      ? { label: 'Publish certified copies', onClick: () => onNavigate?.('publish') }
     : null
 
   // Documents list (§5): triage + plan merged — one row per doc. Not-yet-fixed first, then
@@ -827,72 +866,16 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const assessRunning = run?.status && !_DONE_STATES.has(run.status)
   const showStaleBanner = assessRunning && files.length > 0 && !staleDismissed
 
-  return (
-    <>
-      {/* Snapshot separation: when a new assessment is running, the remediation results below are
-          from the prior assessment phase. Show a persistent warning so users know the numbers belong
-          to two different snapshots. Dismissible so they can keep working from the old results. */}
-      {showStaleBanner && (
-        <div role="status" style={{
-          display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between',
-          background: 'color-mix(in srgb, #d97706 12%, var(--surface))',
-          border: '1px solid color-mix(in srgb, #d97706 30%, transparent)',
-          borderRadius: 8, padding: '10px 14px', marginBottom: 12, flexWrap: 'wrap',
-        }}>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', minWidth: 0 }}>
-            <span aria-hidden="true" style={{ fontSize: 16, lineHeight: '20px', flexShrink: 0 }}>⚠</span>
-            <div>
-              <strong style={{ fontSize: 13.5 }}>A new assessment is running</strong>
-              <div style={{ fontSize: 12.5, color: 'var(--ink)', marginTop: 2 }}>
-                The remediation results below are from{assessedAt ? ` ${assessedAt}` : ' a previous assessment'}.
-                They will not update until the new assessment completes.
-              </div>
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-            <button
-              onClick={() => onNavigate?.('assess')}
-              style={{ fontSize: 12.5, padding: '4px 10px', borderRadius: 6, border: '1px solid var(--line)',
-                       background: 'var(--surface)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-              View assessment progress
-            </button>
-            <button
-              onClick={() => setStaleDismissed(true)}
-              style={{ fontSize: 12.5, padding: '4px 10px', borderRadius: 6, border: 'none',
-                       background: 'transparent', cursor: 'pointer', color: 'var(--muted)', whiteSpace: 'nowrap' }}>
-              Continue from previous results
-            </button>
-          </div>
-        </div>
-      )}
+  // ── The page, composed in the order a reviewer needs it ──────────────────────────────────────
+  // The compact run header states what ACP already did. The review workspace is the next thing on
+  // the page, because it is the only part that needs a person. Everything else — the lane
+  // partition, delivery, verification detail, the documents table, the engine internals — is real
+  // and still reachable, one click away under Run details, rather than eleven panels the reviewer
+  // scrolls past before reaching the work. Naming the blocks here keeps that ORDER readable in one
+  // screen instead of spread across five hundred lines of JSX.
 
-      {/* Compact scope record — what was in scope for this assessment, always visible.
-          R4: replaced the old ScopeBanner <details> with a compact card that shows the three
-          axes at a glance (criteria, formats, source/doc count). Navigates to Assess tab for
-          rescoping, because scope is an Assess decision, not a Remediate one. */}
-      <AssessmentScopeCard
-        run={run}
-        fileCount={files.length}
-        state="done"
-        onReassess={() => onNavigate?.('assess')}
-        docScope={documentScopeSentence(documentSelection(files, triage))}
-      />
-      {/* HERO (§1) — the 5-second story + ONE primary action (§11). Every count is real:
-          documents from the scan, issues fixed from applied-fix evidence, review from the
-          live HITL queue, savings from the recommendation model. */}
-      <section className="rem-hero">
-        <div className="rem-hero-main">
-          <h2 className="rem-hero-title">Accessibility remediation</h2>
-          {/* R1 (board 9) — "from the assessment of [date/time]": which run this backlog belongs
-              to. Pre-formatted by the caller (App.jsx, fmtStamp) — the same "format once, pass a
-              string, omit rather than invent" contract every other stamp on these tabs follows —
-              so this component formats no dates of its own and prints nothing for a missing value
-              rather than a raw ISO timestamp. */}
-          {assessedAt && (
-            <div className="muted rem-hero-assessed" style={{ fontSize: 12.5, marginTop: 2 }}>
-              from the assessment of {assessedAt}
-            </div>
-          )}
+  const runSummaryDetail = (
+    <div className="rem-hero-main">
           <div className="rem-hero-line">
             <b>{files.length}</b> document{files.length === 1 ? '' : 's'} processed
             {fixedCount > 0 && <> · <b className="rh-fixed">{fixedCount}</b> issue{fixedCount === 1 ? '' : 's'} fixed automatically</>}
@@ -907,12 +890,27 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           {files.length > 0 && (
             <div className={`rem-risk risk-${risk.level}`}><b>Business risk:</b> {risk.text}</div>
           )}
-        </div>
-        {primary
-          ? <button className="rem-hero-cta" disabled={primary.disabled} onClick={primary.onClick}>{primary.label}</button>
-          : remStarted ? <span className="rh-done">All caught up ✓</span> : null}
-      </section>
+    </div>
+  )
 
+  const scopeRecord = (
+    <>
+      {/* Compact scope record — what was in scope for this assessment, always visible.
+          R4: replaced the old ScopeBanner <details> with a compact card that shows the three
+          axes at a glance (criteria, formats, source/doc count). Navigates to Assess tab for
+          rescoping, because scope is an Assess decision, not a Remediate one. */}
+      <AssessmentScopeCard
+        run={run}
+        fileCount={files.length}
+        state="done"
+        onReassess={() => onNavigate?.('assess')}
+        docScope={documentScopeSentence(documentSelection(files, triage))}
+      />
+    </>
+  )
+
+  const workLanes = (
+    <>
       {/* ══ THE APPROVED BOARD CORE ══════════════════════════════════════════════════════════
           R2/R3, R5, R6, R9, R11, R12, in the board's order. Each one self-guards: given nothing
           measurable it renders nothing rather than a frame of zeros, so a run that has not reached
@@ -928,13 +926,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           a regression impossible to attribute. The removal is its own commit. */}
 
       {/* R2 · the work, partitioned once — and R3, the deterministic batch inside it. */}
-      <RemediationWork files={files} cap={cap} assessment={assessment} />
+      <RemediationWork files={files} cap={cap} assessment={assessment}
+                       onApplyAutomatic={readOnly ? undefined : runServerRemediation}
+                       applying={remBusy} />
 
-      {/* R5 · the approval queue. Fed the SAME pending queue the Review section below reads, so
-          the two cannot disagree about what is waiting; the handlers are the existing ones. */}
-      <RemediationApprovals items={queue}
-                            onApprove={(id, value, meta) => act(id, 'approved', value, meta && meta.approvedValues)}
-                            onReject={(id) => act(id, 'rejected')} />
 
       {/* R6 · the manual lane — work ACP cannot do at all, derived from the capability lanes
           rather than a hardcoded list. */}
@@ -949,155 +944,27 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           defaults ON and a copy IS written into the customer's own drive. */}
       <DeliveryPanel files={files} />
 
-      {/* R8 · when a fix fails. Page-level, because "what did not work in this run" is a property
-          of the run rather than of whichever finding happens to be selected. It reads its own
-          decisions and jobs, so it needs only the scan. */}
-      <FixOutcomes scanId={run?.id} files={files} cap={cap} />
+
 
       {/* R12 · close the loop. */}
       <CloseoutPanel docs={files}
                      onReverify={() => onRefresh && onRefresh()}
                      onReview={() => { const el = document.getElementById('rem-review'); if (el) el.scrollIntoView({ behavior: 'smooth' }) }}
                      onPublish={() => onNavigate && onNavigate('publish')} />
+    </>
+  )
 
-      {/* ── HUMAN REVIEW (§3) — the only section that needs interaction, so it dominates,
-          directly under the hero. Each card carries its own badge (§4) and a
-          "Why am I reviewing this?" panel (real confidence + reason + suggested value). ── */}
-      <section className="panel rem-review-panel" id="rem-review">
-        <div className="rem-sec-hd">
-          {/* Redesign R4: one dominant statement (findings × documents) replaces the repeated `N`
-              badges. The numeric pill is gone — the count lives in the sentence, said once. */}
-          <div>
-            <h2 style={{ margin: 0 }}>Review queue</h2>
-            {reviewCount > 0
-              ? <p className="rem-review-lead" style={{ margin: '2px 0 0', fontSize: 13 }}>
-                  <b>{reviewCount}</b> finding{reviewCount === 1 ? '' : 's'} need review across{' '}
-                  <b>{reviewDocCount}</b> document{reviewDocCount === 1 ? '' : 's'}
-                </p>
-              // NOT unconditionally "All clear": an unreadable document is not a clear one, and
-              // the reader who sees "All clear" stops reading (reviewQueueCopy.js).
-              : <p className="muted" style={{ margin: '2px 0 0', fontSize: 13 }}>{reviewLeadLine(files, reviewCount)}</p>}
-          </div>
-          {totalHitl > 0 && (
-            <div className="rem-sec-prog">
-              <div className="conftrack" style={{ width: 120 }}><i style={{ width: `${hitlProgress}%`, background: hitlProgress === 100 ? '#3B6D11' : '#1F5FA8' }} /></div>
-              <span className="muted">{totalHitl - queue.length} of {totalHitl} resolved</span>
-            </div>
-          )}
-          {/* Reviewer analytics (vision #39) — real counts from hitl_events, not a fabricated score:
-              approval rate, how often the reviewer edited the AI draft (the calibration signal), and
-              the average review time already computed by measuredReviewTime. */}
-          {reviewStats && reviewStats.reviewed > 0 && (
-            <div className="rev-analytics" style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, marginTop: 6, color: 'var(--muted)' }}>
-              {reviewStats.approval_rate != null && (
-                <span>Approval rate <b style={{ color: 'var(--ink)' }}>{Math.round(reviewStats.approval_rate * 100)}%</b></span>
-              )}
-              {reviewStats.edit_rate != null && (
-                <span title="how often a reviewer edited the AI draft before approving — a calibration signal, not a confidence score">
-                  AI draft edited <b style={{ color: 'var(--ink)' }}>{Math.round(reviewStats.edit_rate * 100)}%</b>
-                </span>
-              )}
-              {measured && <span>Avg review <b style={{ color: 'var(--ink)' }}>{measured.avg}</b></span>}
-            </div>
-          )}
-          {/* AI Quality (feedback intelligence): which rules are weakest + WHY rejections happen —
-              real reviewer-decision counts, weakest-first, never a fabricated score. Renders only
-              once there is signal (a rejection, or 3+ reviewed on some rule). */}
-          {reviewStats && ((reviewStats.by_rule || []).some((r) => r.rejected > 0 || r.reviewed >= 3)) && (
-            <div className="rev-quality" style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
-              <span style={{ fontWeight: 700, color: 'var(--ink)' }}>AI quality · weakest rules first:</span>{' '}
-              {(reviewStats.by_rule || []).filter((r) => r.reviewed > 0).slice(0, 4).map((r, i) => (
-                <span key={r.key} title={Object.entries(r.reject_reasons || {}).map(([k, n]) => `${k.replace(/_/g, ' ')}: ${n}`).join(' · ') || 'no rejections'}>
-                  {i > 0 && ' · '}
-                  <b style={{ color: r.rejected > 0 ? '#A32D2D' : 'var(--ink)' }}>{r.key}</b>
-                  {' '}{r.approved}✓{r.rejected > 0 && <span style={{ color: '#A32D2D' }}> {r.rejected}✕</span>}
-                </span>
-              ))}
-              {Object.keys(reviewStats.reject_reasons || {}).length > 0 && (
-                <span> — top reject reasons: {Object.entries(reviewStats.reject_reasons)
-                  .sort((a, b) => b[1] - a[1]).slice(0, 3)
-                  .map(([k, n]) => `${k.replace(/_/g, ' ')} (${n})`).join(', ')}</span>
-              )}
-            </div>
-          )}
-        </div>
-        {/* A decision the server refused. It rolled back, so the card is in the queue again —
-            say so loudly, because a reviewer who thinks they signed something off and did not
-            is the worst outcome this screen can produce. */}
-        {actError && (
-          <p role="alert" className="rem-act-error"
-             style={{ margin: '0 0 12px', padding: '10px 12px', borderRadius: 8, fontSize: 13,
-                      background: '#FDECEC', color: '#8A1F1F', border: '1px solid #E9A8A8' }}>
-            {actError}
-          </p>
-        )}
-        {/* Both branches of reviewEmptyLine are true about the QUEUE and incomplete about the
-            ESTATE, so the "N could not be analysed" caveat is appended to whichever one renders
-            rather than living inside one of them — which is how the original defect happened. */}
-        {inboxQueue.length === 0 ? (
-          <p className="muted">{reviewEmptyLine(files, { totalHitl, acted })}</p>
-        ) : (
-          // R4, R7 and R10 ride in the detail pane, beside the finding they describe. `sel` is
-          // null when nothing is selected and each component self-guards on that, so an empty
-          // selection renders an empty pane rather than three frames of nothing.
-          //
-          // A LINE comment, not {/* */}: this is an expression position, not a children position,
-          // and a JSX comment here is a parse error. Second time tonight.
-          <RemediationInbox
-            renderDetailExtra={(sel) => (sel ? (
-              <>
-                {/* R15 · only for a row ACP applied itself — a drafted-AI or manually-authored
-                    finding was never something ACP claimed to fix on its own, so there is
-                    nothing here to un-claim for those rows. */}
-                {sel.autoApplied && (
-                  <UndoFix scanId={sel.scanId || run?.id} file={sel.file} ruleId={sel.ruleId}
-                           onUndone={onRefresh} />
-                )}
-                <RemediationDocProgress queue={inboxQueue} file={sel.file} decisions={decisions} />
-                <DocumentAudit scanId={sel.scanId || run?.id} file={sel.file} />
-                <DueDate scanId={sel.scanId || run?.id} file={sel.file}
-                         value={decisions[sel.file]?.due_date || ''}
-                         assignee={decisions[sel.file]?.assignee || ''} />
-                <FindingComments scanId={sel.scanId || run?.id} finding={sel} />
-              </>
-            ) : null)}
-            queue={inboxQueue}
-            decisions={inboxDecisions}
-            scanId={run?.id}
-            onDecide={(f, d) => {
-              // W2 — a handoff row (a rejected AI fix) is already out of the hitl queue; acting on it
-              // here ("Mark as assigned") just clears it from the needs-manual-handling lane. It is
-              // owned by a person now — this is the acknowledgement that they have it.
-              if (f.rejectedFix) { setRejectedItems((r) => r.filter((x) => x.id !== f.id)); return }
-              // Auto-applied (green) rows are already applied + re-scanned — "Approve" acknowledges
-              // them locally (resolve + advance); the human review lanes route to the hitl flow.
-              if (f.autoApplied) { setAckd((a) => ({ ...a, [f.id]: d })); return }
-              // d.value carries a reviewer-EDITED proposed value (the "Save edited fix" flow); fall
-              // back to the AI's proposal when they didn't touch it. act() writes it to the document.
-              if (d.state === 'accepted') act(f.id, 'approved', d.value ?? f.after ?? null)
-              else if (d.state === 'rejected') act(f.id, 'rejected')
-              else if (d.state === 'assigned') act(f.id, 'deferred')
-              // Not applicable / out of scope: resolved as approved-with-no-value + an out_of_scope
-              // resolution, so it never blocks certification and leaves the coverage denominator.
-              else if (d.state === 'not_applicable') act(f.id, 'approved', null, undefined, 'out_of_scope')
-            }}
-            assignees={assignees}
-            myEmail={myEmail}
-            onAssign={(file, email) => {
-              setAssignees?.((a) => {
-                const next = { ...a }
-                if (email) next[file] = email; else delete next[file]
-                return next
-              })
-              // Persist to DB for every pending item that belongs to this file
-              queue.filter((it) => it._raw?.file === file).forEach((it) => {
-                assignHitlItem(it._raw.id, email || null).catch(() => {})
-              })
-            }}
-          />
-        )}
-      </section>
+  const fixFailures = (
+    <>
+      {/* R8 · when a fix fails. Page-level, because "what did not work in this run" is a property
+          of the run rather than of whichever finding happens to be selected. It reads its own
+          decisions and jobs, so it needs only the scan. */}
+      <FixOutcomes scanId={run?.id} files={files} cap={cap} />
+    </>
+  )
 
+  const referenceSections = (
+    <>
       {/* ── VERIFICATION (§8) — real state, tied to the re-scan/job, auto-begins on approval. ── */}
       <RemSection id="rem-verify" title="Verification"
                   count={revalidated.length || null}
@@ -1393,7 +1260,226 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           </p>
         </div>
       </details>
+    </>
+  )
 
+  const reviewWorkspace = (
+    <>
+      {/* ── HUMAN REVIEW (§3) — the only section that needs interaction, so it dominates,
+          directly under the hero. Each card carries its own badge (§4) and a
+          "Why am I reviewing this?" panel (real confidence + reason + suggested value). ── */}
+      <section className="panel rem-review-panel" id="rem-review">
+        <div className="rem-sec-hd">
+          {/* Redesign R4: one dominant statement (findings × documents) replaces the repeated `N`
+              badges. The numeric pill is gone — the count lives in the sentence, said once. */}
+          <div>
+            <h2 style={{ margin: 0 }}>Review queue</h2>
+            {reviewCount > 0
+              ? <p className="rem-review-lead" style={{ margin: '2px 0 0', fontSize: 13 }}>
+                  <b>{reviewCount}</b> finding{reviewCount === 1 ? '' : 's'} need review across{' '}
+                  <b>{reviewDocCount}</b> document{reviewDocCount === 1 ? '' : 's'}
+                </p>
+              // NOT unconditionally "All clear": an unreadable document is not a clear one, and
+              // the reader who sees "All clear" stops reading (reviewQueueCopy.js).
+              : <p className="muted" style={{ margin: '2px 0 0', fontSize: 13 }}>{reviewLeadLine(files, reviewCount)}</p>}
+          </div>
+          {totalHitl > 0 && (
+            <div className="rem-sec-prog">
+              <div className="conftrack" style={{ width: 120 }}><i style={{ width: `${hitlProgress}%`, background: hitlProgress === 100 ? '#3B6D11' : '#1F5FA8' }} /></div>
+              <span className="muted">{totalHitl - queue.length} of {totalHitl} resolved</span>
+            </div>
+          )}
+          {/* Reviewer analytics (vision #39) — real counts from hitl_events, not a fabricated score:
+              approval rate, how often the reviewer edited the AI draft (the calibration signal), and
+              the average review time already computed by measuredReviewTime. */}
+          {reviewStats && reviewStats.reviewed > 0 && (
+            <div className="rev-analytics" style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, marginTop: 6, color: 'var(--muted)' }}>
+              {reviewStats.approval_rate != null && (
+                <span>Approval rate <b style={{ color: 'var(--ink)' }}>{Math.round(reviewStats.approval_rate * 100)}%</b></span>
+              )}
+              {reviewStats.edit_rate != null && (
+                <span title="how often a reviewer edited the AI draft before approving — a calibration signal, not a confidence score">
+                  AI draft edited <b style={{ color: 'var(--ink)' }}>{Math.round(reviewStats.edit_rate * 100)}%</b>
+                </span>
+              )}
+              {measured && <span>Avg review <b style={{ color: 'var(--ink)' }}>{measured.avg}</b></span>}
+            </div>
+          )}
+          {/* AI Quality (feedback intelligence): which rules are weakest + WHY rejections happen —
+              real reviewer-decision counts, weakest-first, never a fabricated score. Renders only
+              once there is signal (a rejection, or 3+ reviewed on some rule). */}
+          {reviewStats && ((reviewStats.by_rule || []).some((r) => r.rejected > 0 || r.reviewed >= 3)) && (
+            <div className="rev-quality" style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
+              <span style={{ fontWeight: 700, color: 'var(--ink)' }}>AI quality · weakest rules first:</span>{' '}
+              {(reviewStats.by_rule || []).filter((r) => r.reviewed > 0).slice(0, 4).map((r, i) => (
+                <span key={r.key} title={Object.entries(r.reject_reasons || {}).map(([k, n]) => `${k.replace(/_/g, ' ')}: ${n}`).join(' · ') || 'no rejections'}>
+                  {i > 0 && ' · '}
+                  <b style={{ color: r.rejected > 0 ? '#A32D2D' : 'var(--ink)' }}>{r.key}</b>
+                  {' '}{r.approved}✓{r.rejected > 0 && <span style={{ color: '#A32D2D' }}> {r.rejected}✕</span>}
+                </span>
+              ))}
+              {Object.keys(reviewStats.reject_reasons || {}).length > 0 && (
+                <span> — top reject reasons: {Object.entries(reviewStats.reject_reasons)
+                  .sort((a, b) => b[1] - a[1]).slice(0, 3)
+                  .map(([k, n]) => `${k.replace(/_/g, ' ')} (${n})`).join(', ')}</span>
+              )}
+            </div>
+          )}
+        </div>
+        {/* A decision the server refused. It rolled back, so the card is in the queue again —
+            say so loudly, because a reviewer who thinks they signed something off and did not
+            is the worst outcome this screen can produce. */}
+        {actError && (
+          <p role="alert" className="rem-act-error"
+             style={{ margin: '0 0 12px', padding: '10px 12px', borderRadius: 8, fontSize: 13,
+                      background: '#FDECEC', color: '#8A1F1F', border: '1px solid #E9A8A8' }}>
+            {actError}
+          </p>
+        )}
+        {/* Both branches of reviewEmptyLine are true about the QUEUE and incomplete about the
+            ESTATE, so the "N could not be analysed" caveat is appended to whichever one renders
+            rather than living inside one of them — which is how the original defect happened. */}
+        {inboxQueue.length === 0 ? (
+          <p className="muted">{reviewEmptyLine(files, { totalHitl, acted })}</p>
+        ) : (
+          // R4, R7 and R10 ride in the detail pane, beside the finding they describe. `sel` is
+          // null when nothing is selected and each component self-guards on that, so an empty
+          // selection renders an empty pane rather than three frames of nothing.
+          //
+          // A LINE comment, not {/* */}: this is an expression position, not a children position,
+          // and a JSX comment here is a parse error. Second time tonight.
+          <RemediationInbox
+            renderDetailExtra={(sel) => (sel ? (
+              <>
+                {/* R15 · only for a row ACP applied itself — a drafted-AI or manually-authored
+                    finding was never something ACP claimed to fix on its own, so there is
+                    nothing here to un-claim for those rows. */}
+                {sel.autoApplied && (
+                  <UndoFix scanId={sel.scanId || run?.id} file={sel.file} ruleId={sel.ruleId}
+                           onUndone={onRefresh} />
+                )}
+                <RemediationDocProgress queue={inboxQueue} file={sel.file} decisions={decisions} />
+                <DocumentAudit scanId={sel.scanId || run?.id} file={sel.file} />
+                <DueDate scanId={sel.scanId || run?.id} file={sel.file}
+                         value={decisions[sel.file]?.due_date || ''}
+                         assignee={decisions[sel.file]?.assignee || ''} />
+                <FindingComments scanId={sel.scanId || run?.id} finding={sel} />
+              </>
+            ) : null)}
+            queue={inboxQueue}
+            decisions={inboxDecisions}
+            scanId={run?.id}
+            onDecide={(f, d) => {
+              // W2 — a handoff row (a rejected AI fix) is already out of the hitl queue; acting on it
+              // here ("Mark as assigned") just clears it from the needs-manual-handling lane. It is
+              // owned by a person now — this is the acknowledgement that they have it.
+              if (f.rejectedFix) { setRejectedItems((r) => r.filter((x) => x.id !== f.id)); return Promise.resolve() }
+              // Auto-applied (green) rows are already applied + re-scanned — "Approve" acknowledges
+              // them locally (resolve + advance); the human review lanes route to the hitl flow.
+              if (f.autoApplied) { setAckd((a) => ({ ...a, [f.id]: d })); return Promise.resolve() }
+              // d.value carries a reviewer-EDITED proposed value (the "Save edited fix" flow); fall
+              // back to the AI's proposal when they didn't touch it. act() writes it to the document.
+              // Every branch RETURNS act()'s promise. The review pane awaits it and only advances to
+              // the next finding once the write has actually landed — see act() above.
+              if (d.state === 'accepted') return act(f.id, 'approved', d.value ?? f.after ?? null)
+              if (d.state === 'rejected') return act(f.id, 'rejected')
+              if (d.state === 'assigned') return act(f.id, 'deferred')
+              // Not applicable / out of scope: resolved as approved-with-no-value + an out_of_scope
+              // resolution, so it never blocks certification and leaves the coverage denominator.
+              if (d.state === 'not_applicable') return act(f.id, 'approved', null, undefined, 'out_of_scope')
+              return Promise.resolve()
+            }}
+            assignees={assignees}
+            myEmail={myEmail}
+            onAssign={(file, email) => {
+              setAssignees?.((a) => {
+                const next = { ...a }
+                if (email) next[file] = email; else delete next[file]
+                return next
+              })
+              // Persist to DB for every pending item that belongs to this file
+              queue.filter((it) => it._raw?.file === file).forEach((it) => {
+                assignHitlItem(it._raw.id, email || null).catch(() => {})
+              })
+            }}
+          />
+        )}
+      </section>
+    </>
+  )
+
+  // Run details (PRD §11). `alert` hoists a section OUT of the disclosure so it stays on screen
+  // while collapsed — used only for failures the reviewer must not have to go looking for.
+  const runDetailSections = [
+    { id: 'rd-outcomes', title: 'Documents with no corrected copy',
+      hint: 'Failed, unreadable, unverified or refused — with the reason recorded for each.',
+      alert: (remProg?.failed || 0) > 0, children: fixFailures },
+    { id: 'rd-work', title: 'How the work divides',
+      hint: 'What ACP applies deterministically, what it drafts for you, and what only a person can author.',
+      defaultOpen: true, children: workLanes },
+    { id: 'rd-summary', title: 'Run summary', children: runSummaryDetail },
+    { id: 'rd-scope', title: 'Assessment scope', children: scopeRecord },
+    { id: 'rd-reference', title: 'Verification, documents and engine detail', children: referenceSections },
+  ]
+
+  return (
+    <>
+      {/* Snapshot separation: when a new assessment is running, the remediation results below are
+          from the prior assessment phase. Show a persistent warning so users know the numbers belong
+          to two different snapshots. Dismissible so they can keep working from the old results. */}
+      {showStaleBanner && (
+        <div role="status" style={{
+          display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between',
+          background: 'color-mix(in srgb, #d97706 12%, var(--surface))',
+          border: '1px solid color-mix(in srgb, #d97706 30%, transparent)',
+          borderRadius: 8, padding: '10px 14px', marginBottom: 12, flexWrap: 'wrap',
+        }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', minWidth: 0 }}>
+            <span aria-hidden="true" style={{ fontSize: 16, lineHeight: '20px', flexShrink: 0 }}>⚠</span>
+            <div>
+              <strong style={{ fontSize: 13.5 }}>A new assessment is running</strong>
+              <div style={{ fontSize: 12.5, color: 'var(--ink)', marginTop: 2 }}>
+                The remediation results below are from{assessedAt ? ` ${assessedAt}` : ' a previous assessment'}.
+                They will not update until the new assessment completes.
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+            <button
+              onClick={() => onNavigate?.('assess')}
+              style={{ fontSize: 12.5, padding: '4px 10px', borderRadius: 6, border: '1px solid var(--line)',
+                       background: 'var(--surface)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              View assessment progress
+            </button>
+            <button
+              onClick={() => setStaleDismissed(true)}
+              style={{ fontSize: 12.5, padding: '4px 10px', borderRadius: 6, border: 'none',
+                       background: 'transparent', cursor: 'pointer', color: 'var(--muted)', whiteSpace: 'nowrap' }}>
+              Continue from previous results
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* The automation-first run header (PRD §5.1/§5.2): what ACP already did, what is left for a
+          person, and the ONE action this state of the run calls for. Counts come from the same
+          derivations the panels under Run details use, and a lane with no data passes nothing rather
+          than a zero, so "none" and "not known" never read the same. */}
+      <RemediationRunHeader
+        assessedAt={assessedAt}
+        docScope={documentScopeSentence(documentSelection(files, triage))}
+        counts={{ autoFixed: fixedCount, documents: files.length, needsApproval: reviewCount,
+                  manual: manualCount, revalidating: revalidatingCount, blocked: blockedCount }}
+        primary={primary}
+        readOnly={readOnly}
+        onOpenRunDetails={() => setRunDetailsOpen((v) => !v)} />
+      {/* THE WORK. Second on the page, not eleventh — the review workspace is the only part of this
+          screen that needs a person, so nothing but the run header and a blocking warning precedes
+          it. It is also the ONLY finding-level approval surface: the standalone approvals panel that
+          used to sit above it is gone, so there is no second place a decision can be made from. */}
+      {reviewWorkspace}
+      <RemediationRunDetails sections={runDetailSections}
+                             open={runDetailsOpen} onToggle={setRunDetailsOpen} />
       {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
       {sel && <FileDrawer file={sel} context="remediate" aiEnabled={aiEnabled} scanId={run?.id} readOnly={readOnly} onClose={() => setSel(null)} />}
       {selItem && <ReviewDrawer item={selItem} onClose={() => setSelItem(null)} onAct={act} onDraft={selItem.aiDraftable ? draftAi : null} />}

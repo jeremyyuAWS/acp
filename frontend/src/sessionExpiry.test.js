@@ -56,8 +56,11 @@ describe('a review decision that fails is not shown as saved', () => {
   })
 
   it('every decision path routes its failure to undoAct', () => {
-    expect(rem).toMatch(/updateHitlItem\(item\.id, 'skipped'\)\.catch\(\(e\) => undoAct\(item, 'deferred', e\)\)/)
-    expect(rem).toMatch(/\(e\) => undoAct\(item, kind, e\),/)
+    // Both paths still roll back through undoAct, and since 2026-09-01 both also RE-THROW: the
+    // rollback is what repairs local state, the throw is what stops the review pane advancing past
+    // a decision the server refused. Losing either half is a defect, so both are pinned.
+    expect(rem).toMatch(/updateHitlItem\(item\.id, 'skipped'\)\.catch\(\(e\) => \{ undoAct\(item, 'deferred', e\); throw e \}\)/)
+    expect(rem).toMatch(/\(e\) => \{ undoAct\(item, kind, e\); throw e \},/)
   })
 
   it('undoAct restores the card, undoes the count, and explains', () => {

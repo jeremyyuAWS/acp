@@ -492,7 +492,7 @@ not on that list; components that are supposed to be live are.
 
 **Currently retired or unmounted, and mounted nowhere** (frontend/src): `AssessScope`,
 `ConfidenceDashboard`, `ControlPlane`, `Dashboard`, `Disposition`, `FileTypeConfig`,
-`LiveAssessment`, `ProcessingDetails`, `RiskScore`, `RolePrivilege`, `Rubric`, `ScanScope`,
+`LiveAssessment`, `ProcessingDetails`, `RemediationApprovals`, `RiskScore`, `RolePrivilege`, `Rubric`, `ScanScope`,
 `ScanSetup`, `ScopeFunnel`, `ScopeRules`, `ScreenReaderDemo`, `Upload`.
 
 Do not delete these, and do not "wire them back in" because they look unfinished — several were

@@ -59,14 +59,20 @@ describe('the screens that were missing it', () => {
   it('Remediate.jsx renders AssessmentScopeCard above the numbers it qualifies', () => {
     // ScopeBanner was replaced by AssessmentScopeCard so the compact scope record is shared
     // with the Overview tab. The invariant — scope shown above the numbers — is still met.
+    // The 2026-09-01 redesign deleted the hero. Scope is now stated TWICE, both honestly: the
+    // compact run header carries the one-sentence document scope at the very top of the page, and
+    // the full AssessmentScopeCard is one click away under Run details. The invariant — a reader
+    // meets the scope before the numbers it qualifies — is met by the header, which precedes
+    // everything including the review workspace.
     const s = read('Remediate.jsx')
     expect(s).toContain("import AssessmentScopeCard from './AssessmentScopeCard.jsx'")
     expect(s).toMatch(/<AssessmentScopeCard\b/)
-    const card = s.indexOf('<AssessmentScopeCard')
-    const hero = s.indexOf('rem-hero')
-    expect(card, 'no AssessmentScopeCard rendered').toBeGreaterThan(-1)
-    expect(hero, 'anchor rem-hero not found').toBeGreaterThan(-1)
-    expect(card, 'the scope card renders after the content it qualifies').toBeLessThan(hero)
+    expect(s).toMatch(/<RemediationRunHeader[\s\S]{0,400}?docScope=\{documentScopeSentence\(documentSelection\(files, triage\)\)\}/)
+    const header = s.indexOf('<RemediationRunHeader')
+    const work = s.indexOf('{reviewWorkspace}')
+    expect(header, 'no run header rendered').toBeGreaterThan(-1)
+    expect(work, 'anchor reviewWorkspace not found').toBeGreaterThan(-1)
+    expect(header, 'the scope statement renders after the work it qualifies').toBeLessThan(work)
   })
 
   it('Remediate.jsx does not pass a fabricated findings count to the scope card', () => {

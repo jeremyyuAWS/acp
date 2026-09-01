@@ -81,16 +81,17 @@ describe('W8 — apply a decision to every matching finding of the same rule', (
     await render({ queue: QUEUE, decisions: {} })
     expect(detailHeading()).toBe('Image needs alt text')
     // 2 OTHER 1.1.1 findings share this issue (ids 2 and 3), across the normalised rule forms.
-    expect(container.textContent).toContain('2 other findings share this issue')
-    expect(container.textContent).toContain('(WCAG 1.1.1)')
-    expect(btnByText('Approve all 3')).toBeTruthy()
-    expect(btnByText('Reject all 3')).toBeTruthy()
+    // The copy names the criterion and the count of OTHER findings, so the reviewer knows exactly
+    // what a batch press would reach — "Approve all 3" said nothing about which 3.
+    expect(container.textContent).toContain('You are looking at one of 3 findings that share this issue')
+    expect(btnByText('Approve this decision for 2 other WCAG 1.1.1 findings')).toBeTruthy()
+    expect(btnByText('Reject this decision for 2 other WCAG 1.1.1 findings')).toBeTruthy()
   })
 
   it('applies the decision to the current finding and every matching one — but not other rules', async () => {
     const calls = []
     await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
-    await click(btnByText('Approve all 3'))
+    await click(btnByText('Approve this decision for 2 other WCAG 1.1.1 findings'))
     // ids 1,2,3 (all 1.1.1) approved; id 4 (2.4.2) untouched.
     expect(calls.map((c) => c[0]).sort()).toEqual([1, 2, 3])
     expect(calls.every((c) => c[1] === 'accepted')).toBe(true)

@@ -155,11 +155,24 @@ describe('App composes the Assess tab the way the board specifies', () => {
     // scan that was NOT assessed this session, while still hiding results during a live run.
     const s = app()
     // resultsReady is the two-way gate: finished this session (done) OR a prior-session assessed scan.
-    expect(s).toMatch(/const resultsReady =[\s\S]{0,80}assessPhase === 'done'[\s\S]{0,120}?assessed_at[\s\S]{0,60}?justAssessed !== run\?\.id/)
+    expect(s).toMatch(/const resultsReady =[\s\S]{0,80}assessPhase === 'done'[\s\S]{0,120}?assessPhase === 'idle'[\s\S]{0,120}?assessed_at[\s\S]{0,60}?justAssessed !== run\?\.id/)
     // the results are gated on it…
     expect(s).toMatch(/assessed && resultsReady && !runDetails && !assessFile && <><AssessSummary/)
     // …and NOT purely on 'done' any more (the exact shape that produced the empty panel).
     expect(s).not.toMatch(/assessed && assessPhase === 'done' && !runDetails/)
+  })
+
+  it('replaces the prior dashboard with a loading state as soon as a new assessment starts', () => {
+    const s = app()
+    // The parent must enter `starting` in the click handler itself. Waiting for AssessRunner's
+    // phase effect permits one paint of the previous run's results before `running` arrives.
+    const startHandler = s.slice(s.indexOf('const startAssessment ='), s.indexOf('const [bulkFixBusy'))
+    expect(startHandler).toContain("setAssessPhase('starting')")
+    expect(startHandler).toContain('assessStart.current?.(decided)')
+    expect(s).toContain('onRun={startAssessment}')
+    expect(s).toMatch(/assessPhase === 'starting'[\s\S]{0,500}?role="status"[\s\S]{0,500}?Preparing your assessment/)
+    // Persisted results may render on an idle revisit, never while a replacement run starts/runs.
+    expect(s).toMatch(/assessPhase === 'idle' && !!run\?\.assessed_at/)
   })
 
   it('A13 · wires document-to-document navigation from the worklist order', () => {

@@ -114,16 +114,16 @@ describe('Guided pane — preserves the #412/#415 behaviours', () => {
 })
 
 describe('Guided pane — auto-fix rows get an obvious, honestly-labelled decision', () => {
-  it('offers "Approve ACP’s fix" and a "This looks wrong" flag (no editable draft)', async () => {
+  it('offers "Approve & next" and a "This looks wrong" flag (no editable draft)', async () => {
     const calls = []
     // An UNacknowledged auto-fix awaits the reviewer's confirmation, so it sits in Needs review (the
     // default tab) — not Awaiting validation — and is selected on open.
     await renderInbox({ queue: [CONTRAST_AUTO], decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
-    expect(btnByText('Approve ACP’s fix')).toBeTruthy()
+    expect(btnByText('Approve & next \u2192')).toBeTruthy()
     expect(btnByText('This looks wrong')).toBeTruthy()
     // The change is already applied — there is no edit-and-apply draft for it.
     expect(container.querySelector('textarea[aria-label="Edit the proposed fix"]')).toBeNull()
-    await click(btnByText('Approve ACP’s fix'))
+    await click(btnByText('Approve & next \u2192'))
     expect(calls).toContainEqual([2, 'accepted'])
   })
 
