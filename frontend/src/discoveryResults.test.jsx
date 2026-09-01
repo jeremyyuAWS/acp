@@ -39,6 +39,16 @@ const render = async (props = {}) => {
 const text = () => container.textContent
 const boxes = () => [...container.querySelectorAll('input[type=checkbox]')]
 const click = async (el) => { await act(async () => { el.click() }) }
+const setInput = async (el, value) => {
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(
+      el instanceof HTMLSelectElement ? window.HTMLSelectElement.prototype : window.HTMLInputElement.prototype,
+      'value',
+    ).set
+    setter.call(el, value)
+    el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
+  })
+}
 
 // A small estate with both recommendation kinds, one unreadable file and one untestable format.
 const ESTATE = [
@@ -226,6 +236,56 @@ describe('the recommendation table', () => {
     expect(text()).toContain('tagged for archive review')
     await click(btn('All'))
     expect(text()).toContain('sepsis-pathway-v3.docx')
+  })
+
+  it('paginates a large result set and reports the visible range', async () => {
+    const files = Array.from({ length: 61 }, (_, i) => arch(`Policies/policy-${String(i + 1).padStart(3, '0')}.docx`))
+    await render({ files })
+    expect(container.querySelectorAll('tbody tr')).toHaveLength(50)
+    expect(text()).toContain('Showing 1–50')
+    expect(text()).toContain('Page 1 of 2')
+    expect(text()).toContain('policy-001.docx')
+    expect(text()).not.toContain('policy-061.docx')
+
+    await click([...container.querySelectorAll('button')].find((button) => button.textContent === 'Next page'))
+    expect(container.querySelectorAll('tbody tr')).toHaveLength(11)
+    expect(text()).toContain('Showing 51–61')
+    expect(text()).toContain('policy-061.docx')
+    expect(text()).not.toContain('policy-001.docx')
+  })
+
+  it('searches the full result set and composes search with action and rule filters', async () => {
+    const files = [
+      ...Array.from({ length: 55 }, (_, i) => arch(`Archive/archive-${i + 1}.docx`, 'Retention A')),
+      del('Drafts/needle-draft.docx', 'Retention B'),
+      del('Drafts/other-draft.docx', 'Retention B'),
+    ]
+    await render({ files })
+    const search = container.querySelector('[aria-label="Search recommendations"]')
+    await setInput(search, 'needle')
+    expect(text()).toContain('1 of 57 recommendations match')
+    expect(text()).toContain('needle-draft.docx')
+    expect(text()).not.toContain('archive-1.docx')
+
+    const rule = container.querySelector('[aria-label="Filter recommendations by matched rule"]')
+    await setInput(rule, 'Retention A')
+    expect(text()).toContain('0 of 57 recommendations match')
+    expect(text()).toContain('No file matches this filter')
+
+    await click([...container.querySelectorAll('button')].find((button) => button.textContent === 'Clear filters'))
+    expect(text()).toContain('57 of 57 recommendations match')
+  })
+
+  it('keeps assess-anyway choices when the reviewer changes pages', async () => {
+    let overrides = []
+    const files = Array.from({ length: 51 }, (_, i) => arch(`policy-${String(i + 1).padStart(3, '0')}.docx`))
+    await render({ files, overrides, onOverridesChange: (next) => { overrides = next } })
+    await click(container.querySelector('[aria-label="Assess policy-001.docx anyway"]'))
+    expect(overrides).toEqual(['policy-001.docx'])
+    await click([...container.querySelectorAll('button')].find((button) => button.textContent === 'Next page'))
+    await click([...container.querySelectorAll('button')].find((button) => button.textContent === 'Previous page'))
+    await render({ files, overrides, onOverridesChange: (next) => { overrides = next } })
+    expect(container.querySelector('[aria-label="Assess policy-001.docx anyway"]').checked).toBe(true)
   })
 })
 
