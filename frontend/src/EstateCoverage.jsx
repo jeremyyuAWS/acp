@@ -13,6 +13,11 @@ const STATUS_COLOR = {
   excluded: 'var(--line-strong, #c6ccc2)',
 }
 const nf = new Intl.NumberFormat('en-US')
+const sectionHeadingStyle = {
+  margin: '0 0 8px', fontSize: 13, letterSpacing: '.04em', textTransform: 'uppercase',
+  // FastPass: #8a8f98 was only 3.08:1 on the estate surface. This token is text, not decoration.
+  color: 'var(--muted-text, #6f727a)',
+}
 
 function Bar({ value, of, color, pending }) {
   const pct = of > 0 && value != null ? Math.max(2, Math.round((value / of) * 100)) : 0
@@ -68,7 +73,7 @@ export default function EstateCoverage({ report, inventory, progress }) {
           the disposition rules rather than the funnel. */}
       {m.age && (
         <>
-          <h4 style={{ margin: '0 0 8px', fontSize: 13, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--muted-fg,#8a8f98)' }}>
+          <h4 style={sectionHeadingStyle}>
             Last modified
           </h4>
           <Bars items={m.age} cols="130px 1fr 60px" />
@@ -86,7 +91,7 @@ export default function EstateCoverage({ report, inventory, progress }) {
         </>
       )}
 
-      <h4 style={{ margin: '0 0 8px', fontSize: 13, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--muted-fg,#8a8f98)' }}>Coverage funnel</h4>
+      <h4 style={sectionHeadingStyle}>Coverage funnel</h4>
       <div style={{ display: 'grid', gap: 6, marginBottom: 22 }}>
         {m.funnel.map((s, i) => (
           <div key={s.key} style={{ display: 'grid', gridTemplateColumns: '22px 1fr 90px', gap: 10, alignItems: 'center' }}>
@@ -103,7 +108,7 @@ export default function EstateCoverage({ report, inventory, progress }) {
       </div>
 
       {/* Composition */}
-      <h4 style={{ margin: '0 0 8px', fontSize: 13, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--muted-fg,#8a8f98)' }}>By format</h4>
+      <h4 style={sectionHeadingStyle}>By format</h4>
       <div style={{ display: 'grid', gap: 6, marginBottom: 22 }}>
         {m.composition.map((r) => {
           const max = m.composition[0]?.count || 1
@@ -121,7 +126,7 @@ export default function EstateCoverage({ report, inventory, progress }) {
       </div>
 
       {/* Capability status — each chip drills into the files behind the count */}
-      <h4 style={{ margin: '0 0 8px', fontSize: 13, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--muted-fg,#8a8f98)' }}>Capability status</h4>
+      <h4 style={sectionHeadingStyle}>Capability status</h4>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
         {m.status.map((r) => {
           const open = openStatus === r.status

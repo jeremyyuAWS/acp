@@ -157,11 +157,7 @@ function PendingRow({ stage, pending, blocked, action, urgency = 'low', onClick 
   const u = URGENCY[urgency] || URGENCY.low
   if (pending == null) return null
   return (
-    <tr className={onClick ? 'filerow' : undefined}
-        role={onClick ? 'button' : undefined}
-        tabIndex={onClick ? 0 : undefined}
-        onClick={onClick}
-        onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick() } } : undefined}>
+    <tr>
       <td style={{ paddingLeft: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: u.dot, flexShrink: 0 }} />
@@ -178,7 +174,10 @@ function PendingRow({ stage, pending, blocked, action, urgency = 'low', onClick 
       </td>
       <td>
         {onClick
-          ? <button className="linkbtn" style={{ fontSize: 13 }}>{action} →</button>
+          ? <button className="linkbtn" style={{ fontSize: 13 }} onClick={onClick}
+                    aria-label={`${action}: ${nf.format(pending)} pending in ${stage}`}>
+              {action} →
+            </button>
           : <span className="muted" style={{ fontSize: 13 }}>{action}</span>}
       </td>
     </tr>
