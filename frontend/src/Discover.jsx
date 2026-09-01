@@ -935,6 +935,12 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
             ?? (inv?.rows
               ? new Set(inv.rows.map((r) => r.lifecycle_rule_id).filter(Boolean)).size
               : null)}
+          lifecycleFilesEvaluated={progress?.files_evaluated
+            ?? scope?.lifecycle_files_evaluated ?? null}
+          lifecycleMatches={progress?.lifecycle_matches
+            ?? scope?.lifecycle_matches ?? null}
+          lifecycleUnevaluable={progress?.lifecycle_unevaluable
+            ?? scope?.lifecycle_unevaluable ?? null}
           archiveCandidates={progress?.lifecycle_archive ?? scope?.lifecycle_archive ?? null}
           deleteCandidates={progress?.lifecycle_delete ?? scope?.lifecycle_delete ?? null}
           tagged={progress?.lifecycle_tagged ?? scope?.lifecycle_tagged ?? null}

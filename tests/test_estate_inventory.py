@@ -35,7 +35,7 @@ def test_supported_formats_are_assessable():
 
 
 def test_html_is_out_of_scope_by_default_but_still_classified_as_html():
-    """HTML left the scan scope on 2026-08-31 (PDF/DOCX/XLSX/PPTX only).
+    """HTML is outside the PDF/DOCX/XLSX/PPTX scan scope but retains its inventory format.
 
     The format bucket is unchanged — an .html file is still recognised AS html, and the estate
     inventory still counts it — but it is no longer `assessable`, because no listing will produce

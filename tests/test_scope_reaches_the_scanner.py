@@ -76,11 +76,11 @@ def test_an_unclassifiable_file_is_kept():
 
 # ── enumeration ───────────────────────────────────────────────────────────────
 
-def test_a_docx_scope_drops_the_pdf_from_the_listing(corpus):
+def test_a_docx_scope_drops_the_pdf_and_html_from_the_listing(corpus):
     names, _ = _listed(DOCX_ONLY)
     assert "b.pdf" not in names
     assert "a.docx" in names
-    assert "e.html" in names, "the html exemption must survive enumeration, not just the predicate"
+    assert "e.html" not in names, "HTML is inventoried but outside the product scan formats"
 
 
 def test_a_docx_scope_still_drops_pptx_and_xlsx(corpus):
@@ -92,7 +92,7 @@ def test_a_docx_scope_still_drops_pptx_and_xlsx(corpus):
 
 def test_no_scope_scans_every_format(corpus):
     names, _ = _listed(None)
-    assert names == ["a.docx", "b.pdf", "c.pptx", "d.xlsx", "e.html"]
+    assert names == ["a.docx", "b.pdf", "c.pptx", "d.xlsx"]
 
 
 def test_a_wider_scope_keeps_the_pdf(corpus):
@@ -132,7 +132,7 @@ def test_a_docx_scoped_scan_never_downloads_the_pdf(corpus, monkeypatch):
     assert "b.pdf" not in fetched, f"an out-of-scope PDF was downloaded: {fetched}"
     assert "c.pptx" not in fetched and "d.xlsx" not in fetched
     assert "a.docx" in fetched
-    assert "e.html" in fetched, "html is exempt and must still be read"
+    assert "e.html" not in fetched, "HTML must remain inventoried without being read"
 
 
 def test_an_unscoped_scan_downloads_everything(corpus, monkeypatch):
@@ -146,7 +146,8 @@ def test_an_unscoped_scan_downloads_everything(corpus, monkeypatch):
 
     scanner.run_scan("local", folder=str(corpus), ai_enabled=False, scan_id="s-open")
 
-    assert {"a.docx", "b.pdf", "c.pptx", "d.xlsx", "e.html"} <= set(fetched)
+    assert {"a.docx", "b.pdf", "c.pptx", "d.xlsx"} <= set(fetched)
+    assert "e.html" not in fetched
 
 
 def test_run_scan_threads_the_signed_in_user_into_the_scope_gate(corpus, monkeypatch):

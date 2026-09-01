@@ -1,6 +1,6 @@
 """Discovery's format scope — one source of truth, and the two connector filters that read it.
 
-WHAT THESE PIN. The scope narrowed to PDF/DOCX/XLSX/PPTX on 2026-08-31. The risk in that change
+WHAT THESE PIN. The scope is PDF/DOCX/XLSX/PPTX without HTML. The risk in that change
 is not the narrowing itself, it is DRIFT: the set is consumed by a Drive MIME filter, a
 SharePoint extension filter, and the estate inventory's `assessable` status, and before
 api/scan_formats those were three independent literals. A file the connectors stop listing but
@@ -31,7 +31,7 @@ GSLIDES = "application/vnd.google-apps.presentation"
 
 
 # ── the scope itself ────────────────────────────────────────────────────────────────────────
-def test_default_scope_is_the_four_formats():
+def test_default_scope_is_pdf_docx_xlsx_pptx_without_html():
     assert scan_formats.formats() == frozenset({"pdf", "docx", "xlsx", "pptx"})
 
 
@@ -162,6 +162,21 @@ def test_sharepoint_walk_drops_an_out_of_scope_file():
     assert dropped is not None
     assert dropped["scannable"] is None
     assert dropped["inventory_row"] is not None
+
+
+def test_local_walk_uses_the_same_default_scope(monkeypatch, tmp_path):
+    """Local/demo must not quietly retain the old wider HTML/PPTX literal."""
+    for name in ("policy.pdf", "policy.docx", "policy.xlsx", "page.html", "deck.pptx"):
+        (tmp_path / name).write_bytes(b"fixture")
+    monkeypatch.setenv("ACP_LOCAL_CORPUS", str(tmp_path))
+    monkeypatch.delenv("ACP_SCAN_FORMATS", raising=False)
+
+    inventory = []
+    items = scanner._list("local", inventory_out=inventory)
+
+    assert {item["name"] for item in items} == {"policy.pdf", "policy.docx", "policy.xlsx", "deck.pptx"}
+    # Out-of-scope files remain visible in the estate inventory instead of disappearing.
+    assert {row["file"] for row in inventory} >= {"page.html"}
 
 
 # ── the three consumers agree ───────────────────────────────────────────────────────────────
