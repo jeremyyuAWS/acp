@@ -20,6 +20,20 @@ const groupKey = (row) => [row.policy_id || row.lifecycle_rule_id || 'none',
 
 const RISK = { delete: 'Moves files to source trash', archive: 'Recoverable move' }
 
+// PRD §7.4 age filter. Buckets rather than a date picker: the question a reviewer actually has
+// is "show me the genuinely old ones", and retention policy is written in these units.
+const AGES = [['', 'Any age'], ['30', 'Older than 30 days'], ['90', 'Older than 90 days'],
+              ['365', 'Older than 1 year'], ['1095', 'Older than 3 years']]
+
+/** Days since the file was last modified at source, or null when nothing recorded it. */
+export function ageInDays(row, now = Date.now()) {
+  const raw = row.source_modified || row.created_at
+  if (!raw) return null
+  const then = Date.parse(raw)
+  if (Number.isNaN(then)) return null
+  return Math.floor((now - then) / 86400000)
+}
+
 export default function DispositionReviewWorkspace({
   scanId, status = '', policyId = '', candidateOnly = true,
 }) {
@@ -32,6 +46,8 @@ export default function DispositionReviewWorkspace({
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
   const [owner, setOwner] = useState('')
+  const [fileType, setFileType] = useState('')
+  const [minAge, setMinAge] = useState('')
 
   useEffect(() => {
     let live = true
@@ -44,9 +60,24 @@ export default function DispositionReviewWorkspace({
 
   const owners = useMemo(
     () => [...new Set(rows.map((r) => r.owner).filter(Boolean))].sort(), [rows])
+  // Derived from the rows in hand rather than a hardcoded vocabulary: estate_inventory.classify
+  // decides what a format IS, and a list copied here would drift from it silently.
+  const fileTypes = useMemo(
+    () => [...new Set(rows.map((r) => r.format || r.doc_class).filter(Boolean))].sort(), [rows])
 
   const groups = useMemo(() => {
-    const filtered = owner ? rows.filter((r) => r.owner === owner) : rows
+    const filtered = rows.filter((r) => {
+      if (owner && r.owner !== owner) return false
+      if (fileType && (r.format || r.doc_class) !== fileType) return false
+      if (minAge) {
+        const age = ageInDays(r)
+        // A file with no recorded date is NOT silently treated as new. An age filter that
+        // quietly drops undated rows would shrink the queue without saying so, and the count
+        // above it is the number a reviewer trusts.
+        if (age === null || age < Number(minAge)) return false
+      }
+      return true
+    })
     const by = new Map()
     for (const row of [...filtered].sort((a, b) => rank(a) - rank(b)
       || String(a.file).localeCompare(String(b.file)))) {
@@ -64,7 +95,7 @@ export default function DispositionReviewWorkspace({
       by.get(key).rows.push(row)
     }
     return [...by.values()].sort((a, b) => rank(a.rows[0]) - rank(b.rows[0]))
-  }, [rows, owner])
+  }, [rows, owner, fileType, minAge])
 
   // Only rows the server could actually accept are selectable: a pending audit id, a policy
   // version, and an action. A row without them is still shown and still reviewable one at a
@@ -132,18 +163,54 @@ export default function DispositionReviewWorkspace({
     {error && <p role="alert">{error}</p>}
     {notice && <p role="status">{notice}</p>}
 
-    <label style={{ fontSize: 13 }}>Owner{' '}
-      <select value={owner} onChange={(e) => setOwner(e.target.value)}>
-        <option value="">All owners</option>
-        {owners.map((o) => <option key={o} value={o}>{o}</option>)}
-      </select>
-    </label>
+    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', margin: '8px 0' }}>
+      <label style={{ fontSize: 13 }}>Owner{' '}
+        <select value={owner} onChange={(e) => setOwner(e.target.value)}>
+          <option value="">All owners</option>
+          {owners.map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+      </label>
+      <label style={{ fontSize: 13 }}>File type{' '}
+        <select value={fileType} onChange={(e) => setFileType(e.target.value)}>
+          <option value="">All file types</option>
+          {fileTypes.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+      </label>
+      <label style={{ fontSize: 13 }}>Age{' '}
+        <select value={minAge} onChange={(e) => setMinAge(e.target.value)}>
+          {AGES.map(([v, label]) => <option key={v || 'any'} value={v}>{label}</option>)}
+        </select>
+      </label>
+      <label style={{ fontSize: 13 }}>Department{' '}
+        {/* PRD §6.2: a signal that needs connector work is labelled UNAVAILABLE, never rendered
+            as an empty filter that appears to work and silently matches nothing. Department is
+            not collected by the Drive/SharePoint scan today (api/documents.py, ADR 0003's own
+            Costs/risks), so the control says so rather than pretending. */}
+        <select disabled aria-describedby="dept-unavailable">
+          <option>Unavailable until connected</option>
+        </select>
+      </label>
+    </div>
+    <p id="dept-unavailable" className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>
+      Department is not collected by the Drive or SharePoint scan yet, so it cannot be filtered
+      on. Source is not offered here because every file in this queue came from one scan, and a
+      scan has a single source.
+    </p>
 
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
       <div className="panel" style={{ maxHeight: 520, overflow: 'auto' }}>
-        {groups.length === 0 && <p>{candidateOnly
-          ? 'No lifecycle candidates need review. The enabled rules ran and matched no files.'
-          : 'No files match this view.'}</p>}
+        {groups.length === 0 && <p>{
+          // Three different zero states, and only the last is about the rules. #1175's message
+          // ("the enabled rules ran and matched no files") became untrue the moment a client-side
+          // filter could empty the list on its own: the rules DID match, and the filter hid the
+          // result. Attributing a filter's effect to the rules is the §6.4 mistake one level up -
+          // a zero that names the wrong cause sends someone to edit a policy that is working.
+          rows.length > 0
+            ? 'No files match these filters. ' + rows.length.toLocaleString()
+              + ' file(s) are in this queue before filtering.'
+            : candidateOnly
+              ? 'No lifecycle candidates need review. The enabled rules ran and matched no files.'
+              : 'No files match this view.'}</p>}
         {groups.map((group) => {
           const chosen = group.rows.filter((r) => picked.has(r.audit_id)).length
           return <section key={group.key} aria-label={`${group.rule} · ${group.action || 'no action'}`}>
