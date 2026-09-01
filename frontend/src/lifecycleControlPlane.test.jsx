@@ -15,7 +15,26 @@ describe('lifecycle control plane', () => {
     expect(html).toContain('10 of 10 files reconciled')
     expect(html).toContain('Archive candidate')
     expect(html).toContain('Recommendations only')
-    expect(html).toContain('disposition candidates excluded from Assess')
+    expect(html).toContain('disposition candidates marked outside Assess')
+    expect(html).toContain('may also be unsupported file types')
+  })
+
+  it('refuses to call candidates reconciled when their immutable evidence is missing', () => {
+    const html = renderToStaticMarkup(<LifecycleEstateSummary summary={{
+      total: 10, reconciled_total: 10, assessment_excluded: 8,
+      counts: { active: 2, already_archived: 0, archive_candidate: 8, delete_candidate: 0,
+        deleted: 0, exempt: 0, reactivated: 0, unevaluable: 0, failed: 0 },
+      integrity: { evidence_complete: false, candidate_count: 8, candidates_with_evidence: 0 },
+    }} />)
+    expect(html).toContain('Lifecycle evidence incomplete')
+    expect(html).toContain('only 0 have immutable rule evidence')
+  })
+
+  it('distinguishes a missing ledger from a run with no enabled rules', () => {
+    const html = renderToStaticMarkup(<LifecycleRuleLedger rules={[]} integrity={{ expected_rules: 1 }} />)
+    expect(html).toContain('1 lifecycle rule ran')
+    expect(html).toContain('ledger was not recorded')
+    expect(html).not.toContain('no enabled lifecycle rules')
   })
 
   it('does not collapse zero matches into an ambiguous empty state', () => {

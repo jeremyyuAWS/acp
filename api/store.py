@@ -2541,11 +2541,45 @@ class Store:
             "unevaluable": counts.get("Unevaluable", 0) + counts.get("Conflict — review required", 0),
             "failed": counts.get("Failed", 0),
         }
+        candidate_count = normalized["archive_candidate"] + normalized["delete_candidate"]
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS evaluations,COUNT(DISTINCT document_id) AS evaluated_files,"
+                "COUNT(DISTINCT policy_id) AS recorded_rules FROM lifecycle_evaluation "
+                "WHERE scan_id=%s AND owner_email=%s", (scan_id, owner))
+            evidence = self._db.fetchone(cur) or {}
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM scan_inventory si WHERE si.scan_id=%s "
+                "AND si.lifecycle_status IN ('Archive Candidate','Delete Candidate') "
+                "AND EXISTS (SELECT 1 FROM lifecycle_evaluation le WHERE le.scan_id=si.scan_id "
+                "AND le.document_id=si.file AND le.policy_id=si.lifecycle_rule_id "
+                "AND le.owner_email=%s AND le.result IN ('matched','conflict'))", (scan_id, owner))
+            candidate_evidence = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            self._db.execute(cur, "SELECT scope FROM scan_runs WHERE id=%s AND owner_email=%s",
+                             (scan_id, owner))
+            run = self._db.fetchone(cur) or {}
+        scope = run.get("scope") or {}
+        if isinstance(scope, str):
+            try:
+                scope = json.loads(scope)
+            except Exception:
+                scope = {}
+        expected_rules = int(scope.get("lifecycle_rules_enabled") or 0)
+        recorded_rules = int(evidence.get("recorded_rules") or 0)
+        evidence_complete = (candidate_count == candidate_evidence and
+                             (expected_rules == 0 or recorded_rules >= expected_rules))
         return {"scan_id": scan_id, "total": total, "reconciled_total": sum(normalized.values()),
                 "counts": normalized,
                 "assessment_excluded": normalized["already_archived"] + normalized["archive_candidate"] + normalized["delete_candidate"] + normalized["deleted"],
                 "data_version": self.lifecycle_data_version(scan_id),
-                "recommendations_only": True}
+                "recommendations_only": True,
+                "integrity": {"evidence_complete": evidence_complete,
+                              "expected_rules": expected_rules,
+                              "recorded_rules": recorded_rules,
+                              "evaluations": int(evidence.get("evaluations") or 0),
+                              "evaluated_files": int(evidence.get("evaluated_files") or 0),
+                              "candidate_count": candidate_count,
+                              "candidates_with_evidence": candidate_evidence}}
 
     def lifecycle_data_version(self, scan_id: str) -> str | None:
         with self._db.cursor() as cur:
@@ -2568,7 +2602,8 @@ class Store:
             return self._db.fetchall(cur)
 
     def list_lifecycle_files(self, scan_id: str, owner: str, *, status: str | None = None,
-                             policy_id: str | None = None, limit: int = 200, offset: int = 0) -> list[dict]:
+                             policy_id: str | None = None, candidate_only: bool = False,
+                             limit: int = 200, offset: int = 0) -> list[dict]:
         where, args = ["si.scan_id=%s", "EXISTS (SELECT 1 FROM scan_runs sr WHERE sr.id=si.scan_id AND sr.owner_email=%s)"], [scan_id, owner]
         if status == "already_archived":
             where.append("COALESCE(si.lifecycle_status,'Active') IN ('Already archived','Archived')")
@@ -2576,6 +2611,8 @@ class Store:
             where.append("COALESCE(si.lifecycle_status,'Active') IN ('Unevaluable','Conflict — review required')")
         elif status:
             where.append("COALESCE(si.lifecycle_status,'Active')=%s"); args.append(status)
+        if candidate_only:
+            where.append("si.lifecycle_status IN ('Archive Candidate','Delete Candidate')")
         if policy_id:
             where.append("si.lifecycle_rule_id=%s"); args.append(policy_id)
         args.extend([limit, offset])
@@ -2584,6 +2621,23 @@ class Store:
                 f"SELECT {self._INV_COLS} FROM scan_inventory si WHERE {' AND '.join(where)} ORDER BY si.file LIMIT %s OFFSET %s",
                 tuple(args))
             return self._db.fetchall(cur)
+
+    def count_lifecycle_files(self, scan_id: str, owner: str, *, status: str | None = None,
+                              policy_id: str | None = None, candidate_only: bool = False) -> int:
+        where, args = ["si.scan_id=%s", "EXISTS (SELECT 1 FROM scan_runs sr WHERE sr.id=si.scan_id AND sr.owner_email=%s)"], [scan_id, owner]
+        if status == "already_archived":
+            where.append("COALESCE(si.lifecycle_status,'Active') IN ('Already archived','Archived')")
+        elif status == "unevaluable":
+            where.append("COALESCE(si.lifecycle_status,'Active') IN ('Unevaluable','Conflict — review required')")
+        elif status:
+            where.append("COALESCE(si.lifecycle_status,'Active')=%s"); args.append(status)
+        if candidate_only:
+            where.append("si.lifecycle_status IN ('Archive Candidate','Delete Candidate')")
+        if policy_id:
+            where.append("si.lifecycle_rule_id=%s"); args.append(policy_id)
+        with self._db.cursor() as cur:
+            self._db.execute(cur, f"SELECT COUNT(*) AS n FROM scan_inventory si WHERE {' AND '.join(where)}", tuple(args))
+            return int((self._db.fetchone(cur) or {}).get("n") or 0)
 
     def lifecycle_evaluations_by_document(self, scan_id: str, owner: str) -> dict[str, list[dict]]:
         """Every lifecycle evaluation in one scan, grouped by document_id, in ONE query.
