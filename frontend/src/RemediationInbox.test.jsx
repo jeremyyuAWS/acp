@@ -195,6 +195,12 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(rinbox().getAttribute('data-layout')).toBe('stacked')
     expect(container.textContent).toContain('Guided remediation')
     expect(container.textContent).toContain('Document preview')
+    // The guided detail can be taller than its allocated half (status summary, preview controls,
+    // audit trail). It must scroll inside that pane instead of painting over Document preview.
+    const guided = container.querySelector('.rinbox-guided-scroll')
+    expect(guided).toBeTruthy()
+    expect(guided.style.overflowY).toBe('auto')
+    expect(guided.style.overflowX).toBe('hidden')
     // In Split the preview divider is vertical; in Stacked it is horizontal.
     expect(sep('Resize the document preview').getAttribute('aria-orientation')).toBe('horizontal')
   })

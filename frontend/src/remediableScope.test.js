@@ -112,7 +112,7 @@ describe('an empty scope explains itself before the round trip', () => {
   const rem = code('Remediate.jsx')
 
   it('runServerRemediation refuses early and says why', () => {
-    expect(rem).toMatch(/if \(!scopeFiles \|\| scopeFiles\.length === 0\) \{/)
+    expect(rem).toMatch(/if \(scope\.length === 0\) \{/)
     expect(rem).toMatch(/setRemMsg\(emptyScopeReason\(files, scopeOpts\)\)/)
   })
 

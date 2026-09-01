@@ -698,7 +698,10 @@ export default function RemediationInbox({
         <div ref={wsRef} style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 480 }}>
           <div style={{ flex: `0 0 ${topFrac * 100}%`, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             {guidedHeader}
-            <div style={{ flex: '1 1 auto', minHeight: 0 }}>{guidedBody}</div>
+            <div className="rinbox-guided-scroll"
+                 style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
+              {guidedBody}
+            </div>
           </div>
           <Divider orientation="horizontal" label="Resize the document preview" value={topFrac * 100} min={25} max={75}
                    onDrag={dragTop} onNudge={(d) => setTopFrac((t) => clamp(t + d * 0.05, 0.25, 0.75))} />
@@ -713,7 +716,10 @@ export default function RemediationInbox({
           <div style={{ flex: layout === 'focus' ? '1 1 auto' : `0 0 ${centerW}%`, maxWidth: layout === 'focus' ? 'none' : `${centerW}%`,
                         minWidth: 0, display: 'flex', flexDirection: 'column' }}>
             {guidedHeader}
-            <div style={{ flex: '1 1 auto', minHeight: 0 }}>{guidedBody}</div>
+            <div className="rinbox-guided-scroll"
+                 style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
+              {guidedBody}
+            </div>
           </div>
 
           {/* ── Right: document preview (Split only — hidden in Focus) ── */}

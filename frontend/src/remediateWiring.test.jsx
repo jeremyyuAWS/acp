@@ -61,6 +61,17 @@ describe('the board core is mounted, not merely shipped', () => {
     }
   })
 
+  it('wires the deterministic batch to the durable Remediate run and live busy state', () => {
+    const s = rem()
+    const m = s.match(/<RemediationWork[^/]*?\/>/s)
+    expect(m, 'RemediationWork mount found').toBeTruthy()
+    expect(m[0]).toMatch(/onApplyAutomatic=\{readOnly \? undefined : runServerRemediation\}/)
+    expect(m[0]).toMatch(/applying=\{remBusy\}/)
+    // RemediationWork supplies filenames while the older page controls supply file records.
+    // Both must enter the same endpoint without producing an undefined scope.
+    expect(s).toMatch(/typeof f === 'string' \? f : f\?\.file/)
+  })
+
   it('feeds the approval queue the same items the review section reads', () => {
     // Two panels disagreeing about what is waiting for a decision is the four-denominator defect
     // in a new place. They read one queue.
