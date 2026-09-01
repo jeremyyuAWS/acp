@@ -1618,8 +1618,60 @@ class Store:
         self._scope_rules_cache: dict = {}
         self._inventory_cache: dict = {}
 
+    def _file_produced_no_result(self, f: dict) -> bool:
+        """Did this file's analysis fail to produce a result at all?
+
+        Three independent signals, because different writers reach the manifest with different
+        shapes and any one of them alone would miss a real case:
+
+          * `status` — what Rubric.assess returned. "error" is an engine that did not succeed;
+            "skipped" is a file deliberately not analysed (an ACP-generated shadow of its own
+            source, handlers.py). Neither looked at the document.
+          * `succeeded is False` — the raw engine flag, present on hand-built records and on
+            the storeless paths that never go through the rubric.
+          * an error carrying no `rule` — scanner.py:2696/2714 report whole-file failures as
+            `{"message": ..., "rule": None}`. Something failed that cannot be attributed to a
+            rule, so the rules it did not name cannot be claimed either.
+
+        Conservative on purpose: every one of these means "do not certify this file", and the
+        cost of being wrong in that direction is a warning, while the cost of being wrong in the
+        other is a compliance claim about a document nobody read.
+        """
+        if (f.get("status") or "").lower() in ("error", "skipped"):
+            return True
+        if f.get("succeeded") is False:
+            return True
+        return any(not (isinstance(e, dict) and e.get("rule")) for e in (f.get("errors") or []))
+
     def _save_file_manifest(self, cur, sid: str, f: dict, catalog: dict) -> None:
-        """Compute and persist the per-rule execution manifest for one file."""
+        """Compute and persist the per-rule execution manifest for one file.
+
+        WHAT THIS USED TO RECORD, AND WHY IT WAS WORSE THAN RECORDING NOTHING. Every rule in the
+        file's catalog that was not in `issues` and not in `errors` was written PASS. Two things
+        made that a certification of work that was never done, and both were measured against a
+        real Store rather than read off the source:
+
+          * `errors` IS NOT ON THE FILE DICT ON THE PRODUCTION PATH. Rubric.assess
+            (scripts/rubric.py:55) CONSUMES the engine's error list and returns `status` and
+            `skipped_rules` in its place; scanner.analyse_and_assess builds the record from
+            `**assessed`, so `f["errors"]` was absent on every production write. `error_ids` was
+            therefore always empty and the ERROR branch below was unreachable — which made
+            `rules_errored_total` structurally 0 and `complete` structurally true for every scan
+            this table has ever held.
+          * A file the engine could not open reaches here with no issues and no errors, so the
+            `else` claimed the whole catalog as PASS. Measured: a .docx that failed to open
+            recorded 17 PASS, 0 ERROR, completeness 100%, complete=true.
+
+        So a file that produced no result now records NOT_CHECKED for every applicable rule
+        rather than PASS. "We did not look" and "we looked and found nothing" are different
+        claims and only one of them may be certified; PASS was asserting the second on evidence
+        for neither.
+
+        `errors` is still read, and is now populated (scanner.py threads `raw["errors"]` onto the
+        record), because it is the only thing that says WHICH rules errored. Where it is absent
+        the count still survives on file_records.skipped_rules, and get_scan_manifest reports the
+        difference as unattributed rather than resolving it to PASS.
+        """
         ext = Path(f["file"]).suffix.lower().lstrip(".")
         rules = catalog.get(ext, [])
         if not rules:
@@ -1633,13 +1685,20 @@ class Store:
         counts: dict[str, int] = {}
         for i in f.get("issues", []):
             counts[i["ruleId"]] = counts.get(i["ruleId"], 0) + 1
+        # The default for a rule nothing said anything about. PASS only when the file was
+        # actually analysed; otherwise the honest answer is that it was never checked.
+        unchecked = self._file_produced_no_result(f)
         manifest_rows = []
         for rule in rules:
             rid = rule["id"]
             if rid in error_ids:
                 status = "ERROR"
             elif rid in fail_ids:
+                # A finding is evidence the rule ran, so it stays FAIL even on a file whose
+                # analysis failed overall — a partial result is still a result for that rule.
                 status = "FAIL"
+            elif unchecked:
+                status = "NOT_CHECKED"
             else:
                 status = "PASS"
             manifest_rows.append((sid, f["file"], rid, status, counts.get(rid, 0)))
@@ -5427,12 +5486,35 @@ class Store:
         """Return per-file rule-execution manifest for a scan.
 
         Each file lists every catalog rule and an explicit status:
-          PASS / FAIL / ERROR  — the rule applies to this file's format and ran
-          NOT_APPLICABLE       — the rule belongs to a different format (e.g. a
-                                 PPTX rule against a .docx). Recorded explicitly so
-                                 an auditor can see a rule was *considered*, not
-                                 silently omitted. N/A does not count against
-                                 completeness (completeness = checked / applicable).
+          PASS / FAIL         — the rule applies to this file's format and ran
+          ERROR               — the rule applies, was attempted, and the engine failed on it
+          NOT_CHECKED         — the rule applies and did NOT run. Its own status because the
+                                alternative was recording it PASS, which is a compliance claim
+                                about work never done (see _save_file_manifest).
+          NOT_APPLICABLE      — the rule belongs to a different format (e.g. a PPTX rule against
+                                a .docx). Recorded explicitly so an auditor can see a rule was
+                                *considered*, not silently omitted. N/A does not count against
+                                completeness (completeness = checked / applicable).
+
+        WHERE THE FILE LIST COMES FROM, AND WHY IT MOVED. This used to read
+        `SELECT DISTINCT file FROM scan_file_manifests`, which defines the scan's files as
+        "the files that have manifest rows" — so a file with none was not 0% complete, it was
+        ABSENT, and files_total under-reported the scan. _save_file_manifest returns early and
+        writes nothing whenever a file's extension has no catalog rules, so that was reachable
+        on any scan containing one. Measured: a two-file scan reported files_total 1.
+
+        The file list is now file_records — the scan's actual files — with the manifest table
+        unioned in so a manifest row can never be orphaned by a missing file record either. A
+        file with no rows is reported, with `reason` saying which kind of nothing it is:
+          no_manifest         — its format HAS rules and none were recorded. An integrity fault.
+          unsupported_format  — its format has no rules at all, so nothing was ever expected of
+                                it. Not a fault, and deliberately not counted as one.
+
+        UNATTRIBUTED ERRORS. `skipped_rules` on file_records is Rubric.assess's count of engine
+        errors, and it survives on paths where the error LIST does not (see _save_file_manifest).
+        Where that count exceeds the ERROR rows actually recorded, the difference is reported as
+        `rules_errored_unattributed` rather than resolved into PASS: the honest statement is
+        "N rules errored and which ones was not recorded", not "everything else passed".
         """
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -5440,14 +5522,19 @@ class Store:
                 "FROM scan_file_manifests WHERE scan_id=%s ORDER BY file, rule_id",
                 (scan_id,))
             rows = self._db.fetchall(cur)
-            # File extensions in this scan (to know each file's applicable rule set).
+            self._db.execute(cur,
+                "SELECT file, status, skipped_rules FROM file_records WHERE scan_id=%s",
+                (scan_id,))
+            records = {r["file"]: r for r in self._db.fetchall(cur)}
             self._db.execute(cur,
                 "SELECT DISTINCT file FROM scan_file_manifests WHERE scan_id=%s", (scan_id,))
-            scan_files = [r["file"] for r in self._db.fetchall(cur)]
+            manifest_files = [r["file"] for r in self._db.fetchall(cur)]
 
         catalog = self._full_catalog_rules()
         # Map every engine rule_id → its engine, for NOT_APPLICABLE derivation.
         all_rule_ids = {r["id"]: eng for eng, rules in catalog.items() for r in rules}
+        # The scan's files: what it recorded results for, plus anything with manifest rows.
+        scan_files = set(records) | set(manifest_files)
 
         by_file: dict[str, list[dict]] = {}
         for r in rows:
@@ -5458,40 +5545,91 @@ class Store:
             })
         files = []
         total_expected = total_checked = total_errored = total_na = 0
+        total_unchecked = total_unattributed = 0
         for fname in sorted(scan_files):
             rules = by_file.get(fname, [])
+            # Whether the scan RECORDED anything for this file, captured before the synthetic
+            # NOT_CHECKED rows below are added — `reason` and the completeness rules below both
+            # turn on it, and after the append `rules` can no longer answer it.
+            had_rows = bool(rules)
             applied_ids = {r["rule_id"] for r in rules}
+            record = records.get(fname) or {}
+            ext = Path(fname).suffix.lower().lstrip(".")
+            own_ids = {r["id"] for r in catalog.get(ext, [])}
+            catalog_size = len(own_ids)
+            # A file with NO rows still owes its own format's rules, so they are emitted as
+            # NOT_CHECKED here rather than swept into NOT_APPLICABLE with every other format's.
+            # Without this the summary counted them as missing (below) while the per-rule list
+            # called them not-applicable — the two halves of the same answer disagreeing, and the
+            # named-checks disclosure in the UI showing nothing for the very file it is about.
+            missing_own = ([{"rule_id": rid, "status": "NOT_CHECKED", "finding_count": 0}
+                            for rid in sorted(own_ids)] if not rules else [])
             # Rules from other formats → explicit NOT_APPLICABLE.
+            claimed = applied_ids | {r["rule_id"] for r in missing_own}
             na = [{"rule_id": rid, "status": "NOT_APPLICABLE", "finding_count": 0}
-                  for rid in sorted(all_rule_ids) if rid not in applied_ids]
-            expected = len(rules)
+                  for rid in sorted(all_rule_ids) if rid not in claimed]
+            rules = rules + missing_own
+
             errored = sum(1 for r in rules if r["status"] == "ERROR")
-            checked = expected - errored
-            total_expected += expected
-            total_checked += checked
-            total_errored += errored
+            unchecked = sum(1 for r in rules if r["status"] == "NOT_CHECKED")
+            # Errors the rubric counted but no row names. Never folded into `checked`.
+            unattributed = max(0, int(record.get("skipped_rules") or 0) - errored)
+            # A file with no rows at all is expected to have its whole catalog — `missing_own`
+            # above already put those rules in as NOT_CHECKED, so the gap reads as the size of
+            # what was skipped rather than as an empty, complete file.
+            expected = len(rules) or catalog_size
+            # Capped at what is left after the rules already accounted for. On a file where
+            # NOTHING ran, every rule is already NOT_CHECKED and the rubric's error count is a
+            # second description of the same gap — counting it again would report more missing
+            # rules than the file has.
+            unattributed = min(unattributed, max(0, expected - errored - unchecked))
+            checked = max(0, expected - errored - unchecked - unattributed)
+
+            reason = None
+            if not had_rows:
+                reason = "unsupported_format" if catalog_size == 0 else "no_manifest"
+            # An unsupported format expected nothing, so it is neither complete nor incomplete —
+            # it is out of scope, and must not drag the percentage down or up.
+            counts_towards_completeness = reason != "unsupported_format"
+            if counts_towards_completeness:
+                total_expected += expected
+                total_checked += checked
+                total_errored += errored
+                total_unchecked += unchecked
+                total_unattributed += unattributed
             total_na += len(na)
             files.append({
                 "file": fname,
+                "file_status": record.get("status"),
+                "reason": reason,
                 "rules_expected": expected,
                 "rules_checked": checked,
                 "rules_errored": errored,
+                "rules_not_checked": unchecked,
+                "rules_errored_unattributed": unattributed,
                 "rules_not_applicable": len(na),
-                "completeness_pct": round(checked / expected * 100) if expected else 100,
-                "complete": errored == 0,
+                "completeness_pct": (round(checked / expected * 100) if expected
+                                     else (100 if reason == "unsupported_format" else 0)),
+                "complete": (checked == expected) if counts_towards_completeness else True,
                 "rules": rules + na,
             })
+        # `complete` means every applicable rule on every file actually ran. It used to mean
+        # `rules_errored_total == 0`, which — with the ERROR branch unreachable — was true of
+        # every scan regardless of what happened during it.
+        incomplete = total_errored + total_unchecked + total_unattributed
         return {
             "scan_id": scan_id,
             "files_total": len(files),
             "rules_expected_total": total_expected,
             "rules_checked_total": total_checked,
             "rules_errored_total": total_errored,
+            "rules_not_checked_total": total_unchecked,
+            "rules_errored_unattributed_total": total_unattributed,
             "rules_not_applicable_total": total_na,
             "completeness_pct": (
                 round(total_checked / total_expected * 100) if total_expected else 100
             ),
-            "complete": total_errored == 0,
+            "complete": incomplete == 0,
             "files": files,
         }
 

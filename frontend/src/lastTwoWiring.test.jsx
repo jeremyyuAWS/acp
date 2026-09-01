@@ -57,8 +57,15 @@ describe('the per-file findings view is reachable', () => {
   it('it takes over the results rather than stacking on them', () => {
     // It carries its own Back and next-document controls, which only make sense for a view that
     // owns the screen — the same arrangement RunDetails already uses.
+    //
+    // The GUARD is the property, not which component happens to be first inside the fragment it
+    // gates. This read `<><AssessSummary` and went red when the Run integrity gate was added
+    // ahead of the summary — an unrelated, correct addition reported as a regression in this
+    // rule. So it now pins the guard, and separately pins that the summary is still inside it,
+    // which is what "takes over the results" actually means.
     const s = code('App.jsx')
-    expect(s).toMatch(/&& !runDetails && !assessFile && <><AssessSummary/)
+    expect(s).toMatch(/&& !runDetails && !assessFile && <>/)
+    expect(s).toMatch(/&& !runDetails && !assessFile && <>[\s\S]{0,400}?<AssessSummary\b/)
   })
 
   it('and App no longer imports the drawer it replaced', () => {

@@ -3686,7 +3686,14 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
             _frozen_scope = None
     assessed = rb.assess(raw["succeeded"], _scoped_for_scoring(raw["issues"], name, _frozen_scope),
                          raw["errors"])
+    # `errors` is carried alongside `**assessed` rather than being consumed by it. Rubric.assess
+    # turns the engine's error list into `status` + `skipped_rules` — a COUNT — and drops the
+    # list, so until now nothing downstream could say WHICH rules the engine failed on. The
+    # per-rule manifest read `f["errors"]` and therefore found an empty list on every production
+    # write, which made its ERROR status unreachable and `rules_errored_total` structurally zero.
+    # Additive: every existing reader picks named keys, and the rubric's own fields are unchanged.
     fdict = {"file": name, "engine": raw["engine"], **assessed, "issues": raw["issues"],
+             "errors": raw["errors"],
              "acp_stamped": detect_acp_stamp(tmp / name, ext),
              **_file_extent(tmp / name, ext)}
     # ADR 0020 stage 2 — Discover-side inventory classification (cheap container peek, no
