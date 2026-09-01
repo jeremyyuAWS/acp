@@ -2,10 +2,10 @@ import { useState, useEffect } from 'react'
 
 let _open = null
 
-export function confirm({ title, message, warning, variant = 'default', confirmLabel = 'Confirm', cancelLabel = 'Cancel' } = {}) {
+export function confirm({ title, message, warning, facts, variant = 'default', confirmLabel = 'Confirm', cancelLabel = 'Cancel' } = {}) {
   return new Promise((resolve) => {
     if (!_open) { resolve(window.confirm([message, warning].filter(Boolean).join('\n\n'))); return }
-    _open({ type: 'confirm', title, message, warning, variant, confirmLabel, cancelLabel, resolve })
+    _open({ type: 'confirm', title, message, warning, facts, variant, confirmLabel, cancelLabel, resolve })
   })
 }
 
@@ -21,6 +21,7 @@ const VARIANTS = {
   warning: { bg: 'linear-gradient(135deg,#d97706 0%,#f59e0b 100%)', icon: '⚠️', btnBg: '#d97706', btnShadow: '#d9770655' },
   danger:  { bg: 'linear-gradient(135deg,#dc2626 0%,#ef4444 100%)', icon: '🗑️', btnBg: '#dc2626', btnShadow: '#dc262655' },
   info:    { bg: 'linear-gradient(135deg,#7c3aed 0%,#6366f1 100%)', icon: '📋', btnBg: '#7c3aed', btnShadow: '#7c3aed55' },
+  activation: { bg: '#35233b', icon: '✓', btnBg: '#51314f', btnShadow: '#51314f44' },
 }
 
 export default function ConfirmDialog() {
@@ -36,19 +37,30 @@ export default function ConfirmDialog() {
       style={{ position:'fixed', inset:0, zIndex:9999, display:'flex', alignItems:'center',
         justifyContent:'center', background:'rgba(15,23,42,0.6)', backdropFilter:'blur(4px)',
         animation:'cd-fade .15s ease' }}>
-      <div style={{ width:'min(93vw,450px)', borderRadius:18, overflow:'hidden',
+      <div style={{ width:'min(93vw,520px)', borderRadius:16, overflow:'hidden',
         boxShadow:'0 32px 72px rgba(0,0,0,.38)', animation:'cd-slide .22s cubic-bezier(.22,1,.36,1)',
         background:'#ffffff' }}>
-        <div style={{ background:vt.bg, padding:'20px 24px 18px' }}>
-          <div style={{ fontSize:24, marginBottom:8 }}>{vt.icon}</div>
-          <div id="cd-title" style={{ color:'#fff', fontWeight:700, fontSize:16.5, lineHeight:1.35 }}>
+        <div style={{ background:vt.bg, padding:'18px 22px', display:'flex', gap:12, alignItems:'center' }}>
+          <div aria-hidden="true" style={{ width:30, height:30, borderRadius:9, display:'grid', placeItems:'center',
+            fontSize:16, background:'rgba(255,255,255,.14)', color:'#fff' }}>{vt.icon}</div>
+          <div id="cd-title" style={{ color:'#fff', fontWeight:700, fontSize:17, lineHeight:1.35 }}>
             {state.title || (isAlert ? 'Notice' : 'Confirm action')}
           </div>
         </div>
         {state.message && (
-          <div style={{ padding:'18px 24px 0', fontSize:14.5, color:'#1e293b', lineHeight:1.65, whiteSpace:'pre-wrap' }}>
+          <div style={{ padding:'18px 22px 0', fontSize:14, color:'#1e293b', lineHeight:1.6, whiteSpace:'pre-wrap' }}>
             {state.message}
           </div>
+        )}
+        {Array.isArray(state.facts) && state.facts.length > 0 && (
+          <dl style={{ margin:'16px 22px 0', display:'grid', gridTemplateColumns:'repeat(3,minmax(0,1fr))',
+            border:'1px solid #e2e8f0', borderRadius:12, overflow:'hidden' }}>
+            {state.facts.map((fact, index) => <div key={fact.label} style={{ padding:'12px 13px', minWidth:0,
+              borderLeft:index ? '1px solid #e2e8f0' : 'none', background:'#f8fafc' }}>
+              <dt style={{ fontSize:10.5, textTransform:'uppercase', letterSpacing:'.05em', color:'#64748b', fontWeight:700 }}>{fact.label}</dt>
+              <dd style={{ margin:'5px 0 0', fontSize:13.5, lineHeight:1.35, color:'#172033', fontWeight:650, overflowWrap:'anywhere' }}>{fact.value}</dd>
+            </div>)}
+          </dl>
         )}
         {state.warning && (
           <div style={{ margin:'14px 24px 0', padding:'11px 15px',

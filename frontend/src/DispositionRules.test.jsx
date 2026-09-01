@@ -111,7 +111,7 @@ describe('the existing rules list', () => {
     listDispositionPolicies.mockResolvedValue(RULES)
     await render(); await expand(); await flush()
     expect(text()).toContain('1 of 2 rules enabled')
-    expect(text()).toContain('Disabled — tags nothing yet')
+    expect(text()).toContain('Off')
   })
 
   // Product rule 3. A pending answer and an empty answer are different facts.
@@ -262,8 +262,8 @@ describe('the existing rules list', () => {
     await render(); await expand(); await flush()
     await click(btnByText('Preview matches')); await flush()
     expect(text()).toContain("couldn't be evaluated")
-    expect(text()).toContain('department')
-    expect(text()).toContain('size_kb')
+    expect(text()).toContain('Department')
+    expect(text()).toContain('Larger than')
   })
 
   it('omits per-field counts when only one file is unable to evaluate', async () => {
@@ -275,9 +275,9 @@ describe('the existing rules list', () => {
     })
     await render(); await expand(); await flush()
     await click(btnByText('Preview matches')); await flush()
-    expect(text()).toContain('department')
+    expect(text()).toContain('Department')
     // No "(1)" when only one file — redundant next to the headline count
-    expect(text()).not.toMatch(/department\s*\(1\)/)
+    expect(text()).not.toMatch(/Department\s*\(1\)/)
   })
 
   it('falls back to generic message when unable_to_evaluate_fields is absent (old server)', async () => {
@@ -323,8 +323,10 @@ describe('the existing rules list', () => {
 
     await click(byLabel('Enable rule Superseded drafts')); await flush()
     expect(previewDispositionPolicy).toHaveBeenCalledWith('p2')
-    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('41 files (20% of your estate)') }))
-    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('tagged for deletion review') }))
+    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ facts: expect.arrayContaining([
+      expect.objectContaining({ label: 'Current matches', value: '41 files · 20%' }),
+      expect.objectContaining({ label: 'Effect', value: 'tagged for deletion review' }),
+    ]) }))
     expect(setDispositionPolicyEnabled).not.toHaveBeenCalled()   // declined
 
     confirmMock.mockResolvedValue(true)
