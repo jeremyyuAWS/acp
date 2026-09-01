@@ -23,6 +23,7 @@ export default function DiscoveryLifecycleResults({ rows, policies, scanId }) {
   const [lifecycleError, setLifecycleError] = useState('')
   const [reviewStatus, setReviewStatus] = useState('')
   const [reviewPolicy, setReviewPolicy] = useState('')
+  const [reviewCandidates, setReviewCandidates] = useState(false)
   useEffect(() => {
     let current = true
     setSummary(null); setRuleResults([]); setLifecycleError('')
@@ -52,11 +53,11 @@ export default function DiscoveryLifecycleResults({ rows, policies, scanId }) {
   return <section className="panel" aria-label="Lifecycle results for supported documents">
     {lifecycleError && <p role="alert">{lifecycleError}</p>}
     {summary && <LifecycleEstateSummary summary={summary}
-      onSelect={(status) => { setReviewStatus(status); setReviewPolicy(''); document.getElementById('lifecycle-review')?.scrollIntoView() }}
-      onReview={() => document.getElementById('lifecycle-review')?.scrollIntoView()}
+      onSelect={(status) => { setReviewStatus(status); setReviewPolicy(''); setReviewCandidates(false); document.getElementById('lifecycle-review')?.scrollIntoView() }}
+      onReview={() => { setReviewStatus(''); setReviewPolicy(''); setReviewCandidates(true); document.getElementById('lifecycle-review')?.scrollIntoView() }}
       onRules={() => document.getElementById('lifecycle-rules')?.scrollIntoView()} />}
-    {summary && <div id="lifecycle-rules"><LifecycleRuleLedger rules={ruleResults} onSelect={(policyId) => { setReviewPolicy(policyId); setReviewStatus(''); document.getElementById('lifecycle-review')?.scrollIntoView() }} /></div>}
-    {summary && <div id="lifecycle-review"><DispositionReviewWorkspace scanId={scanId} status={reviewStatus} policyId={reviewPolicy} /></div>}
+    {summary && <div id="lifecycle-rules"><LifecycleRuleLedger rules={ruleResults} integrity={summary.integrity} onSelect={(policyId) => { setReviewPolicy(policyId); setReviewStatus(''); setReviewCandidates(false); document.getElementById('lifecycle-review')?.scrollIntoView() }} /></div>}
+    {summary && <div id="lifecycle-review"><DispositionReviewWorkspace scanId={scanId} status={reviewStatus} policyId={reviewPolicy} candidateOnly={reviewCandidates} /></div>}
     <h2>Lifecycle results · supported documents</h2>
     <p className="muted">PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), including their Google equivalents. Results are saved from this scan; changing a rule requires a new scan.</p>
     {error && <p role="alert">{error}</p>}

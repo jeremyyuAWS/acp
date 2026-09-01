@@ -480,10 +480,11 @@ export const getLifecycleSummary = (scanId) => (SIM
 export const getLifecycleRuleResults = (scanId) => (SIM
   ? sim({ scan_id: scanId, data_version: null, rules: [] })
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/lifecycle/rules`, { headers: headers() }).then(j))
-export const getLifecycleFiles = (scanId, { status = '', policyId = '', offset = 0, limit = 200 } = {}) => {
+export const getLifecycleFiles = (scanId, { status = '', policyId = '', candidateOnly = false, offset = 0, limit = 200 } = {}) => {
   const qs = new URLSearchParams({ offset: String(offset), limit: String(limit) })
   if (status) qs.set('status', status)
   if (policyId) qs.set('policy_id', policyId)
+  if (candidateOnly) qs.set('candidate_only', 'true')
   return SIM ? getScanInventory(scanId, { offset, limit })
     : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/lifecycle/files?${qs}`, { headers: headers() }).then(j)
 }

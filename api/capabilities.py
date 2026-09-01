@@ -53,6 +53,19 @@ class Capability(str, Enum):
     ARIA = "aria"                    # explicit role/name/state annotations
     CSS = "css"                      # computed presentation, incl. responsive behaviour
     IMAGES = "images"                # embedded pictures/drawings carrying alt-text metadata
+    # ── time-based media ─────────────────────────────────────────────────────────────────
+    # Substrate, not accessibility, exactly as the class docstring requires. MEDIA_STREAMS is
+    # "the container's stream layout could be read"; AUDIO_TRACK is "one of those streams is
+    # audio". Neither says anything about captions — whether a caption track is PRESENT is what
+    # the 1.2.x detector concludes, and putting it here would be declaring the answer as a
+    # property of the format.
+    #
+    # MEDIA_STREAMS earns its place as a separate capability because its absence is the
+    # fail-closed signal: no ffmpeg, or bytes ffmpeg cannot parse, and the adapter advertises
+    # NOTHING. A rule requiring it then reports the missing capability by name instead of
+    # running a technique across an unknown.
+    MEDIA_STREAMS = "media_streams"  # a readable container: stream layout and duration
+    AUDIO_TRACK = "audio_track"      # a decodable audio stream inside that container
 
 
 # Baseline per format — what the CURRENT parsers reliably reach for a typical document of
@@ -105,9 +118,19 @@ BASELINE: dict[str, frozenset[Capability]] = {
         Capability.READING_ORDER, Capability.DOM, Capability.ARIA, Capability.CSS,
         Capability.TAG_TREE,
     }),
+    # "av" is the estate_inventory format bucket for standalone audio/video, and the key is that
+    # string deliberately — scan_formats' header states its keys are "the same strings
+    # estate_inventory._format_of returns", so inventing "media" here would have required a
+    # translation layer between three modules that currently need none.
+    #
+    # Two capabilities and no more. A media container carries no TEXT this codebase can read, no
+    # STRUCTURE, no COLOR that a contrast rule could sample: every criterion about the PICTURE in
+    # a video needs rendering and frame analysis that nothing here does. Listing those to make
+    # media look better covered is the exact drift this layer exists to stop.
+    "av": frozenset({Capability.MEDIA_STREAMS, Capability.AUDIO_TRACK}),
 }
 
-FORMATS: tuple[str, ...] = ("docx", "xlsx", "pptx", "pdf", "html")
+FORMATS: tuple[str, ...] = ("docx", "xlsx", "pptx", "pdf", "html", "av")
 
 
 def capabilities_for(fmt: str, path: Path | None = None) -> frozenset[Capability]:
@@ -188,9 +211,44 @@ def _looks_scanned(path: Path) -> bool:
         return False       # can't tell -> don't claim it; the baseline stands
 
 
+def _av_adapter(path: Path, base: frozenset[Capability]) -> frozenset[Capability]:
+    """Narrow the media baseline to what THIS container actually holds.
+
+    Two narrowings, and the first is the important one.
+
+    NO PROBE AT ALL -> NO CAPABILITIES. `media.probe` returns None when ffmpeg is absent or the
+    bytes are not media, and that is categorically different from a file with nothing in it. An
+    empty set makes every 1.2.x rule report the missing capability by name, so a deployment that
+    lost ffmpeg abstains loudly instead of certifying video nobody opened. This is #1082's
+    fail-closed rule expressed on the capability axis.
+
+    NO AUDIO STREAM -> NO AUDIO_TRACK. A screen recording with no narration cannot be captioned
+    (1.2.2) and cannot need a transcript of its soundtrack (1.2.1); it needs an audio description
+    or a text alternative, which is 1.2.3 and is not claimed anywhere yet. Dropping the capability
+    is what makes those rules say "this document does not expose an audio track" rather than
+    inventing a finding a reviewer cannot act on.
+
+    CATCHES ITS OWN EXCEPTIONS rather than relying on `capabilities_for`'s. That wrapper falls
+    back to the BASELINE, which here is the full set — the opposite of what an unreadable file
+    should advertise. The generic fallback is right for formats whose baseline is a conservative
+    floor and wrong for one whose baseline presumes the engine ran.
+    """
+    try:
+        import media
+        info = media.probe(path)
+    except Exception:
+        return frozenset()
+    if info is None:
+        return frozenset()
+    caps = {Capability.MEDIA_STREAMS}
+    if info.has_audio:
+        caps.add(Capability.AUDIO_TRACK)
+    return frozenset(caps & base)
+
+
 # Per-format capability adapters. A format with no entry simply uses its baseline — adding a
 # new format is a BASELINE entry, and an adapter only when per-document narrowing matters.
-_ADAPTERS: dict[str, object] = {"pdf": _pdf_adapter}
+_ADAPTERS: dict[str, object] = {"pdf": _pdf_adapter, "av": _av_adapter}
 
 
 def missing(required: frozenset[Capability] | set[Capability],

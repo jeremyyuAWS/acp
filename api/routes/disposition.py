@@ -718,6 +718,154 @@ def approve_disposition(audit_id: str, request: Request,
     return core.store.get_disposition_audit(audit_id, owner=owner)
 
 
+class BatchApprovalIn(BaseModel):
+    audit_ids: list[str]
+    policy_id: str
+    policy_version: int
+    action: str
+    reason: str | None = None
+
+
+@router.post("/disposition/approvals")
+def approve_disposition_batch(body: BatchApprovalIn, request: Request):
+    """Approve a HOMOGENEOUS batch of queued dispositions, by explicit id (PRD §8).
+
+    The per-row sibling below approves one audit id and executes it. This exists because a
+    reviewer facing 684 archive candidates will not click 684 times, and the shape that
+    replaces those clicks is where a review queue becomes dangerous. Every rule here is one
+    the PRD states, and each is a way a bulk approval can mean more than the reviewer meant:
+
+      §11  EXPLICIT IDS ONLY. The caller sends the ids it displayed. There is deliberately no
+           filter-based variant — "approve everything matching X" re-expands at execute time to
+           whatever matches THEN, which is not what anyone reviewed. store's batch reader takes
+           ids and nothing else for the same reason.
+      §8   HOMOGENEOUS. Every row must share the policy, the policy VERSION and the action the
+           caller named. A batch that mixes them is refused whole, not partially applied: the
+           confirmation the reviewer read ("archive 40 files under Retention v3") has to be true
+           of every row it covers.
+      §11  THE VERSION MUST STILL BE CURRENT. If the policy has been edited since these rows
+           were queued, the reviewer is approving an explanation that no longer describes the
+           rule. Refused, with the version they asked for and the version that exists now.
+      §11  LEGAL HOLD / EXEMPT IS FAIL-CLOSED AND RE-CHECKED HERE, immediately before the
+           decision lands, not merely when the candidate was queued. An exemption added during
+           review must win.
+      §8   A DESTRUCTIVE ACTION NEEDS A STATED REASON. delete/trash always; the reason is
+           recorded on every row so the audit answers "why" without a second lookup.
+      §8   A PARTIAL BATCH IS NEVER REPORTED AS SUCCESS. The response reconciles: approved +
+           refused + already_decided == submitted, and every refusal names its row and its cause.
+
+    Idempotent on (doc_id, policy_version, action) via the audit row's own identity: a row that
+    already moved out of pending_approval is reported as already_decided rather than approved a
+    second time, so a double-submitted batch cannot double-count.
+
+    RECORDS THE DECISION ONLY — this never touches a source file. Execution stays on the
+    per-row /approve path, which is the one that holds the connector semantics (and today only
+    supports Drive). Approving in bulk and executing per row is deliberate: it is the ordering
+    that lets a legal hold added between the two still stop the mutation.
+    """
+    _require_owner(request)                     # authorises archival of the estate — owner-only
+    owner = _owner(request)
+    submitted = list(dict.fromkeys(body.audit_ids))     # de-duped, order preserved
+    if not submitted:
+        raise HTTPException(400, "no audit ids submitted")
+    if body.action in ("delete", "trash") and not (body.reason or "").strip():
+        raise HTTPException(400, "a delete approval must state a reason")
+
+    policy = core.store.get_disposition_policy(body.policy_id, owner=owner)
+    if policy is None:
+        raise HTTPException(404, "no such policy")
+    current_version = int(policy.get("version") or 1)
+    if current_version != body.policy_version:
+        raise HTTPException(409, f"policy {body.policy_id} is now version {current_version}, "
+                                 f"not the version {body.policy_version} these rows were queued "
+                                 f"under — re-evaluate before approving")
+
+    rows = {r["id"]: r for r in core.store.list_disposition_audit_by_ids(submitted, owner)}
+    # Homogeneity is checked across the WHOLE batch before anything is written, so a mixed
+    # submission changes nothing at all rather than applying its consistent prefix.
+    mixed = [rid for rid, r in rows.items()
+             if r.get("policy_id") != body.policy_id
+             or int(r.get("policy_version") or 0) != body.policy_version
+             or r.get("action") != body.action]
+    if mixed:
+        raise HTTPException(409, f"{len(mixed)} of {len(submitted)} rows are not "
+                                 f"{body.action}/{body.policy_id} v{body.policy_version} "
+                                 f"({', '.join(sorted(mixed)[:5])}) — nothing was approved")
+
+    approved, refused, already = [], [], []
+    detail = f"approved in batch under {body.policy_id} v{body.policy_version}"
+    if (body.reason or "").strip():
+        detail += f" — {body.reason.strip()}"
+    for audit_id in submitted:
+        row = rows.get(audit_id)
+        if row is None:
+            refused.append({"audit_id": audit_id, "why": "not found for this owner"})
+            continue
+        if row.get("result") != "pending_approval":
+            already.append({"audit_id": audit_id, "result": row.get("result")})
+            continue
+        # Re-read the lifecycle state NOW. Queued-then-exempted is the case this exists for.
+        held = _exempt_now(row.get("doc_id"), owner)
+        if held:
+            refused.append({"audit_id": audit_id, "why": held})
+            continue
+        core.store.set_disposition_audit_result(audit_id, "approved", detail)
+        approved.append(audit_id)
+        _trace_decision(row["doc_id"],
+                        (core.store.get_document(row["doc_id"]) or {}).get("path"),
+                        action=row["action"], status="approved",
+                        policy_id=row["policy_id"], reason=detail)
+
+    core.store.log_decision(owner, "disposition.batch_approved",
+                            detail=f"{len(approved)} approved, {len(refused)} refused, "
+                                   f"{len(already)} already decided — {body.action} under "
+                                   f"{body.policy_id} v{body.policy_version}")
+    return {"submitted": len(submitted), "approved": approved, "refused": refused,
+            "already_decided": already,
+            # The reconciliation the PRD asks for, computed here rather than left to the client:
+            # a caller that only reads len(approved) still cannot mistake a partial for a whole.
+            "reconciled": len(approved) + len(refused) + len(already) == len(submitted),
+            "executed": False}
+
+
+def _exempt_now(doc_id: str | None, owner: str) -> str | None:
+    """Why this document must not be dispositioned right now, or None (PRD §11).
+
+    Reads scan_inventory, NOT documents. The first draft of this called get_document and asked
+    it for `lifecycle_status` — a column that table does not have, so it read None, compared it
+    to "Exempted", and let every row through. A fail-OPEN safety check that looks exactly like a
+    fail-closed one is worse than no check, because the route's docstring then promises
+    something nothing enforces.
+
+    The lifecycle evaluator stamps `scan:{scan_id}:{file}` as the doc id (handlers.py), which is
+    what makes the real state reachable. Any OTHER id shape is refused rather than guessed at:
+    those rows come from paths this batch route was not written for, and they remain approvable
+    one at a time on /approvals/{audit_id}/approve.
+
+    A file that was ALREADY exempt never reaches here — the evaluator skips it before an audit
+    row exists. The case this catches is the one that matters: queued as a candidate, then
+    exempted while the reviewer was still reading the queue."""
+    if not doc_id:
+        return "no document id on the audit row"
+    if not str(doc_id).startswith("scan:"):
+        return ("not a discover-lifecycle candidate — approve this row individually")
+    try:
+        _, scan_id, file = str(doc_id).split(":", 2)
+        # Owner-scoped already: the row came back from list_disposition_audit_by_ids, which
+        # filters on owner_email, so this is a re-read of a row this caller may see.
+        state = core.store.get_lifecycle_status(scan_id, file) or {}
+    except Exception:                            # noqa: BLE001 — refuse, never approve blindly
+        return "lifecycle state could not be re-checked"
+    status = str(state.get("lifecycle_status") or "")
+    if status in ("Exempted", "Deleted", "Archived"):
+        return f"document is now {status} — excluded from bulk disposition"
+    if (state.get("lifecycle_override_reason") or "").strip():
+        # A human already said "keep this". Approving the rule's recommendation in a batch
+        # would silently overturn a reasoned individual decision.
+        return "a reviewer has overridden this recommendation — approve it individually or clear the override"
+    return None
+
+
 @router.post("/disposition/approvals/{audit_id}/reject")
 def reject_disposition(audit_id: str, request: Request):
     """Decline the queued action. Recorded (result=rejected), never re-queued

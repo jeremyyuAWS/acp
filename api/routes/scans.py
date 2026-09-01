@@ -1490,13 +1490,18 @@ def lifecycle_rule_results(sid: str, request: Request):
 
 @router.get("/scans/{sid}/lifecycle/files")
 def lifecycle_files(sid: str, request: Request, status: str | None = Query(None),
-                    policy_id: str | None = Query(None), offset: int = Query(0, ge=0),
+                    policy_id: str | None = Query(None), candidate_only: bool = Query(False),
+                    offset: int = Query(0, ge=0),
                     limit: int = Query(200, ge=1, le=1000)):
     owner = _lifecycle_scan_owner(sid, request)
     rows = core.store.list_lifecycle_files(sid, owner, status=status, policy_id=policy_id,
+                                           candidate_only=candidate_only,
                                            limit=limit, offset=offset)
+    total = core.store.count_lifecycle_files(sid, owner, status=status, policy_id=policy_id,
+                                             candidate_only=candidate_only)
     return {"scan_id": sid, "data_version": core.store.lifecycle_data_version(sid),
-            "offset": offset, "limit": limit, "rows": [_inv_capability(r) for r in rows]}
+            "total": total, "offset": offset, "limit": limit,
+            "rows": [_inv_capability(r) for r in rows]}
 
 
 @router.get("/scans/{sid}/lifecycle/files/{document_id:path}")
@@ -1533,10 +1538,15 @@ def scan_inventory_csv(sid: str, request: Request):
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(cols)
+    # ONE grouped read for the whole scan, not lifecycle_file_detail per row. This loop is
+    # unbounded by construction ("it IS the export"), and that call costs two queries each, so
+    # the estate that most needs an export — 6,000+ files — paid ~12,000 round trips for it.
+    # tests/test_inventory_read_amplification.py measures ROWS and so was blind to this: with no
+    # evaluations recorded the extra queries return nothing at all. Its new sibling counts queries.
+    evaluations_by_document = core.store.lifecycle_evaluations_by_document(sid, _owner(request))
     for r in core.store.list_inventory(sid):
         e = _inv_capability(r)
-        detail = core.store.lifecycle_file_detail(sid, r.get("file"), _owner(request)) or {}
-        evaluations = detail.get("evaluations") or []
+        evaluations = evaluations_by_document.get(r.get("file")) or []
         winning = next((x for x in evaluations if str(x.get("policy_id")) == str(r.get("lifecycle_rule_id"))), None)
         if winning:
             e["policy_version"] = winning.get("policy_version")

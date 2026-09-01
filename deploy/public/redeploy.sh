@@ -30,6 +30,7 @@ RG="${ACP_RG:-mdk-accessibility}"
 ACR="${ACP_ACR:-mdkaccessibilityacr}"
 APP="${ACP_APP:-acp-app}"
 WORKER="${ACP_WORKER:-acp-worker}"
+DISCOVERY_WORKER="${ACP_DISCOVERY_WORKER:-acp-discovery}"
 BUILD_TZ="${BUILD_TZ:-America/Los_Angeles}"
 MIN_MODULES=41                  # engine/pdf-analyser is tracked; this guards against truncation
 DRY="${ACP_DRY_RUN:-0}"
@@ -342,13 +343,16 @@ if [ "$BG" = 1 ]; then
   az containerapp ingress traffic set "${AZ[@]}" -g "$RG" -n "$APP" \
     --revision-weight "$GREEN=100" "$BLUE=0" >/dev/null
 
-  say "cutting $WORKER over to the same image (NOT blue-green — see header)"
+  say "cutting $WORKER + $DISCOVERY_WORKER over to the same image (NOT blue-green — see header)"
   az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER" --image "$IMG" --no-wait >/dev/null
-  printf '  %s ' "$WORKER"
-  for _ in $(seq 1 60); do
-    img="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$WORKER" --query properties.template.containers[0].image -o tsv 2>/dev/null || true)"
-    [ "$img" = "$IMG" ] && { printf ' ✓\n'; break; }
-    printf '.'; sleep 5
+  az containerapp update "${AZ[@]}" -g "$RG" -n "$DISCOVERY_WORKER" --image "$IMG" --no-wait >/dev/null
+  for a in "$WORKER" "$DISCOVERY_WORKER"; do
+    printf '  %s ' "$a"
+    for _ in $(seq 1 60); do
+      img="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$a" --query properties.template.containers[0].image -o tsv 2>/dev/null || true)"
+      [ "$img" = "$IMG" ] && { printf ' ✓\n'; break; }
+      printf '.'; sleep 5
+    done
   done
 
   # Verified through the PUBLIC url, not green's. Green being healthy proves green is healthy;
@@ -383,11 +387,12 @@ fi
 # Same image, different entrypoint. Scanning happens in the worker, so updating only the app
 # ships the fixes nowhere useful. --no-wait so the two revisions provision in parallel and the
 # window where they run different images is as short as it can be.
-say "updating $APP + $WORKER concurrently"
+say "updating $APP + $WORKER + $DISCOVERY_WORKER concurrently"
 az containerapp update "${AZ[@]}" -g "$RG" -n "$APP"    --image "$IMG" --no-wait >/dev/null
 az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER" --image "$IMG" --no-wait >/dev/null
+az containerapp update "${AZ[@]}" -g "$RG" -n "$DISCOVERY_WORKER" --image "$IMG" --no-wait >/dev/null
 
-for a in "$APP" "$WORKER"; do
+for a in "$APP" "$WORKER" "$DISCOVERY_WORKER"; do
   printf '  %s ' "$a"
   for _ in $(seq 1 60); do
     img="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$a" --query properties.template.containers[0].image -o tsv 2>/dev/null || true)"
