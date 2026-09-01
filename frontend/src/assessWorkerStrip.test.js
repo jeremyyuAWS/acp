@@ -50,7 +50,8 @@ describe('the worker strip does not render a count it cannot measure', () => {
 
   it('the two counts that ARE measured are still rendered', () => {
     // Deleting the dead category must not take the live ones with it.
-    expect(code).toMatch(/processingCount\s*=\s*liveQueue \? liveQueue\.workersBusy : 0/)
+    expect(code).toMatch(/activeFiles\s*=\s*activeAssessmentFiles\(workerSnap\?\.jobs, runId\)/)
+    expect(code).toMatch(/processingCount\s*=\s*Math\.max\(liveQueue\?\.workersBusy \?\? 0, activeFiles\.size\)/)
     expect(code).toMatch(/\{processingCount > 0 &&/)
     expect(code).toMatch(/\{brokerQueued > 0 &&/)
     expect(code).toMatch(/completed/)

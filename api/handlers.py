@@ -2210,6 +2210,15 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # "discovered" with any of this still unwritten — a status can lag behind what's true, but
         # what it says has to already be true when it's said.
         core.store.set_scan_status(scan_id, "discovered")
+        # Discovery is complete and independent at this point. Holding this source slot until
+        # Assess finishes blocks later inventory runs even though no listing is still active.
+        # Release only after the durable discovered state is visible; acquire_discovery_guard
+        # also reconciles from discovered_at if the worker dies between these two writes.
+        try:
+            core.store.release_discovery_guard(scan_id)
+        except Exception:
+            logger.warning("_scan_discover: failed to release discovery guard for %s",
+                           scan_id, exc_info=True)
         return
     if not items:
         core.store.enqueue_job("scan_finalize",

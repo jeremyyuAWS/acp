@@ -50,6 +50,29 @@ def test_first_fetch_returns_200_with_an_etag(client, isolated_store):
     assert r.status_code == 200
     assert r.json()["run"]["id"] == "s1"
     assert r.headers["etag"] == 'W/"0"', "a freshly-created scan has never had its revision bumped"
+    assert r.headers["cache-control"] == "private, no-cache"
+
+
+def test_each_assessed_file_invalidates_the_discovery_payload(client, isolated_store):
+    _seed(isolated_store, "s1")
+    old_etag = client.get("/scans/s1").headers["etag"]
+
+    isolated_store.save_file_result("s1", {
+        "file": "policy.docx", "engine": "office", "status": "assessed", "score": 82,
+        "compliant": 1, "skipped_rules": 0, "issues": [],
+    }, "2026-08-30T00:00:00Z")
+
+    fresh = client.get("/scans/s1", headers={"If-None-Match": old_etag})
+    assert fresh.status_code == 200
+    assert fresh.headers["etag"] == 'W/"1"'
+    assert [f["file"] for f in fresh.json()["files"]] == ["policy.docx"]
+
+
+def test_remediation_progress_is_never_cacheable(client, isolated_store):
+    _seed(isolated_store, "s1")
+    r = client.get("/scans/s1/remediation-status")
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "no-store"
 
 
 def test_matching_if_none_match_returns_304_with_no_body(client, isolated_store):
