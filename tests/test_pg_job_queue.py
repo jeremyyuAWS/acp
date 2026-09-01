@@ -53,6 +53,11 @@ pytestmark = pytest.mark.skipif(
 def pg():
     """A Store on the real Postgres, with the queue tables emptied first.
 
+    GUARDED. This wipes every base table in `public`, and until require_disposable_postgres was
+    added the only thing standing between that and someone's real database was `skipif(not
+    DATABASE_URL)`. Running `pytest tests/` with DATABASE_URL pointed anywhere real destroyed it,
+    silently, and the suite stayed green because CI happens to point at a throwaway container.
+
     TRUNCATE rather than a fresh database per test: the schema is already applied (Store's own
     init_schema saw to that) and re-creating 40 tables per test would dominate the runtime of a
     file whose point is concurrency. CASCADE because jobs/scan_runs are referenced elsewhere;
@@ -60,9 +65,14 @@ def pg():
     re-run the whole migration.
     """
     import psycopg2
+    from conftest import require_disposable_postgres
     st = store_mod.Store()
     conn = psycopg2.connect(_PG)
     conn.autocommit = True
+    # BEFORE the TRUNCATE, never after: this refuses any target that is not provably a throwaway,
+    # and it is handed the live connection so the SERVER is asked what database this actually is —
+    # the DSN is a claim, and PGDATABASE or a pooler can make it a false one.
+    require_disposable_postgres(_PG, conn=conn)
     with conn.cursor() as cur:
         cur.execute("""
             SELECT string_agg(quote_ident(table_name), ', ')
