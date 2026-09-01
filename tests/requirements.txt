@@ -16,3 +16,11 @@ pytest-xdist
 # Composes with -n auto/--dist loadfile: pytest-split selects the shard's subset, xdist
 # parallelises within it. Free-runner equivalent of a larger runner.
 pytest-split
+# Reads .github/workflows/*.yml in the workflow guards. It was previously UNDECLARED while
+# test_ci_alert_workflow.py gated itself on `pytest.importorskip("yaml")` — so on CI, which
+# installs exactly this file and api/requirements.txt, that module skipped on every run and had
+# never once executed. What it guards is ci-alert.yml, the thing that announces CI going red on
+# main; the 2026-08-20 outage in its docstring is an hour of silently skipped deploys. The guard
+# against that recurring was itself silent. See tests/test_undeclared_importorskip.py, which now
+# fails on any importorskip naming a dependency declared nowhere CI installs.
+PyYAML
