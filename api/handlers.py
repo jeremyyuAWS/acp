@@ -1195,7 +1195,8 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
                 _audit_id = hashlib.sha256(
                     f"discover:{scan_id}:{file}:{p['policy_id']}:tag".encode()).hexdigest()[:24]
                 audit_rows.append((_audit_id, doc_id, p["policy_id"], "tag",
-                                   "applied", "tagged: " + ", ".join(tags), actor))
+                                   "applied", "tagged: " + ", ".join(tags), actor,
+                                   int(p.get("version") or 1)))
                 lc_tagged_files.add(file)
                 seen.add(key)  # idempotent within this run
             if destructive_unevaluable:
@@ -1229,7 +1230,8 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
                 f"discover:{scan_id}:{file}:{chosen['policy_id']}:{chosen.get('action', '')}".encode()
             ).hexdigest()[:24]
             audit_rows.append((_audit_id, doc_id, chosen["policy_id"],
-                               chosen.get("action"), "pending_approval", reason, actor))
+                               chosen.get("action"), "pending_approval", reason, actor,
+                               version_by_policy.get(chosen["policy_id"], 1)))
             if chosen.get("action") == "archive":
                 lc_archive += 1
             elif chosen.get("action") == "delete":

@@ -132,10 +132,23 @@ def engine_status() -> dict:
 # ── probing ──────────────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class MediaInfo:
-    """What a container actually holds. `duration` is seconds; None when it could not be read."""
+    """What a container actually holds. `duration` is seconds; None when it could not be read.
+
+    `has_captions` is a fact about the CONTAINER, not about the estate: an .mp4 can carry its
+    captions internally as a mov_text stream, an .mkv as embedded WebVTT. A caption check that
+    looked only for a neighbouring .vtt would report a false positive on every correctly
+    captioned file of that shape — which is most broadcast and LMS output. The sidecar is the
+    other half and lives in `sidecar_captions`; a file is served if EITHER is true.
+
+    Defaulted to False rather than made required so no existing caller has to change. That is
+    safe here and would not be for `has_audio`: a wrong default of False on captions produces a
+    finding a human then dismisses, while a wrong default on audio would silence one. Neither is
+    ever reached by the missing-engine path, which returns None for the whole object.
+    """
     duration: float | None
     has_audio: bool
     has_video: bool
+    has_captions: bool = False
 
     @property
     def kind(self) -> str:
@@ -178,7 +191,8 @@ def _probe_with_ffprobe(exe: str, path: Path) -> MediaInfo | None:
         kinds = {s.get("codec_type") for s in data.get("streams", [])}
         raw = (data.get("format") or {}).get("duration")
         return MediaInfo(duration=_as_float(raw),
-                         has_audio="audio" in kinds, has_video="video" in kinds)
+                         has_audio="audio" in kinds, has_video="video" in kinds,
+                         has_captions="subtitle" in kinds)
     except Exception:
         return None
 
@@ -199,6 +213,11 @@ def _probe_with_ffmpeg(exe: str, path: Path) -> MediaInfo | None:
         return None
     has_audio = " Audio: " in err
     has_video = " Video: " in err
+    # " Subtitle: " is how ffmpeg's own stream banner names a caption track, verified against a
+    # real mov_text mux rather than assumed from the ffprobe codec_type spelling ("subtitle",
+    # lower case, no spaces). The two formats differ, and reading one off the other is the shape
+    # of mistake this repo keeps a section about.
+    has_captions = " Subtitle: " in err
     if not (has_audio or has_video):
         return None
     duration = None
@@ -208,7 +227,8 @@ def _probe_with_ffmpeg(exe: str, path: Path) -> MediaInfo | None:
             stamp = line.split("Duration:", 1)[1].split(",", 1)[0].strip()
             duration = _hhmmss_to_seconds(stamp)
             break
-    return MediaInfo(duration=duration, has_audio=has_audio, has_video=has_video)
+    return MediaInfo(duration=duration, has_audio=has_audio, has_video=has_video,
+                     has_captions=has_captions)
 
 
 def _as_float(v):

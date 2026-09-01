@@ -1490,13 +1490,18 @@ def lifecycle_rule_results(sid: str, request: Request):
 
 @router.get("/scans/{sid}/lifecycle/files")
 def lifecycle_files(sid: str, request: Request, status: str | None = Query(None),
-                    policy_id: str | None = Query(None), offset: int = Query(0, ge=0),
+                    policy_id: str | None = Query(None), candidate_only: bool = Query(False),
+                    offset: int = Query(0, ge=0),
                     limit: int = Query(200, ge=1, le=1000)):
     owner = _lifecycle_scan_owner(sid, request)
     rows = core.store.list_lifecycle_files(sid, owner, status=status, policy_id=policy_id,
+                                           candidate_only=candidate_only,
                                            limit=limit, offset=offset)
+    total = core.store.count_lifecycle_files(sid, owner, status=status, policy_id=policy_id,
+                                             candidate_only=candidate_only)
     return {"scan_id": sid, "data_version": core.store.lifecycle_data_version(sid),
-            "offset": offset, "limit": limit, "rows": [_inv_capability(r) for r in rows]}
+            "total": total, "offset": offset, "limit": limit,
+            "rows": [_inv_capability(r) for r in rows]}
 
 
 @router.get("/scans/{sid}/lifecycle/files/{document_id:path}")

@@ -518,6 +518,13 @@ _SCHEMA = [
     # rather than silently jumping ahead of rules that were already there.
     "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS priority INTEGER",
     "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1",
+    # The version of the policy AS EVALUATED, stamped on the audit row at discover time.
+    # PRD §8 permits a grouped approval only when every selected row shares a policy version,
+    # and §11 makes source mutations idempotent on (document_id, policy_version, action) — both
+    # are unanswerable from a row that only records which policy fired, not which version of it.
+    # Rows written before this column exists read NULL, and the batch route refuses them rather
+    # than guessing a version on a reviewer's behalf.
+    "ALTER TABLE disposition_audit ADD COLUMN IF NOT EXISTS policy_version INTEGER",
     "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS description TEXT",
     "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS updated_at TEXT",
     """CREATE TABLE IF NOT EXISTS lifecycle_evaluation (
@@ -1541,21 +1548,30 @@ class _PgAdapter:
     # (v3 was independently assigned to two different additive changes by two concurrent
     # sessions — this repo squash-merges, so both landed — and is renumbered to v4 here rather
     # than picking one side's checksum over the other's real, both-present DDL.)
-    # v5 was assigned TWICE, exactly as v3 was, and is resolved the same way — by renumbering to
-    # v6 over the union of both sides' DDL rather than picking either side's checksum. Two
-    # concurrent branches each bumped v4 -> v5 for their own additive change:
+    # v5 AND v6 were each assigned twice, exactly as v3 was, and are resolved the same way — by
+    # renumbering over the union of every side's DDL rather than picking one side's checksum.
+    # Three collisions on this one constant now (v3, v5, v6), all from concurrent branches that
+    # were each correct in isolation:
     #   * #1155's lifecycle control plane — disposition_policy gains version/description/
     #     updated_at, plus the lifecycle_evaluation and effective_disposition tables and indexes.
+    #   * #1169/#1170 — disposition_audit gains policy_version.
     #   * ADR 0047's seven ACR workspace tables and their indexes.
-    # Both really landed, so neither recorded checksum describes the schema that now exists;
-    # keeping either would tell a booting replica the DDL matches when half of it is missing from
-    # that hash. v6 is computed over the merged _SCHEMA below.
+    # Every one really landed, so no previously-recorded checksum describes the schema that now
+    # exists; keeping any of them would tell a booting replica the DDL matches while part of it is
+    # missing from that hash. v7 is computed over the merged _SCHEMA below.
     #
-    # Still additive, and additive in BEHAVIOUR on both halves. For the ACR tables the argument is
-    # simpler than v4's fence: a v5 replica has no ACR code at all, so it never reads or writes
-    # them — they are inert until a replica carrying api/acr_*.py serves a request against them.
-    _SCHEMA_VERSION = 6
-    _SCHEMA_CHECKSUM_AT_VERSION = "a71a719f2c5dc6fd9b51de81571be6db"
+    # WORTH NOTICING, because the pattern is the point rather than any one collision: this
+    # constant is hand-maintained and every long-lived branch that touches _SCHEMA collides on it,
+    # deterministically. The renumber-over-the-union rule resolves each instance correctly and does
+    # nothing to stop the next. Deriving the version from the checksum (bump iff the hash moved)
+    # would remove the class, but that changes migration bookkeeping for everyone and belongs in
+    # its own change, not smuggled into a feature branch's conflict resolution.
+    #
+    # Still additive, and additive in BEHAVIOUR on every half. For the ACR tables the argument is
+    # simpler than v4's fence: a replica without ACR code never reads or writes them — they are
+    # inert until a replica carrying api/acr_*.py serves a request against them.
+    _SCHEMA_VERSION = 7
+    _SCHEMA_CHECKSUM_AT_VERSION = "605d943c984907b641dd3e9ecc44c267"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -2705,11 +2721,45 @@ class Store:
             "unevaluable": counts.get("Unevaluable", 0) + counts.get("Conflict — review required", 0),
             "failed": counts.get("Failed", 0),
         }
+        candidate_count = normalized["archive_candidate"] + normalized["delete_candidate"]
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS evaluations,COUNT(DISTINCT document_id) AS evaluated_files,"
+                "COUNT(DISTINCT policy_id) AS recorded_rules FROM lifecycle_evaluation "
+                "WHERE scan_id=%s AND owner_email=%s", (scan_id, owner))
+            evidence = self._db.fetchone(cur) or {}
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM scan_inventory si WHERE si.scan_id=%s "
+                "AND si.lifecycle_status IN ('Archive Candidate','Delete Candidate') "
+                "AND EXISTS (SELECT 1 FROM lifecycle_evaluation le WHERE le.scan_id=si.scan_id "
+                "AND le.document_id=si.file AND le.policy_id=si.lifecycle_rule_id "
+                "AND le.owner_email=%s AND le.result IN ('matched','conflict'))", (scan_id, owner))
+            candidate_evidence = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            self._db.execute(cur, "SELECT scope FROM scan_runs WHERE id=%s AND owner_email=%s",
+                             (scan_id, owner))
+            run = self._db.fetchone(cur) or {}
+        scope = run.get("scope") or {}
+        if isinstance(scope, str):
+            try:
+                scope = json.loads(scope)
+            except Exception:
+                scope = {}
+        expected_rules = int(scope.get("lifecycle_rules_enabled") or 0)
+        recorded_rules = int(evidence.get("recorded_rules") or 0)
+        evidence_complete = (candidate_count == candidate_evidence and
+                             (expected_rules == 0 or recorded_rules >= expected_rules))
         return {"scan_id": scan_id, "total": total, "reconciled_total": sum(normalized.values()),
                 "counts": normalized,
                 "assessment_excluded": normalized["already_archived"] + normalized["archive_candidate"] + normalized["delete_candidate"] + normalized["deleted"],
                 "data_version": self.lifecycle_data_version(scan_id),
-                "recommendations_only": True}
+                "recommendations_only": True,
+                "integrity": {"evidence_complete": evidence_complete,
+                              "expected_rules": expected_rules,
+                              "recorded_rules": recorded_rules,
+                              "evaluations": int(evidence.get("evaluations") or 0),
+                              "evaluated_files": int(evidence.get("evaluated_files") or 0),
+                              "candidate_count": candidate_count,
+                              "candidates_with_evidence": candidate_evidence}}
 
     def lifecycle_data_version(self, scan_id: str) -> str | None:
         with self._db.cursor() as cur:
@@ -2732,7 +2782,8 @@ class Store:
             return self._db.fetchall(cur)
 
     def list_lifecycle_files(self, scan_id: str, owner: str, *, status: str | None = None,
-                             policy_id: str | None = None, limit: int = 200, offset: int = 0) -> list[dict]:
+                             policy_id: str | None = None, candidate_only: bool = False,
+                             limit: int = 200, offset: int = 0) -> list[dict]:
         where, args = ["si.scan_id=%s", "EXISTS (SELECT 1 FROM scan_runs sr WHERE sr.id=si.scan_id AND sr.owner_email=%s)"], [scan_id, owner]
         if status == "already_archived":
             where.append("COALESCE(si.lifecycle_status,'Active') IN ('Already archived','Archived')")
@@ -2740,6 +2791,8 @@ class Store:
             where.append("COALESCE(si.lifecycle_status,'Active') IN ('Unevaluable','Conflict — review required')")
         elif status:
             where.append("COALESCE(si.lifecycle_status,'Active')=%s"); args.append(status)
+        if candidate_only:
+            where.append("si.lifecycle_status IN ('Archive Candidate','Delete Candidate')")
         if policy_id:
             where.append("si.lifecycle_rule_id=%s"); args.append(policy_id)
         args.extend([limit, offset])
@@ -2748,6 +2801,23 @@ class Store:
                 f"SELECT {self._INV_COLS} FROM scan_inventory si WHERE {' AND '.join(where)} ORDER BY si.file LIMIT %s OFFSET %s",
                 tuple(args))
             return self._db.fetchall(cur)
+
+    def count_lifecycle_files(self, scan_id: str, owner: str, *, status: str | None = None,
+                              policy_id: str | None = None, candidate_only: bool = False) -> int:
+        where, args = ["si.scan_id=%s", "EXISTS (SELECT 1 FROM scan_runs sr WHERE sr.id=si.scan_id AND sr.owner_email=%s)"], [scan_id, owner]
+        if status == "already_archived":
+            where.append("COALESCE(si.lifecycle_status,'Active') IN ('Already archived','Archived')")
+        elif status == "unevaluable":
+            where.append("COALESCE(si.lifecycle_status,'Active') IN ('Unevaluable','Conflict — review required')")
+        elif status:
+            where.append("COALESCE(si.lifecycle_status,'Active')=%s"); args.append(status)
+        if candidate_only:
+            where.append("si.lifecycle_status IN ('Archive Candidate','Delete Candidate')")
+        if policy_id:
+            where.append("si.lifecycle_rule_id=%s"); args.append(policy_id)
+        with self._db.cursor() as cur:
+            self._db.execute(cur, f"SELECT COUNT(*) AS n FROM scan_inventory si WHERE {' AND '.join(where)}", tuple(args))
+            return int((self._db.fetchone(cur) or {}).get("n") or 0)
 
     def lifecycle_evaluations_by_document(self, scan_id: str, owner: str) -> dict[str, list[dict]]:
         """Every lifecycle evaluation in one scan, grouped by document_id, in ONE query.
@@ -9145,16 +9215,37 @@ class Store:
 
     def bulk_create_disposition_audit(self, rows: list) -> None:
         """Bulk-insert disposition audit rows accumulated by the lifecycle rule evaluator.
-        rows: list of (audit_id, doc_id, policy_id, action, result, detail, owner_email)."""
+        rows: (audit_id, doc_id, policy_id, action, result, detail, owner_email, policy_version).
+
+        policy_version is REQUIRED rather than defaulted: a row that cannot say which version of
+        a rule produced it can never be part of a grouped approval (PRD §8), and defaulting it to
+        1 would make a stale row look like a current one to the batch route."""
         if not rows:
             return
         now = self._now()
         with self._db.cursor() as cur:
             self._db.executemany(cur,
                 "INSERT INTO disposition_audit(id,ts,doc_id,policy_id,action,result,detail,"
-                "owner_email) VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
-                [(audit_id, now, doc_id, policy_id, action, result, detail, owner_email)
-                 for audit_id, doc_id, policy_id, action, result, detail, owner_email in rows])
+                "owner_email,policy_version) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(id) DO NOTHING",
+                [(audit_id, now, doc_id, policy_id, action, result, detail, owner_email, version)
+                 for audit_id, doc_id, policy_id, action, result, detail, owner_email, version
+                 in rows])
+
+    def list_disposition_audit_by_ids(self, audit_ids: list[str], owner: str) -> list[dict]:
+        """The batch a reviewer actually selected, in ONE query, owner-scoped.
+
+        PRD §11: "Bulk approval displays and submits explicit document ids; it never means 'all
+        current matches' at execute time." So this takes ids and nothing else — there is
+        deliberately no filter-based sibling that could re-expand to whatever matches now."""
+        if not audit_ids:
+            return []
+        placeholders = ",".join(["%s"] * len(audit_ids))
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT * FROM disposition_audit WHERE id IN ({placeholders}) AND owner_email=%s",
+                (*audit_ids, owner))
+            return self._db.fetchall(cur)
 
     def get_disposition_audit(self, audit_id: str, owner: str | None = None) -> dict | None:
         with self._db.cursor() as cur:

@@ -4,7 +4,12 @@ Target: `acp-discovery` in `mdk-accessibility`, same Container Apps environment 
 
 `ACP_WORKER_ROLE=processing` on the existing worker excludes `scan_discover` using the registered handler types. Default `mixed` preserves the existing topology. Invalid roles fail closed. Role selection applies at startup and live pool resizing. A processing pool with no eligible handlers claims nothing.
 
-Build the dedicated Dockerfile only against its pinned production base; it overlays the role-aware core without replacing the proven engines. Normal deployment scripts target `acp-app` and `acp-worker`, not `acp-discovery`. Updating Discovery is an explicit, independent action. Do not deploy an older core without role support to the processing tier.
+The normal production redeploy updates `acp-app`, `acp-worker`, and `acp-discovery` to the same
+version-stamped application image. The container app's `command: acp-worker` and
+`ACP_WORKER_ROLE=discovery` retain the dedicated role. This lockstep update is required: lifecycle
+evaluation schemas live in the shared handler/store code, and a stale Discovery image can write
+candidate statuses without the evidence ledger a newer API expects. The Dockerfile here remains
+for initial provisioning and explicit engine experiments, not routine releases.
 
 Cutover: create Discovery first with existing database/Redis credentials in secret references, no public ingress and no AI credentials; verify readiness and filtered claims. Wait until existing running jobs are idle before switching the old service to the role-aware image and `processing` role. Then reduce processing to one minimum replica, retaining its existing CPU autoscaling ceiling initially. Do not kill active scans to perform this step.
 
