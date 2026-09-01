@@ -61,23 +61,19 @@ def _scan(store, sid, folders=1):
 
 # ── the listing function itself ───────────────────────────────────────────────────────────────
 
-def test_a_drive_error_is_raised_rather_than_reported_as_an_empty_folder():
+def test_a_drive_error_is_raised_rather_than_reported_as_an_empty_folder(monkeypatch):
     import handlers
     import scanner
 
     def _boom(_svc, _fid):
         raise RuntimeError("drive: rateLimitExceeded")
 
-    orig = scanner._search_folder
-    scanner._search_folder = _boom
-    scanner._drive_service = lambda _t: object()
-    try:
-        with pytest.raises(Exception) as ei:
-            handlers._list_folder_files("drive", "fA", {"drive": "tok"})
-        assert "fA" in str(ei.value), "the error must name the folder it could not list"
-        assert "rateLimitExceeded" in str(ei.value), "the underlying cause must survive"
-    finally:
-        scanner._search_folder = orig
+    monkeypatch.setattr(scanner, "_search_folder", _boom)
+    monkeypatch.setattr(scanner, "_drive_service", lambda _t: object())
+    with pytest.raises(Exception) as ei:
+        handlers._list_folder_files("drive", "fA", {"drive": "tok"})
+    assert "fA" in str(ei.value), "the error must name the folder it could not list"
+    assert "rateLimitExceeded" in str(ei.value), "the underlying cause must survive"
 
 
 def test_a_missing_credential_dead_letters_immediately_instead_of_retrying_five_times():
@@ -98,18 +94,14 @@ def test_an_unsupported_source_is_an_error_not_an_empty_estate():
     assert "sharepoint" in str(ei.value)
 
 
-def test_a_readable_empty_folder_still_reports_empty():
+def test_a_readable_empty_folder_still_reports_empty(monkeypatch):
     """The control. Narrowing what counts as empty must not make a genuinely empty folder into an
     error — that would turn every empty subfolder in an estate into a dead-lettered job."""
     import handlers
     import scanner
-    orig = scanner._search_folder
-    scanner._search_folder = lambda _svc, _fid: []
-    scanner._drive_service = lambda _t: object()
-    try:
-        assert handlers._list_folder_files("drive", "fA", {"drive": "tok"}) == []
-    finally:
-        scanner._search_folder = orig
+    monkeypatch.setattr(scanner, "_search_folder", lambda _svc, _fid: [])
+    monkeypatch.setattr(scanner, "_drive_service", lambda _t: object())
+    assert handlers._list_folder_files("drive", "fA", {"drive": "tok"}) == []
 
 
 # ── end to end, through the queue ─────────────────────────────────────────────────────────────
