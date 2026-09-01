@@ -63,6 +63,7 @@ import { scanPhaseLine, NARRATION_STEPS, activityLine } from './phaseNarration.j
 import { useScanRefetch } from './scanRefetch.js'
 import ConfirmDialog from './ConfirmDialog.jsx'
 import { AdminInsights } from './AdminInsights.jsx'
+import AcrWorkspace from './AcrWorkspace.jsx'
 
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
 const SHOW_A11Y = import.meta.env.DEV || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('a11y'))
@@ -78,6 +79,10 @@ const TABS = [
   ['monitor',       'Monitor',       'track compliance',    5],
   ['analytics',     'Scan Analytics', 'compare scans',      0],
   ['graph',         'Knowledge Graph', 'explore findings',   0],
+  // ADR 0047 — ACP's OWN conformance against WCAG 2.2 A/AA, in VPAT form. Step 0 (not part of the
+  // numbered Discover→Monitor flow) because it is not about a customer's estate at all: the other
+  // tabs assess the documents ACP processes, this one assesses ACP.
+  ['acr',           'Conformance',   'ACR / VPAT',          0],
 ]
 
 function timeAgo(iso) {
@@ -737,7 +742,7 @@ export default function App() {
   const PRIV_PROFILE = {
     id: 'jeremy-yu', name: 'Jeremy Yu', role: 'Compliance Officer & Admin',
     scope: { label: 'Full estate · all departments', departments: 'all' },
-    allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'settings', 'analytics'],
+    allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'settings', 'analytics', 'acr'],
   }
   const PRIVILEGED = { 'jeremyyu.movate@gmail.com': PRIV_PROFILE }
 
@@ -2084,6 +2089,12 @@ export default function App() {
 
         {/* Admin-only analytics — backend gate (_require_admin) mirrors the allow check */}
         {view === 'analytics' && me.allow?.includes('analytics') && <AdminInsights me={me} />}
+
+        {/* ACP's own Accessibility Conformance Report (ADR 0047). No `run` gate: it is not about a
+            scan, and requiring one would make the tab unreachable on a fresh deploy. Every write
+            behind it is role-gated server-side (acr_authz) — a read-only visitor sees the report
+            and cannot change it, which is the same shape the backend enforces. */}
+        {view === 'acr' && <AcrWorkspace />}
 
         {/* Guided workflow: a "next step" CTA on each workflow tab once a scan exists.
             'discover' is excluded — it owns a sub-step CTA (Inventory → Classify → Actions → Assess). */}

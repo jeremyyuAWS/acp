@@ -115,6 +115,23 @@ def has_human_evaluation(evidence, stale_ids: set[str] | None = None) -> bool:
     return any(not e.is_automated for e in _live(evidence, stale_ids))
 
 
+def has_human_pass(evidence, stale_ids: set[str] | None = None) -> bool:
+    """Did a person exercise this criterion and RECORD A PASS?
+
+    Distinct from has_human_evaluation, and the distinction is the whole point. A tester who
+    opened the screen and marked the test `blocked` has evaluated it; they have not established
+    that it conforms. The automated row's own `pass` must not stand in for the positive result
+    they declined to give — which is exactly what "is there any passing row?" would let it do,
+    since the automated row is usually a pass.
+
+    Found by test_a_blocked_human_test_is_not_a_pass: the first version of this module asked
+    "human evaluation exists AND some row passed", and an axe-core pass beside a blocked keyboard
+    test drafted Supports.
+    """
+    return any((not e.is_automated) and e.result == RESULT_PASS
+               for e in _live(evidence, stale_ids))
+
+
 def may_draft(criterion_num: str, evidence, stale_ids: set[str] | None = None) -> tuple[str | None, str]:
     """What ACP may SUGGEST as a draft status, and why. Never a decision (PRD §4.2, §20).
 
@@ -152,11 +169,12 @@ def may_draft(criterion_num: str, evidence, stale_ids: set[str] | None = None) -
     # A human looked, and nothing failed — but "nothing failed" is not "something passed". A
     # criterion whose only human evidence is `blocked` (the tester could not complete the test) or
     # `not_applicable` has no positive result behind it, and drafting Supports there would invent
-    # the very conclusion the tester declined to reach.
-    if not any(e.result == RESULT_PASS for e in live):
-        recorded = sorted({e.result for e in live})
+    # the very conclusion the tester declined to reach. The automated row's own pass does not
+    # substitute: see has_human_pass.
+    if not has_human_pass(evidence, stale_ids):
+        recorded = sorted({e.result for e in live if not e.is_automated})
         return None, (
-            f"human evaluation recorded, but no passing result ({', '.join(recorded)}) — a "
+            f"human evaluation recorded, but no passing human result ({', '.join(recorded)}) — a "
             f"criterion with no positive result has nothing to support a conformance claim")
 
     return SUPPORTS, "human evaluation recorded with a passing result and no unresolved failures"
@@ -198,12 +216,6 @@ def may_select_final_status(status: str, *, criterion_num: str, evidence, remark
     if not live:
         return Verdict(False, "Supports requires supporting evidence (PRD §10, §21.6)")
 
-    blocked = [e for e in live if e.result == RESULT_BLOCKED]
-    if blocked and not any(e.result == RESULT_PASS for e in live):
-        return Verdict(False,
-                       "the only evaluation of this criterion was blocked — a blocked test is not "
-                       "a pass")
-
     failures = open_failures(evidence, stale_ids)
     if failures:
         newest = max(f.tested_at for f in failures)
@@ -222,6 +234,16 @@ def may_select_final_status(status: str, *, criterion_num: str, evidence, remark
                 f"automated pass proves nothing tripped the part the tool examines; it is silent "
                 f"about the rest of the criterion (PRD §4.3, ADR 0031). Record a manual "
                 f"evaluation."))
+
+    # Where a person has evaluated the criterion, THEIR result is the one that has to be a pass.
+    # An automated pass beside a blocked or not-applicable human test is not a conformance claim
+    # (see has_human_pass); where no person has evaluated it, the FULL-coverage branch above is
+    # the only way through, and it already required a clean automated result.
+    if has_human_evaluation(evidence, stale_ids) and not has_human_pass(evidence, stale_ids):
+        recorded = sorted({e.result for e in live if not e.is_automated})
+        return Verdict(False, (
+            f"no passing human result ({', '.join(recorded)}) — Supports requires a recorded "
+            f"result, not the absence of a failure. A blocked test is not a pass."))
 
     if not any(e.result == RESULT_PASS for e in live):
         return Verdict(False,
