@@ -312,13 +312,13 @@ Two more things that day's merges cost:
 
 CCR (cloud remote) sessions cannot call the `/merge` REST endpoint on protected branches — the
 proxy blocks it. The workaround is **auto-merge**: GitHub fires the squash itself once all required
-checks pass, and the `/automerge` endpoint is NOT blocked.
+checks pass.
 
 **The rule:** every PR must be opened **ready-for-review** (not draft) so auto-merge can be
 enabled, and auto-merge must be enabled immediately after `gh pr create` (or the equivalent API
 call). Do not create draft PRs on this repo.
 
-After creating the PR, enable auto-merge via the REST API:
+**Arm it by adding the `automerge` LABEL**, which is this repo's own gate:
 
 ```python
 import urllib.request, os, json
@@ -327,19 +327,39 @@ headers = {'Authorization': f'token {token}',
            'Accept': 'application/vnd.github.v3+json',
            'Content-Type': 'application/json',
            'User-Agent': 'python-urllib'}
-body = json.dumps({'merge_method': 'squash'}).encode()
 req = urllib.request.Request(
-    f'https://api.github.com/repos/jeremyyuAWS/acp/pulls/{pr_number}/automerge',
-    data=body, headers=headers, method='PUT')
+    f'https://api.github.com/repos/jeremyyuAWS/acp/issues/{pr_number}/labels',
+    data=json.dumps({'labels': ['automerge']}).encode(),
+    headers=headers, method='POST')
 with urllib.request.urlopen(req) as r:
-    print('auto-merge enabled:', r.status)
+    print('labels now:', [l['name'] for l in json.load(r)])
 ```
 
-Once that call succeeds, the PR merges itself when CI goes green — no further action needed. You
-can still subscribe to PR activity and notify the user when it merges, but do not poll for CI.
+`.github/workflows/auto-merge.yml` fires on `labeled` and runs `gh pr merge --auto --squash` under
+a GitHub App token. Read its policy before assuming a label is enough: **`hold-for-review` beats
+`automerge`**, a draft is skipped, and — the part worth knowing — a PR that is armed *without* the
+label gets its auto-merge **actively disabled** on the next event. So the label is not one of
+several ways to arm it; it is the authorisation, and arming around it is a change the workflow may
+undo.
+
+**`PUT /pulls/{n}/automerge` DOES NOT EXIST. This file recommended it, and it cannot work.**
+Measured 2026-09-01 with `GITHUB_TOKEN`: that call answers `404 Not Found` while
+`GET /user` returns `jeremyyuAWS` and `GET /pulls/1155` returns `200` on the same token in the same
+second — so it is the endpoint, not the scope. GitHub's auto-merge has no REST endpoint at all; it
+is the GraphQL mutation `enablePullRequestAutoMerge`, **and GraphQL is blocked in a CCR session**:
+
+    403 This GraphQL query is not enabled for this session — only the pinned set of
+        PR-review operations is served.
+
+Both halves of the documented workaround were therefore dead, which is why the label is the recipe.
+The `mcp__github__enable_pr_auto_merge` tool does work, but it arms the PR directly and so bypasses
+the policy gate above, and it spends the shared account rate limit (see the budget section) — on
+2026-09-01 it returned `API rate limit already exceeded for user ID 102616407` mid-session while
+`GITHUB_TOKEN` still had its full 15,000. Prefer the label; keep the tool for when the label is not
+appropriate, and say which you used.
 
 **Auto-merge means minutes, so a follow-up commit needs its OWN PR from the start.** Once
-`/automerge` is armed, the squash lands as soon as the required checks pass — routinely inside
+auto-merge is armed, the squash lands as soon as the required checks pass — routinely inside
 five minutes on this repo. A second commit pushed to that branch after the merge goes nowhere: the
 branch still exists, the push succeeds, and the work is simply not on `main`.
 

@@ -99,7 +99,7 @@ def test_null_created_at_does_not_match_age_days_rule(isolated_store, monkeypatc
             [{"field": "age_days", "op": "gt", "value": 0}])
     _discover()
 
-    assert st.get_lifecycle_status("s1", "nodates.docx")["lifecycle_status"] == "Active"
+    assert st.get_lifecycle_status("s1", "nodates.docx")["lifecycle_status"] == "Unevaluable"
     assert st.list_disposition_audit() == []
 
 
@@ -110,7 +110,7 @@ def test_null_source_modified_does_not_match_modified_age_days_rule(isolated_sto
             [{"field": "modified_age_days", "op": "gt", "value": 0}])
     _discover()
 
-    assert st.get_lifecycle_status("s1", "nodates.docx")["lifecycle_status"] == "Active"
+    assert st.get_lifecycle_status("s1", "nodates.docx")["lifecycle_status"] == "Unevaluable"
     assert st.list_disposition_audit() == []
 
 

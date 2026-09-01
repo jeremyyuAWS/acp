@@ -564,6 +564,58 @@ def download_content_workspace_document_version(workspace_id: str, document_id: 
 
 # ── Assess (connects a stored upload to the existing scan/assess engine) ────────
 
+@router.post("/content-workspaces/{workspace_id}/assess")
+def assess_content_workspace(workspace_id: str, request: Request):
+    """Assess EVERY eligible document in the workspace as ONE run — the Discover step of the
+    upload-first flow (ADR 0044).
+
+    The per-version endpoint below assesses one stored version and is the right call after a
+    single re-upload. This is the customer-facing one: upload a folder, then assess what was
+    uploaded, as a single run with a single total and a single completion.
+
+    Enumeration happens in the WORKER, not here. This route creates the run and one
+    workspace_scan_discover job; that handler lists the workspace and fans out. The listing is
+    therefore re-derived on every attempt from the authoritative table rather than frozen into a
+    payload at request time — so a document uploaded between this call and the worker claiming
+    the job is included, and a reclaimed job resumes the fan-out instead of repeating it.
+
+    The response deliberately reports the eligible/excluded split as it stands RIGHT NOW, as a
+    preview: it is what the caller needs to see to know the request did something, and it is
+    explicitly not a promise, because the authoritative count is the one the worker computes.
+    Marked as such in the payload rather than left to be mistaken for the final answer."""
+    owner = _owner(request)
+    _require_workspace(workspace_id, owner)
+    if not workspace_blob.enabled():
+        raise HTTPException(503, "workspace uploads are not configured on this deployment")
+
+    # Imported inside the function, the way every other route in this package reaches handlers
+    # (drive.py, disposition.py, scans.py all do). api/handlers.py imports the whole engine at
+    # module scope; pulling that in at import time here would put the route package on the wrong
+    # side of that dependency.
+    import handlers
+    eligible, excluded = handlers._workspace_scan_population(workspace_id, owner)
+    if not eligible:
+        # 409 rather than an empty 200: a run over nothing would finalize instantly at 0 of 0 and
+        # read as a successful assessment of the workspace. The reasons are returned so the
+        # caller can see WHY — "3 documents, all quarantined" is actionable; "nothing to do" is
+        # not.
+        raise HTTPException(409, {"error": "no documents are ready to assess",
+                                  "excluded": [{"file": f, "reason": r} for f, r in excluded]})
+
+    scan_id = uuid.uuid4().hex[:12]
+    scan_id, job_id = core.store.enqueue_scan(
+        scan_id, "workspace", owner, "workspace_scan_discover",
+        {"scan_id": scan_id, "workspace_id": workspace_id, "user": owner},
+        inputs={"source": "workspace", "workspace_id": workspace_id, "actor": owner})
+    core.store.log_decision(owner, "content_workspace.workspace_assess_enqueued",
+                            scan_id=scan_id,
+                            detail=f"{workspace_id}: {len(eligible)} eligible, "
+                                   f"{len(excluded)} excluded")
+    return {"scan_id": scan_id, "job_id": job_id, "status": "queued",
+            "preview": {"eligible": len(eligible), "excluded": len(excluded),
+                        "excluded_documents": [{"file": f, "reason": r} for f, r in excluded]}}
+
+
 @router.post("/content-workspaces/{workspace_id}/documents/{document_id}/versions/{version_id}/assess")
 def assess_content_workspace_document_version(workspace_id: str, document_id: str,
                                                version_id: str, request: Request):
