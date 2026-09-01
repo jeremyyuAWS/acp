@@ -702,6 +702,37 @@ def approve_disposition(audit_id: str, request: Request,
     cfg = json.loads(policy.get("action_config") or "{}")
     docs = {d["doc_id"]: d for d in core.store.list_all_documents(owner=owner)}
     doc = docs.get(row["doc_id"])
+    if doc is None and _is_lifecycle_doc_id(row["doc_id"]):
+        # A Discover-lifecycle candidate is not missing — it was never in this table. The two
+        # subsystems key documents differently: the lifecycle evaluator stamps
+        # `scan:{scan_id}:{file}` (handlers.py), while this governance layer keys on
+        # `drive:{id}` / `{source}:{hash}` (documents.resolve_doc_id). list_all_documents holds
+        # none of the former, so every lifecycle approval fell into the clause below and was
+        # recorded FAILED with the reason "document no longer exists".
+        #
+        # Three things were wrong with that, and only the first is cosmetic: the reason is false,
+        # the reviewer's decision is destroyed (the pending row is consumed, so the approval has
+        # to be given again), and the append-only audit — the record a compliance officer relies
+        # on — now asserts that a document which exists did not.
+        #
+        # Recorded, not executed, which is what execute=false already does and what this route's
+        # own docstring calls "the honest half of the operation". Execution is a separate,
+        # larger change: it needs the two identifier spaces reconciled, and that is also where
+        # capturing the before-state for an undo belongs (PRD §8).
+        detail = ("approved — recorded, not executed: this is a Discover-lifecycle candidate and "
+                  "is not represented in the disposition governance layer, so no source action "
+                  "can be performed for it")
+        core.store.set_disposition_audit_result(audit_id, "approved", detail)
+        core.store.log_decision(owner, "disposition.approved",
+                                detail=f"{row['action']} {row['doc_id']}: recorded, not executed")
+        _trace_decision(row["doc_id"], None, action=row["action"], status="approved",
+                        policy_id=row["policy_id"], reason=detail)
+        return {**(core.store.get_disposition_audit(audit_id, owner=owner) or {}),
+                # Explicit, because the caller asked for execute=true and did not get it. A
+                # response that looked identical to a real execution would be the same lie in a
+                # politer form.
+                "executed": False,
+                "why_not_executed": "lifecycle candidates have no governance-layer document"}
     if doc is None:
         core.store.set_disposition_audit_result(audit_id, "failed", "document no longer exists")
         _trace_decision(row["doc_id"], None, action=row["action"], status="failed",
@@ -826,6 +857,18 @@ def approve_disposition_batch(body: BatchApprovalIn, request: Request):
             # a caller that only reads len(approved) still cannot mistake a partial for a whole.
             "reconciled": len(approved) + len(refused) + len(already) == len(submitted),
             "executed": False}
+
+
+def _is_lifecycle_doc_id(doc_id: str | None) -> bool:
+    """Whether this audit row came from the Discover lifecycle evaluator rather than a policy run.
+
+    The evaluator stamps `scan:{scan_id}:{file}`; documents.resolve_doc_id produces
+    `drive:{id}` or `{source}:{hash}`, and never the `scan:` form. Deliberately a positive test
+    for the lifecycle shape rather than "not in the documents table": a genuinely deleted
+    Drive-backed document must keep reporting that it no longer exists, which is true and
+    useful, and a broader rule would swallow it.
+    """
+    return str(doc_id or "").startswith("scan:")
 
 
 def _exempt_now(doc_id: str | None, owner: str) -> str | None:
