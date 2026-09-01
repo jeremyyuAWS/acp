@@ -8,7 +8,7 @@ export default function DiscoveryFolderLabel({ folder, source }) {
     let current = true
     setResolved(null)
     if (opaque) getDriveFolderName(folder).then(data => {
-      if (current) setResolved(data.name || 'Folder name unavailable')
+      if (current) setResolved(data.path || data.name || 'Folder name unavailable')
     }).catch(() => { if (current) setResolved('Folder name unavailable') })
     return () => { current = false }
   }, [folder, opaque])
