@@ -518,6 +518,13 @@ _SCHEMA = [
     # rather than silently jumping ahead of rules that were already there.
     "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS priority INTEGER",
     "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1",
+    # The version of the policy AS EVALUATED, stamped on the audit row at discover time.
+    # PRD §8 permits a grouped approval only when every selected row shares a policy version,
+    # and §11 makes source mutations idempotent on (document_id, policy_version, action) — both
+    # are unanswerable from a row that only records which policy fired, not which version of it.
+    # Rows written before this column exists read NULL, and the batch route refuses them rather
+    # than guessing a version on a reviewer's behalf.
+    "ALTER TABLE disposition_audit ADD COLUMN IF NOT EXISTS policy_version INTEGER",
     "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS description TEXT",
     "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS updated_at TEXT",
     """CREATE TABLE IF NOT EXISTS lifecycle_evaluation (
@@ -1390,8 +1397,8 @@ class _PgAdapter:
     # (v3 was independently assigned to two different additive changes by two concurrent
     # sessions — this repo squash-merges, so both landed — and is renumbered to v4 here rather
     # than picking one side's checksum over the other's real, both-present DDL.)
-    _SCHEMA_VERSION = 5
-    _SCHEMA_CHECKSUM_AT_VERSION = "8814ae61e2657d94a2b6005d2e3cad7c"
+    _SCHEMA_VERSION = 6
+    _SCHEMA_CHECKSUM_AT_VERSION = "cd5ebc2e60b2e0d808bea59c8abc4ea0"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -8960,16 +8967,37 @@ class Store:
 
     def bulk_create_disposition_audit(self, rows: list) -> None:
         """Bulk-insert disposition audit rows accumulated by the lifecycle rule evaluator.
-        rows: list of (audit_id, doc_id, policy_id, action, result, detail, owner_email)."""
+        rows: (audit_id, doc_id, policy_id, action, result, detail, owner_email, policy_version).
+
+        policy_version is REQUIRED rather than defaulted: a row that cannot say which version of
+        a rule produced it can never be part of a grouped approval (PRD §8), and defaulting it to
+        1 would make a stale row look like a current one to the batch route."""
         if not rows:
             return
         now = self._now()
         with self._db.cursor() as cur:
             self._db.executemany(cur,
                 "INSERT INTO disposition_audit(id,ts,doc_id,policy_id,action,result,detail,"
-                "owner_email) VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
-                [(audit_id, now, doc_id, policy_id, action, result, detail, owner_email)
-                 for audit_id, doc_id, policy_id, action, result, detail, owner_email in rows])
+                "owner_email,policy_version) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(id) DO NOTHING",
+                [(audit_id, now, doc_id, policy_id, action, result, detail, owner_email, version)
+                 for audit_id, doc_id, policy_id, action, result, detail, owner_email, version
+                 in rows])
+
+    def list_disposition_audit_by_ids(self, audit_ids: list[str], owner: str) -> list[dict]:
+        """The batch a reviewer actually selected, in ONE query, owner-scoped.
+
+        PRD §11: "Bulk approval displays and submits explicit document ids; it never means 'all
+        current matches' at execute time." So this takes ids and nothing else — there is
+        deliberately no filter-based sibling that could re-expand to whatever matches now."""
+        if not audit_ids:
+            return []
+        placeholders = ",".join(["%s"] * len(audit_ids))
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT * FROM disposition_audit WHERE id IN ({placeholders}) AND owner_email=%s",
+                (*audit_ids, owner))
+            return self._db.fetchall(cur)
 
     def get_disposition_audit(self, audit_id: str, owner: str | None = None) -> dict | None:
         with self._db.cursor() as cur:
