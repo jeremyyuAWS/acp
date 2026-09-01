@@ -19,9 +19,10 @@ be undone by a plausible edit that looks like tidying:
   · move it before the suite   → the suite stops running again
   · drop `always()`            → a run that also has test failures quietly regains the OCR gap
 
-Asserted against the workflow TEXT rather than a parsed tree: PyYAML is in neither
-api/requirements.txt nor tests/requirements.txt, and adding a dependency to test a config file
-is a worse trade than a handful of regexes. Same technique as the repo's other wiring tests.
+Asserted against the workflow TEXT rather than a parsed tree, because these are all
+single-line facts a regex states directly. PyYAML IS available now (tests/requirements.txt
+declares it, for the guards that need to traverse a workflow's structure) — this file simply
+does not need it, and text keeps the assertion and the thing asserted side by side.
 """
 from __future__ import annotations
 

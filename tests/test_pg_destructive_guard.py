@@ -131,12 +131,15 @@ def test_the_ci_dsn_with_the_flag_is_accepted(monkeypatch):
     _guard()(CI_DSN)                                   # must not raise
 
 
-# Read from the workflow TEXT, not a parsed tree. PyYAML is in neither api/requirements.txt nor
-# tests/requirements.txt, so `import yaml` passes on a dev machine that happens to have it and
-# raises ModuleNotFoundError on CI — which is exactly how this test first went red. The repo's
-# other workflow guards already settled this trade the same way (see test_ci_ocr_gate.py); the
-# one that reached for pytest.importorskip("yaml") instead is, in this job, a test that silently
-# never runs, and silent non-running is the failure mode this whole file exists to refuse.
+# Read from the workflow TEXT, not a parsed tree. PyYAML was in neither api/requirements.txt nor
+# tests/requirements.txt when this was written, so `import yaml` passed on a dev machine that
+# happened to have it and raised ModuleNotFoundError on CI — which is exactly how this test first
+# went red. It is declared now, but the two `env:` blocks below are a flat mapping a regex states
+# directly, so this stays text and keeps working under a partial install.
+#
+# What is NOT an option here is the pytest.importorskip("yaml") the alert-workflow guard reached
+# for: in this job that is a test which silently never runs, and silent non-running is the failure
+# mode this whole file exists to refuse.
 _JOB_RE = re.compile(r"^  ([A-Za-z_][\w-]*):\s*$")
 _ENV_RE = re.compile(r"^(\s*)env:\s*$")
 _ENV_KV_RE = re.compile(r"^\s*([A-Z_][A-Z0-9_]*):\s*(\S.*?)\s*$")
