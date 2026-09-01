@@ -33,6 +33,16 @@ DISCOVERY_WORKER="${ACP_DISCOVERY_WORKER:-acp-discovery}"
 ASSESS_WORKER="${ACP_ASSESS_WORKER:-acp-assess}"
 REMEDIATE_WORKER="${ACP_REMEDIATE_WORKER:-acp-remediate}"
 LANE_WORKERS=("$DISCOVERY_WORKER" "$ASSESS_WORKER" "$REMEDIATE_WORKER")
+# The ACP_WORKER_ROLE each lane worker runs as, POSITIONALLY paired with LANE_WORKERS above —
+# LANE_WORKERS[i] reports its heartbeat under LANE_ROLES[i]. Step 9b needs the role, not the
+# service name: the services have no ingress, so the only way to ask one what it is running is
+# through the role-scoped key it writes (worker_tier_heartbeat:<role>).
+#
+# Only acp-discovery's role is set in this repo (deploy/discovery/Dockerfile). The other two get
+# ACP_WORKER_ROLE from container-app env vars set outside it, so this list is a convention the
+# repo cannot verify end to end — which is exactly why step 9b checks that each named role
+# actually reported, instead of trusting whichever roles happen to appear.
+LANE_ROLES=("discovery" "assess" "remediate")
 BUILD_TZ="${BUILD_TZ:-America/Los_Angeles}"
 MIN_MODULES=41                  # engine/pdf-analyser is tracked; this guards against truncation
 DRY="${ACP_DRY_RUN:-0}"
@@ -424,13 +434,24 @@ done
 # notices it; it only fires to unstick an app a blue-green left in Multiple mode. Placed AFTER the
 # image-confirmation loop so the revision it routes 100% to is one we have just seen come up.
 #
-# ALL THREE APPS, not just the one with ingress. This block named $APP only, so nothing in this
-# repo ever asserted the worker services' revision mode — and no script sets it either, which is
-# the shape of state that drifts and is never corrected. The two worker apps have NO INGRESS, so
-# an extra active revision is not stranded at 0% traffic the way the app's would be: it simply
-# keeps running and keeps claiming jobs from the shared queue. The app's version of this bug is
-# loud (the verify below fails with "expected version X, got Y"); theirs is silent.
-for a in "$APP" "$WORKER" "$DISCOVERY_WORKER"; do
+# EVERY APP THIS SCRIPT DEPLOYS, not just the one with ingress. This block named $APP only, so
+# nothing in this repo ever asserted the worker services' revision mode — and no script sets it
+# either, which is the shape of state that drifts and is never corrected. The lane workers have NO
+# INGRESS, so an extra active revision is not stranded at 0% traffic the way the app's would be:
+# it simply keeps running and keeps claiming jobs from the shared queue. The app's version of this
+# bug is loud (the verify below fails with "expected version X, got Y"); theirs is silent.
+#
+# Derived from LANE_WORKERS rather than named one by one. Spelling the apps out here is what broke
+# production deploys on 2026-09-01: this loop was written as `"$APP" "$WORKER" "$DISCOVERY_WORKER"`
+# while the same day's #1172 retired the generic worker and deleted $WORKER, so under `set -u`
+# every deploy died HERE —
+#
+#     deploy/public/redeploy.sh: line 433: WORKER: unbound variable
+#
+# after the images were already updated and before steps 9/9b ran, so nothing was verified and the
+# job reported failure on a deploy that had in fact shipped. `bash -n` cannot see an unbound
+# variable, and the test covering this loop pinned the literal app list, so both guards passed.
+for a in "$APP" "${LANE_WORKERS[@]}"; do
   MODE="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$a" --query properties.configuration.activeRevisionsMode -o tsv 2>/dev/null || echo Single)"
   if [ "$MODE" != "Single" ]; then
     say "returning $a to single-revision mode (was $MODE) so the new revision takes over"
@@ -479,58 +500,120 @@ esac
 # 2026.8.31.20 (pool=3) once: two services alternating in one field. Comparing THAT against the
 # build being shipped would warn at random on every deploy, which is worse than not checking.
 #
-# So this reads `workers.roles.<role>.version` — each service's own key — and checks the roles
-# that actually reported. A role that has never beaten is absent and is not invented as a failure.
+# So this reads `workers.roles.<role>.version` — each service's own key.
+#
+# IT CHECKS THE ROLES THIS DEPLOY UPDATED (LANE_ROLES), NOT WHICHEVER ROLES REPORTED, and that
+# distinction is the whole of the second correction. Checking "every role that reported" is wrong
+# in both directions at once:
+#
+#   - FALSE ALARM, forever. `worker_tier_heartbeat:<role>` is a settings row, and nothing reaps
+#     it when the service that wrote it goes away. #1172 retired the generic worker, which ran as
+#     ACP_WORKER_ROLE=processing; its last beat (2026.9.1.29) is still in the table and still in
+#     /readyz. Measured against production on 2026-09-01, this step's own program printed
+#     `processing=2026.9.1.29` against build 2026.9.1.32 — and would have on every future deploy,
+#     because that row can never catch up. A warning nobody can clear is one people learn to skip.
+#     It also cost the full 24x5s retry every time, since the condition never clears.
+#   - SILENT PASS on the case that matters. A role that never reported at all contributed no line,
+#     so a lane worker whose replicas never came up — the exact failure this step exists to catch —
+#     read as ✓.
+#
+# Naming the roles fixes both: an absent one is now a failure, and a retired one is not our
+# business. Roles outside LANE_ROLES are reported as a NOTE, not a warning, so that a service
+# somebody adds without adding it here is still visible.
 say "verifying worker services (per role — they have no ingress to curl)"
 _ROLES_JSON=""
 for _ in $(seq 1 24); do
   _ROLES_JSON="$(curl -s --max-time 20 "https://$FQDN/readyz" || true)"
-  # Every role that reported, with its version: "role=version" per line.
+  # Every DEPLOYED role that is not running this build, one "role=problem" per line.
   # NO f-STRING HERE, and that is not style. A backslash inside an f-string expression is a
   # SyntaxError, so an earlier version of this line printed nothing on every input — which made
   # `_STALE` always empty and step 9b always print ✓. A check that cannot go red is worse than
   # no check; caught only by running it against sample payloads.
   _STALE="$(printf '%s' "$_ROLES_JSON" | python3 -c '
 import json, sys
-try:
-    roles = json.load(sys.stdin)["workers"].get("roles") or {}
-except Exception:
-    sys.exit(0)
 want = sys.argv[1]
-for role, r in sorted(roles.items()):
+required = sys.argv[2:]
+try:
+    roles = json.load(sys.stdin)["workers"].get("roles")
+except Exception:
+    roles = None
+if not isinstance(roles, dict):
+    # An older API without the field, or a curl that returned an error page. Reported, not
+    # crashed and not passed: "we could not ask" is a third answer and must not read as ✓.
+    print("readyz=no-roles-field")
+    sys.exit(0)
+for role in required:
+    r = roles.get(role)
     if not isinstance(r, dict):
+        print(role + "=absent")
         continue
     got = r.get("version")
-    if got is not None and got != want:
+    if got is None:
+        # A heartbeat predating the version field. Unknown, not wrong.
+        continue
+    if got != want:
         print(role + "=" + str(got))
-' "$BUILD_VERSION" 2>/dev/null || true)"
+    elif r.get("alive") is False:
+        # Right image, no longer beating: the replica wrote one beat and died.
+        print(role + "=stale-" + str(r.get("age_s")) + "s")
+' "$BUILD_VERSION" "${LANE_ROLES[@]}" 2>/dev/null || true)"
   [ -z "$_STALE" ] && break
   sleep 5
 done
 
+# Roles that reported but are not ours to deploy. Informational: a retired service's row lives on
+# (see above), and a NEW service missing from LANE_ROLES should be noticed rather than warned about.
+_OTHER="$(printf '%s' "$_ROLES_JSON" | python3 -c '
+import json, sys
+try:
+    roles = json.load(sys.stdin)["workers"].get("roles") or {}
+except Exception:
+    sys.exit(0)
+known = set(sys.argv[1:])
+for role, r in sorted(roles.items()):
+    if role in known or not isinstance(r, dict):
+        continue
+    print(role + "=" + str(r.get("version")) + ("" if r.get("alive") else " (not beating)"))
+' "${LANE_ROLES[@]}" 2>/dev/null || true)"
+if [ -n "$_OTHER" ]; then
+  printf '  note: roles reporting that this script does not deploy: %s\n' "$(printf '%s' "$_OTHER" | tr '\n' ' ')"
+fi
+
 if [ -z "$_STALE" ]; then
-  printf '\033[32m  ✓ every worker role that reported is running %s\033[0m\n' "$BUILD_VERSION"
+  printf '\033[32m  ✓ every deployed worker role (%s) is running %s\033[0m\n' \
+    "${LANE_ROLES[*]}" "$BUILD_VERSION"
 else
-  printf '\n\033[33m  ! worker roles NOT running %s:\033[0m\n' "$BUILD_VERSION" >&2
+  printf '\n\033[33m  ! deployed worker roles NOT running %s:\033[0m\n' "$BUILD_VERSION" >&2
   printf '      %s\n' $_STALE >&2
   cat >&2 <<WARN
     A worker service is not running the image this deploy shipped, even though its template was
     updated. Scans run in these services, so the estate is being assessed with older code.
 
-    Most likely an old revision is still active and still claiming jobs — these apps have no
-    ingress, so nothing strands one at 0% traffic the way it would for $APP. Check with:
+    "=absent" means the role never reported at all — that service's replicas are not up, or its
+    ACP_WORKER_ROLE does not match the name this script expects (only acp-discovery's is set in
+    this repo; the others come from container-app env vars). "=stale-<n>s" means it wrote one beat
+    on the right image and stopped. A version means an old revision is still the one beating.
 
-      az containerapp show -g $RG -n $WORKER --query properties.configuration.activeRevisionsMode
-      az containerapp revision list -g $RG -n $WORKER \\
+    An old revision is the usual cause — these apps have no ingress, so nothing strands one at 0%
+    traffic the way it would for $APP. Check each of ${LANE_WORKERS[*]}:
+
+      az containerapp show -g $RG -n ${LANE_WORKERS[0]} --query properties.configuration.activeRevisionsMode
+      az containerapp revision list -g $RG -n ${LANE_WORKERS[0]} \\
         --query "[?properties.active].{rev:name,created:properties.createdTime,img:properties.template.containers[0].image}" -o table
 
-    Repeat for $DISCOVERY_WORKER. A role reporting a build older than any recent deploy means
-    that service's replicas were never replaced.
+    A role reporting a build older than any recent deploy means that service's replicas were
+    never replaced.
 WARN
 fi
 
 # WARNS, IT DOES NOT DIE, deliberately. A mixed-version estate is genuinely dangerous — nothing
-# sequences the tiers (ADR 0045 §6) — but this condition is PRE-EXISTING on this deployment, so
-# dying here would red every deploy until somebody with Azure credentials cleans the revisions up,
-# including the deploy that ships the cleanup. Making it fatal is the rollout owner's call, not a
+# sequences the tiers (ADR 0045 §6) — but by the time this runs the images have already been
+# updated and the app is already serving the new build. Dying here does not unship any of that;
+# it only turns a deploy that needs a follow-up into one that reports total failure, and the
+# script has no way to put the estate back. Making it fatal is the rollout owner's call, not a
 # default this script should adopt on its own. What it must not do is stay silent, which it did.
+#
+# The ORIGINAL reason recorded here — "this condition is PRE-EXISTING, so dying would red every
+# deploy including the one shipping the cleanup" — was true of the retired `processing` role and
+# is no longer the reason, because that role is no longer checked. Kept only as the note that the
+# rationale changed; a warning is not load-bearing enough to promote to fatal by accident.

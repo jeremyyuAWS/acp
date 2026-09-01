@@ -48,14 +48,42 @@ def _embedded_program() -> str:
     Extracted rather than retyped so these tests exercise the shipped code. A retyped copy is how
     a broken embedded program passes its own test.
     """
-    m = re.search(r"python3 -c '\n(.*?)\n' \"\$BUILD_VERSION\"", SRC, re.S)
+    m = re.search(r"python3 -c '\n(.*?)\n' \"\$BUILD_VERSION\" \"\$\{LANE_ROLES\[@\]\}\"", SRC, re.S)
     assert m, "could not find step 9b's embedded program"
     return m.group(1)
 
 
-def _run_extractor(payload: str, want: str = "2026.9.2.1") -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, "-c", _embedded_program(), want],
+def _note_program() -> str:
+    """The second, smaller program: the roles that reported but are not ours to deploy."""
+    m = re.search(r"_OTHER=\"\$\(printf '%s' \"\$_ROLES_JSON\" \| python3 -c '\n(.*?)\n' ", SRC, re.S)
+    assert m, "could not find the not-ours-to-deploy note program"
+    return m.group(1)
+
+
+# The roles this script deploys, read out of the script so the tests move with it.
+LANE_ROLES = re.search(r'^LANE_ROLES=\((.*?)\)$', SRC, re.M).group(1).replace('"', '').split()
+
+
+def _run_extractor(payload: str, want: str = "2026.9.2.1",
+                   roles: list[str] | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, "-c", _embedded_program(), want,
+                           *(LANE_ROLES if roles is None else roles)],
                           input=payload, capture_output=True, text=True)
+
+
+def _run_note(payload: str, roles: list[str] | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, "-c", _note_program(),
+                           *(LANE_ROLES if roles is None else roles)],
+                          input=payload, capture_output=True, text=True)
+
+
+def _payload(**roles) -> str:
+    """A /readyz body carrying exactly these roles. Values may be a version string (alive) or a
+    full dict when the test needs to say something about aliveness."""
+    import json
+    body = {r: (v if isinstance(v, dict) else {"version": v, "alive": True})
+            for r, v in roles.items()}
+    return json.dumps({"workers": {"version": "whatever", "roles": body}})
 
 
 # ── the trap: a check that cannot go red ──────────────────────────────────────────────────
@@ -72,49 +100,107 @@ def test_the_embedded_program_actually_compiles():
 
 
 def test_the_extractor_reports_a_role_on_the_wrong_build():
-    r = _run_extractor('{"workers":{"roles":{"mixed":{"version":"2026.9.2.1"},'
-                       '"discovery":{"version":"2026.8.31.20"}}}}')
+    r = _run_extractor(_payload(discovery="2026.8.31.20", assess="2026.9.2.1",
+                                remediate="2026.9.2.1"))
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "discovery=2026.8.31.20"
 
 
-def test_the_extractor_is_silent_when_every_role_matches():
+def test_the_extractor_is_silent_when_every_deployed_role_matches():
     """The ✓ path has to be reachable, or the warning becomes noise everyone learns to skip."""
-    r = _run_extractor('{"workers":{"roles":{"mixed":{"version":"2026.9.2.1"},'
-                       '"discovery":{"version":"2026.9.2.1"}}}}')
+    r = _run_extractor(_payload(discovery="2026.9.2.1", assess="2026.9.2.1",
+                                remediate="2026.9.2.1"))
     assert r.stdout.strip() == "" and r.returncode == 0
 
 
 def test_the_extractor_reports_every_stale_role_not_just_the_first():
-    r = _run_extractor('{"workers":{"roles":{"mixed":{"version":"2026.8.31.39"},'
-                       '"discovery":{"version":"2026.8.31.20"}}}}')
-    assert sorted(r.stdout.split()) == ["discovery=2026.8.31.20", "mixed=2026.8.31.39"]
+    r = _run_extractor(_payload(discovery="2026.8.31.20", assess="2026.8.31.39",
+                                remediate="2026.9.2.1"))
+    assert sorted(r.stdout.split()) == ["assess=2026.8.31.39", "discovery=2026.8.31.20"]
 
 
-def test_the_extractor_survives_an_api_without_the_roles_field():
-    """A deploy can outrun the API version it is talking to. An older /readyz must read as
-    'nothing to report', not as a crash or a false alarm."""
+def test_a_deployed_role_that_never_reported_is_a_failure_not_a_silence():
+    """THE SILENT PASS this rewrite closes. The old program iterated the roles the API returned,
+    so a lane worker whose replicas never came up contributed no line at all and read as ✓ — the
+    exact failure step 9b exists to catch was the one it could not see."""
+    r = _run_extractor(_payload(discovery="2026.9.2.1", assess="2026.9.2.1"))
+    assert r.stdout.strip() == "remediate=absent"
+
+
+def test_a_role_on_the_right_build_that_stopped_beating_is_reported():
+    """Right image, no longer alive: one beat then the replica died. Distinct from a wrong
+    version, and named differently so the reader does not go looking for an old revision."""
+    r = _run_extractor(_payload(discovery="2026.9.2.1", assess="2026.9.2.1",
+                                remediate={"version": "2026.9.2.1", "alive": False,
+                                           "age_s": 2877.6}))
+    assert r.stdout.strip() == "remediate=stale-2877.6s"
+
+
+def test_the_extractor_reports_an_api_without_the_roles_field():
+    """CHANGED DELIBERATELY. This used to read as 'nothing to report' and print ✓ — a third
+    can't-go-red hole: a curl that returned an error page, or an API predating the field, was
+    indistinguishable from three healthy workers. "We could not ask" is its own answer."""
     r = _run_extractor('{"workers":{"version":"2026.8.31.39"}}')
-    assert r.stdout.strip() == "" and r.returncode == 0
+    assert r.stdout.strip() == "readyz=no-roles-field" and r.returncode == 0
 
 
 def test_the_extractor_survives_a_roles_error_payload():
-    """/readyz reports {"error": ...} when the role read itself failed."""
+    """/readyz reports {"error": ...} when the role read itself failed. The field is a dict, so
+    the required roles are simply all missing from it — which is the truth."""
     r = _run_extractor('{"workers":{"roles":{"error":"Boom: x"}}}')
-    assert r.stdout.strip() == "" and r.returncode == 0
+    assert sorted(r.stdout.split()) == ["assess=absent", "discovery=absent", "remediate=absent"]
+    assert r.returncode == 0
 
 
 def test_a_null_version_is_not_treated_as_stale():
     """A heartbeat predating the version field reports null. That is 'unknown', not 'wrong', and
     warning on it would fire against every worker that has not redeployed onto the field yet."""
-    r = _run_extractor('{"workers":{"roles":{"mixed":{"version":null}}}}')
+    r = _run_extractor(_payload(discovery=None, assess="2026.9.2.1", remediate="2026.9.2.1"))
     assert r.stdout.strip() == ""
 
 
 def test_garbage_input_does_not_crash_the_deploy():
     """curl fails, or returns an error page. `set -euo pipefail` is on."""
     r = _run_extractor("not json at all")
-    assert r.returncode == 0 and r.stdout.strip() == ""
+    assert r.returncode == 0 and r.stdout.strip() == "readyz=no-roles-field"
+
+
+# ── the false alarm nobody could clear ────────────────────────────────────────────────────
+def test_a_retired_roles_leftover_heartbeat_does_not_warn():
+    """THE REGRESSION FIXTURE, verbatim from production on 2026-09-01.
+
+    `worker_tier_heartbeat:<role>` is a settings row and nothing reaps it when the service that
+    wrote it goes away. #1172 retired the generic worker, which ran as ACP_WORKER_ROLE=processing;
+    its final beat is still in the table, 48 minutes old and one build behind, and still appears
+    in /readyz. Run against this exact payload, the previous program printed
+
+        processing=2026.9.1.29
+
+    and would have on every future deploy, because that row can never catch up. It also burned the
+    full 24x5s retry each time, since the condition never clears.
+    """
+    live = ('{"workers":{"version":"2026.9.1.32","alive":true,"roles":{'
+            '"assess":{"alive":true,"version":"2026.9.1.32","age_s":0.2},'
+            '"discovery":{"alive":true,"version":"2026.9.1.32","age_s":1.1},'
+            '"processing":{"alive":false,"version":"2026.9.1.29","age_s":2877.6},'
+            '"remediate":{"alive":true,"version":"2026.9.1.32","age_s":7.7}}}}')
+    r = _run_extractor(live, want="2026.9.1.32")
+    assert r.stdout.strip() == "", f"a retired role must not warn, got: {r.stdout!r}"
+
+
+def test_a_role_we_do_not_deploy_is_still_visible_as_a_note():
+    """Ignoring it silently would hide a service somebody adds without adding it to LANE_ROLES.
+    A note is not a warning: it does not gate the ✓ and it does not tell anyone to act."""
+    live = ('{"workers":{"roles":{'
+            '"discovery":{"alive":true,"version":"2026.9.1.32"},'
+            '"processing":{"alive":false,"version":"2026.9.1.29"}}}}')
+    r = _run_note(live)
+    assert r.stdout.strip() == "processing=2026.9.1.29 (not beating)"
+    assert "discovery" not in r.stdout, "a deployed role is not 'other'"
+
+
+def test_the_note_program_compiles_too():
+    compile(_note_program(), "<note>", "exec")
 
 
 # ── which surface each check reads ────────────────────────────────────────────────────────
@@ -153,14 +239,72 @@ def test_the_worker_check_does_not_fail_the_deploy():
 
 
 # ── revision mode, for every app ──────────────────────────────────────────────────────────
-def test_single_revision_mode_is_restored_for_all_three_apps():
-    """The asymmetry that let the worker services drift: this named $APP only."""
-    loop = re.search(r'for a in "\$APP" "\$WORKER" "\$DISCOVERY_WORKER"; do\s*\n\s*MODE=(.*?)\ndone',
+def test_single_revision_mode_is_restored_for_every_app_this_script_deploys():
+    """The asymmetry that let the worker services drift: this named $APP only.
+
+    ASSERTED AS A PROPERTY, NOT A LITERAL, and that is the point of the rewrite. The previous
+    version of this test pinned the exact string `for a in "$APP" "$WORKER" "$DISCOVERY_WORKER"`.
+    When #1172 retired the generic worker and deleted $WORKER on 2026-09-01, the loop kept naming
+    it, `set -u` killed every deploy at that line, and this test went on passing because the
+    broken literal was what it was asserting. Deriving the list from LANE_WORKERS means the loop
+    cannot fall behind the set of apps the script actually updates.
+    """
+    loop = re.search(r'for a in "\$APP" "\$\{LANE_WORKERS\[@\]\}"; do\s*\n\s*MODE=(.*?)\ndone',
                      CODE, re.S)
-    assert loop, "revision mode is not restored for all three apps in one loop"
+    assert loop, "revision mode must be restored for $APP and every lane worker in one loop"
     body = loop.group(1)
     assert "revision set-mode" in body and "--mode single" in body
     assert '-n "$a"' in body, "set-mode must target the loop variable, not a hardcoded app"
+
+
+def test_no_expansion_of_a_variable_the_script_never_defines():
+    """THE GUARD THAT WOULD HAVE CAUGHT IT, and the reason the suite did not.
+
+    `bash -n` parses; it cannot see an unbound variable, so test_the_script_still_parses stayed
+    green while `set -u` aborted the real deploy at line 433 with
+
+        deploy/public/redeploy.sh: line 433: WORKER: unbound variable
+
+    after the images were updated and before anything was verified. Every other guard in this file
+    asserts a specific string, which by construction cannot notice a variable that stopped
+    existing somewhere else. This one is general: every $NAME the script expands must be assigned
+    in the script, defaulted with ${NAME:-...}, or a shell builtin.
+    """
+    body = re.sub(r"^\s*#.*$", "", SRC, flags=re.M)  # comments quote the broken line on purpose
+    assigned: set[str] = set()
+    for pat in (r'^\s*(?:export\s+|local\s+|declare\s+(?:-\w+\s+)?)?([A-Za-z_]\w*)\+?=',
+                r'^\s*for\s+([A-Za-z_]\w*)\s+in\b',
+                r'\bread\s+(?:-\w+\s+)*((?:[A-Za-z_]\w*\s+)*[A-Za-z_]\w*)',
+                r'^\s*([A-Za-z_]\w*)\(\)\s*\{'):
+        for hit in re.findall(pat, body, re.M):
+            assigned |= set(hit.split())
+    shell = {"HOME", "PATH", "PWD", "IFS", "RANDOM", "BASH", "BASHPID", "BASH_SOURCE", "LINENO",
+             "FUNCNAME", "OLDPWD", "SECONDS", "UID", "EUID", "HOSTNAME", "SHELL", "TMPDIR",
+             "USER", "PS1"}
+    undefined = set()
+    for m in re.finditer(r'\$\{([A-Za-z_]\w*)([^}]*)\}|\$([A-Za-z_]\w*)', body):
+        name = m.group(1) or m.group(3)
+        defaulted = bool(m.group(2)) and m.group(2)[0] in ":-+="
+        if name not in assigned and name not in shell and not defaulted:
+            undefined.add(name)
+    assert not undefined, f"expanded but never defined (set -u will kill the deploy): {undefined}"
+
+
+def test_lane_roles_is_paired_with_lane_workers():
+    """Step 9b asks by ROLE, step 8 updates by SERVICE NAME, and the two lists are positional
+    pairs. Different lengths means a service is deployed and never verified, or a role is demanded
+    of a service nobody ships."""
+    workers = re.search(r'^LANE_WORKERS=\((.*?)\)$', SRC, re.M).group(1).split()
+    assert len(workers) == len(LANE_ROLES), f"{workers} vs {LANE_ROLES}"
+    assert LANE_ROLES == ["discovery", "assess", "remediate"]
+
+
+def test_the_discovery_role_matches_the_dockerfile_that_sets_it():
+    """The one pairing this repo can actually verify — acp-assess and acp-remediate take
+    ACP_WORKER_ROLE from container-app env vars set outside it, which the script says so."""
+    dockerfile = (ROOT / "deploy" / "discovery" / "Dockerfile").read_text()
+    assert "ACP_WORKER_ROLE=discovery" in dockerfile
+    assert LANE_ROLES[0] == "discovery", "LANE_ROLES[0] pairs with $DISCOVERY_WORKER"
 
 
 def test_the_mode_restore_defaults_to_single_when_the_query_fails():
@@ -172,7 +316,7 @@ def test_the_mode_restore_defaults_to_single_when_the_query_fails():
 def test_the_blue_green_path_is_untouched_by_the_restore():
     """Blue-green deliberately LEAVES the app in Multiple mode, keeping blue at 0% for rollback,
     and exits before this block. Restoring Single there would deactivate the rollback target."""
-    assert CODE.index("ROLLBACK") < CODE.index('for a in "$APP" "$WORKER" "$DISCOVERY_WORKER"; do\n  MODE=')
+    assert CODE.index("ROLLBACK") < CODE.index('for a in "$APP" "${LANE_WORKERS[@]}"; do\n  MODE=')
 
 
 def test_the_script_still_parses():
