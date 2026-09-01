@@ -23,7 +23,9 @@ export default function DiscoveryLifecycleResults({ rows, policies, scanId }) {
   const [lifecycleError, setLifecycleError] = useState('')
   const [reviewStatus, setReviewStatus] = useState('')
   const [reviewPolicy, setReviewPolicy] = useState('')
-  const [reviewCandidates, setReviewCandidates] = useState(false)
+  // The embedded workspace is a REVIEW queue, not a second copy of the inventory below it.
+  // Start on actionable lifecycle candidates; an explicit estate-segment click may broaden it.
+  const [reviewCandidates, setReviewCandidates] = useState(true)
   useEffect(() => {
     let current = true
     setSummary(null); setRuleResults([]); setLifecycleError('')
