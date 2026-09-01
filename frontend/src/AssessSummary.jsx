@@ -112,7 +112,7 @@ function EmptyState({ discovered, onChangeScope }) {
  * @param onRunDetails secondary — traces and capability live behind this, not on this screen
  */
 export default function AssessSummary({ files, cap, assessment, criteria, level = 'AA',
-                                        assessedAt, notStarted, run, discovered,
+                                        assessedAt, notStarted, run, discovered, integrityCaveat = null,
                                         onRemediate, onRunDetails, onReconnect, onChangeScope }) {
   // The run's own status decides two of the seven screen states the file list cannot: a run of
   // 'error' is `failed` even with a stray record, and one 'cancelled'/'interrupted' is `partial`
@@ -191,6 +191,20 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
             <div style={{ fontSize: 19, fontWeight: 650, color: tone.c, marginTop: 4 }}>
               {STATUS_LABEL[m.status]}
             </div>
+            {/* RUN INTEGRITY TRAVELS WITH THE STATUS, and the reason is the same one the coverage
+                sentence has: this is the line that gets read as the answer, and a status of
+                "No findings" over a run that completed 17 of 34 checks is the most damaging thing
+                this screen can print. `coverageSentence` above says how much of the SCOPE was
+                evaluated; this says whether the run that evaluated it actually finished doing so.
+                Two different failures, and the second was invisible until the Run integrity panel
+                existed — the manifest recorded every un-run check as a pass. Null, and absent,
+                only when the run is genuinely complete (runIntegrity.js: integrityCaveat). */}
+            {integrityCaveat && (
+              <div role="status" style={{ fontSize: 12.5, marginTop: 5, color: TONE.attention.c,
+                                          fontWeight: 600, maxWidth: 320 }}>
+                {integrityCaveat}
+              </div>
+            )}
           </div>
           <div>
             <div className="muted" style={{ fontSize: 11.5, letterSpacing: '.07em', textTransform: 'uppercase',

@@ -62,3 +62,33 @@ NO_OFFICE = ("the .NET Office analyser CLI is not built — run "
              "`dotnet build spike/dotnet/AcpScan.Cli/AcpScan.Cli.csproj -c Release`")
 NO_PDF = (f"the PDF engine is missing from {PDF_ENGINE} — it is vendored in-repo (ADR 0029), so "
           "this means a truncated checkout or an ACP_PDF_ENGINE override pointing somewhere empty.")
+
+# ── media (ffmpeg + a local transcriber) ─────────────────────────────────────────
+#
+# TWO probes, not one, because the two halves fail independently and a test that needs only
+# audio extraction should not skip because no ASR is installed. Extraction is deterministic and
+# fully assertable; transcription accuracy is a model property this repo does not assert.
+#
+# Resolved through `api/media.py` rather than recomputed here — the same rule
+# `scripts/check_engines.py` states in its own header: a guard that recomputes a condition can
+# pass while the thing it guards is broken. `ffmpeg_path()` also knows to fall back to the
+# `imageio-ffmpeg` static wheel, which is the only way ffmpeg exists in a sandbox without apt,
+# and duplicating that lookup here is exactly how the two would drift apart.
+def _media_probes() -> tuple[bool, bool]:
+    import sys
+    if str(ROOT / "api") not in sys.path:
+        sys.path.insert(0, str(ROOT / "api"))
+    try:
+        import media
+        return media.media_available(), media.asr_available()
+    except Exception:
+        return False, False
+
+
+MEDIA_OK, ASR_OK = _media_probes()
+
+NO_MEDIA = ("ffmpeg is unavailable, so audio could not be extracted — install ffmpeg, or "
+            "`pip install imageio-ffmpeg` for a static build that needs no apt.")
+NO_ASR = ("no local transcriber, so captions could not be drafted — `pip install faster-whisper` "
+          "(CPU, CTranslate2; no torch and no API key). The model is fetched once on first use, "
+          "which is why CI does not require this engine.")

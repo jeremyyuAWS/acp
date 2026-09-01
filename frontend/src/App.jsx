@@ -40,6 +40,8 @@ import AssessFileFindings from './AssessFileFindings.jsx'
 import { inventorySnapshot } from './discoverRunTime.js'
 import { scanOptionAt } from './scanOptionDate.js'
 import AssessSummary from './AssessSummary.jsx'
+import AssessRunIntegrity, { useScanManifest } from './AssessRunIntegrity.jsx'
+import { runIntegrity, integrityCaveat } from './runIntegrity.js'
 import AssessWorklist from './AssessWorklist.jsx'
 import { documentRows } from './assessMetrics.js'
 import RunDetails from './RunDetails.jsx'
@@ -928,6 +930,23 @@ export default function App() {
     return () => window.removeEventListener('acp:scan-unavailable', onUnavailable)
   }, [scan?.run?.id, me?.allow]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The run's coverage record, read ONCE for the screen and shared. The Run integrity panel
+  // renders it in full and the summary beside it carries one sentence from it, and those two have
+  // to agree — a summary reading "No findings" under a panel reading "coverage unknown" is exactly
+  // the contradiction the gate exists to remove, and two independent fetches is how it appears.
+  //
+  // ABOVE the `if (!me)` return below, and that placement is load-bearing rather than tidy. Every
+  // hook after that line runs only when signed in, so a hook there changes React's hook count
+  // between a signed-out and a signed-in render: "Rendered more hooks than during the previous
+  // render", which took out five App-mounting test files at once when this was first written
+  // further down. Nothing else in this component calls a hook after line ~928 — this was the first,
+  // and the error names the symptom rather than the rule, so it is written down here.
+  //
+  // Keyed on assessed_at rather than on `assessed && resultsReady` (both derived far below, and
+  // unavailable this early). The cost of the looser condition is one cheap indexed GET for a scan
+  // whose results are not on screen; the verdict itself is computed where those flags exist.
+  const runManifest = useScanManifest(scan?.run?.id, { skip: !scan?.run?.assessed_at })
+
   if (!me) return <SignIn onSignedIn={signIn} notice={signedOutReason} />   // SignIn's own BuildStamp shows the full CalVer
 
   const switchScan = async (id) => {
@@ -1461,6 +1480,21 @@ export default function App() {
   // click-to-child-effect gap; `running` keeps the old snapshot hidden for the whole new run.
   const resultsReady = assessPhase === 'done'
     || (assessPhase === 'idle' && !!run?.assessed_at && justAssessed !== run?.id)
+  // runIntegrity is a plain function, not a hook, so it is safe here — below the `if (!me)`
+  // early return. The FETCH is not, and lives above it; see useScanManifest's call site.
+  //
+  // `currentScanId` is the load-bearing staleness check, not `runInFlight`. resultsReady already
+  // hides the old snapshot for the whole of a new run (see the comment above), so the reachable
+  // staleness is the quieter kind: a manifest fetched for the previous scan still in state when
+  // the screen has moved to another one, which survives a reload where a "something is running"
+  // flag does not.
+  const runVerdict = runIntegrity(runManifest.manifest, {
+    error: runManifest.error,
+    loading: runManifest.loading,
+    runInFlight: assessPhase === 'starting' || assessPhase === 'running',
+    manifestScanId: runManifest.manifest?.scan_id ?? null,
+    currentScanId: run?.id ?? null,
+  })
   const assessGate = <AssessGate onGo={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
   // Time-travel = viewing any scan other than the latest. Drives the replay banner + the
   // app-wide "replaymode" tint so it's unmistakable you're looking at a past point in time.
@@ -2059,7 +2093,7 @@ export default function App() {
               <RunDetails scanId={run.id} files={files} cap={cap} assessment={assessment}
                           onBack={() => { setRunDetails(false); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
             )}
-            {assessed && resultsReady && !runDetails && !assessFile && <><AssessSummary files={files} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} run={run} notStarted={run?.not_assessed?.count} onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onRunDetails={() => { setRunDetails(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onChangeScope={() => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><AssessWorklist files={files} cap={cap} assessment={assessment} onOpenFile={(row) => setAssessFile(row)} onBulkFix={(rows) => handleBulkFix(run.id, rows)} /><RuleBreakdown scanId={run.id} files={files} /></>}
+            {assessed && resultsReady && !runDetails && !assessFile && <><AssessRunIntegrity verdict={runVerdict} manifest={runManifest.manifest} /><AssessSummary files={files} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} run={run} notStarted={run?.not_assessed?.count} integrityCaveat={integrityCaveat(runVerdict)} onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onRunDetails={() => { setRunDetails(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onChangeScope={() => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><AssessWorklist files={files} cap={cap} assessment={assessment} onOpenFile={(row) => setAssessFile(row)} onBulkFix={(rows) => handleBulkFix(run.id, rows)} /><RuleBreakdown scanId={run.id} files={files} /></>}
           </>
         ) : (overviewPreview ? <AssessPreviewCard preview={overviewPreview} /> : placeholder))}
 
