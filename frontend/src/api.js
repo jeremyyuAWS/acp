@@ -657,6 +657,7 @@ export const clearScanTokens = (scanId) => (SIM
 export const NOT_MODIFIED = Symbol('scan-not-modified')
 export const getScan = (id, knownRevision = null) => (SIM ? sim(simGetScan(id)) : fetch(`${BASE}/scans/${id}`, {
   headers: headers(knownRevision != null ? { 'If-None-Match': `W/"${knownRevision}"` } : {}),
+  cache: 'no-store',
 }).then((r) => (r.status === 304 ? NOT_MODIFIED : j(r))))
 // The merged live-assessment snapshot (KPIs + funnel + worker/queue block) for the running screen.
 // SIM has no live pipeline → available:false (the panel renders nothing).
@@ -782,7 +783,8 @@ export const getRemediationStatus = (scanId) => {
     return sim({ in_flight: _simRemed.remaining, failed: 0,
                  latest_file: _simRemed.remaining ? `report-${fixedSoFar}.html` : `report-${_simRemed.total}.html` }, 120)
   }
-  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation-status`, { headers: headers() }).then(j)
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation-status`,
+               { headers: headers(), cache: 'no-store' }).then(j)
 }
 // Per-violation remediation state (ADR 0003 Phase 2) for one file — which rule_ids were
 // actually auto-fixed, so the rule coverage table can say "pass — remediated" instead of

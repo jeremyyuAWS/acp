@@ -41,6 +41,7 @@ describe('no knownRevision — unchanged from before', () => {
 
     const [, opts] = fetchMock.mock.calls[0]
     expect(opts.headers['If-None-Match']).toBeUndefined()
+    expect(opts.cache).toBe('no-store')
   })
 })
 
@@ -53,6 +54,7 @@ describe('knownRevision supplied', () => {
 
     const [, opts] = fetchMock.mock.calls[0]
     expect(opts.headers['If-None-Match']).toBe('W/"3"')
+    expect(opts.cache).toBe('no-store')
   })
 
   it('a 304 resolves to NOT_MODIFIED rather than throwing', async () => {
