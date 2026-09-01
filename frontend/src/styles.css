@@ -118,6 +118,8 @@ table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 0 0 8px; }
 td { padding: 10px 0; border-top: 1px solid var(--line); }
 .fname { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.lifecycle-evidence-panel { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco,
+  Consolas, "Liberation Mono", "Courier New", monospace; }
 .badge { font-size: 12px; padding: 3px 10px; border-radius: 8px; }
 .scorecell { display: inline-flex; align-items: center; gap: 8px; }
 .scorecell > span:first-child { min-width: 22px; }
