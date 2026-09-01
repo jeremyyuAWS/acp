@@ -3,6 +3,7 @@ import {
   rowModel, laneOf, sortQueue, groupByDocument, nextUnresolvedId, progress, railColorOf,
   matchesWorkflow, workflowCounts, workflowStepIndex, isResolved, WORKFLOW_TABS, WORKFLOW_LABELS, SORTS,
 } from './remediationInboxModel.js'
+import { clusterRows, clusterOfFinding, batchTargetsOf } from './remediationClusters.js'
 import { fixSteps, appName } from './remediationGuide.js'
 import { scOf } from './fixSummary.js'
 import { changeSentence, isContrastFinding } from './remediationEvidence.js'
@@ -112,6 +113,118 @@ function QueueRow({ f, decisions, selected, onSelect, showFile = true }) {
   )
 }
 
+// ── A CLUSTER row: many findings, one decision ────────────────────────────────────────────────
+// The row a reviewer actually works. A production run put 265 findings into this queue, largely for
+// one criterion; a queue that long invites rubber-stamping however well each row is laid out. So the
+// unit of the queue is the cluster — same criterion, same format, same lane — and the reviewer
+// inspects ONE representative and decides once for the group.
+//
+// Two controls, side by side, because one button cannot legally contain another: the row itself
+// selects the cluster's shown finding, and a separate disclosure expands the members so any
+// individual one can still be inspected and decided on its own.
+// The formats a cluster spans, as reading text. Format is NOT part of the cluster key, so a group
+// can cover .docx and .pdf at once; this is what keeps that breadth visible instead of implied.
+function formatList(formats) {
+  const f = (formats || []).map((x) => String(x).toUpperCase())
+  if (f.length === 0) return ''
+  if (f.length === 1) return f[0]
+  if (f.length === 2) return `${f[0]} and ${f[1]}`
+  return `${f.slice(0, -1).join(', ')} and ${f[f.length - 1]}`
+}
+
+const SEV_ORDER = ['CRITICAL', 'SERIOUS', 'MODERATE', 'MINOR', 'UNRATED']
+function severityLine(severities) {
+  const parts = SEV_ORDER.filter((k) => severities?.[k]).map((k) => `${severities[k]} ${k === 'UNRATED' ? 'unrated' : k.toLowerCase()}`)
+  return parts.join(' · ')
+}
+
+function ClusterRow({ row, shown, decisions, selectedId, onSelect, expanded, onToggle }) {
+  const r = rowModel(shown, decisions)
+  const railed = railColorOf(row.lane)
+  const sevLine = severityLine(row.severities)
+  const remaining = row.unresolved.length
+  const listId = `rinbox-cluster-${row.key.replace(/[^\w-]/g, '_')}`
+  // When collapsed the header IS the selected member's row, so it carries the selection. When
+  // expanded the member rows carry it, and the header steps back — exactly one row is current.
+  const selected = !expanded && shown.id === selectedId
+  // Spoken as one unit: what the group is, how big it is, and how much of it is left — the three
+  // facts that decide whether a reviewer opens it. The per-member rows carry their own labels.
+  const label = `${r.issue}, ${row.count} findings across ${row.fileCount} document${row.fileCount === 1 ? '' : 's'}`
+    + `, ${formatList(row.formats)}${row.lane?.short ? ` — ${row.lane.short}` : ''}`
+    + `, ${remaining} awaiting a decision`
+  return (
+    <div className="rinbox-clusterwrap">
+      <div style={{ display: 'flex', alignItems: 'stretch', borderBottom: '1px solid var(--line, #e2dce4)',
+                    background: selected ? 'var(--sel, #eef3ff)' : 'transparent',
+                    borderLeft: selected ? `3px solid ${railed}` : '3px solid transparent' }}>
+        <button
+          type="button"
+          id={`rinbox-row-${shown.id}`}
+          onClick={() => onSelect(shown.id)}
+          aria-current={selected ? 'true' : undefined}
+          tabIndex={selected ? 0 : -1}
+          aria-label={label}
+          className="rinbox-row rinbox-cluster-row"
+          style={{ display: 'flex', gap: 10, flex: '1 1 auto', minWidth: 0, textAlign: 'left',
+                   cursor: 'pointer', padding: '10px 12px', border: 'none', background: 'transparent' }}
+        >
+          <LaneRail lane={row.lane} />
+          <span style={{ minWidth: 0, flex: '1 1 auto' }}>
+            <span style={{ display: 'block', fontWeight: remaining > 0 ? 700 : 500, fontSize: 13.5,
+                           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {r.issue}
+            </span>
+            {/* The scale of the group, which is the reason it is one row instead of many. */}
+            <span className="muted" style={{ display: 'block', fontSize: 12 }}>
+              {row.count} findings · {row.fileCount} document{row.fileCount === 1 ? '' : 's'}
+            </span>
+            <span style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+              {row.sc && (
+                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.02em',
+                               background: 'var(--surface-2,#f0eef3)', color: 'var(--ink,#2a2340)',
+                               borderRadius: 5, padding: '1px 6px',
+                               fontFamily: 'var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace)' }}>
+                  {row.sc}
+                </span>
+              )}
+              <span className="muted" style={{ fontSize: 11 }}>{formatList(row.formats)}</span>
+              {row.lane?.short && <span className="muted" style={{ fontSize: 11 }}>{row.lane.short}</span>}
+              {/* The severity MIX, stated rather than hidden: severity is not part of the cluster key
+                  (it would fragment every large group), so the reviewer must be able to see that a
+                  batch spans a critical and a minor finding before they decide it. */}
+              {sevLine && <span className="muted" style={{ fontSize: 11 }}>{sevLine}</span>}
+              {row.resolvedCount > 0 && (
+                <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>
+                  {row.resolvedCount} of {row.count} decided
+                </span>
+              )}
+            </span>
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onToggle(row.key)}
+          aria-expanded={expanded}
+          aria-controls={listId}
+          aria-label={`${expanded ? 'Collapse' : 'Expand'} the ${row.count} findings in ${r.issue}`}
+          style={{ flex: '0 0 auto', border: 'none', borderLeft: '1px solid var(--line,#e2dce4)',
+                   background: 'transparent', cursor: 'pointer', padding: '0 12px', fontSize: 12,
+                   color: 'var(--muted,#5b6774)' }}
+        >
+          <span aria-hidden="true">{expanded ? '\u25be' : '\u25b8'}</span>
+        </button>
+      </div>
+      {expanded && (
+        <div id={listId} style={{ background: 'var(--surface-2,#faf9fb)' }}>
+          {row.items.map((f) => (
+            <QueueRow key={f.id} f={f} decisions={decisions} selected={f.id === selectedId}
+                      onSelect={onSelect} showFile />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 function ManualSteps({ f }) {
   const fmt = fmtOf(f.file)
   const [os, setOs] = useState('win') // 'win' | 'mac'
@@ -171,7 +284,7 @@ function taskLineOf(f, lane) {
   }
 }
 
-function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCount = 0, onApplyToMatching, scanId = null, draft = null, onDraftChange, saving = false, error = null }) {
+function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCount = 0, onApplyToMatching, cluster = null, scanId = null, draft = null, onDraftChange, saving = false, error = null }) {
   if (!f) {
     return (
       <div style={{ display: 'grid', placeItems: 'center', height: '100%', textAlign: 'center', padding: 24 }}>
@@ -299,9 +412,20 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
                         padding: '10px 22px', borderBottom: '1px solid var(--line,#e2dce4)',
                         background: 'var(--surface-2,#f6f5f8)', fontSize: 12.5 }}>
+            {/* The scope, stated in full before the decision. A batch is the one control here that
+                reaches findings the reviewer has not looked at, so it names the criterion, the format,
+                the number of documents, and — because severity is deliberately not part of what
+                groups a cluster — the severity mix it spans. */}
             <span className="muted">
-              You are looking at one of {matchingCount + 1} findings that share this issue. The other {matchingCount} carry
-              the same criterion and an actionable proposal; manual, blocked and already-decided findings are excluded.
+              You are looking at one of {matchingCount + 1} findings that share this issue
+              {cluster ? <> — {scKeyOf(f) ? `WCAG ${scKeyOf(f)}` : 'the same criterion'} in {formatList(cluster.formats)} files,
+                across {cluster.fileCount} document{cluster.fileCount === 1 ? '' : 's'}</> : null}.
+              {cluster && cluster.formats.length > 1
+                ? <> This decision covers more than one document format.</> : null}
+              {cluster && severityLine(cluster.severities)
+                ? <> The group spans {severityLine(cluster.severities)}.</> : null}
+              {' '}The other {matchingCount} carry the same criterion and an actionable proposal; manual,
+              blocked and already-decided findings are excluded.
             </span>
             <button className="ghost" style={{ fontSize: 12.5 }} disabled={saving}
                     onClick={() => onApplyToMatching?.(f, { state: 'accepted' })}>
@@ -446,6 +570,14 @@ export default function RemediationInbox({
   const [collapsed, setCollapsed] = useState({}) // file -> true when a document group is collapsed
   const [drafts, setDrafts] = useState({}) // finding id -> reviewer-edited proposed value (null until edited)
   const [assignedOnly, setAssignedOnly] = useState(false) // "Assigned to me" filter — files whose assignee is myEmail
+  // How the queue groups its rows. BY ISSUE is the default: like findings collapse into one cluster
+  // row a reviewer inspects once and decides once, which is the whole point — a flat list of 265
+  // findings is a rubber-stamping machine no matter how good each row looks. BY DOCUMENT is the
+  // older lens, kept because "what is wrong with THIS file" is a real question too.
+  const [group, setGroup] = useState(() => (readLS('group', 'issue') === 'document' ? 'document' : 'issue'))
+  useEffect(() => { writeLS('group', group) }, [group])
+  const [expandedClusters, setExpandedClusters] = useState({})  // cluster key -> true
+  const toggleCluster = (key) => setExpandedClusters((e) => ({ ...e, [key]: !e[key] }))
 
   // Workspace layout + pane sizes, restored from the reviewer's last session (localStorage).
   const [layout, setLayout] = useState(() => {
@@ -541,6 +673,26 @@ export default function RemediationInbox({
   // only one panel fits, picking a finding is also the navigation TO it.
   const selectRow = (id) => { setSelectedId(id); setNarrowPane('detail') }
   const groups = useMemo(() => groupByDocument(visible), [visible])
+  const clusters = useMemo(() => clusterRows(visible, decisions), [visible, decisions])
+
+  // The finding a cluster row SHOWS. Normally its representative (the first undecided member), but
+  // the selected member when the selection is inside it — so a decision made from inside a cluster,
+  // or an auto-advance into one, is always visible without forcing the group open.
+  const shownOf = (row) => row.items.find((f) => f.id === selectedId) || row.items.find((f) => f.id === row.representativeId) || row.items[0]
+
+  // Navigation units, in display order: what Up/Down step through and what "N of M" counts. A
+  // collapsed cluster is ONE unit (the finding it shows); an expanded one contributes its members.
+  // Grouping by document leaves every finding its own unit, exactly as before.
+  const navFindings = useMemo(() => {
+    if (group !== 'issue') return visible
+    const out = []
+    for (const row of clusters) {
+      if (row.type === 'single') { out.push(row.finding); continue }
+      if (expandedClusters[row.key]) out.push(...row.items)
+      else out.push(shownOf(row))
+    }
+    return out
+  }, [group, clusters, expandedClusters, visible, selectedId]) // eslint-disable-line react-hooks/exhaustive-deps
   // Moving off a failed finding clears its error — the message belongs to that decision, not the page.
   useEffect(() => { setSaveError((e) => (e && e.id !== selectedId ? null : e)) }, [selectedId])
 
@@ -548,12 +700,19 @@ export default function RemediationInbox({
   // "apply to all matching" count and the batch action. Restricted to the actionable approve/apply
   // lanes: a batch decision must not silently sweep in a finding a person already rejected (handoff),
   // one that needs a manual re-author, or a blocked one.
-  const ACTIONABLE = new Set(['review', 'apply', 'recheck'])
+  // W8 — the batch. Its scope is the SELECTED FINDING'S CLUSTER, not "every finding sharing this
+  // criterion": what the reviewer sees grouped in the queue is exactly what one decision reaches,
+  // and there is no second, invisible notion of "matching". That is stricter than the rule it
+  // replaces, which spanned formats — the same criterion is remediated differently in a .docx and a
+  // .pdf and the evidence differs, so the run's own policy (PRD Tier C) requires format to match.
+  //
+  // batchTargetsOf applies the safety filter: unresolved, and in an actionable lane. A manual,
+  // blocked, handed-off or already-decided finding is never swept into a batch.
+  const selectedCluster = useMemo(
+    () => (selected ? clusterOfFinding(clusters, selected.id) : null), [clusters, selected])
   const matchingOf = (f) => {
-    const sc = scKeyOf(f)
-    if (!f || !sc) return []
-    return queue.filter((x) => x.id !== f.id && !isResolved(x, decisions) &&
-      scKeyOf(x) === sc && ACTIONABLE.has(laneOf(x).key))
+    const row = clusterOfFinding(clusters, f?.id)
+    return batchTargetsOf(row, decisions).filter((x) => x.id !== f?.id)
   }
   const matchingCount = selected ? matchingOf(selected).length : 0
 
@@ -620,7 +779,7 @@ export default function RemediationInbox({
 
   // Explicit linear navigation through the visible queue — Previous / Next step the SELECTION without
   // acting, so a reviewer can look before deciding and always sees their place ("N of M").
-  const visIds = visible.map((f) => f.id)
+  const visIds = navFindings.map((f) => f.id)
   const curIdx = visIds.indexOf(selectedId)
   const position = curIdx >= 0 ? curIdx + 1 : 0
   const goPrev = () => { if (curIdx > 0) setSelectedId(visIds[curIdx - 1]) }
@@ -706,7 +865,7 @@ export default function RemediationInbox({
       <DetailPane f={selected} decisions={decisions} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
                   saving={savingId != null && savingId === selected?.id}
                   error={saveError && selected && saveError.id === selected.id ? saveError : null}
-                  matchingCount={matchingCount} onApplyToMatching={applyToMatching}
+                  matchingCount={matchingCount} onApplyToMatching={applyToMatching} cluster={selectedCluster?.type === 'cluster' ? selectedCluster : null}
                   scanId={selected?.scanId || scanId}
                   draft={selected ? (drafts[selected.id] ?? null) : null}
                   onDraftChange={(v) => selected && setDrafts((d) => ({ ...d, [selected.id]: v }))} />
@@ -758,6 +917,11 @@ export default function RemediationInbox({
             <input type="search" value={search} onChange={(e) => setSearch(e.target.value)}
                    placeholder="Search documents" aria-label="Search documents"
                    style={{ flex: '1 1 auto', minWidth: 0, fontSize: 13, padding: '6px 10px', borderRadius: 8, border: '1px solid var(--line,#e2dce4)' }} />
+            <select value={group} onChange={(e) => setGroup(e.target.value)} aria-label="Group findings" title="Group findings"
+                    style={{ flex: '0 0 auto', fontSize: 11.5, padding: '5px 6px', borderRadius: 6, border: '1px solid var(--line,#e2dce4)' }}>
+              <option value="issue">By issue</option>
+              <option value="document">By document</option>
+            </select>
             <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort findings" title="Sort findings"
                     style={{ flex: '0 0 auto', fontSize: 11.5, padding: '5px 6px', borderRadius: 6, border: '1px solid var(--line,#e2dce4)' }}>
               {SORTS.map((s) => <option key={s} value={s}>{SORT_LABEL[s]}</option>)}
@@ -806,7 +970,14 @@ export default function RemediationInbox({
                 ? <>Nothing in this view is assigned to you. <button className="linklike" onClick={() => setAssignedOnly(false)}>Show all</button></>
                 : <>Nothing here. {tab !== 'needs-review' && <button className="linklike" onClick={() => setTab('needs-review')}>Back to Needs review</button>}</>}
             </p>
-          ) : groups.map((g) => (
+          ) : group === 'issue' ? clusters.map((row) => (
+            row.type === 'single'
+              ? <QueueRow key={row.key} f={row.finding} decisions={decisions}
+                          selected={row.finding.id === selectedId} onSelect={selectRow} showFile />
+              : <ClusterRow key={row.key} row={row} shown={shownOf(row)} decisions={decisions}
+                            selectedId={selectedId} onSelect={selectRow}
+                            expanded={!!expandedClusters[row.key]} onToggle={toggleCluster} />
+          )) : groups.map((g) => (
             // A document with a SINGLE finding needs no expandable group header — the row itself
             // names the file. Only multi-finding documents get the collapsible 📄 header, so the file
             // is stated once either way.
