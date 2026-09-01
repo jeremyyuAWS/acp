@@ -1,6 +1,6 @@
 export default function LifecycleEvidencePanel({ file }) {
   if (!file) return <div className="panel"><p>Select a file to inspect its lifecycle evidence.</p></div>
-  return <section className="panel" aria-labelledby="lifecycle-evidence-heading">
+  return <section className="panel lifecycle-evidence-panel" aria-labelledby="lifecycle-evidence-heading">
     <h2 id="lifecycle-evidence-heading">Why this was recommended</h2>
     <p><b>{file.file}</b><br /><span className="muted">{file.path || 'Path not recorded'} · {file.lifecycle_status || 'Active'}</span></p>
     <p>{file.lifecycle_reason || 'No lifecycle reason was recorded.'}</p>

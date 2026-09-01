@@ -40,5 +40,6 @@ describe('lifecycle control plane', () => {
     expect(html).toContain('version 2')
     expect(html).toContain('actual 730')
     expect(html).toContain('required gte 365')
+    expect(html).toContain('class="panel lifecycle-evidence-panel"')
   })
 })
