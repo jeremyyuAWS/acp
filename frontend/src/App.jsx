@@ -220,7 +220,7 @@ export default function App() {
   const [sources, setSources] = useState([])
   const [scan, setScan] = useState(null)
   const [justAssessed, setJustAssessed] = useState(null) // scan id assessed this session (optimistic)
-  const [assessPhase, setAssessPhase] = useState('idle') // AssessRunner phase: idle | running | done
+  const [assessPhase, setAssessPhase] = useState('idle') // idle | starting | running | done
 
   // The two capability tables `AssessSummary` counts over. Held HERE rather than fetched inside
   // the summary so the component stays pure — its own test forbids it deriving anything, because a
@@ -247,6 +247,13 @@ export default function App() {
   // re-fire on every render of this very large component.
   const assessStart = useRef(null)
   const registerAssessStart = useCallback((fn) => { assessStart.current = fn }, [])
+  // Hide any prior completed dashboard in the SAME click that starts the new run. AssessRunner
+  // also reports `starting` synchronously for its internal re-run paths; this wrapper covers the
+  // separate AssessSetup button owned by App.
+  const startAssessment = useCallback((decided) => {
+    setAssessPhase('starting'); setRunDetails(false); setAssessFile(null)
+    assessStart.current?.(decided)
+  }, [])
   // A28 · bulk-fix the deterministic findings in a worklist selection. Calls the SAME endpoint
   // (remediateScan with an explicit scope) R3's "Apply N automatic fixes" already uses on the
   // Remediate tab — this is a second entry point into proven, tested infrastructure, not a new
@@ -1401,7 +1408,13 @@ export default function App() {
   // already-assessed scan showing an EMPTY panel (AssessSetup hidden by `assessed`, results hidden
   // by the 'done' gate). Excluding `justAssessed === run.id` keeps results hidden during the
   // click→running gap the 'done' gate was added to cover, so a fresh run still waits for the bar.
-  const resultsReady = assessPhase === 'done' || (!!run?.assessed_at && justAssessed !== run?.id)
+  // A persisted assessed_at belongs to the LAST completed assessment. It is safe to show only
+  // while the runner is idle. Once a new run starts, leaving this fallback active keeps the old
+  // dashboard on screen until the first live poll lands — a few seconds in production, long
+  // enough to make the new run look as though it returned stale results. `starting` closes the
+  // click-to-child-effect gap; `running` keeps the old snapshot hidden for the whole new run.
+  const resultsReady = assessPhase === 'done'
+    || (assessPhase === 'idle' && !!run?.assessed_at && justAssessed !== run?.id)
   const assessGate = <AssessGate onGo={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
   // Time-travel = viewing any scan other than the latest. Drives the replay banner + the
   // app-wide "replaymode" tint so it's unmistakable you're looking at a past point in time.
@@ -1902,8 +1915,18 @@ export default function App() {
                 than invent" contract — so the `|| null` this used to carry is redundant. */}
             {!busy && assessPhase === 'idle' && !assessed && (
               <AssessSetup discoveredAt={fmtStamp(run?.completed_at)} busy={busy}
-                           onRun={(decided) => assessStart.current?.(decided)}
+                           onRun={startAssessment}
                            onSaved={() => { getConfig().then(adoptScopeConfig).catch(() => {}) }} />
+            )}
+            {assessPhase === 'starting' && (
+              <section className="panel" role="status" aria-live="polite"
+                       style={{ textAlign: 'center', padding: '52px 24px' }}>
+                <div className="spinner" aria-hidden="true" style={{ margin: '0 auto 14px' }} />
+                <h2 style={{ margin: '0 0 7px' }}>Preparing your assessment</h2>
+                <p className="muted" style={{ margin: 0 }}>
+                  Loading the new run and assigning documents to Assess workers…
+                </p>
+              </section>
             )}
             {!(busy && !run?.completed_at) && (
               <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy}
