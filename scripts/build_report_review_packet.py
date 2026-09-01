@@ -40,15 +40,48 @@ ACP = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ACP / "api"))
 sys.path.insert(0, str(ACP / "tests"))
 
-# The sample run is imported from the structural suite rather than restated here. Two copies of
-# the fixture is how the numbers in a review packet start disagreeing with the numbers the tests
-# assert, and this document exists to be trusted.
+# The FALLBACK sample run is imported from the structural suite rather than restated here. Two
+# copies of the fixture is how the numbers in a review packet start disagreeing with the numbers
+# the tests assert. Prefer --db: a real scan exercises pagination, long filenames and criteria no
+# fixture author thought to include, which is exactly what a fixture cannot tell you.
 from test_report_weasy_structure import _FILES, _META, _RUN  # noqa: E402
 
 # Where veraPDF lives, and whether it is here at all, is resolved by the same module the test
 # suite uses — including the ACP_VERAPDF override. A second copy of that logic is a packet that
 # reports "not installed" on a machine where the tests are validating happily.
 from verapdf import NO_VERAPDF, VERAPDF_OK, validate  # noqa: E402
+
+
+def load_scan(db: Path, scan_id: str | None, owner: str | None):
+    """Fetch a real scan's report inputs the way routes/scans.py does, in the same order.
+
+    Not a reimplementation: the report's honesty depends on decisions, evidence and facts being
+    the ones the store holds for THIS scan, and on `meta` carrying the run's own rubric_hash
+    rather than whatever rubric happens to be active now. Assembling those differently here is
+    how a packet ends up reviewing a document the product never renders.
+    """
+    import store as store_mod
+    store_mod._SQLITE_PATH = db          # must precede the first Store() construction
+    import core
+
+    if scan_id is None:
+        rows = core.store.list_scans(owner=owner) if owner else core.store.list_scans()
+        if not rows:
+            raise SystemExit(f"no scans in {db}")
+        scan_id = rows[0]["id"]
+        print(f"scan           {scan_id} (most recent in {db.name})")
+    res = core.store.get_scan(scan_id, owner=owner) if owner else core.store.get_scan(scan_id)
+    if res is None:
+        raise SystemExit(f"scan {scan_id} not found in {db}")
+    rb = core.active_rubric()
+    meta = {"target": rb.cfg.get("conformance_target"), "version": rb.version,
+            "hash": res["run"].get("rubric_hash") or rb.hash}
+    return {
+        "run": res["run"], "files": res["files"], "meta": meta,
+        "decisions": core.store.get_decisions(scan_id),
+        "evidence": core.store.get_remediation_evidence(scan_id),
+        "facts": core.store.get_certification_facts(scan_id, apply_document_selection=True),
+    }
 
 
 @contextlib.contextmanager
@@ -119,15 +152,36 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-o", "--out", type=Path, default=ACP / "review-packet")
+    ap.add_argument("--db", type=Path, help="sqlite store holding a real scan; without it the "
+                                            "structural suite's sample run is used")
+    ap.add_argument("--scan", help="scan id in --db (default: most recent)")
+    ap.add_argument("--owner", help="owner email the scan is stored under")
     args = ap.parse_args()
+    if args.scan and not args.db:
+        ap.error("--scan needs --db")
     out: Path = args.out
     pages = out / "pages"
     pages.mkdir(parents=True, exist_ok=True)
 
+    if args.db:
+        src = load_scan(args.db, args.scan, args.owner)
+        run, files, meta = src["run"], src["files"], src["meta"]
+        extra = {k: src[k] for k in ("decisions", "evidence", "facts")}
+        provenance = (f"a **real scan** (`{run.get('id', '?')}`) — {len(files)} file(s), "
+                      f"average score {run.get('avg_score')}, {run.get('certifiable')} certified")
+        print(f"source         real scan, {len(files)} file(s)")
+    else:
+        run, files, meta, extra = _RUN, _FILES, _META, {}
+        provenance = ("the structural suite's **three-file sample**, not a real scan. It "
+                      "exercises both charts and a mix of certified and uncertified files, but "
+                      "says nothing about how a report with many files paginates — rebuild with "
+                      "`--db` against a real scan before signing off on layout")
+        print("source         sample fixture (pass --db for a real scan)")
+
     import report_weasy
     candidate = out / "candidate.pdf"
     with frozen_clock():
-        candidate.write_bytes(report_weasy.build_weasy_report(_RUN, _FILES, _META))
+        candidate.write_bytes(report_weasy.build_weasy_report(run, files, meta, **extra))
     cand_imgs = _render_pages(candidate, pages, "candidate")
     print(f"candidate.pdf  {candidate.stat().st_size} bytes, {len(cand_imgs)} page(s)")
 
@@ -139,7 +193,7 @@ def main() -> int:
         import report_tagged
         shipped = out / "shipped.pdf"
         with frozen_clock():
-            shipped.write_bytes(report_tagged.build_tagged_report(_RUN, _FILES, _META))
+            shipped.write_bytes(report_tagged.build_tagged_report(run, files, meta, **extra))
         ship_imgs = _render_pages(shipped, pages, "shipped")
         diff_lines = _diff_pages(ship_imgs, cand_imgs, pages)
         print(f"shipped.pdf    {shipped.stat().st_size} bytes, {len(ship_imgs)} page(s)")
@@ -168,6 +222,8 @@ def main() -> int:
 The WeasyPrint PDF/UA-1 renderer proposed to replace the Chromium one. **Nothing has been
 switched over.** `api/report_tagged.py`, `api/report.py` and `api/routes/scans.py` are untouched;
 this packet is the evidence for deciding whether to.
+
+**Built from {provenance}.**
 
 ## Already checked, and how
 

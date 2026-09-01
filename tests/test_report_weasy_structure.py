@@ -306,3 +306,39 @@ def test_the_tick_and_cross_glyphs_have_a_font_that_carries_them(report):
     assert any("DejaVu" in f for f in fonts), (
         f"no DejaVu face embedded — the ✓/✗ marks in the File Inventory have no glyph source. "
         f"Embedded: {sorted(fonts)}")
+
+
+def test_the_chart_alt_names_the_criterion_the_chart_actually_shows_as_largest():
+    """The alt says "affects the most files" — so it must name the longest bar.
+
+    `_bars_alt` receives its rows sorted by SEVERITY, and an earlier version read row[0] as the
+    maximum. The two coincide in the sample fixture, so nothing here caught it; a real 37-file
+    scan produced a report whose alt said "1.3.1 Info and Relationships affects the most files,
+    37 of 37" while the longest bar on the same page was 2.4.2 Page Titled at 49. The sentence
+    and the picture came from one list and disagreed.
+
+    That is the failure this whole file exists for: a Figure with an /Alt, veraPDF green, every
+    structural assertion passing, and the only reader affected is the one who cannot see the
+    chart being told the wrong thing. The rows below are in severity order with the largest count
+    LAST, which is the arrangement the bug needs.
+    """
+    import report_weasy
+    rows = [("1.3.1 Info and Relationships", 37),    # Critical, sorts first
+            ("2.4.1 Bypass Blocks", 12),
+            ("2.4.2 Page Titled", 49)]              # Moderate, sorts last, but is the largest
+    alt = report_weasy._bars_alt(rows, 37)
+    assert "2.4.2 Page Titled affects the most files, 49" in alt, alt
+    assert "1.3.1" not in alt.split("affects the most files")[0], (
+        f"named the highest-severity row rather than the largest: {alt}")
+
+
+def test_the_chart_alt_breaks_a_tie_toward_the_more_severe_criterion():
+    """Equal counts keep the earlier row, which is the higher-severity one.
+
+    Pinned because `max` returning the first maximum is a property of the implementation, and
+    the sentence reads better naming the criterion a reader should care about first.
+    """
+    import report_weasy
+    alt = report_weasy._bars_alt([("1.3.1 Info and Relationships", 37),
+                                  ("3.1.1 Language of Page", 37)], 37)
+    assert "1.3.1 Info and Relationships affects the most files, 37 of 37" in alt, alt

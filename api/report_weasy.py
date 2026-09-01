@@ -127,7 +127,13 @@ def _bars_alt(rows: list[tuple[str, int]], total_files: int) -> str:
     """
     if not rows:
         return "No criteria have open issues."
-    top, top_n = rows[0]
+    # max BY COUNT, not rows[0]. `rows` arrives sorted by severity, and reading the first row as
+    # the largest made the sentence contradict the picture it describes: on a real 37-file scan
+    # the alt said "1.3.1 affects the most files, 37 of 37" while the longest bar on the page was
+    # 2.4.2 at 49. Both statements came from the same list. A sighted reader sees the chart; the
+    # reader this sentence exists for gets the wrong criterion, and nothing structural can tell —
+    # the Figure has an /Alt either way. Ties keep the earlier (higher-severity) row.
+    top, top_n = max(rows, key=lambda r: r[1])
     others = len(rows) - 1
     if others == 1:
         tail = " 1 further criterion also has open issues."
