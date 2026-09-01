@@ -6471,7 +6471,11 @@ class Store:
         for p in (row.get("proposals") or []):
             if not isinstance(p, dict):
                 continue
-            if p.get("explain_only"):
+            # Explain-only: confirmed evidence, never bytes for the document.
+            # Companion: a caption/transcript FILE delivered beside the document. Both are
+            # approved and addressable, and neither is content an applier will write in, so
+            # counting either as outstanding blocks certification for good.
+            if p.get("explain_only") or Store.companion_name(p.get("companion_file")):
                 continue
             loc = (p.get("locator") or "").strip()
             val = (p.get("approved_value") or "").strip() or (p.get("proposed_value") or "").strip()
@@ -6541,6 +6545,79 @@ class Store:
         props = [p for p in (row.get("proposals") or []) if isinstance(p, dict)]
         return bool(props) and all(p.get("explain_only") for p in props)
 
+    @staticmethod
+    def companion_name(raw) -> str:
+        """A companion filename reduced to a BARE NAME, or "" when there isn't one.
+
+        Sanitised where the value is READ rather than only where it is built, and the reason is
+        that the JSON blob is the trust boundary: a row written by an older build, or by a
+        proposer someone adds later, has not been through today's builder. The name is derived
+        from a media filename out of a customer's estate, it reaches a Content-Disposition header
+        and it is the obvious basis for a path — so a `../` in it is a traversal handed to
+        whatever writes the file next.
+
+        `PurePosixPath().name` drops every directory component, on either separator, and the
+        result is checked against the two names that survive that and still mean a directory.
+        """
+        import posixpath as _pp
+        name = str(raw or "").strip().replace("\\", "/")
+        name = _pp.basename(name)
+        return "" if name in ("", ".", "..") else name
+
+    @staticmethod
+    def _row_companion_files(row: dict) -> dict[str, str]:
+        """{filename: content} this row delivers ALONGSIDE the document — never into it.
+
+        The reviewer's `approved_value` wins over the draft, and the fallback is the same one
+        `_row_approved_values` argues for: a reviewer who edited nothing has agreed to exactly
+        the draft they were shown. Getting this backwards is the quiet failure — a corrected
+        caption file and the machine's original are both valid WebVTT, so handing back the wrong
+        one looks like nothing at all.
+
+        A row resolved by a WCAG exception yields nothing, for the same reason it yields no
+        approved values: the reviewer closed it by judgement and authored no artefact.
+        """
+        out: dict[str, str] = {}
+        if Store._row_is_resolved(row):
+            return out
+        for p in (row.get("proposals") or []):
+            if not isinstance(p, dict):
+                continue
+            name = Store.companion_name(p.get("companion_file"))
+            if not name:
+                continue
+            # NOT `.strip()`ed, unlike `_row_approved_values`, and the difference is the point.
+            # There a value is a STRING going into a document — a stray newline around alt text
+            # is noise. Here it is a FILE's bytes: WebVTT is newline-delimited and its trailing
+            # newline is part of the artefact, so stripping would hand back a file that differs
+            # from the one the reviewer approved. Emptiness is still tested on the stripped form,
+            # because a value of only whitespace is not a caption file either.
+            val = p.get("approved_value") or ""
+            if not val.strip():
+                val = p.get("proposed_value") or ""
+            if val.strip():
+                out[name] = val
+        return out
+
+    @staticmethod
+    def _row_owes_no_document_content(row: dict) -> bool:
+        """True when nothing on this row is content awaiting a write into the document.
+
+        THE PREDICATE THE COUNTERS ASK, replacing `resolved or explain_only` at both call sites.
+        A companion row joins that set: a caption file is delivered beside the media and no
+        applier will ever write it in, so counting its approved value as outstanding content
+        would wedge the file permanently on a correct approval — the exact dead end
+        `_row_is_explain_only` was added to close, arriving through a new door.
+
+        Kept as ALL-of, like `_row_is_explain_only`: a row mixing a companion with a writable
+        proposal still owes the writable one, and `_row_approved_values` keeps that distinction
+        per proposal. No mixed row exists today; the point is that the mixed case fails safe.
+        """
+        if Store._row_is_resolved(row) or Store._row_is_explain_only(row):
+            return True
+        props = [p for p in (row.get("proposals") or []) if isinstance(p, dict)]
+        return bool(props) and all(Store.companion_name(p.get("companion_file")) for p in props)
+
     def _approved_unapplied_rows(self, scan_id: str, file: str) -> list[dict]:
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -6568,7 +6645,7 @@ class Store:
         """
         n = 0
         for row in self._approved_unapplied_rows(scan_id, file):
-            owes_nothing = self._row_is_resolved(row) or self._row_is_explain_only(row)
+            owes_nothing = self._row_owes_no_document_content(row)
             legacy = "" if owes_nothing else (row.get("approved_value") or "").strip()
             if self._row_approved_values(row) or legacy:
                 n += 1
@@ -6585,7 +6662,7 @@ class Store:
                 "AND (applied IS NULL OR applied=0)", (scan_id,))
             for r in self._db.fetchall(cur):
                 row = self._decode_proposals(r)
-                owes_nothing = self._row_is_resolved(row) or self._row_is_explain_only(row)
+                owes_nothing = self._row_owes_no_document_content(row)
                 legacy = "" if owes_nothing else (row.get("approved_value") or "").strip()
                 if self._row_approved_values(row) or legacy:
                     f = str(row.get("file") or "")

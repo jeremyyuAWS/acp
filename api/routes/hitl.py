@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 import core
@@ -238,6 +239,54 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
 
 class HitlAssign(BaseModel):
     assignee: str | None = None   # email address of the reviewer to assign, or null to clear
+
+
+@router.get("/hitl/queue/{item_id}/companion")
+def hitl_companion_download(item_id: str, request: Request = None):
+    """Download the companion FILE this review row delivers — a caption track, a transcript.
+
+    THE ARTEFACT HAD NO WAY OUT BEFORE THIS. #1177 drafted a WebVTT, put it on a review card and
+    stopped: the value lived in a JSON blob that no route read back, so a reviewer could sign the
+    finding off and still not obtain the file the sign-off was about. A caption file that cannot
+    be delivered is not a remediation; it is a record that one was considered.
+
+    Returns the reviewer's APPROVED text where there is one and the draft otherwise — the same
+    "approving an unedited card means the drafts are correct" rule `_row_approved_values` uses.
+    Downloading before approval is deliberately allowed: a reviewer checking a transcript against
+    the audio wants the file in a player, and refusing until approval would make them approve it
+    to find out whether they should.
+
+    NO FILENAME IN THE PATH, deliberately. The name comes from the stored row, so nothing a
+    caller sends reaches the Content-Disposition header or any later path — the traversal surface
+    is closed at the route rather than only by `Store.companion_name`, which stays as the check on
+    what a row (possibly written by an older build) actually holds.
+
+    404 rather than 200-with-nothing when the row carries no companion: an empty file would be
+    indistinguishable from a caption track for a silent video, and a player handed one shows
+    nothing rather than reporting a problem.
+    """
+    item = core.store.get_hitl_item(item_id)
+    if item is None:
+        raise HTTPException(404, "item not found")
+    files = core.store._row_companion_files(item)
+    if not files:
+        raise HTTPException(404, "this review item carries no companion file")
+    if len(files) > 1:
+        # One row, one artefact today (a caption card is enqueued alone). If that ever changes,
+        # this must grow a selector rather than silently hand back whichever came first.
+        raise HTTPException(409, f"this item carries {len(files)} companion files; "
+                                 f"no selector exists yet")
+    name, content = next(iter(files.items()))
+    # The name is server-derived, but it still goes through the same header hygiene the uploaded
+    # -filename path uses: it descends from a customer's media filename, and a quote or control
+    # character in it would terminate or inject the header.
+    safe = "".join(c for c in name if c.isprintable()).replace('"', "'") or "captions.vtt"
+    media_type = ("text/vtt" if safe.lower().endswith(".vtt")
+                  else "application/x-subrip" if safe.lower().endswith(".srt")
+                  else "text/plain")
+    return Response(content.encode("utf-8"),
+                    media_type=f"{media_type}; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{safe}"'})
 
 
 @router.patch("/hitl/queue/{item_id}/assign")
