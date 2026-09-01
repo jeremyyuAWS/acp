@@ -212,6 +212,32 @@ def _rules_in(node: ast.AST) -> set[tuple[str, str, str]]:
     return found
 
 
+def _fmt_of_ext(ext: str) -> str:
+    """'.docx' -> 'docx', '.mp4' -> 'av', '.htm' -> 'html'.
+
+    Stripping the dot was right while every dispatched format was one extension whose name was
+    its extension. It stops being right the moment one format has eleven of them: the index would
+    have listed the media rules against formats called "mp4", "mov" and "flac" — nine strings that
+    appear in no capability table, no registry key and no estate bucket, so a reader could not
+    look any of them up and nothing would say why.
+
+    `scan_formats._EXT_OF` is the repo's declared extension-to-format map and is stdlib-only, so
+    reading it here costs nothing. An extension it does not know falls back to the old behaviour
+    rather than being dropped — an unrecognised dispatch should still document its rules.
+    """
+    try:
+        import sys
+        if str(API) not in sys.path:
+            sys.path.insert(0, str(API))
+        import scan_formats
+        for fmt, exts in scan_formats._EXT_OF.items():
+            if ext.lower() in exts:
+                return fmt
+    except Exception:
+        pass
+    return ext.lstrip(".")
+
+
 def _dispatch_formats(tree: ast.Module) -> dict[str, list[str]]:
     """{check_function_name: [formats]} read from office_structure.checks_for().
 
@@ -224,10 +250,33 @@ def _dispatch_formats(tree: ast.Module) -> dict[str, list[str]]:
     if fn is None:
         raise SystemExit("gen_rules_index: office_structure.checks_for() not found — "
                          "the first-party dispatch moved; update this generator.")
+    # Module-level tuples/lists of extension literals, so a branch may test membership of a NAMED
+    # set rather than spelling every extension inline. `if ext in _AV_EXTS:` is the natural way to
+    # dispatch one format that has eleven extensions, where every other branch here is one format
+    # with one — and without this resolution the test would contain no string constants at all,
+    # the branch would be skipped, and that check's rules would silently vanish from rules/.
+    #
+    # Silence is the whole hazard this generator has already been bitten by twice (the 1.4.3 table
+    # rewrite, then the 32 undocumented HTML_* rules). Only literal collections are resolved: a
+    # name bound to a call cannot be evaluated here, and guessing at one would be worse than the
+    # dispatch being unreadable, which at least fails visibly in tests/test_rules_index.py.
+    named_exts: dict[str, list[str]] = {}
+    for stmt in tree.body:
+        if not isinstance(stmt, ast.Assign) or not isinstance(stmt.value, (ast.Tuple, ast.List)):
+            continue
+        vals = [s for s in _const_strs(stmt.value.elts) if s.startswith(".")]
+        if not vals:
+            continue
+        for target in stmt.targets:
+            if isinstance(target, ast.Name):
+                named_exts[target.id] = vals
+
     out: dict[str, list[str]] = {}
     for branch in [n for n in ast.walk(fn) if isinstance(n, ast.If)]:
-        exts = [s.lstrip(".") for s in _const_strs(ast.walk(branch.test))
-                if s.startswith(".")]
+        raw = [s for s in _const_strs(ast.walk(branch.test)) if s.startswith(".")]
+        for name in [n.id for n in ast.walk(branch.test) if isinstance(n, ast.Name)]:
+            raw += named_exts.get(name, [])
+        exts = sorted({_fmt_of_ext(s) for s in raw})
         if not exts:
             continue
         for call in [n for n in ast.walk(branch) if isinstance(n, ast.Call)]:

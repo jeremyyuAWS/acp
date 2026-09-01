@@ -29,10 +29,13 @@ WCAG, nor whether the detector's judgement is correct, nor whether every failure
 criterion is caught. A pair can be tested and still be a partial check — most are.
 
 REACHABILITY IS THREE STATES BECAUSE IT CANNOT BE DERIVED. Asking statically whether a registered
-detector is reachable from `office_structure.checks_for` flags 11 of 32 registrations, of which 3
-are real: the registered detector and the scan-path implementation are frequently different code
-emitting the same criterion (1.1.1 docx, 2.4.3 pdf, 2.4.4 docx and 4.1.2 docx/pdf all look
-unreachable and are all proven to fire). So reachability is reported from EVIDENCE only:
+detector is reachable from `office_structure.checks_for` flagged 11 of 32 registrations, of which
+3 were real: the registered detector and the scan-path implementation are frequently different
+code emitting the same criterion (1.1.1 docx, 2.4.3 pdf, 2.4.4 docx and 4.1.2 docx/pdf all look
+unreachable and are all proven to fire). The count is left as it was measured rather than
+refreshed against the current 34 registrations — it is a record of an experiment, and quietly
+re-running the arithmetic on a sentence describing what someone once found is how a measurement
+turns into a claim nobody made. So reachability is reported from EVIDENCE only:
 
   PROVEN       a ground-truth corpus pair shows a real scan reporting it
   DISPROVEN    a test shows a real scan does not report it, on a document that should trip it

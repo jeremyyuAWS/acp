@@ -2176,7 +2176,57 @@ def checks_for(path: Path, ext: str) -> list[dict]:
         return (xlsx_contrast_checks(path) + xlsx_structure_checks(path)
                 + office_control_review_checks(path, ext) + office_color_only_checks(path, ext)
                 + xlsx_nontext_contrast_checks(path) + office_non_text_content_checks(path, ext))
+    if ext in _AV_EXTS:
+        return media_caption_checks(path)
     return []
+
+
+# ── 1.2.1 / 1.2.2 — standalone audio and video ──────────────────────────────────────────────
+# Dispatched by SET MEMBERSHIP rather than by another `if ext == ...` arm, because "av" is one
+# format with eleven extensions where every other entry above is one format with one. The set is
+# read from scan_formats so the dispatch and the scan scope cannot drift: an extension Discovery
+# lists and this function does not recognise is a file assessed to zero findings, which reads as
+# a clean file rather than as an unhandled one.
+# The media extensions checks_for dispatches, as a LITERAL tuple rather than as
+# `frozenset(scan_formats._EXT_OF["av"])`, and the reason is a tool rather than taste.
+# `scripts/gen_rules_index.py` reads this function's AST to learn which formats each check
+# reaches — "checks_for IS the wiring", as it puts it — and it cannot evaluate a call. Derived
+# here, the media rules would silently stop being documented in rules/, which is the exact
+# failure `tests/test_rules_index.py` was written after.
+#
+# Duplicating the list is only safe because it is BOUND: test_media_assessment asserts this tuple
+# equals scan_formats._EXT_OF["av"] exactly, in both directions. An extension in one and not the
+# other is the drift that makes a file discoverable and unassessable, or the reverse.
+_AV_EXTS = (".mp4", ".mov", ".avi", ".mkv", ".webm",
+            ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg")
+
+
+def media_caption_checks(path: Path) -> list[dict]:
+    """1.2.1/1.2.2 findings for a media file, via the registry-backed detector.
+
+    Imported inside the function, not at module scope. This module is imported by tooling that
+    only wants its check functions (the matrix generator among them), and `formats.media` pulls
+    in `api/media.py` and its optional engine probes. The other registry-backed detectors are
+    reached the same way for the same reason.
+
+    THE FALLBACK IS A REVIEW FINDING, NOT AN EMPTY LIST, and that is the whole point of writing
+    the handler out rather than wrapping the call in `except Exception: return []` like the
+    others. On this path an empty list means "assessed, nothing wrong": a deployment where the
+    detector could not even be imported would report every video in the estate as fine. The other
+    checks in this module can safely return [] because their criterion is also covered by a
+    sibling check; 1.2.x on media has exactly one technique, so its failure has to be visible.
+    """
+    try:
+        from formats.av.detectors import captions as _media_captions
+        return _media_captions.detect(path)
+    except Exception:
+        swallowed(f"media_caption_checks: the media detector could not run for {path.name}")
+        return [{"ruleId": "MEDIA_NOT_ASSESSED",
+                 "wcag": "1.2.2 Captions (Prerecorded)",
+                 "severity": "REVIEW",
+                 "detail": f"{path.name} was NOT ASSESSED for a text alternative: the media "
+                           f"detector could not be loaded on this deployment. This is not "
+                           f"evidence that captions are present or absent — a person must check."}]
 
 
 # ── 1.4.2 Audio Control — pptx embedded audio set to start automatically ────────
