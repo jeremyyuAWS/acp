@@ -240,3 +240,21 @@ def test_the_route_is_registered_and_public(monkeypatch, isolated_store):
     res = client.get("/probe/readyz")
     assert res.status_code == 200, res.text
     assert res.json()["ready"] is True
+
+
+def test_the_503_survives_the_real_response_pipeline(monkeypatch, isolated_store):
+    """Setting `response.status_code` on an injected Response is the mechanism the whole gate
+    rests on. Asserting it on the function alone would not prove FastAPI carries it out to the
+    wire — and a 200 on the wire admits the replica no matter what the body says."""
+    import core
+    from fastapi.testclient import TestClient
+
+    from app import app
+
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setattr(isolated_store, "ping",
+                        lambda: (_ for _ in ()).throw(OSError("connection refused")))
+    res = TestClient(app).get("/probe/readyz")
+    assert res.status_code == 503, res.text
+    assert res.json() == {"ready": False, "checks": {"db": "db_unreachable: OSError"},
+                          "service": "acp"}
