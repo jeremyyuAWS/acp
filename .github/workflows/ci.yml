@@ -347,6 +347,12 @@ jobs:
           # test_the_postgres_tests_are_not_silently_skipped. A misconfigured integration job
           # that quietly skips is the failure mode this whole job exists to avoid.
           ACP_REQUIRE_PG: '1'
+          # Consent to the destructive fixtures (TRUNCATE of every table; DROP of the migration
+          # marker). conftest.require_disposable_postgres refuses to run them without it, and
+          # additionally requires a loopback host and a disposable database name — both of which
+          # the service container above satisfies (localhost / acp_ci). Setting this anywhere
+          # that is not a throwaway is the mistake the guard exists to prevent.
+          ACP_PG_TEST_DESTRUCTIVE: '1'
         run: |
           python -m pytest tests/test_schema_boot_locks.py tests/test_pg_job_queue.py \
             tests/test_pg_result_fencing.py \
@@ -356,6 +362,7 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:acp-ci-throwaway@localhost:5432/acp_ci
           ACP_REQUIRE_PG: '1'
+          ACP_PG_TEST_DESTRUCTIVE: '1'
         # `pytest` exits 0 on a skip, so neither the exit status above nor a green tick here
         # distinguishes "the Postgres behaviour is correct" from "it was never tested".
         #

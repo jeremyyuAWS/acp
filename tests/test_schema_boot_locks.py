@@ -357,8 +357,12 @@ def test_concurrent_boots_against_a_real_server_migrate_exactly_once():
         return real_apply(self, conn, want)
 
     import psycopg2
+    from conftest import require_disposable_postgres
     c = psycopg2.connect(_PG)
     c.autocommit = True
+    # Dropping the migration marker forces every replica to re-run the whole migration. Smaller
+    # than the TRUNCATE next door, and gated on exactly the same nothing until now.
+    require_disposable_postgres(_PG, conn=c)
     with c.cursor() as cur:
         cur.execute(f"DROP TABLE IF EXISTS {store._PgAdapter._SCHEMA_VERSION_TABLE}")
     c.close()
