@@ -176,7 +176,15 @@ jobs:
           FQDN="${{ vars.ACP_FQDN }}"
           H="$(curl -fsS --max-time 20 "https://$FQDN/healthz")"
           R="$(curl -fsS --max-time 20 "https://$FQDN/readyz")"
-          echo "healthz: $H"
-          echo "readyz:  $R"
+          # The route ACA's readiness probe gates ingress on (shared by both deploy scripts).
+          # Checked here for a reason the other two do not cover: the probe lives on the
+          # container app's TEMPLATE and survives an image change, so an image that does not
+          # serve this route would leave the gate asking for a 404 and the revision would never
+          # become ready. curl -f already fails on the 503 this answers when it is not ready.
+          P="$(curl -fsS --max-time 20 "https://$FQDN/probe/readyz")"
+          echo "healthz:      $H"
+          echo "readyz:       $R"
+          echo "probe/readyz: $P"
           case "$H" in *'"version_stamped":true'*) ;; *) echo "::error::live app is not version-stamped"; exit 1 ;; esac
           case "$R" in *'"ready":true'*)           ;; *) echo "::error::live app is not ready";          exit 1 ;; esac
+          case "$P" in *'"ready":true'*)           ;; *) echo "::error::the route ACA gates ingress on is not ready"; exit 1 ;; esac

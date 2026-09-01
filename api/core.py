@@ -366,6 +366,11 @@ def verify_ms_token(token: str) -> str | None:
 # Paths that bypass all auth (needed before the user has a token).
 ALWAYS_PUBLIC = {"/healthz", "/readyz", "/config", "/hub", "/ai/status", "/alerts/webhook",
                  "/capability", "/monitor/estate",
+                 # The container-local readiness probe (routes/system.py). Public because the
+                 # platform's probe carries no credential and never will — a rollout gate that
+                 # needed one would fail every replica it was meant to admit. It returns a
+                 # boolean and a fault class, no data.
+                 "/probe/readyz",
                  # The health/heartbeat Swagger document (routes/openapi_health.py) — a curated,
                  # non-sensitive description of the endpoints above plus the owner-scoped
                  # progress/heartbeat routes. Public on purpose: the whole point is a monitor or

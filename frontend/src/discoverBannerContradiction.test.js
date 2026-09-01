@@ -37,12 +37,30 @@ describe('a failed scan clears the stale preflight capacity notice', () => {
     // The catch that sets the "scan failed: ..." err message must also null out
     // preflightCapacityState — order matters only in that both must be in the same catch, not
     // split across catch/finally where a race could leave one stale.
-    expect(doScan[0]).toMatch(/catch \(e\) \{\s*setPreflightCapacityState\(null\)\s*setErr\(`scan failed: \$\{scanFailureDetail\(e\?\.message \?\? e\)\}`\)/)
+    //
+    // Asserted as "in the same catch, capacity cleared first" rather than as two adjacent lines.
+    // Since 2026-09-01 the err set is GUARDED: a submit whose response was lost has its own,
+    // more accurate surface ("the server did not confirm your scan"), and a red "scan failed"
+    // beside it would be a third contradicting banner — the very thing this file exists to stop.
+    // Pinning adjacency would have made that fix look like a regression.
+    const c = /catch \(e\) \{[\s\S]*?\n    \} finally \{/.exec(doScan[0])
+    expect(c, "doScan's catch block not found").toBeTruthy()
+    const iCapacity = c[0].indexOf('setPreflightCapacityState(null)')
+    const iErr = c[0].indexOf('setErr(`scan failed: ${scanFailureDetail(e?.message ?? e)}`)')
+    expect(iCapacity, 'capacity notice not cleared in the catch').toBeGreaterThan(-1)
+    expect(iErr, 'the "scan failed" message is not set in the catch').toBeGreaterThan(-1)
+    expect(iCapacity).toBeLessThan(iErr)
   })
 
   it('preflightCapacityState is reset at the start of a new attempt too — belt and suspenders', () => {
     const doScan = code.match(/const doScan = async[\s\S]*?\n  \}\n/)
-    expect(doScan[0]).toMatch(/setBusy\(true\); setErr\(null\); setPreflightCapacityState\(null\)/)
+    // setSubmitUncertain(null) joined this line on 2026-09-01 (the unconfirmed-submit notice is
+    // per-attempt too), so the two calls this test is about are no longer adjacent. Both still
+    // have to be on the opening line of a fresh attempt, which is what is asserted.
+    const open = /setBusy\(true\);[^\n]*\n/.exec(doScan[0])
+    expect(open, 'doScan opening line not found').toBeTruthy()
+    expect(open[0]).toMatch(/setErr\(null\)/)
+    expect(open[0]).toMatch(/setPreflightCapacityState\(null\)/)
   })
 
   it('reconnectJob\'s catch does NOT touch preflightCapacityState — it never sets it, so nothing to clear', () => {

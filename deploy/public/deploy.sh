@@ -13,6 +13,7 @@
 set -euo pipefail
 ACP="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ACP"
+source "$ACP/deploy/public/readiness_probe.sh"
 
 _retry() {  # ACA serializes revision writes; retry the conflict it raises when they overlap
   local i
@@ -576,6 +577,8 @@ else
     --env-vars $ADC_ENV $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV \
     --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 1 -o none
 fi
+
+_apply_readiness_probe
 
 echo "== 5/5 done =="
 FQDN="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)"

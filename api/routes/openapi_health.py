@@ -62,7 +62,9 @@ endpoints below rather than exposed directly:
 - **Remediation**: `GET /scans/{sid}/remediation-status` (in-flight jobs + current activity),
   `GET /scans/{sid}/source-status` (has the source file drifted since scan time).
 - **Platform**: `GET /healthz` (liveness + build provenance), `GET /readyz` (functional
-  readiness — workers, PDF/vision engines, source-adapter config), `GET /monitor/estate`
+  readiness — workers, PDF/vision engines, source-adapter config), `GET /probe/readyz`
+  (container-local readiness — the rollout gate; the only one of the three safe to point a
+  platform probe at), `GET /monitor/estate`
   (production-monitor aggregate counts, key-gated), `GET /schedule` (scheduled-sweep config +
   last outcome), `GET /ai/status`, `GET /jobs` (queue depth + worker heartbeat),
   `GET /control/estate`, `POST /alerts/webhook` (inbound Grafana alert receiver).
@@ -147,6 +149,20 @@ HEALTH_OPENAPI_SPEC: dict = {
                     "version": {"type": "string", "example": "2026.8.28.140501"},
                     "built_at": {"type": "string", "nullable": True, "format": "date-time"},
                     "version_stamped": {"type": "boolean"},
+                },
+            },
+            "ProbeReadyzResponse": {
+                "type": "object",
+                "properties": {
+                    "ready": {"type": "boolean"},
+                    "checks": {
+                        "type": "object",
+                        "properties": {
+                            "db": {"type": "string",
+                                   "description": "'ok', 'db_check_in_flight' (an earlier probe's round-trip has not returned), or 'db_unreachable: <ExceptionClass>' — the class only, never the driver message, which carries the DSN."},
+                        },
+                    },
+                    "service": {"type": "string", "example": "acp"},
                 },
             },
             "ReadyzResponse": {
@@ -340,6 +356,22 @@ HEALTH_OPENAPI_SPEC: dict = {
                 "/healthz: a worker-tier outage must never be treated as a reason to restart the "
                 "API container.",
                 {"$ref": "#/components/schemas/ReadyzResponse"}, security=_NO_AUTH,
+            ),
+        },
+        "/probe/readyz": {
+            "get": _get(
+                "Container-local readiness (rollout gate)", "Platform",
+                "Can THIS container serve a database-backed request right now? The only health "
+                "route a platform probe may target: /healthz touches no dependency (so it "
+                "answers 200 from a replica that cannot reach the database) and /readyz answers "
+                "for the whole deployment (so a worker-tier outage would evict the API). Checks "
+                "one database round-trip and nothing else — no worker tier, no engines, no "
+                "source adapters. **Answers with a status code**: 200 ready, 503 not ready; an "
+                "httpGet probe reads the code, so a 200 carrying `ready: false` would be read "
+                "as ready.",
+                {"$ref": "#/components/schemas/ProbeReadyzResponse"}, security=_NO_AUTH,
+                responses_extra={"503": {"description": "Not ready — this replica must not receive traffic",
+                                         "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ProbeReadyzResponse"}}}}},
             ),
         },
         "/monitor/estate": {
