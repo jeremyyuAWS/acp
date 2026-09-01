@@ -379,11 +379,11 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
         if (n == null) {
           confirm({
             title: `Enable "${p.name}"?`,
-            message: 'Review the rule before enabling it. The current impact could not be measured, but future matches will be tagged for review.',
-            facts: [{ label: 'Current matches', value: 'Not available' },
-                    { label: 'Effect', value: actionSpec(p.action).outcome },
-                    { label: 'Applies', value: 'Next Discover run' }],
-            variant: 'activation', confirmLabel: 'Enable rule',
+            message: 'This rule will join the next Discovery run. Its current impact could not be measured. Enabling only adds lifecycle recommendations for review—it never moves, archives, or deletes source files.',
+            facts: [{ label: 'Files currently in scope', value: 'Not available' },
+                    { label: 'Recommendation', value: actionSpec(p.action).outcome },
+                    { label: 'Starts', value: 'Next Discovery run' }],
+            variant: 'activation', presentation: 'toast', confirmLabel: 'Enable rule',
           }).then((ok) => { if (ok) doSetEnabled(true) })
           return
         }
@@ -394,24 +394,24 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
         const broad = pct != null && pct >= BROAD_RULE_PCT
         confirm({
           title: `Enable "${p.name}"?`,
-          message: 'Review the measured impact before this rule joins the next Discovery run. Enabling creates recommendations only; it does not move or delete source files.',
-          facts: [{ label: 'Current matches', value: `${n.toLocaleString()} file${n === 1 ? '' : 's'}${pct != null ? ` · ${pct}%` : ''}` },
-                  { label: 'Effect', value: outcome },
-                  { label: 'Applies', value: 'Next Discover run' }],
+          message: 'This rule will join the next Discovery run. Enabling only adds lifecycle recommendations for review—it never moves, archives, or deletes source files.',
+          facts: [{ label: 'Files currently in scope', value: `${n.toLocaleString()} file${n === 1 ? '' : 's'}${pct != null ? ` · ${pct}% of discovered files` : ''}` },
+                  { label: 'Recommendation', value: outcome },
+                  { label: 'Starts', value: 'Next Discovery run' }],
           warning: broad ? `⚠ That's ${pct}% of your estate — check the conditions are as narrow as you intended before enabling.` : undefined,
           variant: broad ? 'warning' : 'activation',
-          confirmLabel: 'Enable rule',
+          presentation: 'toast', confirmLabel: 'Enable rule',
         }).then((ok) => { if (ok) doSetEnabled(true) })
       })
       .catch((e) => {
         setBusy(false)
         confirm({
           title: `Enable "${p.name}"?`,
-          message: `Could not check how many files it would match: ${refusalText(e)}`,
-          facts: [{ label: 'Current matches', value: 'Not available' },
-                  { label: 'Effect', value: actionSpec(p.action).outcome },
-                  { label: 'Applies', value: 'Next Discover run' }],
-          variant: 'warning', confirmLabel: 'Enable anyway',
+          message: `The current impact could not be measured: ${refusalText(e)} Enabling will still only add lifecycle recommendations for review—it will not change source files.`,
+          facts: [{ label: 'Files currently in scope', value: 'Not available' },
+                  { label: 'Recommendation', value: actionSpec(p.action).outcome },
+                  { label: 'Starts', value: 'Next Discovery run' }],
+          variant: 'warning', presentation: 'toast', confirmLabel: 'Enable anyway',
         }).then((ok) => { if (ok) doSetEnabled(true) })
       })
   }

@@ -323,10 +323,15 @@ describe('the existing rules list', () => {
 
     await click(byLabel('Enable rule Superseded drafts')); await flush()
     expect(previewDispositionPolicy).toHaveBeenCalledWith('p2')
-    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ facts: expect.arrayContaining([
-      expect.objectContaining({ label: 'Current matches', value: '41 files · 20%' }),
-      expect.objectContaining({ label: 'Effect', value: 'tagged for deletion review' }),
-    ]) }))
+    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({
+      presentation: 'toast',
+      message: expect.stringContaining('never moves, archives, or deletes source files'),
+      facts: expect.arrayContaining([
+        expect.objectContaining({ label: 'Files currently in scope', value: '41 files · 20% of discovered files' }),
+        expect.objectContaining({ label: 'Recommendation', value: 'tagged for deletion review' }),
+        expect.objectContaining({ label: 'Starts', value: 'Next Discovery run' }),
+      ])
+    }))
     expect(setDispositionPolicyEnabled).not.toHaveBeenCalled()   // declined
 
     confirmMock.mockResolvedValue(true)
@@ -355,7 +360,10 @@ describe('the existing rules list', () => {
     confirmMock.mockResolvedValue(true)
     await render(); await expand(); await flush()
     await click(byLabel('Enable rule Superseded drafts')); await flush()
-    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('Could not check how many files') }))
+    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({
+      presentation: 'toast',
+      message: expect.stringContaining('current impact could not be measured'),
+    }))
     expect(setDispositionPolicyEnabled).toHaveBeenCalledWith('p2', true)
   })
 
