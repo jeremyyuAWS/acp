@@ -68,17 +68,16 @@ describe('W2 — rejected fix appears in the inbox as manual-handling work', () 
 
 // ── W8 · apply-to-all-matching ───────────────────────────────────────────────────────────────
 describe('W8 — apply a decision to every matching finding in the same cluster', () => {
-  // Three "missing alt text" (1.1.1) findings across three files, all in the actionable apply lane —
-  // but only TWO of them are .docx. Since 2026-09-01 the batch's scope is the selected finding's
-  // CLUSTER (criterion + format + lane), not every finding sharing the criterion, so the .pdf one is
-  // deliberately out of reach of a decision made from a .docx finding. The run's own policy (PRD
-  // "Tier C — grouped approval") requires criterion AND document format to match before one decision
-  // may cover a group: the same criterion is remediated differently per format and the evidence a
-  // reviewer inspects does not transfer.
+  // Three "missing alt text" (1.1.1) findings across three files, all in the actionable apply lane.
+  // The batch's scope is the selected finding's CLUSTER (criterion + lane). Format is deliberately
+  // NOT part of that key — it was tried and reverted at the owner's direction, because keying on it
+  // split the large single-criterion runs clustering exists to collapse. So the .pdf finding IS in
+  // reach here, and the compensating control is disclosure: the banner names the formats the
+  // decision covers.
   const QUEUE = [
     { id: 1, file: 'a.docx', title: 'DOCX · Image needs alt text', rule_id: '1.1.1', hasProposal: true, after: 'alt A' },
     { id: 2, file: 'b.docx', title: 'DOCX · Image needs alt text', rule_id: 'SC_1_1_1', hasProposal: true, after: 'alt B' },
-    // Same criterion, different FORMAT — must not join the .docx batch.
+    // Same criterion, different format — joins the batch, and the banner says so.
     { id: 3, file: 'c.pdf', title: 'PDF · Image needs alt text', rule_id: 'WCAG 1.1.1', hasProposal: true, after: 'alt C' },
     // A different rule — must never be swept into the 1.1.1 batch.
     { id: 4, file: 'd.docx', title: 'DOCX · Document has no title', rule_id: '2.4.2', hasProposal: true, after: 'A title' },
@@ -87,22 +86,23 @@ describe('W8 — apply a decision to every matching finding in the same cluster'
   it('offers a batch action naming the matching count', async () => {
     await render({ queue: QUEUE, decisions: {} })
     expect(detailHeading()).toBe('Image needs alt text')
-    // ONE other finding is in reach: id2 (1.1.1, .docx, apply). id3 is the same criterion in a
-    // different format and is NOT counted. The copy names the criterion, the format and the document
-    // count, so the reviewer knows exactly what a batch press would reach.
-    expect(container.textContent).toContain('You are looking at one of 2 findings that share this issue')
-    expect(container.textContent).toContain('WCAG 1.1.1 in DOCX files')
-    expect(btnByText('Approve this decision for 1 other WCAG 1.1.1 finding')).toBeTruthy()
-    expect(btnByText('Reject this decision for 1 other WCAG 1.1.1 finding')).toBeTruthy()
+    // TWO other findings are in reach: id2 (.docx) and id3 (.pdf). id4 is a different criterion and
+    // is not. The copy names the criterion, the formats and the document count, so the reviewer knows
+    // exactly what a batch press would reach — including that it crosses a format boundary.
+    expect(container.textContent).toContain('You are looking at one of 3 findings that share this issue')
+    expect(container.textContent).toContain('WCAG 1.1.1 in DOCX and PDF files')
+    expect(container.textContent).toContain('covers more than one document format')
+    expect(btnByText('Approve this decision for 2 other WCAG 1.1.1 findings')).toBeTruthy()
+    expect(btnByText('Reject this decision for 2 other WCAG 1.1.1 findings')).toBeTruthy()
   })
 
-  it('applies the decision to its cluster only — not other formats, not other rules', async () => {
+  it('applies the decision to its cluster only — every format of that rule, and no other rule', async () => {
     const calls = []
     await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
-    await click(btnByText('Approve this decision for 1 other WCAG 1.1.1 finding'))
-    // ids 1,2 (1.1.1 in .docx) approved. id3 is the same criterion in .pdf and id4 a different
-    // criterion — neither is in the cluster, so neither is touched.
-    expect(calls.map((c) => c[0]).sort()).toEqual([1, 2])
+    await click(btnByText('Approve this decision for 2 other WCAG 1.1.1 findings'))
+    // ids 1,2,3 (every 1.1.1 in the actionable lane, both formats) approved. id4 is a different
+    // criterion, so it is not in the cluster and is not touched.
+    expect(calls.map((c) => c[0]).sort()).toEqual([1, 2, 3])
     expect(calls.every((c) => c[1] === 'accepted')).toBe(true)
   })
 

@@ -36,7 +36,8 @@ describe('RemediationInbox — workflow-status queue', () => {
   // The failure this exists to stop: a production run put 265 findings into this queue, largely for
   // one criterion. A flat list that long is a rubber-stamping machine however good each row is.
 
-  // Four 1.1.1 AI drafts in .docx (one cluster), one 1.1.1 in .pdf and one 2.4.2 (singles).
+  // Five 1.1.1 AI drafts — four .docx and one .pdf — which are ONE cluster, because format is not
+  // part of the cluster key. Plus one 2.4.2, which is a different criterion and so its own row.
   const CLUSTERED = [
     { id: 101, file: 'a.docx', title: 'DOCX \u00b7 Image needs alt text', rule_id: '1.1.1', severity: 'SERIOUS', hasProposal: true, after: 'alt A' },
     { id: 102, file: 'b.docx', title: 'DOCX \u00b7 Image needs alt text', rule_id: '1.1.1', severity: 'SERIOUS', hasProposal: true, after: 'alt B' },
@@ -49,28 +50,31 @@ describe('RemediationInbox — workflow-status queue', () => {
 
   it('groups like findings into one row by default, and says how big the group is', async () => {
     await render({ queue: CLUSTERED, decisions: {} })
-    // Six findings, but four of them are one decision — so four rows, not six.
-    expect(rows().length).toBe(3)
-    const cluster = rows().find((r) => r.textContent.includes('4 findings'))
+    // Six findings, but five of them are one decision — so two rows, not six.
+    expect(rows().length).toBe(2)
+    const cluster = rows().find((r) => r.textContent.includes('5 findings'))
     expect(cluster).toBeTruthy()
-    expect(cluster.textContent).toContain('3 documents')   // b, c (twice), a → a,b,c = 3
+    expect(cluster.textContent).toContain('4 documents')   // a, b, c (twice), e → 4 distinct files
     expect(cluster.textContent).toContain('1.1.1')
     // Severity is NOT what groups a cluster, so the mix it spans is stated rather than hidden.
     expect(cluster.textContent).toContain('1 critical')
-    expect(cluster.textContent).toContain('3 serious')
+    expect(cluster.textContent).toContain('4 serious')
   })
 
-  it('keeps a different format out of the cluster, as its own row', async () => {
+  it('spans document formats, and says on the row that it does', async () => {
+    // Format is deliberately not part of the cluster key (the owner's call, 2026-09-01: keying on
+    // it split the large single-criterion runs clustering exists to collapse). The compensating
+    // control is disclosure — the breadth is stated, never implied.
     await render({ queue: CLUSTERED, decisions: {} })
-    // The .pdf 1.1.1 finding is the same criterion but not the same decision — it is not folded in.
-    const pdfRow = rows().find((r) => r.textContent.includes('e.pdf'))
-    expect(pdfRow).toBeTruthy()
-    expect(pdfRow.textContent).not.toContain('findings \u00b7')   // a single row, not a cluster header
+    const cluster = rows().find((r) => r.textContent.includes('5 findings'))
+    expect(cluster.textContent).toContain('DOCX and PDF')
+    // …and the spoken label carries it too, so it is not a sighted-only fact.
+    expect(cluster.getAttribute('aria-label')).toContain('DOCX and PDF')
   })
 
   it('selecting a cluster opens its first undecided finding for review', async () => {
     await render({ queue: CLUSTERED, decisions: {} })
-    const cluster = rows().find((r) => r.textContent.includes('4 findings'))
+    const cluster = rows().find((r) => r.textContent.includes('5 findings'))
     await click(cluster)
     expect(detailHeading()).toBe('Image needs alt text')
     // The representative is the first UNDECIDED member — id 101.
@@ -83,9 +87,9 @@ describe('RemediationInbox — workflow-status queue', () => {
     // now three, and the row it shows has moved on from 101 to 102. Both halves matter: the count
     // tracks the tab it is in (never claiming work that is no longer here), and the representative
     // is always the next thing actually needing a decision.
-    const cluster = rows().find((r) => r.textContent.includes('3 findings'))
+    const cluster = rows().find((r) => r.textContent.includes('4 findings'))
     expect(cluster).toBeTruthy()
-    expect(rows().some((r) => r.textContent.includes('4 findings'))).toBe(false)
+    expect(rows().some((r) => r.textContent.includes('5 findings'))).toBe(false)
     expect(container.querySelector('#rinbox-row-102')).toBeTruthy()
     expect(container.querySelector('#rinbox-row-101')).toBeFalsy()
   })
@@ -93,26 +97,27 @@ describe('RemediationInbox — workflow-status queue', () => {
   it('expands to the individual findings when the reviewer wants them', async () => {
     await render({ queue: CLUSTERED, decisions: {} })
     const toggle = [...container.querySelectorAll('button')]
-      .find((b) => /Expand the 4 findings/.test(b.getAttribute('aria-label') || ''))
+      .find((b) => /Expand the 5 findings/.test(b.getAttribute('aria-label') || ''))
     expect(toggle).toBeTruthy()
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     await click(toggle)
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    // All four members are now individually selectable.
-    for (const id of [101, 102, 103, 104]) {
+    // All five members are now individually selectable — including the .pdf one, so a reviewer who
+    // does want to treat a format separately can still reach it.
+    for (const id of [101, 102, 103, 104, 105]) {
       expect(container.querySelector(`#rinbox-row-${id}`)).toBeTruthy()
     }
   })
 
-  it('a collapsed cluster is ONE step for the keyboard, not four', async () => {
+  it('a collapsed cluster is ONE step for the keyboard, not five', async () => {
     await render({ queue: CLUSTERED, decisions: {} })
     const list = container.querySelector('[aria-label^="Findings"]')
-    // Three rows → "1 of 3", and ArrowDown moves to the next ROW, skipping the cluster's interior.
-    expect(container.textContent).toContain('1 of 3')
+    // Two rows → "1 of 2", and ArrowDown moves to the next ROW, skipping the cluster's interior.
+    expect(container.textContent).toContain('1 of 2')
     await act(async () => {
       list.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
     })
-    expect(container.textContent).toContain('2 of 3')
+    expect(container.textContent).toContain('2 of 2')
   })
 
   it('still offers the by-document lens, and switching to it un-clusters the queue', async () => {

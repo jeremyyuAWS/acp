@@ -24,12 +24,24 @@
 // the filename (hence the format) and the remediation lane. It does NOT carry a model version, an
 // evidence type or a normalized before/after pattern — those are server-side policy facts the
 // client is explicitly not supposed to compute ("the UI displays the decision and its basis; the
-// client does not calculate eligibility"). So the key here is the CONSERVATIVE subset of Tier C:
-// criterion + format + lane. The lane stands in for "risk class and proposal strategy" as far as
-// the client can see it — an auto-applied deterministic fix, an AI draft awaiting approval and a
-// manual re-author are three different decisions even for the same criterion in the same format.
-// When the server starts sending a policy cluster id, that becomes the key and this becomes the
-// fallback. Until then a cluster here is narrower than Tier C allows, never wider.
+// client does not calculate eligibility"). So the key is criterion + lane. The lane stands in for
+// "risk class and proposal strategy" as far as the client can see it — an auto-applied
+// deterministic fix, an AI draft awaiting approval and a manual re-author are three different
+// decisions even for the same criterion. When the server starts sending a policy cluster id, that
+// becomes the key and this becomes the fallback.
+//
+// FORMAT IS DELIBERATELY *NOT* IN THE KEY, AND THAT IS A RELAXATION OF TIER C.
+// Tier C lists document format among the conditions a group must share. Keying on it was tried
+// (2026-09-01) and reverted at the product owner's direction: it split the large single-criterion
+// runs this module exists to collapse — a 265-finding alt-text backlog spread over .docx, .pdf and
+// .pptx became three queues to work instead of one — and the reviewer's decision on such a group is
+// "is ACP's alt-text drafting trustworthy here", which is not obviously a per-format question.
+//
+// The compensating control is disclosure, the same one used for severity below: a cluster does not
+// hide the formats it spans, it STATES them, on the row and again in the batch confirmation, so a
+// reviewer approving across .docx and .pdf knows that is what they are doing. If a per-format
+// decision is wanted, the by-document lens and the expand control both still reach the individual
+// findings. Restoring the stricter behaviour is putting `fmtOf(finding?.file)` back in the key.
 //
 // Kept pure and React-free, in the house idiom of remediationInboxModel.js: the component renders
 // whatever this returns and derives nothing itself.
@@ -61,13 +73,10 @@ const criterionOf = (f) => scOf(f?.rule_id ?? f?.ruleId ?? f?.wcag)
  * The cluster key a finding shares with the findings that are the SAME DECISION, or null when it
  * has none and must be reviewed on its own.
  *
- * `${sc}|${fmt}|${laneKey}` — e.g. "1.1.1|docx|apply".
+ * `${sc}|${laneKey}` — e.g. "1.1.1|apply".
  *
- * FORMAT IS PART OF THE KEY DELIBERATELY. Tier C requires criterion AND document format to match
- * before one decision may cover a group, because the same criterion is remediated differently per
- * format and the evidence differs with it: 1.1.1 in .docx is an alt-text property on a drawing
- * element, in .pdf it is an /Alt entry on a tagged figure, and what the reviewer is shown to judge
- * the fix is not the same artifact. Approving the .docx pattern says nothing about the .pdf one.
+ * FORMAT IS NOT IN THE KEY — see the header. A cluster may therefore span .docx and .pdf, and each
+ * row reports the formats it covers (`formats`) so that breadth is visible rather than implied.
  *
  * SEVERITY IS DELIBERATELY NOT IN THE KEY. Including it would fragment exactly the large clusters
  * this module exists to create — a run of 265 alt-text findings would shatter into CRITICAL /
@@ -82,7 +91,7 @@ const criterionOf = (f) => scOf(f?.rule_id ?? f?.ruleId ?? f?.wcag)
 export function clusterKeyOf(finding) {
   const sc = criterionOf(finding)
   if (!sc) return null
-  return `${sc}|${fmtOf(finding?.file)}|${laneOf(finding).key}`
+  return `${sc}|${laneOf(finding).key}`
 }
 
 // Severity display order for the mix a cluster row reports. Mirrors the inbox model's sort ranking
@@ -169,6 +178,18 @@ function clusterRow(key, items, decisions) {
     files.push(name)
   }
 
+  // The distinct formats the group spans, in first-appearance order. Since format is no longer part
+  // of the key (see the header) this is the fact that keeps the breadth of a batch visible: a row
+  // covering .docx and .pdf says so rather than showing whichever one happened to sort first.
+  const formats = []
+  const seenFmt = new Set()
+  for (const f of items) {
+    const x = fmtOf(f?.file)
+    if (!x || seenFmt.has(x)) continue
+    seenFmt.add(x)
+    formats.push(x)
+  }
+
   // The severity mix, worst-first, non-zero keys only.
   const tally = new Map()
   for (const f of items) {
@@ -182,7 +203,9 @@ function clusterRow(key, items, decisions) {
     type: 'cluster',
     key,
     sc: criterionOf(items[0]),
-    fmt: fmtOf(items[0]?.file),
+    // Every distinct format in the group, worst-case first-appearance order. Plural because the
+    // key no longer constrains it: a cluster CAN span formats, and the row must say so.
+    formats,
     laneKey: lane.key,
     lane,
     // The representative's wording, not the first member's — the reviewer should read the phrasing

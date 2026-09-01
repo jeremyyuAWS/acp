@@ -27,16 +27,16 @@ const keysOf = (rows) => rows.map((r) => r.key)
 const typesOf = (rows) => rows.map((r) => r.type)
 const idsOf = (list) => list.map((x) => x.id)
 
-describe('clusterKeyOf — criterion + format + lane, and nothing else', () => {
-  it('composes the three facts that make two findings the same decision', () => {
-    expect(clusterKeyOf(f(1))).toBe('1.1.1|docx|apply')
-    expect(clusterKeyOf(f(2, { ...AUTO }))).toBe('1.1.1|docx|review')
+describe('clusterKeyOf — criterion + lane, and nothing else', () => {
+  it('composes the two facts that make two findings the same decision', () => {
+    expect(clusterKeyOf(f(1))).toBe('1.1.1|apply')
+    expect(clusterKeyOf(f(2, { ...AUTO }))).toBe('1.1.1|review')
   })
 
   it('normalises every spelling of a criterion id', () => {
-    expect(clusterKeyOf(f(1, { rule_id: 'SC_1_1_1' }))).toBe('1.1.1|docx|apply')
-    expect(clusterKeyOf(f(1, { rule_id: undefined, ruleId: 'WCAG_1.1.1' }))).toBe('1.1.1|docx|apply')
-    expect(clusterKeyOf(f(1, { rule_id: undefined, wcag: '1.1.1' }))).toBe('1.1.1|docx|apply')
+    expect(clusterKeyOf(f(1, { rule_id: 'SC_1_1_1' }))).toBe('1.1.1|apply')
+    expect(clusterKeyOf(f(1, { rule_id: undefined, ruleId: 'WCAG_1.1.1' }))).toBe('1.1.1|apply')
+    expect(clusterKeyOf(f(1, { rule_id: undefined, wcag: '1.1.1' }))).toBe('1.1.1|apply')
   })
 
   it('returns null when the criterion cannot be determined — never cluster on a guess', () => {
@@ -46,8 +46,18 @@ describe('clusterKeyOf — criterion + format + lane, and nothing else', () => {
     expect(clusterKeyOf(null)).toBeNull()
   })
 
-  it('FORMAT is part of the key: the same criterion in .docx and .pdf is not one decision', () => {
-    expect(clusterKeyOf(f(1, { file: 'a.docx' }))).not.toBe(clusterKeyOf(f(2, { file: 'a.pdf' })))
+  it('FORMAT is NOT in the key: the same criterion and lane in .docx and .pdf IS one decision', () => {
+    // A DELIBERATE RELAXATION OF TIER C, not an oversight. Keying on format was implemented and then
+    // reverted (2026-09-01) at the product owner's direction: it split the large single-criterion
+    // runs this module exists to collapse — the 265-finding alt-text backlog, spread over .docx,
+    // .pdf and .pptx, became three queues to work instead of one — and the reviewer's question about
+    // such a group ("is ACP's alt-text drafting trustworthy here") was judged not to be a per-format
+    // one. The compensating control is DISCLOSURE, asserted below and pinned in its own test: the
+    // row states the formats it spans instead of quietly spanning them.
+    expect(clusterKeyOf(f(1, { file: 'a.docx' }))).toBe(clusterKeyOf(f(2, { file: 'a.pdf' })))
+    const rows = clusterRows([f(1, { file: 'a.docx' }), f(2, { file: 'a.pdf' })])
+    expect(rows).toHaveLength(1)
+    expect(rows[0].formats).toEqual(['docx', 'pdf'])   // …and the reviewer is told, on the row
   })
 
   it('SEVERITY is NOT part of the key: it would fragment exactly the clusters we want', () => {
@@ -62,12 +72,14 @@ describe('clusterKeyOf — criterion + format + lane, and nothing else', () => {
 })
 
 describe('clusterRows — what actually collapses', () => {
-  it('two 1.1.1 findings in .docx cluster; a third 1.1.1 in .pdf does not join them', () => {
+  it('three 1.1.1 findings cluster across .docx and .pdf — one criterion, one queue', () => {
+    // This is the reversal made concrete: the .pdf finding used to be stranded as a single row.
     const rows = clusterRows([f(1), f(2), f(3, { file: 'Policy.pdf', title: 'PDF · Image needs alt text' })])
-    expect(typesOf(rows)).toEqual(['cluster', 'single'])
-    expect(rows[0].count).toBe(2)
-    expect(idsOf(rows[0].items)).toEqual([1, 2])
-    expect(rows[1].finding.id).toBe(3)      // the lone .pdf is reviewed on its own
+    expect(typesOf(rows)).toEqual(['cluster'])
+    expect(rows[0].count).toBe(3)
+    expect(idsOf(rows[0].items)).toEqual([1, 2, 3])
+    expect(rows[0].formats).toEqual(['docx', 'pdf'])
+    expect(rows[0].fileCount).toBe(3)
   })
 
   it('a 1.1.1 and a 2.4.2 never cluster', () => {
@@ -76,14 +88,19 @@ describe('clusterRows — what actually collapses', () => {
     expect(idsOf(rows.map((r) => r.finding))).toEqual([1, 2])
   })
 
-  it('an AI draft and an auto-applied fix for the same criterion and format do NOT cluster', () => {
-    // Different lanes are different decisions: one asks "is this drafted value right?", the other
-    // "did the change ACP already made land correctly?". A single approval cannot mean both.
-    const rows = clusterRows([f(1), f(2), f(3, AUTO), f(4, AUTO)])
+  it('LANE still splits: an auto-applied fix and an AI draft in the SAME file are two clusters', () => {
+    // Lane is now doing more of the work, since format no longer splits anything. Different lanes
+    // are different decisions: one asks "is this drafted value right?", the other "did the change
+    // ACP already made land correctly?". A single approval cannot mean both — same criterion, same
+    // document, same format notwithstanding.
+    const SAME = { file: 'Shared.docx' }
+    const rows = clusterRows([f(1, SAME), f(2, SAME), f(3, { ...SAME, ...AUTO }), f(4, { ...SAME, ...AUTO })])
     expect(typesOf(rows)).toEqual(['cluster', 'cluster'])
+    expect(keysOf(rows)).toEqual(['1.1.1|apply', '1.1.1|review'])
     expect(rows[0].laneKey).toBe('apply')
     expect(rows[1].laneKey).toBe('review')
     expect(rows[0].lane).toBe(LANES.apply)
+    expect(idsOf(rows[0].items)).toEqual([1, 2])
     expect(idsOf(rows[1].items)).toEqual([3, 4])
   })
 
@@ -93,18 +110,20 @@ describe('clusterRows — what actually collapses', () => {
       f(11),                                    // first 1.1.1 → the cluster sits here
       f(12, { rule_id: '1.3.1' }),             // single
       f(13),                                    // joins the cluster above
-      f(14, { file: 'Late.pdf' }),             // single (only .pdf)
+      f(14, { file: 'Late.pdf' }),             // also joins it now — format no longer separates
     ]
     const rows = clusterRows(input)
-    expect(keysOf(rows)).toEqual(['single:10', '1.1.1|docx|apply', 'single:12', 'single:14'])
-    expect(idsOf(rows[1].items)).toEqual([11, 13])   // members keep input order inside the cluster
+    expect(keysOf(rows)).toEqual(['single:10', '1.1.1|apply', 'single:12'])
+    expect(idsOf(rows[1].items)).toEqual([11, 13, 14])  // members keep input order inside the cluster
+    expect(rows[1].formats).toEqual(['docx', 'pdf'])    // …and the late .pdf is disclosed, not hidden
   })
 
   it('is stable: the same input yields the same rows, and reordering the input reorders the rows', () => {
     const input = [f(1), f(2, { rule_id: '2.4.2' }), f(3)]
     expect(keysOf(clusterRows(input))).toEqual(keysOf(clusterRows(input)))
+    expect(keysOf(clusterRows(input))).toEqual(['1.1.1|apply', 'single:2'])
     expect(keysOf(clusterRows([...input].reverse())))
-      .toEqual(['1.1.1|docx|apply', 'single:2'])     // f(3) now leads the cluster
+      .toEqual(['1.1.1|apply', 'single:2'])     // f(3) now leads the cluster
   })
 
   it('a group below minSize emits one single per member, in order — never a cluster of one', () => {
@@ -136,6 +155,36 @@ describe('clusterRows — what actually collapses', () => {
     expect(rows[0].count).toBe(3)
     expect(rows[0].files).toEqual(['A.docx', 'B.docx'])   // distinct, first-appearance order
     expect(rows[0].fileCount).toBe(2)
+  })
+})
+
+describe('formats — the disclosure that pays for dropping format from the key', () => {
+  it('reports every format the cluster spans, in first-appearance order, deduplicated', () => {
+    // This is the compensating control for the Tier C relaxation. A reviewer approving this pattern
+    // is approving it across three formats, and the row is what tells them so — on the row and in
+    // the batch confirmation. If this collapses to one format the breadth of the decision becomes
+    // invisible, which is the failure the whole module exists to prevent.
+    const row = clusterRows([
+      f(1, { file: 'Brief.docx' }),
+      f(2, { file: 'Policy.pdf' }),
+      f(3, { file: 'Notes.docx' }),   // duplicate format — must not appear twice
+      f(4, { file: 'Deck.pptx' }),
+    ])[0]
+    expect(row.formats).toEqual(['docx', 'pdf', 'pptx'])
+    expect(row.count).toBe(4)
+    expect(row.fileCount).toBe(4)     // four documents, three formats — both facts are stated
+  })
+
+  it('a single-format cluster still reports its one format, as an array', () => {
+    const row = clusterRows([f(1), f(2)])[0]
+    expect(row.formats).toEqual(['docx'])
+  })
+
+  it('a finding with no filename contributes no format rather than an empty one', () => {
+    const row = clusterRows([f(1, { file: 'Brief.docx' }), f(2, { file: '' }), f(3, { file: null })])[0]
+    expect(row.formats).toEqual(['docx'])
+    expect(row.count).toBe(3)         // it is still a member and still gets decided
+    expect(row.fileCount).toBe(1)
   })
 })
 
@@ -212,6 +261,14 @@ describe('batchTargetsOf — the exact scope of a grouped decision', () => {
     expect(idsOf(batchTargetsOf(rows[0], {}))).toEqual([1, 2, 3])
   })
 
+  it('reaches across formats, exactly as the cluster does — no wider, no narrower', () => {
+    // The batch and the disclosed cluster must be the same set. If `formats` says .docx and .pdf,
+    // the decision lands on both; there is no hidden narrowing to the representative's format.
+    const row = clusterRows([f(1, { file: 'A.docx' }), f(2, { file: 'B.pdf' }), f(3, { file: 'C.pptx' })])[0]
+    expect(row.formats).toEqual(['docx', 'pdf', 'pptx'])
+    expect(idsOf(batchTargetsOf(row, {}))).toEqual([1, 2, 3])
+  })
+
   it('EXCLUDES members that are already decided', () => {
     const items = [f(1), f(2), f(3)]
     const dec = { 2: { state: 'accepted' }, 3: { state: 'rejected' } }
@@ -268,6 +325,12 @@ describe('clusterOfFinding', () => {
   it('finds a single row by its finding id', () => {
     expect(clusterOfFinding(rows, 3)).toBe(rows[1])
     expect(clusterOfFinding(rows, 3).type).toBe('single')
+  })
+
+  it('finds a member that joined the cluster from another format', () => {
+    const mixed = clusterRows([f(1, { file: 'A.docx' }), f(2, { file: 'B.pdf' })])
+    expect(clusterOfFinding(mixed, 2)).toBe(mixed[0])
+    expect(clusterOfFinding(mixed, 2).formats).toEqual(['docx', 'pdf'])
   })
 
   it('returns null for an id that is not in the queue', () => {

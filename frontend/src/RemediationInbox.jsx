@@ -122,6 +122,16 @@ function QueueRow({ f, decisions, selected, onSelect, showFile = true }) {
 // Two controls, side by side, because one button cannot legally contain another: the row itself
 // selects the cluster's shown finding, and a separate disclosure expands the members so any
 // individual one can still be inspected and decided on its own.
+// The formats a cluster spans, as reading text. Format is NOT part of the cluster key, so a group
+// can cover .docx and .pdf at once; this is what keeps that breadth visible instead of implied.
+function formatList(formats) {
+  const f = (formats || []).map((x) => String(x).toUpperCase())
+  if (f.length === 0) return ''
+  if (f.length === 1) return f[0]
+  if (f.length === 2) return `${f[0]} and ${f[1]}`
+  return `${f.slice(0, -1).join(', ')} and ${f[f.length - 1]}`
+}
+
 const SEV_ORDER = ['CRITICAL', 'SERIOUS', 'MODERATE', 'MINOR', 'UNRATED']
 function severityLine(severities) {
   const parts = SEV_ORDER.filter((k) => severities?.[k]).map((k) => `${severities[k]} ${k === 'UNRATED' ? 'unrated' : k.toLowerCase()}`)
@@ -140,7 +150,7 @@ function ClusterRow({ row, shown, decisions, selectedId, onSelect, expanded, onT
   // Spoken as one unit: what the group is, how big it is, and how much of it is left — the three
   // facts that decide whether a reviewer opens it. The per-member rows carry their own labels.
   const label = `${r.issue}, ${row.count} findings across ${row.fileCount} document${row.fileCount === 1 ? '' : 's'}`
-    + `, ${row.fmt.toUpperCase()}${row.lane?.short ? ` — ${row.lane.short}` : ''}`
+    + `, ${formatList(row.formats)}${row.lane?.short ? ` — ${row.lane.short}` : ''}`
     + `, ${remaining} awaiting a decision`
   return (
     <div className="rinbox-clusterwrap">
@@ -177,7 +187,7 @@ function ClusterRow({ row, shown, decisions, selectedId, onSelect, expanded, onT
                   {row.sc}
                 </span>
               )}
-              <span className="muted" style={{ fontSize: 11, textTransform: 'uppercase' }}>{row.fmt}</span>
+              <span className="muted" style={{ fontSize: 11 }}>{formatList(row.formats)}</span>
               {row.lane?.short && <span className="muted" style={{ fontSize: 11 }}>{row.lane.short}</span>}
               {/* The severity MIX, stated rather than hidden: severity is not part of the cluster key
                   (it would fragment every large group), so the reviewer must be able to see that a
@@ -408,8 +418,10 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
                 groups a cluster — the severity mix it spans. */}
             <span className="muted">
               You are looking at one of {matchingCount + 1} findings that share this issue
-              {cluster ? <> — {scKeyOf(f) ? `WCAG ${scKeyOf(f)}` : 'the same criterion'} in {cluster.fmt.toUpperCase()} files,
+              {cluster ? <> — {scKeyOf(f) ? `WCAG ${scKeyOf(f)}` : 'the same criterion'} in {formatList(cluster.formats)} files,
                 across {cluster.fileCount} document{cluster.fileCount === 1 ? '' : 's'}</> : null}.
+              {cluster && cluster.formats.length > 1
+                ? <> This decision covers more than one document format.</> : null}
               {cluster && severityLine(cluster.severities)
                 ? <> The group spans {severityLine(cluster.severities)}.</> : null}
               {' '}The other {matchingCount} carry the same criterion and an actionable proposal; manual,
