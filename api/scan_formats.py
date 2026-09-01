@@ -45,28 +45,60 @@ _EXT_OF: dict[str, tuple[str, ...]] = {
     "docx": (".docx",),
     "xlsx": (".xlsx",),
     "pptx": (".pptx",),
-    # Two extensions, one format — the only entry where that is true, which is why this maps to a
-    # tuple rather than a single string.
+    # Two extensions, one format — which is why this maps to a tuple rather than a single string.
     "html": (".html", ".htm"),
+    # Standalone audio and video. ONE key for both because they are one estate bucket and one
+    # detector: `estate_inventory._format_of` has always returned "av" for either, and 1.2.1 vs
+    # 1.2.2 is decided per FILE (does this container hold a video stream?) rather than per format
+    # — splitting the key would put that decision in a table that cannot see inside the file.
+    #
+    # The list matches estate_inventory._AV_EXT exactly. It has to: that function is what assigns
+    # the bucket, so an extension known here and not there classifies as "other" and is never
+    # assessed, while one known there and not here reads as assessable and then finds no detector.
+    # tests/test_media_assessment.py pins the two together.
+    "av": (".mp4", ".mov", ".avi", ".mkv", ".webm", ".mp3", ".wav", ".m4a", ".aac", ".flac",
+           ".ogg"),
 }
 
-# Uploaded-file MIME per format. Google-native MIMEs are NOT here; they resolve through
+# Uploaded-file MIMEs per format. Google-native MIMEs are NOT here; they resolve through
 # scanner.EXPORT_MAP to one of these formats instead (see the module docstring).
-_MIME_OF: dict[str, str] = {
-    "pdf":  "application/pdf",
-    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    "html": "text/html",
+#
+# TUPLES, matching _EXT_OF above. The four document formats each have exactly one MIME and read
+# as a one-tuple, which is verbose for them and correct for "av": a video estate is mp4 and mov
+# and webm under half a dozen MIME spellings, and a single-string map could not express that
+# without a second, differently-shaped table beside this one.
+_MIME_OF: dict[str, tuple[str, ...]] = {
+    "pdf":  ("application/pdf",),
+    "docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document",),
+    "xlsx": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",),
+    "pptx": ("application/vnd.openxmlformats-officedocument.presentationml.presentation",),
+    "html": ("text/html",),
+    "av": ("video/mp4", "video/quicktime", "video/x-msvideo", "video/x-matroska", "video/webm",
+           "audio/mpeg", "audio/wav", "audio/x-wav", "audio/mp4", "audio/aac", "audio/flac",
+           "audio/ogg"),
 }
 
 # Every format this codebase has detectors for — the set ACP_SCAN_FORMATS is validated against.
 # A format absent from here cannot be switched on by env: naming one that no engine can assess
 # would list files Assess is guaranteed to fail on, which is worse than ignoring the typo.
+#
+# "av" JOINED THIS SET WHEN, AND ONLY WHEN, A DETECTOR EXISTED. The media pipeline
+# (api/media.py, api/captions.py) shipped first and registered nothing, deliberately: it could
+# draft captions and could not assess anything, so listing media then would have broken the
+# invariant this comment states. `formats/media` now registers 1.2.1 and 1.2.2 against a real
+# technique, which is what earns the entry.
 KNOWN_FORMATS: frozenset[str] = frozenset(_EXT_OF)
 
-# The 2026-09-01 scope decision. Ordered widest-value-first only for readable log output; every
-# consumer treats it as a set.
+# The 2026-09-01 scope decision, UNCHANGED. Ordered widest-value-first only for readable log
+# output; every consumer treats it as a set.
+#
+# "av" is deliberately absent. Being assessable is not the same as being in Discovery's default
+# scope: switching video on for every existing deployment would change what every estate's totals
+# mean overnight — the eligible denominator, the coverage funnel, the assessed-of-discovered
+# ratio — for content nobody has asked us to walk. It is opt-in exactly as html is, and the
+# operator says so:
+#
+#     ACP_SCAN_FORMATS=pdf,docx,xlsx,pptx,av
 DEFAULT_FORMATS: tuple[str, ...] = ("pdf", "docx", "xlsx", "pptx")
 
 _ENV_VAR = "ACP_SCAN_FORMATS"
@@ -97,7 +129,7 @@ def extensions() -> frozenset[str]:
 
 def upload_mimes() -> frozenset[str]:
     """MIME types of UPLOADED files in scope — no Google-native types (see module docstring)."""
-    return frozenset(_MIME_OF[f] for f in formats())
+    return frozenset(m for f in formats() for m in _MIME_OF[f])
 
 
 def google_native_in_scope(export_map: dict[str, tuple[str, str]]) -> frozenset[str]:
