@@ -12,7 +12,7 @@ import { armNotifyOnComplete, notifyScanComplete, notifyScanFailed, notification
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
+import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, SCAN_UNAVAILABLE, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
 import { beginOrResumeIntent, completeIntent, abandonIntent, outcomeIsUncertain } from './submitIntent'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
@@ -332,6 +332,13 @@ export default function App() {
   // more specific than a static "Loading your workspace…" the whole way through — see the
   // effect below and Loading()'s own comment (EmptyState.jsx) for what each value means.
   const [loadStage, setLoadStage] = useState(null)
+  // The boot chain refused. Distinct from "no data": a failed /workspace/bootstrap used to be
+  // swallowed by an empty .catch, after which .finally flipped `loaded` and the user was shown
+  // EmptyState — "No assessment has run yet" — for an estate that might hold a thousand documents.
+  // A request that failed and an account with nothing in it are different facts and no longer share
+  // a screen. `bootAttempt` re-runs the effect, so the retry is a real re-read, not a page reload.
+  const [bootError, setBootError] = useState(null)
+  const [bootAttempt, setBootAttempt] = useState(0)
   // GET /workspace/bootstrap's cached Overview snapshot for the default scan, set as soon as
   // that one request resolves — before getScan's full file/finding payload arrives. Only
   // consumed by the loading screen's preview line (Loading preview prop, EmptyState.jsx); every
@@ -598,6 +605,7 @@ export default function App() {
 
   useEffect(() => {
     if (!me) return
+    setBootError(null)
     getRubric().then(setRubric).catch(() => {})
     getSources().then(setSources).catch(() => {})
     setLoadStage('bootstrap')
@@ -660,13 +668,20 @@ export default function App() {
           if (scanId) { await getScan(scanId).then(setScan); markLoad('scan-resolved') }
         }
       })
-      .catch(() => {})
+      // A 404 on the scan has its own recovery (acp:scan-unavailable, handled above) and must keep
+      // it — that path knows how to pick another scan, which this screen does not.
+      .catch((e) => {
+        if (String(e?.message || '') === SCAN_UNAVAILABLE) return
+        setBootError(e?.name === 'TimeoutError'
+          ? 'The server did not respond in time.'
+          : (e?.message || 'The server could not be reached.'))
+      })
       .finally(() => {
         setLoaded(true); setLoadStage(null)
         markLoad('load-complete')
         logLoadSummary({ hadPreview: hadPreviewForPerf, hadScan: hadScanForPerf })
       })
-  }, [me])
+  }, [me, bootAttempt])
 
   // Annotate the corpus with the published business ontology (adds `.ont`: label,
   // priority, matched rule, weighted score) so the live workflow is ontology-aware.
@@ -1390,7 +1405,20 @@ export default function App() {
   // OV-02: one action, no numbers. EmptyState no longer configures anything — the criteria
   // and file-type pickers it used to render belong after an inventory exists, in Assess,
   // where the eligible-file count can be shown against them.
-  const placeholder = loaded
+  const placeholder = bootError
+    ? (
+      <section className="empty" role="alert">
+        <div className="emptyicon" aria-hidden="true">⚠</div>
+        <h3 className="emptytitle">Couldn’t load your workspace</h3>
+        <p className="muted emptysub">
+          {bootError} Nothing was lost — this is usually brief. Your documents and decisions are unaffected.
+        </p>
+        <div className="emptyactions">
+          <button onClick={() => setBootAttempt((n) => n + 1)}>Try again</button>
+        </div>
+      </section>
+    )
+    : loaded
     ? <EmptyState onGoToSource={() => { setView('integrations'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
     : <Loading stage={loadStage} preview={overviewPreview} />
   // The scan panel renders inside whichever view is open, so scope its narration to that view
