@@ -506,6 +506,10 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     if (!runId) return
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
     const startedAt = Date.now()
+    // Tell the parent in this click/task, before React's phase effect runs. The parent owns the
+    // prior-run summary, so it must hide that snapshot immediately while this runner starts.
+    // The effect below remains the durable source for running/done and reload resume.
+    onPhase?.('starting')
     setPhase('running'); setResult(null); setProgress(0); setAccessFailed(false); setScanGone(null)
     setWorkersDown(false); setJobInfo(null); setLiveQueue(null)
     // ADR 0020: in the deferred model the DOWNLOAD happens now, at Assess — but GIS Drive tokens
