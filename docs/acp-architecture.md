@@ -1,5 +1,10 @@
 # ACP — System Architecture
 
+> **Production topology, 2026-09-01:** `acp-app` is API-only (`ACP_WORKERS=0`). Queue work is
+> owned by three no-ingress Container Apps running the same image: `acp-discovery`, `acp-assess`,
+> and `acp-remediate`. The generic production `acp-worker` described in older diagrams below has
+> been retired; it remains a valid local/staging topology, not a production component.
+
 > **Movate AccessOps** (customer-facing name; **ACP** is the internal codebase name used
 > throughout). A read‑only document‑accessibility assessment + server‑side remediation platform
 > for Office/PDF/HTML, deployed on Azure Container Apps. This document describes **how it is

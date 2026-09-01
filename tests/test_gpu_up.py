@@ -94,7 +94,8 @@ exit 0
 
 def _run(tmp_path, binn: Path, **env_extra) -> subprocess.CompletedProcess:
     env = dict(os.environ, PATH=f"{binn}:{os.environ['PATH']}")
-    for v in ("ACP_RG", "ACP_APP", "ACP_WORKER", "ACP_GPU_APP", "ACP_ACA_ENV", "ACP_SUBSCRIPTION",
+    for v in ("ACP_RG", "ACP_APP", "ACP_DISCOVERY_WORKER", "ACP_ASSESS_WORKER",
+              "ACP_REMEDIATE_WORKER", "ACP_GPU_APP", "ACP_ACA_ENV", "ACP_SUBSCRIPTION",
               "ACP_GPU_ACTIVATE", "ACP_GPU_DRY_RUN", "ACP_GPU_RETIRE_RUNPOD",
               "ACP_GPU_PROFILE", "ACP_GPU_PROFILE_TYPE", "ACP_GPU_VISION_MODEL"):
         env.pop(v, None)
@@ -146,15 +147,13 @@ def test_external_ingress_is_refused(tmp_path):
 
 
 @requires_bash
-def test_a_verified_endpoint_switches_both_app_and_worker(tmp_path):
-    # Remediation runs in the WORKER (ADR 0013 §2). Switching the app alone leaves every real
-    # fix on the old provider while the preflight — which runs in the app — reports success.
+def test_a_verified_endpoint_switches_app_and_every_stage_worker(tmp_path):
     log = tmp_path / "calls.log"
     r = _run(tmp_path, _stub_az(tmp_path, log), ACP_GPU_ACTIVATE="1")
     assert r.returncode == 0, r.stdout + r.stderr
     switched = " ".join(_switches(log))
-    assert "-n acp-app " in switched + " ", "acp-app was not switched"
-    assert "-n acp-worker " in switched + " ", "acp-worker was not switched"
+    for app in ("acp-app", "acp-discovery", "acp-assess", "acp-remediate"):
+        assert f"-n {app} " in switched + " ", f"{app} was not switched"
     assert INTERNAL_FQDN in switched, "the new endpoint was not passed as OLLAMA_BASE_URL"
 
 

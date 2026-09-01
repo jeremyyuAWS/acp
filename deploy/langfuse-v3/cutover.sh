@@ -8,7 +8,7 @@
 set -euo pipefail
 RG="${RG:-mdk-accessibility}"
 HOST="${1:?usage: cutover.sh <LANGFUSE_HOST-url>}"
-APPS=(${APPS:-acp-app acp-worker})
+APPS=(${APPS:-acp-app acp-discovery acp-assess acp-remediate})
 
 for app in "${APPS[@]}"; do
   echo "▸ $app → LANGFUSE_HOST=$HOST"

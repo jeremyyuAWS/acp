@@ -16,7 +16,7 @@ RG=mdk-accessibility
 API=2024-03-01
 
 # Dependency order: acp-app's REDIS_URL and OLLAMA_BASE_URL point at the first two.
-APPS=(acp-redis acp-ollama acp-langfuse acp-grafana acp-app acp-worker)
+APPS=(acp-redis acp-ollama acp-langfuse acp-grafana acp-app acp-discovery acp-assess acp-remediate)
 
 arm() {  # arm <app> <suffix>
   echo "https://management.azure.com/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.App/containerApps/$1$2?api-version=$API"
@@ -73,4 +73,4 @@ if [[ $fail -ne 0 ]]; then
   exit 1
 fi
 echo
-echo "All six ACP apps Running."
+echo "All ${#APPS[@]} ACP apps Running."
