@@ -21,6 +21,7 @@ against the real acp.db into a hard failure. Postgres had no equivalent.
 from __future__ import annotations
 
 import ast
+import re
 import sys
 from pathlib import Path
 
@@ -130,13 +131,51 @@ def test_the_ci_dsn_with_the_flag_is_accepted(monkeypatch):
     _guard()(CI_DSN)                                   # must not raise
 
 
+# Read from the workflow TEXT, not a parsed tree. PyYAML is in neither api/requirements.txt nor
+# tests/requirements.txt, so `import yaml` passes on a dev machine that happens to have it and
+# raises ModuleNotFoundError on CI — which is exactly how this test first went red. The repo's
+# other workflow guards already settled this trade the same way (see test_ci_ocr_gate.py); the
+# one that reached for pytest.importorskip("yaml") instead is, in this job, a test that silently
+# never runs, and silent non-running is the failure mode this whole file exists to refuse.
+_JOB_RE = re.compile(r"^  ([A-Za-z_][\w-]*):\s*$")
+_ENV_RE = re.compile(r"^(\s*)env:\s*$")
+_ENV_KV_RE = re.compile(r"^\s*([A-Z_][A-Z0-9_]*):\s*(\S.*?)\s*$")
+
+
+def _postgres_job_lines() -> list[str]:
+    """The lines of `jobs.postgres`, bounded by the next job at the same indent."""
+    lines = (TESTS.parent / ".github/workflows/ci.yml").read_text().splitlines()
+    out, inside = [], False
+    for line in lines:
+        m = _JOB_RE.match(line)
+        if m:
+            inside = m.group(1) == "postgres"
+            continue
+        if inside:
+            out.append(line)
+    return out
+
+
 def _ci_postgres_env() -> list[dict]:
     """The env blocks of the steps in the Postgres integration job, read from the workflow."""
-    import yaml
-    wf = yaml.safe_load((TESTS.parent / ".github/workflows/ci.yml").read_text())
-    job = wf["jobs"]["postgres"]
-    return [st["env"] for st in job["steps"] if isinstance(st.get("env"), dict)
-            and "DATABASE_URL" in st["env"]]
+    lines = _postgres_job_lines()
+    envs = []
+    for i, line in enumerate(lines):
+        m = _ENV_RE.match(line)
+        if not m:
+            continue
+        indent, block = len(m.group(1)), {}
+        for nxt in lines[i + 1:]:
+            if not nxt.strip() or nxt.lstrip().startswith("#"):
+                continue
+            if len(nxt) - len(nxt.lstrip()) <= indent:      # dedent ends the mapping
+                break
+            kv = _ENV_KV_RE.match(nxt)
+            if kv:
+                block[kv.group(1)] = kv.group(2).strip("\'\"")
+        if "DATABASE_URL" in block:
+            envs.append(block)
+    return envs
 
 
 def test_the_ci_job_points_at_a_database_this_guard_would_accept(monkeypatch):
