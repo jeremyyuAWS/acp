@@ -1084,6 +1084,26 @@ _SCHEMA = [
     )""",
     "CREATE INDEX IF NOT EXISTS idx_acr_manual_test_report ON acr_manual_test(report_id, criterion_num)",
 
+    # One recorded outcome per step of a plan run (PRD §14, Phase 3). A SEPARATE TABLE rather than
+    # columns on acr_manual_test, for two reasons. Plans have different step counts, so columns
+    # would mean either a fixed ceiling or a JSON blob nothing can query. And the ACR schema is
+    # additive-only under ADR 0045 — test_acr_no_regression asserts every acr_ statement is a
+    # CREATE, so widening a live table is not available here even if it were desirable.
+    #
+    # `environment` holds the per-run tester metadata the plan's own `needs` list demands
+    # (browser, os, assistive_tech, viewport…), which is what makes the run reproducible under
+    # PRD §4.5. It lives on the RUN, not the step: one session, one environment.
+    """CREATE TABLE IF NOT EXISTS acr_manual_step (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      report_id TEXT NOT NULL,
+      owner_email TEXT NOT NULL,
+      step_index INTEGER NOT NULL,
+      outcome TEXT NOT NULL,
+      notes TEXT, recorded_at TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_acr_manual_step_run ON acr_manual_step(run_id, step_index)",
+
     # Append-only audit trail (PRD §17). Mirrors decision_log's shape and its never-updated,
     # never-deleted contract; separate from it because decision_log is scan-anchored (its scan_id/
     # file/rule_id columns) and an ACR event has no scan at all.
@@ -1570,8 +1590,8 @@ class _PgAdapter:
     # Still additive, and additive in BEHAVIOUR on every half. For the ACR tables the argument is
     # simpler than v4's fence: a replica without ACR code never reads or writes them — they are
     # inert until a replica carrying api/acr_*.py serves a request against them.
-    _SCHEMA_VERSION = 7
-    _SCHEMA_CHECKSUM_AT_VERSION = "605d943c984907b641dd3e9ecc44c267"
+    _SCHEMA_VERSION = 8
+    _SCHEMA_CHECKSUM_AT_VERSION = "7da7c6e527940dad3e434d55e559b362"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -3460,6 +3480,9 @@ class Store:
                          # record about a product version, authored by a customer; none of it is
                          # config.
                          "acr_report", "acr_criterion", "acr_evidence", "acr_manual_test",
+                         # acr_manual_step is what a tester OBSERVED during a run — a record about
+                         # a product version, on exactly the same footing as the run it belongs to.
+                         "acr_manual_step",
                          "acr_decision_log",
                          # Published snapshots included, and the tension is worth naming: they are
                          # immutable, which means never MODIFIED — not exempt from an explicit,
@@ -10044,6 +10067,81 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur, sql + " ORDER BY tested_at, id", params)
             return self._db.fetchall(cur)
+
+    # ── Guided manual test runs (PRD §14, Phase 3) ────────────────────────────────────────────
+    #
+    # A "run" is one tester working one plan against one criterion. `acr_manual_test` holds the
+    # run; `acr_manual_step` holds one row per step outcome. Neither table stores the run's
+    # environment: a completed run produces an acr_evidence row, and THAT carries the browser,
+    # assistive technology and environment (PRD §4.5). Keeping one home for that metadata is what
+    # stops a run looking reproducible while the durable record has nothing in it.
+
+    def start_acr_manual_run(self, report_id: str, criterion_num: str, *, owner_email: str,
+                             plan_id: str, tester: str | None = None) -> str:
+        """Begin a run. Returns its id. Starting twice is allowed — a plan can be re-run against a
+        new product version, and acr_freshness decides which runs still count."""
+        run_id = f"acrmt_{uuid.uuid4().hex[:12]}"
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO acr_manual_test(id,report_id,criterion_num,owner_email,plan_id,"
+                "result,evidence_id,tester,notes,created_at,updated_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (run_id, report_id, criterion_num, owner_email, plan_id,
+                 None, None, tester, None, self._now(), self._now()))
+        return run_id
+
+    def list_acr_manual_runs(self, report_id: str, *, owner_email: str,
+                             criterion_num: str | None = None) -> list[dict]:
+        sql = "SELECT * FROM acr_manual_test WHERE report_id=%s AND owner_email=%s"
+        params: tuple = (report_id, owner_email)
+        if criterion_num:
+            sql += " AND criterion_num=%s"
+            params += (criterion_num,)
+        with self._db.cursor() as cur:
+            self._db.execute(cur, sql + " ORDER BY created_at, id", params)
+            return self._db.fetchall(cur)
+
+    def record_acr_manual_step(self, run_id: str, *, report_id: str, owner_email: str,
+                               step_index: int, outcome: str, notes: str | None = None) -> None:
+        """Record what the tester observed at one step. Re-recording a step REPLACES it.
+
+        Deliberately not append-only, unlike acr_evidence. A tester correcting a mis-click during
+        a run is fixing a typo, not retracting a finding — the finding is the evidence row the
+        completed run produces, and that stays append-only.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "DELETE FROM acr_manual_step WHERE run_id=%s AND step_index=%s AND owner_email=%s",
+                (run_id, step_index, owner_email))
+            self._db.execute(cur,
+                "INSERT INTO acr_manual_step(id,run_id,report_id,owner_email,step_index,outcome,"
+                "notes,recorded_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                (f"acrms_{uuid.uuid4().hex[:12]}", run_id, report_id, owner_email,
+                 int(step_index), outcome, notes, self._now()))
+            self._db.execute(cur,
+                "UPDATE acr_manual_test SET updated_at=%s WHERE id=%s AND owner_email=%s",
+                (self._now(), run_id, owner_email))
+
+    def list_acr_manual_steps(self, report_id: str, *, owner_email: str) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM acr_manual_step WHERE report_id=%s AND owner_email=%s "
+                "ORDER BY run_id, step_index", (report_id, owner_email))
+            return self._db.fetchall(cur)
+
+    def complete_acr_manual_run(self, run_id: str, *, report_id: str, owner_email: str,
+                                result: str, evidence_id: str, tester: str,
+                                notes: str | None = None) -> None:
+        """Close a run by linking the evidence row it produced.
+
+        `result` is what the tester OBSERVED across the plan, not a conformance status — this
+        method cannot reach acr_criterion.final_status, and there is no code path from here to it.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE acr_manual_test SET result=%s,evidence_id=%s,tester=%s,notes=%s,"
+                "updated_at=%s WHERE id=%s AND report_id=%s AND owner_email=%s",
+                (result, evidence_id, tester, notes, self._now(), run_id, report_id, owner_email))
 
     def append_acr_decision_log(self, report_id: str, *, owner_email: str, actor: str | None,
                                 action: str, criterion_num: str | None = None,

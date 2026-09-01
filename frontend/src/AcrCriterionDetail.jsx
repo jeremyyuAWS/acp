@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import AcrManualTestPlan from './AcrManualTestPlan.jsx'
 import { getAcrCriterion, addAcrEvidence, decideAcrCriterion, approveAcrCriterion,
          FINAL_STATUSES, REMARKS_REQUIRED } from './acrApi'
 
@@ -193,6 +194,12 @@ export default function AcrCriterionDetail({ reportId, criterionNum, canEdit, ca
       )}
 
       {/* ── the human decision ── */}
+      {/* Guided manual test plans (Phase 3). Placed BEFORE the decision deliberately: the
+          plans are what a decision is supposed to rest on, and a screen that put them after
+          would read as paperwork to file once the call has already been made. */}
+      <AcrManualTestPlan reportId={reportId} criterionNum={criterionNum} canEdit={canEdit}
+                         onChange={load} />
+
       <h4>Conformance decision</h4>
       {canEdit ? (
         <form onSubmit={(e) => { e.preventDefault(); act(() => decideAcrCriterion(reportId, criterionNum, status, remarks), `Recorded ${status}.`) }}>

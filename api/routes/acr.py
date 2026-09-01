@@ -45,6 +45,7 @@ import acr_axe
 import acr_catalog
 import acr_export_preview
 import acr_freshness
+import acr_plans
 import acr_rules
 import acr_validation
 import core
@@ -579,6 +580,224 @@ def approve(report_id: str, criterion_num: str, request: Request):
     return {"criterion_num": criterion_num, "approval_state": "approved"}
 
 
+# ── guided manual test plans (PRD §14) ─────────────────────────────────────────
+
+
+def _run_instances(report_id: str, owner: str) -> list[dict]:
+    """Every manual run on this report, shaped the way acr_plans expects.
+
+    Assembles three sources the module deliberately cannot read for itself — it is pure functions
+    over records (test_the_rule_modules_stay_free_of_io) — into one instance dict per run:
+
+      the run row          which plan, which criterion, who tested
+      its step outcomes    keyed by step index as a string
+      its evidence row     the environment metadata, which lives THERE and only there
+
+    That last join is the point. The plan declares the metadata it needs; the evidence row is
+    where that metadata durably lives; so completeness is computed against the record a reader of
+    the ACR would actually see, not against a second copy that could drift from it.
+    """
+    runs = core.store.list_acr_manual_runs(report_id, owner_email=owner)
+    steps = core.store.list_acr_manual_steps(report_id, owner_email=owner)
+    evidence = {e["id"]: e
+                for e in core.store.list_acr_evidence(report_id, owner_email=owner)}
+
+    by_run: dict[str, dict[str, str]] = {}
+    for s in steps:
+        by_run.setdefault(s["run_id"], {})[str(s["step_index"])] = s["outcome"]
+
+    out = []
+    for run in runs:
+        ev = evidence.get(run.get("evidence_id") or "") or {}
+        out.append({
+            "id": run["id"],
+            "criterion_num": run["criterion_num"],
+            "plan_id": run["plan_id"],
+            "tester": run.get("tester") or ev.get("tester"),
+            "result": run.get("result"),
+            "evidence_id": run.get("evidence_id"),
+            "steps": by_run.get(run["id"], {}),
+            "environment": {"browser": ev.get("browser"),
+                            "assistive_tech": ev.get("assistive_tech"),
+                            "environment": ev.get("environment")},
+            "created_at": run.get("created_at"),
+        })
+    return out
+
+
+def _manual_plan_status(report: dict, report_id: str, owner: str) -> dict[str, bool]:
+    """The map acr_validation.validate has accepted since Phase 1 and nobody has supplied.
+
+    Phase 1 built the socket and passed nothing, so `incomplete_manual_test_plan` produced no rows
+    — the module refusing to pretend it knew. This is the plug. From here on, a report whose
+    manual plans are unfinished cannot publish.
+    """
+    criteria = core.store.list_acr_criteria(report_id, owner_email=owner)
+    ev_by = _evidence_objects(report_id, owner)
+    stale = set(_stale_for(report, ev_by))
+    # Which criteria a HUMAN has evaluated, by acr_rules' own definition — the plan catalog is
+    # structure, not a gate, so directly-recorded manual evidence satisfies the obligation too.
+    human = {num for num, rows in ev_by.items()
+             if acr_rules.has_human_evaluation(rows, stale)}
+    return acr_plans.manual_plan_status(criteria, _run_instances(report_id, owner), human)
+
+
+@router.get("/acr/{report_id}/criteria/{criterion_num}/plans")
+def criterion_plans(report_id: str, criterion_num: str, request: Request):
+    """Which manual plans this criterion needs, and how far each has got."""
+    owner = _tenant()
+    report = _report_or_404(report_id, owner)
+    if acr_catalog.criterion(criterion_num) is None:
+        raise HTTPException(404, f"{criterion_num} is not in the WCAG 2.2 A/AA catalog")
+
+    instances = [i for i in _run_instances(report_id, owner)
+                 if i["criterion_num"] == criterion_num]
+    ev_by = _evidence_objects(report_id, owner, criterion_num)
+    stale = set(_stale_for(report, ev_by))
+    human = acr_rules.has_human_evaluation(ev_by.get(criterion_num, []), stale)
+    prog = acr_plans.progress(criterion_num, instances, human)
+    prog["plan_detail"] = acr_plans.plans_for_criterion(criterion_num)
+    prog["runs"] = instances
+    prog["step_outcomes"] = sorted(acr_plans.STEP_OUTCOMES)
+    return prog
+
+
+class StartRunBody(BaseModel):
+    plan_id: str
+    tester: str | None = None
+
+
+@router.post("/acr/{report_id}/criteria/{criterion_num}/plans/start")
+def start_plan_run(report_id: str, criterion_num: str, body: StartRunBody, request: Request):
+    owner = _tenant()
+    report = _report_or_404(report_id, owner)
+    if report.get("status") == "published":
+        raise HTTPException(409, "this report is published — changes create a new draft revision")
+    who = _require(acr_authz.ROLE_EDITOR, request, report_id)
+
+    if acr_plans.plan(body.plan_id) is None:
+        raise HTTPException(400, f"{body.plan_id} is not in the manual test plan catalog")
+    if body.plan_id not in acr_plans.required_plan_ids(criterion_num):
+        raise HTTPException(
+            400, f"{body.plan_id} does not cover {criterion_num}; running it would record "
+                 f"evidence against a criterion it never exercised")
+
+    run_id = core.store.start_acr_manual_run(report_id, criterion_num, owner_email=owner,
+                                             plan_id=body.plan_id, tester=body.tester or who)
+    core.store.append_acr_decision_log(report_id, owner_email=owner, actor=who,
+                                       action="manual_test.started", criterion_num=criterion_num,
+                                       detail=body.plan_id)
+    return {"run_id": run_id, "plan_id": body.plan_id, "criterion_num": criterion_num}
+
+
+class StepBody(BaseModel):
+    step_index: int
+    outcome: str
+    notes: str | None = None
+
+
+@router.post("/acr/{report_id}/plans/runs/{run_id}/step")
+def record_step(report_id: str, run_id: str, body: StepBody, request: Request):
+    """Record what the tester observed at one step.
+
+    A `fail` here is a first-class outcome, not an error: a plan is complete when every step has
+    been ANSWERED, whatever the answers were. Completeness is about whether someone looked.
+    """
+    owner = _tenant()
+    report = _report_or_404(report_id, owner)
+    if report.get("status") == "published":
+        raise HTTPException(409, "this report is published — changes create a new draft revision")
+    _require(acr_authz.ROLE_EDITOR, request, report_id)
+
+    run = next((r for r in core.store.list_acr_manual_runs(report_id, owner_email=owner)
+                if r["id"] == run_id), None)
+    if run is None:
+        raise HTTPException(404, "no such manual test run on this report")
+    if run.get("evidence_id"):
+        raise HTTPException(409, "this run is complete; start a new run to record a fresh result")
+
+    if body.outcome not in acr_plans.STEP_OUTCOMES:
+        raise HTTPException(400, f"outcome must be one of {sorted(acr_plans.STEP_OUTCOMES)}")
+    total = acr_plans.step_count(run["plan_id"])
+    if not 0 <= body.step_index < total:
+        raise HTTPException(400, f"{run['plan_id']} has {total} steps; there is no step "
+                                 f"{body.step_index}")
+
+    core.store.record_acr_manual_step(run_id, report_id=report_id, owner_email=owner,
+                                      step_index=body.step_index, outcome=body.outcome,
+                                      notes=body.notes)
+    instances = [i for i in _run_instances(report_id, owner) if i["id"] == run_id]
+    complete, why = acr_plans.instance_complete(instances[0]) if instances else (False, "")
+    return {"run_id": run_id, "step_index": body.step_index, "outcome": body.outcome,
+            "complete": complete, "blocking_reason": why}
+
+
+class CompleteRunBody(BaseModel):
+    result: str
+    tester: str
+    browser: str | None = None
+    assistive_tech: str | None = None
+    environment: str | None = None
+    notes: str | None = None
+
+
+@router.post("/acr/{report_id}/plans/runs/{run_id}/complete")
+def complete_plan_run(report_id: str, run_id: str, body: CompleteRunBody, request: Request):
+    """Close a run: create the evidence row it produced, then link it.
+
+    The evidence comes FIRST and the run points at it, so a run can never read as complete while
+    the record a customer would see is missing. `result` is what the tester observed; it is not a
+    conformance status and nothing here can write one — acr_rules remains the only place a status
+    is derived, and `save_acr_draft_status` has no path to `final_status`.
+    """
+    owner = _tenant()
+    report = _report_or_404(report_id, owner)
+    if report.get("status") == "published":
+        raise HTTPException(409, "this report is published — changes create a new draft revision")
+    who = _require(acr_authz.ROLE_EDITOR, request, report_id)
+
+    run = next((r for r in core.store.list_acr_manual_runs(report_id, owner_email=owner)
+                if r["id"] == run_id), None)
+    if run is None:
+        raise HTTPException(404, "no such manual test run on this report")
+    if run.get("evidence_id"):
+        raise HTTPException(409, "this run is already complete")
+
+    plan = acr_plans.plan(run["plan_id"])
+    if plan is None:
+        raise HTTPException(400, f"{run['plan_id']} is no longer in the plan catalog")
+
+    # Refuse to close a run whose steps are unanswered. The screen shows the same sentence, from
+    # this same module, so it cannot offer a Complete button the server then rejects.
+    provisional = dict(next(i for i in _run_instances(report_id, owner) if i["id"] == run_id))
+    provisional["tester"] = body.tester
+    provisional["environment"] = {"browser": body.browser,
+                                  "assistive_tech": body.assistive_tech,
+                                  "environment": body.environment}
+    ok, why = acr_plans.instance_complete(provisional)
+    if not ok:
+        raise HTTPException(400, why)
+
+    ev = Evidence(criterion_num=run["criterion_num"], source_kind="manual", result=body.result,
+                  report_id=report_id, tester=body.tester,
+                  product_version=report.get("product_version"), build_id=report.get("build_id"),
+                  environment=body.environment, browser=body.browser,
+                  assistive_tech=body.assistive_tech,
+                  method=f"Guided manual test plan: {plan['title']} ({plan['plan_id']})",
+                  notes=body.notes)
+    core.store.add_acr_evidence(ev.to_row(), owner_email=owner)
+    core.store.complete_acr_manual_run(run_id, report_id=report_id, owner_email=owner,
+                                       result=body.result, evidence_id=ev.id, tester=body.tester,
+                                       notes=body.notes)
+    core.store.append_acr_decision_log(report_id, owner_email=owner, actor=who,
+                                       action="manual_test.completed",
+                                       criterion_num=run["criterion_num"],
+                                       detail=f"{run['plan_id']}: {body.result}")
+    return {"run_id": run_id, "evidence_id": ev.id, "result": body.result,
+            "note": "A completed plan records what a tester observed. It does not select a "
+                    "conformance status."}
+
+
 # ── validation, audit and preview ──────────────────────────────────────────────
 
 @router.get("/acr/{report_id}/validation")
@@ -589,7 +808,8 @@ def validation(report_id: str, request: Request):
     report = _report_or_404(report_id, owner)
     criteria = core.store.list_acr_criteria(report_id, owner_email=owner)
     ev_by = _evidence_objects(report_id, owner)
-    blockers = acr_validation.validate(report, criteria, ev_by)
+    blockers = acr_validation.validate(report, criteria, ev_by,
+                                       manual_plan_status=_manual_plan_status(report, report_id, owner))
     return {"summary": acr_validation.summary(blockers),
             "by_category": acr_validation.group(blockers),
             "category_labels": acr_validation.CATEGORY_LABELS}
