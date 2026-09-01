@@ -1499,9 +1499,13 @@ def lifecycle_files(sid: str, request: Request, status: str | None = Query(None)
                                            limit=limit, offset=offset)
     total = core.store.count_lifecycle_files(sid, owner, status=status, policy_id=policy_id,
                                              candidate_only=candidate_only)
+    # One batched read for the whole scan, merged in memory. The queue needs the audit id, the
+    # policy VERSION and the proposed action to bound a grouped approval (PRD §8), and asking
+    # per row would rebuild the N+1 that #1163 removed from the CSV export next door.
+    pending = core.store.pending_approvals_by_file(sid, owner)
     return {"scan_id": sid, "data_version": core.store.lifecycle_data_version(sid),
             "total": total, "offset": offset, "limit": limit,
-            "rows": [_inv_capability(r) for r in rows]}
+            "rows": [{**_inv_capability(r), **(pending.get(r.get("file")) or {})} for r in rows]}
 
 
 @router.get("/scans/{sid}/lifecycle/files/{document_id:path}")

@@ -2629,6 +2629,36 @@ class Store:
                 tuple(args))
             return self._db.fetchall(cur)
 
+    def pending_approvals_by_file(self, scan_id: str, owner: str) -> dict[str, dict]:
+        """The pending disposition decision for each file in one scan, keyed by file, ONE query.
+
+        Deliberately NOT a join onto list_lifecycle_files. Two tables that look joinable here are
+        not safely so: lifecycle_evaluation holds a row per (scan, file, policy, VERSION), so a
+        re-evaluated policy multiplies the inventory row and silently inflates the queue's own
+        counts — the one number a reviewer has to be able to trust. disposition_audit is safe on
+        its own because only the CHOSEN action is queued for approval (tag rows land 'applied',
+        never 'pending_approval'), so there is exactly one pending row per file.
+
+        Carries what a grouped approval needs and nothing else: PRD §8 lets a batch cover only
+        rows sharing a policy, its version and its action, and the queue cannot bound a selection
+        by facts it was never given."""
+        out: dict[str, dict] = {}
+        prefix = f"scan:{scan_id}:"
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id,doc_id,policy_id,policy_version,action FROM disposition_audit "
+                "WHERE doc_id LIKE %s AND owner_email=%s AND result='pending_approval'",
+                (prefix + "%", owner))
+            for row in self._db.fetchall(cur):
+                doc_id = str(row.get("doc_id") or "")
+                if not doc_id.startswith(prefix):        # LIKE is not anchored on '_' wildcards
+                    continue
+                out[doc_id[len(prefix):]] = {
+                    "audit_id": row.get("id"), "policy_id": row.get("policy_id"),
+                    "policy_version": row.get("policy_version"), "action": row.get("action"),
+                }
+        return out
+
     def count_lifecycle_files(self, scan_id: str, owner: str, *, status: str | None = None,
                               policy_id: str | None = None, candidate_only: bool = False) -> int:
         where, args = ["si.scan_id=%s", "EXISTS (SELECT 1 FROM scan_runs sr WHERE sr.id=si.scan_id AND sr.owner_email=%s)"], [scan_id, owner]

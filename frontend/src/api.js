@@ -488,6 +488,18 @@ export const getLifecycleFiles = (scanId, { status = '', policyId = '', candidat
   return SIM ? getScanInventory(scanId, { offset, limit })
     : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/lifecycle/files?${qs}`, { headers: headers() }).then(j)
 }
+// PRD §8 grouped approval. Sends the ids the queue DISPLAYED, plus the policy version and
+// action they were all queued under — the server refuses the batch if any row disagrees, so the
+// client cannot widen a selection by getting its own grouping wrong. Records decisions only; no
+// source file is touched here.
+export const approveDispositionBatch = ({ auditIds, policyId, policyVersion, action, reason }) => (SIM
+  ? sim({ submitted: auditIds.length, approved: auditIds, refused: [], already_decided: [],
+          reconciled: true, executed: false })
+  : fetch(`${BASE}/disposition/approvals`, {
+    method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ audit_ids: auditIds, policy_id: policyId,
+                           policy_version: policyVersion, action, reason: reason || null }),
+  }).then(j))
 export const getLifecycleFileDetail = (scanId, file) => (SIM
   ? getScanInventory(scanId).then(({ rows }) => ({ ...(rows.find((r) => r.file === file) || {}), evaluations: [] }))
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/lifecycle/files/${encodeURIComponent(file)}`, { headers: headers() }).then(j))
