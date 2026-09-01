@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { approveDispositionBatch, getLifecycleFileDetail, getLifecycleFiles } from './api.js'
+import { approveDispositionBatch, getLifecycleFileDetail, getLifecycleFileHistory, getLifecycleFiles } from './api.js'
 import LifecycleEvidencePanel from './LifecycleEvidencePanel.jsx'
 
 // PRD §7.4 default sort. Conflicts first because they are the only state where NO rule won and
@@ -71,7 +71,14 @@ export default function DispositionReviewWorkspace({ scanId, status = '', policy
 
   const inspect = (row) => {
     setReviewed((seen) => new Set(seen).add(row.file))
-    return getLifecycleFileDetail(scanId, row.file).then(setSelected)
+    // Detail and history together: the panel is specified to show BOTH what a rule decided and
+    // what happened before it, and a reviewer opening a file wants one answer, not two loads.
+    // A history that fails to load must not blank the evidence beside it, so it degrades to an
+    // empty timeline the panel can say it could not read.
+    return Promise.all([
+      getLifecycleFileDetail(scanId, row.file),
+      getLifecycleFileHistory(scanId, row.file).then((h) => h.events || []).catch(() => null),
+    ]).then(([detail, events]) => setSelected({ ...detail, history: events }))
       .catch(() => setError('Lifecycle evidence could not be loaded.'))
   }
 
