@@ -27,6 +27,34 @@ from scanner import run_scan
 logger = logging.getLogger(__name__)
 
 
+# Longest-predicted work first reduces the tail of a parallel Assess run: without it, a large PDF
+# or presentation that happens to be late in inventory order can occupy the final worker while all
+# other slots sit idle. Size is the strongest metadata-only signal available before download. For
+# native/cloud files whose source does not report bytes, use a deliberately modest format estimate
+# so likely-expensive PDFs/slides still start ahead of tiny text documents. Python's sort is stable,
+# so equal estimates preserve the source order and retries remain deterministic.
+_ASSESS_UNKNOWN_SIZE_KB = {
+    ".pdf": 8192,
+    ".pptx": 4096,
+    ".xlsx": 2048,
+    ".docx": 1024,
+    ".html": 256,
+    ".htm": 256,
+}
+
+
+def _estimated_assess_work(item: dict) -> int:
+    """Return a metadata-only work estimate in KiB-equivalent units."""
+    try:
+        size = item.get("size_kb")
+        if size is not None:
+            return max(0, int(size))
+    except (TypeError, ValueError):
+        pass
+    from pathlib import Path as _Path
+    return _ASSESS_UNKNOWN_SIZE_KB.get(_Path(item.get("file") or "").suffix.lower(), 0)
+
+
 def _defer_analysis_to_assess() -> bool:
     """ADR 0020 — metadata-only discovery is now the DEFAULT. Discover only LISTS the estate
     (metadata, no file opened, nothing downloaded); the download + WCAG analysis run at Assess
@@ -56,6 +84,9 @@ def _enqueue_analysis(scan_id: str, source: str, items: list[dict], *, ai: bool,
         core.store.enqueue_job("scan_finalize",
                                {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)
         return
+    # LPT scheduling is optimal for the two-file tail we repeatedly see in production: start the
+    # likely stragglers while every worker slot is available, then drain the short documents.
+    items = sorted(items, key=_estimated_assess_work, reverse=True)
     name_counts: dict[str, int] = {}
     for it in items:
         name_counts[_logical_name(it["file"])] = name_counts.get(_logical_name(it["file"]), 0) + 1
@@ -70,6 +101,7 @@ def _enqueue_analysis(scan_id: str, source: str, items: list[dict], *, ai: bool,
                            "mime": it.get("mime"), "path": it.get("path"),
                            "checksum": it.get("checksum"), "drive_id": it.get("drive_id"),
                            "source_modified": it.get("source_modified"),
+                           "size_kb": it.get("size_kb"),
                            "shadow_candidate": name_counts[_logical_name(it["file"])] > 1,
                            "exclude_remediated": exclude_remediated} for it in chunk],
             }, scan_id=scan_id)
@@ -80,6 +112,7 @@ def _enqueue_analysis(scan_id: str, source: str, items: list[dict], *, ai: bool,
                 "drive_file_id": it.get("drive_file_id"), "mime": it.get("mime"), "path": it.get("path"),
                 "checksum": it.get("checksum"), "drive_id": it.get("drive_id"),
                 "source_modified": it.get("source_modified"),
+                "size_kb": it.get("size_kb"),
                 "shadow_candidate": name_counts[_logical_name(it["file"])] > 1,
                 "exclude_remediated": exclude_remediated,
                 "ai": ai, "pii": pii, "user": user, "incremental": incremental}, scan_id=scan_id)
@@ -2334,6 +2367,7 @@ def _scan_assess(payload: dict, job: dict) -> None:
                       "mime": src_mime if src_mime in _EXPORT_MAP else None,
                       "path": r.get("path"), "checksum": r.get("checksum"),
                       "drive_id": r.get("drive_id"),
+                      "size_kb": r.get("size_kb"),
                       "source_modified": r.get("source_modified")})
     # ── PERSIST THE EXCLUSION ONTO THE RUN ───────────────────────────────────────────────────
     # Recorded on `scan_runs.scope`, beside `skipped_out_of_scope`, because it is the same kind of
