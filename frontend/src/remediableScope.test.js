@@ -93,12 +93,17 @@ describe('the Run Remediation button is reachable after a review', () => {
   it('the CTA is no longer gated on remStarted', () => {
     // The exact defect: `(!remStarted && remediable.length > 0)`
     expect(rem).not.toMatch(/!remStarted && remediable\.length > 0/)
-    expect(rem).toMatch(/remediable\.length > 0 \? \{ label: '⚡ Run Remediation →'/)
+    // The 2026-09-01 redesign renamed the action and narrowed its scope to the DETERMINISTIC
+    // partition (`autoBatch`) rather than every remediable file, so the button can never be the
+    // thing that approves an AI draft. The invariant this test exists for — the offer does not
+    // disappear once a review has happened — is unchanged.
+    expect(rem).toMatch(/autoBatch && autoBatch\.count > 0/)
+    expect(rem).toMatch(/label: `Apply \$\{autoBatch\.count\} automatic fix/)
   })
 
   it('but a run in flight shows as running rather than re-offering the button', () => {
     expect(rem).toMatch(/const remRunning = remBusy \|\| \(remProg != null && remProg\.done < remProg\.total\)/)
-    expect(rem).toMatch(/remRunning \? \{ label: '⏳ Remediating…', disabled: true \}/)
+    expect(rem).toMatch(/remRunning \? \{ label: 'Applying fixes…', disabled: true \}/)
   })
 
   it('remStarted survives where it is still meaningful', () => {

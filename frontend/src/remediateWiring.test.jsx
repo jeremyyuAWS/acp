@@ -30,7 +30,6 @@ const code = (f) => read(f)
 
 const PAGE_LEVEL = [
   ['RemediationWork', 'R2/R3 — the work partitioned, and the deterministic batch'],
-  ['RemediationApprovals', 'R5 — the approval queue'],
   ['ManualWork', 'R6 — work ACP cannot do at all'],
   ['RemediationVerify', 'R9 — did the fixes hold'],
   ['DeliveryPanel', 'R11 — where the fixed files go'],
@@ -47,6 +46,26 @@ describe('the board core is mounted, not merely shipped', () => {
       expect(s, `${name} is RENDERED, not just imported`).toMatch(new RegExp(`<${name}[\\s/>]`))
     })
   }
+
+  it('does NOT mount RemediationApprovals — there is one approval surface, not two', () => {
+    // Removed 2026-09-01 by the Remediate redesign. It offered a second place to approve the same
+    // drafts the review panel approves, so "which one is authoritative?" had no answer on the
+    // screen; and it was fed UI-shaped rows (`ruleId`) while reading DB field names (`rule_id`,
+    // `status`), so its criterion column rendered empty for every row in production. The panel file
+    // is kept per the retired-feature policy and tracked by unmountedComponents.test.jsx.
+    const s = rem()
+    expect(s).not.toMatch(/import RemediationApprovals from/)
+    expect(s).not.toMatch(/<RemediationApprovals[\s/>]/)
+  })
+
+  it('leaves the review panel as the only finding-level decision surface', () => {
+    const s = rem()
+    // The inbox is mounted and its decisions route through the same `act` the removed panel used,
+    // so this removed a screen rather than a capability.
+    expect(s).toMatch(/<RemediationInbox/)
+    expect(s).toMatch(/if \(d\.state === 'accepted'\) return act\(f\.id, 'approved'/)
+    expect(s).toMatch(/if \(d\.state === 'rejected'\) return act\(f\.id, 'rejected'\)/)
+  })
 
   it('gives every lane-aware panel the capability tables', () => {
     // Without cap/assessment these components cannot tell `auto` from `assisted` from `human`, and
@@ -72,20 +91,25 @@ describe('the board core is mounted, not merely shipped', () => {
     expect(s).toMatch(/typeof f === 'string' \? f : f\?\.file/)
   })
 
-  it('feeds the approval queue the same items the review section reads', () => {
-    // Two panels disagreeing about what is waiting for a decision is the four-denominator defect
-    // in a new place. They read one queue.
+  it('the review panel reads the same queue the header counts are derived from', () => {
+    // Two surfaces disagreeing about what is waiting for a decision is the four-denominator defect
+    // in a new place. One queue feeds the workspace AND the run header's counts.
     const s = rem()
-    expect(s).toMatch(/<RemediationApprovals items=\{queue\}/)
+    expect(s).toMatch(/queue=\{inboxQueue\}/)
+    expect(s).toMatch(/const workflowCount = \(k\) => inboxQueue\.filter/)
   })
 
-  it('wires approve and reject to the real handler, not a placeholder', () => {
-    // `act(id, kind, …)` is the existing decision path — it posts the decision, updates the
-    // counters and reloads the queue. A locally-invented handler would appear to work and record
-    // nothing, which is worse than a dead button.
+  it('a decision REPORTS whether it saved, so the queue cannot advance past a refused write', () => {
+    // `act` used to be fire-and-forget: the server could refuse a decision and the reviewer was
+    // still advanced to the next finding, with the only trace a banner rendered above the whole
+    // inbox. It now returns the write's promise and re-throws on failure, and the review pane
+    // awaits that before it moves anyone.
     const s = rem()
-    expect(s).toMatch(/onApprove=\{\(id, value, meta\) => act\(id, 'approved'/)
-    expect(s).toMatch(/onReject=\{\(id\) => act\(id, 'rejected'\)\}/)
+    expect(s).toMatch(/\(e\) => \{ undoAct\(item, kind, e\); throw e \}/)
+    expect(s).toMatch(/return p\.then\(/)
+    const inbox = code('RemediationInbox.jsx')
+    expect(inbox).toMatch(/await onDecide\?\.\(f, decision\)/)
+    expect(inbox).toMatch(/if \(!ok\) \{ setSelectedId\(f\.id\); return \}/)
   })
 
   it('App passes the capability tables down to Remediate', () => {
@@ -164,13 +188,15 @@ describe('the per-item four reach the detail pane, beside their subject', () => 
 describe('R1 (board 9) — the hero names which assessment this backlog is from', () => {
   const rem = () => code('Remediate.jsx')
 
-  it('accepts assessedAt and prints it next to the hero title, omitting rather than inventing', () => {
+  it('passes assessedAt to the run header, which omits rather than invents', () => {
     // Pre-formatted by the caller — the same "format once, pass a string" contract every other
-    // stamp on these tabs follows — so this component formats no dates of its own, and the
-    // guard means a missing value prints nothing rather than a raw ISO timestamp or a blank line.
+    // stamp on these tabs follows — so this component formats no dates of its own. The redesign
+    // moved the stamp from the deleted hero into the compact run header, and the omission guard
+    // moved with it: RemediationRunHeader renders nothing at all for a null assessedAt.
     const s = rem()
     expect(s).toMatch(/assessedAt = null/)
-    expect(s).toMatch(/assessedAt && \([\s\S]{0,200}?from the assessment of \{assessedAt\}/)
+    expect(s).toMatch(/<RemediationRunHeader[\s\S]{0,400}?assessedAt=\{assessedAt\}/)
+    expect(code('RemediationRunHeader.jsx')).toMatch(/Assessment:/)
   })
 
   it('App passes the run\'s own assessed_at, formatted via fmtStamp — never the raw column', () => {

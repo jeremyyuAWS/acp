@@ -171,7 +171,7 @@ function taskLineOf(f, lane) {
   }
 }
 
-function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCount = 0, onApplyToMatching, scanId = null, draft = null, onDraftChange }) {
+function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCount = 0, onApplyToMatching, scanId = null, draft = null, onDraftChange, saving = false, error = null }) {
   if (!f) {
     return (
       <div style={{ display: 'grid', placeItems: 'center', height: '100%', textAlign: 'center', padding: 24 }}>
@@ -300,14 +300,16 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
                         padding: '10px 22px', borderBottom: '1px solid var(--line,#e2dce4)',
                         background: 'var(--surface-2,#f6f5f8)', fontSize: 12.5 }}>
             <span className="muted">
-              {matchingCount} other finding{matchingCount === 1 ? '' : 's'} share this issue{f.rule_id || f.ruleId ? ` (WCAG ${scKeyOf(f)})` : ''}.
-              Apply your decision to all {matchingCount + 1} matching findings:
+              You are looking at one of {matchingCount + 1} findings that share this issue. The other {matchingCount} carry
+              the same criterion and an actionable proposal; manual, blocked and already-decided findings are excluded.
             </span>
-            <button className="ghost" style={{ fontSize: 12.5 }} onClick={() => onApplyToMatching?.(f, { state: 'accepted' })}>
-              Approve all {matchingCount + 1}
+            <button className="ghost" style={{ fontSize: 12.5 }} disabled={saving}
+                    onClick={() => onApplyToMatching?.(f, { state: 'accepted' })}>
+              Approve this decision for {matchingCount} other {scKeyOf(f) ? `WCAG ${scKeyOf(f)} ` : ''}finding{matchingCount === 1 ? '' : 's'}
             </button>
-            <button className="ghost" style={{ fontSize: 12.5 }} onClick={() => onApplyToMatching?.(f, { state: 'rejected' })}>
-              Reject all {matchingCount + 1}
+            <button className="ghost" style={{ fontSize: 12.5 }} disabled={saving}
+                    onClick={() => onApplyToMatching?.(f, { state: 'rejected' })}>
+              Reject this decision for {matchingCount} other {scKeyOf(f) ? `WCAG ${scKeyOf(f)} ` : ''}finding{matchingCount === 1 ? '' : 's'}
             </button>
           </div>
         )}
@@ -321,12 +323,12 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
             </span>
           ) : isManual ? (
             <>
-              {onOpenWord && <button className="primary" onClick={() => onOpenWord(f)}>Open in Word</button>}
-              {onRecheck && <button className="ghost" onClick={() => onRecheck(f)}>Upload &amp; recheck</button>}
-              <button className="ghost" onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
+              {onOpenWord && <button className="primary" disabled={saving} onClick={() => onOpenWord(f)}>Open in Word</button>}
+              {onRecheck && <button className="ghost" disabled={saving} onClick={() => onRecheck(f)}>Upload &amp; recheck</button>}
+              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
               {/* Out of scope — this criterion doesn't apply to the document. Resolves the finding and
                   takes it out of the coverage denominator (persisted as an out_of_scope resolution). */}
-              <button className="ghost" onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
+              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
             </>
           ) : isAutoFix ? (
             /* An auto-applied fix: the change is already written, so the decision is a clear approve or
@@ -334,24 +336,38 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
                back for a person; it does NOT auto-revert the applied change (no backend undo exists —
                see PR body), so it is labelled as a flag, not a "reject & revert". */
             <>
-              <button className="primary" onClick={() => onDecide?.(f, { state: 'accepted' })}>Approve ACP’s fix</button>
-              <button className="ghost" onClick={() => onDecide?.(f, { state: 'rejected' })}>This looks wrong</button>
-              {onOpenWord && <button className="ghost" onClick={() => onOpenWord(f)}>Open in Word</button>}
-              <button className="ghost" onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
+              <button className="primary" disabled={saving} onClick={() => onDecide?.(f, { state: 'accepted' })}>
+                {saving ? 'Saving…' : 'Approve & next →'}
+              </button>
+              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>This looks wrong</button>
+              {onOpenWord && <button className="ghost" disabled={saving} onClick={() => onOpenWord(f)}>Open source document</button>}
+              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
             </>
           ) : (
             <>
-              <button className="primary" onClick={() => onDecide?.(f, { state: 'accepted', value: canEdit ? draftValue : undefined })}>{edited ? 'Save edited fix' : lane.action}</button>
+              <button className="primary" disabled={saving}
+                      onClick={() => onDecide?.(f, { state: 'accepted', value: canEdit ? draftValue : undefined })}>
+                {saving ? 'Saving…' : edited ? 'Save edited fix & next →' : 'Approve & next →'}
+              </button>
               {/* A specific action, not a bare "Reject": declining an AI fix hands the finding to a
                   person (the handoff lane), so the label names that outcome rather than leaving the
                   reviewer to guess what "Reject" does. */}
-              <button className="ghost" onClick={() => onDecide?.(f, { state: 'rejected' })}>Reject &amp; handle manually</button>
-              <button className="ghost" onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
-              <button className="ghost" onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
-              {onOpenWord && <button className="ghost" onClick={() => onOpenWord(f)}>Open in Word</button>}
+              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>Reject → manual</button>
+              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
+              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
+              {onOpenWord && <button className="ghost" disabled={saving} onClick={() => onOpenWord(f)}>Open source document</button>}
             </>
           )}
         </div>
+        {/* The decision that did NOT save, stated where the reviewer pressed the button. The finding
+            stays selected and unresolved behind this — nothing advanced, and nothing was recorded. */}
+        {error && (
+          <div role="alert"
+               style={{ margin: '0 22px 14px', padding: '10px 12px', borderRadius: 8, fontSize: 12.5,
+                        border: '1px solid #C0392B', background: '#FDEDEC', color: '#7B241C' }}>
+            <b>Not saved.</b> {error.message} This finding is still waiting for your decision — nothing was recorded and you have not moved on.
+          </div>
+        )}
       </div>
     </div>
   )
@@ -367,6 +383,12 @@ const LAYOUTS = [
   ['focus', 'Focus', 'Hide the document preview and focus on the fix'],
 ]
 const LAYOUT_KEYS = LAYOUTS.map(([k]) => k)
+// Where the preview sits once it is OPEN. 'focus' is not a placement — it is the preview being
+// closed, which is the default workspace and is driven by the toggle rather than by this group.
+const PLACEMENTS = LAYOUTS.filter(([k]) => k !== 'focus')
+// Below this the queue and the review panel each get the full width, one at a time. Chosen so the
+// review panel keeps a readable measure at 200% zoom rather than at a device size.
+const NARROW_Q = '(max-width: 820px)'
 
 // A workspace preference (the reviewer sets it once), so it lives in localStorage keyed globally —
 // unlike search/filter state, which is per-scan sessionStorage. Every access is guarded: storage
@@ -427,11 +449,15 @@ export default function RemediationInbox({
 
   // Workspace layout + pane sizes, restored from the reviewer's last session (localStorage).
   const [layout, setLayout] = useState(() => {
-    // Default to the two-column STACKED workspace (queue + one scrolling workspace column) — the
-    // focused layout the redesign was built around. Reviewers who prefer side-by-side switch to
-    // Split (or Focus); their choice persists in localStorage and wins over this default.
-    const v = initialLayout ?? readLS('layout', 'stacked')
-    return LAYOUT_KEYS.includes(v) ? v : 'stacked'
+    // DEFAULT: two panels — the queue and the review canvas, nothing else. The document preview is
+    // a THIRD pane, and making it persistent turned the default experience into a workstation the
+    // reviewer had to manage before they could review anything. It is now opened on demand from the
+    // "Full document preview" toggle, which is what 'focus' means here: preview hidden.
+    //
+    // A reviewer who turns it on keeps it on — the choice still persists in localStorage and still
+    // wins over this default, so the advanced layout is preserved rather than removed.
+    const v = initialLayout ?? readLS('layout', 'focus')
+    return LAYOUT_KEYS.includes(v) ? v : 'focus'
   })
   const [leftW, setLeftW] = useState(() => clamp(readNum('leftW', 28), 18, 45))   // inbox width, % of the row
   const [centerW, setCenterW] = useState(() => clamp(readNum('centerW', 34), 20, 60)) // guided width in Split, % of the row
@@ -440,6 +466,34 @@ export default function RemediationInbox({
   useEffect(() => { writeLS('leftW', leftW) }, [leftW])
   useEffect(() => { writeLS('centerW', centerW) }, [centerW])
   useEffect(() => { writeLS('topFrac', topFrac) }, [topFrac])
+
+  // ── Narrow viewports: two panels side by side stop being two panels and become two half-panels.
+  // Below the breakpoint the workspace shows ONE of them at a time — the queue, or the finding with
+  // a way back to the queue (PRD §12). matchMedia is absent in jsdom and in older engines, so the
+  // guard is a capability check, not a version check, and its failure mode is the desktop layout.
+  const [narrow, setNarrow] = useState(() => {
+    try { return !!window.matchMedia?.(NARROW_Q).matches } catch { return false }
+  })
+  useEffect(() => {
+    let mq
+    try { mq = window.matchMedia?.(NARROW_Q) } catch { return undefined }
+    if (!mq) return undefined
+    const on = (e) => setNarrow(e.matches)
+    // addListener is the pre-2019 spelling; Safari only grew addEventListener here in 14.
+    if (mq.addEventListener) { mq.addEventListener('change', on); return () => mq.removeEventListener('change', on) }
+    if (mq.addListener) { mq.addListener(on); return () => mq.removeListener(on) }
+    return undefined
+  }, [])
+  // Which of the two the narrow layout is showing. Selecting a finding moves to it; "Back to queue"
+  // returns. Ignored entirely at desktop widths, where both panels are on screen at once.
+  const [narrowPane, setNarrowPane] = useState('queue')
+
+  // The preview is open in either placement; 'focus' is the closed, two-panel default. Reopening
+  // restores the placement the reviewer last used rather than always snapping back to side-by-side.
+  const previewOpen = layout !== 'focus'
+  const lastPlaceRef = useRef(layout === 'stacked' ? 'stacked' : 'split')
+  useEffect(() => { if (previewOpen) lastPlaceRef.current = layout }, [layout, previewOpen])
+  const togglePreview = () => setLayout((l) => (l === 'focus' ? lastPlaceRef.current : 'focus'))
 
   const rowRef = useRef(null)   // the .rinbox flex row — the frame for horizontal (column) resizes
   const wsRef = useRef(null)    // the stacked workspace column — the frame for the vertical resize
@@ -474,8 +528,21 @@ export default function RemediationInbox({
     setSelectedId(firstOpen ? firstOpen.id : null)
   }, [visible, selectedId, decisions])
 
-  const selected = queue.find((f) => f.id === selectedId) || null
+  // A decision being written, and the last one refused. Both are keyed by finding id so the pane can
+  // only ever show a busy or failed state against the finding it actually belongs to.
+  const [savingId, setSavingId] = useState(null)
+  const [saveError, setSaveError] = useState(null)
+  // Findings the parent has optimistically removed from `queue` while their write is in flight. Kept
+  // only until the write settles, so the review pane never blanks mid-decision.
+  const heldRef = useRef(new Map())
+
+  const selected = queue.find((f) => f.id === selectedId) || heldRef.current.get(selectedId) || null
+  // One selection entry point for both layouts: at desktop widths this is just setSelectedId; when
+  // only one panel fits, picking a finding is also the navigation TO it.
+  const selectRow = (id) => { setSelectedId(id); setNarrowPane('detail') }
   const groups = useMemo(() => groupByDocument(visible), [visible])
+  // Moving off a failed finding clears its error — the message belongs to that decision, not the page.
+  useEffect(() => { setSaveError((e) => (e && e.id !== selectedId ? null : e)) }, [selectedId])
 
   // W8 — every OTHER unresolved queued finding that shares this one's rule/SC. Drives the
   // "apply to all matching" count and the batch action. Restricted to the actionable approve/apply
@@ -492,20 +559,62 @@ export default function RemediationInbox({
 
   // Act on a finding, then auto-advance to the next unresolved one — the behaviour that makes the
   // queue feel like a controlled worklist rather than a scroll through an audit report.
-  function act(f, decision) {
-    onDecide?.(f, decision)
+  //
+  // ADVANCING IS CONDITIONAL ON THE WRITE SUCCEEDING. This used to call onDecide and move on in the
+  // same breath: the decision was fire-and-forget, so a server refusal advanced the reviewer to the
+  // next finding anyway and the only trace was a banner rendered OUTSIDE this component, above the
+  // whole inbox. The reviewer saw a decision they had made land on a finding that had scrolled past.
+  // Now the save is awaited — on failure the item stays selected, the error is stated inline next to
+  // the buttons that failed, and nothing advances.
+  async function act(f, decision) {
+    if (!f || savingId != null) return
+    // The parent removes the row from `queue` optimistically and puts it back only if the write
+    // fails, so hold our own reference to keep the pane rendering THIS finding while it is in flight.
+    heldRef.current.set(f.id, f)
+    setSavingId(f.id)
+    setSaveError(null)
+    let ok = true
+    try {
+      // `onDecide` returns a promise once the parent has a write to report on; older call sites
+      // return undefined, which awaits to undefined and keeps the previous advance-always behaviour.
+      await onDecide?.(f, decision)
+    } catch (e) {
+      ok = false
+      setSaveError({ id: f.id, message: e?.message || String(e || 'The server did not accept it.') })
+    }
+    setSavingId(null)
+    if (!ok) { setSelectedId(f.id); return }   // stay put — the decision was NOT recorded
+    heldRef.current.delete(f.id)
+    // `visible` is the list as it was when this handler was created, i.e. BEFORE the parent removed
+    // the decided row — which is exactly the ordering the "next" finding should be taken from.
     const nextDecisions = { ...decisions, [f.id]: decision }
-    const nxt = nextUnresolvedId(visible, f.id, nextDecisions)
-    setSelectedId(nxt)
+    setSelectedId(nextUnresolvedId(visible, f.id, nextDecisions))
   }
 
   // W8 — apply one decision to the current finding AND every matching one, in a single click. Each
   // target routes through the same onDecide as an individual action, so approvals still re-validate
   // and rejections still hand off; then advance past everything just decided.
-  function applyToMatching(f, decision) {
+  //
+  // Partial failure is reported rather than hidden (PRD §6): the writes are awaited together, and if
+  // some are refused the batch says how many landed and how many are still unresolved, and the
+  // selection stays on the first finding that failed instead of advancing past the whole cluster.
+  async function applyToMatching(f, decision) {
+    if (!f || savingId != null) return
     const targets = [f, ...matchingOf(f)]
+    targets.forEach((t) => heldRef.current.set(t.id, t))
+    setSavingId(f.id)
+    setSaveError(null)
+    const results = await Promise.allSettled(targets.map((t) => onDecide?.(t, decision)))
+    setSavingId(null)
+    const failed = targets.filter((_, i) => results[i].status === 'rejected')
     const nextDecisions = { ...decisions }
-    targets.forEach((t) => { onDecide?.(t, decision); nextDecisions[t.id] = decision })
+    targets.forEach((t, i) => { if (results[i].status === 'fulfilled') { nextDecisions[t.id] = decision; heldRef.current.delete(t.id) } })
+    if (failed.length) {
+      setSaveError({ id: failed[0].id, batch: { saved: targets.length - failed.length, failed: failed.length },
+                     message: `${targets.length - failed.length} of ${targets.length} saved. ${failed.length} could not be saved and ${failed.length === 1 ? 'is' : 'are'} still unresolved.` })
+      setSelectedId(failed[0].id)
+      return
+    }
     setSelectedId(nextUnresolvedId(visible, f.id, nextDecisions))
   }
 
@@ -548,24 +657,55 @@ export default function RemediationInbox({
   const guidedHeader = (
     <div style={{ flex: '0 0 auto', padding: '8px 12px', borderBottom: '1px solid var(--line,#e2dce4)',
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-      <span style={{ fontSize: 13, fontWeight: 700 }}>Guided remediation</span>
-      <div role="group" aria-label="Workspace layout"
-           style={{ display: 'inline-flex', border: '1px solid var(--line,#e2dce4)', borderRadius: 8, overflow: 'hidden' }}>
-        {LAYOUTS.map(([key, label, title]) => (
-          <button key={key} type="button" aria-pressed={layout === key} title={title} onClick={() => setLayout(key)}
-                  style={{ fontSize: 11.5, padding: '4px 9px', cursor: 'pointer', border: 'none',
-                           borderLeft: key === 'split' ? 'none' : '1px solid var(--line,#e2dce4)',
-                           background: layout === key ? 'var(--accent,#3b6fd6)' : 'var(--bg,#fff)',
-                           color: layout === key ? '#fff' : 'inherit', fontWeight: layout === key ? 700 : 500 }}>
-            {label}
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+        {narrow && (
+          <button type="button" onClick={() => setNarrowPane('queue')}
+                  style={{ fontSize: 11.5, fontWeight: 600, padding: '4px 10px', borderRadius: 8, cursor: 'pointer',
+                           border: '1px solid var(--line,#e2dce4)', background: 'var(--bg,#fff)' }}>
+            &larr; Back to queue
           </button>
-        ))}
+        )}
+        <span style={{ fontSize: 13, fontWeight: 700 }}>Guided remediation</span>
+      </span>
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+        {/* One control, not a layout picker. The default workspace is two panels; this opens the
+            document preview beside (or below) the review canvas and closes it again. The selected
+            finding and any unsaved edit survive both directions — `drafts` and `selectedId` live on
+            this component, and the guided column keeps its position in the tree either way.
+            Hidden at narrow widths: a third pane cannot help where two panels already do not fit. */}
+        {!narrow && (
+          <button type="button" aria-pressed={previewOpen} onClick={togglePreview}
+                  title={previewOpen ? 'Close the document preview and return to the two-panel workspace'
+                                     : 'Open the full document preview beside the review panel'}
+                  style={{ fontSize: 11.5, fontWeight: 600, padding: '4px 10px', borderRadius: 8, cursor: 'pointer',
+                           border: `1px solid ${previewOpen ? 'transparent' : 'var(--line,#e2dce4)'}`,
+                           background: previewOpen ? 'var(--accent,#3b6fd6)' : 'var(--bg,#fff)',
+                           color: previewOpen ? '#fff' : 'inherit' }}>
+            {previewOpen ? '\u2715 ' : ''}Full document preview
+          </button>
+        )}
+        {previewOpen && !narrow && (
+          <div role="group" aria-label="Preview placement"
+               style={{ display: 'inline-flex', border: '1px solid var(--line,#e2dce4)', borderRadius: 8, overflow: 'hidden' }}>
+            {PLACEMENTS.map(([key, label, title]) => (
+              <button key={key} type="button" aria-pressed={layout === key} title={title} onClick={() => setLayout(key)}
+                      style={{ fontSize: 11.5, padding: '4px 9px', cursor: 'pointer', border: 'none',
+                               borderLeft: key === 'split' ? 'none' : '1px solid var(--line,#e2dce4)',
+                               background: layout === key ? 'var(--accent,#3b6fd6)' : 'var(--bg,#fff)',
+                               color: layout === key ? '#fff' : 'inherit', fontWeight: layout === key ? 700 : 500 }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
   const guidedBody = (
     <>
       <DetailPane f={selected} decisions={decisions} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
+                  saving={savingId != null && savingId === selected?.id}
+                  error={saveError && selected && saveError.id === selected.id ? saveError : null}
                   matchingCount={matchingCount} onApplyToMatching={applyToMatching}
                   scanId={selected?.scanId || scanId}
                   draft={selected ? (drafts[selected.id] ?? null) : null}
@@ -607,9 +747,11 @@ export default function RemediationInbox({
       </div>
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
       <WorkspaceProgress queue={queue} decisions={decisions} selected={selected} />
-      <div className="rinbox" data-layout={layout} ref={rowRef} style={{ display: 'flex', gap: 0, border: '1px solid var(--line,#e2dce4)', borderRadius: '0 0 12px 12px', overflow: 'hidden', minHeight: 480 }}>
+      <div className="rinbox" data-layout={narrow ? 'focus' : layout} data-narrow={narrow ? narrowPane : undefined} ref={rowRef} style={{ display: 'flex', gap: 0, border: '1px solid var(--line,#e2dce4)', borderRadius: '0 0 12px 12px', overflow: 'hidden', minHeight: 480 }}>
       {/* ── Left: the work queue — find and select the next finding (resizable) ── */}
-      <div style={{ flex: `0 0 ${leftW}%`, maxWidth: `${leftW}%`, display: 'flex', flexDirection: 'column', minHeight: 480 }}>
+      <div className="rinbox-queuepane" hidden={narrow && narrowPane !== 'queue'}
+           style={{ ...(narrow ? { flex: '1 1 auto', maxWidth: 'none' } : { flex: `0 0 ${leftW}%`, maxWidth: `${leftW}%` }),
+                    display: narrow && narrowPane !== 'queue' ? 'none' : 'flex', flexDirection: 'column', minHeight: 480 }}>
         <div style={{ flex: '0 0 auto', padding: '10px 12px', borderBottom: '1px solid var(--line,#e2dce4)' }}>
           <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Remediation Inbox</div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -670,7 +812,7 @@ export default function RemediationInbox({
             // is stated once either way.
             g.items.length === 1 ? (
               <QueueRow key={g.items[0].id} f={g.items[0]} decisions={decisions}
-                        selected={g.items[0].id === selectedId} onSelect={setSelectedId} showFile />
+                        selected={g.items[0].id === selectedId} onSelect={selectRow} showFile />
             ) : (
               <div key={g.file}>
                 <button type="button" onClick={() => setCollapsed((c) => ({ ...c, [g.file]: !c[g.file] }))}
@@ -681,7 +823,7 @@ export default function RemediationInbox({
                   <span className="muted" style={{ fontWeight: 400 }}>{g.items.length}</span>
                 </button>
                 {!collapsed[g.file] && g.items.map((f) => (
-                  <QueueRow key={f.id} f={f} decisions={decisions} selected={f.id === selectedId} onSelect={setSelectedId} showFile={false} />
+                  <QueueRow key={f.id} f={f} decisions={decisions} selected={f.id === selectedId} onSelect={selectRow} showFile={false} />
                 ))}
               </div>
             )
@@ -689,52 +831,46 @@ export default function RemediationInbox({
         </div>
       </div>
 
-      {/* Divider between the inbox and the workspace — present in every layout. */}
-      <Divider orientation="vertical" label="Resize the inbox" value={leftW} min={18} max={45}
-               onDrag={dragLeft} onNudge={(d) => setLeftW((w) => clamp(w + d * 2, 18, 45))} />
+      {/* Divider between the inbox and the workspace — present whenever both are on screen. */}
+      {!narrow && (
+        <Divider orientation="vertical" label="Resize the inbox" value={leftW} min={18} max={45}
+                 onDrag={dragLeft} onNudge={(d) => setLeftW((w) => clamp(w + d * 2, 18, 45))} />
+      )}
 
-      {layout === 'stacked' ? (
-        /* ── Stacked: guided remediation above, document preview below, one workspace column ── */
-        <div ref={wsRef} style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 480 }}>
-          <div style={{ flex: `0 0 ${topFrac * 100}%`, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            {guidedHeader}
-            <div className="rinbox-guided-scroll"
-                 style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
-              {guidedBody}
-            </div>
-          </div>
-          <Divider orientation="horizontal" label="Resize the document preview" value={topFrac * 100} min={25} max={75}
-                   onDrag={dragTop} onNudge={(d) => setTopFrac((t) => clamp(t + d * 0.05, 0.25, 0.75))} />
-          <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            {previewHeader}
-            <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}>{previewBody}</div>
+      {/* ── The workspace: the review canvas, plus the document preview when it is open ──
+          ONE tree for all three states, rather than a branch per layout. The guided column keeps the
+          same position in the element tree whether the preview is closed, beside it, or below it, so
+          React reconciles it instead of remounting — which is what lets the reviewer open the full
+          preview mid-decision and come back to their scroll position and their unsaved edit. */}
+      <div className="rinbox-workspace" ref={wsRef} hidden={narrow && narrowPane !== 'detail'}
+           style={{ flex: '1 1 auto', minWidth: 0, minHeight: 480,
+                    display: narrow && narrowPane !== 'detail' ? 'none' : 'flex',
+                    flexDirection: layout === 'stacked' ? 'column' : 'row' }}>
+        <div style={{ ...(layout === 'stacked' ? { flex: `0 0 ${topFrac * 100}%` }
+                        : previewOpen ? { flex: `0 0 ${centerW}%`, maxWidth: `${centerW}%` }
+                        : { flex: '1 1 auto' }),
+                      minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          {guidedHeader}
+          <div className="rinbox-guided-scroll"
+               style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
+            {guidedBody}
           </div>
         </div>
-      ) : (
-        <>
-          {/* ── Centre: guided remediation — problem → proposed change → decision, one at a time ── */}
-          <div style={{ flex: layout === 'focus' ? '1 1 auto' : `0 0 ${centerW}%`, maxWidth: layout === 'focus' ? 'none' : `${centerW}%`,
-                        minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-            {guidedHeader}
-            <div className="rinbox-guided-scroll"
-                 style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
-              {guidedBody}
-            </div>
-          </div>
 
-          {/* ── Right: document preview (Split only — hidden in Focus) ── */}
-          {layout === 'split' && (
-            <>
-              <Divider orientation="vertical" label="Resize the document preview" value={centerW} min={20} max={60}
-                       onDrag={dragCenter} onNudge={(d) => setCenterW((w) => clamp(w + d * 2, 20, Math.max(20, 100 - leftW - 15)))} />
-              <div style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-                {previewHeader}
-                <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}>{previewBody}</div>
-              </div>
-            </>
-          )}
-        </>
-      )}
+        {previewOpen && (
+          <>
+            {layout === 'stacked'
+              ? <Divider orientation="horizontal" label="Resize the document preview" value={topFrac * 100} min={25} max={75}
+                         onDrag={dragTop} onNudge={(d) => setTopFrac((t) => clamp(t + d * 0.05, 0.25, 0.75))} />
+              : <Divider orientation="vertical" label="Resize the document preview" value={centerW} min={20} max={60}
+                         onDrag={dragCenter} onNudge={(d) => setCenterW((w) => clamp(w + d * 2, 20, Math.max(20, 100 - leftW - 15)))} />}
+            <div style={{ flex: '1 1 auto', minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+              {previewHeader}
+              <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}>{previewBody}</div>
+            </div>
+          </>
+        )}
+      </div>
       </div>
       {/* Sticky workflow guide (Show → Review → Verify) + Previous / N of M / Next navigation. */}
       <WorkspaceFooter position={position} total={visIds.length} onPrev={goPrev} onNext={goNext}

@@ -69,6 +69,10 @@ const EXPECTED_UNMOUNTED = [
   'FileTypeConfig',
   'LiveAssessment',      // kept for reference; LiveAssessmentLive.jsx says so in its own header
   'ProcessingDetails',   // never mounted in repo history
+  // Retired 2026-09-01: the Remediate redesign made the inbox's review panel the ONE
+  // finding-level approval surface, so this second one was unmounted. Kept per the
+  // retired-feature policy — restoring it is re-adding the mount, not rewriting the panel.
+  'RemediationApprovals',
   'RiskScore',
   'RolePrivilege',
   'Rubric',
