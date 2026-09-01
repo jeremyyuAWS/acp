@@ -84,6 +84,17 @@ class TestStaleDiscoveryGuardReclaim:
         holder2 = store.acquire_discovery_guard("user@a.com", "drive", "scan-3")
         assert holder2 == "scan-2"
 
+    def test_discovered_timestamp_reclaims_guard_after_assess_sets_running(self, store):
+        """Assess reuses scan_runs and sets its status back to running, but a completed
+        Discovery must never retain Discovery capacity for the duration of Assess."""
+        _make_scan(store, "scan-1")
+        store.acquire_discovery_guard("user@a.com", "drive", "scan-1")
+        store.set_scan_status("scan-1", "discovered")
+        store.set_scan_status("scan-1", "running")
+
+        holder = store.acquire_discovery_guard("user@a.com", "drive", "scan-2")
+        assert holder is None, "discovered_at proves the Discovery stage has ended"
+
     def test_terminal_status_reclaim_covers_every_terminal_state(self, store):
         for status in ("discovered", "failed", "cancelled", "superseded", "dead"):
             sid = f"scan-{status}"

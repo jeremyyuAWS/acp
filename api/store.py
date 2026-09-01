@@ -2126,16 +2126,21 @@ class Store:
 
         stale = False
         with self._db.cursor() as cur:
-            self._db.execute(cur, "SELECT status FROM scan_runs WHERE id=%s", (holder,))
+            self._db.execute(cur, "SELECT status, discovered_at FROM scan_runs WHERE id=%s", (holder,))
             holder_row = self._db.fetchone(cur)
         holder_status = (holder_row or {}).get("status")
+        holder_discovered_at = (holder_row or {}).get("discovered_at")
         # 'paused' (ADR 0038) counts as genuinely live here, same as 'queued'/'running' — a
         # paused run has, by design, no active workers, and without this a resume would find its
         # own discovery slot already reclaimed by a second scan that started while it waited.
         # Found by inspection while implementing pause/resume: this staleness check predates the
         # ADR and reads any non-queued/non-running status as abandoned, which is correct for
         # every terminal status but was never updated for the one live status pause introduces.
-        if holder_status and holder_status not in ("queued", "running", "paused"):
+        # Assess moves this same run row back to status='running'. The stage-specific timestamp
+        # is therefore the authoritative signal that Discovery no longer owns this slot.
+        if holder_discovered_at:
+            stale = True
+        elif holder_status and holder_status not in ("queued", "running", "paused"):
             stale = True
         else:
             try:
