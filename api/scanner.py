@@ -289,7 +289,11 @@ def _drive_service(drive_token: str | None = None):
     import httplib2
     from google_auth_httplib2 import AuthorizedHttp
     http = AuthorizedHttp(creds, http=httplib2.Http(timeout=_DRIVE_HTTP_TIMEOUT_S))
-    return build("drive", "v3", http=http, cache_discovery=False)
+    # Folder BFS shares this service between threads. Its default httplib2 pool
+    # cannot be shared: each execute owns and closes a bounded transport.
+    from drive_http import isolated_request_builder
+    return build("drive", "v3", http=http, cache_discovery=False,
+                 requestBuilder=isolated_request_builder(creds, _DRIVE_HTTP_TIMEOUT_S))
 
 
 def drive_account_id(svc) -> str | None:
@@ -481,19 +485,25 @@ def _list_drive_page_all(svc, q: str, max_files: int, on_page=None) -> tuple[lis
     """
     files: list[dict] = []
     page_token = None
+    incomplete = False
     while len(files) < max_files:
         resp = svc.files().list(
             q=q,
-            fields=f"nextPageToken,files({provenance.DRIVE_FIELDS})",
+            fields=f"nextPageToken,incompleteSearch,files({provenance.DRIVE_FIELDS})",
             pageSize=200,
             # Newest first: when a large Drive exceeds the raw cap, the files a user most likely
             # just uploaded are the ones we most want to have listed before the cap bites.
             orderBy="modifiedTime desc",
             pageToken=page_token,
-            corpora="allDrives",             # span My Drive + every Shared Drive
+            # Google's allDrives corpus can return incompleteSearch=true when it cannot search
+            # every drive. The user corpus is the complete set owned by or shared to this signed-
+            # in user and is Google's recommended broad corpus for this case.
+            corpora="user",
+            spaces="drive",
             includeItemsFromAllDrives=True,
             supportsAllDrives=True,
         ).execute(num_retries=5)             # backoff on 429/5xx instead of failing the file
+        incomplete = incomplete or bool(resp.get("incompleteSearch"))
         page = resp.get("files", [])
         files.extend(page)
         if on_page:
@@ -501,7 +511,7 @@ def _list_drive_page_all(svc, q: str, max_files: int, on_page=None) -> tuple[lis
         page_token = resp.get("nextPageToken")
         if not page_token:
             break
-    return files, bool(page_token)
+    return files, bool(page_token) or incomplete
 
 
 def _flag_on(name: str) -> bool:
@@ -650,8 +660,8 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
               f"to let Drive's live listing settle", flush=True)
 
     if hit_cap:
-        print(f"[scan] whole-Drive listing hit the {raw_cap}-item raw cap — not all files were "
-              f"listed; raise ACP_FANOUT_MAX_FILES to cover the full estate", flush=True)
+        print(f"[scan] whole-Drive listing was incomplete or hit the {raw_cap}-item raw cap — "
+              f"the reported inventory is a floor, not a complete estate count", flush=True)
     return _finish_drive_listing(by_id, inv_by_id, raw_seen=raw_seen, hit_cap=hit_cap,
                                  max_files=max_files, exclude_remediated=exclude_remediated,
                                  scope_out=scope_out, inventory_out=inventory_out, cap=raw_cap)

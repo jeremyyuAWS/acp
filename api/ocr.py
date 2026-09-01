@@ -29,9 +29,12 @@ per-file image cap bounds runtime, and only images with >= a word threshold coun
 from __future__ import annotations
 
 import io
+import hashlib
 import os
 import re
+import threading
 import zipfile
+from collections import OrderedDict
 from pathlib import Path
 
 # Tunables (env-overridable) — conservative defaults to avoid flagging logos.
@@ -44,6 +47,8 @@ _MIN_WORDS_STRICT = int(os.environ.get("ACP_OCR_MIN_WORDS_STRICT", "3"))
 _MIN_PIXELS_STRICT = int(os.environ.get("ACP_OCR_MIN_PIXELS_STRICT", "1200"))
 _MAX_IMAGES = int(os.environ.get("ACP_OCR_MAX_IMAGES", "30"))    # per-file cap (bounds scan time)
 _MAX_DIM = 3000  # downscale giant scans before OCR to keep memory/time bounded
+_OCR_TIMEOUT_S = float(os.environ.get("ACP_OCR_TIMEOUT_S", "30"))
+_OCR_CACHE_SIZE = int(os.environ.get("ACP_OCR_CACHE_SIZE", "128"))
 
 _RASTER = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp")
 _MEDIA_RE = re.compile(r"^(word|ppt|xl)/media/", re.I)
@@ -51,6 +56,26 @@ _WORD_RE = re.compile(r"[A-Za-z]{2,}")
 
 
 _WARNED = False
+_OCR_CACHE: OrderedDict[str, str] = OrderedDict()
+_OCR_CACHE_LOCK = threading.Lock()
+
+
+def _cached_text(key: str) -> str | None:
+    with _OCR_CACHE_LOCK:
+        text = _OCR_CACHE.get(key)
+        if text is not None:
+            _OCR_CACHE.move_to_end(key)
+        return text
+
+
+def _remember_text(key: str, text: str) -> None:
+    if _OCR_CACHE_SIZE <= 0:
+        return
+    with _OCR_CACHE_LOCK:
+        _OCR_CACHE[key] = text
+        _OCR_CACHE.move_to_end(key)
+        while len(_OCR_CACHE) > _OCR_CACHE_SIZE:
+            _OCR_CACHE.popitem(last=False)
 
 
 def is_available() -> bool:
@@ -114,12 +139,22 @@ def ocr_text(img_bytes: bytes, *, min_pixels: int = _MIN_PIXELS_STRICT) -> str:
         im = Image.open(io.BytesIO(img_bytes))
         if (im.width * im.height) < min_pixels:
             return ""
+        # The AA and AAA image-of-text checks intentionally inspect the same embedded image.
+        # Cache only the small OCR string (never the document bytes) so the second criterion
+        # reuses the first reading instead of starting another Tesseract process.
+        cache_key = hashlib.sha256(img_bytes).hexdigest()
+        cached = _cached_text(cache_key)
+        if cached is not None:
+            return cached
         if max(im.width, im.height) > _MAX_DIM:
             scale = _MAX_DIM / max(im.width, im.height)
             im = im.resize((max(1, int(im.width * scale)), max(1, int(im.height * scale))))
         if im.mode not in ("RGB", "L"):
             im = im.convert("RGB")
-        return (pytesseract.image_to_string(im) or "").strip()
+        kwargs = {"timeout": _OCR_TIMEOUT_S} if _OCR_TIMEOUT_S > 0 else {}
+        text = (pytesseract.image_to_string(im, **kwargs) or "").strip()
+        _remember_text(cache_key, text)
+        return text
     except Exception:
         return ""
 
