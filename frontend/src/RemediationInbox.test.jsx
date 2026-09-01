@@ -20,7 +20,7 @@ const QUEUE = [
 
 let container, root
 // The workspace layout + pane sizes persist in localStorage; clear it so each test starts from the
-// Stacked default rather than inheriting a previous test's choice.
+// two-panel default rather than inheriting a previous test's choice.
 beforeEach(() => { try { localStorage.clear() } catch {} ;({ container, root } = createTestRoot()) })
 
 // Interaction tests use a deterministic document sort so the queue order is stable;
@@ -31,6 +31,125 @@ const btnByText = (t) => [...container.querySelectorAll('button')].find((b) => b
 const detailHeading = () => container.querySelector('h3')?.textContent
 
 describe('RemediationInbox — workflow-status queue', () => {
+
+  // ── A decision is not made until it is SAVED (PRD §5.8) ──────────────────────────────────────
+  // The failure mode these cover is specific and was real: `onDecide` was fire-and-forget, so a
+  // server refusal still auto-advanced the reviewer, and the only signal was a banner rendered
+  // outside this component. A reviewer working the queue at speed would never see it.
+
+  it('does NOT advance when the decision fails to save, and says so where they pressed', async () => {
+    const seen = []
+    await render({ queue: QUEUE, decisions: {},
+      onDecide: (f, d) => { seen.push([f.id, d.state]); return Promise.reject(new Error('The server rejected it.')) } })
+    expect(detailHeading()).toBe('Heading contrast is too low')     // id1
+    await click(btnByText('Approve & next \u2192'))
+    expect(seen).toEqual([[1, 'accepted']])
+    // Still on the SAME finding — the queue did not move on.
+    expect(detailHeading()).toBe('Heading contrast is too low')
+    // …and the failure is stated inline, in an alert, next to the buttons that failed.
+    const alert = container.querySelector('[role=alert]')
+    expect(alert).toBeTruthy()
+    expect(alert.textContent).toContain('Not saved.')
+    expect(alert.textContent).toContain('The server rejected it.')
+    expect(alert.textContent).toContain('still waiting for your decision')
+    // The decision controls are live again so the reviewer can retry.
+    expect(btnByText('Approve & next \u2192').disabled).toBe(false)
+  })
+
+  it('advances and shows no error when the decision saves', async () => {
+    await render({ queue: QUEUE, decisions: {}, onDecide: () => Promise.resolve() })
+    await click(btnByText('Approve & next \u2192'))
+    expect(detailHeading()).toBe('Image needs alt text')            // moved to id2
+    expect(container.querySelector('[role=alert]')).toBeNull()
+  })
+
+  it('clears a failed decision\u2019s error when the reviewer moves to another finding', async () => {
+    await render({ queue: QUEUE, decisions: {}, onDecide: () => Promise.reject(new Error('nope')) })
+    await click(btnByText('Approve & next \u2192'))
+    expect(container.querySelector('[role=alert]')).toBeTruthy()
+    await click(btnByText('Image needs alt text'))
+    // The message belonged to that decision, not to the page.
+    expect(container.querySelector('[role=alert]')).toBeNull()
+  })
+
+  // ── Batch decisions are scoped and named (PRD §6) ────────────────────────────────────────────
+
+  it('names the criterion and the exact number of OTHER findings a batch would cover', async () => {
+    // Two unresolved 1.1.1 findings in actionable lanes, plus a manual one that must NOT be swept in.
+    const q = [
+      { id: 10, file: 'a.docx', title: 'DOCX \u00b7 Image needs alt text', rule_id: '1.1.1', hasProposal: true, after: 'A chart' },
+      { id: 11, file: 'b.docx', title: 'DOCX \u00b7 Image needs alt text', rule_id: '1.1.1', hasProposal: true, after: 'A photo' },
+      { id: 12, file: 'c.pdf', title: 'PDF \u00b7 Scanned page, no text', rule_id: '1.1.1' },   // manual — excluded
+    ]
+    await render({ queue: q, decisions: {} })
+    const batch = btnByText('Approve this decision for')
+    expect(batch).toBeTruthy()
+    // ONE other actionable finding, not two — the manual one is not batchable.
+    expect(batch.textContent).toContain('Approve this decision for 1 other WCAG 1.1.1 finding')
+    expect(container.textContent).toContain('manual, blocked and already-decided findings are excluded')
+  })
+
+  it('offers no global \u201capprove all AI drafts\u201d control anywhere', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    const labels = [...container.querySelectorAll('button')].map((b) => b.textContent.trim())
+    // Every batch control must name its scope; none may sweep the whole queue.
+    expect(labels.some((l) => /^Approve all\b/i.test(l))).toBe(false)
+    expect(labels.some((l) => /approve all (ai )?drafts/i.test(l))).toBe(false)
+    expect(labels.some((l) => /^(Approve|Accept) everything/i.test(l))).toBe(false)
+  })
+
+  it('reports a partial batch failure instead of claiming the whole cluster landed', async () => {
+    const q = [
+      { id: 20, file: 'a.docx', title: 'DOCX \u00b7 Image needs alt text', rule_id: '1.1.1', hasProposal: true, after: 'A chart' },
+      { id: 21, file: 'b.docx', title: 'DOCX \u00b7 Image needs alt text', rule_id: '1.1.1', hasProposal: true, after: 'A photo' },
+    ]
+    // The second write is refused; the first succeeds.
+    await render({ queue: q, decisions: {},
+      onDecide: (f) => (f.id === 21 ? Promise.reject(new Error('conflict')) : Promise.resolve()) })
+    await click(btnByText('Approve this decision for'))
+    const alert = container.querySelector('[role=alert]')
+    expect(alert).toBeTruthy()
+    expect(alert.textContent).toContain('1 of 2 saved')
+    expect(alert.textContent).toContain('1 could not be saved')
+    // Selection sits on the finding that failed, not past the whole cluster.
+    expect(detailHeading()).toBe('Image needs alt text')
+  })
+
+  // ── Narrow viewports show one panel at a time (PRD §12) ──────────────────────────────────────
+
+  it('at a narrow width shows the queue OR the finding, with a way back', async () => {
+    // jsdom has no matchMedia; stub one that reports narrow so the component takes that branch.
+    const real = window.matchMedia
+    window.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} })
+    try {
+      await render({ queue: QUEUE, decisions: {} })
+      const rinbox = () => container.querySelector('.rinbox')
+      const queuePane = () => container.querySelector('.rinbox-queuepane')
+      const workspace = () => container.querySelector('.rinbox-workspace')
+      expect(rinbox().getAttribute('data-narrow')).toBe('queue')
+      // Both panels are never squeezed side by side. The review side stays MOUNTED (so the
+      // selection and any unsaved edit survive the trip) but is `hidden`, which takes it out of
+      // the accessibility tree and the tab order rather than merely shrinking it.
+      expect(queuePane().hidden).toBe(false)
+      expect(workspace().hidden).toBe(true)
+      // No resizer either — there is nothing on screen to resize against.
+      expect([...container.querySelectorAll('[role=separator]')]
+        .some((n) => n.getAttribute('aria-label') === 'Resize the inbox')).toBe(false)
+      await click(btnByText('Image needs alt text'))          // choosing a finding navigates to it
+      expect(rinbox().getAttribute('data-narrow')).toBe('detail')
+      expect(queuePane().hidden).toBe(true)
+      expect(workspace().hidden).toBe(false)
+      expect(detailHeading()).toBe('Image needs alt text')
+      const back = btnByText('Back to queue')
+      expect(back).toBeTruthy()
+      await click(back)
+      expect(rinbox().getAttribute('data-narrow')).toBe('queue')
+      // The preview toggle is not offered — a third pane cannot help where two do not fit.
+      expect(btnByText('Full document preview')).toBeFalsy()
+    } finally {
+      if (real) window.matchMedia = real; else delete window.matchMedia
+    }
+  })
   it('opens on Needs review and shows its first item', async () => {
     await render({ queue: QUEUE, decisions: {} })
     // Needs review holds the unconfirmed auto-fix (id1) and the AI draft (id2); the manual finding
@@ -68,7 +187,7 @@ describe('RemediationInbox — workflow-status queue', () => {
     await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
     await click(btnByText('Image needs alt text'))                   // id2, apply lane
     expect(detailHeading()).toBe('Image needs alt text')
-    await click(btnByText('Apply fix'))
+    await click(btnByText('Approve & next \u2192'))
     expect(calls).toEqual([[2, 'accepted']])
     // auto-advance moved the workspace to the next unresolved needs-review finding without a click
     expect(detailHeading()).toBe('Heading contrast is too low')      // id1, the remaining auto-fix
@@ -118,7 +237,7 @@ describe('RemediationInbox — workflow-status queue', () => {
     await render({ queue: QUEUE, decisions: {} })
     await click(btnByText('Image needs alt text'))               // id2, apply lane, unresolved
     expect(detailHeading()).toBe('Image needs alt text')
-    expect(btnByText('Reject & handle manually')).toBeTruthy()    // the specific outcome
+    expect(btnByText('Reject \u2192 manual')).toBeTruthy()          // the specific outcome
     expect(btnByText('Defer')).toBeTruthy()
     // The ambiguous bare "Reject" button is gone.
     const bareReject = [...container.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Reject')
@@ -159,61 +278,83 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(rows.some((r) => r.textContent.includes('Scanned page'))).toBe(false)
   })
 
-  // ── Workspace layout controls: Split / Stacked / Focus + resizable dividers ──
-  const layoutBtn = (label) => [...container.querySelectorAll('[role=group][aria-label="Workspace layout"] button')]
+  // ── The default workspace is TWO panels; the document preview is opened on demand ──
+  const previewToggle = () => [...container.querySelectorAll('button')]
+    .find((b) => b.textContent.trim().replace(/^\u2715\s*/, '') === 'Full document preview')
+  const placeBtn = (label) => [...container.querySelectorAll('[role=group][aria-label="Preview placement"] button')]
     .find((b) => b.textContent.trim() === label)
   const rinbox = () => container.querySelector('.rinbox')
   const sep = (label) => [...container.querySelectorAll('[role=separator]')].find((s) => s.getAttribute('aria-label') === label)
 
-  it('offers a Split / Stacked / Focus layout toggle, defaulting to Stacked (the two-column workspace)', async () => {
+  it('defaults to a two-panel workspace — queue and review, with no third preview pane', async () => {
     await render({ queue: QUEUE, decisions: {} })
-    expect(layoutBtn('Split')).toBeTruthy()
-    expect(layoutBtn('Stacked')).toBeTruthy()
-    expect(layoutBtn('Focus')).toBeTruthy()
-    // Opens in the two-column Stacked workspace — queue beside one column that stacks the guided pane
-    // above the document preview. Reviewers can switch to Split/Focus; the choice persists.
-    expect(rinbox().getAttribute('data-layout')).toBe('stacked')
-    expect(layoutBtn('Stacked').getAttribute('aria-pressed')).toBe('true')
-    // Stacked still shows both the guided pane and the document preview, one above the other.
-    expect(container.textContent).toContain('Guided remediation')
-    expect(container.textContent).toContain('Document preview')
-  })
-
-  it('Focus hides the document preview; switching back to Split restores it', async () => {
-    await render({ queue: QUEUE, decisions: {} })
-    await click(layoutBtn('Focus'))
+    // 'focus' is the preview being CLOSED. The reviewer gets the queue and the review canvas and
+    // nothing to configure before they can make a decision.
     expect(rinbox().getAttribute('data-layout')).toBe('focus')
-    expect(container.textContent).not.toContain('Document preview')  // preview pane removed
-    expect(container.textContent).toContain('Guided remediation')    // the fix still has the workspace
-    await click(layoutBtn('Split'))
-    expect(container.textContent).toContain('Document preview')
+    expect(container.textContent).toContain('Guided remediation')
+    expect(container.textContent).not.toContain('Document preview')
+    // No layout picker in the default view — one toggle, not three modes to choose between.
+    expect(container.querySelector('[role=group][aria-label="Workspace layout"]')).toBeNull()
+    expect(previewToggle()).toBeTruthy()
+    expect(previewToggle().getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('Stacked keeps both panes and exposes a horizontal resize between them', async () => {
+  it('"Full document preview" opens the third pane on demand and closes it again', async () => {
     await render({ queue: QUEUE, decisions: {} })
-    await click(layoutBtn('Stacked'))
-    expect(rinbox().getAttribute('data-layout')).toBe('stacked')
-    expect(container.textContent).toContain('Guided remediation')
+    await click(previewToggle())
     expect(container.textContent).toContain('Document preview')
-    // The guided detail can be taller than its allocated half (status summary, preview controls,
-    // audit trail). It must scroll inside that pane instead of painting over Document preview.
+    expect(previewToggle().getAttribute('aria-pressed')).toBe('true')
+    expect(rinbox().getAttribute('data-layout')).toBe('split')
+    await click(previewToggle())
+    expect(container.textContent).not.toContain('Document preview')
+    expect(rinbox().getAttribute('data-layout')).toBe('focus')
+  })
+
+  it('opening the full preview preserves the selected finding and an unsaved edit', async () => {
+    // PRD §8/§16: the preview is a disclosure, not a context switch. The guided column keeps its
+    // place in the element tree across the toggle, so React reconciles rather than remounting it.
+    await render({ queue: QUEUE, decisions: {} })
+    await click(btnByText('Image needs alt text'))
+    const ta = container.querySelector('textarea[aria-label="Edit the proposed fix"]')
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+    await act(async () => { setValue.call(ta, 'A reviewer wrote this'); ta.dispatchEvent(new Event('input', { bubbles: true })) })
+    await click(previewToggle())            // open the full preview mid-decision
+    expect(detailHeading()).toBe('Image needs alt text')
+    expect(container.querySelector('textarea[aria-label="Edit the proposed fix"]').value).toBe('A reviewer wrote this')
+    await click(previewToggle())            // and back
+    expect(detailHeading()).toBe('Image needs alt text')
+    expect(container.querySelector('textarea[aria-label="Edit the proposed fix"]').value).toBe('A reviewer wrote this')
+  })
+
+  it('the opened preview can be placed beside or below, and keeps a keyboard-operable divider', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    await click(previewToggle())
+    expect(sep('Resize the document preview').getAttribute('aria-orientation')).toBe('vertical')
+    await click(placeBtn('Stacked'))
+    expect(rinbox().getAttribute('data-layout')).toBe('stacked')
+    expect(sep('Resize the document preview').getAttribute('aria-orientation')).toBe('horizontal')
+    // The guided detail can outgrow its pane (status summary, audit trail) and must scroll inside it
+    // rather than painting over the preview.
     const guided = container.querySelector('.rinbox-guided-scroll')
-    expect(guided).toBeTruthy()
     expect(guided.style.overflowY).toBe('auto')
     expect(guided.style.overflowX).toBe('hidden')
-    // In Split the preview divider is vertical; in Stacked it is horizontal.
-    expect(sep('Resize the document preview').getAttribute('aria-orientation')).toBe('horizontal')
   })
 
-  it('persists the layout choice and restores it on the next mount', async () => {
+  it('persists the preview choice and restores it on the next mount', async () => {
     await render({ queue: QUEUE, decisions: {} })
-    await click(layoutBtn('Stacked'))
+    await click(previewToggle())
+    await click(placeBtn('Stacked'))
     expect(localStorage.getItem('acp.remediate.layout')).toBe('stacked')
     // A fresh mount (no initialLayout prop) reads the stored preference. Await the teardown — it is
     // async, and a floating unmount rips the DOM out from under the next test.
     await unmountAll()
     ;({ container, root } = createTestRoot())
     await render({ queue: QUEUE, decisions: {} })
+    expect(rinbox().getAttribute('data-layout')).toBe('stacked')
+    // Reopening after closing returns to the placement the reviewer last used, not the default.
+    await click(previewToggle())
+    expect(rinbox().getAttribute('data-layout')).toBe('focus')
+    await click(previewToggle())
     expect(rinbox().getAttribute('data-layout')).toBe('stacked')
   })
 
