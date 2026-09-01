@@ -17,7 +17,7 @@ folder scopes and capture queue delay separately from enumeration and persistenc
 Discovery's existing per-owner/source guard is unchanged; overlapping requests can
 still conflict. This is not a new per-user fair queue.
 
-`ACP_SCAN_FORMATS=pdf,docx,xlsx,pptx` scopes the production scan. Native Google
+`ACP_SCAN_FORMATS=pdf,docx,xlsx` scopes the production scan. Native Google
 files follow their supported export format. No Drive search-index MIME predicate
 is introduced; folder traversal remains necessary. HTML engines are retained and
 can be restored to scan scope explicitly.

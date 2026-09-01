@@ -38,6 +38,9 @@ const BASE = {
   lockedCount: 5,
   excludedCount: 0,
   lifecycleRulesCount: 3,
+  lifecycleFilesEvaluated: 200,
+  lifecycleMatches: 0,
+  lifecycleUnevaluable: 0,
   onAdvance: null,
   pendingActions: 0,
   needsAck: false,
@@ -75,6 +78,16 @@ describe('DiscoverCompleteSummary renders completion state', () => {
   it('shows lifecycle rules count', () => {
     const html = render(BASE)
     expect(html).toContain('3 lifecycle rules')
+    expect(html).toContain('Evaluated 200 inventoried files')
+    expect(html).toContain('0 matched')
+    expect(html).toContain('200 did not match')
+  })
+
+  it('names the exact scannable formats and says HTML and PowerPoint remain inventoried', () => {
+    const html = render({ ...BASE, scannableCount: 170 })
+    expect(html).toContain('(PDF, DOCX, XLSX)')
+    expect(html).toContain('HTML, PowerPoint, and every other type remain inventoried')
+    expect(html).not.toContain('PDF, Office, HTML')
   })
 
   it('omits metadata-only row when count is 0', () => {

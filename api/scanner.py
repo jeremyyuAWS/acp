@@ -348,9 +348,8 @@ def _normalize(files: list[dict]) -> list[dict]:
             name = _safe_name(raw_name) + export_ext
         else:
             ext = Path(raw_name).suffix.lower()
-            # Accept the same set the local path + scan loop handle, including HTML
-            # (was dropping .html/.htm uploaded to Drive as real text/html).
-            if ext not in OFFICE + (".pdf",) + HTML_EXTS:
+            # Enforce the same operator-configurable scope as the MIME filter.
+            if ext not in scan_formats.extensions():
                 skipped += 1
                 continue
             name = _safe_name(raw_name)
@@ -2313,7 +2312,8 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         # SharePoint listing would (size, modified, created, owner, parent) via _local_stat_meta,
         # so the scannable rows are no longer path-only and the whole subtree is inventoried.
         corpus = Path(os.environ.get("ACP_LOCAL_CORPUS") or (ACP / "test-corpus/files"))
-        scannable = OFFICE + (".pdf",) + HTML_EXTS
+        # Local/demo scans use the same scope as Drive and SharePoint.
+        scannable = scan_formats.extensions()
         result: list[dict] = []
         # Drive-shaped rows for the WHOLE walk (scannable + not), so estate_inventory.summarize
         # can classify local scans the same way it does Drive/SharePoint. Without this, `_list`
