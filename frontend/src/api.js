@@ -492,6 +492,12 @@ export const getLifecycleFiles = (scanId, { status = '', policyId = '', candidat
 // action they were all queued under — the server refuses the batch if any row disagrees, so the
 // client cannot widen a selection by getting its own grouping wrong. Records decisions only; no
 // source file is touched here.
+// PRD §7.4 timeline. Scan-scoped in the path (that scan is the owner gate) but not in the
+// answer: the events cross scans, which is the whole point of showing a history at all.
+export const getLifecycleFileHistory = (scanId, file) => (SIM
+  ? sim({ scan_id: scanId, document_id: file, events: [] })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/lifecycle/files/${encodeURIComponent(file)}/history`,
+          { headers: headers() }).then(j))
 export const approveDispositionBatch = ({ auditIds, policyId, policyVersion, action, reason }) => (SIM
   ? sim({ submitted: auditIds.length, approved: auditIds, refused: [], already_decided: [],
           reconciled: true, executed: false })

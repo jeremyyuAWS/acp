@@ -40,6 +40,10 @@ vi.mock('./api.js', () => ({
     { file: 'old.docx', lifecycle_status: 'Archive Candidate', lifecycle_reason: 'older than the cutoff' },
     { file: 'new.docx', lifecycle_status: 'Active', lifecycle_reason: '' },
   ] })),
+  // Added when the review panel started loading a history alongside the detail: a mock that
+  // omits a function the component now calls fails as an unhandled rejection, not as a
+  // readable assertion, so the mock has to track the module's real surface.
+  getLifecycleFileHistory: vi.fn(async () => ({ events: [] })),
   getLifecycleFileDetail: vi.fn(async (_scan, file) => ({
     file, path: `/estate/${file}`, lifecycle_status: 'Archive Candidate',
     lifecycle_reason: 'older than the cutoff', lifecycle_rule_id: 'retention',

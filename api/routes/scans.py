@@ -1508,6 +1508,30 @@ def lifecycle_files(sid: str, request: Request, status: str | None = Query(None)
             "rows": [{**_inv_capability(r), **(pending.get(r.get("file")) or {})} for r in rows]}
 
 
+@router.get("/scans/{sid}/lifecycle/files/{document_id:path}/history")
+def lifecycle_file_history(sid: str, document_id: str, request: Request,
+                           limit: int = Query(300, ge=1, le=1000)):
+    """One document's lifecycle timeline, across every scan this owner can see (PRD §7.4).
+
+    Scan-scoped in its PATH but not in its ANSWER, and the difference is the feature: the
+    reviewer arrives from a scan, and the question they have is what happened to this document
+    BEFORE it. A history that stopped at the current scan would show one recommendation and
+    look complete.
+
+    §10.2 names this /documents/{document_id}/lifecycle/history. It lives here instead because
+    the identifier the lifecycle surfaces actually carry is the file path, and the lifecycle doc
+    id embeds the scan (`scan:{scan_id}:{file}`) — a route keyed on documents.doc_id could not
+    find these events at all. The path follows the identity that exists rather than the one the
+    PRD assumed.
+
+    The scan in the path still authorises: it is the owner gate, exactly as the sibling
+    detail route uses it.
+    """
+    owner = _lifecycle_scan_owner(sid, request)
+    return {"scan_id": sid, "document_id": document_id,
+            "events": core.store.lifecycle_history(document_id, owner, limit=limit)}
+
+
 @router.get("/scans/{sid}/lifecycle/files/{document_id:path}")
 def lifecycle_file_detail(sid: str, document_id: str, request: Request):
     owner = _lifecycle_scan_owner(sid, request)

@@ -23,11 +23,16 @@ import DispositionReviewWorkspace from './DispositionReviewWorkspace.jsx'
 const approveDispositionBatch = vi.fn()
 const getLifecycleFiles = vi.fn()
 const getLifecycleFileDetail = vi.fn()
+const getLifecycleFileHistory = vi.fn()
 
 vi.mock('./api.js', () => ({
   approveDispositionBatch: (...a) => approveDispositionBatch(...a),
   getLifecycleFiles: (...a) => getLifecycleFiles(...a),
   getLifecycleFileDetail: (...a) => getLifecycleFileDetail(...a),
+  // The panel loads a history beside the detail. Omitting it here does not fail a test —
+  // the workspace catches it — it fails as an UNHANDLED error, which reddens the run
+  // while every test still reports passed. See testRoots.js on why that shape matters.
+  getLifecycleFileHistory: (...a) => getLifecycleFileHistory(...a),
 }))
 
 afterEach(unmountAll)
@@ -57,8 +62,10 @@ beforeEach(() => {
   approveDispositionBatch.mockReset()
   getLifecycleFiles.mockReset()
   getLifecycleFileDetail.mockReset()
+  getLifecycleFileHistory.mockReset()
   getLifecycleFiles.mockResolvedValue({ rows: ROWS })
   getLifecycleFileDetail.mockResolvedValue({ file: 'a.docx', evaluations: [] })
+  getLifecycleFileHistory.mockResolvedValue({ events: [] })
   approveDispositionBatch.mockResolvedValue({
     submitted: 2, approved: ['aud-a.docx', 'aud-b.docx'], refused: [],
     already_decided: [], reconciled: true, executed: false,

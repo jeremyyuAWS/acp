@@ -2629,6 +2629,95 @@ class Store:
                 tuple(args))
             return self._db.fetchall(cur)
 
+    def lifecycle_history(self, file: str, owner: str, limit: int = 300) -> list[dict]:
+        """Everything recorded about one document's lifecycle, across EVERY scan (PRD §7.4).
+
+        The right-hand review panel is specified to show "prior scans, recommendations,
+        overrides, approvals, and source actions", and each of those lives in a different table:
+        lifecycle_evaluation holds what a rule decided and why, scan_inventory holds a reviewer's
+        override, disposition_audit holds the approval and its execution, and decision_log holds
+        everything either of those chose to narrate. This is four queries and stays four however
+        long the history is - the count is bounded by the number of SOURCES, not by events.
+
+        Keyed on `file` rather than on a doc id ON PURPOSE. The whole value of a timeline here is
+        that it crosses scans - "this was recommended in August, kept, then recommended again" -
+        and the lifecycle doc id embeds the scan (`scan:{scan_id}:{file}`), so keying on one
+        would return a single scan's worth of events and quietly look like the whole history.
+        Every source is owner-scoped independently; none of them infers ownership from another.
+        """
+        events: list[dict] = []
+        suffix = ":" + file
+        with self._db.cursor() as cur:
+            # 1. What each rule decided, in each scan.
+            self._db.execute(cur,
+                "SELECT scan_id,policy_id,policy_version,result,proposed_action,evaluated_at "
+                "FROM lifecycle_evaluation WHERE document_id=%s AND owner_email=%s "
+                "ORDER BY evaluated_at", (file, owner))
+            for row in self._db.fetchall(cur):
+                events.append({
+                    "ts": row.get("evaluated_at"), "kind": "evaluated",
+                    "scan_id": row.get("scan_id"), "policy_id": row.get("policy_id"),
+                    "policy_version": row.get("policy_version"), "result": row.get("result"),
+                    "action": row.get("proposed_action"), "actor": None,
+                    "detail": f"{row.get('policy_id')} v{row.get('policy_version')} "
+                              f"{row.get('result')}",
+                })
+
+            # 2. A reviewer's recorded disagreement, per scan.
+            self._db.execute(cur,
+                "SELECT scan_id,lifecycle_override_reason,lifecycle_overridden_by,"
+                "lifecycle_overridden_at FROM scan_inventory si WHERE file=%s "
+                "AND lifecycle_overridden_at IS NOT NULL AND EXISTS "
+                "(SELECT 1 FROM scan_runs sr WHERE sr.id=si.scan_id AND sr.owner_email=%s)",
+                (file, owner))
+            for row in self._db.fetchall(cur):
+                events.append({
+                    "ts": row.get("lifecycle_overridden_at"), "kind": "override",
+                    "scan_id": row.get("scan_id"), "policy_id": None, "policy_version": None,
+                    "result": "kept", "action": None,
+                    "actor": row.get("lifecycle_overridden_by"),
+                    "detail": row.get("lifecycle_override_reason") or "kept by a reviewer",
+                })
+
+            # 3. Approvals, rejections, and whatever execution then did.
+            # LIKE's wildcards are not escaped here because a filename containing % or _ can
+            # only ever OVER-match; the exact-suffix check below is what decides membership.
+            self._db.execute(cur,
+                "SELECT id,doc_id,ts,policy_id,policy_version,action,result,detail "
+                "FROM disposition_audit WHERE doc_id LIKE %s AND owner_email=%s ORDER BY ts",
+                ("scan:%" + suffix, owner))
+            for row in self._db.fetchall(cur):
+                doc_id = str(row.get("doc_id") or "")
+                if not (doc_id.startswith("scan:") and doc_id.endswith(suffix)):
+                    continue
+                events.append({
+                    "ts": row.get("ts"), "kind": "approval",
+                    "scan_id": doc_id[len("scan:"):-len(suffix)],
+                    "policy_id": row.get("policy_id"),
+                    "policy_version": row.get("policy_version"),
+                    "result": row.get("result"), "action": row.get("action"), "actor": None,
+                    "detail": row.get("detail") or "",
+                })
+
+            # 4. Anything either path chose to narrate.
+            self._db.execute(cur,
+                "SELECT dl.ts,dl.actor,dl.action,dl.scan_id,dl.rule_id,dl.detail "
+                "FROM decision_log dl WHERE dl.file=%s AND EXISTS "
+                "(SELECT 1 FROM scan_runs sr WHERE sr.id=dl.scan_id AND sr.owner_email=%s) "
+                "ORDER BY dl.ts", (file, owner))
+            for row in self._db.fetchall(cur):
+                events.append({
+                    "ts": row.get("ts"), "kind": "decision", "scan_id": row.get("scan_id"),
+                    "policy_id": row.get("rule_id"), "policy_version": None,
+                    "result": row.get("action"), "action": None, "actor": row.get("actor"),
+                    "detail": row.get("detail") or "",
+                })
+
+        # Oldest first: a timeline is read forwards. Undated rows sort last rather than being
+        # dropped - an event that happened is still evidence even when nothing recorded when.
+        events.sort(key=lambda e: (e.get("ts") is None, e.get("ts") or ""))
+        return events[:limit]
+
     def pending_approvals_by_file(self, scan_id: str, owner: str) -> dict[str, dict]:
         """The pending disposition decision for each file in one scan, keyed by file, ONE query.
 
