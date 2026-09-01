@@ -152,3 +152,104 @@ def test_the_page_contents_are_unchanged(gated_client, isolated_store, discovere
     assert [row["file"] for row in body["rows"]] == [f"doc{i:04d}.docx" for i in range(PAGE)]
     # _inv_capability still decorates each row.
     assert all(row.get("format") and row.get("status") for row in body["rows"])
+
+
+# ── the same defect one endpoint over, measured the other way ────────────────
+#
+# Everything above counts ROWS, which is the right measure for a gate that reads an aggregate it
+# throws away. It is the wrong measure for `inventory.csv`, and that blind spot is why the CSV
+# carried an N+1 for as long as it did: the export called store.lifecycle_file_detail once per
+# inventory row to decorate it with policy_version / evaluation_result / evidence_json, and that
+# call costs TWO queries. With no evaluations recorded those queries return nothing, so row
+# amplification is 0.0x while query amplification is 2N. The endpoint is unpaginated on purpose
+# ("Not paginated: it IS the export"), so the estates that most need it paid the most: ~12,000
+# extra round trips for a 6,000-file scan.
+#
+# Fixed by store.lifecycle_evaluations_by_document(), one grouped read for the whole scan.
+
+def _queries_run(store, fn):
+    """Count statements the adapter executes for one call — the round trips, not the rows."""
+    adapter = store._db
+    original = adapter.execute
+    seen = {"n": 0}
+
+    def counting(cur, sql, params=()):
+        seen["n"] += 1
+        return original(cur, sql, params)
+
+    adapter.execute = counting
+    try:
+        result = fn()
+    finally:
+        adapter.execute = original
+    return seen["n"], result
+
+
+def test_the_csv_export_does_not_query_once_per_row(gated_client, isolated_store, discovered_scan):
+    """THE regression. Exporting N files must cost a constant number of queries, not 2N."""
+    sid = discovered_scan
+    ran, r = _queries_run(isolated_store,
+                          lambda: gated_client(OWNER).get(f"/scans/{sid}/inventory.csv"))
+    assert r.status_code == 200, r.text
+    assert len(r.text.strip().splitlines()) == INVENTORY_ROWS + 1     # header + every row
+
+    # Generous ceiling: the inventory read, the evaluation read, the ownership gate and whatever
+    # middleware costs — all constant. The per-row call landed at 2 * INVENTORY_ROWS above this.
+    assert ran <= 25, (
+        f"exporting {INVENTORY_ROWS} rows ran {ran} queries — the export is querying per row "
+        f"again (store.lifecycle_file_detail in the loop). It is unpaginated by design, so this "
+        f"scales with the whole estate.")
+
+
+def test_the_csv_still_carries_its_lifecycle_evidence(gated_client, isolated_store, discovered_scan):
+    """A cheaper read must export exactly what the per-row read did. Without this the test above
+    passes on an export that dropped the columns it exists to carry."""
+    sid = discovered_scan
+    isolated_store.set_lifecycle_status(sid, "doc0007.docx", "Archive Candidate",
+                                        rule_id="retention", reason="older than the cutoff")
+    isolated_store.bulk_create_lifecycle_evaluations([
+        ("ev-7", sid, "doc0007.docx", "retention", 3, "matched",
+         '{"conditions":[{"field":"modified_at","observed_value":"2019-01-01"}]}',
+         "archive", 10, _NOW, OWNER),
+        # A second scan's evaluation for the same document id: the grouped read is keyed by scan,
+        # so this must not leak into the export.
+        ("ev-other", "some-other-scan", "doc0007.docx", "retention", 3, "matched",
+         "{}", "archive", 10, _NOW, OWNER),
+    ])
+
+    r = gated_client(OWNER).get(f"/scans/{sid}/inventory.csv")
+    assert r.status_code == 200, r.text
+    import csv as _csv
+    import io as _io
+    rows = {row["file"]: row for row in _csv.DictReader(_io.StringIO(r.text))}
+
+    tagged = rows["doc0007.docx"]
+    assert tagged["lifecycle_status"] == "Archive Candidate"
+    assert tagged["lifecycle_rule_id"] == "retention"
+    assert tagged["lifecycle_reason"] == "older than the cutoff"
+    assert tagged["policy_version"] == "3"
+    assert tagged["evaluation_result"] == "matched"
+    assert "2019-01-01" in tagged["evidence_json"], "the evidence blob lost its conditions"
+
+    # Untagged rows still export, with the evaluation columns empty rather than absent —
+    # the CSV must reconcile to the estate, not to the subset a rule happened to match.
+    assert len(rows) == INVENTORY_ROWS
+    assert rows["doc0000.docx"]["policy_version"] == ""
+    assert rows["doc0000.docx"]["evaluation_result"] == ""
+
+
+def test_a_foreign_owners_evaluations_do_not_reach_the_export(gated_client, isolated_store,
+                                                              discovered_scan):
+    """The grouped read filters on owner_email exactly as the per-file read did. A batched query
+    is the natural place to widen access by accident."""
+    sid = discovered_scan
+    isolated_store.set_lifecycle_status(sid, "doc0009.docx", "Archive Candidate",
+                                        rule_id="retention", reason="older than the cutoff")
+    isolated_store.bulk_create_lifecycle_evaluations([
+        ("ev-foreign", sid, "doc0009.docx", "retention", 3, "matched",
+         '{"conditions":[{"field":"secret"}]}', "archive", 10, _NOW, OTHER),
+    ])
+
+    r = gated_client(OWNER).get(f"/scans/{sid}/inventory.csv")
+    assert r.status_code == 200
+    assert "secret" not in r.text, "another owner's evidence was exported"
