@@ -24,6 +24,7 @@ const api = {
   listAcrCriteria: vi.fn(),
   getAcrValidation: vi.fn(),
   getAcrPreview: vi.fn(),
+  getAcrGaps: vi.fn(),
 }
 
 vi.mock('./acrApi', () => ({
@@ -36,6 +37,9 @@ vi.mock('./acrApi', () => ({
   getAcrValidation: (...a) => api.getAcrValidation(...a),
   getAcrAudit: vi.fn(),
   getAcrPreview: (...a) => api.getAcrPreview(...a),
+  getAcrGaps: (...a) => api.getAcrGaps(...a),
+  ingestAxe: vi.fn(),
+  setAcrApplicability: vi.fn(),
   addAcrEvidence: vi.fn(),
   decideAcrCriterion: vi.fn(),
   approveAcrCriterion: vi.fn(),
@@ -63,11 +67,28 @@ const CRITERIA = [
     final_status: null, draft_status: 'Supports', approval_state: 'unapproved' },
 ]
 
+// Every fetcher gets a resolved default, not just the one a given test exercises. The Overview
+// tab now fetches validation as well (the metadata form marks a field required from the publish
+// gate's own blockers rather than a second hardcoded list), so a mock left returning `undefined`
+// throws inside an effect and surfaces as an unrelated-looking React error.
+const EMPTY_VALIDATION = {
+  summary: { may_publish: false, blocking_count: 0, advisory_count: 0, by_category: {} },
+  by_category: {}, category_labels: {},
+}
+const EMPTY_GAPS = {
+  total: 55, with_human_evidence: 0,
+  counts: { no_evidence: 55, automated_only: 0, stale_only: 0 },
+  buckets: { no_evidence: [], automated_only: [], stale_only: [] },
+  note: 'automated evidence alone never establishes conformance',
+}
+
 let container
 const mount = async ({ reports = [{ id: 'acr_1', report_title: 'ACP ACR', status: 'draft' }] } = {}) => {
   api.listAcrReports.mockReset().mockResolvedValue({ reports })
   api.getAcrReport.mockReset().mockResolvedValue(REPORT)
   api.listAcrCriteria.mockReset().mockResolvedValue({ criteria: CRITERIA })
+  if (!api.getAcrValidation.getMockImplementation()) api.getAcrValidation.mockResolvedValue(EMPTY_VALIDATION)
+  api.getAcrGaps.mockReset().mockResolvedValue(EMPTY_GAPS)
   const created = createTestRoot()
   container = created.container
   await act(async () => { created.root.render(createElement(AcrWorkspace)) })

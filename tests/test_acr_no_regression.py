@@ -19,13 +19,39 @@ ACR_TABLES = {"acr_report", "acr_criterion", "acr_evidence", "acr_manual_test",
               "acr_decision_log", "acr_snapshot", "acr_role"}
 
 
+# The ACR routes Phase 1 established. Later phases ADD to this; none of them may disappear,
+# because a route that silently stops being dispatched takes a workflow with it.
+PHASE1_ACR_PATHS = {
+    "/acr",
+    "/acr/{report_id}",
+    "/acr/{report_id}/audit",
+    "/acr/{report_id}/criteria",
+    "/acr/{report_id}/criteria/{criterion_num}",
+    "/acr/{report_id}/criteria/{criterion_num}/approve",
+    "/acr/{report_id}/criteria/{criterion_num}/decision",
+    "/acr/{report_id}/criteria/{criterion_num}/evidence",
+    "/acr/{report_id}/preview",
+    "/acr/{report_id}/roles",
+    "/acr/{report_id}/validation",
+}
+
+
 def test_the_acr_router_did_not_displace_any_existing_route():
-    """Route count only goes up. A path collision would shadow an existing endpoint silently —
-    FastAPI dispatches the first match and reports nothing."""
+    """Route count only goes up, and no earlier route disappears.
+
+    This asserted an EXACT count (== 11) when Phase 1 wrote it, which contradicted its own
+    docstring and broke the moment Phase 2 added three endpoints — an exact count tests "nothing
+    changed", not "nothing was lost". A named floor tests the property the docstring claims: the
+    Phase 1 surface is still there, whatever later phases add. The collision half of the concern
+    is its own test below.
+    """
     from app import app
     paths = {r.path for r in core.enumerate_api_routes(app)}
     acr = {p for p in paths if p == "/acr" or p.startswith("/acr/")}
-    assert len(acr) == 11, sorted(acr)
+
+    missing = PHASE1_ACR_PATHS - acr
+    assert not missing, f"ACR routes disappeared: {sorted(missing)}"
+    assert len(acr) >= len(PHASE1_ACR_PATHS), sorted(acr)
 
     # Every pre-existing route group is still dispatchable.
     for expected in ("/healthz", "/config", "/scans", "/rubric", "/hitl/queue",

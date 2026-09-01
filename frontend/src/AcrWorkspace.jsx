@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import AcrCriterionDetail from './AcrCriterionDetail'
+import AcrMetadataForm from './AcrMetadataForm'
 import { listAcrReports, createAcrReport, getAcrReport, listAcrCriteria, getAcrValidation,
-         getAcrPreview } from './acrApi'
+         getAcrPreview, getAcrGaps } from './acrApi'
 
 // PRD §15 — the ACR list and the report workspace (Overview · Criteria · Validation · Export).
 //
@@ -14,8 +15,19 @@ import { listAcrReports, createAcrReport, getAcrReport, listAcrCriteria, getAcrV
 // deliberately absent rather than stubbed, because an empty tab reads as a broken feature and a
 // missing one reads as work not yet done.
 
-const TABS = [['overview', 'Overview'], ['criteria', 'Criteria'], ['validation', 'Validation'],
-              ['export', 'Draft export']]
+const TABS = [['overview', 'Overview'], ['criteria', 'Criteria'], ['gaps', 'Evidence gaps'],
+              ['validation', 'Validation'], ['export', 'Draft export']]
+
+// Criteria filters. "Needs evidence" is deliberately its own filter rather than a status: at 55
+// criteria the question an analyst actually has is "where do I still have to go and look", and
+// that is not the same set as "undecided" — a criterion can carry a green axe run and still need
+// a person (PRD §4.3).
+const FILTERS = [
+  ['all', 'All'],
+  ['undecided', 'Undecided'],
+  ['decided', 'Decided'],
+  ['unapproved', 'Awaiting approval'],
+]
 
 export default function AcrWorkspace() {
   const [reports, setReports] = useState(null)
@@ -24,7 +36,9 @@ export default function AcrWorkspace() {
   const [criteria, setCriteria] = useState([])
   const [validation, setValidation] = useState(null)
   const [preview, setPreview] = useState(null)
+  const [gapData, setGapData] = useState(null)
   const [tab, setTab] = useState('overview')
+  const [filter, setFilter] = useState('all')
   const [selected, setSelected] = useState(null)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -47,11 +61,29 @@ export default function AcrWorkspace() {
 
   useEffect(() => { refresh() }, [refresh])
 
+  // Validation is fetched for the Overview tab too, not only its own: the metadata form marks a
+  // field required from the validation blockers rather than a second hardcoded list, so the form
+  // and the publish gate cannot disagree about what is required.
   useEffect(() => {
     if (!reportId) return
-    if (tab === 'validation') getAcrValidation(reportId).then(setValidation).catch((e) => setError(String(e.message || e)))
+    if (tab === 'validation' || tab === 'overview') {
+      getAcrValidation(reportId).then(setValidation).catch((e) => setError(String(e.message || e)))
+    }
     if (tab === 'export') getAcrPreview(reportId).then(setPreview).catch((e) => setError(String(e.message || e)))
+    if (tab === 'gaps') getAcrGaps(reportId).then(setGapData).catch((e) => setError(String(e.message || e)))
   }, [tab, reportId])
+
+  // Which metadata fields the publish gate is currently blocking on, derived from the validation
+  // response rather than restated here. `incomplete_metadata` rows name the field in their
+  // message ("vendor name is required to publish"), so the field key is recovered from it.
+  const metadataBlockers = useMemo(() => {
+    const rows = validation?.by_category?.incomplete_metadata || []
+    const key = (m) => (m || '').split(' is ')[0].trim().replace(/ /g, '_')
+    return {
+      blocking: rows.filter((r) => r.blocking).map((r) => key(r.message)),
+      advisory: rows.filter((r) => !r.blocking).map((r) => key(r.message)),
+    }
+  }, [validation])
 
   const create = async () => {
     setBusy(true); setError(null)
@@ -85,6 +117,13 @@ export default function AcrWorkspace() {
       </section>
     )
   }
+
+  const shownCriteria = criteria.filter((c) => (
+    filter === 'all' ? true
+      : filter === 'undecided' ? !c.final_status
+        : filter === 'decided' ? !!c.final_status
+          : filter === 'unapproved' ? c.approval_state !== 'approved'
+            : true))
 
   const p = report?.progress
   const roles = report?.roles || []
@@ -142,27 +181,88 @@ export default function AcrWorkspace() {
       {error && <p role="alert" className="lockwarn">{error}</p>}
 
       {tab === 'overview' && report && (
+        <AcrMetadataForm
+          report={report.report}
+          blockingFields={metadataBlockers.blocking}
+          advisoryFields={metadataBlockers.advisory}
+          readOnly={!canEdit || report.report.status === 'published'}
+          onSaved={() => {
+            refresh()
+            getAcrValidation(reportId).then(setValidation).catch(() => {})
+          }}
+        />
+      )}
+
+      {tab === 'gaps' && (
         <div>
-          <h3>Report information</h3>
-          <table>
-            <caption className="sr-only">Report metadata</caption>
-            <tbody>
-              {Object.entries(report.report)
-                .filter(([k]) => !['id', 'owner_email'].includes(k))
-                .map(([k, v]) => (
-                  <tr key={k}>
-                    <th scope="row">{k.replace(/_/g, ' ')}</th>
-                    <td>{v == null || v === '' ? <span className="muted">not recorded</span> : String(v)}</td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
+          <h3>Evidence gaps</h3>
+          {!gapData ? <p className="muted">Checking…</p> : (
+            <>
+              <p role="status" aria-live="polite">
+                {gapData.with_human_evidence} of {gapData.total} criteria have live human
+                evidence. {gapData.counts.no_evidence} have none at all,
+                {' '}{gapData.counts.automated_only} have only automated results,
+                {' '}{gapData.counts.stale_only} have only stale evidence.
+              </p>
+              <p className="muted">{gapData.note}</p>
+              {[['no_evidence', 'No evidence at all'],
+                ['automated_only', 'Automated evidence only — a human still has to look'],
+                ['stale_only', 'Only stale evidence — retained for audit, cannot support publication']]
+                .map(([key, heading]) => {
+                  const rows = gapData.buckets[key] || []
+                  if (!rows.length) return null
+                  return (
+                    <section key={key}>
+                      <h4>{heading} ({rows.length})</h4>
+                      <table>
+                        <caption className="sr-only">{heading}</caption>
+                        <thead>
+                          <tr>
+                            <th scope="col">Criterion</th><th scope="col">Level</th>
+                            <th scope="col">Evidence</th><th scope="col">Open</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.slice(0, 60).map((r) => (
+                            <tr key={r.criterion_num}>
+                              <th scope="row">{r.criterion_num} {r.criterion_name}</th>
+                              <td>{r.level}</td>
+                              <td>{r.evidence_live} live / {r.evidence_total} total</td>
+                              <td>
+                                <button type="button"
+                                        onClick={() => { setSelected(r.criterion_num); setTab('criteria') }}>
+                                  Open<span className="sr-only"> {r.criterion_num} {r.criterion_name}</span>
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </section>
+                  )
+                })}
+            </>
+          )}
         </div>
       )}
 
       {tab === 'criteria' && (
         <div>
           <h3>Criteria</h3>
+          <fieldset>
+            <legend>Filter</legend>
+            {FILTERS.map(([id, text]) => (
+              <span key={id}>
+                <input type="radio" id={`acr-filter-${id}`} name="acr-filter" value={id}
+                       checked={filter === id} onChange={() => setFilter(id)} />
+                <label htmlFor={`acr-filter-${id}`}>{text}</label>
+              </span>
+            ))}
+          </fieldset>
+          {/* The count is announced, so a filter change is perceivable without sight — 4.1.3. */}
+          <p role="status" aria-live="polite">
+            Showing {shownCriteria.length} of {criteria.length} criteria.
+          </p>
           <table>
             <caption className="sr-only">WCAG 2.2 Level A and AA criteria</caption>
             <thead>
@@ -173,7 +273,7 @@ export default function AcrWorkspace() {
               </tr>
             </thead>
             <tbody>
-              {criteria.map((c) => (
+              {shownCriteria.map((c) => (
                 <tr key={c.criterion_num}>
                   <th scope="row">{c.criterion_num} {c.criterion_name}</th>
                   <td>{c.level}</td>

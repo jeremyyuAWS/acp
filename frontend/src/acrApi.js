@@ -46,6 +46,18 @@ export const getAcrCriterion = (id, num) => call(`/acr/${id}/criteria/${num}`)
 export const getAcrValidation = (id) => call(`/acr/${id}/validation`)
 export const getAcrAudit = (id) => call(`/acr/${id}/audit`)
 export const getAcrPreview = (id) => call(`/acr/${id}/preview`)
+export const getAcrGaps = (id) => call(`/acr/${id}/gaps`)
+
+// `preview: true` reports what would be written without writing it. Worth defaulting callers
+// toward: acr_evidence is append-only, and the interesting part of an axe ingest is what it
+// DROPS — inapplicable rules are not evidence, and a user should see that before committing
+// a few hundred rows.
+export const ingestAxe = (id, result, opts = {}) =>
+  call(`/acr/${id}/evidence/axe`, { method: 'POST', body: { result, ...opts } })
+
+export const setAcrApplicability = (id, num, applicable, rationale) =>
+  call(`/acr/${id}/criteria/${num}/applicability`,
+       { method: 'POST', body: { applicable, rationale } })
 
 export const addAcrEvidence = (id, num, evidence) =>
   call(`/acr/${id}/criteria/${num}/evidence`, { method: 'POST', body: { criterion_num: num, ...evidence } })
