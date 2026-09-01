@@ -936,6 +936,18 @@ export const putAiProvider = (patch) => (SIM
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(patch),
     }).then(j))
+// Ask the server to send its own SYNTHETIC probe image to one provider and report what came back.
+// The body carries a provider NAME and nothing else — no key, and no document: the image is
+// generated server-side (providers.probe_image_bytes) precisely so pressing this cannot send
+// customer content to a third party. In the simulated build it reports that it did nothing,
+// rather than a cheerful ✓ for a call that never left the browser.
+export const testAiProvider = (provider) => (SIM
+  ? sim({ ok: false, provider, reason: 'simulated', detail: 'simulated build — no call was made' })
+  : fetch(`${BASE}/ai/providers/test`, {
+      method: 'POST',
+      headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ provider }),
+    }).then(j))
 
 // ADR 0021 · Review memory — the org's house-style rules, and the decisions on derived proposals.
 //
