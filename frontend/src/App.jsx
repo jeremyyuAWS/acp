@@ -299,6 +299,10 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const isStaging = window.location.hostname.includes('staging')
   const [err, setErr] = useState(null)
+  // A submit that never got confirmed. Deliberately NOT `err`: "scan failed" is a claim we cannot
+  // make here. The request was bounded and the response lost, so the scan may or may not exist —
+  // and the retry is safe either way because the idempotency key is held (submitIntent.js).
+  const [submitUncertain, setSubmitUncertain] = useState(null)
   // Capacity state from the last preflight check — drives the notice near the scan action.
   // null = no check run yet (first visit); cleared when a new scan starts successfully.
   const [preflightCapacityState, setPreflightCapacityState] = useState(null)
@@ -1081,7 +1085,7 @@ export default function App() {
 
   const doScan = async (source, folder = null, runScope = null) => {
     if (busy) return                              // a scan/assessment is already running — don't launch another
-    setBusy(true); setErr(null); setPreflightCapacityState(null); setProgress({ phase: 'preparing' })
+    setBusy(true); setErr(null); setSubmitUncertain(null); setPreflightCapacityState(null); setProgress({ phase: 'preparing' })
     // A stop belongs to the run that was stopped. Clearing both here is what stops the previous
     // run's notice hanging over this one, and stops a stale flag ending this scan the moment it
     // starts.
@@ -1160,6 +1164,12 @@ export default function App() {
           // server proved it was not, so the user's next, corrected attempt is a fresh intent
           // rather than one that resolves to nothing.
           if (!outcomeIsUncertain(err?.status)) abandonIntent('scan')
+          // …and say so on screen. Before this, a lost response produced "scan failed", which
+          // overclaims in the one direction that matters: the enqueue may well have committed.
+          // A bounded request that timed out is reported as unconfirmed, with the retry that
+          // reconciles it, rather than as a failure the user might respond to by starting a
+          // second scan by hand.
+          else setSubmitUncertain({ source, folder, runScope, timedOut: err?.name === 'TimeoutError' })
           throw err
         }
         completeIntent('scan')
@@ -1290,7 +1300,10 @@ export default function App() {
       // both rendered at once and directly contradicted each other. The failure is the newer,
       // harder signal; it wins.
       setPreflightCapacityState(null)
-      setErr(`scan failed: ${scanFailureDetail(e?.message ?? e)}`)
+      // An unconfirmed submit already has its own, more accurate surface; a red "scan failed"
+      // beside it would contradict it, which is exactly the two-banners-disagreeing bug the
+      // comment above was written about.
+      if (!outcomeIsUncertain(e?.status)) setErr(`scan failed: ${scanFailureDetail(e?.message ?? e)}`)
       // Same "notify me" arming as the completion path below — a user who opted to walk away
       // wants to know the scan failed just as much as that it finished (see scanNotify.js).
       // A second scanFailureDetail() call, not a shared variable, deliberately keeps the line
@@ -1802,6 +1815,34 @@ export default function App() {
               Scan ID: {liveScanId}
             </div>
           )}
+        </div>
+      )}
+      {/* A submit whose response was lost. Reported as STATUS, not as an alert: we do not know
+          that anything failed, and the red "scan failed" treatment would push the user toward
+          starting a second scan by hand — the one action that could actually duplicate work.
+          Found in production 2026-09-01: a Discovery submitted during a deploy never reached a
+          replica, and with no timeout on the call the page sat in "Submitting Discovery" forever,
+          with no console error and nothing to retry. */}
+      {submitUncertain && (
+        <div className="panel scanstopped" role="status" style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>
+            {submitUncertain.timedOut
+              ? 'The server did not confirm your scan in time'
+              : 'The server did not confirm your scan'}
+          </div>
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 3 }}>
+            It may or may not have started — the request was sent but no answer came back.
+            Trying again is safe: it reconciles to the same scan rather than starting a second one.
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+            <button className="ghost small"
+                    onClick={() => { const a = submitUncertain; setSubmitUncertain(null)
+                                     doScan(a.source, a.folder, a.runScope) }}>
+              Try again
+            </button>
+            <button className="ghost small" onClick={() => setView('monitor')}>Check Monitor</button>
+            <button className="ghost small" onClick={() => setSubmitUncertain(null)}>Dismiss</button>
+          </div>
         </div>
       )}
       {/* A deliberate stop is not a fault, so it is reported as status rather than as an alert —

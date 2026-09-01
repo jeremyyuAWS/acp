@@ -155,6 +155,26 @@ const sim = (value, ms = 220) => new Promise((res) => setTimeout(() => res(value
 // A shared helper rather than `signal:` repeated per call site, so the set of boot reads is one
 // greppable thing a test can assert over instead of a property each new endpoint must remember.
 export const BOOT_TIMEOUT_MS = 8000
+
+// The scan enqueue. A WRITE, so it is bounded separately and far more loosely than a boot read —
+// but bounded, which it was not.
+//
+// The gap this closes, found in production 2026-09-01: a Discovery submitted DURING a deployment,
+// while the new API replicas were starting. The request never reached a server at all — no
+// preflight, no POST /scans, no scan id, no job id — and because the call had no timeout it never
+// settled, so the browser sat in its optimistic "Submitting Discovery" state permanently, with no
+// console error and nothing to retry.
+//
+// 30s, not the 8s a boot read gets: this POST only enqueues a job and returns its ids, so it is
+// fast by design, but it is still a write and a ceiling tight enough to abort a request the server
+// is actually processing would be the worse bug.
+//
+// Bounding a WRITE is only safe because the caller holds an idempotency key across the failure.
+// A timeout tells us the response was lost, NOT that the work was not done — the scan may exist.
+// The key is what makes the retry safe: outcomeIsUncertain(undefined) is true (submitIntent.js),
+// so the key is held rather than abandoned, and a resubmit reconciles to the same job instead of
+// enqueuing a second scan. Never shorten this without re-reading that contract.
+export const SCAN_ENQUEUE_TIMEOUT_MS = 30000
 const bootFetch = (url, init = {}) => fetch(url, { ...init, signal: AbortSignal.timeout(BOOT_TIMEOUT_MS) })
 
 // AI provenance (ADR 0019 Phase 0): the active model + local/cloud zone, cached from /config so
@@ -751,7 +771,7 @@ export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/sca
 // and test keeps working unchanged; without it the server behaves exactly as before.
 export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null, exclude = null, idempotencyKey = null) => (SIM
   ? sim({ scan_id: 'sim-scan', job_id: 'sim-job', queued: true, workers: 4 })
-  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}${excludeQ(exclude)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}&queue=true&fanout=true`, { method: 'POST', headers: headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) }).then(j))
+  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}${excludeQ(exclude)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}&queue=true&fanout=true`, { method: 'POST', headers: headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}), signal: AbortSignal.timeout(SCAN_ENQUEUE_TIMEOUT_MS) }).then(j))
 // Read-only check on the SPECIFIC source + folders about to be scanned — run right before
 // doScan actually starts one, so a bad credential, a deleted folder, or a dead worker tier is
 // caught before a scan row exists rather than surfacing as "0 documents" after the fact.
