@@ -1039,7 +1039,9 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
     policies = [p for p in core.store.list_disposition_policies(owner=actor) if p.get("enabled")]
     if not policies:
         return {"rules_enabled": 0, "files_evaluated": 0, "lifecycle_matches": 0,
-                "lifecycle_archive": 0, "lifecycle_delete": 0, "lifecycle_tagged": 0}
+                "lifecycle_archive": 0, "lifecycle_delete": 0, "lifecycle_tagged": 0,
+                "rules_total": 0, "rules_completed": 0, "files_unevaluable": 0,
+                "files_skipped": 0, "conflicts": 0}
 
     # Pre-load existing dispositions for this scan in one query — replaces N per-file
     # doc_has_disposition() SELECTs with a set lookup (idempotency guard AC-13, bulk path).
@@ -1063,6 +1065,8 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
     tag_rows: list = []    # (scan_id, file, tag, kind, rule_id)
     audit_rows: list = []  # (audit_id, doc_id, policy_id, action, result, detail, owner_email)
     status_rows: list = [] # (scan_id, file, status, rule_id, reason)
+    evaluation_rows: list = []
+    effective_rows: list = []
 
     files_evaluated = 0
     lifecycle_matches = 0
@@ -1070,6 +1074,8 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
     lc_delete = 0
     lc_tagged_files: set = set()
     lc_errors = 0
+    lc_conflicts = 0
+    lc_skipped = 0
     _eval_start = _dt.datetime.now(_dt.timezone.utc).timestamp()
     for r in core.store.list_inventory(scan_id):
         files_evaluated += 1
@@ -1083,12 +1089,32 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
                 "delete_candidates": lc_delete,
                 "files_tagged": len(lc_tagged_files),
                 "unevaluable": lc_errors,
+                "files_unevaluable": lc_errors,
+                "files_skipped": lc_skipped,
+                "conflicts": lc_conflicts,
+                "rules_total": len(policies),
+                "rules_completed": 0,
+                "current_rule_id": None,
+                "checkpoint_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
                 "rate_per_second": round(files_evaluated / _elapsed),
             })
         file = r.get("file")
         # An Exempted file (legal hold etc.) is never moved to a candidate status, tagged, or
-        # re-audited by a rule run (PRD §6).
+        # re-audited by a rule run (PRD §6). It still receives an immutable EXEMPT evaluation
+        # for every enabled rule so the ledger reconciles evaluated/exempt files.
         if r.get("lifecycle_status") == "Exempted":
+            lc_skipped += 1
+            evaluated_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
+            for p in policies:
+                version = int(p.get("version") or 1)
+                evaluation_id = hashlib.sha256(
+                    f"{scan_id}:{file}:{p['policy_id']}:{version}".encode()).hexdigest()[:32]
+                evaluation_rows.append((evaluation_id, scan_id, file, p["policy_id"], version,
+                                        "exempt", _json.dumps({"conditions": [], "policy_name": p.get("name"),
+                                                               "file": file, "reason": "legal hold or explicit exemption"}),
+                                        p.get("action"), p.get("priority"), evaluated_at, actor))
+            effective_rows.append((file, scan_id, None, "Exempted", "legal hold or explicit exemption wins",
+                                   "not_required", None, evaluated_at, actor))
             continue
         try:
             doc_id = f"scan:{scan_id}:{file}"
@@ -1110,12 +1136,45 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
                 "size_kb": r.get("size_kb"),
             }
             matched = []
+            evaluated = []
             for p in policies:
                 if p["_match"] is None:
+                    evaluated.append((p, {"matched": False, "conditions": [],
+                                          "_result": "unevaluable", "reason": "rule definition could not be read"}))
                     continue
-                if disposition.matches(doc, p["_match"]):
+                matched_by_policy = disposition.matches(doc, p["_match"])
+                result = disposition.evaluate(doc, p["_match"])
+                result["_result"] = disposition.evaluation_result(result)
+                if result["_result"] != "unevaluable":
+                    result["_result"] = "matched" if matched_by_policy else "not_matched"
+                evaluated.append((p, result))
+                if result["_result"] == "matched":
                     matched.append(p)
+            evaluated_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
+            version_by_policy = {p["policy_id"]: int(p.get("version") or 1) for p in policies}
+            eval_ids = {}
+            for p, result in evaluated:
+                version = version_by_policy[p["policy_id"]]
+                evaluation_id = hashlib.sha256(
+                    f"{scan_id}:{file}:{p['policy_id']}:{version}".encode()).hexdigest()[:32]
+                eval_ids[p["policy_id"]] = evaluation_id
+                evidence = {"conditions": result.get("conditions", []),
+                            "policy_name": p.get("name"), "file": file,
+                            "reason": result.get("reason")}
+                evaluation_rows.append((evaluation_id, scan_id, file, p["policy_id"], version,
+                                        result.get("_result", "unevaluable"), _json.dumps(evidence),
+                                        p.get("action"), p.get("priority"), evaluated_at, actor))
+            destructive_unevaluable = any(
+                result.get("_result") == "unevaluable" and p.get("action") in ("archive", "delete")
+                for p, result in evaluated)
             if not matched:
+                if any(result.get("_result") == "unevaluable" for _, result in evaluated):
+                    reason = "required lifecycle evidence was missing; no destructive recommendation was made"
+                    status_rows.append((scan_id, file, "Unevaluable", None, reason))
+                    effective_rows.append((file, scan_id, None, "Unevaluable", reason, "not_required", None, evaluated_at, actor))
+                    lc_errors += 1
+                else:
+                    effective_rows.append((file, scan_id, None, "Active", "no enabled rule matched", "not_required", None, evaluated_at, actor))
                 continue
             lifecycle_matches += 1
             # ── Tag rules: apply EVERY matching tag policy. Tag + Archive both match → tags AND the
@@ -1139,12 +1198,30 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
                                    "applied", "tagged: " + ", ".join(tags), actor))
                 lc_tagged_files.add(file)
                 seen.add(key)  # idempotent within this run
+            if destructive_unevaluable:
+                reason = "required evidence for a destructive lifecycle rule was missing; no destructive recommendation was made"
+                status_rows.append((scan_id, file, "Unevaluable", None, reason))
+                effective_rows.append((file, scan_id, None, "Unevaluable", reason, "not_required", None, evaluated_at, actor))
+                lc_errors += 1
+                continue
             # ── Candidate status: archive-vs-delete precedence (PRD §6), shared with the conflicts
             # report — see disposition.resolve_candidate's own docstring for the precedence rule.
             chosen, new_status, reason = disposition.resolve_candidate(matched, actor)
+            if chosen is None and new_status == "Conflict — review required":
+                lc_conflicts += 1
+                status_rows.append((scan_id, file, new_status, None, reason))
+                effective_rows.append((file, scan_id, None, new_status, reason, "review_required", None, evaluated_at, actor))
+                conflict_ids = {p["policy_id"] for p in matched if p.get("action") in ("archive", "delete")}
+                for i, row in enumerate(evaluation_rows):
+                    if row[1] == scan_id and row[2] == file and row[3] in conflict_ids:
+                        evaluation_rows[i] = (*row[:5], "conflict", *row[6:])
+                continue
             if chosen is None:
+                effective_rows.append((file, scan_id, None, "Active", "matching rules were tag-only", "not_required", None, evaluated_at, actor))
                 continue
             key = (doc_id, chosen["policy_id"])
+            effective_rows.append((file, scan_id, eval_ids.get(chosen["policy_id"]), new_status,
+                                   reason, "pending_approval", None, evaluated_at, actor))
             if key in seen:
                 continue  # this rule already flagged + audited this file on an earlier Discover
             status_rows.append((scan_id, file, new_status, chosen["policy_id"], reason))
@@ -1162,15 +1239,23 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
             lc_errors += 1
 
     # Flush accumulated writes in bulk — one executemany each instead of N individual calls.
+    # Evidence first: a lifecycle state without its immutable explanation is incomplete. If a
+    # later projection write fails, a retry reuses the deterministic evaluation ids and safely
+    # finishes the projection; the reverse order could expose an unexplained candidate forever.
+    core.store.bulk_create_lifecycle_evaluations(evaluation_rows)
+    core.store.bulk_upsert_effective_dispositions(effective_rows)
     core.store.bulk_add_file_tags(tag_rows)
     core.store.bulk_set_lifecycle_status(status_rows)
     core.store.bulk_create_disposition_audit(audit_rows)
 
     return {"rules_enabled": len(policies), "files_evaluated": files_evaluated,
+            "rules_total": len(policies), "rules_completed": len(policies),
             "lifecycle_matches": lifecycle_matches,
             "lifecycle_archive": lc_archive, "lifecycle_delete": lc_delete,
             "lifecycle_tagged": len(lc_tagged_files),
-            "lifecycle_errors": lc_errors}
+            "lifecycle_errors": lc_errors, "files_unevaluable": lc_errors,
+            "files_skipped": lc_skipped, "conflicts": lc_conflicts,
+            "checkpoint_at": _dt.datetime.now(_dt.timezone.utc).isoformat()}
 
 
 def scan_event(scan_id: str | None, kind: str, **kw) -> None:

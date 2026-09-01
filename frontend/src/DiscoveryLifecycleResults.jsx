@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
-import { listDispositionPolicies } from './api.js'
+import { getLifecycleRuleResults, getLifecycleSummary, listDispositionPolicies } from './api.js'
 import { LIFECYCLE_ACTIONS } from './lifecycleRules.js'
 import { formatBucketOf } from './discoveryRecommendations.js'
+import LifecycleEstateSummary from './LifecycleEstateSummary.jsx'
+import LifecycleRuleLedger from './LifecycleRuleLedger.jsx'
+import DispositionReviewWorkspace from './DispositionReviewWorkspace.jsx'
 
 const FORMATS = new Set(['pdf', 'docx', 'xlsx', 'pptx'])
 const NATIVE = { 'application/vnd.google-apps.document': 'docx', 'application/vnd.google-apps.spreadsheet': 'xlsx', 'application/vnd.google-apps.presentation': 'pptx' }
@@ -15,6 +18,20 @@ export default function DiscoveryLifecycleResults({ rows, policies, scanId }) {
   useEffect(() => { setPage(0) }, [rule, search, rows])
   const [loaded, setLoaded] = useState(null)
   const [error, setError] = useState('')
+  const [summary, setSummary] = useState(null)
+  const [ruleResults, setRuleResults] = useState([])
+  const [lifecycleError, setLifecycleError] = useState('')
+  const [reviewStatus, setReviewStatus] = useState('')
+  const [reviewPolicy, setReviewPolicy] = useState('')
+  useEffect(() => {
+    let current = true
+    setSummary(null); setRuleResults([]); setLifecycleError('')
+    if (!scanId) return () => { current = false }
+    Promise.all([getLifecycleSummary(scanId), getLifecycleRuleResults(scanId)]).then(([s, ledger]) => {
+      if (current) { setSummary(s); setRuleResults(ledger.rules || []) }
+    }).catch(() => { if (current) setLifecycleError('The durable lifecycle snapshot could not be loaded. Inventory results remain available below.') })
+    return () => { current = false }
+  }, [scanId])
   useEffect(() => {
     let current = true
     setLoaded(null); setError(''); setRule('all')
@@ -33,6 +50,13 @@ export default function DiscoveryLifecycleResults({ rows, policies, scanId }) {
   const currentPage = Math.min(page, lastPage)
   const visible = shown.slice(currentPage * 50, (currentPage + 1) * 50)
   return <section className="panel" aria-label="Lifecycle results for supported documents">
+    {lifecycleError && <p role="alert">{lifecycleError}</p>}
+    {summary && <LifecycleEstateSummary summary={summary}
+      onSelect={(status) => { setReviewStatus(status); setReviewPolicy(''); document.getElementById('lifecycle-review')?.scrollIntoView() }}
+      onReview={() => document.getElementById('lifecycle-review')?.scrollIntoView()}
+      onRules={() => document.getElementById('lifecycle-rules')?.scrollIntoView()} />}
+    {summary && <div id="lifecycle-rules"><LifecycleRuleLedger rules={ruleResults} onSelect={(policyId) => { setReviewPolicy(policyId); setReviewStatus(''); document.getElementById('lifecycle-review')?.scrollIntoView() }} /></div>}
+    {summary && <div id="lifecycle-review"><DispositionReviewWorkspace scanId={scanId} status={reviewStatus} policyId={reviewPolicy} /></div>}
     <h2>Lifecycle results · supported documents</h2>
     <p className="muted">PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), including their Google equivalents. Results are saved from this scan; changing a rule requires a new scan.</p>
     {error && <p role="alert">{error}</p>}

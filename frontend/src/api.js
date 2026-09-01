@@ -465,6 +465,31 @@ export const getScanInventory = (scanId, { offset = 0, limit = 1000 } = {}) => (
   ? sim(simScanInventory(scanId, offset, limit), 180)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/inventory?offset=${offset}&limit=${limit}`,
           { headers: headers() }).then(j))
+export const getLifecycleSummary = (scanId) => (SIM
+  ? getScanInventory(scanId).then(({ rows, total }) => {
+      const count = (status) => rows.filter((r) => (r.lifecycle_status || 'Active') === status).length
+      const counts = { active: count('Active'), already_archived: count('Archived') + count('Already archived'),
+        archive_candidate: count('Archive Candidate'), delete_candidate: count('Delete Candidate'), deleted: count('Deleted'),
+        exempt: count('Exempted'), reactivated: count('Reactivated'),
+        unevaluable: count('Unevaluable') + count('Conflict — review required'), failed: count('Failed') }
+      return { scan_id: scanId, total, reconciled_total: Object.values(counts).reduce((a, b) => a + b, 0),
+        counts, assessment_excluded: counts.already_archived + counts.archive_candidate + counts.delete_candidate + counts.deleted,
+        recommendations_only: true, data_version: null }
+    })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/lifecycle/summary`, { headers: headers() }).then(j))
+export const getLifecycleRuleResults = (scanId) => (SIM
+  ? sim({ scan_id: scanId, data_version: null, rules: [] })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/lifecycle/rules`, { headers: headers() }).then(j))
+export const getLifecycleFiles = (scanId, { status = '', policyId = '', offset = 0, limit = 200 } = {}) => {
+  const qs = new URLSearchParams({ offset: String(offset), limit: String(limit) })
+  if (status) qs.set('status', status)
+  if (policyId) qs.set('policy_id', policyId)
+  return SIM ? getScanInventory(scanId, { offset, limit })
+    : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/lifecycle/files?${qs}`, { headers: headers() }).then(j)
+}
+export const getLifecycleFileDetail = (scanId, file) => (SIM
+  ? getScanInventory(scanId).then(({ rows }) => ({ ...(rows.find((r) => r.file === file) || {}), evaluations: [] }))
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/lifecycle/files/${encodeURIComponent(file)}`, { headers: headers() }).then(j))
 // Lifecycle rules #8 — record a human's reasoned disagreement with a rule's Archive/Delete
 // Candidate recommendation for ONE file. Rejects (throws) on a blank reason or a file with no
 // candidate status to override, matching the real route's 422/409 — the caller (Discover.jsx)
