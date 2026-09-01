@@ -95,6 +95,39 @@ beforeEach(() => {
 afterEach(() => { errSpy.mockRestore(); unmountAll(); resetJobsFeed() })
 
 describe('the progress bar and its caption share one denominator', () => {
+  it('shows only the four formats supported by Assess and Remediate', async () => {
+    assessScan.mockResolvedValue({ deferred: true, job_id: 'j1', workers: 4, worker_tier_alive: true })
+    getScan.mockResolvedValue({
+      run: { files: 2 },
+      files: [
+        { file: 'policy.docx', score: null, status: 'discovered' },
+        { file: 'report.pdf', score: null, status: 'discovered' },
+        { file: '00readme.txt', score: null, status: 'discovered' },
+        { file: 'script.py', score: null, status: 'discovered' },
+      ],
+    })
+    getQueueJob.mockResolvedValue({ id: 'j1', status: 'running', phase: 'assessing' })
+
+    await mount([
+      { file: 'policy.docx', score: null, status: 'discovered' },
+      { file: 'report.pdf', score: null, status: 'discovered' },
+      { file: '00readme.txt', score: null, status: 'discovered' },
+      { file: 'script.py', score: null, status: 'discovered' },
+    ])
+
+    expect(text()).toContain('Assess 2 files')
+    expect(text()).not.toContain('Assess 4 files')
+
+    await clickText('Assess')
+    await settle()
+
+    const worklist = container.querySelector('.assesslist')?.textContent || ''
+    expect(worklist).toContain('policy.docx')
+    expect(worklist).toContain('report.pdf')
+    expect(worklist).not.toContain('00readme.txt')
+    expect(worklist).not.toContain('script.py')
+  })
+
   it('does not render a bar percentage that contradicts "N of M"', async () => {
     assessScan.mockResolvedValue({ deferred: true, job_id: 'j1', workers: 4, worker_tier_alive: true })
     getScan.mockResolvedValue(DEFERRED_MIDRUN)

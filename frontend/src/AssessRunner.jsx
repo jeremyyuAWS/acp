@@ -131,6 +131,14 @@ const autoOf = (cap, x, fmt) => isAuto(cap, fmt, scOf(x.wcag))
 // cannot drift apart again.
 const nameOf = (f) => (typeof f === 'string' ? f : f?.file || f?.name || null)
 
+// Discovery inventories the whole estate, but the Assess and Remediate workers currently accept
+// exactly these four formats. Keep everything visible in Discover while ensuring the Assess count,
+// "awaiting result" name, and worklist describe only files the backend can actually enqueue.
+const ASSESSABLE_FILE_RE = /\.(pdf|docx|xlsx|pptx)$/i
+export function isAssessableFile(file) {
+  return ASSESSABLE_FILE_RE.test(nameOf(file) || '')
+}
+
 // "3s" under a minute, "1m 12s" past it — short enough to sit inline next to a status line
 // without dominating it. Floors at 0 rather than going negative on a clock skew blip.
 const fmtElapsed = (ms) => {
@@ -295,14 +303,15 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   // appear until the assessment has actually run over all parsable files (phase 'done').
   useEffect(() => { onPhase?.(phase) }, [phase]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const docs = files.filter((f) => f.score != null)
-  const excludedCount = files.length - docs.length
+  const assessmentFiles = files.filter(isAssessableFile)
+  const docs = assessmentFiles.filter((f) => f.score != null)
+  const excludedCount = assessmentFiles.length - docs.length
   // Deferred model (ADR 0020): before Assess runs, files are 'discovered' (no score yet) — they
   // are ASSESSABLE, not excluded. The excluded/parsable framing only makes sense AFTER analysis, so
   // pre-assess we count every discovered file as assessable and suppress the "excluded" warning.
-  const discoveredN = files.filter((f) => f.status === 'discovered').length
+  const discoveredN = assessmentFiles.filter((f) => f.status === 'discovered').length
   const deferredPending = discoveredN > 0 && docs.length === 0
-  const assessN = deferredPending ? files.length : docs.length
+  const assessN = deferredPending ? assessmentFiles.length : docs.length
   // Deterministic conformance result over a set of scored docs at a WCAG level. Defaults to the
   // docs already in props (immediate model); the deferred path passes the freshly-analysed files.
   const computeResultFrom = (scored, lvl) => {
@@ -395,7 +404,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
       }).catch(() => {})
       getScan(runId).then((data) => {
         const run = data?.run || {}
-        const fs = data?.files || []
+        const fs = (data?.files || []).filter(isAssessableFile)
         const scored = fs.filter((f) => f.score != null)
         const total = run.files || fs.length || 1
         if (scored.length > (lastProgressValRef.current ?? -1)) {

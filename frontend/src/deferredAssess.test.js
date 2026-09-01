@@ -54,7 +54,8 @@ describe('AssessRunner drives the real analysis when it is deferred (ADR 0020)',
     const s = read('AssessRunner.jsx')
     // discovered files (score null, status 'discovered') are assessable in the deferred model
     expect(s).toMatch(/status === 'discovered'/)
-    expect(s).toMatch(/const assessN = deferredPending \? files\.length : docs\.length/)
+    expect(s).toMatch(/const assessmentFiles = files\.filter\(isAssessableFile\)/)
+    expect(s).toMatch(/const assessN = deferredPending \? assessmentFiles\.length : docs\.length/)
     // the CTA + enablement use assessN, so the button isn't dead when nothing is scored yet
     expect(s).toMatch(/disabled=\{phase === 'running' \|\| !assessN \|\| scanBusy\}/)
     expect(s).toMatch(/▶ Assess \$\{assessN/)
