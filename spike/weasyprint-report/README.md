@@ -63,7 +63,11 @@ representative report must pass **all** of:
 - [x] Page header/footer/decorative elements excluded from reading order — *header/footer confirmed*
 - [ ] Searchable/selectable text and working links (a `<a href>` link tags as `Link`; selection
       needs a manual check — WeasyPrint text is real glyphs, not outlines)
-- [ ] **veraPDF or PAC 2024 validation** — not runnable here (no local Java); the required automated gate
+- [x] **veraPDF validation** — RUN, 2026-09-01. "not runnable here (no local Java)" was true when
+      this was written and is not any more: Java 21 is present and veraPDF 1.30.2 runs. The shipped
+      Chromium renderer FAILS ua1 (8 checks, clause 7.1 tests 3 and 8); the WeasyPrint candidate
+      PASSES with 0. See the addendum to ADR 0034 and `tests/test_report_pdfua_gap.py`.
+- [ ] **PAC 2024 validation** — still not runnable here (Windows only); the second automated gate
 - [ ] **Manual screen-reader spot check** — NVDA (Windows) or VoiceOver (macOS)
 - [ ] Stable rendering and acceptable runtime in CI and production (WeasyPrint adds native deps:
       Pango, cairo, GDK-PixBuf, HarfBuzz)

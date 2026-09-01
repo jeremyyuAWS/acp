@@ -70,3 +70,9 @@ digital-accessibility/
 # pushed, and this is what it points at. Following that prompt literally would commit a copy of
 # the repo into the repo.
 .claude/worktrees/
+
+# scripts/build_report_review_packet.py's default output: two PDFs and a page raster of each,
+# rebuilt from the renderer on demand. Committing it would put a stale copy of the report in the
+# tree next to the code that generates it, which is the exact way a reviewer ends up signing off
+# yesterday's render.
+review-packet/
