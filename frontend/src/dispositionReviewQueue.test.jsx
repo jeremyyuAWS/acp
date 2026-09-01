@@ -216,6 +216,25 @@ describe('what the approve action actually sends', () => {
 })
 
 describe('progress and filtering', () => {
+  it('requests candidates only by default and shows an honest zero-match empty state', async () => {
+    getLifecycleFiles.mockResolvedValue({ rows: [] })
+    const c = await mount()
+
+    expect(getLifecycleFiles).toHaveBeenCalledWith('s1', {
+      status: '', policyId: '', candidateOnly: true,
+    })
+    expect(text(c)).toContain('0 files in this view')
+    expect(text(c)).toContain('No lifecycle candidates need review')
+    expect(text(c)).not.toContain('No rule recorded')
+  })
+
+  it('can explicitly broaden to a non-candidate estate segment', async () => {
+    await mount({ status: 'Active', candidateOnly: false })
+    expect(getLifecycleFiles).toHaveBeenCalledWith('s1', {
+      status: 'Active', policyId: '', candidateOnly: false,
+    })
+  })
+
   it('reports reviewed and remaining, and advances as files are opened', async () => {
     const c = await mount()
     expect(text(c)).toContain('0 reviewed, 5 remaining')

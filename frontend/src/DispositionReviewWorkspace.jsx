@@ -20,7 +20,9 @@ const groupKey = (row) => [row.policy_id || row.lifecycle_rule_id || 'none',
 
 const RISK = { delete: 'Moves files to source trash', archive: 'Recoverable move' }
 
-export default function DispositionReviewWorkspace({ scanId, status = '', policyId = '' }) {
+export default function DispositionReviewWorkspace({
+  scanId, status = '', policyId = '', candidateOnly = true,
+}) {
   const [rows, setRows] = useState([])
   const [selected, setSelected] = useState(null)
   const [picked, setPicked] = useState(() => new Set())
@@ -34,11 +36,11 @@ export default function DispositionReviewWorkspace({ scanId, status = '', policy
   useEffect(() => {
     let live = true
     setError(''); setNotice(''); setSelected(null); setPicked(new Set())
-    getLifecycleFiles(scanId, { status, policyId })
+    getLifecycleFiles(scanId, { status, policyId, candidateOnly })
       .then((r) => { if (live) setRows(r.rows || []) })
       .catch(() => { if (live) setError('Lifecycle review files could not be loaded.') })
     return () => { live = false }
-  }, [scanId, status, policyId])
+  }, [scanId, status, policyId, candidateOnly])
 
   const owners = useMemo(
     () => [...new Set(rows.map((r) => r.owner).filter(Boolean))].sort(), [rows])
@@ -139,7 +141,9 @@ export default function DispositionReviewWorkspace({ scanId, status = '', policy
 
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
       <div className="panel" style={{ maxHeight: 520, overflow: 'auto' }}>
-        {groups.length === 0 && <p>No files match this view.</p>}
+        {groups.length === 0 && <p>{candidateOnly
+          ? 'No lifecycle candidates need review. The enabled rules ran and matched no files.'
+          : 'No files match this view.'}</p>}
         {groups.map((group) => {
           const chosen = group.rows.filter((r) => picked.has(r.audit_id)).length
           return <section key={group.key} aria-label={`${group.rule} · ${group.action || 'no action'}`}>
