@@ -35,8 +35,10 @@ vi.mock('./api.js', () => ({
 }))
 
 const confirmMock = vi.fn()
+const notifyMock = vi.fn()
 vi.mock('./ConfirmDialog.jsx', () => ({
   confirm: (...a) => confirmMock(...a),
+  notify: (...a) => notifyMock(...a),
   default: () => null,
 }))
 
@@ -46,6 +48,7 @@ afterEach(unmountAll)
 let container, root
 beforeEach(() => {
   confirmMock.mockReset().mockResolvedValue(false)
+  notifyMock.mockReset()
   listDispositionPolicies.mockReset().mockResolvedValue([])
   createDispositionPolicy.mockReset().mockResolvedValue({ policy_id: 'new1' })
   setDispositionPolicyEnabled.mockReset().mockResolvedValue({})
@@ -82,6 +85,16 @@ const RULES = [
 ]
 
 describe('the existing rules list', () => {
+  it('keeps the creation form collapsed when rules already exist', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0]])
+    await render(); await expand(); await flush()
+    expect(byLabel('Rule name')).toBeNull()
+    expect(btnByText('Create rule').getAttribute('aria-expanded')).toBe('false')
+    await click(btnByText('Create rule'))
+    expect(byLabel('Rule name')).not.toBeNull()
+    expect(btnByText('Close form').getAttribute('aria-expanded')).toBe('true')
+  })
+
   it('loads only when opened, and shows only the two lifecycle actions', async () => {
     listDispositionPolicies.mockResolvedValue(RULES)
     await render()
@@ -337,6 +350,23 @@ describe('the existing rules list', () => {
     confirmMock.mockResolvedValue(true)
     await click(byLabel('Enable rule Superseded drafts')); await flush()
     expect(setDispositionPolicyEnabled).toHaveBeenCalledWith('p2', true)
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({
+      title: expect.stringContaining('enabled'), actionLabel: 'Undo',
+    }))
+
+    await act(async () => { await notifyMock.mock.calls.at(-1)[0].onAction() }); await flush()
+    expect(setDispositionPolicyEnabled).toHaveBeenLastCalledWith('p2', false)
+  })
+
+  it('shows that impact is being checked while the enable preview is pending', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[1]])
+    let settle
+    previewDispositionPolicy.mockImplementation(() => new Promise((resolve) => { settle = resolve }))
+    await render(); await expand(); await flush()
+    await click(byLabel('Enable rule Superseded drafts'))
+    expect(text()).toContain('Checking impact…')
+    await act(async () => settle({ would_match: 0, total: 10 })); await flush()
+    expect(text()).not.toContain('Checking impact…')
   })
 
   it('adds a broad-rule warning past the stated threshold, and omits it below it', async () => {
@@ -749,6 +779,7 @@ describe('the safety copy the whole screen rests on', () => {
   it('never says a file was archived, deleted, moved or trashed', async () => {
     listDispositionPolicies.mockResolvedValue(RULES)
     await render(); await expand(); await flush()
+    await click(btnByText('Create rule'))
     await setValue(byLabel('Action'), 'delete')
     const t = text()
     expect(t).not.toMatch(/\b(?:files?|documents?) (?:was|were|are|is) (?:archived|deleted|trashed|moved|removed)\b/i)

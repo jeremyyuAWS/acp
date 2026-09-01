@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { confirm } from './ConfirmDialog.jsx'
+import { confirm, notify } from './ConfirmDialog.jsx'
 import {
   listDispositionPolicies, createDispositionPolicy, setDispositionPolicyEnabled, previewDispositionPolicy,
   updateDispositionPolicy, previewDispositionDraft, deleteDispositionPolicy, reorderDispositionPolicies,
@@ -302,6 +302,7 @@ function RuleFields({ draft, setDraft, labelFor }) {
 
 function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, isLast, rank }) {
   const [busy, setBusy] = useState(false)
+  const [impactBusy, setImpactBusy] = useState(false)
   const [err, setErr] = useState('')
   const enabled = !!p.enabled
   // Preview expansion — docs stored locally; parent only needs the count.
@@ -353,7 +354,23 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
   const doSetEnabled = (next) => {
     setBusy(true); setErr('')
     Promise.resolve(setDispositionPolicyEnabled(p.policy_id, next))
-      .then(() => onChanged())
+      .then(() => {
+        onChanged()
+        notify({
+          title: next ? `“${p.name}” enabled` : `“${p.name}” disabled`,
+          message: next
+            ? 'The rule will begin adding recommendations with the next Discovery run.'
+            : 'The rule will no longer add recommendations in future Discovery runs.',
+          actionLabel: 'Undo',
+          onAction: () => {
+            setBusy(true); setErr('')
+            return Promise.resolve(setDispositionPolicyEnabled(p.policy_id, !next))
+              .then(() => onChanged())
+              .catch((e) => setErr(refusalText(e)))
+              .finally(() => setBusy(false))
+          },
+        })
+      })
       .catch((e) => setErr(refusalText(e)))
       .finally(() => setBusy(false))
   }
@@ -369,13 +386,13 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
       }).then((ok) => { if (ok) doSetEnabled(false) })
       return
     }
-    setBusy(true); setErr('')
+    setBusy(true); setImpactBusy(true); setErr('')
     Promise.resolve(previewDispositionPolicy(p.policy_id))
       .then((r) => {
         const n = r?.would_match ?? null
         const total = r?.total ?? null
         onCount(p.policy_id, n)
-        setBusy(false)
+        setBusy(false); setImpactBusy(false)
         if (n == null) {
           confirm({
             title: `Enable "${p.name}"?`,
@@ -404,7 +421,7 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
         }).then((ok) => { if (ok) doSetEnabled(true) })
       })
       .catch((e) => {
-        setBusy(false)
+        setBusy(false); setImpactBusy(false)
         confirm({
           title: `Enable "${p.name}"?`,
           message: `The current impact could not be measured: ${refusalText(e)} Enabling will still only add lifecycle recommendations for review—it will not change source files.`,
@@ -495,7 +512,9 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
           <span aria-hidden="true" style={{ width: 32, height: 18, borderRadius: 999, padding: 2,
             background: enabled ? 'var(--plum)' : 'var(--line)', display: 'flex', justifyContent: enabled ? 'flex-end' : 'flex-start',
             transition: 'background .15s' }}><span style={{ width: 14, height: 14, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px #0003' }} /></span>
-          <span style={{ fontSize: 11.5, fontWeight: 650, color: enabled ? 'var(--plum)' : 'var(--muted)' }}>{enabled ? 'On' : 'Off'}</span>
+          <span aria-live="polite" style={{ fontSize: 11.5, fontWeight: 650, color: enabled ? 'var(--plum)' : 'var(--muted)', whiteSpace: 'nowrap' }}>
+            {impactBusy ? 'Checking impact…' : enabled ? 'On' : 'Off'}
+          </span>
         </label>
         <span style={{ fontSize: 13.5, fontWeight: 650 }}>{p.name}</span>
         <ActionTag action={p.action} />
@@ -548,7 +567,8 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
   )
 }
 
-function NewRule({ onCreated }) {
+function NewRule({ onCreated, defaultExpanded = false }) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
   const [draft, setDraft] = useState(emptyDraft)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -602,13 +622,17 @@ function NewRule({ onCreated }) {
   return (
     <div className="lifecycle-new" style={{ border: '1px dashed color-mix(in srgb, var(--plum) 35%, transparent)',
                                             borderRadius: 11, padding: '14px 15px', background: 'var(--surface)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: expanded ? 12 : 0 }}>
         <span aria-hidden="true" style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--plum)',
                                           color: '#fff', fontSize: 12, fontWeight: 700, display: 'flex',
                                           alignItems: 'center', justifyContent: 'center' }}>+</span>
-        <span style={{ fontSize: 13.5, fontWeight: 600 }}>New rule</span>
+        <span style={{ fontSize: 13.5, fontWeight: 600 }}>Add lifecycle rule</span>
+        <button className="ghost small" onClick={() => setExpanded((value) => !value)}
+                aria-expanded={expanded} style={{ marginLeft: 'auto' }}>
+          {expanded ? 'Close form' : 'Create rule'}
+        </button>
       </div>
-
+      {expanded && <>
       <RuleFields draft={draft} setDraft={setDraft} labelFor={(l) => l} />
 
       {/* The draft restated in the reader's words, live — and, once there is a real predicate to
@@ -631,6 +655,7 @@ function NewRule({ onCreated }) {
         Added “{added}”. It is disabled — nothing is tagged until you enable it.
       </p>}
       {err && <p style={alertStyle} role="alert">⚠ {err}</p>}
+      </>}
     </div>
   )
 }
@@ -816,7 +841,7 @@ export default function DispositionRules({ embedded = false }) {
                          onCount={setCount} onChanged={load} onDuplicate={onDuplicate} onMove={onMove} />
               )))}
 
-          <NewRule onCreated={onCreated} />
+          {rules != null && <NewRule onCreated={onCreated} defaultExpanded={rules.length === 0} />}
           <PrecedenceNote />
 
           {rules != null && rules.length > 1 && (

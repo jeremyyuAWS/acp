@@ -5,8 +5,15 @@ let _open = null
 export function confirm({ title, message, warning, facts, variant = 'default', presentation = 'dialog', confirmLabel = 'Confirm', cancelLabel = 'Cancel' } = {}) {
   return new Promise((resolve) => {
     if (!_open) { resolve(window.confirm([message, warning].filter(Boolean).join('\n\n'))); return }
-    _open({ type: 'confirm', title, message, warning, facts, variant, presentation, confirmLabel, cancelLabel, resolve })
+    _open({ type: 'confirm', title, message, warning, facts, variant, presentation, confirmLabel, cancelLabel, resolve,
+      returnFocus: document.activeElement })
   })
+}
+
+export function notify({ title, message, actionLabel, onAction, duration = 7000 } = {}) {
+  if (!_open) return
+  _open({ type: 'notice', title, message, actionLabel, onAction, duration,
+    variant: 'activation', presentation: 'toast' })
 }
 
 export function alert({ title, message } = {}) {
@@ -24,14 +31,40 @@ const VARIANTS = {
   activation: { bg: '#35233b', icon: '✓', btnBg: '#51314f', btnShadow: '#51314f44' },
 }
 
+const settle = (current, setState, value) => {
+  setState(null)
+  if (current.resolve) current.resolve(value)
+  if (current.returnFocus && current.returnFocus.isConnected) {
+    queueMicrotask(() => current.returnFocus.focus())
+  }
+}
+
 export default function ConfirmDialog() {
   const [state, setState] = useState(null)
   useEffect(() => { _open = setState; return () => { _open = null } }, [])
+  useEffect(() => {
+    if (!state) return undefined
+    const dismiss = () => settle(state, setState, state.type === 'confirm' ? false : undefined)
+    const onKeyDown = (event) => { if (event.key === 'Escape') dismiss() }
+    document.addEventListener('keydown', onKeyDown)
+    const timer = state.type === 'notice' && state.duration > 0
+      ? window.setTimeout(dismiss, state.duration)
+      : null
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      if (timer) window.clearTimeout(timer)
+    }
+  }, [state])
   if (!state) return null
   const vt = VARIANTS[state.variant] || VARIANTS.default
   const isAlert = state.type === 'alert'
+  const isNotice = state.type === 'notice'
   const isToast = state.presentation === 'toast'
-  const finish = (val) => { const res = state.resolve; setState(null); res(val) }
+  const finish = (val) => settle(state, setState, val)
+  const takeAction = () => {
+    if (isNotice && state.onAction) state.onAction()
+    finish(isAlert ? undefined : true)
+  }
   const handleBackdrop = (e) => { if (e.target === e.currentTarget) finish(isAlert ? undefined : false) }
   const content = (
     <div style={{ width:isToast ? 'min(92vw,470px)' : 'min(93vw,520px)', borderRadius:isToast ? 12 : 16, overflow:'hidden',
@@ -45,7 +78,7 @@ export default function ConfirmDialog() {
         <div id="cd-title" style={{ color:isToast ? '#172033' : '#fff', fontWeight:700, fontSize:17, lineHeight:1.35, flex:1 }}>
           {state.title || (isAlert ? 'Notice' : 'Confirm action')}
         </div>
-        {isToast && <button aria-label="Dismiss" onClick={() => finish(false)} style={{ border:0, background:'transparent', color:'#64748b', cursor:'pointer', fontSize:20, lineHeight:1 }}>×</button>}
+        {isToast && <button aria-label="Dismiss" onClick={() => finish(isNotice ? undefined : false)} style={{ border:0, background:'transparent', color:'#64748b', cursor:'pointer', fontSize:20, lineHeight:1 }}>×</button>}
       </div>
       {state.message && (
         <div style={{ padding:isToast ? '8px 18px 0 60px' : '18px 22px 0', fontSize:14, color:'#334155', lineHeight:1.55, whiteSpace:'pre-wrap' }}>
@@ -71,24 +104,25 @@ export default function ConfirmDialog() {
         </div>
       )}
       <div style={{ padding:isToast ? '16px 18px 16px 60px' : '18px 24px 22px', display:'flex', justifyContent:'flex-end', gap:10 }}>
-        {!isAlert && (
+        {!isAlert && !isNotice && (
           <button onClick={() => finish(false)} style={{ padding:'8px 16px', borderRadius:8,
             border:'1px solid #cbd5e1', background:'#fff', color:'#475569',
             cursor:'pointer', fontWeight:600, fontSize:14 }}>
             {state.cancelLabel || 'Cancel'}
           </button>
         )}
-        <button autoFocus onClick={() => finish(isAlert ? undefined : true)}
+        {(!isNotice || state.actionLabel) && <button autoFocus={!isToast} onClick={takeAction}
           style={{ padding:'8px 17px', borderRadius:8, border:'none', background:isToast ? '#51314f' : vt.btnBg,
             color:'#fff', cursor:'pointer', fontWeight:650, fontSize:14,
             boxShadow:isToast ? 'none' : `0 3px 10px ${vt.btnShadow}` }}>
-          {isAlert ? 'OK' : (state.confirmLabel || 'Confirm')}
-        </button>
+          {isNotice ? state.actionLabel : isAlert ? 'OK' : (state.confirmLabel || 'Confirm')}
+        </button>}
       </div>
     </div>
   )
   if (isToast) return (
-    <div role="alertdialog" aria-modal="false" aria-labelledby="cd-title"
+    <div role={isNotice ? 'status' : 'alertdialog'} aria-live={isNotice ? 'polite' : undefined}
+      aria-modal={isNotice ? undefined : 'false'} aria-labelledby="cd-title"
       style={{ position:'fixed', zIndex:9999, top:18, right:18, pointerEvents:'none' }}>
       {content}
       <style>{`@keyframes cd-toast-in { from { transform:translateY(-12px);opacity:0 } to { transform:translateY(0);opacity:1 } }`}</style>
