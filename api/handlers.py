@@ -2152,12 +2152,9 @@ def _scan_discover(payload: dict, job: dict) -> None:
         try:
             core.store.merge_scan_scope(scan_id, {
                 "lifecycle_rules_enabled": _lc_stats.get("rules_enabled", 0),
-                "lifecycle_files_evaluated": _lc_stats.get("files_evaluated", 0),
-                "lifecycle_matches": _lc_stats.get("lifecycle_matches", 0),
                 "lifecycle_archive": _lc_stats.get("lifecycle_archive", 0),
                 "lifecycle_delete": _lc_stats.get("lifecycle_delete", 0),
                 "lifecycle_tagged": _lc_stats.get("lifecycle_tagged", 0),
-                "lifecycle_unevaluable": _lc_stats.get("lifecycle_errors", 0),
             })
         except Exception:
             swallowed("_scan_discover: merging the lifecycle counters into the scan scope failed", scan_id)
