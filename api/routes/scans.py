@@ -503,9 +503,16 @@ async def remediate_scan(sid: str, request: Request):
         # Honour the triage scope: skip files the user marked N/A or deferred.
         if scope_set is not None and f["file"] not in scope_set:
             continue
-        # Server-side deterministic remediators (ADR 0005 step 4): HTML (in-repo),
-        # PDF (vendored engine), and Office docx/pptx/xlsx (core-properties fixer).
-        if not f["file"].lower().endswith((".html", ".htm", ".pdf", ".docx", ".pptx", ".xlsx")):
+        # Server-side remediators (ADR 0005 step 4): HTML (in-repo), PDF (vendored engine),
+        # Office docx/pptx/xlsx (core-properties fixer), and media (a drafted caption file —
+        # a proposal, not a rewrite; nothing re-encodes a customer's video).
+        #
+        # ASKED OF handlers, not spelled out here. This tuple and `_remediate_file`'s own were
+        # two literals that had to agree and nothing made them: an extension admitted here and
+        # refused there burns a job and logs a deferral, and one admitted there and refused here
+        # is a code path nothing can reach. Neither fails loudly, and adding media needed both.
+        import handlers
+        if not f["file"].lower().endswith(handlers.remediable_extensions()):
             continue
         # Skip already-clean files — nothing to remediate, no point queuing a job.
         if not f.get("issues"):

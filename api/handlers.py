@@ -578,6 +578,92 @@ def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
                    "criterion) is lost, and the reviewer sees a document with no suggested fixes", scan_id)
 
 
+# Media extensions the remediation lane admits. A SUBSET of scan_formats' "av" list, and
+# deliberately not all of it: these are the container/codec combinations ffmpeg decodes to 16 kHz
+# mono without surprises, and admitting one ACP cannot decode would enqueue a job whose only
+# outcome is a deferral it could have predicted.
+_AV_REMEDIABLE = (".mp4", ".m4v", ".mov", ".webm", ".mkv", ".mp3", ".m4a", ".wav", ".aac", ".flac")
+
+
+def remediable_extensions() -> tuple[str, ...]:
+    """Every extension with a server-side remediation path, dot-prefixed.
+
+    ONE PREDICATE, because there were two literals and nothing made them agree. The route
+    (`POST /scans/{sid}/remediate`) decided what to enqueue and `_remediate_file` decided what to
+    accept, each spelling out `(".html", ".htm", ".pdf", ".docx", ".pptx", ".xlsx")` in its own
+    words. Neither direction of drift fails loudly: an extension the route admits and the handler
+    refuses burns a job and logs a deferral, and one the handler admits and the route does not is
+    a code path nothing can reach. Adding media would have needed both edits, and getting one is
+    exactly the shape of mistake nobody notices until a feature "does not work".
+
+    Media earns its place here only because it now HAS a path — `_propose_media_captions` drafts a
+    caption file. It is not a rewriter: nothing in this lane re-encodes a customer's video.
+    """
+    return (".html", ".htm", ".pdf", ".docx", ".pptx", ".xlsx", *_AV_REMEDIABLE)
+
+
+def _propose_media_captions(scan_id: str, filename: str, drive_file_id: str,
+                            payload: dict) -> None:
+    """Draft captions (1.2.2) or a transcript (1.2.1) for one media file and enqueue the card.
+
+    Never raises and never rewrites the media. The download is the only expensive step ACP takes
+    on the customer's behalf here, and it happens before the engine probe on purpose: `probe`
+    needs the bytes, and a media file's duration — the thing the cap is applied to — is not in
+    any listing metadata ACP has.
+
+    A file with no draft is NOT an error and is not logged as a failure. Every refusal inside
+    `proposals.propose_captions` (no transcriber, no soundtrack, over the duration cap, captions
+    already present) is a reason not to offer a draft, never a reason to suppress the finding —
+    the 1.2.2 row stands and a person authors captions as before. `remediate.deferred` records
+    which of those it was, so a reviewer looking at a card-less finding can tell "too long" from
+    "no engine on this deployment" without reading source.
+    """
+    import tempfile
+    from pathlib import Path as _P
+
+    token = payload.get("drive_token") or core.get_scan_tokens(scan_id).get("drive")
+    if not token:
+        raise FatalJobError("no Drive token for this scan (expired/restarted) — re-trigger")
+    try:
+        data = _drive_client(token).files().get_media(fileId=drive_file_id).execute()
+    except Exception:
+        swallowed(f"_propose_media_captions: downloading {filename} failed", scan_id)
+        return
+
+    props = []
+    try:
+        import proposals as _prop
+        with tempfile.TemporaryDirectory(prefix="acp-mediaprop-") as d:
+            p = _P(d) / filename
+            p.write_bytes(data)
+            props = _prop.propose_captions(p, p.suffix)
+    except Exception:
+        swallowed(f"_propose_media_captions: drafting captions for {filename} failed", scan_id)
+        return
+
+    if not props:
+        try:
+            import media as _media
+            reason = (_media.engine_status().get("reason")
+                      or "no draft could be made (no speech found, no soundtrack, captions "
+                         "already present, or the recording is longer than the transcription cap)")
+            core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
+                                    file=filename, detail=f"media: {reason}"[:200])
+        except Exception:
+            swallowed("_propose_media_captions: logging the no-draft reason failed", scan_id)
+        return
+
+    # validated=False, always. A transcription is a machine guess a person confirms — there is no
+    # re-scan that could validate it, because the caption file is not in the document and a
+    # cleared re-scan would only prove the finding stopped firing, never that the words are right.
+    sc = props[0].get("sc", "1.2.2")
+    name = "Captions (Prerecorded)" if sc == "1.2.2" else "Audio-only & Video-only"
+    try:
+        _enqueue_proposals(scan_id, filename, sc, name, props, validated=False)
+    except Exception:
+        swallowed(f"_propose_media_captions: enqueueing the {sc} proposal failed", scan_id)
+
+
 @handler("remediate_file")
 def _remediate_file(payload: dict, job: dict) -> None:
     """Apply server-side remediation to one file and write the fixed copy to Drive.
@@ -607,10 +693,22 @@ def _remediate_file(payload: dict, job: dict) -> None:
         "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if ext not in ("html", "htm", "pdf", *_OFFICE_MIME):
+    if f".{ext}" not in remediable_extensions():
         # No server-side remediator for this type → human review.
         core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
                                 file=filename, detail=f"no server-side remediator for .{ext}")
+        return
+
+    # MEDIA STOPS HERE, with a caption draft and nothing else. Everything below this branch
+    # downloads the file, runs a format remediator that REWRITES bytes, and uploads a fixed copy.
+    # None of that applies to a video: ACP does not re-encode a customer's media, so there is no
+    # fixed copy to make and no Drive round-trip to justify. What a reviewer needs is the draft.
+    #
+    # Returning early rather than threading media through the rest of the function is what keeps
+    # this slice honest — the alternative is a series of `if ext not in _AV` guards down a
+    # 200-line body, each one an opportunity to send a .mp4 into an OOXML path.
+    if f".{ext}" in _AV_REMEDIABLE:
+        _propose_media_captions(scan_id, filename, drive_file_id, payload)
         return
 
     # Prefer the token carried in the durable job payload: the in-memory scan-token

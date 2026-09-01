@@ -1664,3 +1664,125 @@ def propose_outline_contrast(path, ext: str) -> list[dict]:
                   "needed and this card should be declined",
         source="deterministic (measured) — human election required",
         sc="1.4.11")]
+
+
+# ── 1.2.1 / 1.2.2 — a drafted caption file for a standalone media file ───────────────────────
+# Whisper is roughly real-time on CPU, so an unbounded transcription would hold a remediation
+# worker for as long as the recording runs. A 90-minute all-hands is an ordinary thing to find in
+# an estate and is not something to discover by watching a queue stall. Over the cap the proposer
+# DECLINES — no proposal, and the 1.2.2 finding routes to a human exactly as it did before, which
+# is the same outcome as having no engine at all and is deliberately not a different one.
+#
+# Ten minutes is chosen to cover the training clips and recorded walkthroughs that make up most of
+# a document estate's media while refusing the long recordings that need a scheduled job. Raising
+# it is a queue-capacity decision, not a quality one.
+import os as _os_env
+
+CAPTION_MAX_SECONDS = float(_os_env.environ.get("ACP_CAPTION_MAX_SECONDS", "600"))
+
+
+def propose_captions(path, ext: str) -> list[dict]:
+    """One explain-only caption/transcript draft for a media file, or [] when it cannot be made.
+
+    EVERY REFUSAL RETURNS [], AND THAT IS THE SAFE DIRECTION. A proposal is an offer of a draft;
+    withholding one removes the draft and never the finding, so a reviewer who gets no card still
+    sees the 1.2.2 failure and authors captions the way they did before. The dangerous direction
+    is the other one — a caption file produced from a transcription that did not happen would be
+    an empty WEBVTT a reviewer could approve, certifying a video nobody transcribed. `transcribe`
+    returns None for exactly that case and it is checked, not truthiness-tested: `Transcript` with
+    an empty `segments` list is a real result (silent audio) and must not be confused with it.
+
+    EXPLAIN-ONLY, because the deliverable is a COMPANION FILE. Muxing a caption track into the
+    customer's .mp4 re-encodes and re-authors their video — the thing ADR 0016 refuses for PDF
+    re-tagging — and a sidecar is what players and WCAG both expect anyway. Left unflagged, the
+    approved value would be counted by the certify gate as a promise no applier can keep, and the
+    file could never certify on an approval that was entirely correct.
+
+    NEVER `validated=True`. The caller enqueues these as unvalidated, so the card reads Medium/Low
+    and the value is a machine guess a person confirms. ASR mishears names, drops punctuation and
+    swaps homophones; a wrong caption is worse than an absent one, because it looks served.
+    """
+    from pathlib import Path as _Path
+    try:
+        import captions as _cap
+        import media as _media
+    except Exception:
+        return []
+
+    p = _Path(str(path))
+    kind = _media.media_kind(p.name)
+    if kind is None or not _media.asr_available():
+        return []
+
+    try:
+        info = _media.probe(p)
+    except Exception:
+        info = None
+    # `info is None` = nothing looked. `has_audio False` = looked, and there is no soundtrack to
+    # transcribe; a silent video needs an audio description (1.2.3), which nothing here drafts.
+    if info is None or not info.has_audio or info.has_captions:
+        return []
+    if info.duration is None or info.duration > CAPTION_MAX_SECONDS:
+        return []
+
+    import tempfile
+    try:
+        with tempfile.TemporaryDirectory(prefix="acp-caption-") as d:
+            wav = _media.extract_audio(p, _Path(d) / "audio.wav")
+            if wav is None:
+                return []
+            result = _media.transcribe(wav)
+    except Exception:
+        return []
+    # TWO REFUSALS, DELIBERATELY NOT MERGED — they mean different things and a bite check found
+    # that merging them made both untestable. `result is None` is "nothing ran": the fail-closed
+    # case, where an empty caption file would certify a video nobody transcribed. `not cues` is
+    # "it ran and heard no speech": a real answer about the audio, where an empty cue file would
+    # invite a reviewer to approve captions for words nobody said. Written as one condition, each
+    # masked the other — removing either left the function behaving identically, so no test could
+    # distinguish them and both properties were unverified while looking covered.
+    if result is None:
+        return []
+    cues = _cap.segment_cues(result.segments)
+    if not cues:
+        return []
+
+    note = (f"Drafted by ACP using {result.model}; awaiting human approval. "
+            f"Machine transcription — check names, numbers and punctuation before approving.")
+    if kind == "video":
+        sc, rule = "1.2.2", "captions"
+        value = _cap.to_webvtt(cues, language=result.language, note=note)
+        rationale = (
+            f"{len(cues)} cues drafted from the soundtrack by local speech recognition. Approving "
+            f"this delivers a WebVTT file alongside the video — the video itself is not modified. "
+            f"Check the wording: speech recognition mishears names, numbers and homophones, and a "
+            f"wrong caption reads as served when it is not.")
+    else:
+        sc, rule = "1.2.1", "a transcript"
+        value = _cap.to_transcript(cues, timestamps=True)
+        rationale = (
+            f"A timestamped transcript drafted from the recording by local speech recognition. "
+            f"1.2.1 asks for an equivalent text alternative, not synchronised captions — there is "
+            f"no picture to synchronise with. Check the wording before approving.")
+
+    warnings = _cap.cue_warnings(cues) if kind == "video" else []
+    why_review = (
+        f"Every word here was written by a machine listening to audio nobody has checked. ACP can "
+        f"tell that {p.name} has a soundtrack and no {rule}; it cannot tell whether this draft "
+        f"says what was actually said.")
+    if warnings:
+        why_review += (f" {len(warnings)} cue(s) also fall outside the readability guidance "
+                       f"(line length, duration or reading speed).")
+
+    return [proposal(
+        locator=p.name,
+        before="",
+        proposed_value=value,
+        rationale=rationale,
+        source=f"local speech recognition ({result.model}) — companion file, not written into "
+               f"the media",
+        explain_only=True,
+        sc=sc,
+        why_review=why_review,
+        model=result.model,
+    )]
