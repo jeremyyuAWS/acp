@@ -31,9 +31,52 @@ describe('AI Providers settings — the key is never entered in the UI (ADR 0019
     expect(s).toMatch(/reference name/i)
   })
 
-  it('marks only the wired adapter as ready and keeps the rest config-only', () => {
+  it('marks exactly the providers the backend can build, and keeps the rest config-only', () => {
+    // WHY THIS DERIVES THE LIST INSTEAD OF PINNING IT. This assertion used to read
+    // `new Set(['azure_openai'])` — a literal copy of the state the UI was in. providers.py then
+    // shipped working OpenAI and Anthropic adapters, wired into _adapter_for,
+    // cloud_vision_provider() and active_vision_provider(), and this test went on passing while
+    // the Settings page disabled the enable switch for both. The gate was the only thing between
+    // a finished adapter and an admin, and the test that should have caught it was pinning the
+    // gate rather than the fact behind it.
+    //
+    // So: read the backend's own table of which providers have an adapter, and require the UI to
+    // agree. A new adapter now fails this until the UI offers it; a UI that offers one the backend
+    // cannot build fails it too — the direction that would arm an escalation which silently never
+    // fires. The backend enforces its own half independently (PUT /ai/providers refuses to enable
+    // a provider it cannot build), so this is agreement between two guards, not one guard trusted
+    // in two places.
     const s = read('Settings.jsx')
-    expect(s).toMatch(/ADAPTER_READY\s*=\s*new Set\(\['azure_openai'\]\)/)
+    const py = readFileSync(join(here, '..', '..', 'api', 'providers.py'), 'utf8')
+    const table = py.slice(py.indexOf('_REQUIRED_FIELDS = {'), py.indexOf('def activation_readiness'))
+    const backend = [...table.matchAll(/^\s*"([a-z_]+)":\s*\(/gm)].map((m) => m[1]).sort()
+    expect(backend.length).toBeGreaterThan(0)          // the slice found the table at all
+
+    const set = s.slice(s.indexOf('ADAPTER_READY = new Set('))
+    const ui = [...set.slice(0, set.indexOf(')')).matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort()
+    expect(ui).toEqual(backend)
+
+    // The catalogue still lists providers with no adapter, and still says so rather than
+    // offering a switch that would do nothing.
     expect(s).toMatch(/adapter coming/i)
+    expect(s).toMatch(/PROVIDER_LABELS/)
+  })
+
+  it('offers a connection test that sends no customer document, and says so where it is pressed', () => {
+    const s = read('Settings.jsx')
+    const api = read('api.js')
+    expect(s).toMatch(/TestConnection/)
+    expect(api).toMatch(/testAiProvider\s*=/)
+    expect(api).toMatch(/\/ai\/providers\/test/)
+
+    // The request body carries a provider NAME and nothing else — no key, no document, no scan.
+    const call = api.slice(api.indexOf('testAiProvider'), api.indexOf('testAiProvider') + 700)
+    expect(call).toMatch(/JSON\.stringify\(\{ provider \}\)/)
+    expect(call).not.toMatch(/\bapi_key\b|[^_]\bkey:/)
+
+    // The guarantee is on the control itself, not in a paragraph somewhere else on the page:
+    // "what did I just send them?" is asked at the moment of pressing.
+    const btn = s.slice(s.indexOf('export function TestConnection'))
+    expect(btn.slice(0, btn.indexOf('</span>'))).toMatch(/never one of your documents/i)
   })
 })
