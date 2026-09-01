@@ -2617,6 +2617,12 @@ class Store:
                      _json.dumps(pf["samples"])))
             self._db.execute(cur, _UPSERT_INV,
                 (f["file"], completed_at, completed_at, f["status"], f["score"]))
+            # GET /scans/{id} uses scan_runs.revision as its freshness key.  A file result is
+            # exactly the write the Assess progress screen is polling for, so leaving revision
+            # unchanged lets an intermediary/browser reuse the Discover-only payload while
+            # workers are successfully adding file_records.  Advance it in this same transaction
+            # after the complete result (record + findings + traces) is durable.
+            self._bump_scan_revision(cur, scan_id)
         return True
 
     def find_by_checksum(self, scan_id: str, checksum: str) -> dict | None:

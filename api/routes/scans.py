@@ -835,6 +835,9 @@ def scan(sid: str, request: Request, response: Response):
         raise HTTPException(404, "scan not found")
     res["run"]["freshness"] = _scan_freshness(sid, res["run"])
     response.headers["ETag"] = etag
+    # This payload changes document by document during Assess.  Require revalidation so the
+    # two-second progress poll cannot be satisfied from a stale Discover response.
+    response.headers["Cache-Control"] = "private, no-cache"
     return res
 
 
@@ -1362,7 +1365,7 @@ def put_decision(sid: str, filename: str, request: Request, body: dict,
 
 
 @router.get("/scans/{sid}/remediation-status")
-def remediation_status(sid: str, request: Request):
+def remediation_status(sid: str, request: Request, response: Response):
     """Live remediation progress (in-flight jobs + latest fixed file) for the bar.
     Owner-scoped — latest_file could otherwise leak another user's filename by scan id.
 
@@ -1376,6 +1379,9 @@ def remediation_status(sid: str, request: Request):
     import activity
     out = core.store.remediation_status(sid)
     out["activity"] = activity.current(sid)
+    # Live queue depth must never be served from the browser cache; every completed remediation
+    # job reduces in_flight and drives the visible completed count.
+    response.headers["Cache-Control"] = "no-store"
     return out
 
 
