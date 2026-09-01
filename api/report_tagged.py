@@ -425,10 +425,25 @@ def _prepare_context(run: dict, files: list, meta: dict,
     certifiable = sum(1 for f in files if f.get("compliant"))
     avg_score = run.get("avg_score")
 
-    # Open issues: aggregate across files
+    # Open issues: aggregate across files.
+    #
+    # `file_count` counts DISTINCT FILES, not findings. It used to increment once per issue,
+    # which agrees with the file count whenever no document carries two findings under the same
+    # criterion — true of every fixture in this repo, and of most real scans, so the error stayed
+    # invisible. A 37-file scan then reported "2.4.2 Page Titled ... 49" in a column headed
+    # "Files affected", because 2.4.2 fired 49 times across those 37 documents.
+    #
+    # It reaches the reader three ways, all of which say "files": that column, the bar chart
+    # captioned "Files with open issues per criterion", and the chart's text alternative, which
+    # says "affects the most files, N of M" — where an instance count makes N exceed M and the
+    # sentence read aloud becomes arithmetically impossible.
+    #
+    # `total_open` keeps counting findings: it is the remediation backlog, and deduplicating it
+    # would understate the work in the more prominent place.
     open_by_crit_map: dict[str, dict] = {}
     total_open = 0
-    for f in files:
+    for idx, f in enumerate(files):
+        fid = f.get("file") or f"\x00idx{idx}"      # unnamed files still count once each
         for issue in (f.get("issues") or []):
             total_open += 1
             wk = issue.get("wcag") or ""
@@ -439,10 +454,12 @@ def _prepare_context(run: dict, files: list, meta: dict,
                     "criterion": name,
                     "level": level,
                     "severity": sev,
-                    "file_count": 0,
+                    "_files": set(),
                     "_sev_order": _SEV_ORDER.get(sev, 99),
                 }
-            open_by_crit_map[wk]["file_count"] += 1
+            open_by_crit_map[wk]["_files"].add(fid)
+    for row in open_by_crit_map.values():
+        row["file_count"] = len(row.pop("_files"))
 
     open_by_crit = sorted(open_by_crit_map.values(),
                           key=lambda r: (r["_sev_order"], r["criterion"]))
