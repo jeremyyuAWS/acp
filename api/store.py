@@ -6918,6 +6918,60 @@ class Store:
             self._db.execute(cur, "SELECT 1")
             self._db.fetchone(cur)
 
+    # Every role a worker container can be started as (core._worker_job_types validates the same
+    # set). Enumerated rather than discovered by scanning app_settings for a key prefix: the set
+    # is closed and small, and a prefix scan would silently start reporting any future key that
+    # happened to share the namespace.
+    WORKER_ROLES = ("mixed", "discovery", "assess", "remediate", "processing")
+
+    def worker_roles_status(self, window_s: int = 120) -> dict:
+        """Per-ROLE heartbeat, keyed by role. The shared key cannot answer this.
+
+        WHY THIS EXISTS. worker_main writes its beat TWICE (worker_main.py:105-106): once to
+        `worker_tier_heartbeat`, and once to `worker_tier_heartbeat:<role>`. `worker_tier_status`
+        reads only the first, which is a single row — so with more than one worker service
+        running (acp-worker and acp-discovery, since #1169), it reports WHICHEVER BEAT LAST.
+
+        That is not a hypothetical. Measured against production on 2026-09-01, sampling /readyz
+        every 6s for 90s while the app was on 2026.9.1.23:
+
+            2026.8.31.39  pool=2   x13
+            2026.8.31.20  pool=3   x1
+
+        Two services alternating in one field. Read as a single tier, that looks like a version
+        flapping at random; read per role, it is two services each with its own answer. Anything
+        that compares "the worker version" against an expected build — a deploy check, a monitor,
+        an operator — needs the second reading, because the first is a coin toss between services.
+
+        A role absent from the result has never beaten under that key. That is deliberately
+        distinct from a role that beat and went stale (present, `alive` false, with an age), the
+        same distinction `worker_tier_status` draws for the tier as a whole.
+        """
+        from datetime import datetime, timezone
+        out: dict[str, dict] = {}
+        for role in self.WORKER_ROLES:
+            raw = self.get_setting(f"worker_tier_heartbeat:{role}")
+            if not raw:
+                continue
+            iso, pool_size, version = _parse_worker_tier_heartbeat(raw)
+            entry = {"heartbeat_at": iso or None, "age_s": None, "alive": False,
+                     "pool_size": pool_size, "version": version}
+            try:
+                beat = datetime.fromisoformat(iso)
+            except (ValueError, TypeError):
+                # Same posture as worker_tier_status: a corrupt timestamp is a real fault and must
+                # not read as "never started". Reported against the ORIGINAL value.
+                entry["heartbeat_at"] = f"unparseable: {raw!r}"
+                out[role] = entry
+                continue
+            if beat.tzinfo is None:
+                beat = beat.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - beat).total_seconds()
+            entry["age_s"] = round(age, 1)
+            entry["alive"] = age <= window_s
+            out[role] = entry
+        return out
+
     def worker_tier_status(self, window_s: int = 120) -> dict:
         """The heartbeat with its AGE, not just a boolean.
 

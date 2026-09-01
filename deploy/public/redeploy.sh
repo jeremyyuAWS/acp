@@ -423,11 +423,20 @@ done
 # and deactivates the rest. It is a no-op when already Single, so a normal-only history never
 # notices it; it only fires to unstick an app a blue-green left in Multiple mode. Placed AFTER the
 # image-confirmation loop so the revision it routes 100% to is one we have just seen come up.
-MODE="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" --query properties.configuration.activeRevisionsMode -o tsv 2>/dev/null || echo Single)"
-if [ "$MODE" != "Single" ]; then
-  say "returning $APP to single-revision mode (was $MODE) so the new revision takes traffic"
-  az containerapp revision set-mode "${AZ[@]}" -g "$RG" -n "$APP" --mode single >/dev/null
-fi
+#
+# ALL THREE APPS, not just the one with ingress. This block named $APP only, so nothing in this
+# repo ever asserted the worker services' revision mode — and no script sets it either, which is
+# the shape of state that drifts and is never corrected. The two worker apps have NO INGRESS, so
+# an extra active revision is not stranded at 0% traffic the way the app's would be: it simply
+# keeps running and keeps claiming jobs from the shared queue. The app's version of this bug is
+# loud (the verify below fails with "expected version X, got Y"); theirs is silent.
+for a in "$APP" "$WORKER" "$DISCOVERY_WORKER"; do
+  MODE="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$a" --query properties.configuration.activeRevisionsMode -o tsv 2>/dev/null || echo Single)"
+  if [ "$MODE" != "Single" ]; then
+    say "returning $a to single-revision mode (was $MODE) so the new revision takes over"
+    az containerapp revision set-mode "${AZ[@]}" -g "$RG" -n "$a" --mode single >/dev/null
+  fi
+done
 
 # Apply only on the normal path. The blue-green path exits above: patching its template during
 # promotion would create a third revision and invalidate the blue/green pair being verified.
@@ -453,3 +462,75 @@ case "$AFTER" in
   *"\"version\":\"$BUILD_VERSION\""*) printf '\n\033[32m✓ %s is live on %s\033[0m\n' "$BUILD_VERSION" "$APP" ;;
   *) die "expected version $BUILD_VERSION, got: $AFTER" ;;
 esac
+
+# ── 9b. verify the WORKER SERVICES, per role, by asking them ───────────────────────────────
+#
+# Step 8's ✓ reads the TEMPLATE: the image ACA was TOLD to run. Step 9 reads /healthz: the image
+# the app IS running. The worker services only ever had the first kind of check, and the gap
+# between them is not theoretical — on 2026-09-01 the app rolled 2026.9.1.12 -> .23 across eleven
+# deploys, every one printing `acp-worker ✓`, while the live worker tier reported an image built
+# on 31 August throughout.
+#
+# THE SHARED HEARTBEAT KEY CANNOT ANSWER THIS, and that is the trap worth writing down. Every
+# worker writes its beat twice (worker_main.py:105-106): to `worker_tier_heartbeat`, and to
+# `worker_tier_heartbeat:<role>`. /readyz's `workers.version` reads the FIRST — one row, last
+# writer wins — so with two worker services running it reports whichever beat most recently.
+# Sampling production every 6s for 90s returned 2026.8.31.39 (pool=2) thirteen times and
+# 2026.8.31.20 (pool=3) once: two services alternating in one field. Comparing THAT against the
+# build being shipped would warn at random on every deploy, which is worse than not checking.
+#
+# So this reads `workers.roles.<role>.version` — each service's own key — and checks the roles
+# that actually reported. A role that has never beaten is absent and is not invented as a failure.
+say "verifying worker services (per role — they have no ingress to curl)"
+_ROLES_JSON=""
+for _ in $(seq 1 24); do
+  _ROLES_JSON="$(curl -s --max-time 20 "https://$FQDN/readyz" || true)"
+  # Every role that reported, with its version: "role=version" per line.
+  # NO f-STRING HERE, and that is not style. A backslash inside an f-string expression is a
+  # SyntaxError, so an earlier version of this line printed nothing on every input — which made
+  # `_STALE` always empty and step 9b always print ✓. A check that cannot go red is worse than
+  # no check; caught only by running it against sample payloads.
+  _STALE="$(printf '%s' "$_ROLES_JSON" | python3 -c '
+import json, sys
+try:
+    roles = json.load(sys.stdin)["workers"].get("roles") or {}
+except Exception:
+    sys.exit(0)
+want = sys.argv[1]
+for role, r in sorted(roles.items()):
+    if not isinstance(r, dict):
+        continue
+    got = r.get("version")
+    if got is not None and got != want:
+        print(role + "=" + str(got))
+' "$BUILD_VERSION" 2>/dev/null || true)"
+  [ -z "$_STALE" ] && break
+  sleep 5
+done
+
+if [ -z "$_STALE" ]; then
+  printf '\033[32m  ✓ every worker role that reported is running %s\033[0m\n' "$BUILD_VERSION"
+else
+  printf '\n\033[33m  ! worker roles NOT running %s:\033[0m\n' "$BUILD_VERSION" >&2
+  printf '      %s\n' $_STALE >&2
+  cat >&2 <<WARN
+    A worker service is not running the image this deploy shipped, even though its template was
+    updated. Scans run in these services, so the estate is being assessed with older code.
+
+    Most likely an old revision is still active and still claiming jobs — these apps have no
+    ingress, so nothing strands one at 0% traffic the way it would for $APP. Check with:
+
+      az containerapp show -g $RG -n $WORKER --query properties.configuration.activeRevisionsMode
+      az containerapp revision list -g $RG -n $WORKER \\
+        --query "[?properties.active].{rev:name,created:properties.createdTime,img:properties.template.containers[0].image}" -o table
+
+    Repeat for $DISCOVERY_WORKER. A role reporting a build older than any recent deploy means
+    that service's replicas were never replaced.
+WARN
+fi
+
+# WARNS, IT DOES NOT DIE, deliberately. A mixed-version estate is genuinely dangerous — nothing
+# sequences the tiers (ADR 0045 §6) — but this condition is PRE-EXISTING on this deployment, so
+# dying here would red every deploy until somebody with Azure credentials cleans the revisions up,
+# including the deploy that ships the cleanup. Making it fatal is the rollout owner's call, not a
+# default this script should adopt on its own. What it must not do is stay silent, which it did.

@@ -302,6 +302,13 @@ def readyz():
     on one condition without pattern-matching a sentence.
     """
     workers = core.store.worker_tier_status()
+    # Defended: a per-role read must never be able to 500 the readiness endpoint, the same posture
+    # the source and vision probes below take. An empty dict reads as "no role ever beaten", which
+    # is the honest answer when this cannot be established.
+    try:
+        role_status = core.store.worker_roles_status()
+    except Exception as exc:  # pragma: no cover - defensive: a role probe must not break /readyz
+        role_status = {"error": f"{exc.__class__.__name__}: {exc}"}
     local_pool = int(getattr(core, "WORKERS", 0) or 0)
     # Either tier can man the queue: the split topology (#113) runs the pool in a standalone
     # worker container, the single-tier setup runs it in-process. Readiness is the OR — the
@@ -359,7 +366,14 @@ def readyz():
         "ready": not degraded,
         "capacity_state": capacity_state,
         "degraded": degraded,
-        "workers": {**workers, "local_pool": local_pool, "can_run_scans": can_run_scans},
+        "workers": {**workers, "local_pool": local_pool, "can_run_scans": can_run_scans,
+                    # PER-ROLE, because the fields above cannot answer "is each worker service
+                    # running the build we shipped". They come from one shared heartbeat key that
+                    # every worker overwrites, so with more than one service running (acp-worker
+                    # and acp-discovery, since #1169) `version` and `pool_size` report whichever
+                    # beat last — measured flapping between two services' answers in production on
+                    # 2026-09-01. See store.worker_roles_status.
+                    "roles": role_status},
         "engines": {"pdf": pdf, "vision": vision},
         "sources": {"smb": smb_ready},
         "service": "acp",
