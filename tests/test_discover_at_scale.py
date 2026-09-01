@@ -959,6 +959,15 @@ class TestProgressSequence:
 
         monkeypatch.setattr(core, "update_job", _capture)
 
+        released = []
+        real_release = isolated_store.release_discovery_guard
+
+        def _capture_release(scan_id):
+            released.append(scan_id)
+            return real_release(scan_id)
+
+        monkeypatch.setattr(isolated_store, "release_discovery_guard", _capture_release)
+
         job_id = "j-seq-300"
         core.JOBS[job_id] = {"phase": "queued"}
 
@@ -966,6 +975,9 @@ class TestProgressSequence:
             {"scan_id": "sd-seq-300", "source": "local", "user": owner},
             {"scan_id": "sd-seq-300", "id": job_id},
         )
+
+        assert released == ["sd-seq-300"], \
+            "a completed Discovery must free its source slot before Assess starts"
 
         # Extract the sequence of observed phases / event types from update_job calls.
         # Listing updates carry files_found but no phase.
