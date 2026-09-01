@@ -84,6 +84,14 @@ async function mount(props = {}) {
 const boxes = (c) => [...c.querySelectorAll('input[type=checkbox]')]
 const boxFor = (c, file) => boxes(c).find((b) => b.getAttribute('aria-label') === `Select ${file} for batch approval`)
 const approveBtn = (c) => [...c.querySelectorAll('button')].find((b) => /^Approve \d/.test(text(b)))
+const setControl = async (control, value) => {
+  await act(async () => {
+    const proto = control instanceof HTMLSelectElement
+      ? window.HTMLSelectElement.prototype : window.HTMLInputElement.prototype
+    Object.getOwnPropertyDescriptor(proto, 'value').set.call(control, value)
+    control.dispatchEvent(new Event(control instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
+  })
+}
 
 describe('grouping mirrors the server homogeneity rule', () => {
   it('splits one rule into a group per (version, action), each with its size', async () => {
@@ -259,5 +267,35 @@ describe('progress and filtering', () => {
     expect(text(c)).toContain('1 files in this view')
     expect(text(c)).toContain('z.docx')
     expect(text(c)).not.toContain('a.docx')
+  })
+
+  it('searches and filters the queue without hiding the full population', async () => {
+    const c = await mount()
+    await setControl(c.querySelector('[aria-label="Search disposition review queue"]'), 'much older')
+    expect(text(c)).toContain('1 of 5 files match')
+    expect(text(c)).toContain('c.docx')
+    expect(text(c)).not.toContain('a.docx')
+
+    await setControl(c.querySelector('[aria-label="Filter disposition queue by action"]'), 'archive')
+    expect(text(c)).toContain('0 of 5 files match')
+    expect(text(c)).toContain('No files match these filters')
+  })
+
+  it('paginates large queues while preserving the priority sort', async () => {
+    getLifecycleFiles.mockResolvedValue({
+      rows: Array.from({ length: 51 }, (_, i) => row(`file-${String(i + 1).padStart(3, '0')}.docx`)),
+    })
+    const c = await mount()
+    expect(boxes(c)).toHaveLength(50)
+    expect(text(c)).toContain('Showing 1–50')
+    expect(text(c)).toContain('Page 1 of 2')
+    expect(text(c)).not.toContain('file-051.docx')
+
+    await act(async () => {
+      [...c.querySelectorAll('button')].find((button) => text(button) === 'Next page').click()
+    })
+    expect(boxes(c)).toHaveLength(1)
+    expect(text(c)).toContain('Showing 51–51')
+    expect(text(c)).toContain('file-051.docx')
   })
 })

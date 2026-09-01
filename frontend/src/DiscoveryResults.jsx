@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import DiscoveryLifecycleResults, { supportedDiscoveryRow } from './DiscoveryLifecycleResults.jsx'
 import DiscoveryFolderLabel from './DiscoveryFolderLabel.jsx'
 import Term from './Term.jsx'
@@ -165,6 +165,10 @@ export default function DiscoveryResults({
   rawScope = null, rawDecisions = null, runStatus = null,
 }) {
   const [filter, setFilter] = useState('all')
+  const [recommendationSearch, setRecommendationSearch] = useState('')
+  const [recommendationRule, setRecommendationRule] = useState('all')
+  const [recommendationPage, setRecommendationPage] = useState(0)
+  const [recommendationPageSize, setRecommendationPageSize] = useState(50)
   const [showRaw, setShowRaw] = useState(false)
   const [copied, setCopied] = useState(false)
   // Uncontrolled by default, exactly like Discover's own `decisions` prop: a caller that wants the
@@ -173,6 +177,7 @@ export default function DiscoveryResults({
   const [localOverrides, setLocalOverrides] = useState([])
   const overrides = overridesProp ?? localOverrides
   const setOverrides = onOverridesChange ?? setLocalOverrides
+  useEffect(() => { setRecommendationPage(0) }, [filter, recommendationRule, recommendationSearch, recommendationPageSize, files, policies])
 
   const summary = estateSummary(files, inventory)
   // Nothing was read, so nothing is claimed — not "0 files discovered".
@@ -200,7 +205,26 @@ export default function DiscoveryResults({
   const recRows = recommendationRows(files, policies)
   const recRec = recommendationReconciliation(files)
   const ack = acknowledgementSummary(files, overrides)
-  const shown = recRows && (filter === 'all' ? recRows : recRows.filter((r) => r.bucket === filter))
+  const recommendationRules = recRows
+    ? [...new Set(recRows.map((row) => row.rule || NOT_RECORDED))].sort((a, b) => a.localeCompare(b))
+    : []
+  const shown = (() => {
+    if (!recRows) return null
+    const needle = recommendationSearch.trim().toLowerCase()
+    return recRows.filter((row) => {
+      if (filter !== 'all' && row.bucket !== filter) return false
+      if (recommendationRule !== 'all' && (row.rule || NOT_RECORDED) !== recommendationRule) return false
+      if (!needle) return true
+      return [row.path, row.rule, row.reason, row.tag]
+        .some((value) => String(value || '').toLowerCase().includes(needle))
+    })
+  })()
+  const recommendationLastPage = Math.max(0, Math.ceil((shown?.length || 0) / recommendationPageSize) - 1)
+  const recommendationCurrentPage = Math.min(recommendationPage, recommendationLastPage)
+  const visibleRecommendations = shown?.slice(
+    recommendationCurrentPage * recommendationPageSize,
+    (recommendationCurrentPage + 1) * recommendationPageSize,
+  ) || []
   const maxType = types ? Math.max(1, ...types.buckets.map((b) => b.count)) : 1
 
   const toggleOverride = (file) => {
@@ -541,6 +565,43 @@ export default function DiscoveryResults({
             </span>
           </div>
 
+          <div style={{ display: 'flex', gap: 12, alignItems: 'end', flexWrap: 'wrap', marginBottom: 12 }}>
+            <label style={{ fontSize: 12.5 }}>
+              Search recommendations<br />
+              <input type="search" value={recommendationSearch}
+                     onChange={(event) => setRecommendationSearch(event.target.value)}
+                     placeholder="File, rule, or reason" aria-label="Search recommendations" />
+            </label>
+            <label style={{ fontSize: 12.5 }}>
+              Matched rule<br />
+              <select value={recommendationRule}
+                      onChange={(event) => setRecommendationRule(event.target.value)}
+                      aria-label="Filter recommendations by matched rule">
+                <option value="all">All rules</option>
+                {recommendationRules.map((rule) => <option key={rule} value={rule}>{rule}</option>)}
+              </select>
+            </label>
+            <label style={{ fontSize: 12.5 }}>
+              Rows per page<br />
+              <select value={recommendationPageSize}
+                      onChange={(event) => setRecommendationPageSize(Number(event.target.value))}
+                      aria-label="Recommendations per page">
+                {[25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+              </select>
+            </label>
+            {(recommendationSearch || recommendationRule !== 'all' || filter !== 'all') && (
+              <button type="button" className="ghost" onClick={() => {
+                setRecommendationSearch(''); setRecommendationRule('all'); setFilter('all')
+              }}>Clear filters</button>
+            )}
+          </div>
+
+          <p role="status" className="muted" style={{ fontSize: 12.5, margin: '0 0 10px' }}>
+            {shown.length.toLocaleString()} of {recRows.length.toLocaleString()} recommendations match.
+            {' '}Showing {shown.length ? recommendationCurrentPage * recommendationPageSize + 1 : 0}–{Math.min(
+              (recommendationCurrentPage + 1) * recommendationPageSize, shown.length)}.
+          </p>
+
           {shown.length === 0 ? (
             <p className="muted" style={{ fontSize: 13, margin: 0 }}>
               {recRows.length === 0
@@ -560,7 +621,7 @@ export default function DiscoveryResults({
                 </tr>
               </thead>
               <tbody>
-                {shown.map((r) => (
+                {visibleRecommendations.map((r) => (
                   <tr key={r.file}>
                     <td>
                       <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12.5 }}>
@@ -590,6 +651,20 @@ export default function DiscoveryResults({
                 ))}
               </tbody>
             </table>
+          )}
+
+          {shown.length > recommendationPageSize && (
+            <nav aria-label="Recommendation pages"
+                 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginTop: 12 }}>
+              <button type="button" className="ghost" disabled={recommendationCurrentPage === 0}
+                      onClick={() => setRecommendationPage(recommendationCurrentPage - 1)}>Previous page</button>
+              <span style={{ fontSize: 12.5 }}>
+                Page {recommendationCurrentPage + 1} of {recommendationLastPage + 1}
+              </span>
+              <button type="button" className="ghost"
+                      disabled={recommendationCurrentPage === recommendationLastPage}
+                      onClick={() => setRecommendationPage(recommendationCurrentPage + 1)}>Next page</button>
+            </nav>
           )}
 
           <p className="muted" style={{ fontSize: 11.5, margin: '14px 0 0', lineHeight: 1.55 }}>
