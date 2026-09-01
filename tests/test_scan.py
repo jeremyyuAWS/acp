@@ -15,6 +15,7 @@ Needs the .NET Office CLI built (spike/dotnet/.../Release) and the PDF engine
 deps (api/requirements.txt). Run:  .venv-drive/bin/python -m pytest tests/ -q
 """
 from __future__ import annotations
+import os
 import sys
 from pathlib import Path
 
@@ -82,11 +83,19 @@ def run_scan_default(rb: Rubric) -> dict:
     # at the default by temporarily ensuring no active override is present.
     active = ACP / "config/rubric.active.json"
     saved = active.read_text() if active.exists() else None
+    saved_formats = os.environ.get("ACP_SCAN_FORMATS")
     if active.exists():
         active.unlink()
     try:
+        # Product Discovery excludes HTML by default, but the HTML engine remains intentionally
+        # available and must retain direct regression coverage for a reversible scope change.
+        os.environ["ACP_SCAN_FORMATS"] = "pdf,docx,xlsx,pptx,html"
         return run_scan("local")
     finally:
+        if saved_formats is None:
+            os.environ.pop("ACP_SCAN_FORMATS", None)
+        else:
+            os.environ["ACP_SCAN_FORMATS"] = saved_formats
         if saved is not None:
             active.write_text(saved)
 
