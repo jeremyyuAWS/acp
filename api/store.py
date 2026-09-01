@@ -964,6 +964,157 @@ _SCHEMA = [
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS content_workspace_version_id TEXT",
     "CREATE INDEX IF NOT EXISTS idx_scan_runs_cw_version ON scan_runs(content_workspace_version_id) "
     "WHERE content_workspace_version_id IS NOT NULL",
+
+    # ── Accessibility Conformance Report (ACR) workspace — ADR 0047, PRD Phase 1 ──────────────
+    # An ACR is a VPAT-structured statement about ACP'S OWN WEB UI, against WCAG 2.2 A+AA. It is
+    # NOT about the customer documents ACP remediates, and nothing in these tables joins to
+    # scan_runs / issue_records for that reason: docs/conformance-report.md already draws that
+    # line in prose, and a schema-level join is how it would be crossed by accident. Evidence
+    # about ACP's UI arrives from axe-core runs over ACP's screens and from human testers.
+    #
+    # App-level references, not DB foreign keys, matching every other cross-table pointer in this
+    # schema (scan_inventory.scan_id, content_workspace_documents.workspace_id, ...). owner_email
+    # is denormalized onto every table so an isolation check reads it with no join, the same
+    # convention content_workspace_documents and scan_events already follow.
+    """CREATE TABLE IF NOT EXISTS acr_report (
+      id TEXT PRIMARY KEY,
+      owner_email TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      catalog_hash TEXT NOT NULL,
+      supersedes_id TEXT,
+      revision INT NOT NULL DEFAULT 1,
+      report_title TEXT, product_name TEXT, product_version TEXT, build_id TEXT,
+      release_date TEXT, vendor_name TEXT, vendor_contact TEXT, product_description TEXT,
+      evaluation_scope TEXT, excluded_functionality TEXT, deployment_environment TEXT,
+      vpat_edition TEXT, wcag_version TEXT, wcag_levels TEXT,
+      evaluation_methods TEXT, browsers_tested TEXT, operating_systems_tested TEXT,
+      assistive_technologies_tested TEXT, automated_tools TEXT,
+      testing_period_start TEXT, testing_period_end TEXT,
+      evaluators TEXT, approver TEXT, general_notes TEXT, known_dependencies TEXT,
+      evidence_validity_days INT,
+      created_at TEXT, updated_at TEXT, published_at TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_acr_report_owner ON acr_report(owner_email)",
+
+    # One row per applicable criterion, per report — the PRD §9 criteria matrix.
+    #
+    # final_status and workflow_state are TWO COLUMNS ON PURPOSE. PRD §9 permits ACP's internal
+    # states ("Not evaluated", "Needs review") but forbids them appearing as VPAT conformance
+    # levels. One column holding both vocabularies is exactly how "Not evaluated" ends up printed
+    # in a customer's conformance table, so they never share a column. final_status is constrained
+    # to the four VPAT terms in the store layer (see save_acr_decision); workflow_state carries
+    # everything else and is never exported.
+    """CREATE TABLE IF NOT EXISTS acr_criterion (
+      report_id TEXT NOT NULL,
+      criterion_num TEXT NOT NULL,
+      owner_email TEXT NOT NULL,
+      criterion_name TEXT, level TEXT, principle TEXT, guideline TEXT,
+      applicable INT NOT NULL DEFAULT 1,
+      workflow_state TEXT NOT NULL DEFAULT 'not_evaluated',
+      draft_status TEXT,
+      final_status TEXT,
+      remarks TEXT,
+      evaluator TEXT,
+      reviewer TEXT,
+      approval_state TEXT NOT NULL DEFAULT 'unapproved',
+      decided_at TEXT, approved_at TEXT, updated_at TEXT,
+      PRIMARY KEY (report_id, criterion_num)
+    )""",
+
+    # APPEND-ONLY (PRD §12 "remains visible for audit history", §17 additions AND removals are
+    # audited). Nothing here is ever UPDATEd or DELETEd except `stale_reason`, which is a DISPLAY
+    # CACHE of what api/acr_freshness.py derives — never the input to a publication decision. A
+    # retraction is a tombstone in acr_decision_log plus a superseding row, not an edit.
+    #
+    # `coverage` is the field the automated-evidence honesty rule turns on: an assessment.Coverage
+    # value declaring how much of the criterion the producing technique actually reaches. Required
+    # for automated rows (acr_model refuses to build one without it) and meaningless for human
+    # ones. See ADR 0031 for why coverage, not accuracy, is the axis that gates a pass.
+    """CREATE TABLE IF NOT EXISTS acr_evidence (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL,
+      criterion_num TEXT NOT NULL,
+      owner_email TEXT NOT NULL,
+      source_kind TEXT NOT NULL,
+      result TEXT NOT NULL,
+      tester TEXT, tested_at TEXT, product_version TEXT, build_id TEXT,
+      environment TEXT, workflow TEXT, browser TEXT, assistive_tech TEXT,
+      tool_name TEXT, tool_version TEXT, rule_id TEXT, tested_url TEXT, coverage TEXT,
+      method TEXT, notes TEXT, attachments TEXT, related_finding_ids TEXT,
+      stale_reason TEXT,
+      created_at TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_acr_evidence_criterion ON acr_evidence(report_id, criterion_num)",
+
+    # Guided manual test plan instances (PRD §14). Phase 1 creates the table and no rows — the
+    # plan catalog itself is Phase 3. It ships now so the evidence a Phase-1 manual test records
+    # has somewhere to point, rather than a schema change landing under live reports later.
+    """CREATE TABLE IF NOT EXISTS acr_manual_test (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL,
+      criterion_num TEXT NOT NULL,
+      owner_email TEXT NOT NULL,
+      plan_id TEXT NOT NULL,
+      result TEXT,
+      evidence_id TEXT,
+      tester TEXT, notes TEXT, created_at TEXT, updated_at TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_acr_manual_test_report ON acr_manual_test(report_id, criterion_num)",
+
+    # Append-only audit trail (PRD §17). Mirrors decision_log's shape and its never-updated,
+    # never-deleted contract; separate from it because decision_log is scan-anchored (its scan_id/
+    # file/rule_id columns) and an ACR event has no scan at all.
+    """CREATE TABLE IF NOT EXISTS acr_decision_log (
+      id TEXT PRIMARY KEY,
+      ts TEXT NOT NULL,
+      report_id TEXT NOT NULL,
+      owner_email TEXT NOT NULL,
+      actor TEXT,
+      action TEXT NOT NULL,
+      criterion_num TEXT,
+      detail TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_acr_decision_log_report ON acr_decision_log(report_id, ts)",
+
+    # IMMUTABLE published snapshots (PRD §17, §21.12). Written once, never updated — a change
+    # after publication creates a NEW acr_report row with supersedes_id set, and this row stays
+    # exactly as it was.
+    #
+    # content_digest is a recomputable SHA-256 over content_json. It is a DIGEST, not a digital
+    # signature: no key, no non-repudiation. api/report.py's _content_digest carries the same
+    # warning and the same instruction — never relabel it.
+    """CREATE TABLE IF NOT EXISTS acr_snapshot (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL,
+      owner_email TEXT NOT NULL,
+      revision INT NOT NULL,
+      catalog_hash TEXT NOT NULL,
+      content_json TEXT NOT NULL,
+      content_digest TEXT NOT NULL,
+      docx_blob_path TEXT,
+      published_at TEXT NOT NULL,
+      published_by TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_acr_snapshot_report ON acr_snapshot(report_id, revision)",
+
+    # ACR-scoped roles (PRD §18). DELIBERATELY NOT the platform admin model.
+    #
+    # core.is_admin() returns True for ANY authenticated user under the default OPEN_ACCESS=1 —
+    # which is the right call for the rest of the product and the wrong one here: PRD §21.11
+    # requires that only an approver may publish, and an "approver" that means "everyone who can
+    # sign in" is not one. So authority to approve/publish an ACR is granted HERE and nowhere
+    # else, and core.OPEN_ACCESS does not confer it. This is the first place in ACP where being
+    # an admin is not sufficient; see api/acr_authz.py for the gate and the reasoning.
+    #
+    # report_id '*' is an account-wide grant; a specific id scopes the role to one report.
+    """CREATE TABLE IF NOT EXISTS acr_role (
+      owner_email TEXT NOT NULL,
+      report_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      role TEXT NOT NULL,
+      granted_by TEXT, granted_at TEXT,
+      PRIMARY KEY (owner_email, report_id, email, role)
+    )""",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -9087,3 +9238,270 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT file, severity FROM issue_records WHERE scan_id=%s", (scan_id,))
             return self._db.fetchall(cur)
+
+    # ── Accessibility Conformance Report workspace (ADR 0047) ───────────────────
+    # Every read is owner-scoped IN THE QUERY, not filtered afterwards — a foreign report id must
+    # come back exactly like a nonexistent one, the contract tests/test_foreign_scan_404.py already
+    # fixes for scans (an id is never an existence oracle across owners).
+
+    # The metadata fields a caller may set. `status`, `catalog_hash`, `revision`, `published_at`
+    # and the ids are NOT here on purpose: they are lifecycle facts this layer owns, and letting a
+    # PATCH body carry them is how a draft acquires a published_at.
+    _ACR_REPORT_EDITABLE = (
+        "report_title", "product_name", "product_version", "build_id", "release_date",
+        "vendor_name", "vendor_contact", "product_description", "evaluation_scope",
+        "excluded_functionality", "deployment_environment", "vpat_edition", "wcag_version",
+        "wcag_levels", "evaluation_methods", "browsers_tested", "operating_systems_tested",
+        "assistive_technologies_tested", "automated_tools", "testing_period_start",
+        "testing_period_end", "evaluators", "general_notes", "known_dependencies",
+        "evidence_validity_days")
+
+    def create_acr_report(self, report_id: str, *, owner_email: str, catalog_hash: str,
+                          criteria: list[dict], metadata: dict | None = None,
+                          supersedes_id: str | None = None, revision: int = 1) -> None:
+        """Create a draft report AND its full criteria matrix in one transaction.
+
+        Both together, deliberately: a report row without its matrix is a report that looks
+        complete and silently has nothing to evaluate, and PRD §21.2 ("the system creates the
+        complete applicable criteria matrix") is not satisfied by a row that will get its criteria
+        on some later request.
+        """
+        meta = dict(metadata or {})
+        now = self._now()
+        # Built as (column, value) PAIRS rather than two positional lists. The first draft of this
+        # zipped _ACR_REPORT_COLS against _ACR_REPORT_EDITABLE and silently shifted every field
+        # after `evaluators` by one, because `approver` sits between `evaluators` and
+        # `general_notes` in the column list and is not caller-editable. A positional INSERT over
+        # 35 columns has no way to report that; every value simply lands one column to the left.
+        cols: list[tuple[str, object]] = [
+            ("id", report_id), ("owner_email", owner_email), ("status", "draft"),
+            ("catalog_hash", catalog_hash), ("supersedes_id", supersedes_id),
+            ("revision", revision),
+        ]
+        cols += [(f, meta.get(f)) for f in self._ACR_REPORT_EDITABLE]
+        # approver is stamped at sign-off, never at creation (PRD §4.2).
+        cols += [("approver", None), ("created_at", now), ("updated_at", now),
+                 ("published_at", None)]
+        names = ",".join(c for c, _ in cols)
+        placeholders = ",".join(["%s"] * len(cols))
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"INSERT INTO acr_report({names}) VALUES({placeholders})",
+                tuple(v for _, v in cols))
+            for row in criteria:
+                self._db.execute(cur,
+                    "INSERT INTO acr_criterion(report_id,criterion_num,owner_email,criterion_name,"
+                    "level,principle,guideline,applicable,workflow_state,draft_status,final_status,"
+                    "remarks,evaluator,reviewer,approval_state,decided_at,approved_at,updated_at) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    (report_id, row["criterion_num"], owner_email, row.get("criterion_name"),
+                     row.get("level"), row.get("principle"), row.get("guideline"),
+                     1 if row.get("applicable", True) else 0,
+                     row.get("workflow_state", "not_evaluated"), None, None, None, None, None,
+                     "unapproved", None, None, now))
+
+    def list_acr_reports(self, owner_email: str) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM acr_report WHERE owner_email=%s ORDER BY created_at DESC",
+                (owner_email,))
+            return self._db.fetchall(cur)
+
+    def get_acr_report(self, report_id: str, *, owner_email: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM acr_report WHERE id=%s AND owner_email=%s",
+                             (report_id, owner_email))
+            return self._db.fetchone(cur)
+
+    def update_acr_report_metadata(self, report_id: str, *, owner_email: str, fields: dict) -> int:
+        """Patch report metadata. Refuses once published (PRD §17: snapshots are immutable).
+
+        Returns the number of fields written. Unknown keys are IGNORED rather than erroring — the
+        allow-list is the point, and a 400 on an extra key would make the endpoint brittle to
+        harmless client drift while adding no safety.
+        """
+        writable = {k: v for k, v in fields.items() if k in self._ACR_REPORT_EDITABLE}
+        if not writable:
+            return 0
+        sets = ",".join(f"{k}=%s" for k in writable)
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"UPDATE acr_report SET {sets},updated_at=%s "
+                "WHERE id=%s AND owner_email=%s AND status='draft'",
+                (*writable.values(), self._now(), report_id, owner_email))
+        return len(writable)
+
+    def list_acr_criteria(self, report_id: str, *, owner_email: str) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM acr_criterion WHERE report_id=%s AND owner_email=%s "
+                "ORDER BY criterion_num",
+                (report_id, owner_email))
+            return self._db.fetchall(cur)
+
+    def get_acr_criterion(self, report_id: str, criterion_num: str, *, owner_email: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM acr_criterion WHERE report_id=%s AND criterion_num=%s "
+                "AND owner_email=%s",
+                (report_id, criterion_num, owner_email))
+            return self._db.fetchone(cur)
+
+    def save_acr_decision(self, report_id: str, criterion_num: str, *, owner_email: str,
+                          final_status: str, remarks: str | None, decided_by: str) -> None:
+        """Record a human's final conformance decision.
+
+        The four-value constraint is enforced HERE as well as in acr_model, and that duplication is
+        deliberate. This column's values are printed verbatim into a customer's conformance table;
+        a workflow state that reached it by any route at all — a future caller that skips the
+        dataclass, a migration, a fixture — would be exported as if it were a VPAT conformance
+        level. It is the one field in this schema where a wrong value is a false compliance claim,
+        so it is checked at every layer that can write it.
+        """
+        from acr_catalog import FINAL_STATUSES, REMARKS_REQUIRED
+        if final_status not in FINAL_STATUSES:
+            raise ValueError(
+                f"{final_status!r} is not a VPAT conformance level {sorted(FINAL_STATUSES)}")
+        if final_status in REMARKS_REQUIRED and not (remarks or "").strip():
+            raise ValueError(f"{final_status!r} requires remarks (PRD §10)")
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE acr_criterion SET final_status=%s,remarks=%s,evaluator=%s,"
+                "workflow_state='decided',decided_at=%s,updated_at=%s "
+                "WHERE report_id=%s AND criterion_num=%s AND owner_email=%s",
+                (final_status, remarks, decided_by, self._now(), self._now(),
+                 report_id, criterion_num, owner_email))
+
+    def save_acr_draft_status(self, report_id: str, criterion_num: str, *, owner_email: str,
+                              draft_status: str | None, workflow_state: str) -> None:
+        """ACP's own suggestion. Never touches final_status — PRD §20 forbids the model selecting
+        or approving a conformance status, and the only structural guarantee of that is that the
+        code path which writes suggestions cannot write decisions."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE acr_criterion SET draft_status=%s,workflow_state=%s,updated_at=%s "
+                "WHERE report_id=%s AND criterion_num=%s AND owner_email=%s",
+                (draft_status, workflow_state, self._now(), report_id, criterion_num, owner_email))
+
+    def approve_acr_criterion(self, report_id: str, criterion_num: str, *, owner_email: str,
+                              reviewer: str) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE acr_criterion SET approval_state='approved',reviewer=%s,approved_at=%s,"
+                "updated_at=%s WHERE report_id=%s AND criterion_num=%s AND owner_email=%s "
+                "AND final_status IS NOT NULL",
+                (reviewer, self._now(), self._now(), report_id, criterion_num, owner_email))
+
+    def add_acr_evidence(self, row: dict, *, owner_email: str) -> None:
+        """Append one evidence record. Append-only: there is no update_acr_evidence, by design."""
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO acr_evidence(id,report_id,criterion_num,owner_email,source_kind,"
+                "result,tester,tested_at,product_version,build_id,environment,workflow,browser,"
+                "assistive_tech,tool_name,tool_version,rule_id,tested_url,coverage,method,notes,"
+                "attachments,related_finding_ids,stale_reason,created_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (row["id"], row["report_id"], row["criterion_num"], owner_email,
+                 row["source_kind"], row["result"], row.get("tester"), row.get("tested_at"),
+                 row.get("product_version"), row.get("build_id"), row.get("environment"),
+                 row.get("workflow"), row.get("browser"), row.get("assistive_tech"),
+                 row.get("tool_name"), row.get("tool_version"), row.get("rule_id"),
+                 row.get("tested_url"), row.get("coverage"), row.get("method"), row.get("notes"),
+                 _json.dumps(row.get("attachments") or []),
+                 _json.dumps(row.get("related_finding_ids") or []),
+                 None, row.get("created_at") or self._now()))
+
+    def list_acr_evidence(self, report_id: str, *, owner_email: str,
+                          criterion_num: str | None = None) -> list[dict]:
+        sql = "SELECT * FROM acr_evidence WHERE report_id=%s AND owner_email=%s"
+        params: tuple = (report_id, owner_email)
+        if criterion_num:
+            sql += " AND criterion_num=%s"
+            params += (criterion_num,)
+        with self._db.cursor() as cur:
+            self._db.execute(cur, sql + " ORDER BY tested_at, id", params)
+            return self._db.fetchall(cur)
+
+    def append_acr_decision_log(self, report_id: str, *, owner_email: str, actor: str | None,
+                                action: str, criterion_num: str | None = None,
+                                detail: str | None = None) -> None:
+        """Append-only audit (PRD §17). Never updated, never deleted."""
+        import uuid as _uuid
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO acr_decision_log(id,ts,report_id,owner_email,actor,action,"
+                "criterion_num,detail) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                (_uuid.uuid4().hex, self._now(), report_id, owner_email, actor, action,
+                 criterion_num, detail))
+
+    def list_acr_decision_log(self, report_id: str, *, owner_email: str) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM acr_decision_log WHERE report_id=%s AND owner_email=%s "
+                "ORDER BY ts, id",
+                (report_id, owner_email))
+            return self._db.fetchall(cur)
+
+    def create_acr_snapshot(self, snapshot_id: str, *, report_id: str, owner_email: str,
+                            revision: int, catalog_hash: str, content_json: str,
+                            content_digest: str, published_by: str,
+                            docx_blob_path: str | None = None) -> str:
+        """Write the immutable published snapshot and flip the report to published.
+
+        One transaction: a report marked published whose snapshot write failed would be a report
+        claiming an artifact that does not exist.
+        """
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO acr_snapshot(id,report_id,owner_email,revision,catalog_hash,"
+                "content_json,content_digest,docx_blob_path,published_at,published_by) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (snapshot_id, report_id, owner_email, revision, catalog_hash, content_json,
+                 content_digest, docx_blob_path, now, published_by))
+            self._db.execute(cur,
+                "UPDATE acr_report SET status='published',published_at=%s,approver=%s,updated_at=%s "
+                "WHERE id=%s AND owner_email=%s",
+                (now, published_by, now, report_id, owner_email))
+        return now
+
+    def get_acr_snapshot(self, report_id: str, *, owner_email: str,
+                         revision: int | None = None) -> dict | None:
+        sql = "SELECT * FROM acr_snapshot WHERE report_id=%s AND owner_email=%s"
+        params: tuple = (report_id, owner_email)
+        if revision is not None:
+            sql += " AND revision=%s"
+            params += (revision,)
+        with self._db.cursor() as cur:
+            self._db.execute(cur, sql + " ORDER BY revision DESC", params)
+            return self._db.fetchone(cur)
+
+    def grant_acr_role(self, *, owner_email: str, email: str, role: str,
+                       report_id: str = "*", granted_by: str | None = None) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "DELETE FROM acr_role WHERE owner_email=%s AND report_id=%s AND email=%s "
+                "AND role=%s",
+                (owner_email, report_id, email.lower(), role))
+            self._db.execute(cur,
+                "INSERT INTO acr_role(owner_email,report_id,email,role,granted_by,granted_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s)",
+                (owner_email, report_id, email.lower(), role, granted_by, self._now()))
+
+    def revoke_acr_role(self, *, owner_email: str, email: str, role: str,
+                        report_id: str = "*") -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "DELETE FROM acr_role WHERE owner_email=%s AND report_id=%s AND email=%s "
+                "AND role=%s",
+                (owner_email, report_id, email.lower(), role))
+
+    def get_acr_roles(self, *, owner_email: str, email: str, report_id: str) -> list[str]:
+        """Roles this email holds on this report — report-scoped grants plus account-wide ('*')."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT role FROM acr_role WHERE owner_email=%s AND email=%s "
+                "AND report_id IN (%s, '*')",
+                (owner_email, email.lower(), report_id))
+            return sorted({r["role"] for r in self._db.fetchall(cur)})
