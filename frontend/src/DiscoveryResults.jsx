@@ -545,7 +545,7 @@ export default function DiscoveryResults({
         )}
       </div>
 
-      <DiscoveryLifecycleResults rows={invRows} policies={policies} scanId={scanId} />
+      <DiscoveryLifecycleResults rows={invRows} policies={policies} scanId={scanId} source={source} />
 
       {/* RECOMMENDATIONS — rendered only when the per-file lifecycle outcome reached this screen.
           An empty table and an unread field must never look the same. */}

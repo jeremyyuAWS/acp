@@ -223,6 +223,43 @@ describe('what the approve action actually sends', () => {
   })
 })
 
+describe('the approve panel states what recovery would mean', () => {
+  it('names the source behaviour and its window when the source is known', async () => {
+    const c = await mount({ source: 'drive' })
+    await act(async () => { boxFor(c, 'c.docx').click() })     // the delete group
+    const t = text(c)
+    expect(t).toContain('Recovery:')
+    expect(t).toContain('Google Drive trash')
+    expect(t).toContain('Recoverable for about 30 days')
+  })
+
+  it('says the source is unknown rather than promising a Drive window', async () => {
+    // The queue is mounted without a source in most of this suite, and an unstated source must
+    // not inherit Drive's 30 days - that is a promise about somebody's estate.
+    const c = await mount()
+    await act(async () => { boxFor(c, 'c.docx').click() })
+    const t = text(c)
+    expect(t).toContain('source of this file was not supplied')
+    // Scoped to the recovery sentence: a bare /30 days/ also matches the AGE FILTER's own
+    // "Older than 30 days" option, so it would fail on an unrelated label and pass on nothing.
+    expect(t, 'a retention window was promised for an unstated source')
+      .not.toMatch(/Recoverable for/)
+  })
+
+  it('offers no undo control, because none can work today', async () => {
+    const c = await mount({ source: 'drive' })
+    await act(async () => { boxFor(c, 'a.docx').click() })
+    expect(text(c)).not.toContain('can be undone')
+    expect([...c.querySelectorAll('button')].map(text).some((x) => /undo/i.test(x))).toBe(false)
+  })
+
+  it('admits an archive cannot be moved back', async () => {
+    const c = await mount({ source: 'drive' })
+    await act(async () => { boxFor(c, 'a.docx').click() })     // the archive group
+    expect(text(c)).toContain('does not record where it came from')
+  })
+})
+
 describe('progress and filtering', () => {
   it('requests candidates only by default and shows an honest zero-match empty state', async () => {
     getLifecycleFiles.mockResolvedValue({ rows: [] })
