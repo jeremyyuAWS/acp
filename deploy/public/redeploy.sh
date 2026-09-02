@@ -306,7 +306,7 @@ if [ "$BG" = 1 ]; then
   MODE="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" --query properties.configuration.activeRevisionsMode -o tsv)"
   if [ "$MODE" != "Multiple" ]; then
     say "switching $APP to multiple-revision mode (currently $MODE)"
-    az containerapp revision set-mode "${AZ[@]}" -g "$RG" -n "$APP" --mode multiple >/dev/null
+    _aca_retry az containerapp revision set-mode "${AZ[@]}" -g "$RG" -n "$APP" --mode multiple -o none
   fi
 
   # BLUE = whatever holds traffic RIGHT NOW, captured before anything changes. After the update
@@ -322,7 +322,7 @@ if [ "$BG" = 1 ]; then
   SUFFIX="g$(printf '%s' "$BUILD_VERSION" | tr -cd '0-9')"
   GREEN="$APP--$SUFFIX"
   say "deploying green ($GREEN) at 0% traffic"
-  az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$IMG" --revision-suffix "$SUFFIX" >/dev/null
+  _aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$IMG" --revision-suffix "$SUFFIX" -o none
 
   GREEN_FQDN="$GREEN.$ENV_DOMAIN"
   printf '  waiting for green '
@@ -357,7 +357,7 @@ if [ "$BG" = 1 ]; then
 
   say "cutting ${LANE_WORKERS[*]} over to the same image (NOT blue-green — see header)"
   for a in "${LANE_WORKERS[@]}"; do
-    az containerapp update "${AZ[@]}" -g "$RG" -n "$a" --image "$IMG" --no-wait >/dev/null
+    _aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$a" --image "$IMG" --no-wait -o none
   done
   for a in "${LANE_WORKERS[@]}"; do
     printf '  %s ' "$a"
@@ -402,10 +402,27 @@ fi
 # Same image, different roles. Scanning happens in the workers, so updating only the app
 # ships the fixes nowhere useful. --no-wait so the two revisions provision in parallel and the
 # window where they run different images is as short as it can be.
+#
+# EVERY UPDATE RETRIES THE ACA LOCK, because losing that race leaves production SPLIT. Azure
+# serialises modifications per container app; a write while one is provisioning is refused with
+#
+#     (ContainerAppOperationInProgress) Cannot modify a container app 'acp-discovery' because
+#     there is an active provisioning operation in progress. OperationId: '...'
+#
+# and under `set -e` that killed the job MID-LOOP. On 2026-09-02 it did so twice in six minutes
+# (runs 33579832625 and 33580168055, for ca4d6e5d and 0f096be0): the app's update was accepted,
+# acp-discovery's was refused, and the deploy died between them. Production ran the API on
+# 2026.9.1.48 and all three workers on .41 for over half an hour — /healthz 200, /readyz 200,
+# `degraded: []`, nothing red anywhere, and the OCR fix that had just merged live in the API and
+# absent from the workers that actually run scans. That is the worst shape this script can leave:
+# the mixed-version state its own header calls out, reached by the guard against it aborting.
+#
+# A refusal is a STATE, not a fault — the same command succeeds once the in-flight operation
+# settles — so `_aca_retry` waits it out and fails fast on anything else. See readiness_probe.sh.
 say "updating $APP + ${LANE_WORKERS[*]} concurrently"
-az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$IMG" --no-wait >/dev/null
+_aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$IMG" --no-wait -o none
 for a in "${LANE_WORKERS[@]}"; do
-  az containerapp update "${AZ[@]}" -g "$RG" -n "$a" --image "$IMG" --no-wait >/dev/null
+  _aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$a" --image "$IMG" --no-wait -o none
 done
 
 for a in "$APP" "${LANE_WORKERS[@]}"; do
@@ -455,7 +472,7 @@ for a in "$APP" "${LANE_WORKERS[@]}"; do
   MODE="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$a" --query properties.configuration.activeRevisionsMode -o tsv 2>/dev/null || echo Single)"
   if [ "$MODE" != "Single" ]; then
     say "returning $a to single-revision mode (was $MODE) so the new revision takes over"
-    az containerapp revision set-mode "${AZ[@]}" -g "$RG" -n "$a" --mode single >/dev/null
+    _aca_retry az containerapp revision set-mode "${AZ[@]}" -g "$RG" -n "$a" --mode single -o none
   fi
 done
 
