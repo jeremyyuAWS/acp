@@ -969,6 +969,28 @@ def approve_disposition_batch(body: BatchApprovalIn, request: Request):
             "executed": False}
 
 
+#: Most rows one approval (or its dry-run preview) may cover.
+#
+# TWO INDEPENDENT REASONS, and the first is the one that bites.
+#
+# The approve loop costs a MEASURED 3.0 queries per row — _exempt_now's lifecycle re-read, the
+# audit result write, and _trace_decision's document lookup — and writes as it goes, with no
+# transaction around it. 603 queries for 200 rows locally. At 6,000 rows that is ~18,000 round
+# trips in one request; against Postgres over a network it is tens of seconds, and a gateway
+# timeout leaves rows already approved with NO response to say which. PRD §8 requires that a
+# partial batch is never reported as successful — a timeout reports nothing at all, which is the
+# same failure with the evidence removed.
+#
+# And a confirmation dialog covering thousands of files is not meaningful consent. The review
+# queue pages at 25/50/100, so a reviewer can only SEE a hundred rows at once; 500 is five times
+# the largest page and still bounds the request at ~1,500 queries.
+#
+# Enforced in _validated_batch rather than at either route, so the dry run and the approval
+# cannot disagree about what is submittable. A plan that previewed 2,000 rows the approval would
+# then refuse is exactly the drift that sharing this function exists to prevent.
+MAX_BATCH_ROWS = 500
+
+
 def _validated_batch(body, owner: str, *, verb: str):
     """The batch rules of PRD §8/§11, applied identically to a plan and to an approval.
 
@@ -984,6 +1006,11 @@ def _validated_batch(body, owner: str, *, verb: str):
     submitted = list(dict.fromkeys(body.audit_ids))     # de-duped, order preserved
     if not submitted:
         raise HTTPException(400, "no audit ids submitted")
+    if len(submitted) > MAX_BATCH_ROWS:
+        raise HTTPException(400, f"{len(submitted)} rows submitted; this endpoint accepts at most "
+                                 f"{MAX_BATCH_ROWS} at a time. Approve in smaller batches — a "
+                                 f"request this size can time out mid-loop, and rows approved "
+                                 f"before that point stay approved with no response to say so.")
     if body.action in ("delete", "trash") and not (body.reason or "").strip():
         raise HTTPException(400, "a delete approval must state a reason")
 
