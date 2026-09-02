@@ -1,7 +1,7 @@
-"""The app and the worker must move together, and the secret must never reach argv.
+"""The app and all stage workers must move together, and the secret must never reach argv.
 
 set_integration_env.sh exists because `az containerapp update` is easy to run on acp-app and
-forget on acp-worker. Scanning happens in the WORKER (ADR 0013 §2 — the API runs ACP_WORKERS=0
+forget on a stage worker. The API runs ACP_WORKERS=0
 and serves only), so Langfuse configured on acp-app alone yields traces for the API and none for
 Discover. That reads as "tracing is broken", not as "tracing is half-configured", and it is the
 same silent-and-reassuring failure the preflight was written against.
@@ -35,9 +35,10 @@ FAKE_CID = "11111111-2222-3333-4444-555555555555"
 FAKE_TID = "66666666-7777-8888-9999-000000000000"
 FAKE_EID = "2c90hp3hvbq27p"
 FAKE_RPKEY = "rpa_FAKEKEYFAKEKEYFAKEKEYFAKEKEY"
+PROD_TARGETS = ("acp-app", "acp-discovery", "acp-assess", "acp-remediate")
 
 
-def _stub_az(tmp_path, log: Path, *, worker_exists: bool = True, fail_on: str = "") -> Path:
+def _stub_az(tmp_path, log: Path, *, missing_app: str = "", fail_on: str = "") -> Path:
     """An `az` that answers the probes, logs every call, and can be made to fail on one app.
 
     `fail_on` names a container app whose WRITE calls (secret set / update) exit non-zero, so a
@@ -66,7 +67,7 @@ if [ "$1" = containerapp ]; then
       case "$*" in
         *--query*) echo ""; exit 0 ;;
       esac
-      if [ "$APPNAME" = "acp-worker" ] && [ "{int(worker_exists)}" = "0" ]; then exit 1; fi
+      if [ -n "{missing_app}" ] && [ "$APPNAME" = "{missing_app}" ]; then exit 1; fi
       exit 0
       ;;
     secret|update)
@@ -90,7 +91,8 @@ def _run(tmp_path, binn: Path, **env_extra) -> subprocess.CompletedProcess:
     # exported would silently change what these assert.
     for v in ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY",
               "ACP_AZURE_CLIENT_ID", "ACP_AZURE_TENANT_ID", "ACP_SUBSCRIPTION",
-              "ACP_RG", "ACP_APP", "ACP_WORKER", "ACP_SET_ENV_DRY_RUN",
+              "ACP_RG", "ACP_APP", "ACP_DISCOVERY_WORKER", "ACP_ASSESS_WORKER",
+              "ACP_REMEDIATE_WORKER", "ACP_SET_ENV_DRY_RUN",
               "RUNPOD_ENDPOINT_ID", "RUNPOD_API_KEY", "RUNPOD_VISION_MODEL"):
         env.pop(v, None)
     env.update(env_extra)
@@ -111,12 +113,12 @@ def _for_app(log: Path, app: str) -> list[str]:
 
 
 @requires_bash
-def test_langfuse_lands_on_both_app_and_worker(tmp_path):
+def test_langfuse_lands_on_app_and_every_stage_worker(tmp_path):
     log = tmp_path / "calls.log"
     r = _run(tmp_path, _stub_az(tmp_path, log), LANGFUSE_SECRET_KEY=FAKE_SK)
     assert r.returncode == 0, r.stdout + r.stderr
 
-    for app in ("acp-app", "acp-worker"):
+    for app in PROD_TARGETS:
         calls = " ".join(_for_app(log, app))
         assert "secret set" in calls, f"{app} never had its Langfuse secrets set"
         assert "LANGFUSE_SECRET_KEY=secretref:langfuse-sk" in calls, \
@@ -125,7 +127,7 @@ def test_langfuse_lands_on_both_app_and_worker(tmp_path):
 
 
 @requires_bash
-def test_sharepoint_lands_on_both_app_and_worker(tmp_path):
+def test_sharepoint_lands_on_app_and_every_stage_worker(tmp_path):
     # The worker needs it too: it is the tier that opens files, so a Graph token it cannot
     # resolve an authority for fails there and nowhere the operator is looking.
     log = tmp_path / "calls.log"
@@ -133,7 +135,7 @@ def test_sharepoint_lands_on_both_app_and_worker(tmp_path):
              ACP_AZURE_CLIENT_ID=FAKE_CID, ACP_AZURE_TENANT_ID=FAKE_TID)
     assert r.returncode == 0, r.stdout + r.stderr
 
-    for app in ("acp-app", "acp-worker"):
+    for app in PROD_TARGETS:
         calls = " ".join(_for_app(log, app))
         assert f"ACP_AZURE_CLIENT_ID={FAKE_CID}" in calls, f"{app} missing the client id"
         assert f"ACP_AZURE_TENANT_ID={FAKE_TID}" in calls, f"{app} missing the tenant id"
@@ -181,7 +183,7 @@ def test_a_malformed_secret_key_is_refused_before_anything_is_written(tmp_path):
 
 
 @requires_bash
-def test_a_worker_that_cannot_be_updated_fails_the_run(tmp_path):
+def test_a_stage_worker_that_cannot_be_updated_fails_the_run(tmp_path):
     """Half-applied is the state this script exists to prevent, so it must not exit 0.
 
     It cannot be prevented outright — the app is written before the worker — but exiting 0 on a
@@ -189,22 +191,20 @@ def test_a_worker_that_cannot_be_updated_fails_the_run(tmp_path):
     name the risk.
     """
     log = tmp_path / "calls.log"
-    r = _run(tmp_path, _stub_az(tmp_path, log, fail_on="acp-worker"),
+    r = _run(tmp_path, _stub_az(tmp_path, log, fail_on="acp-assess"),
              LANGFUSE_SECRET_KEY=FAKE_SK)
     assert r.returncode != 0, "a worker that could not be configured was reported as success"
-    assert "acp-worker" in r.stderr
+    assert "acp-assess" in r.stderr
 
 
 @requires_bash
-def test_a_single_tier_deployment_configures_the_app_and_says_there_is_no_worker(tmp_path):
-    """"The worker was skipped" and "there is no worker" must not look alike."""
+def test_a_missing_stage_worker_fails_closed_before_configuration(tmp_path):
     log = tmp_path / "calls.log"
-    r = _run(tmp_path, _stub_az(tmp_path, log, worker_exists=False),
+    r = _run(tmp_path, _stub_az(tmp_path, log, missing_app="acp-remediate"),
              LANGFUSE_SECRET_KEY=FAKE_SK)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert _for_app(log, "acp-app"), "the app was not configured"
-    assert not _for_app(log, "acp-worker"), "a non-existent worker was written to"
-    assert "single-tier" in r.stdout
+    assert r.returncode != 0
+    assert _writes(log) == []
+    assert "acp-remediate" in r.stderr
 
 
 @requires_bash
@@ -233,7 +233,7 @@ def test_the_switch_moves_with_the_credentials_on_both_apps(tmp_path):
              RUNPOD_ENDPOINT_ID=FAKE_EID, RUNPOD_API_KEY=FAKE_RPKEY)
     assert r.returncode == 0, r.stdout + r.stderr
 
-    for app in ("acp-app", "acp-worker"):
+    for app in PROD_TARGETS:
         calls = " ".join(_for_app(log, app))
         assert "ACP_VISION_PROVIDER=runpod_serverless" in calls, \
             f"{app} got RunPod credentials but not the switch — the exact silent-CPU state"

@@ -302,6 +302,13 @@ def readyz():
     on one condition without pattern-matching a sentence.
     """
     workers = core.store.worker_tier_status()
+    # Defended: a per-role read must never be able to 500 the readiness endpoint, the same posture
+    # the source and vision probes below take. An empty dict reads as "no role ever beaten", which
+    # is the honest answer when this cannot be established.
+    try:
+        role_status = core.store.worker_roles_status()
+    except Exception as exc:  # pragma: no cover - defensive: a role probe must not break /readyz
+        role_status = {"error": f"{exc.__class__.__name__}: {exc}"}
     local_pool = int(getattr(core, "WORKERS", 0) or 0)
     # Either tier can man the queue: the split topology (#113) runs the pool in a standalone
     # worker container, the single-tier setup runs it in-process. Readiness is the OR — the
@@ -359,7 +366,14 @@ def readyz():
         "ready": not degraded,
         "capacity_state": capacity_state,
         "degraded": degraded,
-        "workers": {**workers, "local_pool": local_pool, "can_run_scans": can_run_scans},
+        "workers": {**workers, "local_pool": local_pool, "can_run_scans": can_run_scans,
+                    # PER-ROLE, because the fields above cannot answer "is each worker service
+                    # running the build we shipped". They come from one shared heartbeat key that
+                    # every worker overwrites, so with more than one service running (acp-worker
+                    # and acp-discovery, since #1169) `version` and `pool_size` report whichever
+                    # beat last — measured flapping between two services' answers in production on
+                    # 2026-09-01. See store.worker_roles_status.
+                    "roles": role_status},
         "engines": {"pdf": pdf, "vision": vision},
         "sources": {"smb": smb_ready},
         "service": "acp",
@@ -922,10 +936,37 @@ def put_ai_provider(body: AIProviderUpdate, request: Request):
         if ref and not _SECRET_REF_RE.match(ref):
             raise HTTPException(422, "key_secret_ref must be an environment-variable NAME "
                                      "(e.g. AZURE_OPENAI_API_KEY), not a key value")
+    enabled = body.enabled if body.enabled is not None else bool(existing.get("enabled"))
+    if enabled:
+        # ENABLE ONLY WHAT CAN ACTUALLY RUN. Until this guard, enabling was unconditional: the row
+        # stored enabled=true whatever else was blank, `_adapter_for` then returned None at call
+        # time, and every document silently stayed on the local path. The Settings page said the
+        # provider was on and nothing was ever sent to it. An enable switch that does nothing is
+        # worse than one that refuses, because it reads as consent having been honoured.
+        #
+        # The would-be config is validated, not the stored one — an admin fills the fields and
+        # ticks the box in a single save, so checking `existing` would refuse the first correct
+        # save and accept nothing after it.
+        candidate = {**existing, "provider": provider, "endpoint": endpoint,
+                     "deployment": (body.deployment.strip() if body.deployment is not None
+                                    else existing.get("deployment")) or None,
+                     "model": (body.model.strip() if body.model is not None
+                               else existing.get("model")) or None,
+                     "key_secret_ref": ref}
+        readiness = _providers.activation_readiness(provider, candidate)
+        if not readiness["ready"]:
+            # 422 with the reason, not a bare refusal: "missing model, key_secret_ref" is fixable
+            # by the admin reading it, and "the environment secret named X is not present" is a
+            # different person's job (ops provisions the value; this app never stores it).
+            raise HTTPException(422, {"error": "cannot enable this provider yet",
+                                      "provider": provider,
+                                      "detail": readiness["detail"],
+                                      "missing": readiness["missing"],
+                                      "secret_resolves": readiness["secret_resolves"]})
     who = getattr(request.state, "user_email", None) or "admin"
     core.store.upsert_ai_provider_config(
         provider,
-        enabled=body.enabled if body.enabled is not None else bool(existing.get("enabled")),
+        enabled=enabled,
         endpoint=endpoint,
         deployment=(body.deployment.strip() if body.deployment is not None else existing.get("deployment")) or None,
         model=(body.model.strip() if body.model is not None else existing.get("model")) or None,
@@ -934,7 +975,7 @@ def put_ai_provider(body: AIProviderUpdate, request: Request):
     )
     # Audit records the config change WITHOUT the key value (only the reference name).
     core.store.log_decision("admin", f"settings.ai_provider.{provider}",
-                            detail=f"provider={provider} enabled={body.enabled} endpoint={endpoint or '—'} "
+                            detail=f"provider={provider} enabled={enabled} endpoint={endpoint or '—'} "
                                    f"key_secret_ref={ref or '—'} (key value never handled here)")
     return {"providers": _providers.list_provider_views()}
 
@@ -1025,3 +1066,49 @@ def clear_dead_jobs(request: Request):
     user can't purge another tenant's queue. Re-run the originating action to retry."""
     owner = getattr(request.state, "user_email", None) or "demo"
     return {"purged": core.store.purge_dead_jobs(owner=owner)}
+
+
+class AIProviderTest(BaseModel):
+    # Same extra='forbid' guard as the update model, and for the same reason: this endpoint has
+    # no field that could carry a key, and a client that invents one is rejected rather than
+    # having the value quietly ignored (or worse, logged with the request).
+    model_config = ConfigDict(extra="forbid")
+    provider: str
+
+
+@router.post("/ai/providers/test")
+def test_ai_provider(body: AIProviderTest, request: Request):
+    """Admin: send a SYNTHETIC probe image to one provider and report what came back.
+
+    NO CUSTOMER DOCUMENT IS SENT. The bytes are providers.probe_image_bytes() — a 64×64 black
+    square on white, generated in-process from stdlib zlib. That is what makes this safe to press
+    on a provider nobody has agreed to send documents to yet: it is how an admin learns whether
+    the credential and the route work BEFORE any real content could go anywhere.
+
+    Works on a provider that is NOT yet enabled, deliberately — testing before enabling is the
+    whole point, and requiring the switch first would invert the order. It does require the
+    configuration to be complete and the referenced secret to resolve, and says which of the two
+    is missing when it is not.
+
+    The response carries no secret: provider, model, zone, latency, outcome reason, real token
+    counts and real cost. Never the key, never the value behind key_secret_ref, and not even the
+    model's caption of the probe.
+    """
+    _require_admin(request)
+    import providers as _providers
+    provider = (body.provider or "").strip().lower()
+    if provider not in _providers.CLOUD_PROVIDERS:
+        raise HTTPException(422, f"unknown provider '{provider}' — one of {list(_providers.CLOUD_PROVIDERS)}")
+    result = _providers.test_connection(provider)
+    # Audited like any other admin action, and for a real reason beyond bookkeeping: this is the
+    # one path that can make an outbound call to a third party from the Settings page, so who
+    # pressed it and what came back belongs in the record. The detail names the outcome, never
+    # a credential.
+    core.store.log_decision(
+        getattr(request.state, "user_email", None) or "admin",
+        f"settings.ai_provider.{provider}.test",
+        detail=f"connection test → ok={result.get('ok')} reason={result.get('reason')} "
+               f"model={result.get('model') or '—'} zone={result.get('zone') or '—'} "
+               f"latency_ms={result.get('latency_ms') or '—'} (synthetic probe image; "
+               f"no customer document sent)")
+    return result

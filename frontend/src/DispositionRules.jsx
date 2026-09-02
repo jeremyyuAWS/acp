@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { confirm } from './ConfirmDialog.jsx'
+import { confirm, notify } from './ConfirmDialog.jsx'
 import {
   listDispositionPolicies, createDispositionPolicy, setDispositionPolicyEnabled, previewDispositionPolicy,
   updateDispositionPolicy, previewDispositionDraft, deleteDispositionPolicy, reorderDispositionPolicies,
@@ -70,6 +70,9 @@ const sentenceBox = {
 const alertStyle = { fontSize: 12.5, color: '#A32D2D', margin: '8px 0 0', lineHeight: 1.5 }
 
 const MAX_PREVIEW_INLINE = 25
+const COMMON_CONDITION_KEYS = new Set(['folder', 'modifiedBefore', 'notModifiedDays'])
+const evidenceFieldLabel = (field) => CONDITIONS.find((condition) => condition.field === field)?.label
+  || String(field || '').replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase())
 
 /** Inline table of files that matched a rule preview. */
 function PreviewPanel({ docs, enabled, fetchedAt, onRefresh, busy, breakdown }) {
@@ -164,7 +167,7 @@ function PreviewPanel({ docs, enabled, fetchedAt, onRefresh, busy, breakdown }) 
                     .map(([field, count], i) => (
                       <span key={field}>
                         {i > 0 && ' · '}
-                        <b style={{ color: 'inherit' }}>{field}</b>
+                        <b style={{ color: 'inherit' }}>{evidenceFieldLabel(field)}</b>
                         {breakdown.unable_to_evaluate > 1 && ` (${count})`}
                       </span>
                     ))}
@@ -255,8 +258,20 @@ function ActionTag({ action }) {
  *  rule's edit form and with NewRule's, all mounted on the same screen at once. */
 function RuleFields({ draft, setDraft, labelFor }) {
   const setValue = (key, v) => setDraft((d) => ({ ...d, values: { ...d.values, [key]: v } }))
+  const field = (c) => (
+    <label key={c.key} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+      <span style={fieldLabel}>{c.label}{c.unit ? ` (${c.unit})` : ''}</span>
+      <input style={inp} aria-label={labelFor(c.label)} placeholder={c.placeholder}
+             type={c.kind === 'date' ? 'date' : 'text'}
+             inputMode={c.kind === 'number' ? 'numeric' : undefined}
+             value={draft.values[c.key]} onChange={(e) => setValue(c.key, e.target.value)} />
+    </label>
+  )
+  const advanced = CONDITIONS.filter((c) => !COMMON_CONDITION_KEYS.has(c.key))
+  const advancedActive = advanced.filter((c) => String(draft.values[c.key] || '').trim()).length
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
         <span style={fieldLabel}>Name</span>
         <input style={inp} type="text" value={draft.name} aria-label={labelFor('Rule name')}
@@ -270,21 +285,24 @@ function RuleFields({ draft, setDraft, labelFor }) {
           {ACTIONS.map((a) => <option key={a.action} value={a.action}>{a.label}</option>)}
         </select>
       </label>
-      {CONDITIONS.map((c) => (
-        <label key={c.key} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          <span style={fieldLabel}>{c.label}{c.unit ? ` (${c.unit})` : ''}</span>
-          <input style={inp} aria-label={labelFor(c.label)} placeholder={c.placeholder}
-                 type={c.kind === 'date' ? 'date' : 'text'}
-                 inputMode={c.kind === 'number' ? 'numeric' : undefined}
-                 value={draft.values[c.key]} onChange={(e) => setValue(c.key, e.target.value)} />
-        </label>
-      ))}
+        {CONDITIONS.filter((c) => COMMON_CONDITION_KEYS.has(c.key)).map(field)}
+      </div>
+      <details style={{ marginTop: 12 }}>
+        <summary className="linklike" style={{ cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>
+          More conditions{advancedActive ? ` · ${advancedActive} in use` : ''}
+        </summary>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12,
+                      marginTop: 10, padding: 12, border: line, borderRadius: 9, background: 'var(--card)' }}>
+          {advanced.map(field)}
+        </div>
+      </details>
     </div>
   )
 }
 
 function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, isLast, rank }) {
   const [busy, setBusy] = useState(false)
+  const [impactBusy, setImpactBusy] = useState(false)
   const [err, setErr] = useState('')
   const enabled = !!p.enabled
   // Preview expansion — docs stored locally; parent only needs the count.
@@ -336,7 +354,23 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
   const doSetEnabled = (next) => {
     setBusy(true); setErr('')
     Promise.resolve(setDispositionPolicyEnabled(p.policy_id, next))
-      .then(() => onChanged())
+      .then(() => {
+        onChanged()
+        notify({
+          title: next ? `“${p.name}” enabled` : `“${p.name}” disabled`,
+          message: next
+            ? 'The rule will begin adding recommendations with the next Discovery run.'
+            : 'The rule will no longer add recommendations in future Discovery runs.',
+          actionLabel: 'Undo',
+          onAction: () => {
+            setBusy(true); setErr('')
+            return Promise.resolve(setDispositionPolicyEnabled(p.policy_id, !next))
+              .then(() => onChanged())
+              .catch((e) => setErr(refusalText(e)))
+              .finally(() => setBusy(false))
+          },
+        })
+      })
       .catch((e) => setErr(refusalText(e)))
       .finally(() => setBusy(false))
   }
@@ -352,41 +386,49 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
       }).then((ok) => { if (ok) doSetEnabled(false) })
       return
     }
-    setBusy(true); setErr('')
+    setBusy(true); setImpactBusy(true); setErr('')
     Promise.resolve(previewDispositionPolicy(p.policy_id))
       .then((r) => {
         const n = r?.would_match ?? null
         const total = r?.total ?? null
         onCount(p.policy_id, n)
-        setBusy(false)
+        setBusy(false); setImpactBusy(false)
         if (n == null) {
           confirm({
             title: `Enable "${p.name}"?`,
-            message: 'It will start tagging matching files immediately. (Could not check how many files it would match.)',
-            variant: 'default', confirmLabel: 'Enable',
+            message: 'This rule will join the next Discovery run. Its current impact could not be measured. Enabling only adds lifecycle recommendations for review—it never moves, archives, or deletes source files.',
+            facts: [{ label: 'Files currently in scope', value: 'Not available' },
+                    { label: 'Recommendation', value: actionSpec(p.action).outcome },
+                    { label: 'Starts', value: 'Next Discovery run' }],
+            variant: 'activation', presentation: 'toast', confirmLabel: 'Enable rule',
           }).then((ok) => { if (ok) doSetEnabled(true) })
           return
         }
         const pct = total ? Math.round((n / total) * 100) : null
         const outcome = actionSpec(p.action).outcome
-        const msg = `This will ${n === 0 ? 'currently tag no files' : `tag ${n} file${n === 1 ? '' : 's'}${pct != null ? ` (${pct}% of your estate)` : ''} as ${outcome}`}, and any future match, until you disable it.`
         // BROAD_RULE_PCT: an arbitrary but stated line, not a backend limit — half the estate is
         // the point past which "this folder" usually stops being what a rule author meant.
         const broad = pct != null && pct >= BROAD_RULE_PCT
         confirm({
           title: `Enable "${p.name}"?`,
-          message: msg,
+          message: 'This rule will join the next Discovery run. Enabling only adds lifecycle recommendations for review—it never moves, archives, or deletes source files.',
+          facts: [{ label: 'Files currently in scope', value: `${n.toLocaleString()} file${n === 1 ? '' : 's'}${pct != null ? ` · ${pct}% of discovered files` : ''}` },
+                  { label: 'Recommendation', value: outcome },
+                  { label: 'Starts', value: 'Next Discovery run' }],
           warning: broad ? `⚠ That's ${pct}% of your estate — check the conditions are as narrow as you intended before enabling.` : undefined,
-          variant: broad ? 'warning' : 'default',
-          confirmLabel: 'Enable',
+          variant: broad ? 'warning' : 'activation',
+          presentation: 'toast', confirmLabel: 'Enable rule',
         }).then((ok) => { if (ok) doSetEnabled(true) })
       })
       .catch((e) => {
-        setBusy(false)
+        setBusy(false); setImpactBusy(false)
         confirm({
           title: `Enable "${p.name}"?`,
-          message: `Could not check how many files it would match: ${refusalText(e)}`,
-          variant: 'default', confirmLabel: 'Enable anyway',
+          message: `The current impact could not be measured: ${refusalText(e)} Enabling will still only add lifecycle recommendations for review—it will not change source files.`,
+          facts: [{ label: 'Files currently in scope', value: 'Not available' },
+                  { label: 'Recommendation', value: actionSpec(p.action).outcome },
+                  { label: 'Starts', value: 'Next Discovery run' }],
+          variant: 'warning', presentation: 'toast', confirmLabel: 'Enable anyway',
         }).then((ok) => { if (ok) doSetEnabled(true) })
       })
   }
@@ -448,7 +490,10 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
   }
 
   return (
-    <div className="lifecycle-rule" style={{ border: line, borderRadius: 11, padding: '13px 15px', marginBottom: 10 }}>
+    <div className="lifecycle-rule" style={{ border: enabled ? '1px solid color-mix(in srgb, var(--plum) 28%, var(--line))' : line,
+                                              borderLeft: enabled ? '4px solid var(--plum)' : line,
+                                              borderRadius: 11, padding: '13px 15px', marginBottom: 10,
+                                              background: enabled ? 'color-mix(in srgb, var(--plum) 2.5%, var(--surface))' : 'var(--surface)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         {/* Priority order, not decoration: two files matched by both an archive and a delete
             rule settle on whichever rule is FIRST here (disposition.resolve_candidate) — moving
@@ -460,11 +505,19 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
                   aria-label={`Move rule ${p.name} down`} style={{ padding: '0 6px', lineHeight: 1.2 }}>▼</button>
         </span>
         <span className="muted" style={{ fontSize: 11, width: 16, textAlign: 'center' }}>{rank}</span>
-        <input type="checkbox" checked={enabled} onChange={toggle} disabled={busy}
-               aria-label={`Enable rule ${p.name}`} style={{ width: 15, height: 15 }} />
-        <span style={{ fontSize: 13.5, fontWeight: 600 }}>{p.name}</span>
+        <label title={enabled ? 'Disable this rule' : 'Preview and enable this rule'}
+               style={{ display: 'inline-flex', alignItems: 'center', gap: 7, cursor: busy ? 'wait' : 'pointer' }}>
+          <input type="checkbox" checked={enabled} onChange={toggle} disabled={busy}
+                 aria-label={`Enable rule ${p.name}`} style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }} />
+          <span aria-hidden="true" style={{ width: 32, height: 18, borderRadius: 999, padding: 2,
+            background: enabled ? 'var(--plum)' : 'var(--line)', display: 'flex', justifyContent: enabled ? 'flex-end' : 'flex-start',
+            transition: 'background .15s' }}><span style={{ width: 14, height: 14, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px #0003' }} /></span>
+          <span aria-live="polite" style={{ fontSize: 11.5, fontWeight: 650, color: enabled ? 'var(--plum)' : 'var(--muted)', whiteSpace: 'nowrap' }}>
+            {impactBusy ? 'Checking impact…' : enabled ? 'On' : 'Off'}
+          </span>
+        </label>
+        <span style={{ fontSize: 13.5, fontWeight: 650 }}>{p.name}</span>
         <ActionTag action={p.action} />
-        <span className="muted" style={{ fontSize: 12 }}>{enabled ? 'Enabled' : 'Disabled — tags nothing yet'}</span>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           <button className="ghost small"
                   onClick={previewOpen ? () => setPreviewOpen(false) : runPreview}
@@ -472,11 +525,18 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
                   aria-expanded={previewOpen}>
             {previewBtnLabel}
           </button>
-          <button className="ghost small" onClick={startEdit} disabled={busy || editing}
-                  aria-label={`Edit rule ${p.name}`}>Edit</button>
-          <button className="ghost small" onClick={duplicate} disabled={busy || editing}>Duplicate</button>
-          <button className="ghost small" onClick={remove} disabled={busy || editing}
-                  aria-label={`Delete rule ${p.name}`}>Delete</button>
+          <details style={{ position: 'relative' }}>
+            <summary className="ghost small" style={{ listStyle: 'none', cursor: 'pointer' }}>Actions ▾</summary>
+            <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 5px)', zIndex: 4, minWidth: 130,
+                          display: 'grid', gap: 3, padding: 6, border: line, borderRadius: 9,
+                          background: 'var(--surface)', boxShadow: '0 10px 30px #0002' }}>
+              <button className="ghost small" onClick={startEdit} disabled={busy || editing}
+                      aria-label={`Edit rule ${p.name}`} style={{ textAlign: 'left' }}>Edit</button>
+              <button className="ghost small" onClick={duplicate} disabled={busy || editing} style={{ textAlign: 'left' }}>Duplicate</button>
+              <button className="ghost small" onClick={remove} disabled={busy || editing}
+                      aria-label={`Delete rule ${p.name}`} style={{ textAlign: 'left', color: '#A32D2D' }}>Delete</button>
+            </div>
+          </details>
         </span>
       </div>
       {editing ? (
@@ -507,7 +567,8 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
   )
 }
 
-function NewRule({ onCreated }) {
+function NewRule({ onCreated, defaultExpanded = false }) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
   const [draft, setDraft] = useState(emptyDraft)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -561,13 +622,17 @@ function NewRule({ onCreated }) {
   return (
     <div className="lifecycle-new" style={{ border: '1px dashed color-mix(in srgb, var(--plum) 35%, transparent)',
                                             borderRadius: 11, padding: '14px 15px', background: 'var(--surface)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: expanded ? 12 : 0 }}>
         <span aria-hidden="true" style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--plum)',
                                           color: '#fff', fontSize: 12, fontWeight: 700, display: 'flex',
                                           alignItems: 'center', justifyContent: 'center' }}>+</span>
-        <span style={{ fontSize: 13.5, fontWeight: 600 }}>New rule</span>
+        <span style={{ fontSize: 13.5, fontWeight: 600 }}>Add lifecycle rule</span>
+        <button className="ghost small" onClick={() => setExpanded((value) => !value)}
+                aria-expanded={expanded} style={{ marginLeft: 'auto' }}>
+          {expanded ? 'Close form' : 'Create rule'}
+        </button>
       </div>
-
+      {expanded && <>
       <RuleFields draft={draft} setDraft={setDraft} labelFor={(l) => l} />
 
       {/* The draft restated in the reader's words, live — and, once there is a real predicate to
@@ -590,6 +655,7 @@ function NewRule({ onCreated }) {
         Added “{added}”. It is disabled — nothing is tagged until you enable it.
       </p>}
       {err && <p style={alertStyle} role="alert">⚠ {err}</p>}
+      </>}
     </div>
   )
 }
@@ -775,7 +841,7 @@ export default function DispositionRules({ embedded = false }) {
                          onCount={setCount} onChanged={load} onDuplicate={onDuplicate} onMove={onMove} />
               )))}
 
-          <NewRule onCreated={onCreated} />
+          {rules != null && <NewRule onCreated={onCreated} defaultExpanded={rules.length === 0} />}
           <PrecedenceNote />
 
           {rules != null && rules.length > 1 && (

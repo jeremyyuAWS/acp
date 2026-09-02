@@ -517,6 +517,35 @@ _SCHEMA = [
     # max on create (see create_disposition_policy), so it starts last too — the safe default —
     # rather than silently jumping ahead of rules that were already there.
     "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS priority INTEGER",
+    "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1",
+    # The version of the policy AS EVALUATED, stamped on the audit row at discover time.
+    # PRD §8 permits a grouped approval only when every selected row shares a policy version,
+    # and §11 makes source mutations idempotent on (document_id, policy_version, action) — both
+    # are unanswerable from a row that only records which policy fired, not which version of it.
+    # Rows written before this column exists read NULL, and the batch route refuses them rather
+    # than guessing a version on a reviewer's behalf.
+    "ALTER TABLE disposition_audit ADD COLUMN IF NOT EXISTS policy_version INTEGER",
+    # What the file looked like BEFORE an applied action — the prior Drive parents for a move,
+    # the prior name for a rename, "not trashed" for a delete. Without it PRD §8's undo cannot
+    # exist at all: disposition.execute_action used to read exactly these values and discard them
+    # the instant it had used them, so nothing in the system could put a file back.
+    # NULL on every row written before this column, and undo refuses those rather than guessing.
+    "ALTER TABLE disposition_audit ADD COLUMN IF NOT EXISTS before_state TEXT",
+    "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS description TEXT",
+    "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS updated_at TEXT",
+    """CREATE TABLE IF NOT EXISTS lifecycle_evaluation (
+      evaluation_id TEXT PRIMARY KEY, scan_id TEXT, document_id TEXT,
+      policy_id TEXT, policy_version INTEGER, result TEXT, evidence_json TEXT,
+      proposed_action TEXT, priority INTEGER, evaluated_at TEXT, owner_email TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS effective_disposition (
+      document_id TEXT, scan_id TEXT, winning_evaluation_id TEXT,
+      lifecycle_status TEXT, precedence_reason TEXT, approval_status TEXT,
+      override_reason TEXT, updated_at TEXT, owner_email TEXT,
+      PRIMARY KEY(scan_id, document_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_lifecycle_evaluation_scan ON lifecycle_evaluation(scan_id, owner_email)",
+    "CREATE INDEX IF NOT EXISTS idx_lifecycle_evaluation_file ON lifecycle_evaluation(scan_id, document_id)",
     # Per-file WCAG scope rules (Discover/Assess Lifecycle PRD §4.4 / AC-09, "C4"). A rule
     # targets files by folder / owner / department and assigns a Core-17 subset; the effective
     # code-set for a file is resolved from matching rules (union, or a higher-priority override
@@ -964,6 +993,177 @@ _SCHEMA = [
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS content_workspace_version_id TEXT",
     "CREATE INDEX IF NOT EXISTS idx_scan_runs_cw_version ON scan_runs(content_workspace_version_id) "
     "WHERE content_workspace_version_id IS NOT NULL",
+
+    # ── Accessibility Conformance Report (ACR) workspace — ADR 0047, PRD Phase 1 ──────────────
+    # An ACR is a VPAT-structured statement about ACP'S OWN WEB UI, against WCAG 2.2 A+AA. It is
+    # NOT about the customer documents ACP remediates, and nothing in these tables joins to
+    # scan_runs / issue_records for that reason: docs/conformance-report.md already draws that
+    # line in prose, and a schema-level join is how it would be crossed by accident. Evidence
+    # about ACP's UI arrives from axe-core runs over ACP's screens and from human testers.
+    #
+    # App-level references, not DB foreign keys, matching every other cross-table pointer in this
+    # schema (scan_inventory.scan_id, content_workspace_documents.workspace_id, ...). owner_email
+    # is denormalized onto every table so an isolation check reads it with no join, the same
+    # convention content_workspace_documents and scan_events already follow.
+    """CREATE TABLE IF NOT EXISTS acr_report (
+      id TEXT PRIMARY KEY,
+      owner_email TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      catalog_hash TEXT NOT NULL,
+      supersedes_id TEXT,
+      revision INT NOT NULL DEFAULT 1,
+      report_title TEXT, product_name TEXT, product_version TEXT, build_id TEXT,
+      release_date TEXT, vendor_name TEXT, vendor_contact TEXT, product_description TEXT,
+      evaluation_scope TEXT, excluded_functionality TEXT, deployment_environment TEXT,
+      vpat_edition TEXT, wcag_version TEXT, wcag_levels TEXT,
+      evaluation_methods TEXT, browsers_tested TEXT, operating_systems_tested TEXT,
+      assistive_technologies_tested TEXT, automated_tools TEXT,
+      testing_period_start TEXT, testing_period_end TEXT,
+      evaluators TEXT, approver TEXT, general_notes TEXT, known_dependencies TEXT,
+      evidence_validity_days INT,
+      created_at TEXT, updated_at TEXT, published_at TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_acr_report_owner ON acr_report(owner_email)",
+
+    # One row per applicable criterion, per report — the PRD §9 criteria matrix.
+    #
+    # final_status and workflow_state are TWO COLUMNS ON PURPOSE. PRD §9 permits ACP's internal
+    # states ("Not evaluated", "Needs review") but forbids them appearing as VPAT conformance
+    # levels. One column holding both vocabularies is exactly how "Not evaluated" ends up printed
+    # in a customer's conformance table, so they never share a column. final_status is constrained
+    # to the four VPAT terms in the store layer (see save_acr_decision); workflow_state carries
+    # everything else and is never exported.
+    """CREATE TABLE IF NOT EXISTS acr_criterion (
+      report_id TEXT NOT NULL,
+      criterion_num TEXT NOT NULL,
+      owner_email TEXT NOT NULL,
+      criterion_name TEXT, level TEXT, principle TEXT, guideline TEXT,
+      applicable INT NOT NULL DEFAULT 1,
+      workflow_state TEXT NOT NULL DEFAULT 'not_evaluated',
+      draft_status TEXT,
+      final_status TEXT,
+      remarks TEXT,
+      evaluator TEXT,
+      reviewer TEXT,
+      approval_state TEXT NOT NULL DEFAULT 'unapproved',
+      decided_at TEXT, approved_at TEXT, updated_at TEXT,
+      PRIMARY KEY (report_id, criterion_num)
+    )""",
+
+    # APPEND-ONLY (PRD §12 "remains visible for audit history", §17 additions AND removals are
+    # audited). Nothing here is ever UPDATEd or DELETEd except `stale_reason`, which is a DISPLAY
+    # CACHE of what api/acr_freshness.py derives — never the input to a publication decision. A
+    # retraction is a tombstone in acr_decision_log plus a superseding row, not an edit.
+    #
+    # `coverage` is the field the automated-evidence honesty rule turns on: an assessment.Coverage
+    # value declaring how much of the criterion the producing technique actually reaches. Required
+    # for automated rows (acr_model refuses to build one without it) and meaningless for human
+    # ones. See ADR 0031 for why coverage, not accuracy, is the axis that gates a pass.
+    """CREATE TABLE IF NOT EXISTS acr_evidence (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL,
+      criterion_num TEXT NOT NULL,
+      owner_email TEXT NOT NULL,
+      source_kind TEXT NOT NULL,
+      result TEXT NOT NULL,
+      tester TEXT, tested_at TEXT, product_version TEXT, build_id TEXT,
+      environment TEXT, workflow TEXT, browser TEXT, assistive_tech TEXT,
+      tool_name TEXT, tool_version TEXT, rule_id TEXT, tested_url TEXT, coverage TEXT,
+      method TEXT, notes TEXT, attachments TEXT, related_finding_ids TEXT,
+      stale_reason TEXT,
+      created_at TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_acr_evidence_criterion ON acr_evidence(report_id, criterion_num)",
+
+    # Guided manual test plan instances (PRD §14). Phase 1 creates the table and no rows — the
+    # plan catalog itself is Phase 3. It ships now so the evidence a Phase-1 manual test records
+    # has somewhere to point, rather than a schema change landing under live reports later.
+    """CREATE TABLE IF NOT EXISTS acr_manual_test (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL,
+      criterion_num TEXT NOT NULL,
+      owner_email TEXT NOT NULL,
+      plan_id TEXT NOT NULL,
+      result TEXT,
+      evidence_id TEXT,
+      tester TEXT, notes TEXT, created_at TEXT, updated_at TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_acr_manual_test_report ON acr_manual_test(report_id, criterion_num)",
+
+    # One recorded outcome per step of a plan run (PRD §14, Phase 3). A SEPARATE TABLE rather than
+    # columns on acr_manual_test, for two reasons. Plans have different step counts, so columns
+    # would mean either a fixed ceiling or a JSON blob nothing can query. And the ACR schema is
+    # additive-only under ADR 0045 — test_acr_no_regression asserts every acr_ statement is a
+    # CREATE, so widening a live table is not available here even if it were desirable.
+    #
+    # `environment` holds the per-run tester metadata the plan's own `needs` list demands
+    # (browser, os, assistive_tech, viewport…), which is what makes the run reproducible under
+    # PRD §4.5. It lives on the RUN, not the step: one session, one environment.
+    """CREATE TABLE IF NOT EXISTS acr_manual_step (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      report_id TEXT NOT NULL,
+      owner_email TEXT NOT NULL,
+      step_index INTEGER NOT NULL,
+      outcome TEXT NOT NULL,
+      notes TEXT, recorded_at TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_acr_manual_step_run ON acr_manual_step(run_id, step_index)",
+
+    # Append-only audit trail (PRD §17). Mirrors decision_log's shape and its never-updated,
+    # never-deleted contract; separate from it because decision_log is scan-anchored (its scan_id/
+    # file/rule_id columns) and an ACR event has no scan at all.
+    """CREATE TABLE IF NOT EXISTS acr_decision_log (
+      id TEXT PRIMARY KEY,
+      ts TEXT NOT NULL,
+      report_id TEXT NOT NULL,
+      owner_email TEXT NOT NULL,
+      actor TEXT,
+      action TEXT NOT NULL,
+      criterion_num TEXT,
+      detail TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_acr_decision_log_report ON acr_decision_log(report_id, ts)",
+
+    # IMMUTABLE published snapshots (PRD §17, §21.12). Written once, never updated — a change
+    # after publication creates a NEW acr_report row with supersedes_id set, and this row stays
+    # exactly as it was.
+    #
+    # content_digest is a recomputable SHA-256 over content_json. It is a DIGEST, not a digital
+    # signature: no key, no non-repudiation. api/report.py's _content_digest carries the same
+    # warning and the same instruction — never relabel it.
+    """CREATE TABLE IF NOT EXISTS acr_snapshot (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL,
+      owner_email TEXT NOT NULL,
+      revision INT NOT NULL,
+      catalog_hash TEXT NOT NULL,
+      content_json TEXT NOT NULL,
+      content_digest TEXT NOT NULL,
+      docx_blob_path TEXT,
+      published_at TEXT NOT NULL,
+      published_by TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_acr_snapshot_report ON acr_snapshot(report_id, revision)",
+
+    # ACR-scoped roles (PRD §18). DELIBERATELY NOT the platform admin model.
+    #
+    # core.is_admin() returns True for ANY authenticated user under the default OPEN_ACCESS=1 —
+    # which is the right call for the rest of the product and the wrong one here: PRD §21.11
+    # requires that only an approver may publish, and an "approver" that means "everyone who can
+    # sign in" is not one. So authority to approve/publish an ACR is granted HERE and nowhere
+    # else, and core.OPEN_ACCESS does not confer it. This is the first place in ACP where being
+    # an admin is not sufficient; see api/acr_authz.py for the gate and the reasoning.
+    #
+    # report_id '*' is an account-wide grant; a specific id scopes the role to one report.
+    """CREATE TABLE IF NOT EXISTS acr_role (
+      owner_email TEXT NOT NULL,
+      report_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      role TEXT NOT NULL,
+      granted_by TEXT, granted_at TEXT,
+      PRIMARY KEY (owner_email, report_id, email, role)
+    )""",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -1374,8 +1574,30 @@ class _PgAdapter:
     # (v3 was independently assigned to two different additive changes by two concurrent
     # sessions — this repo squash-merges, so both landed — and is renumbered to v4 here rather
     # than picking one side's checksum over the other's real, both-present DDL.)
-    _SCHEMA_VERSION = 4
-    _SCHEMA_CHECKSUM_AT_VERSION = "02b549db6c9f9f400496f13781ac2425"
+    # v5 AND v6 were each assigned twice, exactly as v3 was, and are resolved the same way — by
+    # renumbering over the union of every side's DDL rather than picking one side's checksum.
+    # Three collisions on this one constant now (v3, v5, v6), all from concurrent branches that
+    # were each correct in isolation:
+    #   * #1155's lifecycle control plane — disposition_policy gains version/description/
+    #     updated_at, plus the lifecycle_evaluation and effective_disposition tables and indexes.
+    #   * #1169/#1170 — disposition_audit gains policy_version.
+    #   * ADR 0047's seven ACR workspace tables and their indexes.
+    # Every one really landed, so no previously-recorded checksum describes the schema that now
+    # exists; keeping any of them would tell a booting replica the DDL matches while part of it is
+    # missing from that hash. v7 is computed over the merged _SCHEMA below.
+    #
+    # WORTH NOTICING, because the pattern is the point rather than any one collision: this
+    # constant is hand-maintained and every long-lived branch that touches _SCHEMA collides on it,
+    # deterministically. The renumber-over-the-union rule resolves each instance correctly and does
+    # nothing to stop the next. Deriving the version from the checksum (bump iff the hash moved)
+    # would remove the class, but that changes migration bookkeeping for everyone and belongs in
+    # its own change, not smuggled into a feature branch's conflict resolution.
+    #
+    # Still additive, and additive in BEHAVIOUR on every half. For the ACR tables the argument is
+    # simpler than v4's fence: a replica without ACR code never reads or writes them — they are
+    # inert until a replica carrying api/acr_*.py serves a request against them.
+    _SCHEMA_VERSION = 9
+    _SCHEMA_CHECKSUM_AT_VERSION = "8ebbf79add42bcd3893081808a66dc83"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -1618,8 +1840,60 @@ class Store:
         self._scope_rules_cache: dict = {}
         self._inventory_cache: dict = {}
 
+    def _file_produced_no_result(self, f: dict) -> bool:
+        """Did this file's analysis fail to produce a result at all?
+
+        Three independent signals, because different writers reach the manifest with different
+        shapes and any one of them alone would miss a real case:
+
+          * `status` — what Rubric.assess returned. "error" is an engine that did not succeed;
+            "skipped" is a file deliberately not analysed (an ACP-generated shadow of its own
+            source, handlers.py). Neither looked at the document.
+          * `succeeded is False` — the raw engine flag, present on hand-built records and on
+            the storeless paths that never go through the rubric.
+          * an error carrying no `rule` — scanner.py:2696/2714 report whole-file failures as
+            `{"message": ..., "rule": None}`. Something failed that cannot be attributed to a
+            rule, so the rules it did not name cannot be claimed either.
+
+        Conservative on purpose: every one of these means "do not certify this file", and the
+        cost of being wrong in that direction is a warning, while the cost of being wrong in the
+        other is a compliance claim about a document nobody read.
+        """
+        if (f.get("status") or "").lower() in ("error", "skipped"):
+            return True
+        if f.get("succeeded") is False:
+            return True
+        return any(not (isinstance(e, dict) and e.get("rule")) for e in (f.get("errors") or []))
+
     def _save_file_manifest(self, cur, sid: str, f: dict, catalog: dict) -> None:
-        """Compute and persist the per-rule execution manifest for one file."""
+        """Compute and persist the per-rule execution manifest for one file.
+
+        WHAT THIS USED TO RECORD, AND WHY IT WAS WORSE THAN RECORDING NOTHING. Every rule in the
+        file's catalog that was not in `issues` and not in `errors` was written PASS. Two things
+        made that a certification of work that was never done, and both were measured against a
+        real Store rather than read off the source:
+
+          * `errors` IS NOT ON THE FILE DICT ON THE PRODUCTION PATH. Rubric.assess
+            (scripts/rubric.py:55) CONSUMES the engine's error list and returns `status` and
+            `skipped_rules` in its place; scanner.analyse_and_assess builds the record from
+            `**assessed`, so `f["errors"]` was absent on every production write. `error_ids` was
+            therefore always empty and the ERROR branch below was unreachable — which made
+            `rules_errored_total` structurally 0 and `complete` structurally true for every scan
+            this table has ever held.
+          * A file the engine could not open reaches here with no issues and no errors, so the
+            `else` claimed the whole catalog as PASS. Measured: a .docx that failed to open
+            recorded 17 PASS, 0 ERROR, completeness 100%, complete=true.
+
+        So a file that produced no result now records NOT_CHECKED for every applicable rule
+        rather than PASS. "We did not look" and "we looked and found nothing" are different
+        claims and only one of them may be certified; PASS was asserting the second on evidence
+        for neither.
+
+        `errors` is still read, and is now populated (scanner.py threads `raw["errors"]` onto the
+        record), because it is the only thing that says WHICH rules errored. Where it is absent
+        the count still survives on file_records.skipped_rules, and get_scan_manifest reports the
+        difference as unattributed rather than resolving it to PASS.
+        """
         ext = Path(f["file"]).suffix.lower().lstrip(".")
         rules = catalog.get(ext, [])
         if not rules:
@@ -1633,13 +1907,20 @@ class Store:
         counts: dict[str, int] = {}
         for i in f.get("issues", []):
             counts[i["ruleId"]] = counts.get(i["ruleId"], 0) + 1
+        # The default for a rule nothing said anything about. PASS only when the file was
+        # actually analysed; otherwise the honest answer is that it was never checked.
+        unchecked = self._file_produced_no_result(f)
         manifest_rows = []
         for rule in rules:
             rid = rule["id"]
             if rid in error_ids:
                 status = "ERROR"
             elif rid in fail_ids:
+                # A finding is evidence the rule ran, so it stays FAIL even on a file whose
+                # analysis failed overall — a partial result is still a result for that rule.
                 status = "FAIL"
+            elif unchecked:
+                status = "NOT_CHECKED"
             else:
                 status = "PASS"
             manifest_rows.append((sid, f["file"], rid, status, counts.get(rid, 0)))
@@ -2346,8 +2627,9 @@ class Store:
     # ── Lifecycle status (Discover-completeness PRD §4.3 / §4.5) ─────────────────
     # The 7 statuses a discovered file can hold. Active is the default; a rule run or a manual
     # action moves it. Kept here (not an enum type) so the sqlite/postgres split needs no DDL.
-    LIFECYCLE_STATUSES = ("Active", "Archive Candidate", "Archived", "Delete Candidate",
-                          "Deleted", "Failed", "Exempted")
+    LIFECYCLE_STATUSES = ("Active", "Already archived", "Archive Candidate", "Archived",
+                          "Delete Candidate", "Deleted", "Failed", "Exempted", "Reactivated",
+                          "Unevaluable", "Conflict — review required")
     # Statuses Assess excludes by default (PRD §4.5): archive/delete-flagged and terminal.
     LIFECYCLE_EXCLUDED_DEFAULT = ("Archive Candidate", "Archived", "Delete Candidate", "Deleted")
 
@@ -2425,6 +2707,335 @@ class Store:
                 "FROM scan_inventory WHERE scan_id=%s GROUP BY COALESCE(lifecycle_status,'Active')",
                 (scan_id,))
             return {r["s"]: r["n"] for r in self._db.fetchall(cur)}
+
+    def bulk_create_lifecycle_evaluations(self, rows: list[tuple]) -> None:
+        """Persist immutable rule/file evidence snapshots. A deterministic evaluation id makes
+        retries idempotent; an existing snapshot is never rewritten by a later rule edit."""
+        if not rows:
+            return
+        with self._db.cursor() as cur:
+            self._db.executemany(cur,
+                "INSERT INTO lifecycle_evaluation(evaluation_id,scan_id,document_id,policy_id,"
+                "policy_version,result,evidence_json,proposed_action,priority,evaluated_at,owner_email) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(evaluation_id) DO NOTHING", rows)
+
+    def bulk_upsert_effective_dispositions(self, rows: list[tuple]) -> None:
+        if not rows:
+            return
+        with self._db.cursor() as cur:
+            self._db.executemany(cur,
+                "INSERT INTO effective_disposition(document_id,scan_id,winning_evaluation_id,"
+                "lifecycle_status,precedence_reason,approval_status,override_reason,updated_at,owner_email) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,document_id) DO UPDATE SET "
+                "winning_evaluation_id=EXCLUDED.winning_evaluation_id,lifecycle_status=EXCLUDED.lifecycle_status,"
+                "precedence_reason=EXCLUDED.precedence_reason,approval_status=EXCLUDED.approval_status,"
+                "override_reason=EXCLUDED.override_reason,updated_at=EXCLUDED.updated_at,owner_email=EXCLUDED.owner_email",
+                rows)
+
+    def lifecycle_summary(self, scan_id: str, owner: str) -> dict:
+        counts = self.count_lifecycle_by_status(scan_id)
+        total = self.count_inventory(scan_id)
+        normalized = {
+            "active": counts.get("Active", 0),
+            "already_archived": counts.get("Already archived", 0) + counts.get("Archived", 0),
+            "archive_candidate": counts.get("Archive Candidate", 0),
+            "delete_candidate": counts.get("Delete Candidate", 0),
+            "deleted": counts.get("Deleted", 0),
+            "exempt": counts.get("Exempted", 0),
+            "reactivated": counts.get("Reactivated", 0),
+            "unevaluable": counts.get("Unevaluable", 0) + counts.get("Conflict — review required", 0),
+            "failed": counts.get("Failed", 0),
+        }
+        candidate_count = normalized["archive_candidate"] + normalized["delete_candidate"]
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS evaluations,COUNT(DISTINCT document_id) AS evaluated_files,"
+                "COUNT(DISTINCT policy_id) AS recorded_rules FROM lifecycle_evaluation "
+                "WHERE scan_id=%s AND owner_email=%s", (scan_id, owner))
+            evidence = self._db.fetchone(cur) or {}
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM scan_inventory si WHERE si.scan_id=%s "
+                "AND si.lifecycle_status IN ('Archive Candidate','Delete Candidate') "
+                "AND EXISTS (SELECT 1 FROM lifecycle_evaluation le WHERE le.scan_id=si.scan_id "
+                "AND le.document_id=si.file AND le.policy_id=si.lifecycle_rule_id "
+                "AND le.owner_email=%s AND le.result IN ('matched','conflict'))", (scan_id, owner))
+            candidate_evidence = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            self._db.execute(cur, "SELECT scope FROM scan_runs WHERE id=%s AND owner_email=%s",
+                             (scan_id, owner))
+            run = self._db.fetchone(cur) or {}
+        scope = run.get("scope") or {}
+        if isinstance(scope, str):
+            try:
+                scope = json.loads(scope)
+            except Exception:
+                scope = {}
+        expected_rules = int(scope.get("lifecycle_rules_enabled") or 0)
+        recorded_rules = int(evidence.get("recorded_rules") or 0)
+        evidence_complete = (candidate_count == candidate_evidence and
+                             (expected_rules == 0 or recorded_rules >= expected_rules))
+        return {"scan_id": scan_id, "total": total, "reconciled_total": sum(normalized.values()),
+                "counts": normalized,
+                "assessment_excluded": normalized["already_archived"] + normalized["archive_candidate"] + normalized["delete_candidate"] + normalized["deleted"],
+                "data_version": self.lifecycle_data_version(scan_id),
+                "recommendations_only": True,
+                "integrity": {"evidence_complete": evidence_complete,
+                              "expected_rules": expected_rules,
+                              "recorded_rules": recorded_rules,
+                              "evaluations": int(evidence.get("evaluations") or 0),
+                              "evaluated_files": int(evidence.get("evaluated_files") or 0),
+                              "candidate_count": candidate_count,
+                              "candidates_with_evidence": candidate_evidence}}
+
+    def lifecycle_data_version(self, scan_id: str) -> str | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT MAX(evaluated_at) AS v FROM lifecycle_evaluation WHERE scan_id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+            return row.get("v") if row else None
+
+    def list_lifecycle_rule_results(self, scan_id: str, owner: str) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT le.policy_id,le.policy_version,COALESCE(dp.name,le.policy_id) AS name,"
+                "le.priority,le.proposed_action,MAX(le.evaluated_at) AS evaluated_at,COUNT(*) AS evaluated,"
+                "SUM(CASE WHEN le.result='matched' THEN 1 ELSE 0 END) AS matched,"
+                "SUM(CASE WHEN le.result IN ('skipped','exempt') THEN 1 ELSE 0 END) AS skipped,"
+                "SUM(CASE WHEN le.result='unevaluable' THEN 1 ELSE 0 END) AS unevaluable,"
+                "SUM(CASE WHEN le.result='conflict' THEN 1 ELSE 0 END) AS conflicts "
+                "FROM lifecycle_evaluation le LEFT JOIN disposition_policy dp ON dp.policy_id=le.policy_id "
+                "WHERE le.scan_id=%s AND le.owner_email=%s GROUP BY le.policy_id,le.policy_version,dp.name,le.priority,le.proposed_action "
+                "ORDER BY le.priority, name", (scan_id, owner))
+            return self._db.fetchall(cur)
+
+    def list_lifecycle_files(self, scan_id: str, owner: str, *, status: str | None = None,
+                             policy_id: str | None = None, candidate_only: bool = False,
+                             limit: int = 200, offset: int = 0) -> list[dict]:
+        where, args = ["si.scan_id=%s", "EXISTS (SELECT 1 FROM scan_runs sr WHERE sr.id=si.scan_id AND sr.owner_email=%s)"], [scan_id, owner]
+        if status == "already_archived":
+            where.append("COALESCE(si.lifecycle_status,'Active') IN ('Already archived','Archived')")
+        elif status == "unevaluable":
+            where.append("COALESCE(si.lifecycle_status,'Active') IN ('Unevaluable','Conflict — review required')")
+        elif status:
+            where.append("COALESCE(si.lifecycle_status,'Active')=%s"); args.append(status)
+        if candidate_only:
+            where.append("si.lifecycle_status IN ('Archive Candidate','Delete Candidate')")
+        if policy_id:
+            where.append("si.lifecycle_rule_id=%s"); args.append(policy_id)
+        args.extend([limit, offset])
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT {self._INV_COLS} FROM scan_inventory si WHERE {' AND '.join(where)} ORDER BY si.file LIMIT %s OFFSET %s",
+                tuple(args))
+            return self._db.fetchall(cur)
+
+    def lifecycle_history(self, file: str, owner: str, limit: int = 300) -> list[dict]:
+        """Everything recorded about one document's lifecycle, across EVERY scan (PRD §7.4).
+
+        The right-hand review panel is specified to show "prior scans, recommendations,
+        overrides, approvals, and source actions", and each of those lives in a different table:
+        lifecycle_evaluation holds what a rule decided and why, scan_inventory holds a reviewer's
+        override, disposition_audit holds the approval and its execution, and decision_log holds
+        everything either of those chose to narrate. This is four queries and stays four however
+        long the history is - the count is bounded by the number of SOURCES, not by events.
+
+        Keyed on `file` rather than on a doc id ON PURPOSE. The whole value of a timeline here is
+        that it crosses scans - "this was recommended in August, kept, then recommended again" -
+        and the lifecycle doc id embeds the scan (`scan:{scan_id}:{file}`), so keying on one
+        would return a single scan's worth of events and quietly look like the whole history.
+        Every source is owner-scoped independently; none of them infers ownership from another.
+        """
+        events: list[dict] = []
+        suffix = ":" + file
+        with self._db.cursor() as cur:
+            # 1. What each rule decided, in each scan.
+            self._db.execute(cur,
+                "SELECT scan_id,policy_id,policy_version,result,proposed_action,evaluated_at "
+                "FROM lifecycle_evaluation WHERE document_id=%s AND owner_email=%s "
+                "ORDER BY evaluated_at", (file, owner))
+            for row in self._db.fetchall(cur):
+                events.append({
+                    "ts": row.get("evaluated_at"), "kind": "evaluated",
+                    "scan_id": row.get("scan_id"), "policy_id": row.get("policy_id"),
+                    "policy_version": row.get("policy_version"), "result": row.get("result"),
+                    "action": row.get("proposed_action"), "actor": None,
+                    "detail": f"{row.get('policy_id')} v{row.get('policy_version')} "
+                              f"{row.get('result')}",
+                })
+
+            # 2. A reviewer's recorded disagreement, per scan.
+            self._db.execute(cur,
+                "SELECT scan_id,lifecycle_override_reason,lifecycle_overridden_by,"
+                "lifecycle_overridden_at FROM scan_inventory si WHERE file=%s "
+                "AND lifecycle_overridden_at IS NOT NULL AND EXISTS "
+                "(SELECT 1 FROM scan_runs sr WHERE sr.id=si.scan_id AND sr.owner_email=%s)",
+                (file, owner))
+            for row in self._db.fetchall(cur):
+                events.append({
+                    "ts": row.get("lifecycle_overridden_at"), "kind": "override",
+                    "scan_id": row.get("scan_id"), "policy_id": None, "policy_version": None,
+                    "result": "kept", "action": None,
+                    "actor": row.get("lifecycle_overridden_by"),
+                    "detail": row.get("lifecycle_override_reason") or "kept by a reviewer",
+                })
+
+            # 3. Approvals, rejections, and whatever execution then did.
+            # LIKE's wildcards are not escaped here because a filename containing % or _ can
+            # only ever OVER-match; the exact-suffix check below is what decides membership.
+            self._db.execute(cur,
+                "SELECT id,doc_id,ts,policy_id,policy_version,action,result,detail "
+                "FROM disposition_audit WHERE doc_id LIKE %s AND owner_email=%s ORDER BY ts",
+                ("scan:%" + suffix, owner))
+            for row in self._db.fetchall(cur):
+                doc_id = str(row.get("doc_id") or "")
+                if not (doc_id.startswith("scan:") and doc_id.endswith(suffix)):
+                    continue
+                events.append({
+                    "ts": row.get("ts"), "kind": "approval",
+                    "scan_id": doc_id[len("scan:"):-len(suffix)],
+                    "policy_id": row.get("policy_id"),
+                    "policy_version": row.get("policy_version"),
+                    "result": row.get("result"), "action": row.get("action"), "actor": None,
+                    "detail": row.get("detail") or "",
+                })
+
+            # 4. Anything either path chose to narrate.
+            self._db.execute(cur,
+                "SELECT dl.ts,dl.actor,dl.action,dl.scan_id,dl.rule_id,dl.detail "
+                "FROM decision_log dl WHERE dl.file=%s AND EXISTS "
+                "(SELECT 1 FROM scan_runs sr WHERE sr.id=dl.scan_id AND sr.owner_email=%s) "
+                "ORDER BY dl.ts", (file, owner))
+            for row in self._db.fetchall(cur):
+                events.append({
+                    "ts": row.get("ts"), "kind": "decision", "scan_id": row.get("scan_id"),
+                    "policy_id": row.get("rule_id"), "policy_version": None,
+                    "result": row.get("action"), "action": None, "actor": row.get("actor"),
+                    "detail": row.get("detail") or "",
+                })
+
+        # Oldest first: a timeline is read forwards. Undated rows sort last rather than being
+        # dropped - an event that happened is still evidence even when nothing recorded when.
+        events.sort(key=lambda e: (e.get("ts") is None, e.get("ts") or ""))
+        return events[:limit]
+
+    def drive_targets_for_files(self, scan_id: str, files: list[str], owner: str) -> dict[str, str]:
+        """{file: drive_file_id} for the files in one scan that have one, in ONE query.
+
+        This is the bridge between the two identifier spaces. The lifecycle evaluator stamps
+        `scan:{scan_id}:{file}` while the governance layer keys on `drive:{id}`, and the value
+        that connects them has been sitting on the inventory row the whole time. Reading it here
+        lets a plan say what WOULD happen to a lifecycle candidate without changing either id
+        scheme, and without a migration.
+
+        A file with no drive_file_id is simply absent, which the caller reports as a blocker —
+        it is not Drive-backed, so nothing could act on it."""
+        if not files:
+            return {}
+        placeholders = ",".join(["%s"] * len(files))
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT file,drive_file_id FROM scan_inventory si WHERE si.scan_id=%s "
+                f"AND si.file IN ({placeholders}) AND si.drive_file_id IS NOT NULL "
+                "AND EXISTS (SELECT 1 FROM scan_runs sr WHERE sr.id=si.scan_id "
+                "AND sr.owner_email=%s)",
+                (scan_id, *files, owner))
+            return {r["file"]: r["drive_file_id"] for r in self._db.fetchall(cur)
+                    if r.get("drive_file_id")}
+
+    def pending_approvals_by_file(self, scan_id: str, owner: str) -> dict[str, dict]:
+        """The pending disposition decision for each file in one scan, keyed by file, ONE query.
+
+        Deliberately NOT a join onto list_lifecycle_files. Two tables that look joinable here are
+        not safely so: lifecycle_evaluation holds a row per (scan, file, policy, VERSION), so a
+        re-evaluated policy multiplies the inventory row and silently inflates the queue's own
+        counts — the one number a reviewer has to be able to trust. disposition_audit is safe on
+        its own because only the CHOSEN action is queued for approval (tag rows land 'applied',
+        never 'pending_approval'), so there is exactly one pending row per file.
+
+        Carries what a grouped approval needs and nothing else: PRD §8 lets a batch cover only
+        rows sharing a policy, its version and its action, and the queue cannot bound a selection
+        by facts it was never given."""
+        out: dict[str, dict] = {}
+        prefix = f"scan:{scan_id}:"
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id,doc_id,policy_id,policy_version,action FROM disposition_audit "
+                "WHERE doc_id LIKE %s AND owner_email=%s AND result='pending_approval'",
+                (prefix + "%", owner))
+            for row in self._db.fetchall(cur):
+                doc_id = str(row.get("doc_id") or "")
+                if not doc_id.startswith(prefix):        # LIKE is not anchored on '_' wildcards
+                    continue
+                out[doc_id[len(prefix):]] = {
+                    "audit_id": row.get("id"), "policy_id": row.get("policy_id"),
+                    "policy_version": row.get("policy_version"), "action": row.get("action"),
+                }
+        return out
+
+    def count_lifecycle_files(self, scan_id: str, owner: str, *, status: str | None = None,
+                              policy_id: str | None = None, candidate_only: bool = False) -> int:
+        where, args = ["si.scan_id=%s", "EXISTS (SELECT 1 FROM scan_runs sr WHERE sr.id=si.scan_id AND sr.owner_email=%s)"], [scan_id, owner]
+        if status == "already_archived":
+            where.append("COALESCE(si.lifecycle_status,'Active') IN ('Already archived','Archived')")
+        elif status == "unevaluable":
+            where.append("COALESCE(si.lifecycle_status,'Active') IN ('Unevaluable','Conflict — review required')")
+        elif status:
+            where.append("COALESCE(si.lifecycle_status,'Active')=%s"); args.append(status)
+        if candidate_only:
+            where.append("si.lifecycle_status IN ('Archive Candidate','Delete Candidate')")
+        if policy_id:
+            where.append("si.lifecycle_rule_id=%s"); args.append(policy_id)
+        with self._db.cursor() as cur:
+            self._db.execute(cur, f"SELECT COUNT(*) AS n FROM scan_inventory si WHERE {' AND '.join(where)}", tuple(args))
+            return int((self._db.fetchone(cur) or {}).get("n") or 0)
+
+    def lifecycle_evaluations_by_document(self, scan_id: str, owner: str) -> dict[str, list[dict]]:
+        """Every lifecycle evaluation in one scan, grouped by document_id, in ONE query.
+
+        The per-file sibling below is right for a detail view and wrong for an export.
+        scan_inventory_csv called it once per inventory row over an endpoint whose own docstring
+        says "Not paginated: it IS the export" — and lifecycle_file_detail costs TWO queries
+        (the inventory row, then its evaluations), so a 6,000-file estate paid ~12,000 extra
+        round trips to decorate a single CSV. The rows were never the problem: with no
+        evaluations recorded the read amplification is zero and the query amplification is
+        still 2N, which is why tests/test_inventory_read_amplification.py's row counter did not
+        catch it and this one is guarded by a QUERY count instead.
+
+        Served by idx_lifecycle_evaluation_scan(scan_id, owner_email), which already existed."""
+        out: dict[str, list[dict]] = {}
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT document_id,evaluation_id,policy_id,policy_version,result,evidence_json,"
+                "proposed_action,priority,evaluated_at FROM lifecycle_evaluation "
+                "WHERE scan_id=%s AND owner_email=%s ORDER BY document_id,priority,policy_id",
+                (scan_id, owner))
+            for row in self._db.fetchall(cur):
+                # Same decode as lifecycle_file_detail, including its fail-soft: a row whose
+                # evidence will not parse still reports its policy and result rather than
+                # taking the whole export down.
+                try:
+                    row["evidence"] = json.loads(row.pop("evidence_json") or "{}")
+                except Exception:
+                    row["evidence"] = {}
+                out.setdefault(row.get("document_id"), []).append(row)
+        return out
+
+    def lifecycle_file_detail(self, scan_id: str, document_id: str, owner: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, f"SELECT {self._INV_COLS} FROM scan_inventory WHERE scan_id=%s AND file=%s "
+                             "AND EXISTS (SELECT 1 FROM scan_runs sr WHERE sr.id=scan_inventory.scan_id AND sr.owner_email=%s)",
+                             (scan_id, document_id, owner))
+            row = self._db.fetchone(cur)
+            if not row:
+                return None
+            self._db.execute(cur,
+                "SELECT evaluation_id,policy_id,policy_version,result,evidence_json,proposed_action,priority,evaluated_at "
+                "FROM lifecycle_evaluation WHERE scan_id=%s AND document_id=%s AND owner_email=%s ORDER BY priority,policy_id",
+                (scan_id, document_id, owner))
+            evaluations = self._db.fetchall(cur)
+            for evaluation in evaluations:
+                try: evaluation["evidence"] = json.loads(evaluation.pop("evidence_json") or "{}")
+                except Exception: evaluation["evidence"] = {}
+            return {**row, "evaluations": evaluations}
 
     # ── Per-file tags (PRD §4.2 Tag action / §3 auto-tagging) ───────────────────
     def add_file_tags(self, scan_id: str, file: str, tags: list[str], *,
@@ -2876,6 +3487,7 @@ class Store:
                          "file_stage_timings", "scan_file_manifests", "scan_inventory", "file_tags",
                          "scan_decisions", "pii_findings", "hitl_queue", "hitl_events",
                          "disposition_audit", "decision_log", "inventory", "jobs", "documents",
+                         "lifecycle_evaluation", "effective_disposition",
                          "org_memory", "remediation_state", "remediation_diff", "applied_fixes",
                          "ai_calls", "finding_comments",
                          "scan_inputs",  # Stage 1 item 3: per-scan enqueue snapshots are customer data
@@ -2887,10 +3499,34 @@ class Store:
                          "content_workspaces",  # ADR 0044 — a customer's own workspace, not config
                          "content_workspace_documents", "content_workspace_document_versions",
                          "orchestration_events",  # operational log — carries owner_email, customer data
-                         "worker_instances"]  # not customer data, but not genuine config either (no
+                         "worker_instances",  # not customer data, but not genuine config either (no
                          # owner_email, nothing a customer authors) — a fresh worker re-registers
                          # itself on the next heartbeat, same reasoning as active_discovery_guard's
                          # "transient lock state — cleared on reset" above.
+                         # ── ACR workspace (ADR 0047). All seven are DATA, on this file's existing
+                         # rule that RULES survive a reset and RECORDS do not: disposition_policy
+                         # survives while disposition_audit is wiped, and decision_log — the
+                         # append-only audit record — is wiped too. A conformance report is a
+                         # record about a product version, authored by a customer; none of it is
+                         # config.
+                         "acr_report", "acr_criterion", "acr_evidence", "acr_manual_test",
+                         # acr_manual_step is what a tester OBSERVED during a run — a record about
+                         # a product version, on exactly the same footing as the run it belongs to.
+                         "acr_manual_step",
+                         "acr_decision_log",
+                         # Published snapshots included, and the tension is worth naming: they are
+                         # immutable, which means never MODIFIED — not exempt from an explicit,
+                         # owner-authorised wipe of the whole account. overview_snapshots is
+                         # already classified this way for the same reason.
+                         "acr_snapshot",
+                         # Role grants go too, which is the one genuinely arguable call here.
+                         # Report-scoped grants dangle the instant their report is wiped, and a
+                         # surviving approver grant is exactly the kind of residue "completely
+                         # fresh" promises there will not be. Safe to wipe because it cannot lock
+                         # anyone out: acr_authz gives the protected ACP_OWNER_EMAIL every role
+                         # unconditionally, so the owner can always grant the first role again —
+                         # the same anti-lockout property core.is_owner exists to provide.
+                         "acr_role"]
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
@@ -5427,12 +6063,35 @@ class Store:
         """Return per-file rule-execution manifest for a scan.
 
         Each file lists every catalog rule and an explicit status:
-          PASS / FAIL / ERROR  — the rule applies to this file's format and ran
-          NOT_APPLICABLE       — the rule belongs to a different format (e.g. a
-                                 PPTX rule against a .docx). Recorded explicitly so
-                                 an auditor can see a rule was *considered*, not
-                                 silently omitted. N/A does not count against
-                                 completeness (completeness = checked / applicable).
+          PASS / FAIL         — the rule applies to this file's format and ran
+          ERROR               — the rule applies, was attempted, and the engine failed on it
+          NOT_CHECKED         — the rule applies and did NOT run. Its own status because the
+                                alternative was recording it PASS, which is a compliance claim
+                                about work never done (see _save_file_manifest).
+          NOT_APPLICABLE      — the rule belongs to a different format (e.g. a PPTX rule against
+                                a .docx). Recorded explicitly so an auditor can see a rule was
+                                *considered*, not silently omitted. N/A does not count against
+                                completeness (completeness = checked / applicable).
+
+        WHERE THE FILE LIST COMES FROM, AND WHY IT MOVED. This used to read
+        `SELECT DISTINCT file FROM scan_file_manifests`, which defines the scan's files as
+        "the files that have manifest rows" — so a file with none was not 0% complete, it was
+        ABSENT, and files_total under-reported the scan. _save_file_manifest returns early and
+        writes nothing whenever a file's extension has no catalog rules, so that was reachable
+        on any scan containing one. Measured: a two-file scan reported files_total 1.
+
+        The file list is now file_records — the scan's actual files — with the manifest table
+        unioned in so a manifest row can never be orphaned by a missing file record either. A
+        file with no rows is reported, with `reason` saying which kind of nothing it is:
+          no_manifest         — its format HAS rules and none were recorded. An integrity fault.
+          unsupported_format  — its format has no rules at all, so nothing was ever expected of
+                                it. Not a fault, and deliberately not counted as one.
+
+        UNATTRIBUTED ERRORS. `skipped_rules` on file_records is Rubric.assess's count of engine
+        errors, and it survives on paths where the error LIST does not (see _save_file_manifest).
+        Where that count exceeds the ERROR rows actually recorded, the difference is reported as
+        `rules_errored_unattributed` rather than resolved into PASS: the honest statement is
+        "N rules errored and which ones was not recorded", not "everything else passed".
         """
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -5440,14 +6099,19 @@ class Store:
                 "FROM scan_file_manifests WHERE scan_id=%s ORDER BY file, rule_id",
                 (scan_id,))
             rows = self._db.fetchall(cur)
-            # File extensions in this scan (to know each file's applicable rule set).
+            self._db.execute(cur,
+                "SELECT file, status, skipped_rules FROM file_records WHERE scan_id=%s",
+                (scan_id,))
+            records = {r["file"]: r for r in self._db.fetchall(cur)}
             self._db.execute(cur,
                 "SELECT DISTINCT file FROM scan_file_manifests WHERE scan_id=%s", (scan_id,))
-            scan_files = [r["file"] for r in self._db.fetchall(cur)]
+            manifest_files = [r["file"] for r in self._db.fetchall(cur)]
 
         catalog = self._full_catalog_rules()
         # Map every engine rule_id → its engine, for NOT_APPLICABLE derivation.
         all_rule_ids = {r["id"]: eng for eng, rules in catalog.items() for r in rules}
+        # The scan's files: what it recorded results for, plus anything with manifest rows.
+        scan_files = set(records) | set(manifest_files)
 
         by_file: dict[str, list[dict]] = {}
         for r in rows:
@@ -5458,40 +6122,91 @@ class Store:
             })
         files = []
         total_expected = total_checked = total_errored = total_na = 0
+        total_unchecked = total_unattributed = 0
         for fname in sorted(scan_files):
             rules = by_file.get(fname, [])
+            # Whether the scan RECORDED anything for this file, captured before the synthetic
+            # NOT_CHECKED rows below are added — `reason` and the completeness rules below both
+            # turn on it, and after the append `rules` can no longer answer it.
+            had_rows = bool(rules)
             applied_ids = {r["rule_id"] for r in rules}
+            record = records.get(fname) or {}
+            ext = Path(fname).suffix.lower().lstrip(".")
+            own_ids = {r["id"] for r in catalog.get(ext, [])}
+            catalog_size = len(own_ids)
+            # A file with NO rows still owes its own format's rules, so they are emitted as
+            # NOT_CHECKED here rather than swept into NOT_APPLICABLE with every other format's.
+            # Without this the summary counted them as missing (below) while the per-rule list
+            # called them not-applicable — the two halves of the same answer disagreeing, and the
+            # named-checks disclosure in the UI showing nothing for the very file it is about.
+            missing_own = ([{"rule_id": rid, "status": "NOT_CHECKED", "finding_count": 0}
+                            for rid in sorted(own_ids)] if not rules else [])
             # Rules from other formats → explicit NOT_APPLICABLE.
+            claimed = applied_ids | {r["rule_id"] for r in missing_own}
             na = [{"rule_id": rid, "status": "NOT_APPLICABLE", "finding_count": 0}
-                  for rid in sorted(all_rule_ids) if rid not in applied_ids]
-            expected = len(rules)
+                  for rid in sorted(all_rule_ids) if rid not in claimed]
+            rules = rules + missing_own
+
             errored = sum(1 for r in rules if r["status"] == "ERROR")
-            checked = expected - errored
-            total_expected += expected
-            total_checked += checked
-            total_errored += errored
+            unchecked = sum(1 for r in rules if r["status"] == "NOT_CHECKED")
+            # Errors the rubric counted but no row names. Never folded into `checked`.
+            unattributed = max(0, int(record.get("skipped_rules") or 0) - errored)
+            # A file with no rows at all is expected to have its whole catalog — `missing_own`
+            # above already put those rules in as NOT_CHECKED, so the gap reads as the size of
+            # what was skipped rather than as an empty, complete file.
+            expected = len(rules) or catalog_size
+            # Capped at what is left after the rules already accounted for. On a file where
+            # NOTHING ran, every rule is already NOT_CHECKED and the rubric's error count is a
+            # second description of the same gap — counting it again would report more missing
+            # rules than the file has.
+            unattributed = min(unattributed, max(0, expected - errored - unchecked))
+            checked = max(0, expected - errored - unchecked - unattributed)
+
+            reason = None
+            if not had_rows:
+                reason = "unsupported_format" if catalog_size == 0 else "no_manifest"
+            # An unsupported format expected nothing, so it is neither complete nor incomplete —
+            # it is out of scope, and must not drag the percentage down or up.
+            counts_towards_completeness = reason != "unsupported_format"
+            if counts_towards_completeness:
+                total_expected += expected
+                total_checked += checked
+                total_errored += errored
+                total_unchecked += unchecked
+                total_unattributed += unattributed
             total_na += len(na)
             files.append({
                 "file": fname,
+                "file_status": record.get("status"),
+                "reason": reason,
                 "rules_expected": expected,
                 "rules_checked": checked,
                 "rules_errored": errored,
+                "rules_not_checked": unchecked,
+                "rules_errored_unattributed": unattributed,
                 "rules_not_applicable": len(na),
-                "completeness_pct": round(checked / expected * 100) if expected else 100,
-                "complete": errored == 0,
+                "completeness_pct": (round(checked / expected * 100) if expected
+                                     else (100 if reason == "unsupported_format" else 0)),
+                "complete": (checked == expected) if counts_towards_completeness else True,
                 "rules": rules + na,
             })
+        # `complete` means every applicable rule on every file actually ran. It used to mean
+        # `rules_errored_total == 0`, which — with the ERROR branch unreachable — was true of
+        # every scan regardless of what happened during it.
+        incomplete = total_errored + total_unchecked + total_unattributed
         return {
             "scan_id": scan_id,
             "files_total": len(files),
             "rules_expected_total": total_expected,
             "rules_checked_total": total_checked,
             "rules_errored_total": total_errored,
+            "rules_not_checked_total": total_unchecked,
+            "rules_errored_unattributed_total": total_unattributed,
             "rules_not_applicable_total": total_na,
             "completeness_pct": (
                 round(total_checked / total_expected * 100) if total_expected else 100
             ),
-            "complete": total_errored == 0,
+            "complete": incomplete == 0,
             "files": files,
         }
 
@@ -5809,7 +6524,11 @@ class Store:
         for p in (row.get("proposals") or []):
             if not isinstance(p, dict):
                 continue
-            if p.get("explain_only"):
+            # Explain-only: confirmed evidence, never bytes for the document.
+            # Companion: a caption/transcript FILE delivered beside the document. Both are
+            # approved and addressable, and neither is content an applier will write in, so
+            # counting either as outstanding blocks certification for good.
+            if p.get("explain_only") or Store.companion_name(p.get("companion_file")):
                 continue
             loc = (p.get("locator") or "").strip()
             val = (p.get("approved_value") or "").strip() or (p.get("proposed_value") or "").strip()
@@ -5879,6 +6598,79 @@ class Store:
         props = [p for p in (row.get("proposals") or []) if isinstance(p, dict)]
         return bool(props) and all(p.get("explain_only") for p in props)
 
+    @staticmethod
+    def companion_name(raw) -> str:
+        """A companion filename reduced to a BARE NAME, or "" when there isn't one.
+
+        Sanitised where the value is READ rather than only where it is built, and the reason is
+        that the JSON blob is the trust boundary: a row written by an older build, or by a
+        proposer someone adds later, has not been through today's builder. The name is derived
+        from a media filename out of a customer's estate, it reaches a Content-Disposition header
+        and it is the obvious basis for a path — so a `../` in it is a traversal handed to
+        whatever writes the file next.
+
+        `PurePosixPath().name` drops every directory component, on either separator, and the
+        result is checked against the two names that survive that and still mean a directory.
+        """
+        import posixpath as _pp
+        name = str(raw or "").strip().replace("\\", "/")
+        name = _pp.basename(name)
+        return "" if name in ("", ".", "..") else name
+
+    @staticmethod
+    def _row_companion_files(row: dict) -> dict[str, str]:
+        """{filename: content} this row delivers ALONGSIDE the document — never into it.
+
+        The reviewer's `approved_value` wins over the draft, and the fallback is the same one
+        `_row_approved_values` argues for: a reviewer who edited nothing has agreed to exactly
+        the draft they were shown. Getting this backwards is the quiet failure — a corrected
+        caption file and the machine's original are both valid WebVTT, so handing back the wrong
+        one looks like nothing at all.
+
+        A row resolved by a WCAG exception yields nothing, for the same reason it yields no
+        approved values: the reviewer closed it by judgement and authored no artefact.
+        """
+        out: dict[str, str] = {}
+        if Store._row_is_resolved(row):
+            return out
+        for p in (row.get("proposals") or []):
+            if not isinstance(p, dict):
+                continue
+            name = Store.companion_name(p.get("companion_file"))
+            if not name:
+                continue
+            # NOT `.strip()`ed, unlike `_row_approved_values`, and the difference is the point.
+            # There a value is a STRING going into a document — a stray newline around alt text
+            # is noise. Here it is a FILE's bytes: WebVTT is newline-delimited and its trailing
+            # newline is part of the artefact, so stripping would hand back a file that differs
+            # from the one the reviewer approved. Emptiness is still tested on the stripped form,
+            # because a value of only whitespace is not a caption file either.
+            val = p.get("approved_value") or ""
+            if not val.strip():
+                val = p.get("proposed_value") or ""
+            if val.strip():
+                out[name] = val
+        return out
+
+    @staticmethod
+    def _row_owes_no_document_content(row: dict) -> bool:
+        """True when nothing on this row is content awaiting a write into the document.
+
+        THE PREDICATE THE COUNTERS ASK, replacing `resolved or explain_only` at both call sites.
+        A companion row joins that set: a caption file is delivered beside the media and no
+        applier will ever write it in, so counting its approved value as outstanding content
+        would wedge the file permanently on a correct approval — the exact dead end
+        `_row_is_explain_only` was added to close, arriving through a new door.
+
+        Kept as ALL-of, like `_row_is_explain_only`: a row mixing a companion with a writable
+        proposal still owes the writable one, and `_row_approved_values` keeps that distinction
+        per proposal. No mixed row exists today; the point is that the mixed case fails safe.
+        """
+        if Store._row_is_resolved(row) or Store._row_is_explain_only(row):
+            return True
+        props = [p for p in (row.get("proposals") or []) if isinstance(p, dict)]
+        return bool(props) and all(Store.companion_name(p.get("companion_file")) for p in props)
+
     def _approved_unapplied_rows(self, scan_id: str, file: str) -> list[dict]:
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -5906,7 +6698,7 @@ class Store:
         """
         n = 0
         for row in self._approved_unapplied_rows(scan_id, file):
-            owes_nothing = self._row_is_resolved(row) or self._row_is_explain_only(row)
+            owes_nothing = self._row_owes_no_document_content(row)
             legacy = "" if owes_nothing else (row.get("approved_value") or "").strip()
             if self._row_approved_values(row) or legacy:
                 n += 1
@@ -5923,7 +6715,7 @@ class Store:
                 "AND (applied IS NULL OR applied=0)", (scan_id,))
             for r in self._db.fetchall(cur):
                 row = self._decode_proposals(r)
-                owes_nothing = self._row_is_resolved(row) or self._row_is_explain_only(row)
+                owes_nothing = self._row_owes_no_document_content(row)
                 legacy = "" if owes_nothing else (row.get("approved_value") or "").strip()
                 if self._row_approved_values(row) or legacy:
                     f = str(row.get("file") or "")
@@ -6449,6 +7241,60 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT 1")
             self._db.fetchone(cur)
+
+    # Every role a worker container can be started as (core._worker_job_types validates the same
+    # set). Enumerated rather than discovered by scanning app_settings for a key prefix: the set
+    # is closed and small, and a prefix scan would silently start reporting any future key that
+    # happened to share the namespace.
+    WORKER_ROLES = ("mixed", "discovery", "assess", "remediate", "processing")
+
+    def worker_roles_status(self, window_s: int = 120) -> dict:
+        """Per-ROLE heartbeat, keyed by role. The shared key cannot answer this.
+
+        WHY THIS EXISTS. worker_main writes its beat TWICE (worker_main.py:105-106): once to
+        `worker_tier_heartbeat`, and once to `worker_tier_heartbeat:<role>`. `worker_tier_status`
+        reads only the first, which is a single row — so with more than one worker service
+        running (acp-worker and acp-discovery, since #1169), it reports WHICHEVER BEAT LAST.
+
+        That is not a hypothetical. Measured against production on 2026-09-01, sampling /readyz
+        every 6s for 90s while the app was on 2026.9.1.23:
+
+            2026.8.31.39  pool=2   x13
+            2026.8.31.20  pool=3   x1
+
+        Two services alternating in one field. Read as a single tier, that looks like a version
+        flapping at random; read per role, it is two services each with its own answer. Anything
+        that compares "the worker version" against an expected build — a deploy check, a monitor,
+        an operator — needs the second reading, because the first is a coin toss between services.
+
+        A role absent from the result has never beaten under that key. That is deliberately
+        distinct from a role that beat and went stale (present, `alive` false, with an age), the
+        same distinction `worker_tier_status` draws for the tier as a whole.
+        """
+        from datetime import datetime, timezone
+        out: dict[str, dict] = {}
+        for role in self.WORKER_ROLES:
+            raw = self.get_setting(f"worker_tier_heartbeat:{role}")
+            if not raw:
+                continue
+            iso, pool_size, version = _parse_worker_tier_heartbeat(raw)
+            entry = {"heartbeat_at": iso or None, "age_s": None, "alive": False,
+                     "pool_size": pool_size, "version": version}
+            try:
+                beat = datetime.fromisoformat(iso)
+            except (ValueError, TypeError):
+                # Same posture as worker_tier_status: a corrupt timestamp is a real fault and must
+                # not read as "never started". Reported against the ORIGINAL value.
+                entry["heartbeat_at"] = f"unparseable: {raw!r}"
+                out[role] = entry
+                continue
+            if beat.tzinfo is None:
+                beat = beat.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - beat).total_seconds()
+            entry["age_s"] = round(age, 1)
+            entry["alive"] = age <= window_s
+            out[role] = entry
+        return out
 
     def worker_tier_status(self, window_s: int = 120) -> dict:
         """The heartbeat with its AGE, not just a boolean.
@@ -8085,6 +8931,27 @@ class Store:
             self._db.execute(cur, "SELECT * FROM jobs" + where + " ORDER BY updated_at DESC LIMIT %s", tuple(params))
             return self._db.fetchall(cur)
 
+    def list_scan_jobs_of_type(self, scan_id: str, job_type: str) -> list[dict]:
+        """Every job of one type already enqueued for one scan, whatever its status.
+
+        The RESUME primitive for a fan-out handler. enqueue_job has no idempotency key, so a
+        fan-out that is interrupted half-way and then reclaimed would enqueue the whole
+        population a second time — the first half twice, and `files` (set from the population,
+        not from the queue) describing neither. Reading what is already there lets the second
+        attempt enqueue only the remainder, which is what makes the fan-out a checkpoint rather
+        than a restart.
+
+        Status is deliberately NOT filtered: a job that already ran and is 'done', or one that
+        dead-lettered, must both count as enqueued. Re-enqueuing a done file would redo work the
+        results already reflect, and re-enqueuing a dead-lettered one would resurrect a job the
+        queue has deliberately given up on.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id, type, status, payload FROM jobs WHERE scan_id=%s AND type=%s",
+                (scan_id, job_type))
+            return self._db.fetchall(cur)
+
     # Job `type` -> the user-facing phase it belongs to, for the pickup-estimate panel on
     # Discover/Assess/Remediate. Several types (scan_finalize) are shared tail-of-pipeline
     # steps; classified under the phase that enqueues them in the common case.
@@ -8651,16 +9518,37 @@ class Store:
 
     def bulk_create_disposition_audit(self, rows: list) -> None:
         """Bulk-insert disposition audit rows accumulated by the lifecycle rule evaluator.
-        rows: list of (audit_id, doc_id, policy_id, action, result, detail, owner_email)."""
+        rows: (audit_id, doc_id, policy_id, action, result, detail, owner_email, policy_version).
+
+        policy_version is REQUIRED rather than defaulted: a row that cannot say which version of
+        a rule produced it can never be part of a grouped approval (PRD §8), and defaulting it to
+        1 would make a stale row look like a current one to the batch route."""
         if not rows:
             return
         now = self._now()
         with self._db.cursor() as cur:
             self._db.executemany(cur,
                 "INSERT INTO disposition_audit(id,ts,doc_id,policy_id,action,result,detail,"
-                "owner_email) VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
-                [(audit_id, now, doc_id, policy_id, action, result, detail, owner_email)
-                 for audit_id, doc_id, policy_id, action, result, detail, owner_email in rows])
+                "owner_email,policy_version) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(id) DO NOTHING",
+                [(audit_id, now, doc_id, policy_id, action, result, detail, owner_email, version)
+                 for audit_id, doc_id, policy_id, action, result, detail, owner_email, version
+                 in rows])
+
+    def list_disposition_audit_by_ids(self, audit_ids: list[str], owner: str) -> list[dict]:
+        """The batch a reviewer actually selected, in ONE query, owner-scoped.
+
+        PRD §11: "Bulk approval displays and submits explicit document ids; it never means 'all
+        current matches' at execute time." So this takes ids and nothing else — there is
+        deliberately no filter-based sibling that could re-expand to whatever matches now."""
+        if not audit_ids:
+            return []
+        placeholders = ",".join(["%s"] * len(audit_ids))
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT * FROM disposition_audit WHERE id IN ({placeholders}) AND owner_email=%s",
+                (*audit_ids, owner))
+            return self._db.fetchall(cur)
 
     def get_disposition_audit(self, audit_id: str, owner: str | None = None) -> dict | None:
         with self._db.cursor() as cur:
@@ -8697,6 +9585,35 @@ class Store:
             self._db.execute(cur,
                 "UPDATE disposition_audit SET result=%s, detail=%s WHERE id=%s",
                 (result, detail, audit_id))
+
+    def set_disposition_before_state(self, audit_id: str, before: dict | None) -> None:
+        """Record what the file looked like before an applied action (PRD §8).
+
+        Written only on the applied path and never overwritten: a second write would mean the
+        stored 'before' no longer describes the state the first action moved the file out of,
+        and an undo against that is a move to somewhere the file has never been. NULL stays NULL
+        for a failure, because a before-state that MIGHT be true is worse than none."""
+        if not before:
+            return
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE disposition_audit SET before_state=%s "
+                "WHERE id=%s AND before_state IS NULL",
+                (json.dumps(before, separators=(",", ":")), audit_id))
+
+    def get_disposition_before_state(self, audit_id: str, owner: str) -> dict | None:
+        """The recorded before-state for one audit row, or None. Owner-scoped."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT before_state FROM disposition_audit WHERE id=%s AND owner_email=%s",
+                (audit_id, owner))
+            row = self._db.fetchone(cur)
+        if not row or not row.get("before_state"):
+            return None
+        try:
+            return json.loads(row["before_state"])
+        except Exception:      # noqa: BLE001 — an unreadable record must refuse, never guess
+            return None
 
     def doc_has_disposition(self, doc_id: str, policy_id: str) -> bool:
         """True if this policy already produced a live outcome for this doc — used to
@@ -9087,3 +10004,475 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT file, severity FROM issue_records WHERE scan_id=%s", (scan_id,))
             return self._db.fetchall(cur)
+
+    # ── Accessibility Conformance Report workspace (ADR 0047) ───────────────────
+    # Every read is owner-scoped IN THE QUERY, not filtered afterwards — a foreign report id must
+    # come back exactly like a nonexistent one, the contract tests/test_foreign_scan_404.py already
+    # fixes for scans (an id is never an existence oracle across owners).
+
+    # The metadata fields a caller may set. `status`, `catalog_hash`, `revision`, `published_at`
+    # and the ids are NOT here on purpose: they are lifecycle facts this layer owns, and letting a
+    # PATCH body carry them is how a draft acquires a published_at.
+    _ACR_REPORT_EDITABLE = (
+        "report_title", "product_name", "product_version", "build_id", "release_date",
+        "vendor_name", "vendor_contact", "product_description", "evaluation_scope",
+        "excluded_functionality", "deployment_environment", "vpat_edition", "wcag_version",
+        "wcag_levels", "evaluation_methods", "browsers_tested", "operating_systems_tested",
+        "assistive_technologies_tested", "automated_tools", "testing_period_start",
+        "testing_period_end", "evaluators", "general_notes", "known_dependencies",
+        "evidence_validity_days")
+
+    def create_acr_report(self, report_id: str, *, owner_email: str, catalog_hash: str,
+                          criteria: list[dict], metadata: dict | None = None,
+                          supersedes_id: str | None = None, revision: int = 1) -> None:
+        """Create a draft report AND its full criteria matrix in one transaction.
+
+        Both together, deliberately: a report row without its matrix is a report that looks
+        complete and silently has nothing to evaluate, and PRD §21.2 ("the system creates the
+        complete applicable criteria matrix") is not satisfied by a row that will get its criteria
+        on some later request.
+        """
+        meta = dict(metadata or {})
+        now = self._now()
+        # Built as (column, value) PAIRS rather than two positional lists. The first draft of this
+        # zipped _ACR_REPORT_COLS against _ACR_REPORT_EDITABLE and silently shifted every field
+        # after `evaluators` by one, because `approver` sits between `evaluators` and
+        # `general_notes` in the column list and is not caller-editable. A positional INSERT over
+        # 35 columns has no way to report that; every value simply lands one column to the left.
+        cols: list[tuple[str, object]] = [
+            ("id", report_id), ("owner_email", owner_email), ("status", "draft"),
+            ("catalog_hash", catalog_hash), ("supersedes_id", supersedes_id),
+            ("revision", revision),
+        ]
+        cols += [(f, meta.get(f)) for f in self._ACR_REPORT_EDITABLE]
+        # approver is stamped at sign-off, never at creation (PRD §4.2).
+        cols += [("approver", None), ("created_at", now), ("updated_at", now),
+                 ("published_at", None)]
+        names = ",".join(c for c, _ in cols)
+        placeholders = ",".join(["%s"] * len(cols))
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"INSERT INTO acr_report({names}) VALUES({placeholders})",
+                tuple(v for _, v in cols))
+            for row in criteria:
+                self._db.execute(cur,
+                    "INSERT INTO acr_criterion(report_id,criterion_num,owner_email,criterion_name,"
+                    "level,principle,guideline,applicable,workflow_state,draft_status,final_status,"
+                    "remarks,evaluator,reviewer,approval_state,decided_at,approved_at,updated_at) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    (report_id, row["criterion_num"], owner_email, row.get("criterion_name"),
+                     row.get("level"), row.get("principle"), row.get("guideline"),
+                     1 if row.get("applicable", True) else 0,
+                     row.get("workflow_state", "not_evaluated"), None, None, None, None, None,
+                     "unapproved", None, None, now))
+
+    def list_acr_reports(self, owner_email: str) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM acr_report WHERE owner_email=%s ORDER BY created_at DESC",
+                (owner_email,))
+            return self._db.fetchall(cur)
+
+    def get_acr_report(self, report_id: str, *, owner_email: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM acr_report WHERE id=%s AND owner_email=%s",
+                             (report_id, owner_email))
+            return self._db.fetchone(cur)
+
+    def update_acr_report_metadata(self, report_id: str, *, owner_email: str, fields: dict) -> int:
+        """Patch report metadata. Refuses once published (PRD §17: snapshots are immutable).
+
+        Returns the number of fields written. Unknown keys are IGNORED rather than erroring — the
+        allow-list is the point, and a 400 on an extra key would make the endpoint brittle to
+        harmless client drift while adding no safety.
+        """
+        writable = {k: v for k, v in fields.items() if k in self._ACR_REPORT_EDITABLE}
+        if not writable:
+            return 0
+        sets = ",".join(f"{k}=%s" for k in writable)
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"UPDATE acr_report SET {sets},updated_at=%s "
+                "WHERE id=%s AND owner_email=%s AND status='draft'",
+                (*writable.values(), self._now(), report_id, owner_email))
+        return len(writable)
+
+    def list_acr_criteria(self, report_id: str, *, owner_email: str) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM acr_criterion WHERE report_id=%s AND owner_email=%s "
+                "ORDER BY criterion_num",
+                (report_id, owner_email))
+            return self._db.fetchall(cur)
+
+    def get_acr_criterion(self, report_id: str, criterion_num: str, *, owner_email: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM acr_criterion WHERE report_id=%s AND criterion_num=%s "
+                "AND owner_email=%s",
+                (report_id, criterion_num, owner_email))
+            return self._db.fetchone(cur)
+
+    def save_acr_decision(self, report_id: str, criterion_num: str, *, owner_email: str,
+                          final_status: str, remarks: str | None, decided_by: str) -> None:
+        """Record a human's final conformance decision.
+
+        The four-value constraint is enforced HERE as well as in acr_model, and that duplication is
+        deliberate. This column's values are printed verbatim into a customer's conformance table;
+        a workflow state that reached it by any route at all — a future caller that skips the
+        dataclass, a migration, a fixture — would be exported as if it were a VPAT conformance
+        level. It is the one field in this schema where a wrong value is a false compliance claim,
+        so it is checked at every layer that can write it.
+        """
+        from acr_catalog import FINAL_STATUSES, REMARKS_REQUIRED
+        if final_status not in FINAL_STATUSES:
+            raise ValueError(
+                f"{final_status!r} is not a VPAT conformance level {sorted(FINAL_STATUSES)}")
+        if final_status in REMARKS_REQUIRED and not (remarks or "").strip():
+            raise ValueError(f"{final_status!r} requires remarks (PRD §10)")
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE acr_criterion SET final_status=%s,remarks=%s,evaluator=%s,"
+                "workflow_state='decided',decided_at=%s,updated_at=%s "
+                "WHERE report_id=%s AND criterion_num=%s AND owner_email=%s",
+                (final_status, remarks, decided_by, self._now(), self._now(),
+                 report_id, criterion_num, owner_email))
+
+    def save_acr_draft_status(self, report_id: str, criterion_num: str, *, owner_email: str,
+                              draft_status: str | None, workflow_state: str) -> None:
+        """ACP's own suggestion. Never touches final_status — PRD §20 forbids the model selecting
+        or approving a conformance status, and the only structural guarantee of that is that the
+        code path which writes suggestions cannot write decisions."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE acr_criterion SET draft_status=%s,workflow_state=%s,updated_at=%s "
+                "WHERE report_id=%s AND criterion_num=%s AND owner_email=%s",
+                (draft_status, workflow_state, self._now(), report_id, criterion_num, owner_email))
+
+    def set_acr_criterion_applicability(self, report_id: str, criterion_num: str, *,
+                                        owner_email: str, applicable: bool) -> None:
+        """The workspace's own triage flag (PRD §9's applicability column).
+
+        Deliberately CANNOT write final_status. Deciding "Not Applicable" is a conformance
+        judgement that a customer reads and that PRD §10 requires remarks for; this is only
+        "we do not expect to evaluate this". Keeping them in separate code paths is what stops
+        a triage click from becoming an exported conformance claim.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE acr_criterion SET applicable=%s,updated_at=%s "
+                "WHERE report_id=%s AND criterion_num=%s AND owner_email=%s",
+                (1 if applicable else 0, self._now(), report_id, criterion_num, owner_email))
+
+    def approve_acr_criterion(self, report_id: str, criterion_num: str, *, owner_email: str,
+                              reviewer: str) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE acr_criterion SET approval_state='approved',reviewer=%s,approved_at=%s,"
+                "updated_at=%s WHERE report_id=%s AND criterion_num=%s AND owner_email=%s "
+                "AND final_status IS NOT NULL",
+                (reviewer, self._now(), self._now(), report_id, criterion_num, owner_email))
+
+    def add_acr_evidence(self, row: dict, *, owner_email: str) -> None:
+        """Append one evidence record. Append-only: there is no update_acr_evidence, by design."""
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO acr_evidence(id,report_id,criterion_num,owner_email,source_kind,"
+                "result,tester,tested_at,product_version,build_id,environment,workflow,browser,"
+                "assistive_tech,tool_name,tool_version,rule_id,tested_url,coverage,method,notes,"
+                "attachments,related_finding_ids,stale_reason,created_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (row["id"], row["report_id"], row["criterion_num"], owner_email,
+                 row["source_kind"], row["result"], row.get("tester"), row.get("tested_at"),
+                 row.get("product_version"), row.get("build_id"), row.get("environment"),
+                 row.get("workflow"), row.get("browser"), row.get("assistive_tech"),
+                 row.get("tool_name"), row.get("tool_version"), row.get("rule_id"),
+                 row.get("tested_url"), row.get("coverage"), row.get("method"), row.get("notes"),
+                 _json.dumps(row.get("attachments") or []),
+                 _json.dumps(row.get("related_finding_ids") or []),
+                 None, row.get("created_at") or self._now()))
+
+    def list_acr_evidence(self, report_id: str, *, owner_email: str,
+                          criterion_num: str | None = None) -> list[dict]:
+        sql = "SELECT * FROM acr_evidence WHERE report_id=%s AND owner_email=%s"
+        params: tuple = (report_id, owner_email)
+        if criterion_num:
+            sql += " AND criterion_num=%s"
+            params += (criterion_num,)
+        with self._db.cursor() as cur:
+            self._db.execute(cur, sql + " ORDER BY tested_at, id", params)
+            return self._db.fetchall(cur)
+
+    # ── Guided manual test runs (PRD §14, Phase 3) ────────────────────────────────────────────
+    #
+    # A "run" is one tester working one plan against one criterion. `acr_manual_test` holds the
+    # run; `acr_manual_step` holds one row per step outcome. Neither table stores the run's
+    # environment: a completed run produces an acr_evidence row, and THAT carries the browser,
+    # assistive technology and environment (PRD §4.5). Keeping one home for that metadata is what
+    # stops a run looking reproducible while the durable record has nothing in it.
+
+    def start_acr_manual_run(self, report_id: str, criterion_num: str, *, owner_email: str,
+                             plan_id: str, tester: str | None = None) -> str:
+        """Begin a run. Returns its id. Starting twice is allowed — a plan can be re-run against a
+        new product version, and acr_freshness decides which runs still count."""
+        run_id = f"acrmt_{uuid.uuid4().hex[:12]}"
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO acr_manual_test(id,report_id,criterion_num,owner_email,plan_id,"
+                "result,evidence_id,tester,notes,created_at,updated_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (run_id, report_id, criterion_num, owner_email, plan_id,
+                 None, None, tester, None, self._now(), self._now()))
+        return run_id
+
+    def list_acr_manual_runs(self, report_id: str, *, owner_email: str,
+                             criterion_num: str | None = None) -> list[dict]:
+        sql = "SELECT * FROM acr_manual_test WHERE report_id=%s AND owner_email=%s"
+        params: tuple = (report_id, owner_email)
+        if criterion_num:
+            sql += " AND criterion_num=%s"
+            params += (criterion_num,)
+        with self._db.cursor() as cur:
+            self._db.execute(cur, sql + " ORDER BY created_at, id", params)
+            return self._db.fetchall(cur)
+
+    def record_acr_manual_step(self, run_id: str, *, report_id: str, owner_email: str,
+                               step_index: int, outcome: str, notes: str | None = None) -> None:
+        """Record what the tester observed at one step. Re-recording a step REPLACES it.
+
+        Deliberately not append-only, unlike acr_evidence. A tester correcting a mis-click during
+        a run is fixing a typo, not retracting a finding — the finding is the evidence row the
+        completed run produces, and that stays append-only.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "DELETE FROM acr_manual_step WHERE run_id=%s AND step_index=%s AND owner_email=%s",
+                (run_id, step_index, owner_email))
+            self._db.execute(cur,
+                "INSERT INTO acr_manual_step(id,run_id,report_id,owner_email,step_index,outcome,"
+                "notes,recorded_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                (f"acrms_{uuid.uuid4().hex[:12]}", run_id, report_id, owner_email,
+                 int(step_index), outcome, notes, self._now()))
+            self._db.execute(cur,
+                "UPDATE acr_manual_test SET updated_at=%s WHERE id=%s AND owner_email=%s",
+                (self._now(), run_id, owner_email))
+
+    def list_acr_manual_steps(self, report_id: str, *, owner_email: str) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM acr_manual_step WHERE report_id=%s AND owner_email=%s "
+                "ORDER BY run_id, step_index", (report_id, owner_email))
+            return self._db.fetchall(cur)
+
+    def complete_acr_manual_run(self, run_id: str, *, report_id: str, owner_email: str,
+                                result: str, evidence_id: str, tester: str,
+                                notes: str | None = None) -> None:
+        """Close a run by linking the evidence row it produced.
+
+        `result` is what the tester OBSERVED across the plan, not a conformance status — this
+        method cannot reach acr_criterion.final_status, and there is no code path from here to it.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE acr_manual_test SET result=%s,evidence_id=%s,tester=%s,notes=%s,"
+                "updated_at=%s WHERE id=%s AND report_id=%s AND owner_email=%s",
+                (result, evidence_id, tester, notes, self._now(), run_id, report_id, owner_email))
+
+    def append_acr_decision_log(self, report_id: str, *, owner_email: str, actor: str | None,
+                                action: str, criterion_num: str | None = None,
+                                detail: str | None = None) -> None:
+        """Append-only audit (PRD §17). Never updated, never deleted."""
+        import uuid as _uuid
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO acr_decision_log(id,ts,report_id,owner_email,actor,action,"
+                "criterion_num,detail) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                (_uuid.uuid4().hex, self._now(), report_id, owner_email, actor, action,
+                 criterion_num, detail))
+
+    def list_acr_decision_log(self, report_id: str, *, owner_email: str) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM acr_decision_log WHERE report_id=%s AND owner_email=%s "
+                "ORDER BY ts, id",
+                (report_id, owner_email))
+            return self._db.fetchall(cur)
+
+    def create_acr_snapshot(self, snapshot_id: str, *, report_id: str, owner_email: str,
+                            revision: int, catalog_hash: str, content_json: str,
+                            content_digest: str, published_by: str,
+                            docx_blob_path: str | None = None) -> str:
+        """Write the immutable published snapshot and flip the report to published.
+
+        One transaction: a report marked published whose snapshot write failed would be a report
+        claiming an artifact that does not exist.
+        """
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO acr_snapshot(id,report_id,owner_email,revision,catalog_hash,"
+                "content_json,content_digest,docx_blob_path,published_at,published_by) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (snapshot_id, report_id, owner_email, revision, catalog_hash, content_json,
+                 content_digest, docx_blob_path, now, published_by))
+            self._db.execute(cur,
+                "UPDATE acr_report SET status='published',published_at=%s,approver=%s,updated_at=%s "
+                "WHERE id=%s AND owner_email=%s",
+                (now, published_by, now, report_id, owner_email))
+        return now
+
+    def get_acr_snapshot(self, report_id: str, *, owner_email: str,
+                         revision: int | None = None) -> dict | None:
+        sql = "SELECT * FROM acr_snapshot WHERE report_id=%s AND owner_email=%s"
+        params: tuple = (report_id, owner_email)
+        if revision is not None:
+            sql += " AND revision=%s"
+            params += (revision,)
+        with self._db.cursor() as cur:
+            self._db.execute(cur, sql + " ORDER BY revision DESC", params)
+            return self._db.fetchone(cur)
+
+    def carry_acr_decisions(self, report_id: str, rows: list[dict], *, owner_email: str) -> int:
+        """Write decisions carried from a superseded revision into a NEW report's matrix.
+
+        A SEPARATE method rather than a parameter on create_acr_report, because that method
+        deliberately hardcodes `final_status=None` and `approval_state='unapproved'` and ignores
+        whatever the caller put on the incoming rows. That is a safety property worth keeping: a
+        newly created report always starts with a blank matrix, so no code path can accidentally
+        create one that arrives pre-decided.
+
+        CARRYING AN APPROVAL IS NOT POSSIBLE HERE, and that is the point. This method writes
+        `final_status`, `remarks`, `evaluator` and `workflow_state`; it has no path to
+        `approval_state`, `reviewer` or `approved_at`, which stay at their creation defaults. PRD
+        §4.2 requires an approver to sign off every applicable criterion of THIS report, and an
+        approval granted against the previous revision was granted for a different product
+        version — carrying it forward would be a recorded sign-off that never happened.
+
+        Returns the number of criteria written, so the caller can report what was carried.
+        """
+        written = 0
+        now = self._now()
+        with self._db.cursor() as cur:
+            for row in rows:
+                if not row.get("final_status"):
+                    continue
+                self._db.execute(cur,
+                    "UPDATE acr_criterion SET final_status=%s,remarks=%s,evaluator=%s,"
+                    "workflow_state=%s,decided_at=%s,updated_at=%s "
+                    "WHERE report_id=%s AND criterion_num=%s AND owner_email=%s",
+                    (row["final_status"], row.get("remarks"), row.get("evaluator"),
+                     row.get("workflow_state") or "decided", row.get("decided_at") or now, now,
+                     report_id, row["criterion_num"], owner_email))
+                written += 1
+        return written
+
+    def list_acr_snapshots(self, report_id: str, *, owner_email: str) -> list[dict]:
+        """Every published revision of this report, newest first.
+
+        There is deliberately no update_acr_snapshot and no delete_acr_snapshot. A published ACR is
+        in a customer's procurement file; the only honest way to change it is to publish a new
+        revision that supersedes it, which is what create_acr_report's supersedes_id is for.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM acr_snapshot WHERE report_id=%s AND owner_email=%s "
+                "ORDER BY revision DESC", (report_id, owner_email))
+            return self._db.fetchall(cur)
+
+    def list_acr_snapshots_for_lineage(self, report_ids: list[str], *,
+                                       owner_email: str) -> list[dict]:
+        """Snapshots across a whole supersedes chain, newest first.
+
+        A revision is a NEW acr_report row, so "the history of this report" spans several ids. The
+        caller walks the chain and passes every id in it; doing the walk here would put lineage
+        logic in the store, where the route already has to know it to render the chain.
+        """
+        if not report_ids:
+            return []
+        placeholders = ",".join(["%s"] * len(report_ids))
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT * FROM acr_snapshot WHERE owner_email=%s AND report_id IN ({placeholders}) "
+                "ORDER BY revision DESC", (owner_email, *report_ids))
+            return self._db.fetchall(cur)
+
+    def grant_acr_role(self, *, owner_email: str, email: str, role: str,
+                       report_id: str = "*", granted_by: str | None = None) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "DELETE FROM acr_role WHERE owner_email=%s AND report_id=%s AND email=%s "
+                "AND role=%s",
+                (owner_email, report_id, email.lower(), role))
+            self._db.execute(cur,
+                "INSERT INTO acr_role(owner_email,report_id,email,role,granted_by,granted_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s)",
+                (owner_email, report_id, email.lower(), role, granted_by, self._now()))
+
+    def revoke_acr_role(self, *, owner_email: str, email: str, role: str,
+                        report_id: str = "*") -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "DELETE FROM acr_role WHERE owner_email=%s AND report_id=%s AND email=%s "
+                "AND role=%s",
+                (owner_email, report_id, email.lower(), role))
+
+    def copy_acr_role_grants(self, *, owner_email: str, from_report_id: str,
+                             to_report_id: str) -> int:
+        """Carry a report's role grants into its new revision.
+
+        A ROLE IS NOT AN APPROVAL, and the difference is the whole reason one carries and the
+        other must not. A role says "this person is authorized to approve on this report"; an
+        approval says "this person did approve this criterion, for this product version". Carrying
+        the first is continuity — a revision is the same report, and without it every revision
+        would need an admin to re-grant every role before anyone could work. Carrying the second
+        would be a recorded sign-off that never happened, which is why carry_acr_decisions has no
+        path to approval_state.
+
+        Deployment-wide ('*') grants are not copied: they already apply to every report, and
+        duplicating them as report-scoped rows would make a later revoke miss one.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT email,role,granted_by FROM acr_role "
+                "WHERE owner_email=%s AND report_id=%s", (owner_email, from_report_id))
+            rows = self._db.fetchall(cur)
+            now = self._now()
+            for row in rows:
+                self._db.execute(cur,
+                    "INSERT INTO acr_role(owner_email,report_id,email,role,granted_by,granted_at) "
+                    "VALUES(%s,%s,%s,%s,%s,%s)",
+                    (owner_email, to_report_id, row["email"], row["role"],
+                     row.get("granted_by"), now))
+        return len(rows)
+
+    def list_acr_role_holders(self, *, owner_email: str, report_id: str,
+                              roles: tuple[str, ...]) -> list[str]:
+        """Everyone holding one of these roles on this report, or deployment-wide.
+
+        Needed by PRD §18's separation-of-duties advisory, which is CONDITIONED on a second
+        qualified reviewer existing — the warning is silent when the approver is the only one
+        available, because nagging a one-person team on every publish teaches them to ignore it.
+        So this has to count real role holders rather than assume.
+
+        `report_id='*'` rows are deployment-wide grants and count for every report, matching how
+        get_acr_roles resolves them.
+        """
+        if not roles:
+            return []
+        placeholders = ",".join(["%s"] * len(roles))
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT DISTINCT email FROM acr_role WHERE owner_email=%s "
+                f"AND report_id IN (%s,'*') AND role IN ({placeholders})",
+                (owner_email, report_id, *roles))
+            return [r["email"] for r in self._db.fetchall(cur)]
+
+    def get_acr_roles(self, *, owner_email: str, email: str, report_id: str) -> list[str]:
+        """Roles this email holds on this report — report-scoped grants plus account-wide ('*')."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT role FROM acr_role WHERE owner_email=%s AND email=%s "
+                "AND report_id IN (%s, '*')",
+                (owner_email, email.lower(), report_id))
+            return sorted({r["role"] for r in self._db.fetchall(cur)})

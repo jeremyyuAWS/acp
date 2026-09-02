@@ -2,6 +2,7 @@
 remediation endpoints."""
 from __future__ import annotations
 import hashlib
+import json as _json
 import logging
 import os
 import threading
@@ -502,9 +503,16 @@ async def remediate_scan(sid: str, request: Request):
         # Honour the triage scope: skip files the user marked N/A or deferred.
         if scope_set is not None and f["file"] not in scope_set:
             continue
-        # Server-side deterministic remediators (ADR 0005 step 4): HTML (in-repo),
-        # PDF (vendored engine), and Office docx/pptx/xlsx (core-properties fixer).
-        if not f["file"].lower().endswith((".html", ".htm", ".pdf", ".docx", ".pptx", ".xlsx")):
+        # Server-side remediators (ADR 0005 step 4): HTML (in-repo), PDF (vendored engine),
+        # Office docx/pptx/xlsx (core-properties fixer), and media (a drafted caption file —
+        # a proposal, not a rewrite; nothing re-encodes a customer's video).
+        #
+        # ASKED OF handlers, not spelled out here. This tuple and `_remediate_file`'s own were
+        # two literals that had to agree and nothing made them: an extension admitted here and
+        # refused there burns a job and logs a deferral, and one admitted there and refused here
+        # is a code path nothing can reach. Neither fails loudly, and adding media needed both.
+        import handlers
+        if not f["file"].lower().endswith(handlers.remediable_extensions()):
             continue
         # Skip already-clean files — nothing to remediate, no point queuing a job.
         if not f.get("issues"):
@@ -1466,6 +1474,81 @@ def scan_inventory_list(sid: str, request: Request,
             "rows": [_inv_capability(r) for r in rows]}
 
 
+def _lifecycle_scan_owner(sid: str, request: Request) -> str:
+    owner = _owner(request)
+    if core.store.get_scan_head(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    return owner
+
+
+@router.get("/scans/{sid}/lifecycle/summary")
+def lifecycle_summary(sid: str, request: Request):
+    """One mutually-exclusive estate reconciliation from the persisted scan snapshot."""
+    owner = _lifecycle_scan_owner(sid, request)
+    return core.store.lifecycle_summary(sid, owner)
+
+
+@router.get("/scans/{sid}/lifecycle/rules")
+def lifecycle_rule_results(sid: str, request: Request):
+    owner = _lifecycle_scan_owner(sid, request)
+    return {"scan_id": sid, "data_version": core.store.lifecycle_data_version(sid),
+            "rules": core.store.list_lifecycle_rule_results(sid, owner)}
+
+
+@router.get("/scans/{sid}/lifecycle/files")
+def lifecycle_files(sid: str, request: Request, status: str | None = Query(None),
+                    policy_id: str | None = Query(None), candidate_only: bool = Query(False),
+                    offset: int = Query(0, ge=0),
+                    limit: int = Query(200, ge=1, le=1000)):
+    owner = _lifecycle_scan_owner(sid, request)
+    rows = core.store.list_lifecycle_files(sid, owner, status=status, policy_id=policy_id,
+                                           candidate_only=candidate_only,
+                                           limit=limit, offset=offset)
+    total = core.store.count_lifecycle_files(sid, owner, status=status, policy_id=policy_id,
+                                             candidate_only=candidate_only)
+    # One batched read for the whole scan, merged in memory. The queue needs the audit id, the
+    # policy VERSION and the proposed action to bound a grouped approval (PRD §8), and asking
+    # per row would rebuild the N+1 that #1163 removed from the CSV export next door.
+    pending = core.store.pending_approvals_by_file(sid, owner)
+    return {"scan_id": sid, "data_version": core.store.lifecycle_data_version(sid),
+            "total": total, "offset": offset, "limit": limit,
+            "rows": [{**_inv_capability(r), **(pending.get(r.get("file")) or {})} for r in rows]}
+
+
+@router.get("/scans/{sid}/lifecycle/files/{document_id:path}/history")
+def lifecycle_file_history(sid: str, document_id: str, request: Request,
+                           limit: int = Query(300, ge=1, le=1000)):
+    """One document's lifecycle timeline, across every scan this owner can see (PRD §7.4).
+
+    Scan-scoped in its PATH but not in its ANSWER, and the difference is the feature: the
+    reviewer arrives from a scan, and the question they have is what happened to this document
+    BEFORE it. A history that stopped at the current scan would show one recommendation and
+    look complete.
+
+    §10.2 names this /documents/{document_id}/lifecycle/history. It lives here instead because
+    the identifier the lifecycle surfaces actually carry is the file path, and the lifecycle doc
+    id embeds the scan (`scan:{scan_id}:{file}`) — a route keyed on documents.doc_id could not
+    find these events at all. The path follows the identity that exists rather than the one the
+    PRD assumed.
+
+    The scan in the path still authorises: it is the owner gate, exactly as the sibling
+    detail route uses it.
+    """
+    owner = _lifecycle_scan_owner(sid, request)
+    return {"scan_id": sid, "document_id": document_id,
+            "events": core.store.lifecycle_history(document_id, owner, limit=limit)}
+
+
+@router.get("/scans/{sid}/lifecycle/files/{document_id:path}")
+def lifecycle_file_detail(sid: str, document_id: str, request: Request):
+    owner = _lifecycle_scan_owner(sid, request)
+    row = core.store.lifecycle_file_detail(sid, document_id, owner)
+    if row is None:
+        raise HTTPException(404, "document not found in this scan")
+    return {**_inv_capability(row), "evaluations": row.get("evaluations", []),
+            "data_version": core.store.lifecycle_data_version(sid)}
+
+
 @router.get("/scans/{sid}/inventory.csv")
 def scan_inventory_csv(sid: str, request: Request):
     """The whole per-file estate inventory as CSV (owner-scoped) — every discovered file, source
@@ -1483,14 +1566,27 @@ def scan_inventory_csv(sid: str, request: Request):
     # not in place of it.
     cols = ["file", "owner", "size_kb", "mime", "format", "status", "doc_class",
             "lifecycle_status", "lifecycle_rule_id", "lifecycle_reason",
+            "policy_version", "evaluation_result", "evidence_json",
             "lifecycle_override_reason", "lifecycle_overridden_by", "lifecycle_overridden_at",
             "path", "parent_folder", "created_at", "source_modified",
             "discovered_at", "drive_file_id"]
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(cols)
+    # ONE grouped read for the whole scan, not lifecycle_file_detail per row. This loop is
+    # unbounded by construction ("it IS the export"), and that call costs two queries each, so
+    # the estate that most needs an export — 6,000+ files — paid ~12,000 round trips for it.
+    # tests/test_inventory_read_amplification.py measures ROWS and so was blind to this: with no
+    # evaluations recorded the extra queries return nothing at all. Its new sibling counts queries.
+    evaluations_by_document = core.store.lifecycle_evaluations_by_document(sid, _owner(request))
     for r in core.store.list_inventory(sid):
         e = _inv_capability(r)
+        evaluations = evaluations_by_document.get(r.get("file")) or []
+        winning = next((x for x in evaluations if str(x.get("policy_id")) == str(r.get("lifecycle_rule_id"))), None)
+        if winning:
+            e["policy_version"] = winning.get("policy_version")
+            e["evaluation_result"] = winning.get("result")
+            e["evidence_json"] = _json.dumps(winning.get("evidence") or {}, separators=(",", ":"))
         w.writerow([e.get(c, "") if e.get(c) is not None else "" for c in cols])
     return Response(buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="inventory-{sid}.csv"'})

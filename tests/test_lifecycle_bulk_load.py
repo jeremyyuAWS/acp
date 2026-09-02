@@ -134,8 +134,10 @@ def test_bulk_create_disposition_audit(isolated_store):
     """bulk_create_disposition_audit inserts rows that get_disposition_audit can read back."""
     st = isolated_store
     st.bulk_create_disposition_audit([
+        # policy_version (the trailing 3) became required when grouped approval landed: a row
+        # that cannot say which version of a rule produced it can never join a batch (PRD §8).
         ("audit-x1", "scan:s1:a.docx", "p1", "archive",
-         "pending_approval", "stale", "x@x.com"),
+         "pending_approval", "stale", "x@x.com", 3),
     ])
     row = st.get_disposition_audit("audit-x1")
     assert row is not None

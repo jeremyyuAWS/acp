@@ -64,6 +64,7 @@ def scanned(tmp_path_factory):
         issues = fdict.get("issues", [])
         out[name] = {
             "scs": {_sc(i.get("wcag", "")) for i in issues},
+            "rules": {str(i.get("ruleId", "")) for i in issues},
             "engine_ran": any(str(i.get("wcag", "")).startswith("SC_") for i in issues),
         }
     return out
@@ -107,6 +108,18 @@ def test_python_detected_criteria_all_fire(scanned, fmt, name):
     got = scanned[name]["scs"]
     missing = _expected_python(fmt) - got
     assert not missing, f"{name}: python detectors did not fire for {sorted(missing)}"
+
+    # 1.4.5 has TWO ways to appear and only one of them is a detection. `OCR_IMAGE_UNREAD`
+    # (REVIEW) reports an image whose OCR did not complete — added deliberately so a timed-out
+    # reading stops looking like a clean document (api/ocr.py). It is also labelled 1.4.5, so
+    # from here it is indistinguishable from the finding unless this test says which it wants.
+    # Without this line the notice would satisfy the assertion above and the drift guard this
+    # whole file exists to be would quietly stop guarding.
+    if "1.4.5" in _expected_python(fmt):
+        assert "OCR_IMAGE_OF_TEXT" in scanned[name]["rules"], (
+            f"{name}: 1.4.5 is present only as an advisory notice — the image-of-text detector "
+            f"itself never fired, so this fixture no longer demonstrates the finding "
+            f"({sorted(r for r in scanned[name]['rules'] if r.startswith('OCR_'))})")
 
 
 @pytest.mark.parametrize("fmt,name", [

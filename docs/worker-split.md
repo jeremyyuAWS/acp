@@ -1,5 +1,10 @@
 # Splitting the worker off the API container (#113)
 
+> Production topology (2026-09-01): the generic `acp-worker` has been retired. Production runs
+> `acp-discovery`, `acp-assess`, and `acp-remediate`, each restricted by `ACP_WORKER_ROLE`, while
+> `acp-app` runs with `ACP_WORKERS=0`. The generic topology below remains relevant to local and
+> staging deployments only. Production configuration changes must include all three stage workers.
+
 **Why.** A UI/API deploy swaps the API container. When the worker pool runs *inside* that
 container, the swap restarts running scans — the incident of 2026-07-11 (a scan wedged
 mid-swap). The self-heal + sweeper-finalize + Stop button landed since make this survivable,

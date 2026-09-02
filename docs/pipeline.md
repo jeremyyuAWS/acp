@@ -1,5 +1,10 @@
 # How a change reaches production, and how the matrix keeps up
 
+> **Production worker topology, 2026-09-01:** releases update `acp-app`, `acp-discovery`,
+> `acp-assess`, and `acp-remediate` to one image and verify each role's heartbeat. References
+> below to a generic production `acp-worker` document the earlier topology or staging. The
+> generic production service has been retired.
+
 Two chains start from one event — a PR merged to `acp/main` — and then never touch again.
 
 **Chain A** keeps the public WCAG matrix in step with the code. It is automatic and finishes in

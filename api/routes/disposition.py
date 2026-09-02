@@ -610,12 +610,16 @@ def execute_policy(policy_id: str, request: Request):
             _trace_decision(doc["doc_id"], doc.get("path"), action=policy["action"],
                             status="pending_approval", policy_id=policy_id, reason=detail)
         else:
-            result, detail = disposition.execute_action(doc, policy["action"], cfg, svc)
+            result, detail, before = disposition.execute_action(doc, policy["action"], cfg, svc)
             if result == "applied" and policy["action"] == "tag":
                 _persist_tags(doc, cfg, policy_id)
             core.store.create_disposition_audit(
                 audit_id, doc_id=doc["doc_id"], policy_id=policy_id,
                 action=policy["action"], result=result, detail=detail, owner_email=owner)
+            # An auto-applied policy (requires_approval=false) never passes through the approve
+            # route, so without this the ONE path that moves a file with no human in the loop
+            # would be the one path whose result could not be undone.
+            core.store.set_disposition_before_state(audit_id, before)
             summary[result] += 1
             _trace_decision(doc["doc_id"], doc.get("path"), action=policy["action"],
                             status=result, policy_id=policy_id, reason=detail)
@@ -702,20 +706,358 @@ def approve_disposition(audit_id: str, request: Request,
     cfg = json.loads(policy.get("action_config") or "{}")
     docs = {d["doc_id"]: d for d in core.store.list_all_documents(owner=owner)}
     doc = docs.get(row["doc_id"])
+    if doc is None and _is_lifecycle_doc_id(row["doc_id"]):
+        # A Discover-lifecycle candidate is not missing — it was never in this table. The two
+        # subsystems key documents differently: the lifecycle evaluator stamps
+        # `scan:{scan_id}:{file}` (handlers.py), while this governance layer keys on
+        # `drive:{id}` / `{source}:{hash}` (documents.resolve_doc_id). list_all_documents holds
+        # none of the former, so every lifecycle approval fell into the clause below and was
+        # recorded FAILED with the reason "document no longer exists".
+        #
+        # Three things were wrong with that, and only the first is cosmetic: the reason is false,
+        # the reviewer's decision is destroyed (the pending row is consumed, so the approval has
+        # to be given again), and the append-only audit — the record a compliance officer relies
+        # on — now asserts that a document which exists did not.
+        #
+        # Recorded, not executed, which is what execute=false already does and what this route's
+        # own docstring calls "the honest half of the operation". Execution is a separate,
+        # larger change: it needs the two identifier spaces reconciled, and that is also where
+        # capturing the before-state for an undo belongs (PRD §8).
+        detail = ("approved — recorded, not executed: this is a Discover-lifecycle candidate and "
+                  "is not represented in the disposition governance layer, so no source action "
+                  "can be performed for it")
+        core.store.set_disposition_audit_result(audit_id, "approved", detail)
+        core.store.log_decision(owner, "disposition.approved",
+                                detail=f"{row['action']} {row['doc_id']}: recorded, not executed")
+        _trace_decision(row["doc_id"], None, action=row["action"], status="approved",
+                        policy_id=row["policy_id"], reason=detail)
+        return {**(core.store.get_disposition_audit(audit_id, owner=owner) or {}),
+                # Explicit, because the caller asked for execute=true and did not get it. A
+                # response that looked identical to a real execution would be the same lie in a
+                # politer form.
+                "executed": False,
+                "why_not_executed": "lifecycle candidates have no governance-layer document"}
     if doc is None:
         core.store.set_disposition_audit_result(audit_id, "failed", "document no longer exists")
         _trace_decision(row["doc_id"], None, action=row["action"], status="failed",
                         policy_id=row["policy_id"], reason="document no longer exists")
         raise HTTPException(410, "document no longer exists")
-    result, detail = disposition.execute_action(doc, row["action"], cfg, _drive_svc(request))
+    result, detail, before = disposition.execute_action(doc, row["action"], cfg,
+                                                        _drive_svc(request))
     if result == "applied" and row["action"] == "tag":
         _persist_tags(doc, cfg, row["policy_id"])
+    # Recorded BEFORE the result is written, deliberately. A crash between the two then leaves a
+    # before-state on a row that still reads pending_approval — harmless, and re-approving
+    # overwrites nothing (set_disposition_before_state only fills a NULL). The other order loses
+    # the file's origin for an action already marked applied, which is exactly the state PRD §8
+    # cannot recover from.
+    core.store.set_disposition_before_state(audit_id, before)
     core.store.set_disposition_audit_result(audit_id, result, detail)
     core.store.log_decision(owner, f"disposition.{result}",
                             detail=f"{row['action']} {row['doc_id']}: {detail}"[:200])
     _trace_decision(row["doc_id"], doc.get("path"), action=row["action"], status=result,
                     policy_id=row["policy_id"], reason=detail)
     return core.store.get_disposition_audit(audit_id, owner=owner)
+
+
+@router.post("/disposition/approvals/{audit_id}/undo")
+def undo_disposition(audit_id: str, request: Request):
+    """Put a file back where an applied action moved it (PRD §8).
+
+    Only an APPLIED row with a recorded before-state can be undone, and both halves matter. An
+    action that failed may or may not have moved the file, so there is nothing trustworthy to
+    reverse; an action applied before this column existed has no origin recorded, and restoring a
+    file to a folder nobody wrote down is indistinguishable — afterwards — from moving it
+    somewhere new. Both refuse rather than guess.
+
+    OWNER-gated like approve and execute: this touches the estate.
+
+    The undo is itself appended to the audit rather than erasing the original row. The record is
+    append-only by design, and "this was archived, then restored" is the true history; a row that
+    quietly reverted to pending would claim the archive never happened.
+    """
+    _require_owner(request)
+    owner = _owner(request)
+    row = core.store.get_disposition_audit(audit_id, owner=owner)
+    if row is None:
+        raise HTTPException(404, "no disposition with that id")
+    if row.get("result") != "applied":
+        raise HTTPException(409, f"only an applied action can be undone — this one is "
+                                 f"{row.get('result')!r}")
+    before = core.store.get_disposition_before_state(audit_id, owner)
+    if not before:
+        raise HTTPException(409, "no before-state was recorded for this action, so it cannot be "
+                                 "undone — it was applied before ACP recorded where files came "
+                                 "from")
+    docs = {d["doc_id"]: d for d in core.store.list_all_documents(owner=owner)}
+    doc = docs.get(row["doc_id"]) or {"doc_id": row["doc_id"], "source": "drive"}
+
+    result, detail = disposition.undo_action(doc, before, _drive_svc(request))
+    undo_id = hashlib.sha256(f"undo:{audit_id}".encode()).hexdigest()[:24]
+    core.store.create_disposition_audit(
+        undo_id, doc_id=row["doc_id"], policy_id=row["policy_id"],
+        action=f"undo_{row['action']}", result=result, detail=detail, owner_email=owner)
+    core.store.log_decision(owner, f"disposition.undo_{result}",
+                            detail=f"{row['action']} {row['doc_id']}: {detail}"[:200])
+    _trace_decision(row["doc_id"], doc.get("path"), action=f"undo_{row['action']}",
+                    status=result, policy_id=row["policy_id"], reason=detail)
+    if result != "applied":
+        raise HTTPException(502, detail)
+    return {"undone": audit_id, "audit_id": undo_id, "result": result, "detail": detail}
+
+
+class BatchApprovalIn(BaseModel):
+    audit_ids: list[str]
+    policy_id: str
+    policy_version: int
+    action: str
+    reason: str | None = None
+
+
+@router.post("/disposition/approvals/plan")
+def plan_disposition_batch(body: BatchApprovalIn, request: Request):
+    """What approving this batch WOULD do, without doing any of it (PRD §7.4's source-effect
+    preview, and the safe first half of making lifecycle candidates executable).
+
+    WRITES NOTHING. No audit row moves, no file is touched, no Drive client is even constructed.
+    A dry run that can mutate is not a dry run, and the test suite asserts the absence rather
+    than trusting the reading.
+
+    Validated by the SAME rules as the approval it previews (_validated_batch), because a plan
+    produced by a second copy of those rules is a plan that can drift from what approval will
+    actually accept — showing a batch that is then refused, or worse, calling one safe that is
+    not.
+
+    It resolves the identifier gap rather than papering over it: a Discover-lifecycle candidate
+    is keyed `scan:{scan_id}:{file}`, and the drive_file_id that would make it actionable has
+    been on the inventory row all along. Resolving it HERE, in the one path that cannot act,
+    makes the gap visible per row — "this one could be archived, that one has no Drive id and
+    never could" — before anybody authorises anything.
+
+    Owner-gated like the approval. A preview of what would happen to somebody's estate is still
+    a read of somebody's estate.
+    """
+    _require_owner(request)
+    owner = _owner(request)
+    submitted, policy, rows = _validated_batch(body, owner, verb="planned")
+    cfg = json.loads(policy.get("action_config") or "{}")
+
+    # Resolve every lifecycle row's Drive id in one query per scan, rather than per row.
+    by_scan: dict[str, list[str]] = {}
+    for audit_id in submitted:
+        row = rows.get(audit_id)
+        doc_id = str((row or {}).get("doc_id") or "")
+        if doc_id.startswith("scan:"):
+            _, scan_id, file = doc_id.split(":", 2)
+            by_scan.setdefault(scan_id, []).append(file)
+    targets = {}
+    for scan_id, files in by_scan.items():
+        for file, fid in core.store.drive_targets_for_files(scan_id, files, owner).items():
+            targets[f"scan:{scan_id}:{file}"] = fid
+
+    plan, blocked = [], 0
+    for audit_id in submitted:
+        row = rows.get(audit_id)
+        if row is None:
+            plan.append({"audit_id": audit_id, "blocked": "not found for this owner"})
+            blocked += 1
+            continue
+        doc_id = str(row.get("doc_id") or "")
+        if row.get("result") != "pending_approval":
+            plan.append({"audit_id": audit_id, "doc_id": doc_id,
+                         "blocked": f"already {row.get('result')}"})
+            blocked += 1
+            continue
+        held = _exempt_now(doc_id, owner) if doc_id.startswith("scan:") else None
+        if held:
+            plan.append({"audit_id": audit_id, "doc_id": doc_id, "blocked": held})
+            blocked += 1
+            continue
+        # A resolved lifecycle candidate is planned AS the Drive document it would become, so
+        # the preview is of the real action rather than of the record-only refusal it gets today.
+        fid = targets.get(doc_id)
+        doc = ({"doc_id": f"drive:{fid}", "source": "drive"} if fid
+               else {"doc_id": doc_id, "source": row.get("source") or "unknown"})
+        step = disposition.plan_action(doc, row["action"], cfg)
+        if step.get("blocked"):
+            blocked += 1
+        plan.append({"audit_id": audit_id, "doc_id": doc_id,
+                     "drive_file_id": fid, **step})
+
+    return {"planned": len(plan), "actionable": len(plan) - blocked, "blocked": blocked,
+            "policy_id": body.policy_id, "policy_version": body.policy_version,
+            "action": body.action,
+            # Said in the payload, not only in the docs: a caller cannot mistake this for a
+            # receipt of something that happened.
+            "executed": False, "dry_run": True, "plan": plan}
+
+
+@router.post("/disposition/approvals")
+def approve_disposition_batch(body: BatchApprovalIn, request: Request):
+    """Approve a HOMOGENEOUS batch of queued dispositions, by explicit id (PRD §8).
+
+    The per-row sibling below approves one audit id and executes it. This exists because a
+    reviewer facing 684 archive candidates will not click 684 times, and the shape that
+    replaces those clicks is where a review queue becomes dangerous. Every rule here is one
+    the PRD states, and each is a way a bulk approval can mean more than the reviewer meant:
+
+      §11  EXPLICIT IDS ONLY. The caller sends the ids it displayed. There is deliberately no
+           filter-based variant — "approve everything matching X" re-expands at execute time to
+           whatever matches THEN, which is not what anyone reviewed. store's batch reader takes
+           ids and nothing else for the same reason.
+      §8   HOMOGENEOUS. Every row must share the policy, the policy VERSION and the action the
+           caller named. A batch that mixes them is refused whole, not partially applied: the
+           confirmation the reviewer read ("archive 40 files under Retention v3") has to be true
+           of every row it covers.
+      §11  THE VERSION MUST STILL BE CURRENT. If the policy has been edited since these rows
+           were queued, the reviewer is approving an explanation that no longer describes the
+           rule. Refused, with the version they asked for and the version that exists now.
+      §11  LEGAL HOLD / EXEMPT IS FAIL-CLOSED AND RE-CHECKED HERE, immediately before the
+           decision lands, not merely when the candidate was queued. An exemption added during
+           review must win.
+      §8   A DESTRUCTIVE ACTION NEEDS A STATED REASON. delete/trash always; the reason is
+           recorded on every row so the audit answers "why" without a second lookup.
+      §8   A PARTIAL BATCH IS NEVER REPORTED AS SUCCESS. The response reconciles: approved +
+           refused + already_decided == submitted, and every refusal names its row and its cause.
+
+    Idempotent on (doc_id, policy_version, action) via the audit row's own identity: a row that
+    already moved out of pending_approval is reported as already_decided rather than approved a
+    second time, so a double-submitted batch cannot double-count.
+
+    RECORDS THE DECISION ONLY — this never touches a source file. Execution stays on the
+    per-row /approve path, which is the one that holds the connector semantics (and today only
+    supports Drive). Approving in bulk and executing per row is deliberate: it is the ordering
+    that lets a legal hold added between the two still stop the mutation.
+    """
+    _require_owner(request)                     # authorises archival of the estate — owner-only
+    owner = _owner(request)
+    submitted, policy, rows = _validated_batch(body, owner, verb="approved")
+
+    approved, refused, already = [], [], []
+    detail = f"approved in batch under {body.policy_id} v{body.policy_version}"
+    if (body.reason or "").strip():
+        detail += f" — {body.reason.strip()}"
+    for audit_id in submitted:
+        row = rows.get(audit_id)
+        if row is None:
+            refused.append({"audit_id": audit_id, "why": "not found for this owner"})
+            continue
+        if row.get("result") != "pending_approval":
+            already.append({"audit_id": audit_id, "result": row.get("result")})
+            continue
+        # Re-read the lifecycle state NOW. Queued-then-exempted is the case this exists for.
+        held = _exempt_now(row.get("doc_id"), owner)
+        if held:
+            refused.append({"audit_id": audit_id, "why": held})
+            continue
+        core.store.set_disposition_audit_result(audit_id, "approved", detail)
+        approved.append(audit_id)
+        _trace_decision(row["doc_id"],
+                        (core.store.get_document(row["doc_id"]) or {}).get("path"),
+                        action=row["action"], status="approved",
+                        policy_id=row["policy_id"], reason=detail)
+
+    core.store.log_decision(owner, "disposition.batch_approved",
+                            detail=f"{len(approved)} approved, {len(refused)} refused, "
+                                   f"{len(already)} already decided — {body.action} under "
+                                   f"{body.policy_id} v{body.policy_version}")
+    return {"submitted": len(submitted), "approved": approved, "refused": refused,
+            "already_decided": already,
+            # The reconciliation the PRD asks for, computed here rather than left to the client:
+            # a caller that only reads len(approved) still cannot mistake a partial for a whole.
+            "reconciled": len(approved) + len(refused) + len(already) == len(submitted),
+            "executed": False}
+
+
+def _validated_batch(body, owner: str, *, verb: str):
+    """The batch rules of PRD §8/§11, applied identically to a plan and to an approval.
+
+    Extracted rather than duplicated, and that is the point: a dry run is only a preview if the
+    thing it previews is validated the same way. Two copies of these rules would drift, and the
+    drift would be invisible — the plan would show a batch that approval then refuses, or worse,
+    approve one the plan had called safe.
+
+    Returns (submitted ids, policy row, {audit_id: row}). Raises the same HTTPExceptions either
+    caller would have raised, with `verb` making the message true for both ("nothing was
+    approved" / "nothing was planned").
+    """
+    submitted = list(dict.fromkeys(body.audit_ids))     # de-duped, order preserved
+    if not submitted:
+        raise HTTPException(400, "no audit ids submitted")
+    if body.action in ("delete", "trash") and not (body.reason or "").strip():
+        raise HTTPException(400, "a delete approval must state a reason")
+
+    policy = core.store.get_disposition_policy(body.policy_id, owner=owner)
+    if policy is None:
+        raise HTTPException(404, "no such policy")
+    current_version = int(policy.get("version") or 1)
+    if current_version != body.policy_version:
+        raise HTTPException(409, f"policy {body.policy_id} is now version {current_version}, "
+                                 f"not the version {body.policy_version} these rows were queued "
+                                 f"under — re-evaluate before approving")
+
+    rows = {r["id"]: r for r in core.store.list_disposition_audit_by_ids(submitted, owner)}
+    # Homogeneity is checked across the WHOLE batch before anything is written, so a mixed
+    # submission changes nothing at all rather than applying its consistent prefix.
+    mixed = [rid for rid, r in rows.items()
+             if r.get("policy_id") != body.policy_id
+             or int(r.get("policy_version") or 0) != body.policy_version
+             or r.get("action") != body.action]
+    if mixed:
+        raise HTTPException(409, f"{len(mixed)} of {len(submitted)} rows are not "
+                                 f"{body.action}/{body.policy_id} v{body.policy_version} "
+                                 f"({', '.join(sorted(mixed)[:5])}) — nothing was {verb}")
+    return submitted, policy, rows
+
+
+def _is_lifecycle_doc_id(doc_id: str | None) -> bool:
+    """Whether this audit row came from the Discover lifecycle evaluator rather than a policy run.
+
+    The evaluator stamps `scan:{scan_id}:{file}`; documents.resolve_doc_id produces
+    `drive:{id}` or `{source}:{hash}`, and never the `scan:` form. Deliberately a positive test
+    for the lifecycle shape rather than "not in the documents table": a genuinely deleted
+    Drive-backed document must keep reporting that it no longer exists, which is true and
+    useful, and a broader rule would swallow it.
+    """
+    return str(doc_id or "").startswith("scan:")
+
+
+def _exempt_now(doc_id: str | None, owner: str) -> str | None:
+    """Why this document must not be dispositioned right now, or None (PRD §11).
+
+    Reads scan_inventory, NOT documents. The first draft of this called get_document and asked
+    it for `lifecycle_status` — a column that table does not have, so it read None, compared it
+    to "Exempted", and let every row through. A fail-OPEN safety check that looks exactly like a
+    fail-closed one is worse than no check, because the route's docstring then promises
+    something nothing enforces.
+
+    The lifecycle evaluator stamps `scan:{scan_id}:{file}` as the doc id (handlers.py), which is
+    what makes the real state reachable. Any OTHER id shape is refused rather than guessed at:
+    those rows come from paths this batch route was not written for, and they remain approvable
+    one at a time on /approvals/{audit_id}/approve.
+
+    A file that was ALREADY exempt never reaches here — the evaluator skips it before an audit
+    row exists. The case this catches is the one that matters: queued as a candidate, then
+    exempted while the reviewer was still reading the queue."""
+    if not doc_id:
+        return "no document id on the audit row"
+    if not str(doc_id).startswith("scan:"):
+        return ("not a discover-lifecycle candidate — approve this row individually")
+    try:
+        _, scan_id, file = str(doc_id).split(":", 2)
+        # Owner-scoped already: the row came back from list_disposition_audit_by_ids, which
+        # filters on owner_email, so this is a re-read of a row this caller may see.
+        state = core.store.get_lifecycle_status(scan_id, file) or {}
+    except Exception:                            # noqa: BLE001 — refuse, never approve blindly
+        return "lifecycle state could not be re-checked"
+    status = str(state.get("lifecycle_status") or "")
+    if status in ("Exempted", "Deleted", "Archived"):
+        return f"document is now {status} — excluded from bulk disposition"
+    if (state.get("lifecycle_override_reason") or "").strip():
+        # A human already said "keep this". Approving the rule's recommendation in a batch
+        # would silently overturn a reasoned individual decision.
+        return "a reviewer has overridden this recommendation — approve it individually or clear the override"
+    return None
 
 
 @router.post("/disposition/approvals/{audit_id}/reject")

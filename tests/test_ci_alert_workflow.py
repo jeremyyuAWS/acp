@@ -21,8 +21,13 @@ looks like tidying:
 from pathlib import Path
 
 import pytest
+import yaml   # declared in tests/requirements.txt — see below
 
-yaml = pytest.importorskip("yaml")
+# IMPORTED, NOT importorskip'd. It was the latter until PyYAML turned out to be declared in
+# neither requirements file, so on CI every test here skipped and this module had never actually
+# run — a guard against silent deploy failures that was itself silent. A missing dependency must
+# now FAIL rather than quietly delete the coverage. tests/test_undeclared_importorskip.py holds
+# the general rule.
 
 ROOT = Path(__file__).resolve().parent.parent
 WF = ROOT / ".github" / "workflows"

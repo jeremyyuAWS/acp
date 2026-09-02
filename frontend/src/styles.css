@@ -118,6 +118,10 @@ table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 0 0 8px; }
 td { padding: 10px 0; border-top: 1px solid var(--line); }
 .fname { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.lifecycle-evidence-panel { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco,
+  Consolas, "Liberation Mono", "Courier New", monospace; }
+.lifecycle-integrity-warning { margin: 10px 0; padding: 10px 12px; border: 1px solid #B7791F;
+  border-radius: 8px; background: #FFF8E6; color: #744210; line-height: 1.45; }
 .badge { font-size: 12px; padding: 3px 10px; border-radius: 8px; }
 .scorecell { display: inline-flex; align-items: center; gap: 8px; }
 .scorecell > span:first-child { min-width: 22px; }
@@ -287,6 +291,8 @@ input:focus-visible, [role="tab"]:focus-visible {
 .tracechip { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 600; color: var(--plum); background: #F4EEFC; border: 1px solid #D9CCF2; border-radius: 999px; padding: 2px 9px; text-decoration: none; white-space: nowrap; }
 .tracechip:hover { background: #EBE0FA; }
 .tracechip--unavailable { color: #aaa; background: #f5f5f5; border-color: #e0e0e0; cursor: default; pointer-events: none; }
+.scan-history-select { text-align: left; }
+.projected-label { margin-left: 3px; color: #737076; font-size: 10px; }
 /* TraceChip renders as a <button> for the in-app panel — reset the native chrome so it
    matches the <a> pill exactly, and keep it keyboard-activatable with a pointer cursor. */
 button.tracechip { cursor: pointer; font-family: inherit; line-height: normal; }
@@ -1781,11 +1787,11 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .hitlbell-medium { border-color: #E7CE93; box-shadow: 0 0 0 2px #FBEECB inset; }
 .hitlbell-low { border-color: var(--line); }
 .hitlbell-badge { position: absolute; top: -6px; right: -6px; min-width: 17px; height: 17px;
-  padding: 0 4px; border-radius: 9px; background: #D0492F; color: #fff; font-size: 11px;
+  padding: 0 4px; border-radius: 9px; background: #C5452C; color: #fff; font-size: 11px;
   font-weight: 700; display: flex; align-items: center; justify-content: center; }
-.hitlbell-high .hitlbell-badge { background: #D0492F; }
-.hitlbell-medium .hitlbell-badge { background: #C98A0A; }
-.hitlbell-low .hitlbell-badge { background: #8A94A6; }
+.hitlbell-high .hitlbell-badge { background: #C5452C; }
+.hitlbell-medium .hitlbell-badge { background: #8A5A00; }
+.hitlbell-low .hitlbell-badge { background: #596579; }
 .hitlbell-pop { position: absolute; top: 40px; right: 0; width: 340px; z-index: 60;
   background: var(--card); border: 1px solid var(--line); border-radius: 12px;
   box-shadow: 0 12px 34px rgba(28,22,32,0.18); overflow: hidden; }

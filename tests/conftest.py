@@ -167,6 +167,88 @@ def _forbid_opening_the_real_db(store_mod):
 _forbid_opening_the_real_db(_store_mod)
 
 
+# ── the same protection for PostgreSQL, which had none ────────────────────────────────────────
+# _forbid_opening_the_real_db above turns a Store opened against the real SQLite file into a hard
+# failure. Two tests issue destructive SQL against whatever DATABASE_URL names — a TRUNCATE of
+# every base table (test_pg_job_queue.pg) and a DROP of the migration marker
+# (test_schema_boot_locks) — and nothing asked whether that database was a throwaway. Running
+# `pytest tests/` with DATABASE_URL pointed anywhere real wiped it. The CI job happens to point at
+# a disposable container, so the suite was green the whole time the hazard existed.
+
+# A database this suite is allowed to destroy. Deliberately narrow: `acp_ci` (what CI uses),
+# anything ending _ci/_test, and anything starting test_. `acp` and `acp_prod` do NOT match, and
+# that is the point — the real database is one underscore away from the CI one.
+_DISPOSABLE_DB_RE = re.compile(r"^(test_[a-z0-9_]+|[a-z0-9_]+_(ci|test)|acp_ci)$")
+
+# Destroying data on a host you do not control is not a test, it is an incident. Loopback only:
+# a service container published on localhost qualifies, a managed Postgres never does.
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
+
+_DESTRUCTIVE_OPT_IN = "ACP_PG_TEST_DESTRUCTIVE"
+
+
+def require_disposable_postgres(url: str, *, conn=None) -> None:
+    """Refuse to let the caller destroy data unless the target is PROVABLY a throwaway.
+
+    Raises RuntimeError — it never skips. A skip is how a dangerous configuration goes unnoticed,
+    and the Postgres job's own anti-skip step would turn one red there anyway, so skipping is both
+    less safe and no more convenient than failing.
+
+    Four conditions, each closing a different way the old code could have been pointed at
+    something real:
+
+      1. ACP_PG_TEST_DESTRUCTIVE=1 must be set. DATABASE_URL being present is NOT consent — it is
+         the ordinary way to run this app. The operator states the intent, or nothing is dropped.
+      2. The host must be loopback. A managed or remote Postgres is refused outright, whatever it
+         is called.
+      3. The database name must match _DISPOSABLE_DB_RE. `acp_ci` qualifies; `acp` does not.
+      4. When a live connection is supplied, the SERVER is asked for current_database() and that
+         answer must qualify too. The DSN is a claim about where you are connected; PGDATABASE, a
+         service file, or a connection pooler can all make it a false one. This is the only check
+         that survives being lied to.
+
+    `conn` is optional so the first three conditions can be tested — and enforced — without a
+    server, which matters: a guard that only runs where a database exists is absent from every
+    machine that does not have one, which is where the accidents happen.
+    """
+    from urllib.parse import urlparse
+
+    if os.environ.get(_DESTRUCTIVE_OPT_IN) != "1":
+        raise RuntimeError(
+            f"refusing to run a destructive PostgreSQL test: {_DESTRUCTIVE_OPT_IN} is not set. "
+            f"This test TRUNCATEs or DROPs tables in the database DATABASE_URL names ({url!r}). "
+            f"Set {_DESTRUCTIVE_OPT_IN}=1 only when that database is a throwaway you can lose.")
+
+    parsed = urlparse(url or "")
+    host = (parsed.hostname or "").lower()
+    db = (parsed.path or "").lstrip("/")
+
+    if host not in _LOOPBACK_HOSTS:
+        raise RuntimeError(
+            f"refusing to destroy data on {host!r} (database {db!r}): a destructive test may only "
+            f"run against a local, disposable server — loopback only, so a managed or shared "
+            f"PostgreSQL can never be the target.")
+
+    if not _DISPOSABLE_DB_RE.match(db):
+        raise RuntimeError(
+            f"refusing to destroy database {db!r} on {host!r}: the name is not recognisably "
+            f"disposable. Use a dedicated throwaway database — 'acp_ci', or a name ending _ci / "
+            f"_test, or starting test_. ('acp' is deliberately excluded: the real database is one "
+            f"underscore away from the CI one.)")
+
+    if conn is not None:
+        with conn.cursor() as cur:
+            cur.execute("SELECT current_database()")
+            actual = (cur.fetchone()[0] or "").strip()
+        if not _DISPOSABLE_DB_RE.match(actual):
+            raise RuntimeError(
+                f"refusing to destroy data: the DSN names {db!r} but the server reports it is "
+                f"connected to {actual!r}, which is not a disposable name. A connection pooler, "
+                f"PGDATABASE, or a service file can redirect a connection — the server's own "
+                f"answer is the one that counts.")
+
+
+
 @pytest.fixture(autouse=True)
 def _fresh_shadow_log_dedupe(monkeypatch):
     """Give every test its own store._shadow_logged.

@@ -591,7 +591,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
 
       {scanList.length > 0 && (
         <section className="panel">
-          <h2>Scan history <span className="muted" style={{ fontWeight: 400 }}>· master score = latest run · click a row to view it</span></h2>
+          <h2>Scan history <span className="muted" style={{ fontWeight: 400 }}>· master score = latest run · choose a scan to view it</span></h2>
           <div className="tablewrap"><table>
             <thead><tr><th></th><th>scan</th><th>score</th><th>change</th><th>files</th><th>certifiable</th><th>source</th><th></th></tr></thead>
             <tbody>
@@ -601,12 +601,14 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
                 const isCurrent = s.id === run.id
                 const dt = s.completed_at ? new Date(s.completed_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'
                 return (
-                  <tr key={s.id} className="filerow" role="button" tabIndex={0}
-                    onClick={() => onPickScan?.(s.id)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPickScan?.(s.id) } }}
-                    style={isCurrent ? { background: '#F4EEFC' } : undefined}>
+                  <tr key={s.id} style={isCurrent ? { background: '#F4EEFC' } : undefined}>
                     <td>{i === 0 && <span className="badge" style={{ background: '#EDE7FB', color: '#6D28D9' }}>★ master</span>}</td>
-                    <td>{dt}{isCurrent && <span className="muted"> · viewing</span>}</td>
+                    <td><button type="button" className="linkbtn scan-history-select"
+                                aria-current={isCurrent ? 'true' : undefined}
+                                aria-label={`${isCurrent ? 'Currently viewing' : 'View'} scan completed ${dt}`}
+                                onClick={() => onPickScan?.(s.id)}>
+                      {dt}{isCurrent && <span className="muted"> · viewing</span>}
+                    </button></td>
                     <td className="scorecell"><b>{s.avg_score ?? 'n/a'}</b><span className="muted">/100</span></td>
                     <td>{d == null ? <span className="muted">—</span> : (
                       <span style={{ color: d > 0 ? '#3B6D11' : d < 0 ? '#B43A2A' : '#6B7280', fontWeight: 600, fontSize: 12 }}>
@@ -625,7 +627,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
                                title={scopeSentence(s.scope, s.files ?? 0) || undefined}>
                         {scopeChip(s.scope).text}</span></>
                     )}</td>
-                    <td onClick={(e) => e.stopPropagation()}><TraceChip scanId={s.id} kind="session" label="trace" /></td>
+                    <td><TraceChip scanId={s.id} kind="session" label="trace" /></td>
                   </tr>
                 )
               })}
@@ -791,7 +793,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         <div className="lift">
           <div className="liftcol"><div className="liftnum" style={{ color: '#1F5FA8' }}>{before}</div><div className="muted">today · measured</div></div>
           <div className="liftarrow" aria-hidden="true">→</div>
-          <div className="liftcol"><div className="liftnum" style={{ color: '#3B6D11' }}>{after}</div><div className="muted">after queued fixes <span style={{ fontSize: 10, opacity: 0.7 }}>(projected)</span></div></div>
+          <div className="liftcol"><div className="liftnum" style={{ color: '#3B6D11' }}>{after}</div><div className="muted">after queued fixes <span className="projected-label">(projected)</span></div></div>
           <div className="liftgain">+{after - before} pts</div>
         </div>
         <p className="muted">Projected estate score assuming all queued remediations are approved and pass re-validation — actual results may vary.</p>

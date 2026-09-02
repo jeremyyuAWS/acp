@@ -465,6 +465,50 @@ export const getScanInventory = (scanId, { offset = 0, limit = 1000 } = {}) => (
   ? sim(simScanInventory(scanId, offset, limit), 180)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/inventory?offset=${offset}&limit=${limit}`,
           { headers: headers() }).then(j))
+export const getLifecycleSummary = (scanId) => (SIM
+  ? getScanInventory(scanId).then(({ rows, total }) => {
+      const count = (status) => rows.filter((r) => (r.lifecycle_status || 'Active') === status).length
+      const counts = { active: count('Active'), already_archived: count('Archived') + count('Already archived'),
+        archive_candidate: count('Archive Candidate'), delete_candidate: count('Delete Candidate'), deleted: count('Deleted'),
+        exempt: count('Exempted'), reactivated: count('Reactivated'),
+        unevaluable: count('Unevaluable') + count('Conflict — review required'), failed: count('Failed') }
+      return { scan_id: scanId, total, reconciled_total: Object.values(counts).reduce((a, b) => a + b, 0),
+        counts, assessment_excluded: counts.already_archived + counts.archive_candidate + counts.delete_candidate + counts.deleted,
+        recommendations_only: true, data_version: null }
+    })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/lifecycle/summary`, { headers: headers() }).then(j))
+export const getLifecycleRuleResults = (scanId) => (SIM
+  ? sim({ scan_id: scanId, data_version: null, rules: [] })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/lifecycle/rules`, { headers: headers() }).then(j))
+export const getLifecycleFiles = (scanId, { status = '', policyId = '', candidateOnly = false, offset = 0, limit = 200 } = {}) => {
+  const qs = new URLSearchParams({ offset: String(offset), limit: String(limit) })
+  if (status) qs.set('status', status)
+  if (policyId) qs.set('policy_id', policyId)
+  if (candidateOnly) qs.set('candidate_only', 'true')
+  return SIM ? getScanInventory(scanId, { offset, limit })
+    : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/lifecycle/files?${qs}`, { headers: headers() }).then(j)
+}
+// PRD §8 grouped approval. Sends the ids the queue DISPLAYED, plus the policy version and
+// action they were all queued under — the server refuses the batch if any row disagrees, so the
+// client cannot widen a selection by getting its own grouping wrong. Records decisions only; no
+// source file is touched here.
+// PRD §7.4 timeline. Scan-scoped in the path (that scan is the owner gate) but not in the
+// answer: the events cross scans, which is the whole point of showing a history at all.
+export const getLifecycleFileHistory = (scanId, file) => (SIM
+  ? sim({ scan_id: scanId, document_id: file, events: [] })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/lifecycle/files/${encodeURIComponent(file)}/history`,
+          { headers: headers() }).then(j))
+export const approveDispositionBatch = ({ auditIds, policyId, policyVersion, action, reason }) => (SIM
+  ? sim({ submitted: auditIds.length, approved: auditIds, refused: [], already_decided: [],
+          reconciled: true, executed: false })
+  : fetch(`${BASE}/disposition/approvals`, {
+    method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ audit_ids: auditIds, policy_id: policyId,
+                           policy_version: policyVersion, action, reason: reason || null }),
+  }).then(j))
+export const getLifecycleFileDetail = (scanId, file) => (SIM
+  ? getScanInventory(scanId).then(({ rows }) => ({ ...(rows.find((r) => r.file === file) || {}), evaluations: [] }))
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/lifecycle/files/${encodeURIComponent(file)}`, { headers: headers() }).then(j))
 // Lifecycle rules #8 — record a human's reasoned disagreement with a rule's Archive/Delete
 // Candidate recommendation for ONE file. Rejects (throws) on a blank reason or a file with no
 // candidate status to override, matching the real route's 422/409 — the caller (Discover.jsx)
@@ -722,6 +766,21 @@ export const NOT_MODIFIED = Symbol('scan-not-modified')
 // 45s is far longer than any healthy response and still finite, which is the only property the
 // hang needs.
 export const SCAN_READ_TIMEOUT_MS = 45000
+// The per-rule execution manifest, for the Assessment Run Integrity Gate (runIntegrity.js).
+//
+// Bounded like every other read added since #1149/#1150: a hang here is worse than a failure,
+// because the gate's whole job is to withhold a conformance claim it cannot justify, and a fetch
+// that never settles leaves it in `pending` — claiming nothing, but also never telling anyone why.
+// A rejection reaches runIntegrity as `unavailable`, which is an answer.
+//
+// Its own constant rather than SCAN_READ_TIMEOUT_MS's 45s: this endpoint reads two indexed tables
+// keyed by scan_id and does no joins or reconciliation, so it has none of the properties that
+// argued for the long ceiling there.
+export const MANIFEST_READ_TIMEOUT_MS = 15000
+export const getScanManifest = (id) => (SIM ? sim(null) : fetch(
+  `${BASE}/scans/${encodeURIComponent(id)}/manifest`,
+  { headers: headers(), cache: 'no-store', signal: AbortSignal.timeout(MANIFEST_READ_TIMEOUT_MS) },
+).then(j))
 export const getScan = (id, knownRevision = null) => (SIM ? sim(simGetScan(id)) : fetch(`${BASE}/scans/${id}`, {
   headers: headers(knownRevision != null ? { 'If-None-Match': `W/"${knownRevision}"` } : {}),
   cache: 'no-store',
@@ -895,6 +954,18 @@ export const putAiProvider = (patch) => (SIM
       method: 'PUT',
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(patch),
+    }).then(j))
+// Ask the server to send its own SYNTHETIC probe image to one provider and report what came back.
+// The body carries a provider NAME and nothing else — no key, and no document: the image is
+// generated server-side (providers.probe_image_bytes) precisely so pressing this cannot send
+// customer content to a third party. In the simulated build it reports that it did nothing,
+// rather than a cheerful ✓ for a call that never left the browser.
+export const testAiProvider = (provider) => (SIM
+  ? sim({ ok: false, provider, reason: 'simulated', detail: 'simulated build — no call was made' })
+  : fetch(`${BASE}/ai/providers/test`, {
+      method: 'POST',
+      headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ provider }),
     }).then(j))
 
 // ADR 0021 · Review memory — the org's house-style rules, and the decisions on derived proposals.

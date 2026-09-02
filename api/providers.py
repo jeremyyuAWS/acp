@@ -619,6 +619,152 @@ def local_vision_provider() -> VisionProvider:
     return OllamaVisionProvider(_ai.OLLAMA_BASE_URL, _ai.OLLAMA_VISION_MODEL)
 
 
+# The non-secret fields each cloud provider needs before it can be enabled, beyond the key. ONE
+# table, consulted by both _adapter_for (which builds) and activation_readiness (which explains),
+# so "what does this provider need" cannot be true in one place and stale in the other —
+# test_provider_activation.py asserts the two agree for every provider in CLOUD_PROVIDERS.
+_REQUIRED_FIELDS = {
+    "azure_openai": ("endpoint", "deployment"),
+    "openai": ("model",),
+    "anthropic": ("model",),
+}
+
+
+def activation_readiness(provider: str, cfg: dict | None = None) -> dict:
+    """Whether one provider is complete enough to be ENABLED, and what is missing if not.
+
+    WHY THIS EXISTS. Enabling was previously unconditional: `PUT /ai/providers` stored
+    `enabled=true` whatever else was blank, and `_adapter_for` then returned None at call time, so
+    the provider fell through to the local floor. Verified by running it, not by reading: a config
+    with no model and no key_secret_ref stores as enabled=True, builds no adapter, and reports
+    `credential_source='not_configured'` — the Settings page says the provider is on, and every
+    document is silently still handled locally. An enable switch that does nothing is worse than
+    one that refuses, because it looks like consent was honoured.
+
+    `missing` names the fields an admin still has to fill, and `secret_resolves` is the separate,
+    ops-owned half: the key VALUE is provisioned outside this app, so a complete config can still be
+    unusable because the referenced environment secret is absent. Those two failures need two
+    different people, so they are reported apart rather than as one "not ready".
+
+    Reads no secret value and returns none — only whether the named reference resolves.
+    """
+    cfg = cfg or {}
+    required = _REQUIRED_FIELDS.get(provider)
+    if required is None:
+        return {"provider": provider, "ready": False, "missing": [], "secret_resolves": False,
+                "detail": f"no adapter is implemented for '{provider}'"}
+    missing = [f for f in required if not (cfg.get(f) or "").strip()]
+    ref = (cfg.get("key_secret_ref") or "").strip()
+    if not ref:
+        missing.append("key_secret_ref")
+    resolves = bool(_resolve_key(cfg))
+    ready = not missing and resolves
+    if missing:
+        detail = "missing " + ", ".join(missing)
+    elif not resolves:
+        detail = (f"the environment secret named {ref} is not present on this deployment — "
+                  "ops provisions the key value; this app never stores it")
+    else:
+        detail = "configuration is complete and the referenced secret resolves"
+    return {"provider": provider, "ready": ready, "missing": missing,
+            "secret_resolves": resolves, "detail": detail}
+
+
+# A tiny, fixed, SYNTHETIC image for the connection test — a black square on white, 64x64, built
+# here from stdlib zlib/struct rather than read from disk or rendered from anything a customer
+# uploaded. That is the whole point: "Test connection" must prove the credential and the route
+# work WITHOUT sending one byte of customer content to a third party. Deterministic, so the same
+# bytes go every time and nothing about a tenant can leak through the probe.
+#
+# Not a 1x1 pixel: a model asked to describe a single pixel legitimately answers with nothing, and
+# an empty answer is the one outcome this test must be able to call a FAILURE. A square is enough
+# content for any vision model to say something, so REASON_EMPTY here means the deployment is
+# wrong, not that the prompt was unanswerable.
+_PROBE_SIZE = 64
+
+
+def probe_image_bytes() -> bytes:
+    """The synthetic probe image. Contains no customer document, no scan, no tenant data."""
+    import struct
+    import zlib
+    n = _PROBE_SIZE
+    rows = bytearray()
+    for y in range(n):
+        rows.append(0)                                   # PNG per-row filter: none
+        for x in range(n):
+            inside = n // 4 <= x < 3 * n // 4 and n // 4 <= y < 3 * n // 4
+            rows += b"\x00\x00\x00" if inside else b"\xff\xff\xff"
+
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+
+    return (b"\x89PNG\r\n\x1a\n"
+            + _chunk(b"IHDR", struct.pack(">IIBBBBB", n, n, 8, 2, 0, 0, 0))
+            + _chunk(b"IDAT", zlib.compress(bytes(rows), 9))
+            + _chunk(b"IEND", b""))
+
+
+PROBE_PROMPT = "Describe this image in one short sentence."
+
+
+def test_connection(provider: str, *, timeout: float = 30.0) -> dict:
+    """Send the synthetic probe image to one provider and report what came back. Admin action.
+
+    NO CUSTOMER DOCUMENT IS SENT — the bytes are probe_image_bytes(), generated in-process. That
+    is what makes this safe to press on a provider nobody has agreed to send documents to yet:
+    pressing it is how an admin finds out whether the credential and route work BEFORE any real
+    content could go anywhere.
+
+    RETURNS NO SECRET. The result carries the provider, model, zone, latency, the outcome reason,
+    the real token counts and the real cost — the same normalized shape every vision call
+    produces. It never carries the key, and never the value behind key_secret_ref.
+
+    The three outcomes are the adapter's own (see the reason constants): a transport throw, an
+    HTTP status, or a 200 with nothing in it. They stay distinct here because they need different
+    fixes — a 401 is the wrong key, a 404 is the wrong model or route, and an empty 200 on THIS
+    image means the deployment answers but cannot caption a black square, which is a real finding
+    about the deployment rather than about the prompt.
+    """
+    ready = activation_readiness(provider, _config_for(provider))
+    if not ready["ready"]:
+        return {"ok": False, "provider": provider, "reason": "not_configured",
+                "detail": ready["detail"], "missing": ready["missing"],
+                "secret_resolves": ready["secret_resolves"]}
+    adapter = _adapter_for(provider, _config_for(provider))
+    if adapter is None:                                  # belt and braces; readiness already agreed
+        return {"ok": False, "provider": provider, "reason": "not_configured",
+                "detail": "the adapter could not be built from this configuration",
+                "missing": ready["missing"], "secret_resolves": ready["secret_resolves"]}
+    res = adapter.generate(PROBE_PROMPT, probe_image_bytes(), timeout=timeout)
+    return {
+        "ok": bool(res.get("ok")),
+        "provider": res.get("provider") or provider,
+        "model": res.get("model"),
+        "zone": res.get("zone"),
+        "latency_ms": res.get("latency_ms"),
+        "reason": res.get("reason"),
+        "prompt_tokens": res.get("prompt_tokens"),
+        "completion_tokens": res.get("completion_tokens"),
+        "cost_usd": res.get("cost_usd", 0.0),
+        # Whether the model produced a caption at all — NOT the caption. The probe image is
+        # synthetic so its description would be harmless, but a test action has no reason to
+        # return model output, and not returning it keeps the response shape free of anything
+        # that could carry content if the probe ever changed.
+        "described": bool((res.get("text") or "").strip()),
+        "secret_resolves": True,
+    }
+
+
+def _config_for(provider: str) -> dict:
+    """One provider's stored config, or an empty config when the store is unavailable."""
+    try:
+        import core
+        return core.store.get_ai_provider_config(provider) or {"provider": provider}
+    except Exception:
+        return {"provider": provider}
+
+
 def _adapter_for(provider: str, cfg: dict) -> VisionProvider | None:
     """Build the adapter for one configured cloud provider from its stored config, or None when it
     is under-configured (missing key or a required field). The single place that knows each cloud

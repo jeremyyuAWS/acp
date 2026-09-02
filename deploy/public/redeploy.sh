@@ -14,9 +14,9 @@
 #      (LibreOffice + a downloaded .NET 10 runtime), pip install, and npm install. `az acr build`
 #      has no --cache-from (checked, az 2.86.0), so a QuickRun cannot reuse layers and was
 #      re-running all of that for a one-line CSS change. Bases rebuild only when the hash moves.
-#   2. acp-app and acp-worker are updated CONCURRENTLY (--no-wait, then poll). Sequential
-#      updates also left a window where the two ran DIFFERENT images; they must move together
-#      (same image, different entrypoint — scanning happens in the worker).
+#   2. acp-app and all three stage-owned workers are updated CONCURRENTLY (--no-wait, then poll).
+#      Sequential updates left a window where stages ran DIFFERENT images; they must move together
+#      (same image, different roles — Discovery, Assess, and Remediate own disjoint queues).
 #
 # Guards, all of which are scar tissue from 2026-07-29 (see docs/pipeline.md):
 #   - pin to a sha and refuse to build from a dirty or shared tree
@@ -29,7 +29,20 @@ set -euo pipefail
 RG="${ACP_RG:-mdk-accessibility}"
 ACR="${ACP_ACR:-mdkaccessibilityacr}"
 APP="${ACP_APP:-acp-app}"
-WORKER="${ACP_WORKER:-acp-worker}"
+DISCOVERY_WORKER="${ACP_DISCOVERY_WORKER:-acp-discovery}"
+ASSESS_WORKER="${ACP_ASSESS_WORKER:-acp-assess}"
+REMEDIATE_WORKER="${ACP_REMEDIATE_WORKER:-acp-remediate}"
+LANE_WORKERS=("$DISCOVERY_WORKER" "$ASSESS_WORKER" "$REMEDIATE_WORKER")
+# The ACP_WORKER_ROLE each lane worker runs as, POSITIONALLY paired with LANE_WORKERS above —
+# LANE_WORKERS[i] reports its heartbeat under LANE_ROLES[i]. Step 9b needs the role, not the
+# service name: the services have no ingress, so the only way to ask one what it is running is
+# through the role-scoped key it writes (worker_tier_heartbeat:<role>).
+#
+# Only acp-discovery's role is set in this repo (deploy/discovery/Dockerfile). The other two get
+# ACP_WORKER_ROLE from container-app env vars set outside it, so this list is a convention the
+# repo cannot verify end to end — which is exactly why step 9b checks that each named role
+# actually reported, instead of trusting whichever roles happen to appear.
+LANE_ROLES=("discovery" "assess" "remediate")
 BUILD_TZ="${BUILD_TZ:-America/Los_Angeles}"
 MIN_MODULES=41                  # engine/pdf-analyser is tracked; this guards against truncation
 DRY="${ACP_DRY_RUN:-0}"
@@ -233,9 +246,9 @@ fi
 FQDN="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)"
 BEFORE="$(curl -s --max-time 20 "https://$FQDN/healthz" || echo '{}')"
 say "before: $BEFORE"
-# Both apps must already be running, or a 404 afterwards is unattributable — on 2026-07-29 both
-# turned out to have been Stopped before the deploy that appeared to break them.
-for a in "$APP" "$WORKER"; do
+# The app and every stage worker must already be running, or a stalled queue afterwards is
+# unattributable. The retired generic acp-worker is deliberately absent from this list.
+for a in "$APP" "${LANE_WORKERS[@]}"; do
   st="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$a" --query properties.runningStatus -o tsv)"
   [ "$st" = "Running" ] || die "$a is '$st' before we started — fix that first, do not deploy onto it"
 done
@@ -256,7 +269,7 @@ if [ "$DRY" = 1 ]; then
     echo "  blue (keeps traffic until promotion): $BLUE"
     echo "  green (would provision at 0%)      : $APP--$SUFFIX"
     echo "  green smoke-test url               : https://$APP--$SUFFIX.$ENV_DOMAIN/healthz"
-    echo "  worker cutover                     : $WORKER -> $IMG  (NOT blue-green)"
+    echo "  worker cutover                     : ${LANE_WORKERS[*]} -> $IMG  (NOT blue-green)"
   fi
   say "DRY RUN — stopping before anything is changed"
   exit 0
@@ -270,7 +283,7 @@ fi
 # green provisions at 0%, is smoke-tested on its own FQDN while production still serves blue, and
 # takes traffic in one weight change that reverses just as fast.
 #
-# acp-worker has NO INGRESS (properties.configuration.ingress is null). It takes work by pulling
+# Stage workers have NO INGRESS (properties.configuration.ingress is null). They take work by pulling
 # from a shared job queue, so a second worker on a different image would pull from that SAME
 # queue — blue and green racing over live production jobs, picked at random. There is no weight
 # to set and nothing to split. The worker therefore CUTS OVER at promotion, and that step is not
@@ -342,13 +355,17 @@ if [ "$BG" = 1 ]; then
   az containerapp ingress traffic set "${AZ[@]}" -g "$RG" -n "$APP" \
     --revision-weight "$GREEN=100" "$BLUE=0" >/dev/null
 
-  say "cutting $WORKER over to the same image (NOT blue-green — see header)"
-  az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER" --image "$IMG" --no-wait >/dev/null
-  printf '  %s ' "$WORKER"
-  for _ in $(seq 1 60); do
-    img="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$WORKER" --query properties.template.containers[0].image -o tsv 2>/dev/null || true)"
-    [ "$img" = "$IMG" ] && { printf ' ✓\n'; break; }
-    printf '.'; sleep 5
+  say "cutting ${LANE_WORKERS[*]} over to the same image (NOT blue-green — see header)"
+  for a in "${LANE_WORKERS[@]}"; do
+    az containerapp update "${AZ[@]}" -g "$RG" -n "$a" --image "$IMG" --no-wait >/dev/null
+  done
+  for a in "${LANE_WORKERS[@]}"; do
+    printf '  %s ' "$a"
+    for _ in $(seq 1 60); do
+      img="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$a" --query properties.template.containers[0].image -o tsv 2>/dev/null || true)"
+      [ "$img" = "$IMG" ] && { printf ' ✓\n'; break; }
+      printf '.'; sleep 5
+    done
   done
 
   # Verified through the PUBLIC url, not green's. Green being healthy proves green is healthy;
@@ -369,25 +386,29 @@ if [ "$BG" = 1 ]; then
   # real names filled in: recovery should be a paste, not a reconstruction under pressure.
   cat <<ROLLBACK
 
-  Rollback — app is instant (a weight change, nothing provisions); the worker needs ~20s:
+  Rollback — app is instant (a weight change, nothing provisions); the workers need ~20s:
 
     az containerapp ingress traffic set -g $RG -n $APP --revision-weight $BLUE=100 $GREEN=0
-    az containerapp update -g $RG -n $WORKER --image $BLUE_IMG
+    az containerapp update -g $RG -n $DISCOVERY_WORKER --image $BLUE_IMG
+    az containerapp update -g $RG -n $ASSESS_WORKER --image $BLUE_IMG
+    az containerapp update -g $RG -n $REMEDIATE_WORKER --image $BLUE_IMG
 
-  Run BOTH. A new worker under an old app is the mixed-version state promotion exists to close.
+  Run ALL FOUR. New workers under an old app are the mixed-version state promotion exists to close.
 ROLLBACK
   exit 0
 fi
 
-# ── 8. update BOTH, concurrently ───────────────────────────────────────────────────────────
-# Same image, different entrypoint. Scanning happens in the worker, so updating only the app
+# ── 8. update app and stage workers, concurrently ──────────────────────────────────────────
+# Same image, different roles. Scanning happens in the workers, so updating only the app
 # ships the fixes nowhere useful. --no-wait so the two revisions provision in parallel and the
 # window where they run different images is as short as it can be.
-say "updating $APP + $WORKER concurrently"
-az containerapp update "${AZ[@]}" -g "$RG" -n "$APP"    --image "$IMG" --no-wait >/dev/null
-az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER" --image "$IMG" --no-wait >/dev/null
+say "updating $APP + ${LANE_WORKERS[*]} concurrently"
+az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$IMG" --no-wait >/dev/null
+for a in "${LANE_WORKERS[@]}"; do
+  az containerapp update "${AZ[@]}" -g "$RG" -n "$a" --image "$IMG" --no-wait >/dev/null
+done
 
-for a in "$APP" "$WORKER"; do
+for a in "$APP" "${LANE_WORKERS[@]}"; do
   printf '  %s ' "$a"
   for _ in $(seq 1 60); do
     img="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$a" --query properties.template.containers[0].image -o tsv 2>/dev/null || true)"
@@ -412,11 +433,31 @@ done
 # and deactivates the rest. It is a no-op when already Single, so a normal-only history never
 # notices it; it only fires to unstick an app a blue-green left in Multiple mode. Placed AFTER the
 # image-confirmation loop so the revision it routes 100% to is one we have just seen come up.
-MODE="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" --query properties.configuration.activeRevisionsMode -o tsv 2>/dev/null || echo Single)"
-if [ "$MODE" != "Single" ]; then
-  say "returning $APP to single-revision mode (was $MODE) so the new revision takes traffic"
-  az containerapp revision set-mode "${AZ[@]}" -g "$RG" -n "$APP" --mode single >/dev/null
-fi
+#
+# EVERY APP THIS SCRIPT DEPLOYS, not just the one with ingress. This block named $APP only, so
+# nothing in this repo ever asserted the worker services' revision mode — and no script sets it
+# either, which is the shape of state that drifts and is never corrected. The lane workers have NO
+# INGRESS, so an extra active revision is not stranded at 0% traffic the way the app's would be:
+# it simply keeps running and keeps claiming jobs from the shared queue. The app's version of this
+# bug is loud (the verify below fails with "expected version X, got Y"); theirs is silent.
+#
+# Derived from LANE_WORKERS rather than named one by one. Spelling the apps out here is what broke
+# production deploys on 2026-09-01: this loop was written as `"$APP" "$WORKER" "$DISCOVERY_WORKER"`
+# while the same day's #1172 retired the generic worker and deleted $WORKER, so under `set -u`
+# every deploy died HERE —
+#
+#     deploy/public/redeploy.sh: line 433: WORKER: unbound variable
+#
+# after the images were already updated and before steps 9/9b ran, so nothing was verified and the
+# job reported failure on a deploy that had in fact shipped. `bash -n` cannot see an unbound
+# variable, and the test covering this loop pinned the literal app list, so both guards passed.
+for a in "$APP" "${LANE_WORKERS[@]}"; do
+  MODE="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$a" --query properties.configuration.activeRevisionsMode -o tsv 2>/dev/null || echo Single)"
+  if [ "$MODE" != "Single" ]; then
+    say "returning $a to single-revision mode (was $MODE) so the new revision takes over"
+    az containerapp revision set-mode "${AZ[@]}" -g "$RG" -n "$a" --mode single >/dev/null
+  fi
+done
 
 # Apply only on the normal path. The blue-green path exits above: patching its template during
 # promotion would create a third revision and invalidate the blue/green pair being verified.
@@ -442,3 +483,227 @@ case "$AFTER" in
   *"\"version\":\"$BUILD_VERSION\""*) printf '\n\033[32m✓ %s is live on %s\033[0m\n' "$BUILD_VERSION" "$APP" ;;
   *) die "expected version $BUILD_VERSION, got: $AFTER" ;;
 esac
+
+# ── 9b. verify the WORKER SERVICES, per role, by asking them ───────────────────────────────
+#
+# Step 8's ✓ reads the TEMPLATE: the image ACA was TOLD to run. Step 9 reads /healthz: the image
+# the app IS running. The worker services only ever had the first kind of check, and the gap
+# between them is not theoretical — on 2026-09-01 the app rolled 2026.9.1.12 -> .23 across eleven
+# deploys, every one printing `acp-worker ✓`, while the live worker tier reported an image built
+# on 31 August throughout.
+#
+# THE SHARED HEARTBEAT KEY CANNOT ANSWER THIS, and that is the trap worth writing down. Every
+# worker writes its beat twice (worker_main.py:105-106): to `worker_tier_heartbeat`, and to
+# `worker_tier_heartbeat:<role>`. /readyz's `workers.version` reads the FIRST — one row, last
+# writer wins — so with two worker services running it reports whichever beat most recently.
+# Sampling production every 6s for 90s returned 2026.8.31.39 (pool=2) thirteen times and
+# 2026.8.31.20 (pool=3) once: two services alternating in one field. Comparing THAT against the
+# build being shipped would warn at random on every deploy, which is worse than not checking.
+#
+# So this reads `workers.roles.<role>.version` — each service's own key.
+#
+# IT CHECKS THE ROLES THIS DEPLOY UPDATED (LANE_ROLES), NOT WHICHEVER ROLES REPORTED, and that
+# distinction is the whole of the second correction. Checking "every role that reported" is wrong
+# in both directions at once:
+#
+#   - FALSE ALARM, forever. `worker_tier_heartbeat:<role>` is a settings row, and nothing reaps
+#     it when the service that wrote it goes away. #1172 retired the generic worker, which ran as
+#     ACP_WORKER_ROLE=processing; its last beat (2026.9.1.29) is still in the table and still in
+#     /readyz. Measured against production on 2026-09-01, this step's own program printed
+#     `processing=2026.9.1.29` against build 2026.9.1.32 — and would have on every future deploy,
+#     because that row can never catch up. A warning nobody can clear is one people learn to skip.
+#     It also cost the full 24x5s retry every time, since the condition never clears.
+#   - SILENT PASS on the case that matters. A role that never reported at all contributed no line,
+#     so a lane worker whose replicas never came up — the exact failure this step exists to catch —
+#     read as ✓.
+#
+# Naming the roles fixes both: an absent one is now a failure, and a retired one is not our
+# business. Roles outside LANE_ROLES are reported as a NOTE, not a warning, so that a service
+# somebody adds without adding it here is still visible.
+say "verifying worker services (per role — they have no ingress to curl)"
+#
+# ONE CLEAN POLL IS NOT AN ANSWER, and this loop used to break on the first one.
+#
+# Measured on 2026-09-01, deploy of 2026.9.1.36 (run 33568634537). Step 9b printed
+# `✓ every deployed worker role is running 2026.9.1.36` at 23:03:55.5585. Discovery's row:
+#
+#     23:03:39.570  beat, version 2026.9.1.30
+#    ~23:03:55.5    step 9b polls, sees .36, BREAKS, prints the tick
+#     23:03:55.581  beat, version 2026.9.1.30
+#     23:03:56.35   the workflow's own /readyz: discovery .30, age 0.5s
+#
+# Discovery beats every 15s (worker_main.py), and .30 was written at :39.57 and :55.58 — 16s
+# apart, one replica's cadence. A .36 write in between is a SECOND WRITER. Two replicas, one on
+# each image, both writing worker_tier_heartbeat:discovery, because the role-scoped key is
+# last-writer-wins across REPLICAS and not merely across services. Breaking on the first clean
+# poll turns that into a check that retries until it gets a green sample and then stops — it
+# converges on green rather than being able to go red, which is the same defect as the f-string.
+#
+# So a role must stay clean across a span LONGER THAN ONE HEARTBEAT INTERVAL. An old replica
+# still beating writes its version at least once per interval, so a window wider than that has
+# to contain one of its writes to be observed. Any dirty poll resets the streak to zero.
+#
+# THIS IS PROBABILISTIC, NOT A PROOF, and pretending otherwise is how the last version of this
+# check got believed. The row holds whichever write landed last; if the old replica's beat is
+# consistently overwritten by the new one within a second or two, a 5s poll cadence can still
+# miss it. That is why the revision-count check below exists — ACA can be asked how many
+# revisions are actually running, which is an answer rather than a sample.
+_HEARTBEAT_S=15                 # worker_main.py: `if now - last_beat >= 15`
+_MIN_CLEAN_SPAN=$(( _HEARTBEAT_S + 5 ))
+_ROLES_JSON=""
+_STREAK_START=""
+_SUSTAINED=0
+_STALE="startup"                # non-empty until a poll says otherwise
+for _ in $(seq 1 24); do
+  _ROLES_JSON="$(curl -s --max-time 20 "https://$FQDN/readyz" || true)"
+  # Every DEPLOYED role that is not running this build, one "role=problem" per line.
+  # NO f-STRING HERE, and that is not style. A backslash inside an f-string expression is a
+  # SyntaxError, so an earlier version of this line printed nothing on every input — which made
+  # `_STALE` always empty and step 9b always print ✓. A check that cannot go red is worse than
+  # no check; caught only by running it against sample payloads.
+  _STALE="$(printf '%s' "$_ROLES_JSON" | python3 -c '
+import json, sys
+want = sys.argv[1]
+required = sys.argv[2:]
+try:
+    roles = json.load(sys.stdin)["workers"].get("roles")
+except Exception:
+    roles = None
+if not isinstance(roles, dict):
+    # An older API without the field, or a curl that returned an error page. Reported, not
+    # crashed and not passed: "we could not ask" is a third answer and must not read as ✓.
+    print("readyz=no-roles-field")
+    sys.exit(0)
+for role in required:
+    r = roles.get(role)
+    if not isinstance(r, dict):
+        print(role + "=absent")
+        continue
+    got = r.get("version")
+    if got is None:
+        # A heartbeat predating the version field. Unknown, not wrong.
+        continue
+    if got != want:
+        print(role + "=" + str(got))
+    elif r.get("alive") is False:
+        # Right image, no longer beating: the replica wrote one beat and died.
+        print(role + "=stale-" + str(r.get("age_s")) + "s")
+' "$BUILD_VERSION" "${LANE_ROLES[@]}" 2>/dev/null || true)"
+  if [ -n "$_STALE" ]; then
+    _STREAK_START=""            # any dirty poll starts the span over
+  else
+    [ -n "$_STREAK_START" ] || _STREAK_START="$SECONDS"
+    if [ $(( SECONDS - _STREAK_START )) -ge "$_MIN_CLEAN_SPAN" ]; then
+      _SUSTAINED=1
+      break
+    fi
+  fi
+  sleep 5
+done
+
+# THE VERDICT IS `_SUSTAINED`, NOT `_STALE`, and that distinction is load-bearing. On exhaustion
+# `_STALE` holds only the LAST poll's result, so a run that flapped for two minutes and happened
+# to end on a clean poll would leave it empty and print the tick — exactly the bug this block was
+# rewritten to remove, reintroduced one level up. An unsustained streak is not a pass.
+if [ "${_SUSTAINED:-0}" != 1 ] && [ -z "$_STALE" ]; then
+  _STALE="roles=never-clean-for-${_MIN_CLEAN_SPAN}s (last poll was clean; earlier ones were not)"
+fi
+
+# Roles that reported but are not ours to deploy. Informational: a retired service's row lives on
+# (see above), and a NEW service missing from LANE_ROLES should be noticed rather than warned about.
+_OTHER="$(printf '%s' "$_ROLES_JSON" | python3 -c '
+import json, sys
+try:
+    roles = json.load(sys.stdin)["workers"].get("roles") or {}
+except Exception:
+    sys.exit(0)
+known = set(sys.argv[1:])
+for role, r in sorted(roles.items()):
+    if role in known or not isinstance(r, dict):
+        continue
+    print(role + "=" + str(r.get("version")) + ("" if r.get("alive") else " (not beating)"))
+' "${LANE_ROLES[@]}" 2>/dev/null || true)"
+if [ -n "$_OTHER" ]; then
+  printf '  note: roles reporting that this script does not deploy: %s\n' "$(printf '%s' "$_OTHER" | tr '\n' ' ')"
+fi
+
+# ── 9c. ASK ACA, rather than sampling a key it does not own ────────────────────────────────
+#
+# The heartbeat check above answers "is the running image the new one". This answers "is there
+# exactly ONE running image", which is the question the heartbeat cannot: two replicas on
+# different images both write worker_tier_heartbeat:<role> and the row keeps whichever landed
+# last, so a sample is evidence and a revision count is an answer.
+#
+# It is also the thing the warning below has always told the reader to run by hand. Running it
+# here costs one `az` call per lane worker on a deploy that has already spent minutes building,
+# and it removes the step where a human is trusted to go and look.
+#
+# Step 8's restore already set these apps to Single mode, under which ACA deactivates the
+# previous revision — so more than one active revision here means that did not take effect, which
+# is precisely the silent state these no-ingress apps drift into (nothing strands an extra
+# revision at 0% traffic the way it would for $APP; it just keeps claiming jobs).
+_EXTRA_REVS=""
+for a in "${LANE_WORKERS[@]}"; do
+  # `|| true` on the query, then a numeric guard: a failed az call must not read as "1 revision".
+  _n="$(az containerapp revision list "${AZ[@]}" -g "$RG" -n "$a" \
+          --query "length([?properties.active])" -o tsv 2>/dev/null || true)"
+  case "$_n" in
+    1) ;;
+    ''|*[!0-9]*) _EXTRA_REVS="$_EXTRA_REVS $a=unreadable" ;;
+    *) _EXTRA_REVS="$_EXTRA_REVS $a=${_n}-active-revisions" ;;
+  esac
+done
+
+if [ -z "$_STALE" ] && [ -z "$_EXTRA_REVS" ]; then
+  printf '\033[32m  ✓ every deployed worker role (%s) is running %s, one active revision each\033[0m\n' \
+    "${LANE_ROLES[*]}" "$BUILD_VERSION"
+elif [ -z "$_STALE" ]; then
+  printf '\n\033[33m  ! worker roles report %s, but ACA cannot confirm one revision each:\033[0m\n' \
+    "$BUILD_VERSION" >&2
+  printf '     %s\n' $_EXTRA_REVS >&2
+  cat >&2 <<REVWARN
+    The heartbeat says the new image is running; the revision count says an OLD one is running
+    TOO. Both are true — they are different questions. A second active revision has no ingress to
+    strand it, so it keeps claiming jobs from the shared queue, and the role key reports whichever
+    replica beat last. This is why the tick above is not on its own a pass.
+
+      az containerapp revision list -g $RG -n ${LANE_WORKERS[0]} \\
+        --query "[?properties.active].{rev:name,created:properties.createdTime,img:properties.template.containers[0].image}" -o table
+
+    Deactivate the old revision, or check why --mode single did not take.
+REVWARN
+else
+  printf '\n\033[33m  ! deployed worker roles NOT running %s:\033[0m\n' "$BUILD_VERSION" >&2
+  printf '      %s\n' $_STALE >&2
+  cat >&2 <<WARN
+    A worker service is not running the image this deploy shipped, even though its template was
+    updated. Scans run in these services, so the estate is being assessed with older code.
+
+    "=absent" means the role never reported at all — that service's replicas are not up, or its
+    ACP_WORKER_ROLE does not match the name this script expects (only acp-discovery's is set in
+    this repo; the others come from container-app env vars). "=stale-<n>s" means it wrote one beat
+    on the right image and stopped. A version means an old revision is still the one beating.
+
+    An old revision is the usual cause — these apps have no ingress, so nothing strands one at 0%
+    traffic the way it would for $APP. Check each of ${LANE_WORKERS[*]}:
+
+      az containerapp show -g $RG -n ${LANE_WORKERS[0]} --query properties.configuration.activeRevisionsMode
+      az containerapp revision list -g $RG -n ${LANE_WORKERS[0]} \\
+        --query "[?properties.active].{rev:name,created:properties.createdTime,img:properties.template.containers[0].image}" -o table
+
+    A role reporting a build older than any recent deploy means that service's replicas were
+    never replaced.
+WARN
+fi
+
+# WARNS, IT DOES NOT DIE, deliberately. A mixed-version estate is genuinely dangerous — nothing
+# sequences the tiers (ADR 0045 §6) — but by the time this runs the images have already been
+# updated and the app is already serving the new build. Dying here does not unship any of that;
+# it only turns a deploy that needs a follow-up into one that reports total failure, and the
+# script has no way to put the estate back. Making it fatal is the rollout owner's call, not a
+# default this script should adopt on its own. What it must not do is stay silent, which it did.
+#
+# The ORIGINAL reason recorded here — "this condition is PRE-EXISTING, so dying would red every
+# deploy including the one shipping the cleanup" — was true of the retired `processing` role and
+# is no longer the reason, because that role is no longer checked. Kept only as the note that the
+# rationale changed; a warning is not load-bearing enough to promote to fatal by accident.

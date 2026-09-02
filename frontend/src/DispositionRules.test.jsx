@@ -35,8 +35,10 @@ vi.mock('./api.js', () => ({
 }))
 
 const confirmMock = vi.fn()
+const notifyMock = vi.fn()
 vi.mock('./ConfirmDialog.jsx', () => ({
   confirm: (...a) => confirmMock(...a),
+  notify: (...a) => notifyMock(...a),
   default: () => null,
 }))
 
@@ -46,6 +48,7 @@ afterEach(unmountAll)
 let container, root
 beforeEach(() => {
   confirmMock.mockReset().mockResolvedValue(false)
+  notifyMock.mockReset()
   listDispositionPolicies.mockReset().mockResolvedValue([])
   createDispositionPolicy.mockReset().mockResolvedValue({ policy_id: 'new1' })
   setDispositionPolicyEnabled.mockReset().mockResolvedValue({})
@@ -82,6 +85,16 @@ const RULES = [
 ]
 
 describe('the existing rules list', () => {
+  it('keeps the creation form collapsed when rules already exist', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[0]])
+    await render(); await expand(); await flush()
+    expect(byLabel('Rule name')).toBeNull()
+    expect(btnByText('Create rule').getAttribute('aria-expanded')).toBe('false')
+    await click(btnByText('Create rule'))
+    expect(byLabel('Rule name')).not.toBeNull()
+    expect(btnByText('Close form').getAttribute('aria-expanded')).toBe('true')
+  })
+
   it('loads only when opened, and shows only the two lifecycle actions', async () => {
     listDispositionPolicies.mockResolvedValue(RULES)
     await render()
@@ -111,7 +124,7 @@ describe('the existing rules list', () => {
     listDispositionPolicies.mockResolvedValue(RULES)
     await render(); await expand(); await flush()
     expect(text()).toContain('1 of 2 rules enabled')
-    expect(text()).toContain('Disabled — tags nothing yet')
+    expect(text()).toContain('Off')
   })
 
   // Product rule 3. A pending answer and an empty answer are different facts.
@@ -262,8 +275,8 @@ describe('the existing rules list', () => {
     await render(); await expand(); await flush()
     await click(btnByText('Preview matches')); await flush()
     expect(text()).toContain("couldn't be evaluated")
-    expect(text()).toContain('department')
-    expect(text()).toContain('size_kb')
+    expect(text()).toContain('Department')
+    expect(text()).toContain('Larger than')
   })
 
   it('omits per-field counts when only one file is unable to evaluate', async () => {
@@ -275,9 +288,9 @@ describe('the existing rules list', () => {
     })
     await render(); await expand(); await flush()
     await click(btnByText('Preview matches')); await flush()
-    expect(text()).toContain('department')
+    expect(text()).toContain('Department')
     // No "(1)" when only one file — redundant next to the headline count
-    expect(text()).not.toMatch(/department\s*\(1\)/)
+    expect(text()).not.toMatch(/Department\s*\(1\)/)
   })
 
   it('falls back to generic message when unable_to_evaluate_fields is absent (old server)', async () => {
@@ -323,13 +336,37 @@ describe('the existing rules list', () => {
 
     await click(byLabel('Enable rule Superseded drafts')); await flush()
     expect(previewDispositionPolicy).toHaveBeenCalledWith('p2')
-    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('41 files (20% of your estate)') }))
-    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('tagged for deletion review') }))
+    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({
+      presentation: 'toast',
+      message: expect.stringContaining('never moves, archives, or deletes source files'),
+      facts: expect.arrayContaining([
+        expect.objectContaining({ label: 'Files currently in scope', value: '41 files · 20% of discovered files' }),
+        expect.objectContaining({ label: 'Recommendation', value: 'tagged for deletion review' }),
+        expect.objectContaining({ label: 'Starts', value: 'Next Discovery run' }),
+      ])
+    }))
     expect(setDispositionPolicyEnabled).not.toHaveBeenCalled()   // declined
 
     confirmMock.mockResolvedValue(true)
     await click(byLabel('Enable rule Superseded drafts')); await flush()
     expect(setDispositionPolicyEnabled).toHaveBeenCalledWith('p2', true)
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({
+      title: expect.stringContaining('enabled'), actionLabel: 'Undo',
+    }))
+
+    await act(async () => { await notifyMock.mock.calls.at(-1)[0].onAction() }); await flush()
+    expect(setDispositionPolicyEnabled).toHaveBeenLastCalledWith('p2', false)
+  })
+
+  it('shows that impact is being checked while the enable preview is pending', async () => {
+    listDispositionPolicies.mockResolvedValue([RULES[1]])
+    let settle
+    previewDispositionPolicy.mockImplementation(() => new Promise((resolve) => { settle = resolve }))
+    await render(); await expand(); await flush()
+    await click(byLabel('Enable rule Superseded drafts'))
+    expect(text()).toContain('Checking impact…')
+    await act(async () => settle({ would_match: 0, total: 10 })); await flush()
+    expect(text()).not.toContain('Checking impact…')
   })
 
   it('adds a broad-rule warning past the stated threshold, and omits it below it', async () => {
@@ -353,7 +390,10 @@ describe('the existing rules list', () => {
     confirmMock.mockResolvedValue(true)
     await render(); await expand(); await flush()
     await click(byLabel('Enable rule Superseded drafts')); await flush()
-    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('Could not check how many files') }))
+    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({
+      presentation: 'toast',
+      message: expect.stringContaining('current impact could not be measured'),
+    }))
     expect(setDispositionPolicyEnabled).toHaveBeenCalledWith('p2', true)
   })
 
@@ -739,6 +779,7 @@ describe('the safety copy the whole screen rests on', () => {
   it('never says a file was archived, deleted, moved or trashed', async () => {
     listDispositionPolicies.mockResolvedValue(RULES)
     await render(); await expand(); await flush()
+    await click(btnByText('Create rule'))
     await setValue(byLabel('Action'), 'delete')
     const t = text()
     expect(t).not.toMatch(/\b(?:files?|documents?) (?:was|were|are|is) (?:archived|deleted|trashed|moved|removed)\b/i)

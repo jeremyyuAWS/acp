@@ -82,6 +82,26 @@ async function mountSignedInOnDiscover() {
 }
 
 describe('the universal scan gate (App)', () => {
+  it('implements one-stop workflow tabs with a resolvable active panel', async () => {
+    const c = await mountSignedInOnDiscover()
+    const tabs = [...c.querySelectorAll('nav[aria-label="Compliance workflow"] [role="tab"]')]
+    const active = tabs.find((tab) => tab.getAttribute('aria-selected') === 'true')
+    expect(active.textContent).toMatch(/Discover/)
+    expect(tabs.filter((tab) => tab.tabIndex === 0)).toEqual([active])
+    expect(tabs.every((tab) => tab.getAttribute('aria-controls') === 'workflow-panel')).toBe(true)
+    const panel = c.querySelector('#workflow-panel[role="tabpanel"]')
+    expect(panel).toBeTruthy()
+    expect(panel.getAttribute('aria-labelledby')).toBe(active.id)
+
+    await act(async () => active.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'ArrowRight', bubbles: true,
+    })))
+    await flush()
+    const next = tabs.find((tab) => tab.getAttribute('aria-selected') === 'true')
+    expect(next.textContent).toMatch(/Assess/)
+    expect(document.activeElement).toBe(next)
+  })
+
   it('opens the review modal from a scan entry point and does NOT scan yet', async () => {
     const c = await mountSignedInOnDiscover()
     const rescan = byText(c, 'button', /Re-scan all sources/)

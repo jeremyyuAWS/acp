@@ -52,7 +52,10 @@ cd "$ACP"
 
 RG="${ACP_RG:-mdk-accessibility}"
 APP="${ACP_APP:-acp-app}"
-WORKER="${ACP_WORKER:-acp-worker}"
+DISCOVERY_WORKER="${ACP_DISCOVERY_WORKER:-acp-discovery}"
+ASSESS_WORKER="${ACP_ASSESS_WORKER:-acp-assess}"
+REMEDIATE_WORKER="${ACP_REMEDIATE_WORKER:-acp-remediate}"
+TARGETS=("$APP" "$DISCOVERY_WORKER" "$ASSESS_WORKER" "$REMEDIATE_WORKER")
 GPU_APP="${ACP_GPU_APP:-acp-ollama}"
 # The workload profile NAME is a friendly label you choose; the TYPE is an Azure SKU string and
 # must match one Azure actually offers in this region. They are NOT the same field, and the first
@@ -272,13 +275,13 @@ if [ "$ACTIVATE" != 1 ] || [ "$DRY" = 1 ]; then
 
   Re-run with ACP_GPU_ACTIVATE=1 to flip, or do it by hand:
 
-    for A in $APP $WORKER; do
+    for A in ${TARGETS[*]}; do
       az containerapp update -g $RG -n "\$A" --set-env-vars \\
         ACP_VISION_PROVIDER=ollama OLLAMA_BASE_URL=$BASE -o none
     done
 
-  Both apps, because remediation runs in the WORKER (ADR 0013 §2) — the app alone would leave
-  every real fix on the old provider.
+  All stage workers move with the app so discovery, assessment, and remediation cannot resolve
+  different providers.
 
   AZURE-ONLY MEANS NO SAFETY NET. With ollama as the provider, ai.py:616 skips the fallback, so
   a bad endpoint defers findings instead of degrading to a second lane. That is the honest
@@ -288,12 +291,12 @@ if [ "$ACTIVATE" != 1 ] || [ "$DRY" = 1 ]; then
   endpoint when you are satisfied, so you stop paying for it.
 NOTE
 else
-  say "switching $APP + $WORKER onto $BASE"
-  for A in "$APP" "$WORKER"; do
+  say "switching ${TARGETS[*]} onto $BASE"
+  for A in "${TARGETS[@]}"; do
     az containerapp show "${AZ[@]}" -g "$RG" -n "$A" -o none 2>/dev/null || { warn "no '$A' — skipping"; continue; }
     az containerapp update "${AZ[@]}" -g "$RG" -n "$A" --set-env-vars \
       "ACP_VISION_PROVIDER=ollama" "OLLAMA_BASE_URL=$BASE" -o none \
-      || die "could not switch $A — '$APP' and '$WORKER' may now disagree; re-run before remediating"
+      || die "could not switch $A — the stage workers may now disagree; re-run before remediating"
     echo "  ✓ $A"
   done
   cat <<NOTE
@@ -331,7 +334,7 @@ if [ "${ACP_GPU_RETIRE_RUNPOD:-0}" = 1 ] && [ "$DRY" != 1 ]; then
   [ "$ACTIVATE" = 1 ] || die "ACP_GPU_RETIRE_RUNPOD=1 without ACP_GPU_ACTIVATE=1 would strip the
   RunPod lane while it is still the one serving vision. Switch over first, verify, then retire."
   say "retiring RunPod config"
-  for A in "$APP" "$WORKER"; do
+  for A in "${TARGETS[@]}"; do
     az containerapp show "${AZ[@]}" -g "$RG" -n "$A" -o none 2>/dev/null || { warn "no '$A' — skipping"; continue; }
     az containerapp update "${AZ[@]}" -g "$RG" -n "$A" \
       --remove-env-vars RUNPOD_API_KEY RUNPOD_ENDPOINT_ID RUNPOD_VISION_MODEL -o none \
