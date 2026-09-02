@@ -273,12 +273,11 @@ describe('analysedCount separates documents we opened from documents we merely l
 describe('Overview reports absent values as absent, not as zero', () => {
   it('renders an em dash for an unmeasured KPI rather than a zero', () => {
     // The four headline tiles were removed from Overview on 2026-09-02 (PRD "ACP Discover and
-    // Overview Simplification"); EstateProgressPanel's KPI cards are the headline now. The
-    // INVARIANT is the reason this test exists and is unchanged: an absent measurement must not
-    // render as a measured zero. It moved from Overview's `tile()` helper to KpiCard.
+    // Overview Simplification"); EstateProgressPanel's funnel is the headline now. The INVARIANT
+    // is unchanged: an absent measurement must not render as a measured zero.
     expect(overviewSrc).not.toMatch(/<span>files discovered<\/span>/)
     const panel = readFileSync(join(here, 'EstateProgressPanel.jsx'), 'utf8')
-    expect(panel).toMatch(/\{value == null \? '—' : nf\.format\(value\)\}/)
+    expect(panel).toMatch(/\{count == null \? '—' : nf\.format\(count\)\}/)
     // A null KPI reaches the screen as the dash, not as 0.
     expect(screen({ ...SCAN_12F2_RUN, certifiable: null, scope: { kind: 'drive' } }, []))
       .not.toMatch(/discovered 0 total estate/)
@@ -478,8 +477,8 @@ describe('the Overview totals count the documents the Overview lists', () => {
     // The four tiles were removed on 2026-09-02. This run's scope carries no inventory, so the
     // estate KPIs have nothing to report — and report a dash, rather than claiming discovery
     // found 0 documents.
-    expect(html).toMatch(/discovered—/)
-    expect(html).not.toMatch(/discovered0/)
+    expect(html).toMatch(/Discovered—/)
+    expect(html).not.toMatch(/Discovered0/)
     // The invariant this test was written for is the line below, and it is untouched: the
     // funnel and the KPI row must all describe ONE population.
     expect(statusSegments(SCAN_12F2_RUN, SCAN_12F2_FILES).reduce((a, s) => a + s.value, 0))
