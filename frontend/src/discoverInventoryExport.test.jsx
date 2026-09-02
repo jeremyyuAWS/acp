@@ -49,6 +49,25 @@ const clickButton = async (label) => {
   return btn
 }
 
+describe('DiscoverInventoryExport — sticky actions', () => {
+  it('supports a sticky compact action toolbar without the snapshot details', async () => {
+    await render({ rows: ROWS, compact: true, save: () => true })
+    expect(container.textContent).toContain('Export CSV')
+    expect(container.textContent).toContain('Export JSON')
+    expect(container.textContent).not.toContain('Inventory snapshot')
+    const toolbar = container.querySelector('[role="toolbar"][aria-label="Inventory export actions"]')
+    expect(toolbar.style.position).toBe('sticky')
+    expect(toolbar.style.top).toBe('8px')
+  })
+
+  it('can keep snapshot details while actions are mounted in the sticky toolbar', async () => {
+    await render({ rows: ROWS, showActions: false })
+    expect(container.textContent).toContain('Inventory snapshot')
+    expect(container.textContent).not.toContain('Export CSV')
+    expect(container.textContent).not.toContain('Export JSON')
+  })
+})
+
 describe('DiscoverInventoryExport — when the inventory was taken', () => {
   it('states the instant from the run record, with its age', async () => {
     await render({ run: { id: 's1', discovered_at: '2026-08-19T10:00:00Z' }, rows: ROWS })

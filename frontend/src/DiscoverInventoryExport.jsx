@@ -31,6 +31,8 @@ export default function DiscoverInventoryExport({
   // `exported_at` — which is when the FILE was written, never the snapshot instant.
   save = saveBlob,
   clock = () => new Date().toISOString(),
+  compact = false,
+  showActions = true,
 }) {
   const [saved, setSaved] = useState(null)
   const list = rows || (inventory && Array.isArray(inventory.rows) ? inventory.rows : null)
@@ -66,22 +68,38 @@ export default function DiscoverInventoryExport({
 
   const canExport = !unread && preview && preview.rowCount > 0
 
+  const actions = !unread && preview && showActions ? (
+    <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+      <button type="button" onClick={() => build('csv')} disabled={!canExport}>
+        Export CSV
+      </button>
+      <button type="button" onClick={() => build('json')} disabled={!canExport}>
+        Export JSON
+      </button>
+    </div>
+  ) : null
+
+  if (compact) {
+    if (!actions) return null
+    return (
+      <div role="toolbar" aria-label="Inventory export actions" style={{ position: 'sticky', top: 8,
+                       zIndex: 40, display: 'flex', justifyContent: 'flex-end', margin: '8px 0 10px',
+                       padding: '7px 8px', background: 'var(--bg)',
+                       border: '1px solid var(--line)', borderRadius: 12,
+                       boxShadow: '0 4px 14px rgba(40, 30, 48, 0.08)' }}>
+        {actions}
+        <span className="sronly" role="status">{saved ? `Saved ${saved.filename}` : ''}</span>
+      </div>
+    )
+  }
+
   return (
     <section className="discover-inventory-export" aria-label="Discovery inventory export">
       {/* Header row: title left, export buttons right */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                     gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
         <h3 style={{ margin: 0, fontSize: 16 }}>Inventory snapshot</h3>
-        {!unread && preview && (
-          <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-            <button type="button" onClick={() => build('csv')} disabled={!canExport}>
-              Export CSV
-            </button>
-            <button type="button" onClick={() => build('json')} disabled={!canExport}>
-              Export JSON
-            </button>
-          </div>
-        )}
+        {actions}
       </div>
 
       {/* Snapshot time */}
