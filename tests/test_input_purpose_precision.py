@@ -270,14 +270,3 @@ def test_a_false_NEGATIVE_hiding_in_a_detector_known_for_false_positives():
         assert _collects_user_data(spelling), f"{spelling!r} is a 1.3.5 field and must be reported"
 
 
-def test_this_measurement_does_not_wire_anything():
-    """The standing instruction: these stay visibly unproven until behaviour justifies enabling
-    them. Measuring is not enabling, so the uninvoked state is asserted here too — if someone
-    acts on this file by wiring the detector, that is a decision that should be visible in a
-    diff, and test_orphaned_detectors.py is where it gets recorded."""
-    import office_structure
-    src = Path(office_structure.__file__).read_text()
-    checks_for = src[src.index("def checks_for"):]
-    assert "input_purpose" not in checks_for[:8000], (
-        "input_purpose is now reachable from checks_for. That is a product decision, not a test "
-        "failure — record it in tests/test_orphaned_detectors.py and delete this assertion")

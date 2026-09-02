@@ -284,9 +284,9 @@ def _form(path: Path, named: bool, tabs_s: bool) -> None:
     pdf = _blank()
     page = pdf.pages[0]
     fld = Dictionary(Type=Name.Annot, Subtype=Name.Widget, FT=Name.Tx,
-                     T=String("email"), Rect=Array([50, 100, 250, 130]), V=String(""))
+                     T=String("reference"), Rect=Array([50, 100, 250, 130]), V=String(""))
     if named:
-        fld.TU = String("Email address")
+        fld.TU = String("Reference number")
     fld = pdf.make_indirect(fld)
     page.obj.Annots = Array([fld])
     if tabs_s:
@@ -303,7 +303,7 @@ def f_field_no_name(path: Path):
 
 def f_field_named_ok(path: Path):
     _form(path, named=True, tabs_s=True)
-    return {"4.1.2": "REVIEW"}, "the same field carrying /TU 'Email address' (adversarial)"
+    return {"4.1.2": "REVIEW"}, "the same field carrying /TU 'Reference number' (adversarial)"
 
 
 def f_no_tabs_structure(path: Path):

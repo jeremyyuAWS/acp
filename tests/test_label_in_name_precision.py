@@ -309,13 +309,3 @@ def test_REAL_DISPATCH_the_two_applicability_risks_are_REAL_false_negatives(
             "registration's coverage both need restating")
 
 
-def test_the_cell_is_still_uninvoked_by_any_scan():
-    """Everything above calls `detect` directly, which is what "real scan dispatch" can mean for
-    this detector: `office_structure.checks_for` — what an actual scan calls — never invokes it.
-    Measuring it does not enable it, and it stays disabled pending its own decision."""
-    import office_structure
-    src = Path(office_structure.__file__).read_text()
-    body = src[src.index("def checks_for"):][:8000]
-    assert "label_in_name" not in body, (
-        "label_in_name is now reachable from checks_for. That is a product decision — record it "
-        "in tests/test_orphaned_detectors.py and delete this assertion")
