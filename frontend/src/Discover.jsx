@@ -413,6 +413,8 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // Monitor already surface, now on Discover too, where the PRD's own inventory spec asks for it.
   // Best-effort like those two: an empty map on any failure means no badges, never a false claim.
   const [srcStatus, setSrcStatus] = useState({})
+  const [estateOpen, setEstateOpen] = useState(true)
+  const [inventoryOpen, setInventoryOpen] = useState(true)
   useEffect(() => {
     let live = true
     if (!scanId) { setSrcStatus({}); return undefined }
@@ -902,17 +904,28 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       {/* Estate progress summary: funnel, doc-types, and pending work.
           Replaces the verbose DiscoverCompleteSummary — appears once discovery finishes. */}
       {!busy && (run?.discovered_at || run?.status === 'discovered') && (
-        <EstateProgressPanel
-          inventory={scope?.inventory}
-          analysed={analysedCount(files)}
-          needFix={remediableCount(files)}
-          certifiable={run?.certifiable}
-          published={files.filter((f) => f.published_at).length}
-          errorCount={run?.error}
-          files={files}
-          estateFiles={estateFiles}
-          onGo={onAdvance}
-        />
+        <section className="panel" style={{ marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <h2 style={{ margin: 0 }}>Estate overview</h2>
+            <button className="linklike" onClick={() => setEstateOpen((o) => !o)} aria-expanded={estateOpen}
+                    style={{ fontSize: 13, color: 'var(--muted)', whiteSpace: 'nowrap', marginLeft: 12 }}>
+              {estateOpen ? '▴ hide' : '▾ show'}
+            </button>
+          </div>
+          {estateOpen && (
+            <EstateProgressPanel
+              inventory={scope?.inventory}
+              analysed={analysedCount(files)}
+              needFix={remediableCount(files)}
+              certifiable={run?.certifiable}
+              published={files.filter((f) => f.published_at).length}
+              errorCount={run?.error}
+              files={files}
+              estateFiles={estateFiles}
+              onGo={onAdvance}
+            />
+          )}
+        </section>
       )}
 
       {/* Any run whose numbers below cannot be trusted as "the whole source, as of now" —
@@ -1207,7 +1220,14 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                                     onShowPrevious={() => setShowPreviousResults(true)} />
       ) : (
       <div id="discover-inventory-table">
-      <DiscoveryResults files={estateFiles} source={run?.source} inventory={scope?.inventory || null} invRows={inv?.rows ?? null} scopeLine={scopeLine} runAt={runAt}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <h2 style={{ margin: 0 }}>File inventory</h2>
+        <button className="linklike" onClick={() => setInventoryOpen((o) => !o)} aria-expanded={inventoryOpen}
+                style={{ fontSize: 13, color: 'var(--muted)', whiteSpace: 'nowrap', marginLeft: 12 }}>
+          {inventoryOpen ? '▴ hide' : '▾ show'}
+        </button>
+      </div>
+      {inventoryOpen && <><DiscoveryResults files={estateFiles} source={run?.source} inventory={scope?.inventory || null} invRows={inv?.rows ?? null} scopeLine={scopeLine} runAt={runAt}
                         reasonOf={why ? why.reasonOf : undefined}
                         reasonSampleOf={why ? why.sampleOf : null}
                         reasonFetchLikely={why ? why.fetchLikely : null}
@@ -1231,7 +1251,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           the runs the "0 documents" fix (#835) now correctly counts. `inv` is the same paginated
           per-file read already threaded into DiscoveryResults above as `invRows`. */}
       <DiscoverInventoryExport scanId={scanId} run={runForExport}
-                               inventory={scope?.inventory || null} rows={inv?.rows ?? null} />
+                               inventory={scope?.inventory || null} rows={inv?.rows ?? null} /></>}
       </div>
       )}
 

@@ -70,6 +70,8 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const reportRef = useRef(null)
   const [exporting, setExporting] = useState(false)
   const [scanExporting, setScanExporting] = useState(false)
+  const [assessOpen, setAssessOpen] = useState(true)
+  const [funnelOpen, setFunnelOpen] = useState(true)
   const doScanExport = async () => {
     setScanExporting(true)
     try {
@@ -437,29 +439,39 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       {stageAssessed && metrics ? (
         <>
           <section className="panel overview-assessment" aria-label="Assessment summary">
-            <h2>Assessment <span className="muted" style={{ fontWeight: 400 }}>· {coverageSentence(metrics)}</span></h2>
-            <div className="metrics">
-              <div className="metric" title="Documents where at least one selected check completed.">
-                <span>documents assessed</span><b>{metrics.documentsAssessed}</b></div>
-              <div className="metric" title="Assessed documents carrying at least one unresolved finding.">
-                <span>needing attention</span><b style={{ color: '#854F0B' }}>{metrics.documentsNeedingAttention}</b></div>
-              <div className="metric" title="Unresolved finding instances across all assessed documents. One criterion can produce many.">
-                <span>total findings</span><b>{metrics.totalFindings}</b></div>
-              <div className="metric" title="Findings with a deterministic remediation — same input, same fix, no person needed.">
-                <span>auto-fix available</span><b style={{ color: '#2F7D32' }}>{metrics.autoFixAvailable}</b></div>
-              <div className="metric" title="Findings needing a person's judgement, including every AI-drafted fix awaiting approval.">
-                <span>human review required</span><b>{metrics.humanReviewRequired}</b></div>
-              <div className="metric" title="Selected checks that could not run — no method for these formats. Not passes and not failures.">
-                <span>unable to assess</span><b>{metrics.unableToAssess} <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>checks</span></b></div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <h2 style={{ margin: 0 }}>Assessment <span className="muted" style={{ fontWeight: 400 }}>· {coverageSentence(metrics)}</span></h2>
+              <button className="linklike" onClick={() => setAssessOpen((o) => !o)} aria-expanded={assessOpen}
+                      style={{ fontSize: 13, color: 'var(--muted)', whiteSpace: 'nowrap', marginLeft: 12 }}>
+                {assessOpen ? '▴ hide' : '▾ show'}
+              </button>
             </div>
-            {/* The severity partition, added up on screen — the 7th metric, printed as an equation so
-                a reader can check it against Total findings rather than take it on trust. */}
-            {metrics.totalFindings > 0 && (
-              <div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
-                By severity: {SEVERITIES.map((s, i) => (
-                  <span key={s}>{i > 0 ? ' · ' : ''}<b>{metrics.bySeverity[s]}</b> {SEVERITY_LABEL[s]}</span>
-                ))} — {sevAddends.join(' + ')} = {metrics.totalFindings}
-              </div>
+            {assessOpen && (
+              <>
+                <div className="metrics">
+                  <div className="metric" title="Documents where at least one selected check completed.">
+                    <span>documents assessed</span><b>{metrics.documentsAssessed}</b></div>
+                  <div className="metric" title="Assessed documents carrying at least one unresolved finding.">
+                    <span>needing attention</span><b style={{ color: '#854F0B' }}>{metrics.documentsNeedingAttention}</b></div>
+                  <div className="metric" title="Unresolved finding instances across all assessed documents. One criterion can produce many.">
+                    <span>total findings</span><b>{metrics.totalFindings}</b></div>
+                  <div className="metric" title="Findings with a deterministic remediation — same input, same fix, no person needed.">
+                    <span>auto-fix available</span><b style={{ color: '#2F7D32' }}>{metrics.autoFixAvailable}</b></div>
+                  <div className="metric" title="Findings needing a person's judgement, including every AI-drafted fix awaiting approval.">
+                    <span>human review required</span><b>{metrics.humanReviewRequired}</b></div>
+                  <div className="metric" title="Selected checks that could not run — no method for these formats. Not passes and not failures.">
+                    <span>unable to assess</span><b>{metrics.unableToAssess} <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>checks</span></b></div>
+                </div>
+                {/* The severity partition, added up on screen — the 7th metric, printed as an equation so
+                    a reader can check it against Total findings rather than take it on trust. */}
+                {metrics.totalFindings > 0 && (
+                  <div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
+                    By severity: {SEVERITIES.map((s, i) => (
+                      <span key={s}>{i > 0 ? ' · ' : ''}<b>{metrics.bySeverity[s]}</b> {SEVERITY_LABEL[s]}</span>
+                    ))} — {sevAddends.join(' + ')} = {metrics.totalFindings}
+                  </div>
+                )}
+              </>
             )}
           </section>
 
@@ -477,8 +489,14 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         </>
       ) : (
         <section className="panel overview-runassess" aria-label="Assessment not yet run">
-          <h2>Assessment <span className="muted" style={{ fontWeight: 400 }}>· not yet run</span></h2>
-          {n > 0 ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <h2 style={{ margin: 0 }}>Assessment <span className="muted" style={{ fontWeight: 400 }}>· not yet run</span></h2>
+            <button className="linklike" onClick={() => setAssessOpen((o) => !o)} aria-expanded={assessOpen}
+                    style={{ fontSize: 13, color: 'var(--muted)', whiteSpace: 'nowrap', marginLeft: 12 }}>
+              {assessOpen ? '▴ hide' : '▾ show'}
+            </button>
+          </div>
+          {assessOpen && (n > 0 ? (
             <>
               <p className="muted" style={{ margin: '4px 0 12px' }}>
                 {n.toLocaleString()} document{n === 1 ? '' : 's'} discovered
@@ -493,13 +511,19 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
               No documents have been discovered yet. Configure a source and run a scan from
               the Discover tab first.
             </p>
-          )}
+          ))}
         </section>
       )}
 
       <section className="panel">
-        <h2>Compliance funnel · click a stage</h2>
-        <div className="trapfunnel">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h2 style={{ margin: 0 }}>Compliance funnel · click a stage</h2>
+          <button className="linklike" onClick={() => setFunnelOpen((o) => !o)} aria-expanded={funnelOpen}
+                  style={{ fontSize: 13, color: 'var(--muted)', whiteSpace: 'nowrap', marginLeft: 12 }}>
+            {funnelOpen ? '▴ hide' : '▾ show'}
+          </button>
+        </div>
+        {funnelOpen && <div className="trapfunnel">
           {stages.map((s, i) => {
             // Conversion from the PREVIOUS stage, not from the funnel's first stage — each drop
             // answers "of what reached here, how much reached the next step", which is what a
@@ -525,7 +549,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
               </div>
             )
           })}
-        </div>
+        </div>}
       </section>
 
       </div>

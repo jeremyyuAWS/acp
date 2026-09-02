@@ -200,6 +200,12 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
   // Collapsible settings at top — remembered per session so it doesn't snap shut
   // on every tab switch once someone has opened it.
   const [controlsOpen, setControlsOpen] = useState(() => sessionStorage.getItem('acp-mon-controls') === '1')
+  const [trendOpen, setTrendOpen] = useState(true)
+  const [driftOpen, setDriftOpen] = useState(true)
+  const [slaOpen, setSlaOpen] = useState(true)
+  const [schedOpen, setSchedOpen] = useState(true)
+  const [queueOpen, setQueueOpen] = useState(true)
+  const [auditOpen, setAuditOpen] = useState(true)
   useEffect(() => { try { sessionStorage.setItem('acp-mon-controls', controlsOpen ? '1' : '0') } catch { /* ignore */ } }, [controlsOpen])
   const evidenceRef = useRef(null)
   const [exporting, setExporting] = useState(false)
@@ -371,18 +377,28 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
         }
         return (
           <section className="panel">
-            <h2>Compliance trend <span className="muted">· {trend.length} scans</span></h2>
-            <Sparkline points={trend} labels={trendDates} width={620} height={104} />
-            {velocity != null && (
-              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <span className="badge" style={{ background: velocity > 0 ? '#E7F0DC' : velocity < 0 ? '#FCEBEB' : '#EEEDEA',
-                                                  color: velocity > 0 ? '#3B6D11' : velocity < 0 ? '#A32D2D' : 'var(--muted)' }}>
-                  {velocity > 0 ? '↑' : velocity < 0 ? '↓' : '→'} {Math.abs(velocity).toFixed(1)} pts/week
-                </span>
-                <span className="muted" style={{ fontSize: 12.5 }}>
-                  {etaLabel ? `at this pace, on track for 90/100 by ${etaLabel}` : velocity <= 0 ? 'flat or regressing — no projected path to 90/100 at this pace' : 'already at or above 90/100'}
-                </span>
-              </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <h2 style={{ margin: 0 }}>Compliance trend <span className="muted">· {trend.length} scans</span></h2>
+              <button className="linklike" onClick={() => setTrendOpen((o) => !o)} aria-expanded={trendOpen}
+                      style={{ fontSize: 13, color: 'var(--muted)', whiteSpace: 'nowrap', marginLeft: 12 }}>
+                {trendOpen ? '▴ hide' : '▾ show'}
+              </button>
+            </div>
+            {trendOpen && (
+              <>
+                <Sparkline points={trend} labels={trendDates} width={620} height={104} />
+                {velocity != null && (
+                  <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <span className="badge" style={{ background: velocity > 0 ? '#E7F0DC' : velocity < 0 ? '#FCEBEB' : '#EEEDEA',
+                                                      color: velocity > 0 ? '#3B6D11' : velocity < 0 ? '#A32D2D' : 'var(--muted)' }}>
+                      {velocity > 0 ? '↑' : velocity < 0 ? '↓' : '→'} {Math.abs(velocity).toFixed(1)} pts/week
+                    </span>
+                    <span className="muted" style={{ fontSize: 12.5 }}>
+                      {etaLabel ? `at this pace, on track for 90/100 by ${etaLabel}` : velocity <= 0 ? 'flat or regressing — no projected path to 90/100 at this pace' : 'already at or above 90/100'}
+                    </span>
+                  </div>
+                )}
+              </>
             )}
           </section>
         )
@@ -461,8 +477,12 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
           <div className="slahd">
             <h2 style={{ margin: 0 }}>Source drift <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, color: '#3B6D11', background: '#E7F0DC', border: '1px solid #C9E0B0', borderRadius: 4, padding: '1px 5px', marginLeft: 8, verticalAlign: 'middle' }}>LIVE</span> <span className="muted">· files changed at the source since this scan</span></h2>
             {drift.loaded && drift.stale > 0 && <span className="slachip breached">⚠ {drift.stale} changed</span>}
+            <button className="linklike" onClick={() => setDriftOpen((o) => !o)} aria-expanded={driftOpen}
+                    style={{ fontSize: 13, color: 'var(--muted)', whiteSpace: 'nowrap', marginLeft: 8 }}>
+              {driftOpen ? '▴ hide' : '▾ show'}
+            </button>
           </div>
-          {!drift.loaded ? (
+          {driftOpen && (!drift.loaded ? (
             <p className="muted" style={{ marginTop: 8 }}>Checking sources…</p>
           ) : drift.stale === 0 ? (
             <p className="muted" style={{ marginTop: 8 }}>
@@ -484,7 +504,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
                 <p className="muted" style={{ marginTop: 4, fontSize: 12 }}>…and {drift.files.length - 8} more.</p>
               )}
             </>
-          )}
+          ))}
         </section>
       )}
 
@@ -493,23 +513,31 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
           <div className="slahd">
             <h2 style={{ margin: 0 }}>SLA tracking <span className="muted">· remediation deadlines from your business ontology</span></h2>
             {slaBreached.length > 0 && <span className="slachip breached">⚠ {slaBreached.length} breached</span>}
+            <button className="linklike" onClick={() => setSlaOpen((o) => !o)} aria-expanded={slaOpen}
+                    style={{ fontSize: 13, color: 'var(--muted)', whiteSpace: 'nowrap', marginLeft: 8 }}>
+              {slaOpen ? '▴ hide' : '▾ show'}
+            </button>
           </div>
-          <div className="slastats">
-            <div className="slastat"><b style={{ color: '#1F5FA8' }}>{slaItems.length}</b><span className="muted">under SLA</span></div>
-            <div className="slastat"><b style={{ color: slaBreached.length ? '#854F0B' : '#5F5E5A' }}>{slaBreached.length}</b><span className="muted">breached</span></div>
-            <div className="slastat"><b style={{ color: '#996F08' }}>{slaAtRisk.length}</b><span className="muted">at risk</span></div>
-            <div className="slastat"><b style={{ color: '#3B6D11' }}>{slaOnTrack.length}</b><span className="muted">on track</span></div>
-          </div>
-          <div className="slalist">
-            {slaItems.slice(0, 8).map((s, i) => (
-              <div className="slarow" key={i}>
-                <span className={`slatag ${s.status}`}>{s.status === 'breached' ? `${-s.remaining}d over` : `${s.remaining}d left`}</span>
-                <div className="slamain"><div className="slafile">{s.f.file}</div><div className="muted" style={{ fontSize: 11 }}>{s.f.ont.priority} · {s.sla}-day SLA · rule: {s.f.ont.rule.name}</div></div>
-                <span className="muted slasrc">{s.f.sourceName}</span>
+          {slaOpen && (
+            <>
+              <div className="slastats">
+                <div className="slastat"><b style={{ color: '#1F5FA8' }}>{slaItems.length}</b><span className="muted">under SLA</span></div>
+                <div className="slastat"><b style={{ color: slaBreached.length ? '#854F0B' : '#5F5E5A' }}>{slaBreached.length}</b><span className="muted">breached</span></div>
+                <div className="slastat"><b style={{ color: '#996F08' }}>{slaAtRisk.length}</b><span className="muted">at risk</span></div>
+                <div className="slastat"><b style={{ color: '#3B6D11' }}>{slaOnTrack.length}</b><span className="muted">on track</span></div>
               </div>
-            ))}
-          </div>
-          <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>Breaches surface here and on the executive dashboard — the agent flags them before the deadline, not after.</p>
+              <div className="slalist">
+                {slaItems.slice(0, 8).map((s, i) => (
+                  <div className="slarow" key={i}>
+                    <span className={`slatag ${s.status}`}>{s.status === 'breached' ? `${-s.remaining}d over` : `${s.remaining}d left`}</span>
+                    <div className="slamain"><div className="slafile">{s.f.file}</div><div className="muted" style={{ fontSize: 11 }}>{s.f.ont.priority} · {s.sla}-day SLA · rule: {s.f.ont.rule.name}</div></div>
+                    <span className="muted slasrc">{s.f.sourceName}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>Breaches surface here and on the executive dashboard — the agent flags them before the deadline, not after.</p>
+            </>
+          )}
         </section>
       )}
 
@@ -519,38 +547,46 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
           {schedNext && (Object.values(cad)[0] || 'off') !== 'off' && (
             <span className="trstatchip pending" style={{ fontSize: 12 }}>next {new Date(schedNext).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
           )}
+          <button className="linklike" onClick={() => setSchedOpen((o) => !o)} aria-expanded={schedOpen}
+                  style={{ fontSize: 13, color: 'var(--muted)', whiteSpace: 'nowrap', marginLeft: 8 }}>
+            {schedOpen ? '▴ hide' : '▾ show'}
+          </button>
         </div>
-        <div className="muted" style={{ fontSize: 13, margin: '6px 0 10px' }}>
-          {(Object.values(cad)[0] || 'off') === 'off'
-            ? 'No schedule set — the estate is re-scanned only when you trigger one manually.'
-            : `Re-scanning ${Object.values(cad)[0]}. The scheduled sweep runs server-side and writes results back to your scans + Langfuse.`}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span className="muted" style={{ fontSize: 13 }}>Cadence:</span>
-          {['live', 'hourly', 'daily', 'weekly', 'off'].map((v) => {
-            const on = (Object.values(cad)[0] || 'off') === v
-            return (
-              <button key={v} onClick={() => setAllCad(v)}
-                style={{ fontSize: 12, padding: '4px 11px', borderRadius: 6, cursor: 'pointer', fontWeight: on ? 600 : 400,
-                  border: '1px solid ' + (on ? '#7C3AED' : 'var(--line)'), background: on ? '#7C3AED' : '#fff', color: on ? '#fff' : 'var(--ink)' }}>{v}</button>
-            )
-          })}
-          {schedErr && <span style={{ fontSize: 12, color: '#A32D2D' }} role="alert">⚠ {schedErr}</span>}
-        </div>
-        {lastSweep && lastSweep.ok === false && (
-          <div role="alert" style={{ marginTop: 12, padding: '11px 14px', borderRadius: 8, fontSize: 13.5,
-               background: '#FBE9E7', border: '1px solid #E7B4AC', color: '#8A2A20' }}>
-            ⚠ <b>The last scheduled sweep failed — the estate below has not refreshed.</b>{' '}
-            The {lastSweep.source || 'drive'} sweep at{' '}
-            <b>{lastSweep.at ? new Date(lastSweep.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'an unknown time'}</b>{' '}
-            saved no scan, so every figure on this page still describes the previous scan
-            {schedLastAt ? <> from <b>{new Date(schedLastAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</b></> : null}.
-            {lastSweep.error && (
-              <div style={{ marginTop: 6, fontSize: 12, fontFamily: 'ui-monospace, monospace', opacity: 0.85, wordBreak: 'break-word' }}>
-                {lastSweep.error}
+        {schedOpen && (
+          <>
+            <div className="muted" style={{ fontSize: 13, margin: '6px 0 10px' }}>
+              {(Object.values(cad)[0] || 'off') === 'off'
+                ? 'No schedule set — the estate is re-scanned only when you trigger one manually.'
+                : `Re-scanning ${Object.values(cad)[0]}. The scheduled sweep runs server-side and writes results back to your scans + Langfuse.`}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span className="muted" style={{ fontSize: 13 }}>Cadence:</span>
+              {['live', 'hourly', 'daily', 'weekly', 'off'].map((v) => {
+                const on = (Object.values(cad)[0] || 'off') === v
+                return (
+                  <button key={v} onClick={() => setAllCad(v)}
+                    style={{ fontSize: 12, padding: '4px 11px', borderRadius: 6, cursor: 'pointer', fontWeight: on ? 600 : 400,
+                      border: '1px solid ' + (on ? '#7C3AED' : 'var(--line)'), background: on ? '#7C3AED' : '#fff', color: on ? '#fff' : 'var(--ink)' }}>{v}</button>
+                )
+              })}
+              {schedErr && <span style={{ fontSize: 12, color: '#A32D2D' }} role="alert">⚠ {schedErr}</span>}
+            </div>
+            {lastSweep && lastSweep.ok === false && (
+              <div role="alert" style={{ marginTop: 12, padding: '11px 14px', borderRadius: 8, fontSize: 13.5,
+                   background: '#FBE9E7', border: '1px solid #E7B4AC', color: '#8A2A20' }}>
+                ⚠ <b>The last scheduled sweep failed — the estate below has not refreshed.</b>{' '}
+                The {lastSweep.source || 'drive'} sweep at{' '}
+                <b>{lastSweep.at ? new Date(lastSweep.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'an unknown time'}</b>{' '}
+                saved no scan, so every figure on this page still describes the previous scan
+                {schedLastAt ? <> from <b>{new Date(schedLastAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</b></> : null}.
+                {lastSweep.error && (
+                  <div style={{ marginTop: 6, fontSize: 12, fontFamily: 'ui-monospace, monospace', opacity: 0.85, wordBreak: 'break-word' }}>
+                    {lastSweep.error}
+                  </div>
+                )}
               </div>
             )}
-          </div>
+          </>
         )}
       </section>
 
@@ -562,44 +598,62 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
           dead letters, stalled scans, job timelines) requested 2026-08-28 — not the whole
           of it. */}
       <section className="panel" style={{ marginTop: 14 }}>
-        <h2 style={{ margin: '0 0 4px' }}>Workers &amp; Queue</h2>
-        <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
-          What the workers are doing right now, across every scan and assessment — reachable
-          without an active run, so this no longer means checking Azure logs directly. Adjust
-          how many are warm ahead of a large batch in Settings → Worker Configuration.
-        </p>
-        <QueuePanel focusScanId={focusScanId} onClearFocus={onClearFocus} />
-        <RevisionHistoryPanel />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h2 style={{ margin: 0 }}>Workers &amp; Queue</h2>
+          <button className="linklike" onClick={() => setQueueOpen((o) => !o)} aria-expanded={queueOpen}
+                  style={{ fontSize: 13, color: 'var(--muted)', whiteSpace: 'nowrap', marginLeft: 12 }}>
+            {queueOpen ? '▴ hide' : '▾ show'}
+          </button>
+        </div>
+        {queueOpen && (
+          <>
+            <p className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+              What the workers are doing right now, across every scan and assessment — reachable
+              without an active run, so this no longer means checking Azure logs directly. Adjust
+              how many are warm ahead of a large batch in Settings → Worker Configuration.
+            </p>
+            <QueuePanel focusScanId={focusScanId} onClearFocus={onClearFocus} />
+            <RevisionHistoryPanel />
+          </>
+        )}
       </section>
 
       <section className="panel" style={{ marginTop: 14 }} ref={evidenceRef}>
         <div className="monfeedhd">
           <h2 style={{ margin: 0 }}>Audit trail · live <span className="pulsedot" aria-hidden="true" /></h2>
           <button className="exportbtn" onClick={exportEvidence} disabled={exporting}>{exporting ? 'Generating…' : '⤓ Export evidence package'}</button>
+          <button className="linklike" onClick={() => setAuditOpen((o) => !o)} aria-expanded={auditOpen}
+                  style={{ fontSize: 13, color: 'var(--muted)', whiteSpace: 'nowrap', marginLeft: 8 }}>
+            {auditOpen ? '▴ hide' : '▾ show'}
+          </button>
         </div>
-        <div className="auditfeed" style={{ marginTop: 10 }} role="log" aria-live="polite" aria-label="Audit trail">
-          {ratified && ratified.total > 0 && (
-            <div className="auditrow pinned">
-              <span className="auditkind" style={{ background: '#EEEDFE', color: '#3C3489' }}>action plan</span>
-              <span className="auditwhat">{ratified.total} recommendation{ratified.total === 1 ? '' : 's'} ratified · {ratified.auto} auto-fix, {ratified.assisted + ratified.review} to review</span>
-              <span className="muted auditactor">you · just now</span>
+        {auditOpen && (
+          <>
+            <div className="auditfeed" style={{ marginTop: 10 }} role="log" aria-live="polite" aria-label="Audit trail">
+              {ratified && ratified.total > 0 && (
+                <div className="auditrow pinned">
+                  <span className="auditkind" style={{ background: '#EEEDFE', color: '#3C3489' }}>action plan</span>
+                  <span className="auditwhat">{ratified.total} recommendation{ratified.total === 1 ? '' : 's'} ratified · {ratified.auto} auto-fix, {ratified.assisted + ratified.review} to review</span>
+                  <span className="muted auditactor">you · just now</span>
+                </div>
+              )}
+              {audit.map((row) => {
+                const [kind, what, file] = row.e
+                return (
+                  <div className="auditrow" key={row.id}>
+                    <span className="auditkind" style={{ background: ACOLOR[kind] + '1f', color: ACOLOR[kind] }}>{kind}</span>
+                    <span className="auditwhat">{what} · <span className="fname" style={{ fontSize: 12 }}>{file}</span></span>
+                    <span className="muted auditactor">{ACTOR[kind]}</span>
+                  </div>
+                )
+              })}
+              {!audit.length && !(ratified && ratified.total > 0) && (
+                <p className="muted" style={{ fontSize: 13, padding: '4px 2px' }}>No activity yet — decisions, auto-fixes, re-validations and publishes appear here as you work.</p>
+              )}
             </div>
-          )}
-          {audit.map((row) => {
-            const [kind, what, file] = row.e
-            return (
-              <div className="auditrow" key={row.id}>
-                <span className="auditkind" style={{ background: ACOLOR[kind] + '1f', color: ACOLOR[kind] }}>{kind}</span>
-                <span className="auditwhat">{what} · <span className="fname" style={{ fontSize: 12 }}>{file}</span></span>
-                <span className="muted auditactor">{ACTOR[kind]}</span>
-              </div>
-            )
-          })}
-          {!audit.length && !(ratified && ratified.total > 0) && (
-            <p className="muted" style={{ fontSize: 13, padding: '4px 2px' }}>No activity yet — decisions, auto-fixes, re-validations and publishes appear here as you work.</p>
-          )}
-        </div>
-        <p className="muted" style={{ marginTop: 10 }}>Immutable who / when / what / which-engine log — your ADA &amp; EAA evidence trail.</p>
+            <p className="muted" style={{ marginTop: 10 }}>Immutable who / when / what / which-engine log — your ADA &amp; EAA evidence trail.</p>
+          </>
+        )}
       </section>
     </>
   )
