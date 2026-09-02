@@ -497,7 +497,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         </section>
       )}
 
-      <section className=”panel”>
+      <section className="panel">
         <h2>Compliance funnel · click a stage</h2>
         <div className="trapfunnel">
           {stages.map((s, i) => {
