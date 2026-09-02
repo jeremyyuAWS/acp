@@ -99,3 +99,25 @@ def test_the_renderer_no_longer_claims_to_be_unwired():
     doc = (ROOT / "api" / "report_weasy.py").read_text()[:4000]
     assert "NOT WIRED IN" not in doc, (
         "report_weasy.py still says it is not wired in, but it is the default renderer")
+
+
+def test_the_review_packet_asks_which_renderer_is_live_rather_than_assuming():
+    """The sign-off document must not tell a reviewer the wrong thing about what ships.
+
+    scripts/build_report_review_packet.py was written when WeasyPrint was a proposal, and named
+    its outputs candidate.pdf and shipped.pdf. #1201 made WeasyPrint the default, at which point
+    "shipped.pdf" named the renderer that had just STOPPED shipping and REVIEW.md opened by
+    telling the reviewer that nothing had been switched over — while the endpoint was already
+    serving it to customers. A sign-off packet that misstates whether the thing under review is
+    live inverts the urgency of the sign-off, and PAC 2024 and the screen-reader pass were
+    outstanding either way.
+
+    So the packet reads routes.scans._REPORT_RENDERER. Asserted on that read rather than on the
+    output filenames, because the failure being guarded against is a hardcoded assumption, not a
+    naming choice: someone could rename the files back and still be correct, or keep these names
+    and quietly hardcode WeasyPrint as "live" again.
+    """
+    src = (ROOT / "scripts" / "build_report_review_packet.py").read_text()
+    assert "_scans._REPORT_RENDERER" in src, (
+        "the review packet no longer asks the route which renderer is live; it will mislabel "
+        "the document a reviewer signs off the moment ACP_REPORT_RENDERER is flipped")
