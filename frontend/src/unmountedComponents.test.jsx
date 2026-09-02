@@ -73,6 +73,9 @@ const EXPECTED_UNMOUNTED = [
   // Retired 2026-09-02: removed from Discover (PRD simplification). EstateProgressPanel covers
   // the same inventory completeness story. Kept per retired-feature policy.
   'DiscoveryCompleteness',
+  // Retired 2026-09-02: removed from DiscoveryResults (PRD simplification). The lifecycle results
+  // panel was removed along with the RECOMMENDATIONS table and acknowledgement bar. Kept per policy.
+  'DiscoveryLifecycleResults',
   'Disposition',
   // Retired 2026-09-02 on the owner's request: mounted in Discover, it listed the WHOLE estate
   // — 200 rows of .pyc, .py and .pfb files, every one "Active · No reason recorded", grouped
@@ -89,6 +92,9 @@ const EXPECTED_UNMOUNTED = [
   // Retired 2026-09-02: removed from Overview (PRD simplification). The findings section that
   // rendered Insight tiles was removed. Kept per retired-feature policy.
   'Insight',
+  // Retired 2026-09-02: removed from DiscoveryResults along with the RECOMMENDATIONS table.
+  // The per-file override control has no mount point now the table is gone. Kept per policy.
+  'LifecycleOverrideControl',
   'LiveAssessment',      // kept for reference; LiveAssessmentLive.jsx says so in its own header
   // Retired 2026-09-02: removed from Overview (PRD simplification). Kept per retired-feature policy.
   'PiiPanel',

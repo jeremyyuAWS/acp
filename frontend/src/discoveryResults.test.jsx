@@ -125,27 +125,6 @@ describe('the estate summary and its reconciliations add up on screen', () => {
     expect(counts.reduce((a, b) => a + b, 0)).toBe(ESTATE.length)
   })
 
-  it('shows every discovered file landing in exactly one bucket, with the sum visible', async () => {
-    await render({ files: ESTATE })
-    expect(text()).toContain('EVERY DISCOVERED FILE, IN ONE BUCKET')
-    expect(text()).toContain('The buckets add up to the 6 files discovered')
-    const expanders = [...container.querySelectorAll('details')]
-    expect(expanders.some((d) => d.textContent.includes('Tagged for archive review'))).toBe(true)
-    expect(expanders.some((d) => d.textContent.includes('Tagged for deletion review'))).toBe(true)
-    expect(expanders.some((d) => d.textContent.includes('Could not be read — no recommendation was produced'))).toBe(true)
-    expect(text()).toMatch(/Total · files discovered6/)
-  })
-
-  it('expands each lifecycle bucket to show the files counted in it', async () => {
-    await render({ files: ESTATE })
-    const archive = [...container.querySelectorAll('details')]
-      .find((d) => d.querySelector('summary')?.textContent.includes('archive review'))
-    expect(archive).toBeTruthy()
-    await click(archive.querySelector('summary'))
-    expect([...archive.querySelectorAll('li')].map((li) => li.textContent))
-      .toContain('Clinical Guidelines/2019/sepsis-pathway-v3.docx')
-  })
-
   it('says when the whole-estate listing total differs from the rows on screen', async () => {
     await render({ files: ESTATE, inventory: { discovered: 12408 } })
     expect(text()).toContain('This discovery listed 12,408 files in the estate')
@@ -194,198 +173,19 @@ describe('the could-not-be-read panel is separate, and never guesses', () => {
   })
 })
 
-describe('the recommendation table', () => {
-  it('names the rule behind every tag and quotes the recorded reason', async () => {
+describe('retired sections — intentionally absent', () => {
+  it('does not render lifecycle recommendations', async () => {
     await render({ files: ESTATE })
-    expect(text()).toContain('RECOMMENDATIONS')
-    expect(text()).toContain('Legacy clinical policies')
-    expect(text()).toContain('Superseded drafts')
-    expect(text()).toContain("matched archive rule 'Legacy clinical policies'")
+    expect(text()).not.toContain('RECOMMENDATIONS')
   })
 
-  it('says review, and says in full that nothing was archived, moved or trashed', async () => {
+  it('does not render the every-discovered-file reconciliation', async () => {
     await render({ files: ESTATE })
-    expect(text()).toContain('archive review')
-    expect(text()).toContain('deletion review')
-    expect(text()).toContain('These are recommendations only')
-    expect(text()).toContain('Nothing is archived, moved or trashed')
-    // The words that would make this screen lie.
-    expect(text()).not.toMatch(/\bfiles archived\b/)
-    expect(text()).not.toMatch(/\bwere deleted\b/)
-    expect(text()).not.toMatch(/\bhas been archived\b/)
+    expect(text()).not.toContain('EVERY DISCOVERED FILE')
   })
 
-  it('joins a policy list on the rule id when one is supplied', async () => {
-    await render({ files: [F('a.docx', { lifecycle_status: 'Archive Candidate', lifecycle_rule_id: 'p9' })],
-                   policies: [{ policy_id: 'p9', name: 'Finance retention' }] })
-    expect(text()).toContain('Finance retention')
-  })
-
-  it('says the rule was not recorded rather than inferring one from the action', async () => {
-    await render({ files: [F('a.docx', { lifecycle_status: 'Archive Candidate' })] })
-    expect(text()).toContain(`Rule not recorded`)
-  })
-
-  it('filters to archive or deletion without changing any count above it', async () => {
+  it('does not render the acknowledgement bar', async () => {
     await render({ files: ESTATE })
-    const btn = (label) => [...container.querySelectorAll('button')].find((b) => b.textContent.trim() === label)
-    await click(btn('Deletion'))
-    expect(text()).toContain('alt-text-draft-2.docx')
-    expect(text()).not.toContain('sepsis-pathway-v3.docx')
-    // The headline is a fact about the estate, not about the filter.
-    expect(text()).toContain('tagged for archive review')
-    await click(btn('All'))
-    expect(text()).toContain('sepsis-pathway-v3.docx')
-  })
-
-  it('paginates a large result set and reports the visible range', async () => {
-    const files = Array.from({ length: 61 }, (_, i) => arch(`Policies/policy-${String(i + 1).padStart(3, '0')}.docx`))
-    await render({ files })
-    expect(container.querySelectorAll('tbody tr')).toHaveLength(50)
-    expect(text()).toContain('Showing 1–50')
-    expect(text()).toContain('Page 1 of 2')
-    expect(text()).toContain('policy-001.docx')
-    expect(text()).not.toContain('policy-061.docx')
-
-    await click([...container.querySelectorAll('button')].find((button) => button.textContent === 'Next page'))
-    expect(container.querySelectorAll('tbody tr')).toHaveLength(11)
-    expect(text()).toContain('Showing 51–61')
-    expect(text()).toContain('policy-061.docx')
-    expect(text()).not.toContain('policy-001.docx')
-  })
-
-  it('searches the full result set and composes search with action and rule filters', async () => {
-    const files = [
-      ...Array.from({ length: 55 }, (_, i) => arch(`Archive/archive-${i + 1}.docx`, 'Retention A')),
-      del('Drafts/needle-draft.docx', 'Retention B'),
-      del('Drafts/other-draft.docx', 'Retention B'),
-    ]
-    await render({ files })
-    const search = container.querySelector('[aria-label="Search recommendations"]')
-    await setInput(search, 'needle')
-    expect(text()).toContain('1 of 57 recommendations match')
-    expect(text()).toContain('needle-draft.docx')
-    expect(text()).not.toContain('archive-1.docx')
-
-    const rule = container.querySelector('[aria-label="Filter recommendations by matched rule"]')
-    await setInput(rule, 'Retention A')
-    expect(text()).toContain('0 of 57 recommendations match')
-    expect(text()).toContain('No file matches this filter')
-
-    await click([...container.querySelectorAll('button')].find((button) => button.textContent === 'Clear filters'))
-    expect(text()).toContain('57 of 57 recommendations match')
-  })
-
-  it('keeps assess-anyway choices when the reviewer changes pages', async () => {
-    let overrides = []
-    const files = Array.from({ length: 51 }, (_, i) => arch(`policy-${String(i + 1).padStart(3, '0')}.docx`))
-    await render({ files, overrides, onOverridesChange: (next) => { overrides = next } })
-    await click(container.querySelector('[aria-label="Assess policy-001.docx anyway"]'))
-    expect(overrides).toEqual(['policy-001.docx'])
-    await click([...container.querySelectorAll('button')].find((button) => button.textContent === 'Next page'))
-    await click([...container.querySelectorAll('button')].find((button) => button.textContent === 'Previous page'))
-    await render({ files, overrides, onOverridesChange: (next) => { overrides = next } })
-    expect(container.querySelector('[aria-label="Assess policy-001.docx anyway"]').checked).toBe(true)
-  })
-})
-
-describe('the per-file override (lifecycle rules #8)', () => {
-  const setValue = async (input, value) => {
-    await act(async () => {
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
-      setter.call(input, value)
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-  }
-  const btnByText = (text2) => [...container.querySelectorAll('button')].find((b) => b.textContent.trim() === text2)
-
-  it('offers "Keep this file" per recommendation row when a handler is wired', async () => {
-    await render({ files: ESTATE, onOverrideRecommendation: async () => true })
-    expect(btnByText('Keep this file')).toBeTruthy()
-  })
-
-  it('is disabled with no handler wired, rather than silently doing nothing', async () => {
-    await render({ files: ESTATE })
-    expect(btnByText('Keep this file').disabled).toBe(true)
-  })
-
-  it('calls the handler with (file, reason) and explains the override in the footnote', async () => {
-    const onOverrideRecommendation = vi.fn(() => Promise.resolve(true))
-    await render({
-      files: [arch('Clinical Guidelines/2019/sepsis-pathway-v3.docx')],
-      onOverrideRecommendation,
-    })
-    await click(btnByText('Keep this file'))
-    await setValue(container.querySelector('.lc-override-form input'), 'still needed for the audit')
-    await click(btnByText('Save'))
-    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
-    expect(onOverrideRecommendation).toHaveBeenCalledWith(
-      'Clinical Guidelines/2019/sepsis-pathway-v3.docx', 'still needed for the audit')
-    expect(text()).toContain('Keep this file')
-    expect(text()).toContain('records that you reviewed the recommendation')
-  })
-
-  it('renders a recorded override permanently, distinct from Assess anyway', async () => {
-    const overridden = F('kept.pdf', {
-      lifecycle_status: 'Archive Candidate', lifecycle_rule_id: 'p1',
-      lifecycle_reason: "matched archive rule 'Legacy clinical policies'",
-      lifecycle_override_reason: 'under active legal hold', lifecycle_overridden_by: 'reviewer@x.com',
-    })
-    await render({ files: [overridden] })
-    expect(text()).toContain('Kept')
-    expect(text()).toContain('under active legal hold')
-    expect(btnByText('Keep this file')).toBeFalsy()
-  })
-})
-
-describe('the acknowledgement', () => {
-  it('names how many recommendations it covers and what approving does', async () => {
-    await render({ files: ESTATE })
-    expect(text()).toContain('I approve these 3 recommendations.')
-    expect(text()).toContain('2 for archive review')
-    expect(text()).toContain('1 for deletion review')
-    expect(text()).toContain('archives, moves and deletes nothing')
-  })
-
-  it('reports the checkbox change to its caller, which is what gates Assess', async () => {
-    const seen = []
-    await render({ files: ESTATE, onAcknowledge: (v) => seen.push(v) })
-    const ackBox = boxes().at(-1)
-    await click(ackBox)
-    expect(seen).toEqual([true])
-  })
-
-  it('counts "assess anyway" overrides, and keeps the recommendation on the file', async () => {
-    let overrides = []
-    const rerender = async () => render({
-      files: ESTATE, overrides, onOverridesChange: (next) => { overrides = next },
-    })
-    await rerender()
-    const rowBox = boxes()[0]
-    await click(rowBox)
-    expect(overrides).toHaveLength(1)
-    await rerender()
-    expect(text()).toContain('1 file overridden to assess anyway')
-    // The tag survives the override — the file is still recommended for review.
-    expect(text()).toContain('deletion review')
-  })
-
-  it('is absent when the rules matched nothing — there is nothing to approve', async () => {
-    await render({ files: [active('a.docx')] })
-    expect(text()).not.toContain('I approve')
-  })
-
-  it('claims attribution only when it was given an actor', async () => {
-    await render({ files: ESTATE })
-    expect(text()).not.toContain('approving as')
-    await render({ files: ESTATE, actor: 'jeremy@example.com' })
-    expect(text()).toContain('approving as jeremy@example.com')
-  })
-
-  it('offers an export only when the caller can actually perform one', async () => {
-    await render({ files: ESTATE })
-    expect(text()).not.toContain('Export inventory')
-    await render({ files: ESTATE, onExport: () => {} })
-    expect(text()).toContain('Export inventory')
+    expect(container.querySelector('input[type=checkbox]')).toBeNull()
   })
 })

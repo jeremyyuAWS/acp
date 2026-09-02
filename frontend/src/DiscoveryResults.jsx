@@ -1,14 +1,12 @@
-import { useEffect, useState } from 'react'
-import DiscoveryLifecycleResults, { supportedDiscoveryRow } from './DiscoveryLifecycleResults.jsx'
+import { useState } from 'react'
+import { supportedDiscoveryRow } from './DiscoveryLifecycleResults.jsx'
 import DiscoveryFolderLabel from './DiscoveryFolderLabel.jsx'
 import Term from './Term.jsx'
 import {
-  NOT_RECORDED, acknowledgementSummary, estateSummary, estateTypeReconciliation, plural,
-  recommendationBucketOf, recommendationReconciliation, recommendationRows, typeReconciliation, unreadableReasons,
+  estateSummary, estateTypeReconciliation, plural, typeReconciliation, unreadableReasons,
 } from './discoveryRecommendations.js'
 import { contentTypeBreakdown } from './contentTypeBreakdown.js'
 import { ageBucketDistribution, sizeBucketDistribution, folderDistribution } from './discoveryDistributions.js'
-import LifecycleOverrideControl from './LifecycleOverrideControl.jsx'
 
 // The Discovery results screen (approved design board `DiscoverResults.dc.html`).
 //
@@ -30,17 +28,8 @@ import LifecycleOverrideControl from './LifecycleOverrideControl.jsx'
 //
 // Every number is derived from a prop. Nothing here estimates.
 
-const TAG_TONE = {
-  arch: { background: '#EEF2FB', border: '1px solid #D3DDF1', color: '#2B4A7E' },
-  del: { background: '#FBE9E9', border: '1px solid #E5C4C4', color: '#A32D2D' },
-}
 const BAR_COLOR = { assessable: '#6B8FC7', other: '#B9B1BD' }
 const STAT_COLOR = { archive: '#2B4A7E', delete: '#A32D2D', unreadable: '#8a6d1f', assessable: '#3B6D11' }
-
-const tagStyle = (tone) => ({
-  fontSize: 11, fontWeight: 600, padding: '2px 9px', borderRadius: 20,
-  whiteSpace: 'nowrap', display: 'inline-block', ...TAG_TONE[tone],
-})
 
 const Stat = ({ n, label, color, sub = null }) => (
   <div style={{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 12,
@@ -113,45 +102,11 @@ const Reconciliation = ({ id, heading, note, rec, renderLabel }) => (
   </table>
 )
 
-const FileBucket = ({ bucket, files }) => {
-  const [open, setOpen] = useState(false)
-  const rows = files.filter((file) => recommendationBucketOf(file) === bucket.key)
-  return (
-    <details open={open}>
-      <summary onClick={(event) => { event.preventDefault(); setOpen((value) => !value) }}
-               style={{ cursor: 'pointer', fontSize: 13, padding: '9px 0' }}>
-        <span style={{ display: 'inline-flex', width: 'calc(100% - 18px)',
-                       justifyContent: 'space-between', gap: 16 }}>
-          <span>{bucket.label}</span>
-          <b>{bucket.count.toLocaleString()}</b>
-        </span>
-      </summary>
-      {open && (
-        <ul style={{ margin: '0 0 10px 20px', padding: 0, fontSize: 12.5, lineHeight: 1.65 }}>
-          {rows.map((file, index) => (
-            <li key={`${file.id || file.file || file.path || 'file'}-${index}`}>
-              {file.file || file.name || file.path || NOT_RECORDED}
-            </li>
-          ))}
-        </ul>
-      )}
-    </details>
-  )
-}
-
 export default function DiscoveryResults({
   source = null, files = null, inventory = null, invRows = null, scopeLine = null, runAt = null, policies = null,
   reasonOf = undefined,
   reasonSampleOf = null, reasonFetchLikely = null,
-  acknowledged = false, onAcknowledge = null,
-  overrides: overridesProp, onOverridesChange,
-  onExport = null, actor = null, scanId = null,
-  // Lifecycle rules #8 — a human's per-file override of the recommendation itself, distinct from
-  // `overrides`/`onOverridesChange` above (which is "Assess anyway", a separate, unreasoned,
-  // client-state-only flag). `onOverrideRecommendation(file, reason)` should POST the override and
-  // resolve truthy on success; the caller (Discover.jsx) owns refetching the inventory afterward
-  // so the recorded override reaches this table on the next render.
-  onOverrideRecommendation = null,
+  scanId = null,
   // For support/debugging (2026-08-28): the run's raw `scope` (includes `enumeration` — whether
   // the source was reachable, the raw pre-filter file count, truncation) and its decision-log
   // rows (system.py GET /decisions — the same audit trail a `scan.suspicious_zero` or
@@ -164,20 +119,8 @@ export default function DiscoveryResults({
   // guessed at.
   rawScope = null, rawDecisions = null, runStatus = null,
 }) {
-  const [filter, setFilter] = useState('all')
-  const [recommendationSearch, setRecommendationSearch] = useState('')
-  const [recommendationRule, setRecommendationRule] = useState('all')
-  const [recommendationPage, setRecommendationPage] = useState(0)
-  const [recommendationPageSize, setRecommendationPageSize] = useState(50)
   const [showRaw, setShowRaw] = useState(false)
   const [copied, setCopied] = useState(false)
-  // Uncontrolled by default, exactly like Discover's own `decisions` prop: a caller that wants the
-  // overrides to survive a reload passes its own state in, and one that does not still gets a
-  // working control.
-  const [localOverrides, setLocalOverrides] = useState([])
-  const overrides = overridesProp ?? localOverrides
-  const setOverrides = onOverridesChange ?? setLocalOverrides
-  useEffect(() => { setRecommendationPage(0) }, [filter, recommendationRule, recommendationSearch, recommendationPageSize, files, policies])
 
   const summary = estateSummary(files, inventory)
   // Nothing was read, so nothing is claimed — not "0 files discovered".
@@ -202,35 +145,7 @@ export default function DiscoveryResults({
   const sizeDist = sizeBucketDistribution(invRows)
   const folderDist = folderDistribution(invRows?.filter(supportedDiscoveryRow))
 
-  const recRows = recommendationRows(files, policies)
-  const recRec = recommendationReconciliation(files)
-  const ack = acknowledgementSummary(files, overrides)
-  const recommendationRules = recRows
-    ? [...new Set(recRows.map((row) => row.rule || NOT_RECORDED))].sort((a, b) => a.localeCompare(b))
-    : []
-  const shown = (() => {
-    if (!recRows) return null
-    const needle = recommendationSearch.trim().toLowerCase()
-    return recRows.filter((row) => {
-      if (filter !== 'all' && row.bucket !== filter) return false
-      if (recommendationRule !== 'all' && (row.rule || NOT_RECORDED) !== recommendationRule) return false
-      if (!needle) return true
-      return [row.path, row.rule, row.reason, row.tag]
-        .some((value) => String(value || '').toLowerCase().includes(needle))
-    })
-  })()
-  const recommendationLastPage = Math.max(0, Math.ceil((shown?.length || 0) / recommendationPageSize) - 1)
-  const recommendationCurrentPage = Math.min(recommendationPage, recommendationLastPage)
-  const visibleRecommendations = shown?.slice(
-    recommendationCurrentPage * recommendationPageSize,
-    (recommendationCurrentPage + 1) * recommendationPageSize,
-  ) || []
   const maxType = types ? Math.max(1, ...types.buckets.map((b) => b.count)) : 1
-
-  const toggleOverride = (file) => {
-    const next = overrides.includes(file) ? overrides.filter((f) => f !== file) : [...overrides, file]
-    setOverrides(next)
-  }
 
   return (
     <section className="panel" aria-labelledby="discres-h">
@@ -572,192 +487,6 @@ export default function DiscoveryResults({
         )}
       </div>
 
-      <DiscoveryLifecycleResults rows={invRows} policies={policies} scanId={scanId} source={source} />
-
-      {/* RECOMMENDATIONS — rendered only when the per-file lifecycle outcome reached this screen.
-          An empty table and an unread field must never look the same. */}
-      {recRows && (
-        <div className="panel">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
-            <h2 style={{ margin: 0 }}>RECOMMENDATIONS</h2>
-            <span className="muted" style={{ fontSize: 12 }}>
-              {recRows.length.toLocaleString()} of {summary.discovered.toLocaleString()} discovered {plural(summary.discovered, 'file', 'files')} ·
-              every tag names the rule that produced it
-            </span>
-            <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }} role="group" aria-label="Filter recommendations">
-              {[['all', 'All'], ['archive', 'Archive'], ['delete', 'Deletion']].map(([k, label]) => (
-                <button key={k} className="ghost" style={{ padding: '6px 12px', fontSize: 13 }}
-                        aria-pressed={filter === k} onClick={() => setFilter(k)}>{label}</button>
-              ))}
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', gap: 12, alignItems: 'end', flexWrap: 'wrap', marginBottom: 12 }}>
-            <label style={{ fontSize: 12.5 }}>
-              Search recommendations<br />
-              <input type="search" value={recommendationSearch}
-                     onChange={(event) => setRecommendationSearch(event.target.value)}
-                     placeholder="File, rule, or reason" aria-label="Search recommendations" />
-            </label>
-            <label style={{ fontSize: 12.5 }}>
-              Matched rule<br />
-              <select value={recommendationRule}
-                      onChange={(event) => setRecommendationRule(event.target.value)}
-                      aria-label="Filter recommendations by matched rule">
-                <option value="all">All rules</option>
-                {recommendationRules.map((rule) => <option key={rule} value={rule}>{rule}</option>)}
-              </select>
-            </label>
-            <label style={{ fontSize: 12.5 }}>
-              Rows per page<br />
-              <select value={recommendationPageSize}
-                      onChange={(event) => setRecommendationPageSize(Number(event.target.value))}
-                      aria-label="Recommendations per page">
-                {[25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
-              </select>
-            </label>
-            {(recommendationSearch || recommendationRule !== 'all' || filter !== 'all') && (
-              <button type="button" className="ghost" onClick={() => {
-                setRecommendationSearch(''); setRecommendationRule('all'); setFilter('all')
-              }}>Clear filters</button>
-            )}
-          </div>
-
-          <p role="status" className="muted" style={{ fontSize: 12.5, margin: '0 0 10px' }}>
-            {shown.length.toLocaleString()} of {recRows.length.toLocaleString()} recommendations match.
-            {' '}Showing {shown.length ? recommendationCurrentPage * recommendationPageSize + 1 : 0}–{Math.min(
-              (recommendationCurrentPage + 1) * recommendationPageSize, shown.length)}.
-          </p>
-
-          {shown.length === 0 ? (
-            <p className="muted" style={{ fontSize: 13, margin: 0 }}>
-              {recRows.length === 0
-                ? 'The enabled lifecycle rules matched no file in this discovery.'
-                : 'No file matches this filter.'}
-            </p>
-          ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th style={{ width: '32%' }}>File</th>
-                  <th style={{ width: '15%' }}>Recommendation</th>
-                  <th style={{ width: '19%' }}>Matched rule</th>
-                  <th>Reason</th>
-                  <th style={{ width: '15%' }}>Override</th>
-                  <th style={{ width: '11%', textAlign: 'right' }}>Assess anyway</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleRecommendations.map((r) => (
-                  <tr key={r.file}>
-                    <td>
-                      <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12.5 }}>
-                        {r.path}
-                      </span>
-                    </td>
-                    <td><span style={tagStyle(r.bucket === 'delete' ? 'del' : 'arch')}>{r.tag}</span></td>
-                    <td style={{ fontSize: 13 }}>
-                      {r.rule || <span className="muted">Rule {NOT_RECORDED}</span>}
-                      {r.conflicted && <span className="muted"> (conflict)</span>}
-                    </td>
-                    <td className="muted" style={{ fontSize: 12.5 }}>
-                      {r.reason || <span>No reason was recorded for this match.</span>}
-                    </td>
-                    <td style={{ fontSize: 12.5 }}>
-                      <LifecycleOverrideControl file={r.file} override={r.override}
-                                                disabled={!onOverrideRecommendation}
-                                                onSave={onOverrideRecommendation} />
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <input type="checkbox" style={{ width: 15, height: 15 }}
-                             aria-label={`Assess ${r.file} anyway`}
-                             checked={overrides.includes(r.file)}
-                             onChange={() => toggleOverride(r.file)} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-
-          {shown.length > recommendationPageSize && (
-            <nav aria-label="Recommendation pages"
-                 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginTop: 12 }}>
-              <button type="button" className="ghost" disabled={recommendationCurrentPage === 0}
-                      onClick={() => setRecommendationPage(recommendationCurrentPage - 1)}>Previous page</button>
-              <span style={{ fontSize: 12.5 }}>
-                Page {recommendationCurrentPage + 1} of {recommendationLastPage + 1}
-              </span>
-              <button type="button" className="ghost"
-                      disabled={recommendationCurrentPage === recommendationLastPage}
-                      onClick={() => setRecommendationPage(recommendationCurrentPage + 1)}>Next page</button>
-            </nav>
-          )}
-
-          <p className="muted" style={{ fontSize: 11.5, margin: '14px 0 0', lineHeight: 1.55 }}>
-            These are recommendations only. <b>Nothing is archived, moved or trashed</b> — ACP
-            attaches a flag and records which rule produced it. <i>Keep this file</i> records that
-            you reviewed the recommendation and are keeping the file anyway, with why — it changes
-            no tag and moves no file. Ticking <i>Assess anyway</i> keeps that flag and records that
-            you want this file assessed; it changes no tag and moves no file.
-          </p>
-        </div>
-      )}
-
-      {/* The reconciliation, last: every discovered file in exactly one bucket, with the sum on
-          screen beside the total it has to equal. */}
-      {recRec && (
-        <div className="panel">
-          <h2>EVERY DISCOVERED FILE, IN ONE BUCKET</h2>
-          <div aria-label={`Bucket · ${recRec.population}`}>
-            {recRec.buckets.map((bucket) => (
-              <FileBucket key={bucket.key} bucket={bucket} files={files} />
-            ))}
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16,
-                          borderTop: '1px solid var(--line)', paddingTop: 9,
-                          fontSize: 13, fontWeight: 600 }}>
-              <span>{recRec.balanced
-                ? `Total · ${recRec.population}`
-                : `⚠ Total · ${recRec.population} — ${recRec.total.toLocaleString()} expected`}</span>
-              <span>{recRec.sum.toLocaleString()}</span>
-            </div>
-          </div>
-          <p className="muted" style={{ fontSize: 11.5, margin: '12px 0 0', lineHeight: 1.5 }}>
-            {recRec.balanced
-              ? `The buckets add up to the ${recRec.total.toLocaleString()} ${plural(recRec.total, 'file', 'files')} discovered, so no file is counted twice and none is missing.`
-              : `⚠ The buckets sum to ${recRec.sum.toLocaleString()} but ${recRec.total.toLocaleString()} ${plural(recRec.total, 'file was', 'files were')} discovered — do not read these as a partition of the estate.`}
-          </p>
-        </div>
-      )}
-
-      {/* The acknowledgement, which gates Assess. Absent when there is nothing to acknowledge. */}
-      {ack && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px',
-                      borderRadius: 12, background: 'var(--card)', border: '1px solid var(--line)',
-                      flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
-            <input type="checkbox" style={{ width: 15, height: 15 }} checked={!!acknowledged}
-                   onChange={(e) => onAcknowledge?.(e.target.checked)} />
-            I approve these {ack.total.toLocaleString()} {plural(ack.total, 'recommendation', 'recommendations')}.
-          </label>
-          <span className="muted" style={{ fontSize: 11.5, lineHeight: 1.5 }}>
-            {ack.archive.toLocaleString()} for archive review · {ack.delete.toLocaleString()} for
-            deletion review
-            {ack.overridden > 0 && <> · {ack.overridden.toLocaleString()} {plural(ack.overridden, 'file', 'files')} overridden to assess anyway</>}
-            {' · '}approving unblocks Assess and archives, moves and deletes nothing
-            {/* Named only when we HAVE them. An unattributed approval must not claim attribution. */}
-            {actor && <> · approving as {actor}</>}
-            {scanId && <> · recorded against this run</>}
-          </span>
-          {onExport && (
-            <span style={{ marginLeft: 'auto' }}>
-              <button className="ghost" style={{ padding: '6px 12px', fontSize: 13 }} onClick={onExport}>
-                Export inventory
-              </button>
-            </span>
-          )}
-        </div>
-      )}
     </section>
   )
 }

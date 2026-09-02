@@ -15,7 +15,6 @@ import DiscoveryResults from './DiscoveryResults.jsx'
 import DiscoverInventoryExport from './DiscoverInventoryExport.jsx'
 import { analysedCount } from './docStatus.js'
 import { snapshotTrust, snapshotTrustMessage } from './discoverySnapshotTrust.js'
-import { acknowledgementSummary } from './discoveryRecommendations.js'
 import { assessmentEligible } from './estateFunnel.js'
 import { hasClassificationData, NO_CLASSIFICATION_TITLE, NO_CLASSIFICATION_BODY,
          NO_CLASSIFICATION_WHY } from './classificationData.js'
@@ -176,8 +175,6 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // the acknowledgement can GATE the Assess button at the foot of this tab — an acknowledgement
   // that does not gate anything is a checkbox, not a control.
   // Initialize from the persisted run.acknowledged so a page reload restores the prior decision.
-  const [ackRecs, setAckRecs] = useState(() => !!(run?.acknowledged))
-  const [assessAnyway, setAssessAnyway] = useState([])
   // The per-file lifecycle columns the recommendation surface is made of. They are NOT on
   // `GET /scans/{id}` (it reads file_records, which has no such columns) — they live on
   // scan_inventory, behind `GET /scans/{id}/inventory`. So Discover reads that route itself.
@@ -428,18 +425,6 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       .catch(() => { if (live) setSrcStatus({}) })
     return () => { live = false }
   }, [scanId])
-  // Persist the acknowledgement decision to the backend (PRD §EX-10). Optimistic local state
-  // update so the Assess gate responds immediately; the server write is best-effort and
-  // a failure only means a page reload would reset the checkbox (no data is lost).
-  const handleAcknowledge = useCallback(async (checked) => {
-    setAckRecs(checked)
-    if (!scanId) return
-    try {
-      if (checked) await acknowledgeScan(scanId)
-      else await unacknowledgeScan(scanId)
-    } catch { /* non-fatal — local state is already updated */ }
-  }, [scanId])
-
   // Lifecycle rules #8: POST the override, then reload the inventory so the recorded reason
   // reaches this screen the same way every other lifecycle fact does — through the same
   // all-or-nothing paginated read, never patched into local state (a locally-patched row would
@@ -645,11 +630,6 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // one is not silently a change to the other's meaning.
   const acceptable = () => actionable
   const acceptAll = () => setDecisions((s) => { const n = { ...s }; acceptable().forEach((f) => { if (!n[f.file]) n[f.file] = { state: 'accepted' } }); return n })
-  // What the acknowledgement covers — null when the lifecycle rule pass did not reach this screen
-  // or matched nothing, in which case there is nothing to acknowledge and nothing to gate.
-  const recsToAck = acknowledgementSummary(estateFiles, assessAnyway)
-  const needsAck = !!recsToAck && !ackRecs
-
   // Inventory/Classify/Action are no longer formally separated tabs — one dept-grouped
   // list shows the file, its classification tags (colorful pills), and its lifecycle
   // action together, so a reviewer tags AND decides in the same row instead of hopping
@@ -1220,8 +1200,6 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                         reasonOf={why ? why.reasonOf : undefined}
                         reasonSampleOf={why ? why.sampleOf : null}
                         reasonFetchLikely={why ? why.fetchLikely : null}
-                        acknowledged={ackRecs} onAcknowledge={handleAcknowledge}
-                        overrides={assessAnyway} onOverridesChange={setAssessAnyway}
                         onOverrideRecommendation={overrideRecommendation}
                         actor={me?.email || me?.name || null} scanId={scanId}
                         rawScope={scope} rawDecisions={errLog} runStatus={run?.status ?? null} />
@@ -1266,20 +1244,13 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           {/* DX-07 — the discovery-results acknowledgement GATES Assess. Only ever a gate when
               there is something to acknowledge: with no lifecycle recommendations on screen
               `recsToAck` is null and this button behaves exactly as it did before. */}
-          {needsAck && (
-            <span className="muted" style={{ fontSize: 13 }} role="status">
-              Approve the {recsToAck.total.toLocaleString()} discovery recommendation{recsToAck.total === 1 ? '' : 's'} above to continue
-            </span>
-          )}
           {/* `data-advance` is a STABLE hook. Two tests found this control by its label, so a copy
               change broke them for no reason connected to what they assert — they care that the
               advance control is gated, not what it is called this week. */}
-          <button data-advance="assess" onClick={() => onAdvance?.()} disabled={pendingActions > 0 || needsAck}
+          <button data-advance="assess" onClick={() => onAdvance?.()} disabled={pendingActions > 0}
                   title={pendingActions > 0
                     ? `${pendingActions} action${pendingActions === 1 ? '' : 's'} still pending — accept or override each row, or use "Accept all recommendations"`
-                    : needsAck
-                      ? `${recsToAck.total} discovery recommendation${recsToAck.total === 1 ? '' : 's'} need your approval — tick "I approve these recommendations" in Discovery results`
-                      : undefined}>
+                    : undefined}>
             Continue to Assess →
           </button>
         </div>
