@@ -11,7 +11,11 @@ export default function LifecycleRuleLedger({ rules = [], onSelect, integrity })
       <tbody>{rules.map((rule) => <tr key={`${rule.policy_id}:${rule.policy_version}`}>
         <td><button type="button" className="linklike" aria-expanded={open === rule.policy_id} onClick={() => setOpen(open === rule.policy_id ? null : rule.policy_id)}>{rule.name}</button>{open === rule.policy_id && <div className="muted" style={{ marginTop: 6 }}>Policy {rule.policy_id} · immutable version {rule.policy_version} · evaluated {rule.evaluated_at ? new Date(rule.evaluated_at).toLocaleString() : 'time not recorded'}</div>}</td>
         <td>{rule.priority ?? '—'}</td><td>{rule.evaluated}</td>
-        <td><button type="button" className="linklike" onClick={() => onSelect?.(rule.policy_id)}>{rule.matched}</button></td>
+        {/* Same reason as the estate summary's counts: this linked to the review queue, which
+            Discover no longer mounts. */}
+        <td>{onSelect
+          ? <button type="button" className="linklike" onClick={() => onSelect(rule.policy_id)}>{rule.matched}</button>
+          : rule.matched}</td>
         <td>{rule.skipped}</td><td>{rule.unevaluable}</td><td>{rule.conflicts}</td><td>{rule.proposed_action}</td>
       </tr>)}</tbody>
     </table></div>}

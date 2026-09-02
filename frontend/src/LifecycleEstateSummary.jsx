@@ -23,12 +23,17 @@ export default function LifecycleEstateSummary({ summary, onSelect, onReview, on
     <table style={{ width: '100%', marginTop: 12 }}><caption className="sr-only">Lifecycle disposition counts</caption><tbody>
       {SEGMENTS.map(([key, label, status], index) => <tr key={key}>
         <td><span aria-hidden="true" style={{ color: COLORS[index] }}>●</span> {label}</td>
-        <td style={{ textAlign: 'right' }}><button type="button" className="linklike" onClick={() => onSelect?.(status)}>{Number(summary.counts[key] || 0).toLocaleString()}</button></td>
+        {/* A count is a CONTROL only when somebody is listening. Discover no longer mounts the
+            review queue these filtered, and a button that does nothing is worse than a figure:
+            it is reachable by keyboard, announced as actionable, and answers nothing. */}
+        <td style={{ textAlign: 'right' }}>{onSelect
+          ? <button type="button" className="linklike" onClick={() => onSelect(status)}>{Number(summary.counts[key] || 0).toLocaleString()}</button>
+          : Number(summary.counts[key] || 0).toLocaleString()}</td>
       </tr>)}
       <tr><th scope="row">Reconciled total</th><th style={{ textAlign: 'right' }}>{summary.reconciled_total.toLocaleString()}</th></tr>
     </tbody></table>
     <p><b>{summary.assessment_excluded.toLocaleString()}</b> disposition candidates marked outside Assess by default; some may also be unsupported file types.</p>
     <p className="muted">Recommendations only — no source files were moved or deleted.</p>
-    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><button type="button" onClick={onReview}>Review disposition queue</button><button type="button" className="ghost" onClick={onRules}>View rule results</button></div>
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>{onReview && <button type="button" onClick={onReview}>Review disposition queue</button>}{onRules && <button type="button" className="ghost" onClick={onRules}>View rule results</button>}</div>
   </section>
 }

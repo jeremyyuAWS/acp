@@ -4,7 +4,6 @@ import { LIFECYCLE_ACTIONS } from './lifecycleRules.js'
 import { formatBucketOf } from './discoveryRecommendations.js'
 import LifecycleEstateSummary from './LifecycleEstateSummary.jsx'
 import LifecycleRuleLedger from './LifecycleRuleLedger.jsx'
-import DispositionReviewWorkspace from './DispositionReviewWorkspace.jsx'
 
 const FORMATS = new Set(['pdf', 'docx', 'xlsx', 'pptx'])
 const NATIVE = { 'application/vnd.google-apps.document': 'docx', 'application/vnd.google-apps.spreadsheet': 'xlsx', 'application/vnd.google-apps.presentation': 'pptx' }
@@ -21,11 +20,8 @@ export default function DiscoveryLifecycleResults({ rows, policies, scanId, sour
   const [summary, setSummary] = useState(null)
   const [ruleResults, setRuleResults] = useState([])
   const [lifecycleError, setLifecycleError] = useState('')
-  const [reviewStatus, setReviewStatus] = useState('')
-  const [reviewPolicy, setReviewPolicy] = useState('')
   // The embedded workspace is a REVIEW queue, not a second copy of the inventory below it.
   // Start on actionable lifecycle candidates; an explicit estate-segment click may broaden it.
-  const [reviewCandidates, setReviewCandidates] = useState(true)
   useEffect(() => {
     let current = true
     setSummary(null); setRuleResults([]); setLifecycleError('')
@@ -55,11 +51,8 @@ export default function DiscoveryLifecycleResults({ rows, policies, scanId, sour
   return <section className="panel" aria-label="Lifecycle results for supported documents">
     {lifecycleError && <p role="alert">{lifecycleError}</p>}
     {summary && <LifecycleEstateSummary summary={summary}
-      onSelect={(status) => { setReviewStatus(status); setReviewPolicy(''); setReviewCandidates(false); document.getElementById('lifecycle-review')?.scrollIntoView() }}
-      onReview={() => { setReviewStatus(''); setReviewPolicy(''); setReviewCandidates(true); document.getElementById('lifecycle-review')?.scrollIntoView() }}
       onRules={() => document.getElementById('lifecycle-rules')?.scrollIntoView()} />}
-    {summary && <div id="lifecycle-rules"><LifecycleRuleLedger rules={ruleResults} integrity={summary.integrity} onSelect={(policyId) => { setReviewPolicy(policyId); setReviewStatus(''); setReviewCandidates(false); document.getElementById('lifecycle-review')?.scrollIntoView() }} /></div>}
-    {summary && <div id="lifecycle-review"><DispositionReviewWorkspace scanId={scanId} status={reviewStatus} policyId={reviewPolicy} candidateOnly={reviewCandidates} source={source} /></div>}
+    {summary && <div id="lifecycle-rules"><LifecycleRuleLedger rules={ruleResults} integrity={summary.integrity} /></div>}
     <h2>Lifecycle results · supported documents</h2>
     <p className="muted">PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), including their Google equivalents. Results are saved from this scan; changing a rule requires a new scan.</p>
     {error && <p role="alert">{error}</p>}

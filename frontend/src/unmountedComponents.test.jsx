@@ -66,6 +66,12 @@ const EXPECTED_UNMOUNTED = [
   'ControlPlane',
   'Dashboard',           // never mounted in repo history — unbuilt, not retired
   'Disposition',
+  // Retired 2026-09-02 on the owner's request: mounted in Discover, it listed the WHOLE estate
+  // — 200 rows of .pyc, .py and .pfb files, every one "Active · No reason recorded", grouped
+  // under "No rule recorded · no proposed action" — directly above the Lifecycle results section
+  // that already answers the same question for the files a rule actually matched. Kept per the
+  // retired-feature policy; see dispositionReviewRemoved.test.jsx.
+  'DispositionReviewWorkspace',
   'FileTypeConfig',
   'LiveAssessment',      // kept for reference; LiveAssessmentLive.jsx says so in its own header
   'ProcessingDetails',   // never mounted in repo history
