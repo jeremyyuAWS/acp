@@ -100,27 +100,40 @@ export default function DiscoverInventoryExport({
           <span className="muted">{snap.note ?? 'Re-run discovery to get a dated snapshot.'}</span>
         </p>
       )}
+      {snap.recorded && (
+        <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>
+          {snap.label}.
+        </p>
+      )}
 
       {unread ? (
-        <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>
-          Inventory could not be read — nothing to export.
+        <p className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+          The inventory could not be read, so there is nothing to export. This is not an empty
+          estate — it means the per-file list did not come back.
         </p>
       ) : (
         <>
           <p style={{ fontSize: 13, margin: '4px 0 0' }}>
             {nf.format(preview.rowCount)} file{preview.rowCount === 1 ? '' : 's'} ·{' '}
             {preview.columns.length} column{preview.columns.length === 1 ? '' : 's'}
-            {preview.rowCount === 0 && (
-              <span className="muted"> — no files to export</span>
-            )}
+          </p>
+          <p className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
+            Metadata only — no findings, scores or conformance verdicts. In the CSV,{' '}
+            <code>(not collected)</code> means discovery recorded no value; an empty cell means it
+            recorded an empty one. The JSON uses <code>null</code> for the first.
           </p>
           {preview.omitted.length > 0 && (
-            <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
-              Columns omitted (every row empty): {preview.omitted.map((o) => o.header).join(', ')}.
+            <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>
+              Not shipped, because every row was empty:{' '}
+              {preview.omitted.map((o) => o.header).join(', ')}.
             </p>
           )}
-          {/* Live region — mounted empty so a screen reader already observes it before the
-              download fires, making the announcement reliable. */}
+          {preview.rowCount === 0 && (
+            <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              This run inventoried no files, so there is nothing to export.
+            </p>
+          )}
+          {/* Mounted empty so a screen reader observes it before the download fires. */}
           <p className="muted" role="status" style={{ fontSize: 12, marginTop: 6 }}>
             {saved
               ? `Saved ${saved.filename} — ${nf.format(saved.rowCount)} row${saved.rowCount === 1 ? '' : 's'}.`
