@@ -180,8 +180,13 @@ def test_a_rule_that_has_run_can_still_be_renamed(client):
     c, st = client
     _rule(st)
     _ran(st)
+    # confirm_unattended because this PATCH also turns approval OFF on an `archive` rule, and
+    # PRD §7.5 now requires that to be asked for explicitly. Incidental to what this test is
+    # about — the subject is that a rule which has RUN can still be renamed — but sending it
+    # keeps the test honest rather than having the guard relaxed to let it through.
     r = c.put("/disposition/policies/p1",
-              json={"name": "stale finance (superseded)", "requires_approval": False})
+              json={"name": "stale finance (superseded)", "requires_approval": False,
+                    "confirm_unattended": True})
     assert r.status_code == 200
     saved = st.get_disposition_policy("p1")
     assert saved["name"] == "stale finance (superseded)"
