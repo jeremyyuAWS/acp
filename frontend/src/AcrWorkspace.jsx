@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import AcrCriterionDetail from './AcrCriterionDetail'
 import AcrMetadataForm from './AcrMetadataForm'
+import AcrPublish from './AcrPublish.jsx'
 import { listAcrReports, createAcrReport, getAcrReport, listAcrCriteria, getAcrValidation,
          getAcrPreview, getAcrGaps } from './acrApi'
 
-// PRD §15 — the ACR list and the report workspace (Overview · Criteria · Validation · Export).
+// PRD §15 — the ACR list and the report workspace
+// (Overview · Criteria · Evidence gaps · Validation · Publication · Draft export).
 //
 // WHAT THIS SCREEN REFUSES TO DO. It shows no compliance score and no percentage. PRD §4.4 is
 // explicit that ACP must make limitations visible rather than optimize for a misleading score, and
@@ -16,7 +18,8 @@ import { listAcrReports, createAcrReport, getAcrReport, listAcrCriteria, getAcrV
 // missing one reads as work not yet done.
 
 const TABS = [['overview', 'Overview'], ['criteria', 'Criteria'], ['gaps', 'Evidence gaps'],
-              ['validation', 'Validation'], ['export', 'Draft export']]
+              ['validation', 'Validation'], ['publication', 'Publication'],
+              ['export', 'Draft export']]
 
 // Criteria filters. "Needs evidence" is deliberately its own filter rather than a status: at 55
 // criteria the question an analyst actually has is "where do I still have to go and look", and
@@ -300,6 +303,13 @@ export default function AcrWorkspace() {
                                 onChange={refresh} />
           )}
         </div>
+      )}
+
+      {tab === 'publication' && (
+        <AcrPublish reportId={reportId} onChange={() => {
+          load()
+          getAcrValidation(reportId).then(setValidation).catch(() => {})
+        }} />
       )}
 
       {tab === 'validation' && (

@@ -10274,6 +10274,70 @@ class Store:
             self._db.execute(cur, sql + " ORDER BY revision DESC", params)
             return self._db.fetchone(cur)
 
+    def carry_acr_decisions(self, report_id: str, rows: list[dict], *, owner_email: str) -> int:
+        """Write decisions carried from a superseded revision into a NEW report's matrix.
+
+        A SEPARATE method rather than a parameter on create_acr_report, because that method
+        deliberately hardcodes `final_status=None` and `approval_state='unapproved'` and ignores
+        whatever the caller put on the incoming rows. That is a safety property worth keeping: a
+        newly created report always starts with a blank matrix, so no code path can accidentally
+        create one that arrives pre-decided.
+
+        CARRYING AN APPROVAL IS NOT POSSIBLE HERE, and that is the point. This method writes
+        `final_status`, `remarks`, `evaluator` and `workflow_state`; it has no path to
+        `approval_state`, `reviewer` or `approved_at`, which stay at their creation defaults. PRD
+        §4.2 requires an approver to sign off every applicable criterion of THIS report, and an
+        approval granted against the previous revision was granted for a different product
+        version — carrying it forward would be a recorded sign-off that never happened.
+
+        Returns the number of criteria written, so the caller can report what was carried.
+        """
+        written = 0
+        now = self._now()
+        with self._db.cursor() as cur:
+            for row in rows:
+                if not row.get("final_status"):
+                    continue
+                self._db.execute(cur,
+                    "UPDATE acr_criterion SET final_status=%s,remarks=%s,evaluator=%s,"
+                    "workflow_state=%s,decided_at=%s,updated_at=%s "
+                    "WHERE report_id=%s AND criterion_num=%s AND owner_email=%s",
+                    (row["final_status"], row.get("remarks"), row.get("evaluator"),
+                     row.get("workflow_state") or "decided", row.get("decided_at") or now, now,
+                     report_id, row["criterion_num"], owner_email))
+                written += 1
+        return written
+
+    def list_acr_snapshots(self, report_id: str, *, owner_email: str) -> list[dict]:
+        """Every published revision of this report, newest first.
+
+        There is deliberately no update_acr_snapshot and no delete_acr_snapshot. A published ACR is
+        in a customer's procurement file; the only honest way to change it is to publish a new
+        revision that supersedes it, which is what create_acr_report's supersedes_id is for.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM acr_snapshot WHERE report_id=%s AND owner_email=%s "
+                "ORDER BY revision DESC", (report_id, owner_email))
+            return self._db.fetchall(cur)
+
+    def list_acr_snapshots_for_lineage(self, report_ids: list[str], *,
+                                       owner_email: str) -> list[dict]:
+        """Snapshots across a whole supersedes chain, newest first.
+
+        A revision is a NEW acr_report row, so "the history of this report" spans several ids. The
+        caller walks the chain and passes every id in it; doing the walk here would put lineage
+        logic in the store, where the route already has to know it to render the chain.
+        """
+        if not report_ids:
+            return []
+        placeholders = ",".join(["%s"] * len(report_ids))
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT * FROM acr_snapshot WHERE owner_email=%s AND report_id IN ({placeholders}) "
+                "ORDER BY revision DESC", (owner_email, *report_ids))
+            return self._db.fetchall(cur)
+
     def grant_acr_role(self, *, owner_email: str, email: str, role: str,
                        report_id: str = "*", granted_by: str | None = None) -> None:
         with self._db.cursor() as cur:
@@ -10293,6 +10357,57 @@ class Store:
                 "DELETE FROM acr_role WHERE owner_email=%s AND report_id=%s AND email=%s "
                 "AND role=%s",
                 (owner_email, report_id, email.lower(), role))
+
+    def copy_acr_role_grants(self, *, owner_email: str, from_report_id: str,
+                             to_report_id: str) -> int:
+        """Carry a report's role grants into its new revision.
+
+        A ROLE IS NOT AN APPROVAL, and the difference is the whole reason one carries and the
+        other must not. A role says "this person is authorized to approve on this report"; an
+        approval says "this person did approve this criterion, for this product version". Carrying
+        the first is continuity — a revision is the same report, and without it every revision
+        would need an admin to re-grant every role before anyone could work. Carrying the second
+        would be a recorded sign-off that never happened, which is why carry_acr_decisions has no
+        path to approval_state.
+
+        Deployment-wide ('*') grants are not copied: they already apply to every report, and
+        duplicating them as report-scoped rows would make a later revoke miss one.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT email,role,granted_by FROM acr_role "
+                "WHERE owner_email=%s AND report_id=%s", (owner_email, from_report_id))
+            rows = self._db.fetchall(cur)
+            now = self._now()
+            for row in rows:
+                self._db.execute(cur,
+                    "INSERT INTO acr_role(owner_email,report_id,email,role,granted_by,granted_at) "
+                    "VALUES(%s,%s,%s,%s,%s,%s)",
+                    (owner_email, to_report_id, row["email"], row["role"],
+                     row.get("granted_by"), now))
+        return len(rows)
+
+    def list_acr_role_holders(self, *, owner_email: str, report_id: str,
+                              roles: tuple[str, ...]) -> list[str]:
+        """Everyone holding one of these roles on this report, or deployment-wide.
+
+        Needed by PRD §18's separation-of-duties advisory, which is CONDITIONED on a second
+        qualified reviewer existing — the warning is silent when the approver is the only one
+        available, because nagging a one-person team on every publish teaches them to ignore it.
+        So this has to count real role holders rather than assume.
+
+        `report_id='*'` rows are deployment-wide grants and count for every report, matching how
+        get_acr_roles resolves them.
+        """
+        if not roles:
+            return []
+        placeholders = ",".join(["%s"] * len(roles))
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT DISTINCT email FROM acr_role WHERE owner_email=%s "
+                f"AND report_id IN (%s,'*') AND role IN ({placeholders})",
+                (owner_email, report_id, *roles))
+            return [r["email"] for r in self._db.fetchall(cur)]
 
     def get_acr_roles(self, *, owner_email: str, email: str, report_id: str) -> list[str]:
         """Roles this email holds on this report — report-scoped grants plus account-wide ('*')."""
