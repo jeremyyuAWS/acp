@@ -91,6 +91,18 @@ def _doc_label(file: str | None) -> str | None:
     return f"doc-{digest}{ext}"
 
 
+def _owner_key(owner: str | None) -> str:
+    """Stable, irreversible HMAC of the operator email — safe as a Langfuse tag/user_id value.
+
+    Uses the same salt as _doc_label so one env var controls both. 12 hex chars gives 48 bits of
+    collision resistance, which is more than enough for a tenant discriminator on a corporate estate.
+    """
+    import hashlib
+    import hmac
+    salt = (os.environ.get("ACP_TRACE_SALT") or _SK or "").encode()
+    return "owner-" + hmac.new(salt, (owner or "demo").encode("utf-8"), hashlib.sha256).hexdigest()[:12]
+
+
 def _fmt(file: str | None) -> str | None:
     """The document's format (docx/pdf/xlsx/pptx/…) from its extension, or None. A type, not an
     identifier — safe to send for the same reason `_doc_label` keeps the extension."""
@@ -119,7 +131,7 @@ def _file_tags(file: str, user: str | None) -> list[str]:
 
     `format:` is added so the native Langfuse UI can filter a document type (all PDFs, all
     docx) without parsing trace names — a type, not an identifier, same safety as `_fmt`."""
-    tags = ["accessibility-file", f"user:{user or 'demo'}", f"file:{_doc_label(file)}"]
+    tags = ["accessibility-file", f"owner:{_owner_key(user)}", f"file:{_doc_label(file)}"]
     fmt = _fmt(file)
     if fmt:
         tags.append(f"format:{fmt}")
@@ -571,7 +583,7 @@ def file_trace(scan_id: str, file: str, user: str | None = None):
             id=_trace_id(scan_id, file),
             session_id=scan_id,
             name=_doc_label(file),
-            user_id=who,
+            user_id=_owner_key(who),
             tags=_file_tags(file, who),
             # Trace-level input so the session view shows WHAT was assessed, not an empty shell.
             # Structured only — a redacted label + the format (a type, not an identifier); never
@@ -727,8 +739,8 @@ def discover_run_trace(scan_id: str, source: str, *, listed: int, inventoried: i
             session_id=scan_id,
             # No operator email in the name (identity leak in the trace list); user_id carries it.
             name=f"Discover · {label}",
-            user_id=who,
-            tags=["accessibility-discover", f"user:{who}", f"source:{source}"],
+            user_id=_owner_key(who),
+            tags=["accessibility-discover", f"owner:{_owner_key(who)}", f"source:{source}"],
             metadata={"scan_id": scan_id, "source": source, "phase": "discover",
                       "deferred_assess": deferred},
             input=boundary,
@@ -1032,21 +1044,27 @@ def fetch_session(scan_id: str, limit: int = 500) -> dict | None:
 # (one scan), never across scans by document, so this is the view it can't give: a document's score
 # and failing-criteria trajectory over successive scans. Fetched with ACP's own keys; PHI-safe (the
 # label is already an HMAC, the operator email is never read).
-def fetch_document_history(doc_label: str, limit: int = 20) -> dict | None:
+def fetch_document_history(doc_label: str, limit: int = 20,
+                           owner_key: str | None = None) -> dict | None:
     """A document's trace across every scan it appears in, newest first.
 
     `doc_label` is the trace-facing label (the `_doc_label` value, e.g. 'doc-3f9a2c.docx') — the
     SAME string the trace input's `document` field and the `file:` tag hold, NOT a raw filename, so
-    it is used as-is and never re-hashed. Returns None when tracing isn't configured or the fetch
-    errors; a document with a single scan simply comes back with one row."""
+    it is used as-is and never re-hashed. `owner_key` (from `_owner_key(email)`) scopes the result
+    to a single tenant — callers MUST pass it so cross-tenant history is never returned. Returns
+    None when tracing isn't configured or the fetch errors; a document with a single scan simply
+    comes back with one row."""
     if not _ENABLED or not doc_label:
         return None
     try:
         import urllib.parse
 
         import httpx
-        tag = urllib.parse.quote(f"file:{doc_label}", safe="")
-        r = httpx.get(f"{_HOST.rstrip('/')}/api/public/traces?tags={tag}&limit={int(limit)}",
+        file_tag = urllib.parse.quote(f"file:{doc_label}", safe="")
+        qs = f"tags={file_tag}&limit={int(limit)}"
+        if owner_key:
+            qs += "&tags=" + urllib.parse.quote(f"owner:{owner_key}", safe="")
+        r = httpx.get(f"{_HOST.rstrip('/')}/api/public/traces?{qs}",
                       auth=(_PK, _SK), timeout=8.0)
         if r.status_code != 200:
             return None

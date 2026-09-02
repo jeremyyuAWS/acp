@@ -2,8 +2,11 @@
 than the app — and it must not lead with the operator's email. It used to:
 `jeremy_acp@…onmicrosoft.com · doc-…`, on every file, scan, assess and discover trace. That is an
 identity leak, distinct from the PHI (filename) guards: the operator email is not a patient name,
-but it still has no business in a shared observability list. Segregation BY operator stays
-available through `user_id` and the `user:` tag (both filterable), which SHOULD keep the email.
+but it still has no business in a shared observability list.
+
+Segregation BY operator stays available through `user_id` and an `owner:` tag, both carrying a
+stable HMAC of the operator email (`lf._owner_key`) rather than the raw address. The HMAC is
+filterable in Langfuse's UI (consistent key per tenant), and the raw email never leaves ACP.
 
 Also pins two logging-legibility improvements shipped with the fix: a `format:` tag so the native
 UI can filter by document type, and the verdict-in-name upgrade so the list reads at a glance."""
@@ -61,10 +64,15 @@ def test_file_trace_name_carries_no_operator_email(cap):
     for n in names:
         assert EMAIL not in n
         assert "@" not in n                      # no email in any name
-    # but the operator is STILL filterable — user_id and a user: tag carry it
+    # the operator is still filterable — user_id and owner: tag carry a stable HMAC, not raw email
     tkw = next(kw for kind, kw in cap.calls if kind == "trace")
-    assert tkw.get("user_id") == EMAIL
-    assert any(str(t) == f"user:{EMAIL}" for t in (tkw.get("tags") or []))
+    uid = tkw.get("user_id") or ""
+    assert EMAIL not in uid and "@" not in uid, f"raw email in user_id: {uid!r}"
+    assert uid.startswith("owner-"), f"user_id should be an owner-key, got: {uid!r}"
+    tags = tkw.get("tags") or []
+    owner_tags = [t for t in tags if str(t).startswith("owner:")]
+    assert owner_tags, "expected an owner: tag but found none"
+    assert not any(EMAIL in str(t) for t in tags), "raw email must not appear in any tag"
 
 
 def test_file_trace_tags_include_format_for_filtering(cap):

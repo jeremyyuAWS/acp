@@ -89,8 +89,9 @@ def test_outcome_tags_carry_result_pii_and_the_base_tags(cap):
     assert "result:fail" in tags and "pii:flagged" in tags
     assert "accessibility-file" in tags and "format:docx" in tags   # base tags re-included
     assert "rule-fail:1.4.3" in tags and "rule-fail:1.1.1" in tags   # per-rule tags preserved
-    # the operator stays available as a filterable user: tag (that's by design, unlike the NAME)
-    assert "user:nurse@x" in tags
+    # the operator stays filterable via an owner: HMAC tag — raw email must NOT appear
+    assert not any("nurse@x" in str(t) for t in tags), "raw email must not appear in any tag"
+    assert any(str(t).startswith("owner:") for t in tags), "expected an owner: HMAC tag"
 
 
 def test_outcome_tags_omit_pii_when_not_flagged(cap):

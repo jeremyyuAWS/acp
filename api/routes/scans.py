@@ -1122,7 +1122,7 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
 
 
 @router.get("/scans/{sid}/trace/session/data")
-def session_trace_data(sid: str):
+def session_trace_data(sid: str, request: Request):
     """Data source for the IN-APP session panel: the whole scan's Langfuse session (every file's
     trace) fetched server-side (lf.fetch_session) and returned as a PHI-safe list + rollup, so ACP
     renders the aggregate inline. This is the view that hung the Langfuse UI on large scans; in-app
@@ -1133,7 +1133,8 @@ def session_trace_data(sid: str):
     Registered BEFORE the literal /trace/session and the /trace/{kind} wildcard (registration
     order), though its two-segment suffix already keeps it unambiguous. Public — read-only."""
     import lf as _lf
-    if core.store.get_scan(sid) is None:
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
         raise HTTPException(404, "scan not found")
     if not _lf.enabled():
         return {"status": "not_configured"}
@@ -1144,7 +1145,7 @@ def session_trace_data(sid: str):
 
 
 @router.get("/scans/{sid}/trace/session")
-def open_session(sid: str):
+def open_session(sid: str, request: Request):
     """'View this scan' target under file-centric tracing (see lf.file_trace): every file
     in this scan shares a Langfuse SESSION keyed by the scan id, so this is the
     replacement for the old single scan/assess/remediate trace chips. No ensure-exists
@@ -1154,7 +1155,8 @@ def open_session(sid: str):
     would otherwise shadow this literal "session" path (FastAPI matches routes in
     registration order; the more specific route must come first)."""
     import lf as _lf
-    if core.store.get_scan(sid) is None:
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
         raise HTTPException(404, "scan not found")
     link = _lf.session_deep_link(sid)
     if not link:
@@ -1175,7 +1177,7 @@ def open_trace(sid: str, request: Request, kind: str, level: str = Query("AA")):
     import lf as _lf
     if kind not in ("scan", "assess", "remediate"):
         raise HTTPException(404, "unknown trace kind")
-    if core.store.get_scan(sid) is None:
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
         raise HTTPException(404, "scan not found")
     trace_id = sid if kind == "scan" else f"{sid}-{kind}"
     link = _lf.trace_deep_link(trace_id)
@@ -1200,13 +1202,15 @@ def open_trace(sid: str, request: Request, kind: str, level: str = Query("AA")):
 
 
 @router.get("/scans/{sid}/trace/{kind}/exists")
-def trace_exists(sid: str, kind: str):
+def trace_exists(sid: str, kind: str, request: Request):
     """Returns {available: bool} — whether the Langfuse trace for this scan exists.
     Used by the UI to grey out the trace chip for scans that have no trace yet
     (e.g. scans from before tracing was wired up). Public — no auth needed.
     Historical (kind-based) traces only — see /trace/file/{file} for the current,
     file-centric model."""
     import lf as _lf
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        return {"available": False}
     if kind == "session":
         return {"available": _lf.session_exists(sid)}
     if kind not in ("scan", "assess", "remediate"):
@@ -1222,7 +1226,7 @@ def trace_exists(sid: str, kind: str):
 # already shadows /exists above; that route is best-effort and the SPA tolerates it, so it is
 # left as-is rather than reordered in this change.)
 @router.get("/scans/{sid}/trace/file/{filename:path}/data")
-def file_trace_data(sid: str, filename: str, level: str = Query("AA")):
+def file_trace_data(sid: str, filename: str, request: Request, level: str = Query("AA")):
     """Data source for the IN-APP trace panel: the file's Langfuse trace fetched
     server-side (lf.fetch_trace) and returned as PHI-safe JSON, so ACP renders it
     inline with no Langfuse login. Langfuse's own trace page hangs for logged-out
@@ -1236,7 +1240,7 @@ def file_trace_data(sid: str, filename: str, level: str = Query("AA")):
     Public — read-only apart from the same best-effort assess-trace rebuild the
     redirect route does, so a never-opened Assess trace still materializes."""
     import lf as _lf
-    if core.store.get_scan(sid) is None:
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
         raise HTTPException(404, "scan not found")
     if not _lf.enabled():
         return {"status": "not_configured"}
@@ -1264,23 +1268,24 @@ def file_trace_data(sid: str, filename: str, level: str = Query("AA")):
 # matches ".../{file}/history"). `filename` here is the trace-facing document LABEL (what the trace
 # panel holds as `document`), not a raw filename — lf.fetch_document_history uses it as-is.
 @router.get("/scans/{sid}/trace/file/{filename:path}/history")
-def file_trace_history(sid: str, filename: str):
+def file_trace_history(sid: str, filename: str, request: Request):
     """CROSS-SCAN history for one document: its trace in every scan it appears in, newest first —
     the "this document over time" view Langfuse's own session-grouped UI cannot give. Honest states
     like the /data route: {status: not_configured | pending | ok}. Public — read-only."""
     import lf as _lf
-    if core.store.get_scan(sid) is None:
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
         raise HTTPException(404, "scan not found")
     if not _lf.enabled():
         return {"status": "not_configured"}
-    data = _lf.fetch_document_history(filename)
+    data = _lf.fetch_document_history(filename, owner_key=_lf._owner_key(owner))
     if data is None:
         return {"status": "pending"}
     return {"status": "ok", "history": data}
 
 
 @router.get("/scans/{sid}/trace/file/{filename:path}")
-def open_file_trace(sid: str, filename: str, level: str = Query("AA")):
+def open_file_trace(sid: str, filename: str, request: Request, level: str = Query("AA")):
     """Reliable 'View trace' target for ONE file — its Discover/Assess/Remediate spans
     all live on this single trace (file-centric tracing). Ensures it exists (re-running
     the Assess write for this file if Langfuse doesn't have it yet — the same
@@ -1289,7 +1294,7 @@ def open_file_trace(sid: str, filename: str, level: str = Query("AA")):
     import time
 
     import lf as _lf
-    if core.store.get_scan(sid) is None:
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
         raise HTTPException(404, "scan not found")
     trace_id = f"{sid}::{filename}"
     link = _lf.trace_deep_link(trace_id)
@@ -1310,10 +1315,12 @@ def open_file_trace(sid: str, filename: str, level: str = Query("AA")):
 
 
 @router.get("/scans/{sid}/trace/file/{filename:path}/exists")
-def file_trace_exists(sid: str, filename: str):
+def file_trace_exists(sid: str, filename: str, request: Request):
     """Returns {available: bool} for one file's trace — the file-centric counterpart to
     /trace/{kind}/exists above. Public — no auth needed."""
     import lf as _lf
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        return {"available": False}
     return {"available": _lf.trace_exists(f"{sid}::{filename}")}
 
 
