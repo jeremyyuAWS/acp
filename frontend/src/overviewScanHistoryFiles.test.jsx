@@ -63,4 +63,13 @@ describe('scan history table — files column', () => {
     const row = table.querySelector('tbody tr')
     expect(row.textContent).toContain('0')
   })
+
+  it('does not turn a table row containing a trace button into another interactive control', async () => {
+    const c = await render()
+    const table = historyTable(c)
+    expect(table.querySelector('tbody tr[role="button"]')).toBeNull()
+    const viewButtons = table.querySelectorAll('button.scan-history-select')
+    expect(viewButtons).toHaveLength(2)
+    expect(viewButtons[0].getAttribute('aria-current')).toBe('true')
+  })
 })

@@ -66,6 +66,7 @@ import { useScanRefetch } from './scanRefetch.js'
 import ConfirmDialog from './ConfirmDialog.jsx'
 import { AdminInsights } from './AdminInsights.jsx'
 import AcrWorkspace from './AcrWorkspace.jsx'
+import { handleWorkflowTabKeyDown } from './workflowTabs.js'
 
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
 const SHOW_A11Y = import.meta.env.DEV || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('a11y'))
@@ -1714,11 +1715,14 @@ export default function App() {
             // would have pointed at a tab nothing could open.
             const locked = busy && step > 0 && k !== 'discover' && view !== k
             return (
-              <button key={k} role="tab" aria-selected={view === k}
+              <button key={k} id={`workflow-tab-${k}`} role="tab" aria-selected={view === k}
+                      aria-controls="workflow-panel"
                       aria-current={view === k ? 'step' : undefined}
+                      tabIndex={view === k ? 0 : -1}
                       disabled={locked}
                       title={locked ? 'A scan or assessment is running — this step opens when it finishes' : rg}
                       className={`tab${view === k ? ' on' : ''}${done ? ' done' : ''}${step ? ' stepTab' : ''}${locked ? ' locked' : ''}`}
+                      onKeyDown={handleWorkflowTabKeyDown}
                       onClick={() => setView(k)}>
                 {step > 0 && <span className="stepnum" aria-hidden="true">{done ? '✓' : step}</span>}
                 <span className="tablbl">{done && <span className="vh">completed: </span>}{label}</span>
@@ -1946,6 +1950,7 @@ export default function App() {
                           onStop={() => stopScan(liveScanId || run?.id)} />
 
       <main id="main-content" tabIndex={-1}>
+      <div id="workflow-panel" role="tabpanel" aria-labelledby={`workflow-tab-${view}`}>
       <ErrorBoundary key={view}>
         {/* onScan/busy/tokens are threaded so Overview can offer the scan-scope editor after a
             scan exists. Before one, `placeholder` (EmptyState → ScanSetup) is the whole screen;
@@ -2162,6 +2167,7 @@ export default function App() {
           ) : null
         })()}
       </ErrorBoundary>
+      </div>
       </main>
 
       <ChatWidget files={files} run={run} trend={trend} trendDates={trendDates} me={me} />
