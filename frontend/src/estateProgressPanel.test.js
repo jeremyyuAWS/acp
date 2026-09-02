@@ -18,6 +18,7 @@ const code = (f) => readFileSync(join(here, f), 'utf8').split('\n')
 
 const panel = code('EstateProgressPanel.jsx')
 const overview = code('Overview.jsx')
+const discover = code('Discover.jsx')
 
 describe('EstateProgressPanel component', () => {
   it('exports a default function', () => {
@@ -37,9 +38,9 @@ describe('EstateProgressPanel component', () => {
     expect(panel).toMatch(/const eligible\s+= assessmentEligible\(inventory\)/)
   })
 
-  it('renders KpiCard sub-components', () => {
-    expect(panel).toMatch(/function KpiCard/)
-    expect(panel).toMatch(/<KpiCard/)
+  it('does not repeat the funnel values in a separate KPI row', () => {
+    expect(panel).not.toMatch(/function KpiCard/)
+    expect(panel).not.toMatch(/<KpiCard/)
   })
 
   it('renders the four funnel stages', () => {
@@ -78,5 +79,15 @@ describe('EstateProgressPanel wired in Overview', () => {
 
   it('passes onGo to EstateProgressPanel', () => {
     expect(overview).toMatch(/<EstateProgressPanel[\s\S]{0,400}onGo=/)
+  })
+})
+
+describe('EstateProgressPanel wired in Discover', () => {
+  it('uses the same single-source funnel without restoring the duplicate KPI row', () => {
+    expect(discover).toMatch(
+      /import EstateProgressPanel from ['"]\.\/EstateProgressPanel\.jsx['"]/,
+    )
+    expect(discover).toMatch(/<EstateProgressPanel[\s\S]{0,400}inventory=/)
+    expect(panel).not.toMatch(/<KpiCard/)
   })
 })

@@ -256,12 +256,12 @@ describe('the live 2026-08-28 zero-documents report, reproduced and then fixed',
     })
     expect(h.calls[0]).toMatchObject({ scanId: 'scan-1' })
     expect(text()).toContain('DISCOVERY RESULTS')
-    // The estate KPI row, the eligibility breakdown and the results panel all agree — this is the
+    // The estate funnel, the eligibility breakdown and the results panel all agree — this is the
     // concrete, DOM-level proof the fix works end to end, not just at the API layer. ("Discovery
     // complete · 32 files inventoried" was DiscoverCompleteSummary's wording; the panel that
-    // replaced it on 2026-09-02 says "discovered 32" in its KPI row.)
+    // replaced it on 2026-09-02 says "Discovered 32" in its stage funnel.)
     expect(text()).toContain('Estate overview')
-    expect(text()).toMatch(/discovered32/)
+    expect(text()).toMatch(/Discovered32/)
     expect(text()).toContain('32files discovered')
     expect(text()).not.toContain('0files discovered')
     expect(container.querySelector('button[data-advance="assess"]')).toBeTruthy()

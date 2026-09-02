@@ -4,10 +4,9 @@ import AccordionSection from './AccordionSection.jsx'
 
 // ── Estate Progress Panel ───────────────────────────────────────────────────
 // Three interlocking components:
-//   1. KPI cards   — four headline numbers across the top
-//   2. Funnel      — horizontal stage flow, hero component
-//   3. DocTypes    — horizontal bars, eligible vs ineligible by format
-//   4. PendingWork — action table showing where work is accumulating
+//   1. Funnel      — horizontal stage flow, hero component
+//   2. DocTypes    — horizontal bars, eligible vs ineligible by format
+//   3. PendingWork — action table showing where work is accumulating
 //
 // All four read from the same data model so the numbers can never disagree.
 
@@ -15,30 +14,7 @@ const nf = new Intl.NumberFormat('en-US')
 const pct = (a, b) => (b > 0 ? Math.round((a / b) * 100) : 0)
 const pctLabel = (a, b) => `${pct(a, b)}%`
 
-// ── 1. KPI cards ─────────────────────────────────────────────────────────────
-// Mirrors the existing `.metrics` / `.metric` pattern.
-
-function KpiCard({ label, value, ofLabel, trend, color, title }) {
-  return (
-    <div className="metric" title={title} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <span style={{ color: 'var(--muted)', fontSize: 13 }}>{label}</span>
-      <b style={{ fontSize: 26, fontWeight: 600, color: color || 'var(--ink)', lineHeight: 1.1 }}>
-        {value == null ? '—' : nf.format(value)}
-      </b>
-      {ofLabel && <span style={{ fontSize: 12, color: 'var(--muted)' }}>{ofLabel}</span>}
-      {trend != null && trend !== 0 && (
-        <span style={{ fontSize: 12, fontWeight: 600,
-          color: trend > 0 ? '#3B6D11' : '#A32D2D',
-          background: trend > 0 ? '#E7F0DC' : '#FCEBEB',
-          borderRadius: 6, padding: '1px 7px', alignSelf: 'flex-start', marginTop: 2 }}>
-          {trend > 0 ? `+${nf.format(trend)}` : nf.format(trend)} this week
-        </span>
-      )}
-    </div>
-  )
-}
-
-// ── 2. Horizontal estate progress funnel ─────────────────────────────────────
+// ── 1. Horizontal estate progress funnel ─────────────────────────────────────
 
 const STAGE_COLOR = ['#46303F', '#7a5c8e', '#1F5FA8', '#067647']
 const STAGE_LIGHT = ['#f3eef6', '#ede7f6', '#eff8ff', '#ecfdf3']
@@ -312,41 +288,10 @@ export default function EstateProgressPanel({
 
   return (
     <>
-      {/* ── KPI cards ─────────────────────────────────────────────────── */}
-      <div className="metrics" style={{ marginBottom: 0 }}>
-        <KpiCard
-          label="discovered"
-          value={discovered}
-          ofLabel="total estate"
-          title="Every file listed from metadata before any filter. The widest denominator."
-        />
-        <KpiCard
-          label="eligible"
-          value={eligible}
-          ofLabel={eligible != null && discovered ? `${pctLabel(eligible, discovered)} of discovered` : undefined}
-          title="Files in an assessable format — PDF, DOCX, XLSX, PPTX. The assessment denominator."
-          color="#46303F"
-        />
-        <KpiCard
-          label="assessed"
-          value={assessed}
-          ofLabel={assessed != null && eligible ? `${pctLabel(assessed, eligible)} of eligible` : undefined}
-          title="Eligible files that have been scored against WCAG criteria."
-          color="#1F5FA8"
-        />
-        <KpiCard
-          label="remediated"
-          value={remediated}
-          ofLabel={remediated != null && assessed ? `${pctLabel(remediated, assessed)} of assessed` : undefined}
-          title="Assessed files that are now certifiable — passed or remediated."
-          color="#067647"
-        />
-      </div>
-
       {/* ── Estate progress funnel ────────────────────────────────────── */}
       <PanelSection collapsible={collapsible} accId="estate-progress"
                     heading="Estate progress" label="Estate progress funnel"
-                    defaultOpen style={{ marginTop: 12 }}
+                    defaultOpen
                     actions={(unsupported || excluded || failed) ? (
                       <button className="linkbtn" type="button" style={{ fontSize: 12 }}
                               onClick={() => setShowSideBranches((v) => !v)}>

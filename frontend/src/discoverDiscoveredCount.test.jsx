@@ -167,8 +167,8 @@ describe('the completion card\'s "Assessable" count agrees with DiscoveryResults
     })
     // textContent runs the labels together, so anchor on the label — `\b170\b` would fail on
     // "eligible17085% of discovered" for the boundary, not for the number.
-    expect(c).toMatch(/eligible170/)
-    expect(c).not.toMatch(/eligible40/)
+    expect(c).toMatch(/Eligible170/)
+    expect(c).not.toMatch(/Eligible40/)
   })
 
   it('falls back to by_status.assessable when assessment_eligible is absent', async () => {
@@ -177,7 +177,7 @@ describe('the completion card\'s "Assessable" count agrees with DiscoveryResults
       files, run: doneRun(),
       scope: { kind: 'drive', inventory: { discovered: 200, by_status: { assessable: 170 } } },
     })
-    expect(c).toMatch(/eligible170/)
+    expect(c).toMatch(/Eligible170/)
   })
 })
 
@@ -201,8 +201,8 @@ describe('the estate overview keeps the whole estate and the assessable subset a
       files, run: doneRun({ files: 173 }),
       scope: { kind: 'drive', inventory: { discovered: 6922, assessment_eligible: 173 } },
     })
-    expect(c).toMatch(/discovered6,922/)
-    expect(c).toMatch(/eligible173/)
+    expect(c).toMatch(/Discovered6,922/)
+    expect(c).toMatch(/Eligible173/)
     // The old unlabelled "173 of 6,922" phrasing is what made them look like a contradiction.
     expect(c).not.toMatch(/173 of 6,922/)
   })
@@ -214,9 +214,9 @@ describe('the estate overview keeps the whole estate and the assessable subset a
       scope: { kind: 'drive', inventory: { discovered: 200 } },
     })
     expect(c).not.toMatch(/scannable document type/)
-    // The em dash IS the assertion: a KPI reading 0 would render "eligible0" here, and the
+    // The em dash IS the assertion: a funnel stage reading 0 would render "Eligible0" here, and the
     // whole point is that "not measured" must not print as "measured nothing". (A bare
-    // /eligible0/ negative would be ambiguous — the doc-type rows print "0 eligible" too.)
-    expect(c).toMatch(/eligible—/)
+    // /Eligible0/ negative would be ambiguous — the doc-type rows print "0 eligible" too.)
+    expect(c).toMatch(/Eligible—/)
   })
 })

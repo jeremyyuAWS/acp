@@ -30,13 +30,12 @@ test('a local scan runs discover → assess and produces WCAG findings', async (
     .toBeVisible({ timeout: 120_000 })
 
   // The count is what ties this to OUR corpus. SIM's synthetic estate is thousands of files, so
-  // this can only come from a real scan of .e2e/corpus. It is read off the "discovered" KPI card
-  // rather than by text: the card is `<span>discovered</span><b>N</b>`, and a bare getByText of
-  // the number would match any "3" anywhere on the page. (The previous wording, "N files
-  // inventoried", was DiscoverCompleteSummary's — this assertion has now been re-pointed twice,
-  // so it is anchored on structure this time, not on copy.)
-  const discoveredKpi = page.locator('.metric').filter({ hasText: /^discovered/ }).first()
-  await expect(discoveredKpi.locator('b')).toHaveText(String(CORPUS_SIZE), { timeout: 30_000 })
+  // this can only come from a real scan of .e2e/corpus. Read it from the retained Discovered
+  // funnel stage, scoped to the Estate overview region, rather than matching a bare "3" anywhere.
+  const estateOverview = page.getByRole('region', { name: 'Estate overview' })
+  await expect(estateOverview.getByRole('button', {
+    name: new RegExp(`^Discovered ${CORPUS_SIZE} `),
+  })).toBeVisible({ timeout: 30_000 })
 
   const assessTab = tab(page, /Assess/)
   await expect(assessTab).toBeVisible()
