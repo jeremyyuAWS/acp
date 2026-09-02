@@ -195,6 +195,7 @@ describe('status-token standard values — all must pass WCAG AA on white', () =
   })
 })
 
+
 describe('livedot and aibadge overrides (from PR #1222, regression-pinned)', () => {
   it('livedot WCAG color on --bg ≥ 4.5:1', () => {
     expect(contrastRatio('#7A5000', STANDARD['--bg'])).toBeGreaterThanOrEqual(4.5)
