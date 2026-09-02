@@ -76,10 +76,36 @@ ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 \
 # git: five test modules shell out to it (test_progress_log_guard, test_progress_log_generator,
 #   test_monitor, test_redeploy_pin_resolution, test_git_credential_helper), and two of the
 #   four checks the CI job runs read the repo's commits.
+#
+# WeasyPrint's native stack (libpango/libpangoft2/libharfbuzz/libfontconfig) and the DejaVu font.
+#   These are the one place this image installs something ci.yml does not, and that is not a
+#   departure from "what CI installs, and therefore what is here" — it is that rule applied to
+#   the ENVIRONMENT rather than to the step list. ci.yml runs on a hosted ubuntu-latest runner,
+#   which ships these libraries pre-provisioned; this image is the plain dotnet/sdk:10.0-noble,
+#   the same Ubuntu 24.04 without a runner's provisioning, so what the gate gets ambiently has
+#   to be asked for here. Agreeing with CI means matching what the suite RUNS AGAINST.
+#
+#   api/requirements.txt carries weasyprint==69.0 (it renders /scans/{sid}/report.pdf as of
+#   #1201), and pip cannot install what it dlopens. Without these, `import weasyprint` raises
+#   OSError — NOT ImportError — which `pytest.importorskip` does not catch, so the report suites
+#   ERROR at collection here instead of skipping. That is precisely the misreading this image
+#   exists to prevent: its own header records a session carrying "32 pre-existing test failures"
+#   through four PRs when the cause was an incomplete venv.
+#
+#   The list is read off weasyprint.text.ffi's own dlopen calls, not from documentation —
+#   spike/weasyprint-report/requirements.txt says "Pango, cairo, GDK-PixBuf, HarfBuzz", the
+#   pre-53 cairo-era list, naming two libraries WeasyPrint 69 never loads. libglib2.0-0
+#   (gobject) is omitted because it arrives as a dependency of libpango.
+#
+#   fonts-dejavu-core is not decoration: the report's File Inventory prints U+2713 and U+2717
+#   directly and Liberation Sans carries neither (measured with fontTools against the font
+#   file), so without DejaVu they render as .notdef boxes.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        python3 python3-venv python3-dev \
        git ca-certificates tzdata \
+       libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libfontconfig1 \
+       fonts-liberation fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /opt/venv \
     && python3 --version
@@ -106,6 +132,36 @@ RUN ACP_SUDO= bash /tmp/install_tesseract.sh \
     && rm -f /tmp/install_tesseract.sh \
     && rm -rf /var/lib/apt/lists/* \
     && tesseract --version
+
+# ---- veraPDF (PDF/UA-1 conformance gate) ---------------------------------------------------
+# Through scripts/install_verapdf.sh for the same reason tesseract is: ci.yml and
+# azure-pipelines.yml both call it, so a fourth hand-rolled copy here would be free to drift.
+#
+# The JRE is the cost of admission and the reason this is its own layer: veraPDF is a Java
+# application, the script exits 1 with "no java on PATH" without one, and the SDK base ships
+# .NET rather than Java. `default-jre-headless` keeps it to the runtime — no AWT, no desktop.
+#
+# WHY IT IS HERE AT ALL, given this image's rule that it installs what CI installs and no more:
+# ci.yml installs veraPDF (#1199), so this IS that rule rather than an exception to it. Without
+# it the conformance tests in tests/test_report_weasy_structure.py and tests/test_report_pdfua_
+# gap.py degrade to a stated skip — milder than the collection error a missing Pango causes, and
+# still the thing this image exists to stop a developer misreading: a green suite in which the
+# PDF/UA claim was never evaluated.
+#
+# SOFTENED WHERE TESSERACT IS NOT, and this is the one place this image departs from the gate's
+# severity. ci.yml fails the job when veraPDF will not install, because a gate that skips its
+# only conformance check is worse than a red one. This is a developer image, often built behind
+# a proxy, and a failed fetch from software.verapdf.org should not make the whole toolchain
+# unbuildable — so the build continues and the tests say in their own skip reason that the check
+# did not run. `|| echo` is the difference between "this image lacks a tool" and "this image
+# cannot be built today".
+COPY scripts/install_verapdf.sh /tmp/install_verapdf.sh
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends default-jre-headless curl \
+    && (bash /tmp/install_verapdf.sh \
+        || echo "install_verapdf: FAILED — the conformance tests will skip in this image") \
+    && rm -f /tmp/install_verapdf.sh \
+    && rm -rf /var/lib/apt/lists/*
 
 # ---- NuGet packages -----------------------------------------------------------------------
 # Only the project and props files, so this layer is a function of the DEPENDENCY graph and not
