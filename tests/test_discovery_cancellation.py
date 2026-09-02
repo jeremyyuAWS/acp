@@ -225,12 +225,53 @@ def test_cancellation_during_parallel_listing_is_not_a_skipped_subtree(st):
 def test_nothing_is_still_running_when_discovery_reports_stopped(st):
     """`stopped` means no task can still run or write. Note what this does NOT prove: the `with`
     block's own shutdown(wait=True) would satisfy it too. It is the invariant, not the argument
-    for cancel_futures — that is the next test, and it took a bite check to tell them apart."""
+    for cancel_futures — that is the next test, and it took a bite check to tell them apart.
+
+    THE PARALLELISM IS ARRANGED, NOT HOPED FOR, and that is a repair rather than a decoration.
+
+    This test used to cancel on the FIRST non-root request and then assert, at the end, that at
+    least two folder fetches had been in flight at once. Those two things fight each other:
+    cancelling on the first child request is exactly what stops the siblings, because every task
+    that has not already entered execute() hits `_cancel_checkpoint()` and raises before its
+    Drive call. Whether a second thread got in first was a pure race that the test itself
+    started.
+
+    Measured on this machine it resolved to 2, 4, 5 or 6 across every condition tried — the test
+    alone, the whole file, CI's exact `-n auto --dist loadfile --splits 4 --group 2` invocation,
+    every core saturated, and pinned to a single core. On a GitHub runner it resolved to 1, and
+    the `max_in_flight > 1` guard failed the shard (#1190's CI, 2026-09-02) on a PR that touches
+    nothing in this file. The guard was right: on that run the test genuinely had not exercised
+    the parallel path.
+
+    So the fixture now HOLDS the first few child requests inside execute() on a barrier until
+    that many are concurrently in flight, and only then requests cancellation. The assertion
+    below is unchanged and is now satisfied by construction rather than by scheduling luck — and
+    the test is strictly stronger for it, because cancellation provably arrives with siblings
+    genuinely mid-flight, which is the situation the drain exists to handle.
+    """
     drive = FakeDrive(children=_wide_tree())
 
+    # Two is all the assertion needs; three exercises the drain a little harder without getting
+    # close to the pool width. Capped at the real pool so a deployment that narrowed
+    # ACP_DISCOVERY_WORKERS cannot deadlock this on a barrier that can never fill.
+    want = min(3, scanner._DISCOVERY_WORKERS)
+    assert want > 1, (
+        f"ACP_DISCOVERY_WORKERS={scanner._DISCOVERY_WORKERS} — the discovery pool is serial, so "
+        f"there is no parallel path for this test to exercise")
+    # Timeout, not a bare wait: a barrier that never fills must fail with THIS message rather
+    # than hang the suite until the job times out and someone reads a traceback about nothing.
+    gate = threading.Barrier(want, timeout=10)
+
     def on_request(d, fid, token):
-        if fid != "root":
-            st.request_job_cancellation(d.job_id)
+        if fid == "root":
+            return
+        try:
+            # Every arriving child blocks here, INSIDE execute(), so `in_flight` is already
+            # incremented for each of them — which is what makes max_in_flight reach `want`.
+            gate.wait()
+        except threading.BrokenBarrierError:
+            return                      # timed out or already broken; the assertions below judge
+        st.request_job_cancellation(d.job_id)
 
     drive.on_request = on_request
 
@@ -238,7 +279,12 @@ def test_nothing_is_still_running_when_discovery_reports_stopped(st):
         drive.job_id = job["id"]
         scanner._search_folder(drive, "root", max_files=10_000)
 
-    _run_in_worker_turn(st, body)
+    try:
+        _run_in_worker_turn(st, body)
+    finally:
+        # A later arrival must never block on a barrier the walk has finished with; aborting it
+        # makes every subsequent wait() raise immediately instead of waiting out the timeout.
+        gate.abort()
 
     with drive.lock:
         assert drive.in_flight == 0, (
@@ -248,8 +294,10 @@ def test_nothing_is_still_running_when_discovery_reports_stopped(st):
     threading.Event().wait(0.25)          # give any surviving queued task time to show itself
     assert len(drive.requests) == settled, (
         f"{len(drive.requests) - settled} more Drive requests arrived AFTER discovery raised")
-    assert drive.max_in_flight > 1, (
-        "this test never exercised the parallel path, so it proves nothing about draining it")
+    assert drive.max_in_flight >= want, (
+        f"only {drive.max_in_flight} folder fetch(es) were ever concurrent, not {want} — the "
+        f"barrier did not hold them, so this run never exercised the parallel path and proves "
+        f"nothing about draining it")
 
 
 def test_the_drain_stops_a_burst_of_cancellation_checks(st):
