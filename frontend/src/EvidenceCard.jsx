@@ -519,10 +519,6 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   // editor, which says why rather than rendering a broken player.
   const companionMediaName = companionRow
     ? (proposalList[0]?.locator || item?.file || '') : ''
-  const companionMediaSrc = companionRow && item?.scan_id && companionMediaName
-    ? `/scans/${encodeURIComponent(item.scan_id)}/files/`
-      + `${encodeURIComponent(companionMediaName)}/content`
-    : null
   // Audio-only files get an <audio> element: a <video> tag on an .mp3 renders a black rectangle
   // where a reviewer expects a transport, which reads as a file that failed to load.
   const companionMediaKind = /\.(mp3|m4a|wav|aac|flac|ogg|oga|opus|wma)$/i.test(companionMediaName)
@@ -846,7 +842,10 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
                   Machine transcription — play the media and correct any line that is wrong
                 </span>
               </span>
-              <CaptionEditor value={value} onChange={setValue} mediaSrc={companionMediaSrc}
+              {/* The editor fetches the media through api.js itself. The card used to hand it a
+                  hand-built `/scans/.../content` string, which carried no bearer and no BASE — so
+                  it could only ever have worked against a same-origin, signed-out API. */}
+              <CaptionEditor value={value} onChange={setValue} scanId={item?.scan_id}
                              mediaKind={companionMediaKind} filename={companionMediaName} />
             </div>
           ) : editable && multi ? (

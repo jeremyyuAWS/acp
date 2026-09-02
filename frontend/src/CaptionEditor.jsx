@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { parseVtt, serialiseVtt, formatTimestamp, isVtt, activeCueIndex } from './captionCues.js'
-import { getToken } from './api.js'
+import { getFileContentBlob } from './api.js'
 
 // The synchronised caption review editor.
 //
@@ -25,9 +25,16 @@ import { getToken } from './api.js'
 // A reviewer fixing a word must not have their cue boundaries silently rewritten underneath them,
 // and re-segmentation is `api/captions.py`'s decision, made once, at drafting time.
 
-export default function CaptionEditor({ value, onChange, mediaSrc, mediaKind = 'video',
+export default function CaptionEditor({ value, onChange, scanId = '', mediaKind = 'video',
                                         filename = '', disabled = false }) {
   const mediaRef = useRef(null)
+  // The element is tracked in STATE as well as a ref, because it does not exist on first render:
+  // the media is fetched on request (see MediaPlayer), so the <video> appears several renders
+  // later. An effect keyed on the source alone would have run once, found `mediaRef.current`
+  // null, attached no listeners, and left the highlight frozen on cue 1 for the whole recording —
+  // with nothing on screen to say the synchronisation this editor exists for was not running.
+  const [mediaEl, setMediaEl] = useState(null)
+  const attachMedia = (node) => { mediaRef.current = node; setMediaEl(node) }
   const [now, setNow] = useState(0)
   const [mediaError, setMediaError] = useState(null)
 
@@ -39,7 +46,7 @@ export default function CaptionEditor({ value, onChange, mediaSrc, mediaKind = '
   const active = activeCueIndex(cues, now)
 
   useEffect(() => {
-    const el = mediaRef.current
+    const el = mediaEl
     if (!el) return
     const tick = () => setNow(el.currentTime || 0)
     el.addEventListener('timeupdate', tick)
@@ -47,7 +54,7 @@ export default function CaptionEditor({ value, onChange, mediaSrc, mediaKind = '
     // the highlight would sit on the cue the reviewer left rather than the one they moved to.
     el.addEventListener('seeked', tick)
     return () => { el.removeEventListener('timeupdate', tick); el.removeEventListener('seeked', tick) }
-  }, [mediaSrc])
+  }, [mediaEl])
 
   const seekTo = (t) => {
     const el = mediaRef.current
@@ -68,7 +75,7 @@ export default function CaptionEditor({ value, onChange, mediaSrc, mediaKind = '
   if (!cueFile) {
     return (
       <div className="caption-editor">
-        <MediaPlayer refEl={mediaRef} src={mediaSrc} kind={mediaKind} filename={filename}
+        <MediaPlayer refEl={attachMedia} scanId={scanId} filename={filename} kind={mediaKind}
                      error={mediaError} onError={setMediaError} />
         <label className="caption-editor-prose">
           <span className="muted" style={{ fontSize: 12 }}>
@@ -83,7 +90,7 @@ export default function CaptionEditor({ value, onChange, mediaSrc, mediaKind = '
 
   return (
     <div className="caption-editor">
-      <MediaPlayer refEl={mediaRef} src={mediaSrc} kind={mediaKind} filename={filename}
+      <MediaPlayer refEl={attachMedia} scanId={scanId} filename={filename} kind={mediaKind}
                    error={mediaError} onError={setMediaError} />
 
       {/* The announcement a sighted reviewer gets from the highlight. `polite` so it waits for a
@@ -120,42 +127,44 @@ export default function CaptionEditor({ value, onChange, mediaSrc, mediaKind = '
   )
 }
 
-function MediaPlayer({ refEl, src, kind, filename, error, onError }) {
-  // WHY FETCH INSTEAD OF src=. A <video src="/scans/.../content"> cannot send ACP's bearer
-  // token — the browser makes that request anonymously. fetch() can carry the Authorization
-  // header; we turn the response into a blob URL the element can open from the same origin.
+function MediaPlayer({ refEl, scanId, filename, kind, error, onError }) {
+  // WHY THE BYTES ARE FETCHED AND NOT HANDED TO src=. A <video src="/scans/.../content"> is
+  // fetched ANONYMOUSLY — a browser attaches no bearer to a media element load — and that path is
+  // relative, so on a deployed frontend it resolves against the WEB origin rather than the API.
+  // Both are fixed by asking api.js for the bytes the way every other route is asked: BASE, the
+  // Authorization bearer, X-Auth-Provider (a Microsoft sign-in 401s without it) and the Drive
+  // token the backend needs to reach a Drive-backed original. The Blob keeps the response's
+  // Content-Type, which is what api/media.py's media_mime() exists to set.
+  //
+  // ON REQUEST, NOT ON RENDER. A blob URL means downloading the recording IN FULL, and a review
+  // queue holds many cards: fetching each one the moment its card mounts would pull an estate's
+  // worth of media nobody asked for. `preload="metadata"` used to buy that restraint for free;
+  // an authenticated fetch cannot, so the restraint is a click the reviewer makes.
   const [blobSrc, setBlobSrc] = useState(null)
+  const [wanted, setWanted] = useState(false)
 
   useEffect(() => {
-    if (!src) { setBlobSrc(null); return }
-    const ctrl = new AbortController()
-    const token = getToken()
-    fetch(src, {
-      signal: ctrl.signal,
-      headers: token ? { Authorization: 'Bearer ' + token } : {},
-    })
-      .then((r) => {
-        if (!r.ok) throw Object.assign(new Error(`fetch ${r.status}`), { status: r.status })
-        return r.blob()
-      })
+    if (!wanted || !scanId || !filename) return
+    let live = true
+    let objectUrl = null
+    getFileContentBlob(scanId, filename)
       .then((blob) => {
-        if (!ctrl.signal.aborted) setBlobSrc(URL.createObjectURL(blob))
+        if (!live) return
+        if (!blob) { onError('media'); return }   // SIM has no real bytes
+        objectUrl = URL.createObjectURL(blob)
+        setBlobSrc(objectUrl)
       })
-      .catch((err) => {
-        if (err.name !== 'AbortError') onError('media')
-      })
-    return () => {
-      ctrl.abort()
-      // Revoke whichever blob URL was created, if any. The setState callback runs synchronously
-      // inside React's state machine, so the URL we revoke is always the one we set.
-      setBlobSrc((prev) => { if (prev) URL.revokeObjectURL(prev); return null })
-    }
-  }, [src])
+      .catch(() => { if (live) onError('media') })
+    // Revoke the URL THIS effect created, held in the closure rather than read back out of state.
+    // React never runs a state updater during unmount, so revoking from one would leak the blob —
+    // and the whole file it holds — for the life of the page.
+    return () => { live = false; if (objectUrl) URL.revokeObjectURL(objectUrl); setBlobSrc(null) }
+  }, [wanted, scanId, filename])
 
   // NO PLAYER WITHOUT A SOURCE, and no silent absence either. A <video> with src="" renders a
   // broken control that looks like the file failed to load; saying why is the difference between
   // "this is broken" and "this scan has no retrievable original".
-  if (!src) {
+  if (!scanId || !filename) {
     return (
       <p className="muted" style={{ fontSize: 12.5 }}>
         The original media could not be located for this scan, so it cannot be played here.
@@ -167,13 +176,24 @@ function MediaPlayer({ refEl, src, kind, filename, error, onError }) {
     return (
       <p role="status" className="muted" style={{ fontSize: 12.5 }}>
         {filename || 'This file'} could not be played in the browser — it may use a codec your
-        browser does not support. The caption text below is still editable; check it against
-        your own copy before approving.
+        browser does not support, or the original may no longer be reachable. The caption text
+        below is still editable; check it against your own copy before approving.
       </p>
     )
   }
   if (!blobSrc) {
-    return <p className="muted" style={{ fontSize: 12.5 }}>Loading media…</p>
+    return (
+      <p className="caption-editor-load">
+        <button type="button" className="caption-editor-loadbtn" disabled={wanted}
+                onClick={() => setWanted(true)}>
+          {wanted ? 'Loading\u2026' : `Load ${kind === 'audio' ? 'audio' : 'video'}`}
+        </button>
+        <span className="muted">
+          {filename} is fetched when you ask for it, so opening a queue of caption cards does not
+          download every recording in it.
+        </span>
+      </p>
+    )
   }
   const Tag = kind === 'audio' ? 'audio' : 'video'
   return (

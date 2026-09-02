@@ -9,19 +9,38 @@
 // property — which is exactly right here: what is under test is the component's own reaction to
 // time changing, so the time is set directly and the `timeupdate` event dispatched, the same way
 // a real element would.
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react'
 import { createTestRoot, unmountAll } from './testRoots.js'
-import CaptionEditor from './CaptionEditor.jsx'
 import { parseVtt } from './captionCues.js'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
+// The media arrives as an authenticated fetch through api.js, so that is what is stubbed — NOT
+// `window.fetch`. Stubbing the global would let a component that hand-rolls its own request (with
+// no bearer, no X-Auth-Provider and no BASE, which is exactly the bug this file now pins) pass
+// here and fail for every signed-in user. Mocking the module means the only way to be green is to
+// go through the layer that carries those.
+vi.mock('./api.js', () => ({ getFileContentBlob: vi.fn() }))
+import { getFileContentBlob } from './api.js'
+import CaptionEditor from './CaptionEditor.jsx'
+
 const here = dirname(fileURLToPath(import.meta.url))
 
 afterEach(() => unmountAll())
+
+// jsdom implements neither of these; the component's whole media path runs through them.
+let revoked = []
+beforeEach(() => {
+  revoked = []
+  let n = 0
+  getFileContentBlob.mockReset()
+  getFileContentBlob.mockResolvedValue(new Blob(['fake bytes'], { type: 'video/mp4' }))
+  URL.createObjectURL = vi.fn(() => `blob:acp/${n++}`)
+  URL.revokeObjectURL = vi.fn((u) => revoked.push(u))
+})
 
 const VTT = 'WEBVTT\nLanguage: en\n\nNOTE\nDrafted by ACP using tiny; awaiting human approval.\n\n'
   + '1\n00:00:00.000 --> 00:00:02.400\nWelcome to the quarterly all-hands.\n\n'
@@ -30,17 +49,29 @@ const VTT = 'WEBVTT\nLanguage: en\n\nNOTE\nDrafted by ACP using tiny; awaiting h
 
 const TRANSCRIPT = '[00:00:00] Welcome to the quarterly all-hands.\n'
 
+// `load` defaults to true because almost every test here is about what the reviewer does ONCE
+// the media is playing. The restraint itself — that nothing is fetched until they ask — is what
+// `load: false` is for, and it has its own tests below.
 async function mount(props = {}) {
+  const { load = true, ...rest } = props
   const { container, root } = createTestRoot()
-  const state = { value: props.value ?? VTT }
-  const onChange = props.onChange || ((v) => { state.value = v })
+  const state = { value: rest.value ?? VTT }
+  const onChange = rest.onChange || ((v) => { state.value = v })
   await act(async () => {
     root.render(createElement(CaptionEditor, {
-      mediaSrc: '/scans/s1/files/townhall.mp4/content', mediaKind: 'video',
-      filename: 'townhall.mp4', ...props, value: state.value, onChange,
+      scanId: 's1', mediaKind: 'video', filename: 'townhall.mp4',
+      ...rest, value: state.value, onChange,
     }))
   })
+  if (load) await loadMedia(container)
   return { container, state, root, onChange }
+}
+
+async function loadMedia(container) {
+  const btn = container.querySelector('.caption-editor-loadbtn')
+  if (!btn) return null
+  await act(async () => { btn.click() })
+  return container.querySelector('video, audio')
 }
 
 const cueRows = (c) => [...c.querySelectorAll('.caption-cue')]
@@ -65,11 +96,17 @@ async function typeInto(el, value) {
 }
 
 describe('the media is playable at all', () => {
-  it('renders a video element pointed at the scanned file', async () => {
+  it('plays the scanned file, fetched through the authenticated API layer', async () => {
+    // WHAT THIS REPLACED, and why the assertion moved from an attribute to a call. The element
+    // used to carry src="/scans/s1/files/townhall.mp4/content" directly, and that string could
+    // never have worked in production twice over: a browser sends no bearer with a media element
+    // load, and a relative path resolves against the WEB origin, not the API host. Asserting the
+    // attribute passed happily on both counts.
     const { container } = await mount()
+    expect(getFileContentBlob).toHaveBeenCalledWith('s1', 'townhall.mp4')
     const video = container.querySelector('video')
     expect(video).toBeTruthy()
-    expect(video.getAttribute('src')).toBe('/scans/s1/files/townhall.mp4/content')
+    expect(video.getAttribute('src')).toMatch(/^blob:/)
     expect(video.hasAttribute('controls')).toBe(true)
   })
 
@@ -81,15 +118,41 @@ describe('the media is playable at all', () => {
     expect(container.querySelector('video')).toBeNull()
   })
 
-  it('preloads metadata only', async () => {
-    // A review queue holds many cards. Fetching every video in full on render would download an
-    // estate's worth of media nobody asked for.
+  it('downloads nothing until the reviewer asks for it', async () => {
+    // A review queue holds many cards. Fetching every recording in full the moment its card
+    // mounts would download an estate's worth of media nobody asked for.
+    //
+    // This used to be `preload="metadata"` on the element, which the browser honoured for free.
+    // An authenticated fetch cannot be lazy that way — reading the response IS the download — so
+    // the restraint became explicit, and this test moved with it rather than being deleted.
+    const { container } = await mount({ load: false })
+    expect(getFileContentBlob).not.toHaveBeenCalled()
+    expect(container.querySelector('video')).toBeNull()
+
+    await loadMedia(container)
+    expect(getFileContentBlob).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('video')).toBeTruthy()
+  })
+
+  it('says what the control will do before the reviewer commits to a download', async () => {
+    const { container } = await mount({ load: false })
+    const btn = container.querySelector('.caption-editor-loadbtn')
+    expect(btn.tagName).toBe('BUTTON')
+    expect(btn.textContent).toBe('Load video')
+    expect(container.textContent).toContain('townhall.mp4')
+  })
+
+  it('releases the blob URL when the card goes away', async () => {
+    // A caption card holds a whole recording in memory behind that URL. A reviewer working
+    // through a queue would accumulate every file they had played until the tab was closed.
     const { container } = await mount()
-    expect(container.querySelector('video').getAttribute('preload')).toBe('metadata')
+    const url = container.querySelector('video').getAttribute('src')
+    await unmountAll()          // not root.unmount(): unmountAll owns the list, so the afterEach
+    expect(revoked).toContain(url)   // that follows does not tear the same root down twice
   })
 
   it('says WHY there is no player rather than rendering a broken one', async () => {
-    const { container } = await mount({ mediaSrc: null })
+    const { container } = await mount({ scanId: null })
     expect(container.querySelector('video')).toBeNull()
     expect(container.textContent).toContain('could not be located')
     // The editing surface must survive: a reviewer with their own copy of the file can still work.
@@ -163,7 +226,7 @@ describe('seeking', () => {
   })
 
   it('does not throw when the media element has nothing loaded', async () => {
-    const { container } = await mount({ mediaSrc: null })
+    const { container } = await mount({ scanId: null })
     // No player at all — activating a cue must still be harmless rather than an exception that
     // takes the whole card down.
     await act(async () => { seekButtons(container)[0]?.click() })

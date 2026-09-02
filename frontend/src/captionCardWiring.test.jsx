@@ -10,7 +10,7 @@
 // So this mounts the REAL EvidenceCard with a real companion proposal and asserts the reviewer
 // gets the player and the cue list — through the card's own `editable`/`companionRow` gates,
 // which is the wiring that could break.
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react'
 import { createTestRoot, unmountAll } from './testRoots.js'
@@ -26,7 +26,20 @@ vi.mock('./api.js', () => ({
   getFileGeometry: () => Promise.resolve(null),
   getScanAiCalls: () => Promise.resolve([]),
   validateAlt: () => Promise.resolve({}),
+  getFileContentBlob: vi.fn(() => Promise.resolve(new Blob(['fake'], { type: 'video/mp4' }))),
 }))
+
+const { getFileContentBlob } = await import('./api.js')
+URL.createObjectURL = vi.fn(() => 'blob:acp/card')
+URL.revokeObjectURL = vi.fn()
+beforeEach(() => getFileContentBlob.mockClear())
+
+/** The reviewer's click on "Load video" — the media is fetched on request, not on render. */
+async function loadMedia(c) {
+  const btn = c.querySelector('.caption-editor-loadbtn')
+  await act(async () => { btn.click() })
+  return c.querySelector('video, audio')
+}
 
 const { default: EvidenceCard } = await import('./EvidenceCard.jsx')
 
@@ -58,15 +71,19 @@ describe('a caption card gives the reviewer the editor, not a text box', () => {
   it('renders the cue list and the player', async () => {
     const c = await mount(captionRow())
     expect(c.querySelectorAll('.caption-cue')).toHaveLength(2)
-    expect(c.querySelector('video')).toBeTruthy()
+    expect(await loadMedia(c)).toBeTruthy()
   })
 
   it('points the player at the media this card is about', async () => {
     // The proposal's locator is the media filename. Getting this wrong would play a DIFFERENT
     // file behind the captions — and it would look like it was working.
+    //
+    // Asserted as the call the card causes, not as a src attribute. The card used to hand the
+    // editor a hand-built `/scans/.../content` string; that carried no bearer and no API base,
+    // so it named the right file and could not have fetched it for any signed-in user.
     const c = await mount(captionRow())
-    expect(c.querySelector('video').getAttribute('src'))
-      .toBe('/scans/s1/files/townhall.mp4/content')
+    await loadMedia(c)
+    expect(getFileContentBlob).toHaveBeenCalledWith('s1', 'townhall.mp4')
   })
 
   it('uses an audio player for an audio-only card', async () => {
@@ -78,6 +95,7 @@ describe('a caption card gives the reviewer the editor, not a text box', () => {
         companion_file: 'interview.en.txt', sc: '1.2.1',
       }],
     }))
+    await loadMedia(c)
     expect(c.querySelector('audio')).toBeTruthy()
     expect(c.querySelector('video')).toBeNull()
   })
