@@ -315,6 +315,29 @@ export default function DiscoveryResults({
         </>
       )}
 
+      {/* A scan that found nothing renders, today, as a wall of zeros and the sentence "Every one
+          of the 0 files on this screen was read." True, useless, and it reads as a bug. Say the
+          result instead.
+
+          The claim it can honestly make is narrow, and it is narrow because of #1104: a folder ACP
+          cannot list now FAILS the scan rather than returning an empty list, so a rendered zero
+          means the source was read and had nothing in it. Before that fix this sentence could not
+          have been written — "empty" and "unreadable" were the same screen. */}
+      {summary.discovered === 0 && (
+        <div className="panel" style={{ marginTop: 16 }} role="status">
+          <h2>NOTHING WAS FOUND</h2>
+          <p style={{ fontSize: 13, margin: '0 0 8px', lineHeight: 1.55 }}>
+            This scan completed and found no files{scopeLine ? ' in the scope you selected' : ''}.
+          </p>
+          <p className="muted" style={{ fontSize: 12.5, margin: 0, lineHeight: 1.55 }}>
+            This is a result, not a failure to read: a folder ACP cannot open stops the scan and
+            reports the error, so it is never shown here as an empty one.
+            {scopeLine ? ' Widen the scope, or check the folder, if you expected files.'
+                       : ' Check that the folder or drive you pointed at contains files.'}
+          </p>
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: 12, marginTop: 16, flexWrap: 'wrap' }}>
         <Stat n={summary.discovered} label={`${plural(summary.discovered, 'file', 'files')} discovered`} />
         {/* SECOND, because it qualifies the number beside it. Discovery lists everything; only some
@@ -503,8 +526,12 @@ export default function DiscoveryResults({
             <h2>COULD NOT BE READ</h2>
             {unread.total === 0 ? (
               <p className="muted" style={{ fontSize: 12.5, margin: 0, lineHeight: 1.5 }}>
-                Every one of the {summary.discovered.toLocaleString()} files on this screen was
-                read. Nothing was skipped.
+                {summary.discovered === 0
+                  // "Every one of the 0 files was read" is true and absurd. With no files there is
+                  // no read to report on, and the NOTHING WAS FOUND panel above has already said
+                  // what happened.
+                  ? 'No files were listed, so there was nothing to read.'
+                  : `Every one of the ${summary.discovered.toLocaleString()} files on this screen was read. Nothing was skipped.`}
               </p>
             ) : (
               <>
