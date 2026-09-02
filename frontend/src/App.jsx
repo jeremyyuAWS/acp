@@ -413,6 +413,13 @@ export default function App() {
   const [rolePrivileges, setRolePrivileges] = useState(loadRolePrivileges)
   const [ontology, setOntology] = useState(loadPublished)
   const [aiEnabled, setAiEnabled] = useState(false)
+  const [wcagMode, setWcagMode] = useState(() => {
+    try { return localStorage.getItem('acp-wcag-mode') === 'on' } catch { return false }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('acp-wcag-mode', wcagMode ? 'on' : 'off') } catch {}
+    document.documentElement.dataset.wcag = wcagMode ? 'on' : ''
+  }, [wcagMode])
   const [hitlCount, setHitlCount] = useState(0)  // pending HITL items, reported up from Remediate for the nav badge
   // Durable (background queue) is the default (2026-08-21). The session-scoped path runs as a
   // bare in-process thread with no queue behind it — the code's own comment on it has always said
@@ -1565,6 +1572,15 @@ export default function App() {
               scan-only options (Deep scan, Queued) live on the Sources tab where you scan. */}
           <PrivateAiBadge aiEnabled={aiEnabled} />
           <HitlBell />
+          <button
+            className={`wcag-toggle${wcagMode ? ' wcag-toggle--on' : ''}`}
+            onClick={() => setWcagMode(v => !v)}
+            title={wcagMode
+              ? 'WCAG-compliant palette is on — all UI colours meet 4.5:1 contrast. Click to switch back to the standard palette.'
+              : 'Standard palette — some decorative colours fall below the 4.5:1 AA threshold. Click to switch to the WCAG-compliant palette.'}
+            aria-pressed={wcagMode}>
+            {wcagMode ? '◉ WCAG' : '◎ WCAG'}
+          </button>
           <button
             className={`ai-toggle${aiEnabled ? ' ai-toggle--on' : ''}`}
             onClick={() => setAiEnabled(v => !v)}

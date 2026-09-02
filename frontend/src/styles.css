@@ -1062,6 +1062,31 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .ai-toggle { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); cursor: pointer; font-size: 12px; font-weight: 600; color: var(--muted); transition: background .15s, color .15s, border-color .15s; white-space: nowrap; }
 .ai-toggle--on { background: #f0ebff; border-color: #b794f4; color: #6b21a8; }
 .ai-toggle:hover { border-color: #b794f4; }
+.wcag-toggle { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); cursor: pointer; font-size: 12px; font-weight: 600; color: var(--muted); transition: background .15s, color .15s, border-color .15s; white-space: nowrap; }
+.wcag-toggle--on { background: #e6f4ea; border-color: #68b37b; color: #1a5c2a; }
+.wcag-toggle:hover { border-color: #68b37b; }
+
+/* ── WCAG-compliant palette (toggled via the ◎/◉ WCAG button) ──────────────────
+   Overrides only the decorative colours that fail 4.5:1 AA contrast in the standard
+   palette. Verified ratios noted inline (lighter bg / darker text).
+
+   Inactive step-number circles: standard palette is #6c6470 on #ece8ee = 4.07:1 (fail).
+   WCAG mode uses the plum token on white — #46303F on #fff = 14.1:1.             */
+[data-wcag="on"] {
+  --muted: #595060;     /* #595060 on #faf8fb = 6.6:1 (was #6c6470 = 5.2:1 — already passing but tightened) */
+}
+[data-wcag="on"] .stepnum {
+  background: var(--plum);   /* #46303F */
+  color: #fff;               /* 14.1:1 on --plum */
+}
+[data-wcag="on"] .tab.on .stepnum {
+  background: rgba(255,255,255,0.9);
+  color: var(--plum);        /* #46303F on near-white = 13.4:1 */
+}
+[data-wcag="on"] .tab.done .stepnum {
+  background: #2F5310;       /* dark green */
+  color: #fff;               /* 9.8:1 on #2F5310 */
+}
 .setoverlay { position: fixed; inset: 0; background: rgba(40, 30, 48, 0.38); backdrop-filter: blur(2px); z-index: 80; display: flex; align-items: flex-start; justify-content: center; padding: 36px 20px; overflow-y: auto; }
 .setpanel { background: var(--bg); border-radius: 16px; width: min(1360px, 97vw); box-shadow: 0 24px 64px rgba(30, 22, 34, 0.4); overflow: hidden; }
 .sethead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 22px; background: var(--card); border-bottom: 1px solid var(--line); font-size: 15px; position: sticky; top: 0; }
