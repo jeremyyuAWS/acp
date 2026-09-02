@@ -37,12 +37,14 @@ import json
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi import Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 import acr_authz
 import acr_axe
 import acr_catalog
+import acr_export_pdf
 import acr_export_preview
 import acr_freshness
 import acr_plans
@@ -1161,3 +1163,102 @@ def revise(report_id: str, request: Request):
                  f"{len(reset)} criterion/criteria lost a Supports claim because the evidence "
                  "behind it is stale for this version."),
     }
+
+
+# ── the accessible PDF export (PRD §16, wiring #1159's PDF/UA-1 renderer) ──────
+
+
+@router.get("/acr/{report_id}/export.pdf")
+def export_pdf(report_id: str, request: Request):
+    """The ACR as a PDF/UA-1 tagged PDF — the accessible export PRD §16 asks for.
+
+    Renders the SAME projection the preview and the JSON export use, so the PDF cannot state a
+    different conformance level from the screen. See api/acr_export_pdf.py for what this document
+    can and cannot claim: veraPDF validates it as PDF/UA-1, and the two human gates ADR 0034
+    requires — PAC 2024 and a screen-reader pass — have NOT been run against this renderer. That
+    limitation is printed inside the PDF, not only stated here, because a PDF is mailed and filed
+    far from the application that made it.
+
+    A DRAFT report exports too, deliberately. Refusing until publication would mean the only way
+    to see what the deliverable looks like is to publish it — and publication is irreversible.
+    The document carries the projection's own "draft structural preview" notice, so a draft export
+    cannot be mistaken for a published one.
+    """
+    owner = _tenant()
+    report = _report_or_404(report_id, owner)
+    criteria = core.store.list_acr_criteria(report_id, owner_email=owner)
+    ev_by = _evidence_objects(report_id, owner)
+    stale = _stale_for(report, ev_by)
+    try:
+        projection = acr_export_preview.project(report, criteria, evidence_by_criterion=ev_by,
+                                                stale_ids=set(stale))
+    except ValueError as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+    try:
+        pdf = acr_export_pdf.build_acr_pdf(projection)
+    except ImportError as exc:
+        # WeasyPrint is declared in tests/requirements.txt for CI and api/requirements.txt for
+        # the service. A 503 that NAMES the missing renderer beats a 500 that says "error":
+        # this is an operator problem, and the operator needs to know which package.
+        raise HTTPException(503, f"the accessible PDF renderer is not installed: {exc}") from exc
+
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition":
+                 f'attachment; filename="{acr_export_pdf.filename_for(report)}"'})
+
+
+@router.get("/acr/{report_id}/revisions/{revision}/export.pdf")
+def export_revision_pdf(report_id: str, revision: int, request: Request):
+    """A PUBLISHED revision as an accessible PDF, rendered from the immutable snapshot.
+
+    Not from the live tables. The snapshot is what was frozen and digested at publication; the
+    report rows may have moved on into a later revision, and a PDF of a published revision that
+    quietly reflected today's data would be the one thing §17's immutability exists to prevent.
+
+    The digest is re-verified before rendering, and a mismatch REFUSES rather than exporting with
+    a warning — a customer holding a PDF has no way to see a caveat that stayed on the server.
+    """
+    owner = _tenant()
+    report = _report_or_404(report_id, owner)
+    chain = _lineage(report, owner)
+    snaps = core.store.list_acr_snapshots_for_lineage([r["id"] for r in chain], owner_email=owner)
+    snap = next((s for s in snaps if int(s["revision"]) == int(revision)), None)
+    if snap is None:
+        raise HTTPException(404, f"no published revision {revision} for this report")
+
+    ok, why = acr_publish.verify(snap)
+    if not ok:
+        raise HTTPException(409, f"refusing to export this revision: {why}")
+
+    content = json.loads(snap["content_json"])
+    # The snapshot stores conformance under `conformance_level`, which is the shape the preview
+    # projection renders — rebuild the projection from the frozen rows rather than re-deriving it
+    # from the live matrix.
+    projection = {
+        "template": {"is_official_iti_template": False, "note": content.get("note", "")},
+        "report": content.get("report", {}),
+        "criteria": [{"criterion_num": r["criterion_num"],
+                      "criterion_name": r.get("criterion_name"),
+                      "level": r.get("level"),
+                      "conformance_level": r.get("conformance_level") or "",
+                      "remarks": r.get("remarks") or "",
+                      "decided": bool(r.get("conformance_level")),
+                      "draft_status": None,
+                      "evidence_stale": 0}
+                     for r in content.get("criteria", [])],
+        "totals": content.get("totals", {}),
+    }
+
+    try:
+        pdf = acr_export_pdf.build_acr_pdf(projection)
+    except ImportError as exc:
+        raise HTTPException(503, f"the accessible PDF renderer is not installed: {exc}") from exc
+
+    meta = dict(content.get("report", {}))
+    meta.setdefault("revision", snap["revision"])
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition":
+                 f'attachment; filename="{acr_export_pdf.filename_for(meta)}"'})

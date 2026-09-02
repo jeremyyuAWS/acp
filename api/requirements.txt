@@ -65,3 +65,8 @@ langfuse>=2.0,<3.0
 
 # --- tests ---
 pytest==9.1.0
+
+# The PDF/UA-1 renderer behind GET /acr/{id}/export.pdf. A RUNTIME dependency, not merely a test
+# one: the route serves the PDF, so a deployment without this 503s on every accessible export.
+# tests/requirements.txt declares it too, for the CI shards that never install this file.
+weasyprint
