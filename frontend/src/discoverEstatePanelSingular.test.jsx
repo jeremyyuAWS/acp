@@ -54,12 +54,12 @@ describe('Discover partitions the estate exactly once', () => {
     expect(code('Discover.jsx')).toMatch(/<DiscoveryResults\b/)
   })
 
-  it('EstateCoverage is NOT retired — Overview still mounts it', () => {
-    // The distinction that makes this a de-duplication rather than a feature deletion. If Overview
-    // ever stops mounting it, this becomes a removal and needs the retired-component treatment in
-    // CLAUDE.md instead of this test.
+  it('EstateCoverage is now fully retired — Overview no longer mounts it either', () => {
+    // The 2026-09-02 PRD simplification also removed EstateCoverage from Overview. The file is
+    // kept for potential restoration; it is tracked as a deliberate orphan in
+    // unmountedComponents.test.jsx.
     expect(existsSync(join(here, 'EstateCoverage.jsx'))).toBe(true)
-    expect(code('Overview.jsx')).toMatch(/<EstateCoverage\b/)
+    expect(code('Overview.jsx')).not.toMatch(/<EstateCoverage\b/)
   })
 })
 

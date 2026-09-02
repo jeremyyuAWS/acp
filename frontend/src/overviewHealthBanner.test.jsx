@@ -85,9 +85,10 @@ describe('red critical fires when run.status === "failed"', () => {
 
 describe('banner placement', () => {
   it('appears before the headline metrics tiles', () => {
-    // The critical banner must precede the "files discovered" tile on screen.
+    // The critical banner must precede the metrics section. The "files discovered" tiles were
+    // removed by the 2026-09-02 PRD simplification; "total findings" is the surviving anchor.
     const bannerIdx = src.indexOf("run.status === 'failed'")
-    const tilesIdx = src.indexOf('files discovered')
+    const tilesIdx = src.indexOf('total findings')
     expect(bannerIdx).toBeGreaterThan(0)
     expect(tilesIdx).toBeGreaterThan(0)
     expect(bannerIdx).toBeLessThan(tilesIdx)
@@ -95,7 +96,7 @@ describe('banner placement', () => {
 
   it('the warning banner also precedes the headline metrics tiles', () => {
     const bannerIdx = src.indexOf('could not be opened')
-    const tilesIdx = src.indexOf('files discovered')
+    const tilesIdx = src.indexOf('total findings')
     expect(bannerIdx).toBeGreaterThan(0)
     expect(bannerIdx).toBeLessThan(tilesIdx)
   })

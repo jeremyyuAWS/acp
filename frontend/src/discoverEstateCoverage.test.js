@@ -59,8 +59,14 @@ describe('Discover no longer shows the estate coverage funnel', () => {
     expect(code).toMatch(/<DiscoveryResults\b/)
   })
 
-  it('and Overview still carries the funnel, so nothing was retired', () => {
+  it('and EstateCoverage is now fully retired — Overview no longer mounts it either', () => {
+    // The 2026-09-02 PRD simplification also removed EstateCoverage from Overview. The file is
+    // kept for potential restoration; it is tracked as a deliberate orphan in
+    // unmountedComponents.test.jsx.
     const overview = readFileSync(join(here, 'Overview.jsx'), 'utf8')
-    expect(overview).toMatch(/<EstateCoverage\b/)
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '')
+    expect(overview).not.toMatch(/<EstateCoverage\b/)
   })
 })

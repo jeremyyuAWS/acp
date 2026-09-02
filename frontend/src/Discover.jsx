@@ -1132,28 +1132,17 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
             <div className="muted" style={{ marginTop: 2 }}>the agent crawls metadata, proposes a classification &amp; a lifecycle action — you confirm or override{lockedCount ? <> · <span className="lockwarn">🔒 {lockedCount} could not be opened (password-protected / unsupported)</span></> : null}</div>
           </div>
         )}
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          {hasDriveToken && (
-            // Opens the SAME review wizard "Re-scan all sources" does, pre-set to "Specific
-            // folders" — not a second, standalone folder picker. That used to open its own
-            // FolderPicker modal and, on a selection, immediately reopen this wizard again at its
-            // default "Entire connected source" step: the folder just picked, re-asked from
-            // scratch a moment later, which read as a regression rather than a review step.
-            <button className="ghost" disabled={busy} onClick={() => onScan('drive', null, { folderFirst: true })}
-                    title="Browse your Google Drive and scan just one folder (and its subfolders)">
-              Choose folder to scan…
-            </button>
-          )}
-          {/* Gated on the SharePoint token for the same reason the Drive button is gated on its
-              own: offering a picker that cannot authenticate produces an error where a missing
-              button would have produced an obvious next step (connect the source). */}
-          {hasSPToken && (
+        {/* Gated on the SharePoint token for the same reason the Drive button is gated on its
+            own: offering a picker that cannot authenticate produces an error where a missing
+            button would have produced an obvious next step (connect the source). */}
+        {hasSPToken && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <button className="ghost" disabled={busy} onClick={() => setShowSites(true)}
                     title="Choose a SharePoint site — every document library on it is scanned">
               Choose SharePoint site…
             </button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* The site id travels as `folder`, which is what the backend reads it as — _list treats
