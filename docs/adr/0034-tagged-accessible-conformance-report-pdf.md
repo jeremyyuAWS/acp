@@ -261,3 +261,59 @@ what is still unverified.
 **Nothing is switched over.** `api/report_tagged.py`, `api/report.py` and `api/routes/scans.py` are
 untouched, and the cutover stays gated on PAC 2024 and a screen-reader pass — which is what this ADR
 asked for, and is now the only part of it outstanding.
+
+## Addendum 2 — 2026-09-02: the cutover happened, with two gates still open
+
+The paragraph immediately above is superseded and deliberately left standing, because what changed
+is a decision and not a fact: the owner asked for the renderer to be wired in. It now serves
+`/scans/{sid}/report.pdf`.
+
+**PAC 2024 and the NVDA/VoiceOver pass have still not been run.** This ADR asks for both before
+replacing the renderer, and they were not done — that is a knowing exception, recorded here rather
+than quietly dropped from a checklist. What was run: veraPDF ua1 (0 failures on the endpoint's own
+output, against the Chromium renderer's 14 on the same document), the structural suite, and a
+page-by-page visual comparison.
+
+**`ACP_REPORT_RENDERER=tagged` restores the previous renderer at runtime, with no redeploy.** That
+switch exists because of the two open gates; a rollback needing a build is not one anybody reaches
+for at the moment they need it. Both directions were measured rather than assumed — the default
+gives 0 ua1 failures and no path leak, `tagged` gives 14 and the leak returns.
+
+### What wiring it in actually required, none of which was the route
+
+The route change is one import and one call. The rest is what would have made it fail in
+production instead of in review:
+
+- **`weasyprint` was in no requirements file.** It merged as dead code and nothing installed it, so
+  wiring the route alone would have fallen through to Chromium on every request — silently, since
+  the fallback is what keeps the endpoint up.
+- **pip cannot install what WeasyPrint dlopens**: pango, pangoft2, harfbuzz, fontconfig (gobject
+  arrives with pango). That list is read off `weasyprint.text.ffi`'s own dlopen calls —
+  `spike/weasyprint-report/requirements.txt` says "Pango, cairo, GDK-PixBuf, HarfBuzz", the
+  pre-53 cairo-era list, which names two libraries WeasyPrint 69 never loads.
+- **`fonts-dejavu-core` is load-bearing.** The File Inventory prints U+2713 and U+2717 and
+  Liberation Sans carries neither; without DejaVu they are `.notdef` boxes in the certification
+  column.
+
+**All three of those were already fixed on `main` before this cutover landed, by #1197/#1198/#1199
+and not by this change** — `weasyprint==69.0` is declared, the serving image installs the native
+stack and DejaVu, and CI installs veraPDF so the conformance half of the suite evaluates instead
+of skipping. This change found them independently while preparing to wire the route and then
+dropped its own versions rather than shipping a second declaration beside a first. What it keeps
+is `tests/test_report_renderer_wiring.py`, which pins them statically so that the cutover cannot
+outlive them: they are now load-bearing for a live endpoint rather than for a module nothing
+called, and the way they would break is silent — a fallback serving a non-conformant report with
+a 200.
+
+### Known gaps, not addressed here
+
+Noted while measuring, left alone because they belong to the PDF/UA gate work rather than to the
+cutover, and duplicating that work is what this change has already had to unwind once:
+
+- `deploy/test/Dockerfile` installs none of the native stack, while installing
+  `api/requirements.txt`, which now carries weasyprint. A missing library raises `OSError`, which
+  `pytest.importorskip` does not catch, so the report suites would ERROR at collection in that
+  image rather than skip.
+- `azure-pipelines.yml` installs neither the native stack nor veraPDF, so the same suite means
+  something different there than in `ci.yml` — which that file's own dependency-step comment says
+  it must not.
