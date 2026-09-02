@@ -669,9 +669,17 @@ function PrecedenceNote() {
            strokeLinecap="round" style={{ flex: '0 0 auto', marginTop: 1 }} aria-hidden="true">
         <path d="M12 8v5" /><path d="M12 16.5v.5" /><circle cx="12" cy="12" r="9" />
       </svg>
+      {/* All three outcomes of disposition.resolve_candidate, because the previous wording gave
+          only one and stated it as universal — and its closing clause said the opposite of what
+          the code does. "The safer outcome is never chosen silently" reads as "we never quietly
+          pick the safe option", when archive IS the safe option and IS what gets picked. The
+          thing never chosen silently is the DESTRUCTIVE one. */}
       <div>
-        A file matching both an archive and a deletion rule keeps the <b>archive</b> recommendation
-        and is flagged for you to resolve. The safer outcome is never chosen silently.
+        When an archive rule and a deletion rule both match a file, ACP keeps the <b>archive</b>
+        recommendation and flags that a deletion rule also matched. Deletion wins only if that
+        rule explicitly permits it and you are authorised. If both rules have the same priority,
+        <b> neither</b> is applied and the file is marked <i>Conflict — review required</i>.
+        A deletion is never chosen silently.
       </div>
     </div>
   )

@@ -799,9 +799,17 @@ describe('the safety copy the whole screen rests on', () => {
 
   it('explains rule precedence where a conflicting rule would be created', async () => {
     await render(); await expand(); await flush()
-    expect(text()).toContain('A file matching both an archive and a deletion rule keeps the')
-    expect(text()).toContain('recommendation')
-    expect(text()).toContain('The safer outcome is never chosen silently.')
+    // One assertion per outcome in disposition.resolve_candidate, because the old copy
+    // described only the third and asserted it as universal.
+    expect(text()).toContain('keeps the')                     // archive is kept ...
+    expect(text()).toContain('flags that a deletion rule also matched')
+    expect(text()).toContain('Deletion wins only if that rule explicitly permits it')
+    expect(text()).toContain('neither')                       // ... equal priority applies neither
+    expect(text()).toContain('Conflict — review required')
+    // The corrected claim: the DESTRUCTIVE outcome is the one never chosen silently. The old
+    // sentence said "safer", which is both false and the more alarming way round.
+    expect(text()).toContain('A deletion is never chosen silently.')
+    expect(text(), 'the inverted claim is back').not.toContain('The safer outcome is never chosen')
   })
 
   it('says a file may carry only one recommendation, next to the list it applies to', async () => {
