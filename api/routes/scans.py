@@ -587,7 +587,7 @@ def scan_job(job_id: str, request: Request):
         raise HTTPException(404, "job not found")
     scan_id = j.get("scan_id")
     if scan_id and core.store.get_scan(scan_id, owner=_owner(request)) is None:
-        raise HTTPException(404, "job not found")
+        raise HTTPException(404, "scan not found")
     return j
 
 
