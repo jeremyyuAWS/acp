@@ -88,12 +88,11 @@ describe('a completed read fills the recommendation surface', () => {
     expect(text()).toContain('Inventory taken')
   })
 
-  it('shows the tag, the rule that produced it and the recorded reason', async () => {
+  it('shows the lifecycle count on the stat tile for the completed read', async () => {
     await render()
+    // The RECOMMENDATIONS table and ack bar are retired; the stat tile is the remaining
+    // lifecycle-dependent surface that a completed read must populate.
     expect(text()).toContain('tagged for archive review')
-    expect(text()).toContain('Legacy clinical policies')
-    expect(text()).toContain("matched archive rule 'Legacy clinical policies'")
-    expect(text()).toContain('I approve these 1 recommendation.')
   })
 
   it('reports a MEASURED zero when the rules ran and matched nothing', async () => {
@@ -166,12 +165,15 @@ describe('a read that did not complete renders NOTHING — never a zero', () => 
   })
 })
 
-describe('a file the inventory did not cover is its own bucket, not "no recommendation"', () => {
-  it('keeps the partition honest instead of promoting an unread file to checked', async () => {
+describe('retired sections — intentionally absent', () => {
+  it('does not render the every-discovered-file reconciliation bucket', async () => {
     h.rows = [h.rows[0]]     // only one of the two files has an inventory row
     await render()
-    expect(text()).toContain('No lifecycle record was read for these')
-    expect(text()).toContain('The buckets add up to the 2 files discovered')
+    // EVERY DISCOVERED FILE, IN ONE BUCKET was retired; the partial coverage is no longer
+    // surfaced as a separate reconciliation panel.
+    expect(text()).not.toContain('No lifecycle record was read for these')
+    expect(text()).not.toContain('The buckets add up to')
+    expect(text()).not.toContain('EVERY DISCOVERED FILE')
   })
 })
 
@@ -236,7 +238,6 @@ describe('the live 2026-08-28 zero-documents report, reproduced and then fixed',
     expect(text()).toContain('32 files inventoried')
     expect(text()).toContain('32files discovered')
     expect(text()).not.toContain('0files discovered')
-    expect(text()).toMatch(/Assess \d+ documents/)
   })
 })
 
