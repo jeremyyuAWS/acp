@@ -25,7 +25,7 @@ SRC = (API / "handlers.py").read_text()
 CODE = "\n".join(l for l in SRC.split("\n") if not l.strip().startswith("#"))
 
 # The mirror block: from the enabled-check to the record_remediation that follows it.
-MIRROR = CODE[CODE.index("if core.store.get_drive_mirror_enabled():"):
+MIRROR = CODE[CODE.index('if source == "drive" and core.store.get_drive_mirror_enabled():'):
               CODE.index("core.store.record_remediation(")]
 
 

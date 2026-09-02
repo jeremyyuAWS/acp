@@ -481,6 +481,8 @@ async def remediate_scan(sid: str, request: Request):
     if res is None:
         raise HTTPException(404, "scan not found")
     token = request.headers.get("x-drive-token")
+    source = (res.get("run") or {}).get("source") or "drive"
+    owner = _owner(request)
     core.register_scan_tokens(sid, drive=token)  # in-memory only
 
     # Parse optional scope list from request body.
@@ -522,12 +524,16 @@ async def remediate_scan(sid: str, request: Request):
         if not f.get("issues"):
             continue
         drive_file_id = core.store.get_file_drive_id(sid, f["file"])
-        if not drive_file_id:
+        # Drive needs its remote id. Local demo/corpus files are intentionally id-less but their
+        # source bytes were cached during Assess (with a corpus fallback in the worker), so they
+        # are valid remediation inputs and produce the primary Blob artifact.
+        if source == "drive" and not drive_file_id:
             continue
         jid = core.store.enqueue_job(
             "remediate_file",
             {"scan_id": sid, "file": f["file"], "drive_file_id": drive_file_id,
-             "remediated_folder_id": remediated_folder_id, "drive_token": token},
+             "remediated_folder_id": remediated_folder_id, "drive_token": token,
+             "source": source, "owner": owner, "checksum": f.get("checksum")},
             scan_id=sid)
         enqueued.append(jid)
     return {"scan_id": sid, "enqueued": len(enqueued), "job_ids": enqueued,
@@ -1404,6 +1410,53 @@ def remediation_status(sid: str, request: Request, response: Response):
     return out
 
 
+@router.get("/scans/{sid}/remediation/stream")
+async def stream_remediation_status(sid: str, request: Request):
+    """Push the owner-scoped remediation status whenever it changes.
+
+    This is the Remediate counterpart to the Discover stream.  It deliberately reads the same
+    store method as ``remediation_status`` so the pushed and fallback-poll views cannot disagree.
+    The browser consumes it with authenticated fetch (not EventSource, which cannot carry ACP's
+    bearer header).  A final ``done`` event closes the connection once the batch drains.
+    """
+    import asyncio
+    import json as _json
+    import activity
+
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+
+    async def _gen():
+        last = None
+        idle = 0
+        for _ in range(_MAX_STREAM_ITERS):
+            if await request.is_disconnected():
+                return
+            out = await asyncio.to_thread(core.store.remediation_status, sid)
+            out["activity"] = activity.current(sid)
+            sig = _json.dumps(out, sort_keys=True, default=str)
+            if sig != last:
+                last = sig
+                idle = 0
+                yield f"data: {_json.dumps(out)}\n\n"
+            else:
+                idle += 1
+                if idle >= _HEARTBEAT_EVERY:
+                    idle = 0
+                    yield ": keep-alive\n\n"
+            if not out.get("in_flight"):
+                yield "event: done\ndata: {\"done\": true}\n\n"
+                return
+            await asyncio.sleep(_STREAM_INTERVAL_S)
+
+    return StreamingResponse(_gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    })
+
+
 @router.get("/scans/{sid}/source-status")
 def source_status(sid: str, request: Request):
     """Has each file's SOURCE changed since ACP scanned it, and — PRD Phase 3 — where does ACP's
@@ -2205,9 +2258,20 @@ def _source_bytes_for_render(request: Request, scan_id: str, filename: str, owne
     scan = core.store.get_scan(scan_id, owner=owner)
     source = (scan or {}).get("run", {}).get("source")
 
+    # Assess caches the exact bytes it evaluated. Prefer that owner-scoped copy so preview works
+    # after a worker restart and for sources that are no longer reachable from this API replica.
+    # read_cached_source validates both scan ownership and the recorded source metadata.
+    try:
+        import scanner
+        cached = scanner.read_cached_source(scan_id, filename, owner)
+        if cached is not None:
+            return cached
+    except Exception:
+        swallowed("routes.scans._source_bytes_for_render: reading the assessed source cache "
+                  "failed", scan_id)
+
     if source == "local":
         try:
-            import scanner
             corpus = Path(os.environ.get("ACP_LOCAL_CORPUS") or (scanner.ACP / "test-corpus/files"))
             p = corpus / filename
             if p.is_file():

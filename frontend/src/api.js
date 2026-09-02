@@ -913,6 +913,39 @@ export const getRemediationStatus = (scanId) => {
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation-status`,
                { headers: headers(), cache: 'no-store' }).then(j)
 }
+
+// Authenticated Remediate progress stream.  Native EventSource cannot send ACP's bearer header,
+// so this shares Discover's fetch + ReadableStream SSE parser and exposes the same close contract.
+export function openRemediationStream(scanId, { onMessage, onDone, onError } = {}) {
+  if (SIM) return { close: () => {} }
+  const controller = new AbortController()
+  ;(async () => {
+    try {
+      const res = await fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/stream`,
+        { headers: headers(), signal: controller.signal, cache: 'no-store' })
+      if (!res.ok || !res.body) { onError?.(); return }
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const { frames, rest } = parseSSEFrames(buffer)
+        buffer = rest
+        for (const frame of frames) {
+          if (frame.event === 'done') { onDone?.(); return }
+          if (frame.event === 'error') { onError?.(); return }
+          try { onMessage?.(JSON.parse(frame.data)) } catch { /* malformed frame: keep listening */ }
+        }
+      }
+      onDone?.()
+    } catch (e) {
+      if (e?.name !== 'AbortError') onError?.()
+    }
+  })()
+  return { close: () => controller.abort() }
+}
 // Per-violation remediation state (ADR 0003 Phase 2) for one file — which rule_ids were
 // actually auto-fixed, so the rule coverage table can say "pass — remediated" instead of
 // just "pass" for a criterion that used to fail. SIM has no per-violation state to draw

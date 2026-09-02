@@ -8,11 +8,15 @@ describe('deriveRemediateProcessingState', () => {
     expect(d.headline).toBeNull()
   })
 
-  it('is idle once at least one document has completed — the live progress bar takes over', () => {
+  it('keeps the shared update panel active once documents begin completing', () => {
     const d = deriveRemediateProcessingState({
       remBusy: true, remProg: { total: 10, done: 3, latest: 'a.pdf', failed: 0 },
+      updateMode: 'live',
     })
-    expect(d.state).toBe('idle')
+    expect(d.state).toBe('active')
+    expect(d.headline).toMatch(/3 of 10 complete/)
+    expect(d.detail).toContain('a.pdf')
+    expect(d.live).toBe(true)
   })
 
   it('reports waiting while enqueued but nothing has completed yet, with no pickup estimate', () => {

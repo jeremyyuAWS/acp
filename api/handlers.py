@@ -674,8 +674,9 @@ def _remediate_file(payload: dict, job: dict) -> None:
     scan_id = payload.get("scan_id") or job.get("scan_id")
     filename = payload.get("file")
     drive_file_id = payload.get("drive_file_id")
-    if not (scan_id and filename and drive_file_id):
-        raise FatalJobError("remediate_file job missing scan_id/file/drive_file_id")
+    source = payload.get("source") or "drive"
+    if not (scan_id and filename) or (source == "drive" and not drive_file_id):
+        raise FatalJobError("remediate_file job missing scan_id/file/source identity")
 
     # Never remediate ACP's own remediated copy. POST /scans/{sid}/remediate already can't
     # enqueue one — it iterates get_scan's filtered file list — but jobs are DURABLE: a job
@@ -715,13 +716,29 @@ def _remediate_file(payload: dict, job: dict) -> None:
     # store is per-replica and is wiped by a restart/redeploy, so a durable remediate
     # job that later runs on another replica (or after a restart) would otherwise fail
     # with "no Drive token". The payload token survives both; fall back to in-memory.
-    token = payload.get("drive_token") or core.get_scan_tokens(scan_id).get("drive")
-    if not token:
-        raise FatalJobError("no Drive token for this scan (expired/restarted) — re-trigger")
-
     _phase(job, f"downloading {filename}")
-    svc = _drive_client(token)
-    data = svc.files().get_media(fileId=drive_file_id).execute()
+    svc = None
+    if source == "local":
+        from scanner import read_cached_source
+        owner = payload.get("owner")
+        data = read_cached_source(scan_id, filename, owner, checksum=payload.get("checksum"))
+        if data is None:
+            # Local corpus remains the deterministic development/demo fallback when Blob caching
+            # is disabled. Resolve beneath the configured corpus and never accept a path from the
+            # job payload.
+            import scanner as _scanner
+            corpus = _Path(_os.environ.get("ACP_LOCAL_CORPUS") or
+                           (_scanner.ACP / "test-corpus/files")).resolve()
+            candidate = (corpus / filename).resolve()
+            if corpus not in candidate.parents or not candidate.is_file():
+                raise FatalJobError("local source bytes are unavailable — re-run Assess")
+            data = candidate.read_bytes()
+    else:
+        token = payload.get("drive_token") or core.get_scan_tokens(scan_id).get("drive")
+        if not token:
+            raise FatalJobError("no Drive token for this scan (expired/restarted) — re-trigger")
+        svc = _drive_client(token)
+        data = svc.files().get_media(fileId=drive_file_id).execute()
 
     # Format-agnostic text proposers (3.1.2 language-of-parts + 1.3.3 sensory rewrite) run on
     # the original bytes — the prose these check is unchanged by remediation, and running
@@ -895,7 +912,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
     blob_url = _blob.upload_remediated(owner, scan_id, filename, fixed_bytes, mimetype)
 
     web_url = None
-    if core.store.get_drive_mirror_enabled():
+    if source == "drive" and core.store.get_drive_mirror_enabled():
         _phase(job, "writing the corrected copy to Drive")
         import io
         from googleapiclient.http import MediaIoBaseUpload
@@ -967,11 +984,14 @@ def _remediate_file(payload: dict, job: dict) -> None:
                   f"{type(e).__name__}: {e}", flush=True)
             core.store.log_decision("system", "remediate.drive_mirror_failed", scan_id=scan_id,
                                     file=filename, detail=f"{type(e).__name__}: {e}"[:200])
-    else:
+    elif source == "drive":
         # The third silence: with the mirror switched off nothing was written and nothing was
         # said, so "no mirror line" could also mean "the operator turned it off". Say it.
         print(f"[remediate] drive mirror: {filename} skipped — disabled "
               f"(settings.drive_mirror_enabled=false)", flush=True)
+    else:
+        print(f"[remediate] source mirror: {filename} skipped — {source} scan; corrected copy "
+              "stored in ACP", flush=True)
 
     core.store.record_remediation(scan_id, filename, drive_write_url=web_url, blob_url=blob_url)
     # G4: the Remediate span now carries what the fix pass DID — how many fixes applied vs
@@ -1019,7 +1039,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
         swallowed("_remediate_file: recording the verified remediation diffs failed", scan_id)
     try:
         from documents import resolve_doc_id
-        doc_id = resolve_doc_id("drive", drive_file_id, filename, None)
+        doc_id = resolve_doc_id(source, drive_file_id or f"{scan_id}:{filename}", filename, None)
         auto_rules = core.store.list_auto_fail_rules(scan_id, filename)
         cleared: set[str] = set()   # rule_ids this run verifiably auto-cleared
         kept = []

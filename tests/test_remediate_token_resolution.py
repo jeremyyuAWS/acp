@@ -54,3 +54,26 @@ def test_no_token_anywhere_fails_cleanly_asking_for_a_re_trigger(monkeypatch):
     # No payload token AND no in-memory token → a clean FatalJobError, not a partial/bad write.
     with pytest.raises(handlers.FatalJobError, match="no Drive token"):
         handlers._remediate_file(_payload(), {})
+
+
+def test_local_remediation_reads_cached_source_without_a_drive_token(monkeypatch):
+    import core
+    import handlers
+    import scanner
+    import remediate_office
+
+    monkeypatch.setattr(core.store, "is_shadowed_output", lambda sid, f: False)
+    monkeypatch.setattr(handlers, "_phase", lambda *a, **k: None)
+    monkeypatch.setattr(scanner, "read_cached_source", lambda *a, **k: b"local-office-bytes")
+
+    class _ReachedRemediator(Exception):
+        pass
+
+    def _remediate(path, **kwargs):
+        assert path.read_bytes() == b"local-office-bytes"
+        raise _ReachedRemediator()
+
+    monkeypatch.setattr(remediate_office, "remediate_office", _remediate)
+    with pytest.raises(_ReachedRemediator):
+        handlers._remediate_file({"scan_id": "s1", "file": "a.docx", "source": "local",
+                                   "owner": "owner-key"}, {})

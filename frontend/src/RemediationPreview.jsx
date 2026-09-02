@@ -136,7 +136,9 @@ function PageView({ f, scanId }) {
   // Real geometry only: for pptx/xlsx a resolvable locator yields a measured box + zoom-to-object
   // crop; for docx/pdf there is no per-element box, so we render the page (or, with no scan, an
   // honest note) — never a fabricated highlight.
-  if (scanId && hasVisualAnchor(f)) {
+  // A FULL-document preview does not require element coordinates.  Coordinates improve it with a
+  // box/correct page, but page 1 is still the honest full-page fallback for an unanchored finding.
+  if (scanId) {
     return (
       <div style={{ display: 'grid', placeItems: 'center' }}>
         <Thumbnail scanId={scanId} file={f.file} page={f.page || 1} locator={localeOf(f)} maxHeight={420} />
