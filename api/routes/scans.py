@@ -2227,32 +2227,31 @@ def get_remediated_file(scan_id: str, filename: str, request: Request):
 
 @router.get("/scans/{scan_id}/files/{filename:path}/content")
 def get_file_content(scan_id: str, filename: str, request: Request):
-    """Fetch the original file bytes from Drive using the stored drive_file_id.
-    Returns raw bytes so the browser can run remediateHtml() client-side."""
-    drive_file_id = core.store.get_file_drive_id(scan_id, filename)
-    if not drive_file_id:
-        raise HTTPException(404, "drive_file_id not recorded for this file — was it scanned from Drive?")
-    try:
-        svc = core.drive_service(request)
-        data = svc.files().get_media(fileId=drive_file_id).execute()
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(502, f"Drive fetch failed: {e}")
+    """Fetch the original file bytes for playback in the caption review editor.
+
+    Verifies scan ownership before serving bytes. Tries local corpus, Drive, and remediated
+    blob in that order — the same cheapest-first chain as the render/thumbnail routes — so
+    captions are reviewable regardless of whether the scan came from Drive, SharePoint, or a
+    local corpus.
+
+    NO `Accept-Ranges` HEADER, deliberately. This reads the whole object in one Response; it
+    does not honour a Range request. Advertising byte ranges would give the browser a seek bar
+    that silently re-serves the full body. Not having ranges yet is a limitation; claiming them
+    would be a bug.
+    """
+    owner = _owner(request)
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    data = _source_bytes_for_render(request, scan_id, filename, owner)
+    if data is None:
+        raise HTTPException(404, "file not retrievable from any configured source")
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
     mime_map = {"html": "text/html", "htm": "text/html", "pdf": "application/pdf",
                 "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation"}
-    # Media types come from api/media.py rather than being spelled out here. A caption reviewer
-    # has to WATCH the video they are correcting a transcript for, and a <video> element handed
-    # `application/octet-stream` refuses to play it — browsers do not sniff a container out of a
-    # generic type. So the file the remediation lane drafted captions for came back unplayable.
-    #
-    # NO `Accept-Ranges` HEADER, deliberately. This reads the whole object and returns it in one
-    # Response; it does not honour a Range request. Advertising byte ranges would give the browser
-    # a seek bar that silently re-serves the full body — the reviewer drags the scrubber and the
-    # video jumps back. Not having ranges yet is a limitation; claiming them would be a bug.
+    # Media MIME types come from api/media.py. A <video> element handed `application/octet-stream`
+    # refuses to play — browsers do not sniff a container out of a generic type.
     import media as _media
     media_type = mime_map.get(ext) or _media.media_mime(filename) or "application/octet-stream"
     return Response(data, media_type=media_type)

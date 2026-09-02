@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { parseVtt, serialiseVtt, formatTimestamp, isVtt, activeCueIndex } from './captionCues.js'
+import { getToken } from './api.js'
 
 // The synchronised caption review editor.
 //
@@ -120,6 +121,37 @@ export default function CaptionEditor({ value, onChange, mediaSrc, mediaKind = '
 }
 
 function MediaPlayer({ refEl, src, kind, filename, error, onError }) {
+  // WHY FETCH INSTEAD OF src=. A <video src="/scans/.../content"> cannot send ACP's bearer
+  // token — the browser makes that request anonymously. fetch() can carry the Authorization
+  // header; we turn the response into a blob URL the element can open from the same origin.
+  const [blobSrc, setBlobSrc] = useState(null)
+
+  useEffect(() => {
+    if (!src) { setBlobSrc(null); return }
+    const ctrl = new AbortController()
+    const token = getToken()
+    fetch(src, {
+      signal: ctrl.signal,
+      headers: token ? { Authorization: 'Bearer ' + token } : {},
+    })
+      .then((r) => {
+        if (!r.ok) throw Object.assign(new Error(`fetch ${r.status}`), { status: r.status })
+        return r.blob()
+      })
+      .then((blob) => {
+        if (!ctrl.signal.aborted) setBlobSrc(URL.createObjectURL(blob))
+      })
+      .catch((err) => {
+        if (err.name !== 'AbortError') onError('media')
+      })
+    return () => {
+      ctrl.abort()
+      // Revoke whichever blob URL was created, if any. The setState callback runs synchronously
+      // inside React's state machine, so the URL we revoke is always the one we set.
+      setBlobSrc((prev) => { if (prev) URL.revokeObjectURL(prev); return null })
+    }
+  }, [src])
+
   // NO PLAYER WITHOUT A SOURCE, and no silent absence either. A <video> with src="" renders a
   // broken control that looks like the file failed to load; saying why is the difference between
   // "this is broken" and "this scan has no retrievable original".
@@ -140,13 +172,14 @@ function MediaPlayer({ refEl, src, kind, filename, error, onError }) {
       </p>
     )
   }
+  if (!blobSrc) {
+    return <p className="muted" style={{ fontSize: 12.5 }}>Loading media…</p>
+  }
   const Tag = kind === 'audio' ? 'audio' : 'video'
   return (
     // `controls` always: the reviewer needs play, pause and volume, and building our own would
     // mean re-implementing keyboard support the browser already gets right.
-    // `preload="metadata"` because a review queue can hold many cards and fetching every video in
-    // full on render would download an estate's worth of media nobody asked for.
-    <Tag ref={refEl} src={src} controls preload="metadata" className="caption-editor-media"
+    <Tag ref={refEl} src={blobSrc} controls className="caption-editor-media"
          onError={() => onError('media')} />
   )
 }

@@ -124,6 +124,45 @@ describe('timestamps', () => {
   })
 })
 
+describe('post-cue metadata blocks (NOTE / STYLE / REGION between cues)', () => {
+  // WebVTT allows NOTE, STYLE and REGION blocks to appear after cues, not only before them.
+  // Real captioning tools write post-cue NOTEs as provenance or QA records. Dropping them on
+  // the first round-trip is silent corruption — the reviewer opened the file and the tool
+  // deleted content without being asked.
+  const WITH_POST_NOTE = 'WEBVTT\n\nNOTE\nPre-cue header note.\n\n'
+    + '1\n00:00:00.000 --> 00:00:02.000\nFirst cue.\n\n'
+    + 'NOTE\nBetween-cue annotation.\n\n'
+    + '2\n00:00:02.000 --> 00:00:04.000\nSecond cue.\n\n'
+    + 'NOTE\nTrailing annotation.\n'
+
+  it('round-trips a file with post-cue NOTE blocks byte-for-byte', () => {
+    const { header, cues } = parseVtt(WITH_POST_NOTE)
+    expect(serialiseVtt(header, cues)).toBe(WITH_POST_NOTE)
+  })
+
+  it('keeps the pre-cue note in the header, not in any cue', () => {
+    const { header, cues } = parseVtt(WITH_POST_NOTE)
+    expect(header).toContain('Pre-cue header note')
+    expect(cues.every((c) => !c.text.includes('Pre-cue header note'))).toBe(true)
+  })
+
+  it('still finds both cues', () => {
+    const { cues } = parseVtt(WITH_POST_NOTE)
+    expect(cues).toHaveLength(2)
+    expect(cues[0].text).toBe('First cue.')
+    expect(cues[1].text).toBe('Second cue.')
+  })
+
+  it('an edit to one cue leaves the between-cue and trailing notes intact', () => {
+    const { header, cues } = parseVtt(WITH_POST_NOTE)
+    cues[0].text = 'First cue edited.'
+    const out = serialiseVtt(header, cues)
+    expect(out).toContain('First cue edited.')
+    expect(out).toContain('Between-cue annotation')
+    expect(out).toContain('Trailing annotation')
+  })
+})
+
 describe('which cue is playing', () => {
   const cues = [{ start: 0, end: 2 }, { start: 2, end: 4 }, { start: 5, end: 6 }]
 

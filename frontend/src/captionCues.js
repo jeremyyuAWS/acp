@@ -72,6 +72,10 @@ export function parseVtt(text) {
     }
     if (arrowAt === -1) {
       if (!seenCue) header.push(block)
+      // NOTE/STYLE/REGION blocks between cues are valid WebVTT. Dropping them would silently
+      // corrupt a file the reviewer opens and saves without changing anything. Attach them to
+      // the preceding cue so serialiseVtt can re-insert them in the right position.
+      else if (cues.length) (cues[cues.length - 1].trailing ??= []).push(block.replace(/\n+$/, ''))
       continue
     }
     const [startRaw, rest] = lines[arrowAt].split('-->')
@@ -106,9 +110,10 @@ export function parseVtt(text) {
  */
 export function serialiseVtt(header, cues) {
   const head = (header || '').trim() || 'WEBVTT'
-  const body = (cues || []).map((c, i) => {
+  const body = (cues || []).flatMap((c, i) => {
     const id = (c.id || '').trim() || String(i + 1)
-    return `${id}\n${formatTimestamp(c.start)} --> ${formatTimestamp(c.end)}\n${encode(c.text)}`
+    const cueStr = `${id}\n${formatTimestamp(c.start)} --> ${formatTimestamp(c.end)}\n${encode(c.text)}`
+    return [cueStr, ...(c.trailing || [])]
   })
   return [head, ...body].join('\n\n') + '\n'
 }

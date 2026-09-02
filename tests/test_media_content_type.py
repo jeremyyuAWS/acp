@@ -35,34 +35,60 @@ if str(ROOT / "api") not in sys.path:
 MP4 = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
 
 
-@pytest.fixture()
-def client(monkeypatch, tmp_path):
-    """The content route with Drive stubbed out. What is under test is the RESPONSE SHAPE, not
-    the fetch — so the fetch is replaced and everything the browser sees stays real."""
+class _DriveMedia:
+    def execute(self):
+        return MP4
+
+
+class _DriveFiles:
+    def get_media(self, fileId=None):
+        return _DriveMedia()
+
+
+class _DriveSvc:
+    def files(self):
+        return _DriveFiles()
+
+
+def _store_for(*, owner="demo", source="drive", drive_id="drive-1"):
+    """Minimal store stub whose `get_scan` honours the `owner` parameter the route passes.
+    A request arriving as a different user gets None — the same 404 path as a production gate
+    that verified the token but found a scan that belongs to somebody else."""
+    _owner = owner
+    _source = source
+    _drive_id = drive_id
+
+    class _Store:
+        def get_scan(self, scan_id, owner=None):
+            return {"run": {"source": _source}} if owner == _owner else None
+
+        def get_file_drive_id(self, scan_id, filename):
+            return _drive_id
+
+    return _Store()
+
+
+def _make_client(monkeypatch, *, owner="demo", source="drive", drive_id="drive-1",
+                 drive_svc=None):
     import core as core_mod
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from routes import scans as scans_routes
 
-    class _Media:
-        def execute(self):
-            return MP4
-
-    class _Files:
-        def get_media(self, fileId=None):
-            return _Media()
-
-    class _Svc:
-        def files(self):
-            return _Files()
-
-    monkeypatch.setattr(core_mod, "drive_service", lambda request: _Svc())
-    monkeypatch.setattr(core_mod, "store", type("S", (), {
-        "get_file_drive_id": staticmethod(lambda scan_id, filename: "drive-1"),
-    })())
+    monkeypatch.setattr(core_mod, "drive_service",
+                        lambda request: (drive_svc if drive_svc is not None else _DriveSvc()))
+    monkeypatch.setattr(core_mod, "store", _store_for(owner=owner, source=source,
+                                                       drive_id=drive_id))
     app = FastAPI()
     app.include_router(scans_routes.router)
     return TestClient(app)
+
+
+@pytest.fixture()
+def client(monkeypatch, tmp_path):
+    """The content route with Drive stubbed out. What is under test is the RESPONSE SHAPE, not
+    the fetch — so the fetch is replaced and everything the browser sees stays real."""
+    return _make_client(monkeypatch)
 
 
 def test_a_video_is_served_as_video(client):
@@ -161,3 +187,53 @@ def test_every_remediable_media_extension_has_a_playable_type():
     assert not missing, (
         f"{missing} can reach the caption lane and have no playable MIME type — the reviewer "
         f"gets a draft to correct and a file the browser refuses to open")
+
+
+# ── ownership and source isolation ───────────────────────────────────────────────────────────────
+
+def test_a_foreign_owner_scan_returns_404(monkeypatch):
+    """Scan ownership is checked before bytes are served.
+
+    The production gate verifies the bearer token and sets request.state.user_email; _owner()
+    reads it. Without a token the owner defaults to "demo". A scan stamped with owner "alice"
+    must return 404 when the request carries no token — it must not be a cross-account oracle
+    or a data-exfiltration path, and the error must be the same "scan not found" the per-scan
+    GET already returns so id enumeration learns nothing extra.
+    """
+    client = _make_client(monkeypatch, owner="alice")  # scan owned by alice; request arrives as demo
+    r = client.get("/scans/s1/files/townhall.mp4/content")
+    assert r.status_code == 404, (
+        f"a scan owned by 'alice' was served to an unauthenticated ('demo') request: "
+        f"{r.status_code} {r.text}")
+    assert "scan not found" in r.text.lower(), r.text
+
+
+def test_local_corpus_source_is_served(monkeypatch, tmp_path):
+    """The content route is not limited to Drive-backed scans.
+
+    Before the ownership fix, `get_file_content` called `get_file_drive_id` and 404'd when
+    the scan had no Drive backing — which is always true for local-corpus and assessed-source
+    scans. The route now delegates to `_source_bytes_for_render`, which tries the local corpus
+    first. A caption reviewer watching a locally-sourced video must be able to play it.
+    """
+    import os
+    # Write the test media into the local corpus directory
+    (tmp_path / "townhall.mp4").write_bytes(MP4)
+    monkeypatch.setenv("ACP_LOCAL_CORPUS", str(tmp_path))
+
+    # Stub scanner.read_cached_source so _source_bytes_for_render falls through to the local
+    # corpus path rather than returning a cached copy (which would also be correct but would
+    # bypass the path this test is exercising).
+    try:
+        import scanner as scanner_mod
+        monkeypatch.setattr(scanner_mod, "read_cached_source", lambda *a, **kw: None)
+    except Exception:
+        pass  # scanner not importable; its block is wrapped in try/except anyway
+
+    client = _make_client(monkeypatch, source="local", drive_id=None)
+    r = client.get("/scans/s1/files/townhall.mp4/content")
+    assert r.status_code == 200, (
+        f"local-corpus source should be served; old Drive-only code would have 404'd: "
+        f"{r.status_code} {r.text}")
+    assert r.content == MP4
+    assert r.headers["content-type"].startswith("video/mp4")
