@@ -117,6 +117,30 @@ steps:
     # only ever present ambiently on dev machines — harmless while the engine-gated tests
     # skipped here, load-bearing now that the engine is built.
 
+  - script: bash scripts/install_verapdf.sh
+    displayName: Install veraPDF (PDF/UA-1 conformance gate)
+    # The same step ci.yml runs, and here for the same reason the tesseract note above gives:
+    # two CI pipelines running one suite need the same dependencies or the suite means different
+    # things in each. That note was written about OCR landing in ci.yml only; veraPDF landed in
+    # ci.yml only too (#1199), so this file ran the report suites with the conformance half
+    # silently skipped — tests/verapdf.py degrades to a stated skip when veraPDF is absent, which
+    # is right on a developer machine and wrong in a gate. A skipped PDF/UA check is a compliance
+    # claim nothing evaluated, and the conformance report is now the document ACP hands a
+    # customer as audit evidence: api/report_weasy.py serves /scans/{sid}/report.pdf as of #1201.
+    #
+    # NOT continueOnError, matching ci.yml and differing from the tesseract step above for the
+    # reason ci.yml states: OCR degrades to fewer criteria covered, while this is the only thing
+    # between "we render an accessible PDF" and "we render a PDF". veraPDF has no wheel, so it
+    # gets a step rather than a requirements line.
+    #
+    # No apt step for WeasyPrint's native stack (pango/harfbuzz/fontconfig), deliberately: this
+    # pool is ubuntu-latest, the same hosted-runner image family ci.yml uses, where those
+    # libraries are already present — #1199 verified the report suites executing there with no
+    # such step. The environment that genuinely lacks them is deploy/test/Dockerfile, which
+    # builds from mcr.microsoft.com/dotnet/sdk:10.0-noble — Ubuntu 24.04 like the runners, but a
+    # plain SDK image rather than a hosted runner's heavily pre-provisioned one, so it gets an
+    # explicit apt line that this pool does not need.
+
   # -n auto --dist loadfile, mirroring ci.yml — see the long note there. loadfile is load-bearing
   # rather than a tuning choice: test_check_actually_fails_on_drift corrupts the real generated
   # scopePresets.js and restores it, so plain -n auto lets other workers read the corrupted

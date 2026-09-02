@@ -164,3 +164,68 @@ def test_neither_pipeline_calls_the_pdf_engine_unvendored(pipeline, src):
         f"{pipeline} no longer states that the PDF engine is vendored. A comment saying skipped "
         f"PDF suites are expected makes a checkout that really lost the engine look normal — "
         f"which is why the gap went unnoticed the first time")
+
+
+# ── 5. the PDF/UA conformance gate, in both pipelines and the test image ─────────────────────
+#
+# Added when the drift this file was written about happened a third time: veraPDF landed in
+# ci.yml only (#1199), so azure-pipelines.yml ran the report suites with the conformance half
+# silently skipped. tests/verapdf.py degrades to a stated skip when the tool is absent — right on
+# a developer machine, wrong in a gate — and the document it checks is the one ACP hands a
+# customer as audit evidence, served by api/report_weasy.py since #1201.
+
+@pytest.mark.parametrize("pipeline,src", [("ci.yml", CI), ("azure-pipelines.yml", AZ)],
+                         ids=["ci.yml", "azure-pipelines.yml"])
+def test_both_pipelines_install_verapdf(pipeline, src):
+    """A skipped PDF/UA check is a compliance claim nothing evaluated.
+
+    Same shape as the OCR drift recorded above and the same cause: a dependency added to one
+    pipeline because that is the one whose runs people watch. Asserted on the script name rather
+    than a step title — the title is prose, the call is the behaviour.
+    """
+    assert "scripts/install_verapdf.sh" in src, (
+        f"{pipeline} does not install veraPDF, so its report suites skip the conformance check "
+        f"while the other pipeline runs it — one suite meaning two things")
+
+
+@pytest.mark.parametrize("pipeline,src", [("ci.yml", CI), ("azure-pipelines.yml", AZ)],
+                         ids=["ci.yml", "azure-pipelines.yml"])
+def test_neither_pipeline_softens_the_conformance_gate(pipeline, src):
+    """veraPDF is not continue-on-error in either pipeline, and that differs from tesseract.
+
+    The tesseract step IS softened: OCR degrading means fewer criteria covered, and a dead job
+    tells a reviewer nothing about the change under review. This gate is the only thing between
+    "we render an accessible PDF" and "we render a PDF", so ci.yml states plainly that failing to
+    install it should fail the job. An edit that quietly adds a softener here would turn the gate
+    back into the silent skip it replaced.
+    """
+    idx = src.index("scripts/install_verapdf.sh")
+    window = src[max(0, idx - 400):idx + 400]
+    for softener in ("continue-on-error: true", "continueOnError: true"):
+        assert softener not in window, (
+            f"{pipeline} softens the veraPDF step with {softener!r}; a conformance gate that is "
+            f"allowed not to run is not a gate")
+
+
+def test_the_test_image_installs_what_weasyprint_dlopens():
+    """deploy/test/Dockerfile can actually import weasyprint.
+
+    That image reproduces the CI environment so a developer does not misread an absent toolchain
+    as repo breakage — its header records a session carrying "32 pre-existing test failures"
+    through four PRs when the cause was its own venv. A missing native library raises OSError,
+    which pytest.importorskip does NOT catch, so the report suites would ERROR at collection
+    there: the exact misreading the image exists to prevent, inside the image built to prevent
+    it.
+
+    ci.yml needs no such step — its hosted runners ship these pre-provisioned — so this is the
+    one place the image installs something the gate's step list does not name, and it is still
+    "agree with CI", applied to the environment rather than the steps.
+    """
+    df = (ROOT / "deploy" / "test" / "Dockerfile").read_text()
+    for lib in ("libpango-1.0-0", "libpangoft2-1.0-0", "libharfbuzz0b", "libfontconfig1"):
+        assert lib in df, (
+            f"deploy/test/Dockerfile does not install {lib}; weasyprint dlopens it, and without "
+            f"it the report suites error at collection rather than skipping")
+    assert "fonts-dejavu-core" in df, (
+        "deploy/test/Dockerfile installs no DejaVu; the report prints U+2713/U+2717, which "
+        "Liberation Sans does not carry")
