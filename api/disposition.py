@@ -364,15 +364,76 @@ def _ensure_folder(svc, name: str) -> str:
         fields="id").execute()["id"]
 
 
-def execute_action(doc: dict, action: str, action_config: dict | None, svc) -> tuple[str, str]:
-    """Apply `action` to `doc`. Returns (result, detail) with result applied|failed.
+def undo_action(doc: dict, before: dict | None, svc) -> tuple[str, str]:
+    """Put a file back the way `before` says it was. Returns (result, detail).
+
+    The mirror of execute_action, and deliberately NOT a general "reverse whatever happened"
+    — it reverses one recorded before-state and refuses anything it cannot verify. PRD §8's
+    undo is only meaningful if it restores the actual prior state, so a missing or unrecognised
+    record is a refusal, never a best guess. Restoring a file to a folder nobody recorded is
+    indistinguishable, afterwards, from having moved it somewhere new.
+
+    Drive only, for the same reason execute_action is: ACP holds read-only scopes everywhere
+    else, so there is nothing there to have undone.
+    """
+    if not before:
+        return "failed", "no before-state was recorded for this action, so it cannot be undone"
+    fid = _drive_file_id(doc)
+    if not fid:
+        return "failed", (f"unsupported source '{doc.get('source')}' — only Drive-backed "
+                          "documents can be undone")
+    if svc is None:
+        return "failed", "no Drive connection — connect Google Drive and retry"
+    action = before.get("action")
+    try:
+        if action == "delete":
+            svc.files().update(fileId=fid, body={"trashed": False}).execute()
+            return "applied", "restored from Drive trash"
+        if action == "rename":
+            prior = before.get("name")
+            if not prior:
+                return "failed", "the previous name was not recorded, so it cannot be restored"
+            svc.files().update(fileId=fid, body={"name": prior}).execute()
+            return "applied", f"renamed back to '{prior}'"
+        if action in ("archive", "move"):
+            prior_parents = before.get("parents") or []
+            if not prior_parents:
+                # A file that genuinely had no parent is not the same as one whose parents were
+                # never recorded, and this cannot tell them apart — so it refuses rather than
+                # dropping the file into My Drive and calling that a restoration.
+                return "failed", ("the previous folder was not recorded, so the file cannot be "
+                                  "moved back")
+            current = svc.files().get(fileId=fid, fields="parents").execute()
+            svc.files().update(fileId=fid, addParents=",".join(prior_parents),
+                               removeParents=",".join(current.get("parents", [])),
+                               fields="id").execute()
+            return "applied", f"moved back to its previous folder ({', '.join(prior_parents)})"
+        return "failed", f"nothing recorded for action '{action}' can be undone"
+    except Exception as e:  # HttpError, network, permission — record, don't raise
+        return "failed", f"{type(e).__name__}: {e}"[:300]
+
+
+def execute_action(doc: dict, action: str, action_config: dict | None,
+                   svc) -> tuple[str, str, dict | None]:
+    """Apply `action` to `doc`. Returns (result, detail, before) with result applied|failed.
 
     svc is an authenticated Drive client (may be None for 'leave'). Exceptions are
     converted to a 'failed' result — one bad file must not abort a policy run.
+
+    `before` is what the file looked like BEFORE the action, and it is the whole reason this
+    returns a triple. Until now a move read the file's parents and passed them straight to
+    removeParents, and a rename read its name only to build the new one: both were discarded the
+    instant they were used, so nothing in the system could ever put the file back. PRD §8 promises
+    the reviewer an undo "where the connector supports it" — the connector always supported it;
+    ACP simply never wrote down where the file came from.
+
+    Returned rather than written here so this stays a pure Drive operation: persisting it is the
+    route's job, at the route's tenant grain, exactly as tag persistence already is. None when
+    there is nothing to reverse (leave/tag never move a file) or when the action failed.
     """
     cfg = action_config or {}
     if action == "leave":
-        return "applied", "left in place — decision recorded"
+        return "applied", "left in place — decision recorded", None
     if action == "tag":
         # Metadata-only: attaches tags to the document, never touches Drive — so it
         # works for any source and needs no svc (unlike archive/rename/move/delete).
@@ -380,35 +441,44 @@ def execute_action(doc: dict, action: str, action_config: dict | None, svc) -> t
         # the caller's tenant/scan grain; here we only decide applied/failed + detail.
         tags = tag_list(cfg)
         if not tags:
-            return "failed", "tag action has no tags configured"
-        return "applied", "tagged: " + ", ".join(tags)
+            return "failed", "tag action has no tags configured", None
+        return "applied", "tagged: " + ", ".join(tags), None
     fid = _drive_file_id(doc)
     if not fid:
         return "failed", (f"unsupported source '{doc.get('source')}' — only Drive-backed "
-                          "documents can be actioned")
+                          "documents can be actioned"), None
     if svc is None:
-        return "failed", "no Drive connection — connect Google Drive and retry"
+        return "failed", "no Drive connection — connect Google Drive and retry", None
     try:
         if action == "delete":
             # Trash, never permanent: recoverable from Drive for ~30 days.
             svc.files().update(fileId=fid, body={"trashed": True}).execute()
-            return "applied", "moved to Drive trash (recoverable ~30 days)"
+            # The file was not in the trash a moment ago — that IS the before-state, and it is
+            # what an undo restores it to.
+            return ("applied", "moved to Drive trash (recoverable ~30 days)",
+                    {"action": "delete", "trashed": False})
         if action == "rename":
             template = cfg.get("template") or "{name} [ARCHIVED {date}]"
             meta = svc.files().get(fileId=fid, fields="name").execute()
             from datetime import datetime, timezone as _tz
             new_name = (template.replace("{name}", meta.get("name", doc.get("path", "document")))
                                 .replace("{date}", datetime.now(_tz.utc).strftime("%Y-%m-%d")))
+            prior_name = meta.get("name")
             svc.files().update(fileId=fid, body={"name": new_name}).execute()
-            return "applied", f"renamed to '{new_name}'"
+            return ("applied", f"renamed to '{new_name}'",
+                    {"action": "rename", "name": prior_name})
         if action in ("archive", "move"):
             folder_id = cfg.get("target_folder_id") or _ensure_folder(svc, ARCHIVE_FOLDER)
             meta = svc.files().get(fileId=fid, fields="parents").execute()
+            prior_parents = list(meta.get("parents", []))
             svc.files().update(fileId=fid, addParents=folder_id,
-                               removeParents=",".join(meta.get("parents", [])),
+                               removeParents=",".join(prior_parents),
                                fields="id").execute()
             dest = cfg.get("target_folder_id") and "configured folder" or f"'{ARCHIVE_FOLDER}'"
-            return "applied", f"moved to {dest} ({folder_id})"
-        return "failed", f"unknown action '{action}'"
+            return ("applied", f"moved to {dest} ({folder_id})",
+                    {"action": action, "parents": prior_parents, "moved_to": folder_id})
+        return "failed", f"unknown action '{action}'", None
     except Exception as e:  # HttpError, network, permission — record, don't raise
-        return "failed", f"{type(e).__name__}: {e}"[:300]
+        # No before-state on a failure: the file may or may not have moved, and a recorded
+        # "before" that might not be true is worse than none — an undo would act on a guess.
+        return "failed", f"{type(e).__name__}: {e}"[:300], None

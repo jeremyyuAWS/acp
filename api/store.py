@@ -525,6 +525,12 @@ _SCHEMA = [
     # Rows written before this column exists read NULL, and the batch route refuses them rather
     # than guessing a version on a reviewer's behalf.
     "ALTER TABLE disposition_audit ADD COLUMN IF NOT EXISTS policy_version INTEGER",
+    # What the file looked like BEFORE an applied action — the prior Drive parents for a move,
+    # the prior name for a rename, "not trashed" for a delete. Without it PRD §8's undo cannot
+    # exist at all: disposition.execute_action used to read exactly these values and discard them
+    # the instant it had used them, so nothing in the system could put a file back.
+    # NULL on every row written before this column, and undo refuses those rather than guessing.
+    "ALTER TABLE disposition_audit ADD COLUMN IF NOT EXISTS before_state TEXT",
     "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS description TEXT",
     "ALTER TABLE disposition_policy ADD COLUMN IF NOT EXISTS updated_at TEXT",
     """CREATE TABLE IF NOT EXISTS lifecycle_evaluation (
@@ -1590,8 +1596,8 @@ class _PgAdapter:
     # Still additive, and additive in BEHAVIOUR on every half. For the ACR tables the argument is
     # simpler than v4's fence: a replica without ACR code never reads or writes them — they are
     # inert until a replica carrying api/acr_*.py serves a request against them.
-    _SCHEMA_VERSION = 8
-    _SCHEMA_CHECKSUM_AT_VERSION = "7da7c6e527940dad3e434d55e559b362"
+    _SCHEMA_VERSION = 9
+    _SCHEMA_CHECKSUM_AT_VERSION = "8ebbf79add42bcd3893081808a66dc83"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -9555,6 +9561,35 @@ class Store:
             self._db.execute(cur,
                 "UPDATE disposition_audit SET result=%s, detail=%s WHERE id=%s",
                 (result, detail, audit_id))
+
+    def set_disposition_before_state(self, audit_id: str, before: dict | None) -> None:
+        """Record what the file looked like before an applied action (PRD §8).
+
+        Written only on the applied path and never overwritten: a second write would mean the
+        stored 'before' no longer describes the state the first action moved the file out of,
+        and an undo against that is a move to somewhere the file has never been. NULL stays NULL
+        for a failure, because a before-state that MIGHT be true is worse than none."""
+        if not before:
+            return
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE disposition_audit SET before_state=%s "
+                "WHERE id=%s AND before_state IS NULL",
+                (json.dumps(before, separators=(",", ":")), audit_id))
+
+    def get_disposition_before_state(self, audit_id: str, owner: str) -> dict | None:
+        """The recorded before-state for one audit row, or None. Owner-scoped."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT before_state FROM disposition_audit WHERE id=%s AND owner_email=%s",
+                (audit_id, owner))
+            row = self._db.fetchone(cur)
+        if not row or not row.get("before_state"):
+            return None
+        try:
+            return json.loads(row["before_state"])
+        except Exception:      # noqa: BLE001 — an unreadable record must refuse, never guess
+            return None
 
     def doc_has_disposition(self, doc_id: str, policy_id: str) -> bool:
         """True if this policy already produced a live outcome for this doc — used to

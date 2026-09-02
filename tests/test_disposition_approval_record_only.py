@@ -144,7 +144,8 @@ def test_approve_without_the_param_still_executes(client, monkeypatch):
     seen = {}
     import routes.disposition as rd
     monkeypatch.setattr(rd.disposition, "execute_action",
-                        lambda doc, action, cfg, svc: (seen.setdefault("ran", True), ("applied", "did it"))[1])
+                        lambda doc, action, cfg, svc: (seen.setdefault("ran", True),
+                                                       ("applied", "did it", None))[1])
     body = c.post("/disposition/approvals/a1/approve").json()
     assert seen.get("ran") is True
     assert body["result"] == "applied"
@@ -154,8 +155,11 @@ def test_a_sharepoint_document_cannot_actually_execute(client):
     """The reason record-only exists: execute_action is Drive-only, so approving a SharePoint
     row for real fails by construction. Pinned so the UI's choice stays justified."""
     import disposition
-    result, detail = disposition.execute_action(
+    result, detail, before = disposition.execute_action(
         {"doc_id": "sp:1", "source": "sharepoint", "path": "/x.docx"}, "archive", {}, None)
+    # A failure records no before-state: it may or may not have moved, and a "before" that might
+    # be untrue is worse than none, because an undo would act on the guess.
+    assert before is None
     assert result == "failed"
     assert "unsupported source" in detail
 

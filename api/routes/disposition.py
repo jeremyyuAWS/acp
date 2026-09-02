@@ -610,12 +610,16 @@ def execute_policy(policy_id: str, request: Request):
             _trace_decision(doc["doc_id"], doc.get("path"), action=policy["action"],
                             status="pending_approval", policy_id=policy_id, reason=detail)
         else:
-            result, detail = disposition.execute_action(doc, policy["action"], cfg, svc)
+            result, detail, before = disposition.execute_action(doc, policy["action"], cfg, svc)
             if result == "applied" and policy["action"] == "tag":
                 _persist_tags(doc, cfg, policy_id)
             core.store.create_disposition_audit(
                 audit_id, doc_id=doc["doc_id"], policy_id=policy_id,
                 action=policy["action"], result=result, detail=detail, owner_email=owner)
+            # An auto-applied policy (requires_approval=false) never passes through the approve
+            # route, so without this the ONE path that moves a file with no human in the loop
+            # would be the one path whose result could not be undone.
+            core.store.set_disposition_before_state(audit_id, before)
             summary[result] += 1
             _trace_decision(doc["doc_id"], doc.get("path"), action=policy["action"],
                             status=result, policy_id=policy_id, reason=detail)
@@ -738,15 +742,68 @@ def approve_disposition(audit_id: str, request: Request,
         _trace_decision(row["doc_id"], None, action=row["action"], status="failed",
                         policy_id=row["policy_id"], reason="document no longer exists")
         raise HTTPException(410, "document no longer exists")
-    result, detail = disposition.execute_action(doc, row["action"], cfg, _drive_svc(request))
+    result, detail, before = disposition.execute_action(doc, row["action"], cfg,
+                                                        _drive_svc(request))
     if result == "applied" and row["action"] == "tag":
         _persist_tags(doc, cfg, row["policy_id"])
+    # Recorded BEFORE the result is written, deliberately. A crash between the two then leaves a
+    # before-state on a row that still reads pending_approval — harmless, and re-approving
+    # overwrites nothing (set_disposition_before_state only fills a NULL). The other order loses
+    # the file's origin for an action already marked applied, which is exactly the state PRD §8
+    # cannot recover from.
+    core.store.set_disposition_before_state(audit_id, before)
     core.store.set_disposition_audit_result(audit_id, result, detail)
     core.store.log_decision(owner, f"disposition.{result}",
                             detail=f"{row['action']} {row['doc_id']}: {detail}"[:200])
     _trace_decision(row["doc_id"], doc.get("path"), action=row["action"], status=result,
                     policy_id=row["policy_id"], reason=detail)
     return core.store.get_disposition_audit(audit_id, owner=owner)
+
+
+@router.post("/disposition/approvals/{audit_id}/undo")
+def undo_disposition(audit_id: str, request: Request):
+    """Put a file back where an applied action moved it (PRD §8).
+
+    Only an APPLIED row with a recorded before-state can be undone, and both halves matter. An
+    action that failed may or may not have moved the file, so there is nothing trustworthy to
+    reverse; an action applied before this column existed has no origin recorded, and restoring a
+    file to a folder nobody wrote down is indistinguishable — afterwards — from moving it
+    somewhere new. Both refuse rather than guess.
+
+    OWNER-gated like approve and execute: this touches the estate.
+
+    The undo is itself appended to the audit rather than erasing the original row. The record is
+    append-only by design, and "this was archived, then restored" is the true history; a row that
+    quietly reverted to pending would claim the archive never happened.
+    """
+    _require_owner(request)
+    owner = _owner(request)
+    row = core.store.get_disposition_audit(audit_id, owner=owner)
+    if row is None:
+        raise HTTPException(404, "no disposition with that id")
+    if row.get("result") != "applied":
+        raise HTTPException(409, f"only an applied action can be undone — this one is "
+                                 f"{row.get('result')!r}")
+    before = core.store.get_disposition_before_state(audit_id, owner)
+    if not before:
+        raise HTTPException(409, "no before-state was recorded for this action, so it cannot be "
+                                 "undone — it was applied before ACP recorded where files came "
+                                 "from")
+    docs = {d["doc_id"]: d for d in core.store.list_all_documents(owner=owner)}
+    doc = docs.get(row["doc_id"]) or {"doc_id": row["doc_id"], "source": "drive"}
+
+    result, detail = disposition.undo_action(doc, before, _drive_svc(request))
+    undo_id = hashlib.sha256(f"undo:{audit_id}".encode()).hexdigest()[:24]
+    core.store.create_disposition_audit(
+        undo_id, doc_id=row["doc_id"], policy_id=row["policy_id"],
+        action=f"undo_{row['action']}", result=result, detail=detail, owner_email=owner)
+    core.store.log_decision(owner, f"disposition.undo_{result}",
+                            detail=f"{row['action']} {row['doc_id']}: {detail}"[:200])
+    _trace_decision(row["doc_id"], doc.get("path"), action=f"undo_{row['action']}",
+                    status=result, policy_id=row["policy_id"], reason=detail)
+    if result != "applied":
+        raise HTTPException(502, detail)
+    return {"undone": audit_id, "audit_id": undo_id, "result": result, "detail": detail}
 
 
 class BatchApprovalIn(BaseModel):

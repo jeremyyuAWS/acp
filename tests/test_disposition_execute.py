@@ -56,14 +56,14 @@ def _doc(doc_id="drive:f123", source="drive"):
 
 def test_delete_is_always_trash():
     svc = FakeDrive()
-    result, detail = disposition.execute_action(_doc(), "delete", {}, svc)
+    result, detail, before = disposition.execute_action(_doc(), "delete", {}, svc)
     assert result == "applied" and "trash" in detail
     assert svc.calls == [("update", {"fileId": "f123", "body": {"trashed": True}})]
 
 
 def test_archive_moves_to_folder():
     svc = FakeDrive()
-    result, detail = disposition.execute_action(_doc(), "archive", {}, svc)
+    result, detail, before = disposition.execute_action(_doc(), "archive", {}, svc)
     assert result == "applied"
     kinds = [k for k, _ in svc.calls]
     assert "update" in kinds and ("list" in kinds or "create" in kinds)
@@ -71,31 +71,31 @@ def test_archive_moves_to_folder():
 
 def test_rename_uses_template():
     svc = FakeDrive()
-    result, detail = disposition.execute_action(
+    result, detail, before = disposition.execute_action(
         _doc(), "rename", {"template": "{name} [RETIRED]"}, svc)
     assert result == "applied" and "old-name.docx [RETIRED]" in detail
 
 
 def test_leave_needs_no_drive():
-    result, detail = disposition.execute_action(_doc(), "leave", {}, None)
+    result, detail, before = disposition.execute_action(_doc(), "leave", {}, None)
     assert result == "applied"
 
 
 def test_tag_executes_without_drive_and_needs_no_svc():
     # Tag is metadata-only: applies for any source, with svc=None, never touching Drive.
-    result, detail = disposition.execute_action(
+    result, detail, before = disposition.execute_action(
         _doc(doc_id="sp:abc", source="sharepoint"), "tag", {"tags": ["legacy", "review"]}, None)
     assert result == "applied" and detail == "tagged: legacy, review"
 
 
 def test_tag_dedupes_and_trims_in_detail():
-    result, detail = disposition.execute_action(
+    result, detail, before = disposition.execute_action(
         _doc(), "tag", {"tags": [" legacy ", "legacy", "", "review"]}, None)
     assert result == "applied" and detail == "tagged: legacy, review"
 
 
 def test_tag_with_no_tags_fails_cleanly():
-    result, detail = disposition.execute_action(_doc(), "tag", {"tags": []}, None)
+    result, detail, before = disposition.execute_action(_doc(), "tag", {"tags": []}, None)
     assert result == "failed" and "no tags" in detail
 
 
@@ -108,13 +108,13 @@ def test_validate_action_config_requires_tags_for_tag():
 
 
 def test_non_drive_source_fails_cleanly():
-    result, detail = disposition.execute_action(
+    result, detail, before = disposition.execute_action(
         _doc(doc_id="local:abc", source="local"), "delete", {}, FakeDrive())
     assert result == "failed" and "unsupported source" in detail
 
 
 def test_missing_drive_connection_fails_cleanly():
-    result, detail = disposition.execute_action(_doc(), "archive", {}, None)
+    result, detail, before = disposition.execute_action(_doc(), "archive", {}, None)
     assert result == "failed" and "Drive" in detail
 
 
@@ -122,7 +122,7 @@ def test_action_exception_becomes_failed():
     class Boom(FakeDrive):
         def files(self):
             raise RuntimeError("api down")
-    result, detail = disposition.execute_action(_doc(), "delete", {}, Boom())
+    result, detail, before = disposition.execute_action(_doc(), "delete", {}, Boom())
     assert result == "failed" and "RuntimeError" in detail
 
 
