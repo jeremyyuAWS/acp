@@ -21,11 +21,19 @@ WORKDIR /app
 # tesseract-ocr backs the 1.4.5 images-of-text check (api/ocr.py) — a lightweight
 # binary (unlike easyocr, which OOMs small containers).
 #
+# libpango/libharfbuzz/libfontconfig back WeasyPrint, which renders the ACR's accessible PDF
+# export (api/acr_export_pdf.py). NAMED EXPLICITLY even though libreoffice-* above already pulls
+# every one of them in transitively: that is an accident of another package's dependency tree,
+# and the day LibreOffice is dropped or slimmed from this image the ACR export would start
+# raising RendererUnavailable with nothing in this file explaining why it ever worked. The
+# `--no-install-recommends` above is exactly the flag that makes such inheritance brittle.
+#
 # KEEP IN SYNC with the hash inputs in redeploy.sh (_deps_hash). If you edit this block
 # without the script seeing it, a stale base is silently reused and the change never ships.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates libicu-dev tesseract-ocr \
        libreoffice-impress libreoffice-writer libreoffice-calc fonts-liberation \
+       libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libfontconfig1 \
     && curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
     && bash /tmp/dotnet-install.sh --runtime dotnet --channel 10.0 --install-dir /usr/share/dotnet \
     && ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet \

@@ -37,12 +37,13 @@ import json
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 import acr_authz
 import acr_axe
 import acr_catalog
+import acr_export_pdf
 import acr_export_preview
 import acr_freshness
 import acr_plans
@@ -829,6 +830,11 @@ def preview(report_id: str, request: Request, format: str = "json"):
 
     NOT a VPAT and not a .docx — the official ITI template is Phase 5, gated on a licensing
     decision. The output says so on its face; see api/acr_export_preview.py.
+
+    `format=pdf` returns the SAME projection rendered as a tagged PDF/UA-1 document, which is what
+    PRD §16's "the exported report is itself accessible" asks for. All three formats are built
+    from one `project()` call below — a reviewer who approves the HTML and a customer who receives
+    the PDF are looking at the same rows, and no code path exists in which they could differ.
     """
     owner = _tenant()
     report = _report_or_404(report_id, owner)
@@ -843,6 +849,18 @@ def preview(report_id: str, request: Request, format: str = "json"):
 
     if format == "html":
         return HTMLResponse(acr_export_preview.to_html(projection))
+    if format == "pdf":
+        # 503 and not a fallback. An untagged PDF is indistinguishable from this one to everyone
+        # except the reader it exists for, so a deployment that cannot tag must say so rather than
+        # hand over a conformance document that quietly lost its structure tree.
+        try:
+            pdf = acr_export_pdf.render_html(acr_export_preview.to_html(projection))
+        except acr_export_pdf.RendererUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
+        return Response(
+            pdf, media_type="application/pdf",
+            headers={"Content-Disposition":
+                     f'attachment; filename="{acr_export_pdf.filename_for(report)}"'})
     return projection
 
 
