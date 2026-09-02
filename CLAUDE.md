@@ -511,7 +511,8 @@ the approved design boards and fails if any is not rendered by some screen. Reti
 not on that list; components that are supposed to be live are.
 
 **Currently retired or unmounted, and mounted nowhere** (frontend/src): `AssessScope`,
-`ConfidenceDashboard`, `ControlPlane`, `Dashboard`, `Disposition`, `FileTypeConfig`,
+`ConfidenceDashboard`, `ControlPlane`, `Dashboard`, `Disposition`,
+`DispositionReviewWorkspace`, `FileTypeConfig`,
 `LiveAssessment`, `ProcessingDetails`, `RemediationApprovals`, `RiskScore`, `RolePrivilege`, `Rubric`, `ScanScope`,
 `ScanSetup`, `ScopeFunnel`, `ScopeRules`, `ScreenReaderDemo`, `Upload`.
 
