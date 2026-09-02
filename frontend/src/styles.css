@@ -10,15 +10,33 @@
      --card so it is always opaque (an undefined --surface resolves to transparent, which let
      scrolling rows bleed through the sticky scope-matrix header). */
   --surface: var(--card);
+
+  /* ── Semantic tokens for elements whose standard colors fail WCAG AA ──────────────
+     Centralised here so [data-wcag="on"] can override at the variable level rather
+     than duplicating per-selector rules.
+
+     --focus-ring:     global keyboard focus outline (#7a5c8e on white = 5.2:1, passes AA).
+     --text-secondary: denominator / secondary measurement text (.atile-den, 15px/600).
+                       Standard: #9aa2ac on #f7f9fb = 2.44:1 (FAILS). Intentional muted
+                       design; WCAG mode overrides to #5c6570 = 5.60:1 (PASSES).
+     --text-disabled:  pending / inactive state text (.assesslist .alstate, 12px/700).
+                       Standard: #B9B4C0 on #fff = 1.95:1 (FAILS). WCAG mode → #716b76 = 5.16:1.
+     --muted-fg:       alias for --muted used in inline JSX styles (EstateCoverage, etc.) so
+                       the WCAG toggle propagates automatically without JSX edits.             */
+  --focus-ring: #7a5c8e;
+  --text-secondary: #9aa2ac;
+  --text-disabled: #B9B4C0;
+  --muted-fg: var(--muted);      /* chart/bar fills in inline JSX — alias to --muted so WCAG toggle propagates */
+  --muted-text: var(--muted);    /* uppercase section headings in inline JSX (EstateCoverage) */
 }
 * { box-sizing: border-box; }
 
 /* Keyboard focus ring — visible focus is WCAG 2.4.7; this tool should practice it.
    Only shows for keyboard users (:focus-visible), never on mouse click. */
-:focus-visible { outline: 2px solid #7a5c8e; outline-offset: 2px; border-radius: 4px; }
+:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 4px; }
 a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
 textarea:focus-visible, [tabindex]:focus-visible, [role="button"]:focus-visible,
-[role="tab"]:focus-visible { outline: 2px solid #7a5c8e; outline-offset: 2px; }
+[role="tab"]:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
 /* Respect reduced-motion (WCAG 2.3.3 / 2.2.2) — calm every animation & transition. */
 @media (prefers-reduced-motion: reduce) {
@@ -191,7 +209,7 @@ button.small { padding: 6px 12px; font-size: 13px; }
 /* keyboard focus — this is an accessibility product; it should be accessible */
 button:focus-visible, a:focus-visible, .tab:focus-visible, .fchip:focus-visible,
 input:focus-visible, [role="tab"]:focus-visible {
-  outline: 2px solid #7a5c8e; outline-offset: 2px;
+  outline: 2px solid var(--focus-ring); outline-offset: 2px;
 }
 
 .source { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0; border-top: 1px solid var(--line); }
@@ -570,7 +588,7 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 /* clickable inventory rows + file detail drawer */
 .filerow { cursor: pointer; }
 .filerow:hover { background: var(--bg); }
-.filerow:focus-visible { outline: 2px solid #7a5c8e; outline-offset: -2px; }
+.filerow:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .drawer-overlay { position: fixed; inset: 0; background: rgba(28, 22, 32, 0.4); z-index: 50; }
 .drawer { position: fixed; top: 0; right: 0; height: 100%; width: 598px; max-width: 94vw; background: var(--card);
   z-index: 51; box-shadow: -10px 0 36px rgba(40, 30, 48, 0.16); overflow-y: auto; padding: 22px 24px 40px;
@@ -771,7 +789,7 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .covcell:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(40, 30, 48, 0.1); }
 .covsc { display: flex; align-items: baseline; gap: 7px; font-size: 13px; }
 .covsc b { font-variant-numeric: tabular-nums; }
-.covlvl { font-size: 10px; font-weight: 600; color: #6c6470; background: rgba(255, 255, 255, 0.6); border-radius: 5px; padding: 0 5px; }
+.covlvl { font-size: 10px; font-weight: 600; color: var(--muted); background: rgba(255, 255, 255, 0.6); border-radius: 5px; padding: 0 5px; }
 .covname { font-size: 12px; color: var(--ink); line-height: 1.3; min-height: 31px; }
 /* "Why it matters" — who's blocked & how, in palette-safe warning amber (no threatening red) */
 .covwhy { font-size: 11px; color: #854F0B; line-height: 1.35; }
@@ -1073,7 +1091,9 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
    Inactive step-number circles: standard palette is #6c6470 on #ece8ee = 4.07:1 (fail).
    WCAG mode uses the plum token on white — #46303F on #fff = 14.1:1.             */
 [data-wcag="on"] {
-  --muted: #595060;     /* #595060 on #faf8fb = 6.6:1 (was #6c6470 = 5.2:1 — already passing but tightened) */
+  --muted: #595060;          /* #595060 on #faf8fb = 7.25:1 (was #6c6470 = 5.38:1 — already passing) */
+  --text-secondary: #5c6570; /* was #9aa2ac on #f7f9fb = 2.44:1 (FAIL) → now 5.60:1 (PASS) */
+  --text-disabled: #716b76;  /* was #B9B4C0 on white = 1.95:1 (FAIL) → now 5.16:1 (PASS) */
 }
 [data-wcag="on"] .stepnum {
   background: var(--plum);   /* #46303F */
@@ -1390,7 +1410,7 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .assesslist li.pending { color: var(--muted); }
 .assesslist li.done + li.pending { border-top: 1px solid #EFECF2; }
 .alstate { font-weight: 700; color: #3B6D11; width: 12px; flex: 0 0 12px; }
-.assesslist li.pending .alstate { color: #B9B4C0; }
+.assesslist li.pending .alstate { color: var(--text-disabled); }
 .assesslist li.active { background: #F2F8EA; color: #315F16; }
 .assesslist li.active .alstate { color: #4B861F; animation: assessPulse 1.2s ease-in-out infinite; }
 .assess-live-stage { color: #3B6D11; font-weight: 600; }
@@ -1414,7 +1434,7 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .atile b { display: block; font-size: 28px; line-height: 1.05; font-weight: 800; letter-spacing: -.01em; }
 /* The denominator / percent that trails the headline number — smaller and muted so the outcome
    figure leads, the way the KPI cards read as one number with context rather than two. */
-.atile .atile-den { font-size: 15px; font-weight: 600; color: #9aa2ac; letter-spacing: 0; }
+.atile .atile-den { font-size: 15px; font-weight: 600; color: var(--text-secondary); letter-spacing: 0; }
 .atile span { display: block; font-size: 11.5px; color: #6B747D; margin-top: 4px; }
 .assessnote { margin: 12px 0 0; font-size: 12.5px; }
 @media (max-width: 720px) { .assesstiles { grid-template-columns: repeat(2, 1fr); } .lvlseg { flex-wrap: wrap; } }
@@ -2554,6 +2574,6 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .acc-toggle .acc-chevron { flex: 0 0 auto; font-size: 11px; line-height: 1.4; opacity: .7; }
 .acc-toggle .acc-meta { font-weight: 400; font-size: 12.5px; }
 .acc-toggle:hover .acc-title { color: var(--plum, #46303F); }
-.acc-toggle:focus-visible { outline: 2px solid #7a5c8e; outline-offset: 3px; border-radius: 4px; }
+.acc-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; border-radius: 4px; }
 .acc-panel[hidden] { display: none; }
 .acc-panel:not([hidden]) { margin-top: 10px; }
