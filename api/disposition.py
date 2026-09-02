@@ -364,6 +364,54 @@ def _ensure_folder(svc, name: str) -> str:
         fields="id").execute()["id"]
 
 
+def plan_action(doc: dict, action: str, action_config: dict | None) -> dict:
+    """What execute_action WOULD do to `doc`, without doing any of it.
+
+    Takes no Drive client and makes no call, which is the property that matters: a dry run that
+    can touch the estate is not a dry run. It is also why the rename preview names the template
+    rather than the resulting filename — the current name lives in Drive, and reading it would
+    mean a network call this deliberately cannot make.
+
+    Returns {will, target, recoverable, blocked}. `blocked` is a reason the action could not be
+    performed at all, and it is stated up front rather than discovered at execution: the whole
+    point of showing a reviewer a plan is that they see the refusals BEFORE they authorise
+    anything.
+    """
+    cfg = action_config or {}
+    if action == "leave":
+        return {"will": "leave the file where it is", "target": None,
+                "recoverable": None, "blocked": None}
+    if action == "tag":
+        tags = tag_list(cfg)
+        return {"will": f"tag the document {', '.join(tags)}" if tags else "tag the document",
+                "target": None, "recoverable": None,
+                "blocked": None if tags else "tag action has no tags configured"}
+    if not _drive_file_id(doc):
+        return {"will": None, "target": None, "recoverable": None,
+                "blocked": (f"unsupported source '{doc.get('source')}' — only Drive-backed "
+                            "documents can be actioned")}
+    if action == "delete":
+        return {"will": "move the file to Google Drive trash", "target": "Drive trash",
+                # The same claim api/disposition.py's own detail string makes, and no stronger:
+                # nothing here reads a retention policy back from Drive.
+                "recoverable": "recoverable from Drive trash for about 30 days",
+                "blocked": None}
+    if action == "rename":
+        template = cfg.get("template") or "{name} [ARCHIVED {date}]"
+        return {"will": "rename the file in place", "target": f"pattern {template}",
+                "recoverable": "the previous name is recorded, so this can be undone",
+                "blocked": None}
+    if action in ("archive", "move"):
+        folder = cfg.get("target_folder_id")
+        return {"will": "move the file out of its current folder",
+                "target": (f"folder {folder}" if folder
+                           else f"the '{ARCHIVE_FOLDER}' folder (created if it does not exist)"),
+                "recoverable": "the current folder is recorded, so this can be undone",
+                "blocked": None}
+    return {"will": None, "target": None, "recoverable": None,
+            "blocked": f"unknown action '{action}'"}
+
+
 def execute_action(doc: dict, action: str, action_config: dict | None, svc) -> tuple[str, str]:
     """Apply `action` to `doc`. Returns (result, detail) with result applied|failed.
 
