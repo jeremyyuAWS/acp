@@ -64,11 +64,27 @@ export default function DiscoverInventoryExport({
     [list, scanId, run, snap.at, unread],
   )
 
+  const canExport = !unread && preview && preview.rowCount > 0
+
   return (
     <section className="discover-inventory-export" aria-label="Discovery inventory export">
-      <h3 style={{ margin: '0 0 4px', fontSize: 16 }}>Inventory snapshot</h3>
+      {/* Header row: title left, export buttons right */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
+        <h3 style={{ margin: 0, fontSize: 16 }}>Inventory snapshot</h3>
+        {!unread && preview && (
+          <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+            <button type="button" onClick={() => build('csv')} disabled={!canExport}>
+              Export CSV
+            </button>
+            <button type="button" onClick={() => build('json')} disabled={!canExport}>
+              Export JSON
+            </button>
+          </div>
+        )}
+      </div>
 
-      {/* ── When ─────────────────────────────────────────────────────────────── */}
+      {/* Snapshot time */}
       {snap.recorded ? (
         <p style={{ margin: '0 0 2px', fontSize: 13.5 }}>
           Inventory taken{' '}
@@ -81,61 +97,31 @@ export default function DiscoverInventoryExport({
       ) : (
         <p style={{ margin: '0 0 2px', fontSize: 13.5 }}>
           <strong>Discovery completion time not recorded for this run.</strong>{' '}
-          <span className="muted">{snap.note}</span>
+          <span className="muted">{snap.note ?? 'Re-run discovery to get a dated snapshot.'}</span>
         </p>
       )}
-      <p className="muted" style={{ fontSize: 12, margin: '0 0 12px' }}>
-        {snap.recorded
-          ? `Every count on this screen is true as of that instant — ${snap.label}.`
-          : 'Re-run discovery to get a dated snapshot.'}
-      </p>
 
-      {/* ── What comes out ───────────────────────────────────────────────────── */}
       {unread ? (
-        <p className="muted" style={{ fontSize: 13 }}>
-          The inventory could not be read, so there is nothing to export. This is not an empty
-          estate — it means the per-file list did not come back.
+        <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>
+          Inventory could not be read — nothing to export.
         </p>
       ) : (
         <>
-          <p style={{ fontSize: 13, margin: '0 0 8px' }}>
+          <p style={{ fontSize: 13, margin: '4px 0 0' }}>
             {nf.format(preview.rowCount)} file{preview.rowCount === 1 ? '' : 's'} ·{' '}
             {preview.columns.length} column{preview.columns.length === 1 ? '' : 's'}
-          </p>
-          <p className="muted" style={{ fontSize: 12, margin: '0 0 10px' }}>
-            Metadata only. Discovery lists and classifies from what the source reports; it never
-            opens a file, so the export carries no findings, scores or conformance verdicts. A
-            discovered file has no assessment — which is not the same as a clean one.
-          </p>
-          <p className="muted" style={{ fontSize: 12, margin: '0 0 10px' }}>
-            In the CSV, <code>(not collected)</code> means discovery recorded no value; an empty
-            cell means it recorded an empty one. The JSON uses <code>null</code> for the first.
+            {preview.rowCount === 0 && (
+              <span className="muted"> — no files to export</span>
+            )}
           </p>
           {preview.omitted.length > 0 && (
-            <p className="muted" style={{ fontSize: 12, margin: '0 0 10px' }}>
-              Not shipped, because every row was empty:{' '}
-              {preview.omitted.map((o) => o.header).join(', ')}.
+            <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
+              Columns omitted (every row empty): {preview.omitted.map((o) => o.header).join(', ')}.
             </p>
           )}
-
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button type="button" onClick={() => build('csv')} disabled={preview.rowCount === 0}>
-              Export CSV
-            </button>
-            <button type="button" onClick={() => build('json')} disabled={preview.rowCount === 0}>
-              Export JSON
-            </button>
-          </div>
-          {preview.rowCount === 0 && (
-            <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-              This run inventoried no files, so there is nothing to export.
-            </p>
-          )}
-          {/* Mounted empty rather than conditionally, because a live region a screen reader has
-              not been observing since before the update is one it may never announce — and this
-              is the confirmation that a download the browser gives no other feedback for
-              actually happened. */}
-          <p className="muted" role="status" style={{ fontSize: 12, marginTop: 8 }}>
+          {/* Live region — mounted empty so a screen reader already observes it before the
+              download fires, making the announcement reliable. */}
+          <p className="muted" role="status" style={{ fontSize: 12, marginTop: 6 }}>
             {saved
               ? `Saved ${saved.filename} — ${nf.format(saved.rowCount)} row${saved.rowCount === 1 ? '' : 's'}.`
               : ''}
