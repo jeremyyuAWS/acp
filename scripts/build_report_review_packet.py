@@ -25,6 +25,9 @@ Writes DIR (default review-packet/):
     previous.pdf       the renderer it replaced, for side-by-side (skipped if Chromium is absent)
     pages/             both rendered page by page, plus amplified difference images
     verapdf-live.txt   machine-readable ua1 result for live.pdf (skipped if veraPDF is absent)
+    reading-order.txt  live.pdf's structure walked in the order an assistive technology
+                       traverses it — roles, alternatives, header scope
+    reading-order-previous.txt   the same for previous.pdf, so the two are comparable
     REVIEW.md          what was checked here, and what the reviewer must still do
 
 WHICH RENDERER IS "LIVE" IS ASKED, NOT ASSUMED. The names above used to be candidate.pdf and
@@ -91,6 +94,144 @@ def load_scan(db: Path, scan_id: str | None, owner: str | None):
         "evidence": core.store.get_remediation_evidence(scan_id),
         "facts": core.store.get_certification_facts(scan_id, apply_document_selection=True),
     }
+
+
+# ── reading order, as an assistive technology derives it ─────────────────────────────────────
+
+#: PDF structure roles mapped to roughly what a screen reader says for them. Approximate on
+#: purpose: readers differ, and the point is to make the SEQUENCE legible, not to imitate any one
+#: of them. Roles that carry no announcement of their own map to "".
+_ROLE_SPEECH = {
+    "/H1": "heading level 1", "/H2": "heading level 2", "/H3": "heading level 3",
+    "/H4": "heading level 4", "/H5": "heading level 5", "/H6": "heading level 6",
+    "/Figure": "graphic", "/Link": "link", "/Table": "table", "/TR": "row",
+    "/TH": "header cell", "/TD": "cell", "/L": "list", "/LI": "list item",
+    "/Caption": "caption", "/Document": "document", "/Sect": "section", "/P": "paragraph",
+    "/Span": "", "/LBody": "", "/THead": "", "/TBody": "", "/Div": "", "/NonStruct": "",
+}
+
+#: Structural plumbing a reader announces nothing for — omitted so the sequence stays readable.
+_SILENT = frozenset({"/Span", "/Div", "/NonStruct", "/THead", "/TBody", "/LBody"})
+
+
+def _walk_reading_order(node, rows, seen, depth=0):
+    """Every structure element in tree order, which is the order a reader traverses.
+
+    Visited-set keyed on the PDF object id and skipping (0, 0), for the reason
+    tests/test_report_weasy_structure.py records at length: pikepdf returns a fresh wrapper per
+    access and CPython recycles those addresses, so an id()-keyed set silently truncates the
+    walk. A traversal that stops early does not look broken — it looks like a shorter document.
+    """
+    import pikepdf
+
+    if isinstance(node, pikepdf.Array):
+        for kid in node:
+            _walk_reading_order(kid, rows, seen, depth)
+        return
+    if not isinstance(node, pikepdf.Dictionary):
+        return
+    try:
+        oid = node.objgen
+    except Exception:                                    # noqa: BLE001 — a direct object
+        oid = None
+    if oid and oid != (0, 0):
+        if oid in seen:
+            return
+        seen.add(oid)
+
+    role = node.get("/S")
+    if role is not None:
+        rows.append({
+            "depth": depth,
+            "role": str(role),
+            "alt": str(node["/Alt"]) if "/Alt" in node else None,
+            "scope": str(node["/Scope"]) if "/Scope" in node else None,
+        })
+    kids = node.get("/K")
+    if kids is not None:
+        _walk_reading_order(kids, rows, seen, depth + 1)
+
+
+def reading_order(pdf_path, out_file):
+    """Write the tagged structure in reading order; return counts REVIEW.md can quote.
+
+    WHY THIS SHIPS IN THE PACKET. PAC 2024 and NVDA are the two gates ADR 0034 asks for and this
+    environment cannot run — PAC is a .NET Framework 4.8 WinForms application (attempted under
+    Wine 9.0 with Wine Mono 9.0.0 on 2026-09-02: the Mono runtime raises a
+    TypeInitializationException in mscorlib before any UI loads, and PAC has no CLI), and NVDA
+    needs Windows UIA and a speech synthesiser. This is the part of what they check that CAN be
+    answered from the document itself: the order, the roles, and whether every graphic carries an
+    alternative.
+
+    WHAT IT DOES NOT ANSWER, which is why the gates stand: how a particular reader BEHAVES (NVDA,
+    JAWS and VoiceOver differ from each other and from the spec), whether an alternative is
+    USEFUL as speech rather than merely present and non-empty, and anything interactive —
+    heading-jump, table navigation, the reading cursor.
+
+    NO TEXT COLUMN, deliberately. A structure element's text lives in the content stream behind
+    an MCID, not in the element, so printing what is reachable from the element itself yields an
+    empty string for every heading and paragraph — which reads as "this heading has no text" and
+    is false. Roles and alternatives are what this file is honest about; the words are in the PDF
+    beside it.
+    """
+    import pikepdf
+
+    rows = []
+    with pikepdf.open(str(pdf_path)) as pdf:
+        root = pdf.Root
+        lang = str(root.get("/Lang", "MISSING"))
+        title = str(pdf.docinfo.get("/Title", "")) if pdf.docinfo else ""
+        if "/StructTreeRoot" not in root:
+            out_file.write_text(
+                f"{pdf_path.name} has NO STRUCTURE TREE — an assistive technology gets no "
+                f"headings, no reading order and no table structure from it.\n")
+            return {"elements": 0, "figures": 0, "figures_without_alt": 0, "th": 0,
+                    "th_with_scope": 0, "links": 0, "lang": lang, "title": title,
+                    "tagged": False}
+        _walk_reading_order(root.StructTreeRoot, rows, set())
+
+    figures = [r for r in rows if r["role"] == "/Figure"]
+    th = [r for r in rows if r["role"] == "/TH"]
+    counts = {
+        "elements": len(rows),
+        "figures": len(figures),
+        "figures_without_alt": sum(1 for r in figures if not (r["alt"] or "").strip()),
+        "th": len(th),
+        "th_with_scope": sum(1 for r in th if r["scope"]),
+        "links": sum(1 for r in rows if r["role"] == "/Link"),
+        "lang": lang,
+        "title": title,
+        "tagged": True,
+    }
+
+    lines = [
+        f"# {pdf_path.name} — structure in reading order",
+        "",
+        f"document language : {lang}",
+        f"document title    : {title or 'MISSING'}",
+        f"structure elements: {len(rows)}",
+        "",
+        "Roles and alternatives only — a structure element's text lives in the content stream",
+        "behind an MCID, so printing what the element itself carries would show every heading",
+        "as empty. Read the words in the PDF; read the ORDER and the ROLES here.",
+        "",
+        "=" * 78,
+    ]
+    for r in rows:
+        if r["role"] in _SILENT:
+            continue
+        label = (_ROLE_SPEECH.get(r["role"], r["role"].lstrip("/").lower())
+                 or r["role"].lstrip("/"))
+        line = "  " * min(r["depth"], 10) + label
+        if r["alt"] is not None:
+            line += f'  ALT="{r["alt"]}"'
+        if r["scope"]:
+            line += f'  scope={r["scope"].lstrip("/")}'
+        lines.append(line)
+    # The whole traversal, never truncated. An elided one reported two of this report's three
+    # figure alternatives and none of its links — both read as findings, both were the cut-off.
+    out_file.write_text("\n".join(lines) + "\n")
+    return counts
 
 
 @contextlib.contextmanager
@@ -230,6 +371,14 @@ def main() -> int:
                      f"live document alone.")
         print(f"previous.pdf   SKIPPED — {type(exc).__name__}: {exc}")
 
+    ro = reading_order(live, out / "reading-order.txt")
+    print(f"reading order  {ro['elements']} elements, {ro['figures']} figure(s) "
+          f"({ro['figures_without_alt']} without Alt), {ro['th']} header cell(s) "
+          f"({ro['th_with_scope']} with Scope), {ro['links']} link(s)")
+    ro_prev = None
+    if (out / "previous.pdf").exists():
+        ro_prev = reading_order(out / "previous.pdf", out / "reading-order-previous.txt")
+
     if VERAPDF_OK:
         res = validate(live)
         (out / "verapdf-live.txt").write_text(res.summary())
@@ -243,6 +392,16 @@ def main() -> int:
         print(f"verapdf        SKIPPED — {NO_VERAPDF}")
 
     diff_block = "\n".join(f"- {line}" for line in diff_lines) or "- not measured, see above"
+    scope_line = (
+        f"**{ro['th_with_scope']} of {ro['th']} header cells carry an explicit `/Scope`.**"
+        if ro["th"] else "This report has no table header cells.")
+    prev_scope = (f"{ro_prev['th_with_scope']} of {ro_prev['th']}" if ro_prev
+                  else "an unknown number of")
+    ro_line = (
+        f"{ro['elements']} elements, {ro['figures']} figure(s) with "
+        f"{ro['figures_without_alt']} missing an alternative, {ro['links']} link(s)."
+        if ro["tagged"] else
+        "**live.pdf has no structure tree at all** — a reader gets nothing from it.")
     live_banner = (
         "**This is the document customers already receive.** `/scans/{{sid}}/report.pdf` has "
         "served {live_name} since #1201, and the two gates below were NOT run before that "
@@ -284,10 +443,26 @@ def main() -> int:
    one passing is not the other passing.
 2. **NVDA (Windows) or VoiceOver (macOS).** Read `live.pdf` front to back. The question is
    reading order and whether the chart alternatives say anything useful — a validator cannot ask
-   either. Specifically worth hearing: the two chart Figures, whose Alt text is a sentence
-   generated from the run's own numbers, and whether the File Inventory table's row headers are
+   either. Specifically worth hearing: the chart Figures, whose Alt text is a sentence generated
+   from the run's own numbers, and whether the File Inventory table's row and column headers are
    announced with each cell.
-3. **Visual sign-off.** `pages/` holds both renderers page by page, plus amplified difference
+
+   **That last one is the sharp question, and `reading-order.txt` says why.** {scope_line} PDF/UA
+   does not require `/Scope` where a table's shape lets a reader infer headers by position, and
+   veraPDF accepts this table — but inference is where readers differ from each other, so it is
+   exactly what a human pass settles and a validator cannot. It is not a regression: the previous
+   renderer scoped {prev_scope} of its own header cells.
+
+3. **`reading-order.txt`** is what could be checked here in place of a screen reader: the
+   structure walked in the order a reader traverses it, with every role, alternative and scope.
+   {ro_line} It answers the document half of the NVDA question — order, roles, alternatives
+   present — and none of the experience half: how a given reader behaves, whether an alternative
+   is useful as speech, or anything interactive.
+
+   PAC was attempted here rather than assumed impossible. It is a .NET Framework 4.8 WinForms
+   application with no CLI; under Wine 9.0 with Wine Mono 9.0.0 the Mono runtime raises a
+   TypeInitializationException in mscorlib before any UI loads.
+4. **Visual sign-off.** `pages/` holds both renderers page by page, plus amplified difference
    images. Two known-deliberate differences, neither of them drift: Chromium's print header and
    footer are gone (that is the temp-path leak), and a "Standard reference" row linking to
    WCAG 2.1 is added, because the older report contains no link to keep parity with.

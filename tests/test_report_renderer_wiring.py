@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,9 @@ sys.path.insert(0, str(ROOT / "api"))
 #: WeasyPrint 69 never loads. libglib2.0-0 (gobject) is not asserted: it arrives as a dependency
 #: of libpango and demanding it explicitly would assert a packaging detail, not a requirement.
 _NATIVE = ("libpango-1.0-0", "libpangoft2-1.0-0", "libharfbuzz0b", "libfontconfig1")
+
+sys.path.insert(0, str(ROOT / "tests"))
+from test_report_weasy_structure import _FILES, _META, _RUN  # noqa: E402
 
 _REQS = ROOT / "api" / "requirements.txt"
 _BASE_API = ROOT / "deploy" / "public" / "Dockerfile.base-api"
@@ -121,3 +125,65 @@ def test_the_review_packet_asks_which_renderer_is_live_rather_than_assuming():
     assert "_scans._REPORT_RENDERER" in src, (
         "the review packet no longer asks the route which renderer is live; it will mislabel "
         "the document a reviewer signs off the moment ACP_REPORT_RENDERER is flipped")
+
+
+def test_the_review_packet_ships_a_reading_order_traversal():
+    """The packet answers the document half of the NVDA gate, since NVDA cannot run here.
+
+    PAC 2024 and a screen-reader pass are the two gates ADR 0034 asks for and this environment
+    cannot provide — PAC is a .NET Framework 4.8 WinForms app with no CLI (attempted under Wine
+    9.0 with Wine Mono 9.0.0: the Mono runtime raises TypeInitializationException in mscorlib
+    before any UI loads), and NVDA needs Windows UIA and a speech synthesiser. Walking the
+    structure tree in reading order is the part that CAN be checked from the document, and it is
+    what caught that 0 of 57 header cells carry an explicit /Scope.
+
+    Asserted on the counts the traversal returns rather than on the file it writes: those counts
+    are what REVIEW.md interpolates, so a traversal that stopped reporting them would leave the
+    sign-off document making claims with no measurement behind them.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_packet", ROOT / "scripts" / "build_report_review_packet.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_packet"] = mod
+    spec.loader.exec_module(mod)
+
+    assert hasattr(mod, "reading_order"), "the packet no longer walks the structure tree"
+
+    # Run it against a report this suite builds, rather than asserting the function exists.
+    pytest.importorskip("weasyprint")
+    sys.path.insert(0, str(ROOT / "api"))
+    import report_weasy
+
+    with tempfile.TemporaryDirectory() as td:
+        pdf = Path(td) / "r.pdf"
+        pdf.write_bytes(report_weasy.build_weasy_report(_RUN, _FILES, _META))
+        counts = mod.reading_order(pdf, Path(td) / "reading-order.txt")
+        text = (Path(td) / "reading-order.txt").read_text()
+
+    assert counts["tagged"] is True, "the built report has no structure tree"
+    assert counts["elements"] > 20, f"only {counts['elements']} elements — the walk truncated"
+    assert counts["figures"] >= 2, (
+        f"{counts['figures']} figures; the report has a logo and at least one chart")
+    assert counts["figures_without_alt"] == 0, (
+        f"{counts['figures_without_alt']} figure(s) carry no alternative — that is the defect "
+        f"the NVDA gate exists to catch, and it is catchable here")
+    assert counts["th"] > 0, "no header cells found; the tables lost their TH tags"
+    assert "heading level 1" in text and "graphic" in text, (
+        "the traversal names no roles; a reviewer cannot read reading order out of it")
+
+
+def test_the_traversal_does_not_truncate():
+    """An elided traversal reads as a finding rather than as a cut-off.
+
+    The first version of this printed 120 elements and stopped. On this report that hid one of
+    three figure alternatives and the only link — both of which read as real defects, and both of
+    which were the limit. A reviewer cannot tell the difference from the file.
+    """
+    src = (ROOT / "scripts" / "build_report_review_packet.py").read_text()
+    body = src[src.index("def reading_order("):src.index("@contextlib.contextmanager")]
+    for stop in ("break", "[:120]", "islice"):
+        assert stop not in body, (
+            f"reading_order contains {stop!r}; a truncated traversal silently omits elements a "
+            f"reviewer would read as missing")
