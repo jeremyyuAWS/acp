@@ -85,6 +85,29 @@ class PolicyCreate(BaseModel):
     action_config: dict = {}
     requires_approval: bool = True
     enabled: bool = False        # created disabled by default -- an explicit opt-in to enable
+    #: PRD §7.5: a destructive rule "cannot disable approval without an administrator capability
+    #: and an explicit confirmation". requires_approval already DEFAULTS to True, which is the
+    #: first half and the easy half; nothing enforced the second, so one boolean in a JSON body
+    #: was the whole distance between "queued for a human" and a rule that moves or trashes
+    #: documents unattended. In the body rather than a header or query flag, so it is part of the
+    #: request a client had to compose deliberately.
+    confirm_unattended: bool = False
+
+
+def _guard_unattended(action: str, requires_approval: bool, confirmed: bool) -> None:
+    """Refuse to arm a source-mutating rule that skips human approval, unless asked twice.
+
+    The auto-apply branch (requires_approval false) is the one path in this system that changes a
+    file with NO human in the loop, so this is the last point at which anybody is asked at all.
+
+    `leave` and `tag` are exempt because they change no file. Gating them would train people to
+    send the flag by reflex, and a confirmation everyone sends stops being a confirmation.
+    """
+    if action in disposition.SOURCE_MUTATING and not requires_approval and not confirmed:
+        raise HTTPException(422, (
+            f"'{action}' changes the source file, so a rule that skips approval would move or "
+            f"trash documents with no human review. Send confirm_unattended=true to accept that, "
+            f"or leave requires_approval=true."))
 
 
 @router.post("/disposition/policies")
@@ -92,6 +115,7 @@ def create_policy(body: PolicyCreate, request: Request):
     _require_admin(request)
     if body.action not in disposition.ACTIONS:
         raise HTTPException(422, f"action must be one of {sorted(disposition.ACTIONS)}")
+    _guard_unattended(body.action, body.requires_approval, body.confirm_unattended)
     try:
         disposition.validate_match(body.match)
         disposition.validate_action_config(body.action, body.action_config)
@@ -240,6 +264,11 @@ def set_policy_enabled(policy_id: str, enabled: bool, request: Request):
     return core.store.get_disposition_policy(policy_id, owner=owner)
 
 
+#: How many non-matching documents a preview names. Small on purpose: this is a sample to reason
+#: from, not a second result set, and the preview fires on every keystroke in the rule editor.
+_NEAR_MISS_SAMPLE = 5
+
+
 def _preview(match: list[dict], action: str, policy_id: str | None, owner: str) -> dict:
     """The dry run itself, shared by the saved-policy preview and the draft preview.
 
@@ -281,6 +310,16 @@ def _preview(match: list[dict], action: str, policy_id: str | None, owner: str) 
     effective = 0
     superseded = 0
     exempted = 0
+    # PRD §7.5 asks the test bench for "representative matches and non-matches". The matches are
+    # already returned in full as `documents`; the non-matches were the missing half, and they are
+    # the debugging half — a rule that selects far fewer files than expected is diagnosed by
+    # seeing what it REJECTED and why, not by staring at the count it produced.
+    #
+    # The reasons cost nothing extra: disposition.evaluate() already runs for every document in
+    # the loop below, so the failing condition is in hand and was being thrown away. Only the
+    # SAMPLE is bounded, and that is about payload size — this runs on every keystroke in the
+    # rule editor, and a 12,000-row list of near misses helps nobody.
+    near_misses: list[dict] = []
     exempted_documents: list[dict] = []
     unable_to_evaluate = 0
     unable_to_evaluate_fields: dict[str, int] = {}
@@ -304,6 +343,20 @@ def _preview(match: list[dict], action: str, policy_id: str | None, owner: str) 
                 unable_to_evaluate += 1
                 for f in missing_fields:
                     unable_to_evaluate_fields[f] = unable_to_evaluate_fields.get(f, 0) + 1
+            if len(near_misses) < _NEAR_MISS_SAMPLE:
+                # The FIRST failing condition, not every one: a reader debugging "why didn't
+                # this match?" wants the reason it fell out, and the conditions after it were
+                # never the deciding factor.
+                failed = next((c for c in eval_result["conditions"] if c["outcome"] == "fail"), None)
+                near_misses.append({
+                    "path": doc.get("path"), "doc_id": doc.get("doc_id"),
+                    "field": (failed or {}).get("field"),
+                    "observed_value": (failed or {}).get("observed_value"),
+                    "reason": (failed or {}).get("reason"),
+                    # Distinguishes "this file is genuinely not a match" from "we could not tell",
+                    # which unable_to_evaluate counts in aggregate but never names a file for.
+                    "unevaluable": bool(missing_fields),
+                })
             continue
 
         selected.append(doc)
@@ -350,6 +403,8 @@ def _preview(match: list[dict], action: str, policy_id: str | None, owner: str) 
         "exempted_documents": exempted_documents,
         "unable_to_evaluate": unable_to_evaluate,
         "unable_to_evaluate_fields": unable_to_evaluate_fields,
+        "near_misses": near_misses,
+        "near_miss_sample": _NEAR_MISS_SAMPLE,
     }
 
 
@@ -424,6 +479,7 @@ class PolicyUpdate(BaseModel):
     action: str | None = None
     action_config: dict | None = None
     requires_approval: bool | None = None
+    confirm_unattended: bool = False
 
 
 def _policy_has_history(policy_id: str, owner: str) -> bool:
@@ -525,6 +581,20 @@ def update_policy(policy_id: str, body: PolicyUpdate, request: Request):
     new_name = policy.get("name") if body.name is None else body.name
     new_req = (bool(policy.get("requires_approval")) if body.requires_approval is None
                else body.requires_approval)
+    # Guarded on the TRANSITION, not the state. Two things had to be got right here and the
+    # first draft only got one:
+    #
+    #   · resolve first — `requires_approval` and `action` are both optional, so a rule created
+    #     with approval could otherwise have it edited away in a one-field PATCH, which is the
+    #     easier of the two bypasses to take and the harder to notice afterwards;
+    #   · and fire only when this edit CREATES the unattended state. A rule that was already
+    #     unattended — armed before this guard existed, or armed with a confirmation — must stay
+    #     renameable. Guarding the state instead broke exactly that, and the suite said so:
+    #     test_a_rule_that_has_run_can_still_be_renamed started returning 422 for a rename.
+    was_unattended = (str(policy.get("action")) in disposition.SOURCE_MUTATING
+                      and not bool(policy.get("requires_approval")))
+    if not was_unattended:
+        _guard_unattended(new_action, new_req, body.confirm_unattended)
     core.store.update_disposition_policy(
         policy_id, name=new_name, match=json.dumps(new_match), action=new_action,
         action_config=json.dumps(new_cfg), requires_approval=new_req)
