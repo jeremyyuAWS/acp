@@ -291,9 +291,13 @@ def test_the_report_is_set_in_the_intended_sans_face(report):
     the CSS is the mechanism, the embedded face is the property.
     """
     fonts = _embedded_fonts(report)
-    assert any("Liberation" in f for f in fonts), (
-        f"Liberation Sans is not embedded — the font stack is not reaching the renderer. "
-        f"Embedded: {sorted(fonts)}")
+    # Production is Debian and deliberately installs Liberation Sans. Developer Macs resolve
+    # the same CSS fallback to Arial instead; that is not evidence that the declaration was
+    # ignored. The invariant is a real sans face, never WeasyPrint's serif default. A separate
+    # deployment test below pins the production image's deterministic font package.
+    assert any(("Liberation" in f) or ("Arial" in f) for f in fonts), (
+        f"neither Liberation Sans nor its Arial fallback is embedded — the font stack is not "
+        f"reaching the renderer. Embedded: {sorted(fonts)}")
     assert not any(("Serif" in f) or ("Charter" in f) or ("Times" in f) for f in fonts), (
         f"a serif face is embedded — the sans stack was ignored. Embedded: {sorted(fonts)}")
 
@@ -303,9 +307,31 @@ def test_the_tick_and_cross_glyphs_have_a_font_that_carries_them(report):
     a second face must be embedded to supply them. Without it they render as tofu — visible to a
     sighted reader, invisible to every automated check in this file."""
     fonts = _embedded_fonts(report)
-    assert any("DejaVu" in f for f in fonts), (
-        f"no DejaVu face embedded — the ✓/✗ marks in the File Inventory have no glyph source. "
-        f"Embedded: {sorted(fonts)}")
+    # macOS supplies these glyphs from Arial Unicode MS. Production deliberately installs
+    # DejaVu; accepting the platform-equivalent face keeps this render test meaningful locally
+    # without making the container's font selection ambient.
+    assert any(("DejaVu" in f) or ("Arial-Unicode" in f) for f in fonts), (
+        f"no symbol-capable fallback face is embedded — the ✓/✗ marks in the File Inventory "
+        f"have no glyph source. Embedded: {sorted(fonts)}")
+
+
+def test_the_runtime_declares_the_renderer_fonts_and_native_libraries():
+    """Selecting the renderer must work in the deployed image, not only in a developer venv.
+
+    PR #1159 added the module and its tests without adding WeasyPrint to the API requirements;
+    it also relied on DejaVu while the image installed only Liberation. Both omissions allow a
+    locally green PDF to fail at the first production request or render its symbols as tofu.
+    """
+    requirements = (ACP / "api/requirements.txt").read_text(encoding="utf-8").lower()
+    base_image = (ACP / "deploy/public/Dockerfile.base-api").read_text(encoding="utf-8")
+    fallback_image = (ACP / "deploy/public/Dockerfile").read_text(encoding="utf-8")
+    assert "weasyprint==" in requirements
+    required_apt = ("fonts-liberation", "fonts-dejavu-core", "libpango-1.0-0",
+                    "libpangoft2-1.0-0", "libharfbuzz0b", "libfontconfig1")
+    assert all(package in base_image for package in required_apt)
+    # Dockerfile's from-scratch path must be complete too. Testing only the optimized base image
+    # lets a clean build succeed and then fail at the first PDF request.
+    assert all(package in fallback_image for package in required_apt)
 
 
 def test_the_chart_alt_names_the_criterion_the_chart_actually_shows_as_largest():
