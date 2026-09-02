@@ -20,11 +20,20 @@ Usage:
     python scripts/build_report_review_packet.py [-o DIR]
 
 Writes DIR (default review-packet/):
-    candidate.pdf          the WeasyPrint report — the file to open in PAC and the reader
-    shipped.pdf            today's Chromium report, for side-by-side (skipped if no Chromium)
-    pages/                 both rendered page by page, plus amplified difference images
-    verapdf-candidate.txt  machine-readable ua1 result (skipped if veraPDF is absent)
-    REVIEW.md              what was checked here, and what the reviewer must still do
+    live.pdf           what /scans/{sid}/report.pdf serves today — the file to open in PAC and
+                       to read with a screen reader
+    previous.pdf       the renderer it replaced, for side-by-side (skipped if Chromium is absent)
+    pages/             both rendered page by page, plus amplified difference images
+    verapdf-live.txt   machine-readable ua1 result for live.pdf (skipped if veraPDF is absent)
+    REVIEW.md          what was checked here, and what the reviewer must still do
+
+WHICH RENDERER IS "LIVE" IS ASKED, NOT ASSUMED. The names above used to be candidate.pdf and
+shipped.pdf, from when WeasyPrint was a proposal. It became the default in #1201, at which point
+"shipped.pdf" named the renderer we had just stopped shipping and REVIEW.md opened by telling the
+reviewer that nothing had been switched over. A sign-off document that misstates whether the
+thing under review is already serving customers inverts the urgency of the sign-off. So the
+labels come from routes.scans._REPORT_RENDERER — flip ACP_REPORT_RENDERER and this packet
+relabels itself.
 
 Everything optional degrades to a stated skip. A packet that quietly omits the baseline is worse
 than one that says the baseline is missing.
@@ -143,7 +152,7 @@ def _diff_pages(a_imgs: list, b_imgs: list, out: Path) -> list[str]:
         Image.eval(diff, lambda p: min(255, p * 6)).save(out / f"diff-p{i + 1}.png")
         lines.append(f"p{i + 1}: {pct:.2f}% of pixels differ — see pages/diff-p{i + 1}.png")
     if len(a_imgs) != len(b_imgs):
-        lines.append(f"PAGE COUNT DIFFERS: shipped {len(a_imgs)}, candidate {len(b_imgs)}. "
+        lines.append(f"PAGE COUNT DIFFERS: previous {len(a_imgs)}, live {len(b_imgs)}. "
                      f"Pagination changed; review every page.")
     return lines
 
@@ -178,38 +187,55 @@ def main() -> int:
                       "`--db` against a real scan before signing off on layout")
         print("source         sample fixture (pass --db for a real scan)")
 
+    # Ask the route which renderer it serves. `weasy` is the default since #1201;
+    # ACP_REPORT_RENDERER=tagged puts the Chromium one back at runtime, and when someone has done
+    # that, THAT is the document a reviewer must sign off — so the packet follows the switch
+    # instead of restating the state of the world on the day it was written.
+    import routes.scans as _scans
+    import report_tagged
     import report_weasy
-    candidate = out / "candidate.pdf"
-    with frozen_clock():
-        candidate.write_bytes(report_weasy.build_weasy_report(run, files, meta, **extra))
-    cand_imgs = _render_pages(candidate, pages, "candidate")
-    print(f"candidate.pdf  {candidate.stat().st_size} bytes, {len(cand_imgs)} page(s)")
 
-    # The baseline needs Chromium, which is not everywhere. Say so rather than silently
+    weasy_is_live = _scans._REPORT_RENDERER != "tagged"
+    live_render, prev_render = ((report_weasy.build_weasy_report, report_tagged.build_tagged_report)
+                                if weasy_is_live else
+                                (report_tagged.build_tagged_report, report_weasy.build_weasy_report))
+    live_name = "WeasyPrint (api/report_weasy.py)" if weasy_is_live else \
+                "Chromium (api/report_tagged.py)"
+    prev_name = "Chromium (api/report_tagged.py)" if weasy_is_live else \
+                "WeasyPrint (api/report_weasy.py)"
+    print(f"live renderer  {live_name}"
+          + ("" if weasy_is_live else "   [ACP_REPORT_RENDERER=tagged is set]"))
+
+    live = out / "live.pdf"
+    with frozen_clock():
+        live.write_bytes(live_render(run, files, meta, **extra))
+    live_imgs = _render_pages(live, pages, "live")
+    print(f"live.pdf       {live.stat().st_size} bytes, {len(live_imgs)} page(s)")
+
+    # The comparison needs Chromium, which is not everywhere. Say so rather than silently
     # producing a packet with nothing to compare against.
-    shipped_note = ""
+    prev_note = ""
     diff_lines: list[str] = []
     try:
-        import report_tagged
-        shipped = out / "shipped.pdf"
+        prev = out / "previous.pdf"
         with frozen_clock():
-            shipped.write_bytes(report_tagged.build_tagged_report(run, files, meta, **extra))
-        ship_imgs = _render_pages(shipped, pages, "shipped")
-        diff_lines = _diff_pages(ship_imgs, cand_imgs, pages)
-        print(f"shipped.pdf    {shipped.stat().st_size} bytes, {len(ship_imgs)} page(s)")
+            prev.write_bytes(prev_render(run, files, meta, **extra))
+        prev_imgs = _render_pages(prev, pages, "previous")
+        diff_lines = _diff_pages(prev_imgs, live_imgs, pages)
+        print(f"previous.pdf   {prev.stat().st_size} bytes, {len(prev_imgs)} page(s)")
     except Exception as exc:  # noqa: BLE001 — any failure here is a stated skip, not a crash
-        shipped_note = (f"**The baseline is missing from this packet.** Building today's "
-                        f"Chromium report failed: `{type(exc).__name__}: {exc}`. Without it the "
-                        f"visual comparison below could not be made, and the reviewer is "
-                        f"looking at the candidate alone.")
-        print(f"shipped.pdf    SKIPPED — {type(exc).__name__}: {exc}")
+        prev_note = (f"**The comparison is missing from this packet.** Building the previous "
+                     f"renderer ({prev_name}) failed: `{type(exc).__name__}: {exc}`. The visual "
+                     f"comparison below could not be made, and the reviewer is looking at the "
+                     f"live document alone.")
+        print(f"previous.pdf   SKIPPED — {type(exc).__name__}: {exc}")
 
     if VERAPDF_OK:
-        res = validate(candidate)
-        (out / "verapdf-candidate.txt").write_text(res.summary())
+        res = validate(live)
+        (out / "verapdf-live.txt").write_text(res.summary())
         verdict = "PASS" if res.compliant else f"FAIL — {len(res.failures)} rule(s)"
-        vera_note = (f"flavour ua1: **{verdict}**, {res.passed_checks} checks passed, "
-                     f"{res.failed_checks} failed (verapdf-candidate.txt)")
+        vera_note = (f"flavour ua1 on live.pdf: **{verdict}**, {res.passed_checks} checks "
+                     f"passed, {res.failed_checks} failed (verapdf-live.txt)")
         print(f"verapdf        {verdict}")
     else:
         vera_note = (f"**Not run here** — {NO_VERAPDF}. This is one of the two automated "
@@ -217,11 +243,24 @@ def main() -> int:
         print(f"verapdf        SKIPPED — {NO_VERAPDF}")
 
     diff_block = "\n".join(f"- {line}" for line in diff_lines) or "- not measured, see above"
+    live_banner = (
+        "**This is the document customers already receive.** `/scans/{{sid}}/report.pdf` has "
+        "served {live_name} since #1201, and the two gates below were NOT run before that "
+        "happened — they are outstanding against live output, not against a proposal. "
+        "`ACP_REPORT_RENDERER=tagged` reverts the endpoint at runtime, with no redeploy, if "
+        "either finds a problem."
+        if weasy_is_live else
+        "**The endpoint has been reverted to {live_name}** via `ACP_REPORT_RENDERER=tagged`. "
+        "That renderer is NOT PDF/UA-1 conformant and prints a local filesystem path at the "
+        "foot of every page, so this packet is evidence about a known-non-conformant document; "
+        "unset the variable to go back to the PDF/UA renderer."
+    ).format(live_name=live_name)
+
     (out / "REVIEW.md").write_text(f"""# Conformance report — review packet
 
-The WeasyPrint PDF/UA-1 renderer proposed to replace the Chromium one. **Nothing has been
-switched over.** `api/report_tagged.py`, `api/report.py` and `api/routes/scans.py` are untouched;
-this packet is the evidence for deciding whether to.
+{live_banner}
+
+`live.pdf` is {live_name}. `previous.pdf` is {prev_name}, kept for side-by-side only.
 
 **Built from {provenance}.**
 
@@ -234,28 +273,28 @@ this packet is the evidence for deciding whether to.
   real table, the Link, and graceful degradation on a run with no score. These matter because a
   conformant document can still be useless: the shipped template rendered through WeasyPrint
   unmodified passes veraPDF with zero failures and drops both charts out of the tag tree.
-- **The gap being closed.** `tests/test_report_pdfua_gap.py` pins what today's renderer does:
-  fails PDF/UA-1 on clause 7.1 tests 3 and 8 — 8 failed checks — and prints
+- **The gap that was closed.** `tests/test_report_pdfua_gap.py` pins what the PREVIOUS
+  renderer does, and keeps doing: fails PDF/UA-1 on clause 7.1 tests 3 and 8, and prints
   `file:///tmp/acp_report_<random>/report.html` at the foot of every page of a document handed to
   customers as audit evidence.
 
 ## Still unverified — this is the sign-off
 
-1. **PAC 2024** (Windows). Open `candidate.pdf`. veraPDF and PAC disagree in both directions, so
+1. **PAC 2024** (Windows). Open `live.pdf`. veraPDF and PAC disagree in both directions, so
    one passing is not the other passing.
-2. **NVDA (Windows) or VoiceOver (macOS).** Read `candidate.pdf` front to back. The question is
+2. **NVDA (Windows) or VoiceOver (macOS).** Read `live.pdf` front to back. The question is
    reading order and whether the chart alternatives say anything useful — a validator cannot ask
    either. Specifically worth hearing: the two chart Figures, whose Alt text is a sentence
    generated from the run's own numbers, and whether the File Inventory table's row headers are
    announced with each cell.
 3. **Visual sign-off.** `pages/` holds both renderers page by page, plus amplified difference
    images. Two known-deliberate differences, neither of them drift: Chromium's print header and
-   footer are gone (that is the temp-path leak), and page 2 gains a "Standard reference" row
-   linking to WCAG 2.1, because the shipped report contains no link to keep parity with.
+   footer are gone (that is the temp-path leak), and a "Standard reference" row linking to
+   WCAG 2.1 is added, because the older report contains no link to keep parity with.
 
-{shipped_note}
+{prev_note}
 
-## Measured difference against the shipped report
+## Measured difference between live.pdf and previous.pdf
 
 {diff_block}
 
