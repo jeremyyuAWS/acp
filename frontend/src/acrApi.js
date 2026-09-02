@@ -46,6 +46,33 @@ export const getAcrCriterion = (id, num) => call(`/acr/${id}/criteria/${num}`)
 export const getAcrValidation = (id) => call(`/acr/${id}/validation`)
 export const getAcrAudit = (id) => call(`/acr/${id}/audit`)
 export const getAcrPreview = (id) => call(`/acr/${id}/preview`)
+
+// The accessible (PDF/UA-1) export. NOT a plain <a href> to the endpoint, and not because a link
+// would be untidy: the route needs the bearer token, and an anchor cannot send one — it would
+// navigate away and land on a 401 page having lost the workspace. So fetch it with the same
+// headers as everything else and hand the browser a blob.
+//
+// Errors go through `call`'s reasoning too: a deployment without the renderer answers 503 with a
+// sentence naming what is missing, and the screen must show THAT rather than "download failed".
+export async function downloadAcrPdf(id) {
+  const res = await fetch(BASE + `/acr/${id}/preview?format=pdf`, { headers: headers() })
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`
+    try {
+      const body = await res.json()
+      if (body?.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
+    } catch { /* non-JSON error body — keep the status line */ }
+    const err = new Error(detail)
+    err.status = res.status
+    throw err
+  }
+  // The server names the file (it knows the report id and revision); fall back only if the
+  // header is absent, never overwrite it — two reports downloading under one name is the
+  // collision api/acr_export_pdf.py::filename_for exists to avoid.
+  const disp = res.headers.get('content-disposition') || ''
+  const match = /filename="([^"]+)"/.exec(disp)
+  return { blob: await res.blob(), filename: match ? match[1] : `acr-${id}.pdf` }
+}
 export const getAcrGaps = (id) => call(`/acr/${id}/gaps`)
 
 // Guided manual test plans (PRD §14, Phase 3).

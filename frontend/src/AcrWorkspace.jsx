@@ -3,7 +3,7 @@ import AcrCriterionDetail from './AcrCriterionDetail'
 import AcrMetadataForm from './AcrMetadataForm'
 import AcrPublish from './AcrPublish.jsx'
 import { listAcrReports, createAcrReport, getAcrReport, listAcrCriteria, getAcrValidation,
-         getAcrPreview, getAcrGaps } from './acrApi'
+         getAcrPreview, getAcrGaps, downloadAcrPdf } from './acrApi'
 
 // PRD §15 — the ACR list and the report workspace
 // (Overview · Criteria · Evidence gaps · Validation · Publication · Draft export).
@@ -45,6 +45,7 @@ export default function AcrWorkspace() {
   const [selected, setSelected] = useState(null)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [pdfBusy, setPdfBusy] = useState(false)
 
   useEffect(() => {
     listAcrReports().then((d) => {
@@ -354,6 +355,41 @@ export default function AcrWorkspace() {
               </p>
               <p className="muted">
                 {Object.entries(preview.totals).map(([k, v]) => `${k}: ${v}`).join(' · ')}
+              </p>
+              {/* The same rows as the table below, as a tagged PDF/UA-1 document. A conformance
+                  report that is itself inaccessible is the one document in this product that
+                  cannot be allowed to be (PRD §16), so the download says what it produces —
+                  a reader should not have to open it to find out. */}
+              <p>
+                <button
+                  type="button"
+                  disabled={pdfBusy}
+                  onClick={async () => {
+                    setPdfBusy(true)
+                    setError(null)
+                    try {
+                      const { blob, filename } = await downloadAcrPdf(reportId)
+                      const url = URL.createObjectURL(blob)
+                      const a = document.createElement('a')
+                      a.href = url
+                      a.download = filename
+                      document.body.appendChild(a)
+                      a.click()
+                      a.remove()
+                      URL.revokeObjectURL(url)
+                    } catch (e) {
+                      // The server's sentence, not "download failed" — a 503 here names the
+                      // missing renderer, which is the only thing an operator can act on.
+                      setError(String(e.message || e))
+                    } finally {
+                      setPdfBusy(false)
+                    }
+                  }}
+                >
+                  {pdfBusy ? 'Preparing PDF…' : 'Download accessible PDF'}
+                </button>
+                {' '}
+                <span className="muted">Tagged PDF/UA-1 — same rows as below.</span>
               </p>
               <table>
                 <caption>WCAG {preview.report.wcag_version} Report</caption>
