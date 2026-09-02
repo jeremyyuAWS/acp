@@ -34,6 +34,7 @@ import FolderActivity from './FolderActivity.jsx'
 import QueueJobDetails from './QueueJobDetails.jsx'
 import DiscoveryQueuedPlaceholder from './DiscoveryQueuedPlaceholder.jsx'
 import AccordionSection from './AccordionSection.jsx'
+import LastSuccessfulScanSummary from './LastSuccessfulScanSummary.jsx'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
@@ -744,6 +745,10 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
 
   return (
     <>
+      {!busy && (run?.discovered_at || run?.status === 'discovered') && (
+        <DiscoverInventoryExport compact scanId={scanId} run={runForExport}
+                                 inventory={scope?.inventory || null} rows={inv?.rows ?? null} />
+      )}
       {/* REMOVED: the "1 · Choose what to assess · criteria and file types, before you scan" panel.
           Discover asks ONE question — WHERE to inventory. Which document types and which WCAG
           criteria are Assess's question, and AssessSetup now owns both on the Assess tab, so this
@@ -889,7 +894,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         <AccordionSection id="discover-estate" title="Estate overview"
                           ariaLabel="Estate overview" defaultOpen
                           style={{ marginBottom: 14 }}>
-          {(
+          <>
             <EstateProgressPanel
               inventory={scope?.inventory}
               analysed={analysedCount(files)}
@@ -901,7 +906,8 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               estateFiles={estateFiles}
               onGo={onAdvance}
             />
-          )}
+            <LastSuccessfulScanSummary run={run} scope={scope} runAt={runAt} />
+          </>
         </AccordionSection>
       )}
 
@@ -1209,7 +1215,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           panel read "The inventory could not be read" on every run, healthy or not — including
           the runs the "0 documents" fix (#835) now correctly counts. `inv` is the same paginated
           per-file read already threaded into DiscoveryResults above as `invRows`. */}
-      <DiscoverInventoryExport scanId={scanId} run={runForExport}
+      <DiscoverInventoryExport scanId={scanId} run={runForExport} showActions={false}
                                inventory={scope?.inventory || null} rows={inv?.rows ?? null} /></>
       </AccordionSection>
       </div>
