@@ -1335,6 +1335,19 @@ export const getFileContent = (scanId, file) => (SIM
   ? sim(null)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/content`, { headers: headers() }).then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.arrayBuffer() }))
 
+// The same bytes as a Blob that KEEPS the response's Content-Type — which is the whole point of
+// api/media.py's media_mime(): a <video> handed `application/octet-stream` refuses to play, and a
+// Blob rebuilt from the ArrayBuffer above would drop the type again. Goes through this module
+// rather than a bare fetch in the component so it carries what every other call carries: BASE
+// (a relative /scans/... URL would resolve against the WEB origin on a deployed frontend, not the
+// API), the Authorization bearer, X-Auth-Provider (without which a Microsoft sign-in 401s) and
+// the Drive token the backend needs to reach a Drive-backed original. Rejects on a non-2xx so the
+// caller can say the media could not be played rather than showing a dead transport.
+export const getFileContentBlob = (scanId, file) => (SIM
+  ? sim(null)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/content`, { headers: headers() })
+      .then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.blob() }))
+
 // Page-1 preview image (ADR 0015). Resolves to a PNG Blob, or null when there's no preview
 // (unsupported type, source unreachable, render failed, or SIM mode). NEVER rejects — a
 // missing thumbnail must degrade silently, never surface as an error to the caller.

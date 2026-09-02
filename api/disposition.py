@@ -22,6 +22,14 @@ from datetime import datetime, timezone
 
 ACTIONS = {"leave", "archive", "rename", "move", "delete", "tag"}
 
+#: Actions that CHANGE THE SOURCE FILE. Exactly the set execute_action reaches Drive for —
+#: `leave` records a decision and `tag` writes metadata, neither touches the document.
+#:
+#: Named here rather than in a route because it is a fact about what an action DOES, and a second
+#: copy in the API layer would drift from this one silently: a new mutating action added to
+#: ACTIONS would keep the old approval requirements until somebody remembered the other list.
+SOURCE_MUTATING = {"archive", "rename", "move", "delete"}
+
 FIELDS = {"department", "business_criticality", "regulatory_tags", "triage_score",
          "source", "owner", "age_days",
          # Folder/path + lifecycle conditions (Discover/Assess Lifecycle PRD, Phase B1).

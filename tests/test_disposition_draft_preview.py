@@ -118,7 +118,12 @@ def test_the_response_carries_the_saved_previews_shape_with_a_null_id(client):
     c, st = client
     _docs(st)
     body = c.post("/disposition/preview", json={"match": FINANCE, "action": "archive"}).json()
+    # near_misses/near_miss_sample joined the shape when the preview started naming the
+    # documents it REJECTED (PRD §7.5's "representative matches and non-matches"). Asserted here
+    # as an exact set on purpose: the point of this test is that the draft and saved previews
+    # cannot drift apart, so a key added to one has to be added to the other and to this list.
     assert set(body) == {"policy_id", "action", "would_match", "total", "documents",
+                         "near_misses", "near_miss_sample",
                          "effective", "superseded", "exempted", "exempted_documents",
                          "unable_to_evaluate", "unable_to_evaluate_fields"}
     assert body["policy_id"] is None
