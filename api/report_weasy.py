@@ -28,9 +28,15 @@ that is what `report.py::_tag_pdf` does today, and it is the one option ADR 0034
 rules out: an empty `/Document` element with an empty ParentTree turns our own detector green
 and gives a screen-reader user nothing.
 
-NOT WIRED IN. `ACP_REPORT_RENDERER=weasyprint` selects it; the default is unchanged. The
-cutover is gated on checks that cannot run in CI — PAC 2024 and a real NVDA/VoiceOver pass —
-see docs/adr/0034 and the reviewer packet built by `scripts/build_report_review_packet.py`.
+THIS IS NOW THE RENDERER `/scans/{sid}/report.pdf` SERVES, by default, as of the cutover.
+`ACP_REPORT_RENDERER=tagged` puts the previous Chromium renderer back without a redeploy.
+
+TWO OF ADR 0034'S GATES WERE NOT RUN BEFORE THAT HAPPENED — PAC 2024 (Windows-only) and a real
+NVDA or VoiceOver pass. Neither can run in this environment or in CI. What HAS been run: veraPDF
+ua1 (0 failures, against Chromium's 8), the structural suite in tests/test_report_weasy_structure
+.py, and a page-by-page visual comparison. The env switch above exists precisely because those
+two gates are outstanding; `scripts/build_report_review_packet.py` builds what a reviewer needs
+to close them. See the addendum to docs/adr/0034.
 """
 from __future__ import annotations
 

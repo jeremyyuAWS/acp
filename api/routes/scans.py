@@ -17,6 +17,10 @@ import core
 from scanner import run_scan
 from report import build_report
 from report_tagged import build_tagged_report
+# Safe to import without weasyprint installed: report_weasy imports it inside the render
+# function, not at module scope, so a missing native stack fails one request rather than
+# preventing the API from starting.
+from report_weasy import build_weasy_report
 from swallowed import swallowed
 
 router = APIRouter()
@@ -1951,6 +1955,46 @@ def scan_manifest(sid: str, request: Request):
     return core.store.get_scan_manifest(sid)
 
 
+#: Which renderer serves /scans/{sid}/report.pdf. "weasy" (the default) is the PDF/UA-1
+#: conformant one; "tagged" restores the previous Chromium renderer WITHOUT a redeploy, which is
+#: the point of the switch existing at all — the cutover shipped before two of the gates ADR 0034
+#: asks for (PAC 2024, and a screen-reader pass) had been run, so there needs to be a way back
+#: that does not require a build. Anything else falls through to the default.
+_REPORT_RENDERER = os.environ.get("ACP_REPORT_RENDERER", "weasy").strip().lower()
+
+
+def _render_report(run: dict, files: list, meta: dict, **kw) -> bytes:
+    """Render the conformance report, degrading rather than 500ing.
+
+    Order is deliberate. WeasyPrint first: it is the only one of the three that produces a
+    PDF/UA-1 conformant document (veraPDF ua1, 0 failures) with a real structure tree, and the
+    only one that does not print `file:///tmp/acp_report_<random>/report.html` at the foot of
+    every page — a local path on a document handed to a customer as audit evidence.
+
+    It needs native libraries (Pango, HarfBuzz, fontconfig, gobject — verified against
+    weasyprint.text.ffi's own dlopen list, not from documentation) and those are declared in
+    deploy/public/Dockerfile.base-api. If the image is nevertheless missing them, `import
+    weasyprint` raises OSError rather than ImportError, so this catches Exception rather than
+    ImportError and an incomplete image degrades to the previous renderer instead of taking the
+    endpoint down. That is not a licence to ship an image without them: a fallback that fires in
+    production is a silent regression to a non-conformant report, which is why
+    test_report_renderer_wiring.py asserts the dependency is declared wherever it is installed.
+    """
+    if _REPORT_RENDERER == "tagged":
+        order = (build_tagged_report, build_report)
+    else:
+        order = (build_weasy_report, build_tagged_report, build_report)
+    last: Exception | None = None
+    for render in order:
+        try:
+            return render(run, files, meta, **kw)
+        except Exception as exc:  # noqa: BLE001 — any renderer failure degrades to the next
+            last = exc
+            logging.warning("report renderer %s failed, falling back: %s: %s",
+                            getattr(render, "__name__", render), type(exc).__name__, exc)
+    raise HTTPException(500, f"could not render report: {last}")
+
+
 @router.get("/scans/{sid}/report.pdf")
 def report_pdf(sid: str, request: Request):
     # Owner-scoped. The frontend fetches this WITH the Bearer token (XHR → blob → open),
@@ -1965,13 +2009,8 @@ def report_pdf(sid: str, request: Request):
     decisions = core.store.get_decisions(sid)
     evidence = core.store.get_remediation_evidence(sid)
     facts = core.store.get_certification_facts(sid, apply_document_selection=True)
-    try:
-        pdf = build_tagged_report(res["run"], res["files"], meta,
-                                  decisions=decisions, evidence=evidence, facts=facts)
-    except Exception:
-        # Fall back to the reportlab report if Chromium is unavailable.
-        pdf = build_report(res["run"], res["files"], meta,
-                           decisions=decisions, evidence=evidence, facts=facts)
+    pdf = _render_report(res["run"], res["files"], meta,
+                         decisions=decisions, evidence=evidence, facts=facts)
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="acp-report-{sid}.pdf"'})
 
