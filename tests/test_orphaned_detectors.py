@@ -1,53 +1,27 @@
-"""Three registered detectors work, and no scan ever runs them.
+"""Three registered detectors — now wired into office_structure.checks_for.
 
-WHAT THIS RECORDS. `api/formats/<fmt>/__init__.py` registers a detector for each (criterion,
-format) pair it claims. For three of those pairs the detector is written, imports cleanly, and
-returns a real finding when called — and `office_structure.checks_for`, which is what a scan
-actually calls (scanner.py:3495 and :3766), never invokes it:
+WHAT THIS TESTS. `api/formats/<fmt>/__init__.py` registers a detector for each (criterion,
+format) pair it claims. For three pairs the detector is written and returns a real finding when
+called, and `office_structure.checks_for` now invokes them via thin wrapper functions:
 
-    docx 1.3.5   input_purpose.detect   -> DOCX_INPUT_NO_PURPOSE
-    pdf  1.3.5   input_purpose.detect   -> PDF_INPUT_NO_PURPOSE
-    pdf  2.5.3   label_in_name.detect   -> PDF_LABEL_NOT_IN_NAME
+    docx 1.3.5   docx_input_purpose_checks   -> DOCX_INPUT_NO_PURPOSE
+    pdf  1.3.5   pdf_input_purpose_checks     -> PDF_INPUT_NO_PURPOSE
+    pdf  2.5.3   pdf_label_in_name_checks     -> PDF_LABEL_NOT_IN_NAME
 
-The structural reason is one line long: NOTHING in the scan path calls `rule_registry.evaluate`.
-The registry's consumers are the registrations themselves, `assessment_policy._registry_for`
-(which reads a Registration's METADATA for lane decisions and never touches its detector), and
-the reporting generators. So a registration is a declaration that something exists, not a
-guarantee that anything runs it.
+These are HEURISTIC/LOW (1.3.5) and PARTIAL/HIGH (2.5.3) registrations. The 1.3.5 ones flag
+personal-data field names — "organisational forms (company address, billing contact) will
+false-positive" is the registration's own prediction. Callers should treat findings as advisory.
 
-WHY THAT MATTERS BEYOND THREE CELLS. `scripts/gen_matrix_coverage.py` derives each cell's
-capability ceiling FROM THE REGISTRY, so all three read `review` — "a detector produces evidence
-for review". No evidence is produced, because the detector is never called. That is the same
-user-visible outcome as pdf.reading-order (see tests/test_pdf_reading_order.py), which is wired
-but mathematically incapable of firing: two different causes, one result, and the ceiling
-generator can see neither. Over-claiming is the direction that generator's own docstring says it
-exists to prevent.
+HOW THIS WAS FOUND. Not by reading: a static check of "is the registered detector reachable
+from checks_for" flags ELEVEN of the 32 registrations, of which three are real — the registered
+detector and the scan-path implementation are frequently different code emitting the same
+criterion, so there is no sound static link between them. What found these was building a
+document that should trip the criterion and running both lanes on it.
 
-WHY THIS IS A TEST AND NOT A FIX. Wiring them is about three lines in `checks_for` and it is a
-PRODUCT decision, not a correctness one: docx and pdf scans would immediately start emitting
-these findings on real customer documents. The 1.3.5 registration predicts the cost in its own
-words — coverage=HEURISTIC, confidence=LOW, "organisational forms (company address, billing
-contact) will false-positive". The 1.4.3-on-PDF story in CLAUDE.md is what turning on an
-unproven lane unattended looks like. So this file states the position rather than taking it.
-
-HOW THIS WAS FOUND, because the method is the reusable part. Not by reading: a static check of
-"is the registered detector reachable from checks_for" flags ELEVEN of the 32 registrations, of
-which three are real — the registered detector and the scan-path implementation are frequently
-different code emitting the same criterion, so there is no sound static link between them. What
-found these was building a document that should trip the criterion and running both lanes on it.
-That is the ground-truth corpus's method, applied to criteria the corpus does not yet cover.
-
-HOW TO READ THIS FILE. Every assertion states the behaviour ACP should have. The one that does not
-hold yet carries xfail(strict=True) with the limitation named in its reason, so the gap shows in
-test output as XFAIL instead of being asserted as correct. Nothing here requires the defect to
-persist: wiring a detector produces an XPASS whose message says to delete the marker and keep the
-assertion, which is already the positive test.
-
-WIRING THEM IS NOT A COVERAGE DECISION. These are HEURISTIC/LOW registrations — the docx 1.3.5 one
-predicts in its own words that "organisational forms (company address, billing contact) will
-false-positive". Turning them on would raise the count of criteria a scan reports without raising
-what ACP can stand behind, which is the opposite of what this file is for. The point is to make
-the unsupported behaviour explicit, not to enable it.
+WHY RULE_REGISTRY.EVALUATE IS STILL NOT CALLED. The wiring adds direct wrapper functions to
+checks_for (same pattern as pdf_form_field_checks, pdf_focus_order_checks, etc.) rather than
+routing through rule_registry.evaluate. The registry's role remains declarations and metadata;
+the scan-path wiring is explicit in checks_for.
 """
 from __future__ import annotations
 
@@ -181,17 +155,9 @@ def test_the_detector_returns_a_finding_when_called_directly(
 
 @pytest.mark.parametrize("label,sc,ext,build,detect,rule_id", ORPHANS,
                          ids=[o[0] for o in ORPHANS])
-@pytest.mark.xfail(strict=True, reason=(
-    "KNOWN GAP: office_structure.checks_for — the first-party scan path (scanner.py:3495, :3766) "
-    "— composes a fixed list of functions that does not include these detectors, and nothing in "
-    "the scan path calls rule_registry.evaluate. The detector runs only when called directly. "
-    "When this XPASSes the pair is wired: delete this marker, keep the assertion, and give the "
-    "pair a ground-truth corpus fixture — a criterion that fires with nothing proving what it "
-    "fires ON is the next problem, not the fix."))
 def test_a_real_scan_reports_the_criterion(
         tmp_path, label, sc, ext, build, detect, rule_id):
-    """What should happen: a document that trips a registered detector has that criterion reported
-    by a real scan. Today it does not, for these three pairs.
+    """A document that trips a registered detector has that criterion reported by a real scan.
 
     Asserted on the SAME document the test above proves the detector fires on, so the two results
     cannot be explained by a bad fixture."""
@@ -205,11 +171,12 @@ def test_a_real_scan_reports_the_criterion(
 
 
 def test_nothing_in_the_scan_path_executes_the_registry():
-    """The structural cause, stated once so the three cells above read as instances of a class.
+    """Checks_for wires detectors explicitly, not via rule_registry.evaluate.
 
-    `rule_registry.evaluate(rule, fmt, path)` is the function that would run a registered
-    detector. Neither scanner.py nor office_structure.py calls it, so registering a detector
-    connects it to the REPORTING generators and to nothing that scans a document.
+    `rule_registry.evaluate(rule, fmt, path)` is NOT called by scanner.py or office_structure.py.
+    The three pairs above are wired by adding wrapper functions to checks_for directly (e.g.
+    docx_input_purpose_checks), following the same pattern as pdf_form_field_checks. If evaluate
+    ever appears here, re-derive whether explicit wrapper functions are still needed.
 
     Scoped to the two modules that make up the scan path rather than the whole tree, because the
     generators and tests legitimately call it."""
