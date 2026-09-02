@@ -35,6 +35,8 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
+from acr_catalog import NOT_APPLICABLE
+
 CATALOG_PATH = Path(__file__).resolve().parent.parent / "config" / "acr-manual-test-plans.json"
 
 # What a tester can record for a step. Deliberately the same vocabulary acr_model uses for
@@ -193,6 +195,17 @@ def manual_plan_status(criteria: list[dict], instances: list[dict],
         if not num:
             continue
         if crit.get("applicable") is False:
+            continue
+        # A criterion DECIDED "Not Applicable" has been humanly evaluated: the decision IS the
+        # evaluation, and PRD §10 already requires an explanation for it (acr_validation enforces
+        # the remarks). Demanding a completed test plan on top would ask someone to run the
+        # live-media captions plan against a product that has no live audio — and that plan's own
+        # text says an empty inventory is a Not Applicable decision, not a run.
+        #
+        # Found by Phase 4's publish test: a report whose criteria were all decided Not Applicable
+        # with explanations was blocked by 55 incomplete-plan rows, while acr_plans' own docstring
+        # claimed it did not duplicate acr_validation's evidence judgement. It did.
+        if crit.get("final_status") == NOT_APPLICABLE:
             continue
         out[num] = criterion_complete(num, instances,
                                       num in (human_evidence or set()))[0]

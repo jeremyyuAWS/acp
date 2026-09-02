@@ -1,6 +1,6 @@
 # PRD — ACP Accessibility Conformance Report Workspace
 
-Status: Phases 1–3 delivered · Phases 4–6 planned
+Status: Phases 1–4 delivered · Phases 5–6 planned
 Design decisions: [ADR 0047](adr/0047-acr-workspace-data-model.md)
 
 ## Purpose
@@ -79,7 +79,7 @@ Stale records stay visible for audit history and cannot independently support pu
 | 1 | Domain model, standards catalog, decision rules, validation, roles, thin vertical slice | **delivered** |
 | 2 | Evidence workspace — **rescoped**, see below | **delivered** |
 | 3 | Guided manual test plans, tester metadata, and the publish gate that consumes them | **delivered** |
-| 4 | Publication validation, reviewer sign-off, immutable snapshots, revision history | planned |
+| 4 | Publication, reviewer sign-off, immutable snapshots, revision history | **delivered** |
 | 5 | Vendored ITI VPAT 2.5Rev template + accessible Word export + export accessibility gate | planned |
 | 6 | Section 508, EU and International editions | planned |
 
@@ -182,12 +182,63 @@ to finish evaluating it.
 **Persistence.** One additive table, `acr_manual_step` (schema v8). The run's environment lives on
 the `acr_evidence` row it produces rather than in a second copy.
 
+## Phase 4 — what shipped
+
+**Publication is the one irreversible act in this feature.** An ACR goes into a customer's
+procurement file and cannot be recalled, so everything the earlier phases built exists so that
+what gets frozen here is true when it is frozen.
+
+**The gate is assembled from parts that already existed** — `acr_validation.validate`,
+`acr_authz.may_publish`, `acr_freshness` — rather than a new "can publish?" predicate written for
+the endpoint. A second implementation of the gate is how a screen goes green while the real check
+is red. `POST /acr/{id}/publish` checks, in this order: the report is not already published; the
+**caller** may publish (`acr_authz`, never `core.is_admin`, which returns `True` for every
+authenticated user under the default `OPEN_ACCESS=1`); and validation is completely clean. The
+role check precedes the readiness check so an unauthorised caller learns nothing about the
+report's internal state.
+
+**The digest is a digest, not a signature.** `content_digest` is a recomputable SHA-256 over the
+canonical snapshot content — it makes alteration detectable and provides no non-repudiation. It is
+re-verified on **every read** of a revision rather than on demand: a tamper-evident record nobody
+checks is a record nobody has checked. `api/report.py` carries the same warning for scan reports,
+and the rule is the same — never relabel it.
+
+**Revising is the dangerous operation, not publishing.** PRD §19's list of prohibitions ends on
+*copy a previous version's "Supports" decisions without freshness validation*, and a revision
+exists precisely because the product changed. `acr_publish.carry_forward` re-derives staleness
+against the **new** report: a `Supports` claim with no live evidence left returns to
+`needs_review`, and the criteria that were reset are **returned to the caller** rather than
+silently changed. The three limitation statuses carry with their remarks, because carrying a known
+barrier forward understates nothing.
+
+**No approval carries into a revision at all** — an approval granted against the previous revision
+was granted for a different product version, and PRD §4.2 requires sign-off on *this* report.
+`store.carry_acr_decisions` has no code path to `approval_state`, `reviewer` or `approved_at`.
+
+**Roles do carry, and the distinction is the point.** A role says "this person is authorised to
+approve here"; an approval says "this person did approve this criterion, for this version".
+Without carrying roles, every revision would need an admin to re-grant them before anyone could
+work — and the person revising may not be an admin.
+
+**Separation of duties (PRD §18) is surfaced and never blocks.** The warning fires only when a
+second qualified reviewer actually exists, because a warning that nags a one-person team on every
+publish teaches them to ignore it. It is recorded in the audit log alongside the publication.
+
+### A Phase 3 bug this phase found
+
+A report whose criteria were all decided **Not Applicable** with explanations was blocked by 55
+`incomplete_manual_test_plan` rows — Phase 3 demanded a completed manual plan for criteria a human
+had determined did not apply, which would ask someone to run the live-captions plan against a
+product with no live audio. Worse, `acr_plans`' own docstring claimed it did not duplicate
+`acr_validation`'s evidence judgement, and it did. A decided `Not Applicable` is now recognised as
+the human evaluation it is; PRD §10 already requires the explanation, and `acr_validation`
+enforces it.
+
 ## Explicitly not delivered in Phase 1
 
 * **The ITI VPAT template and Word export.** Phase 5, gated on a licensing decision. The Phase 1
   export is a structural preview that states on its face that it is not a VPAT.
-* **Publication.** The snapshot table, the immutability boundary and the validation gate exist and
-  are tested; the publish endpoint is Phase 4.
+* **Publication.** Delivered in Phase 4 — see above.
 * **Guided manual test plans.** Delivered in Phase 3 — see above.
 
 ## Non-goals

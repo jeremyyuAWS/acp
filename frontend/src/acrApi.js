@@ -59,6 +59,13 @@ export const recordPlanStep = (id, runId, stepIndex, outcome, notes) =>
 export const completePlanRun = (id, runId, body) =>
   call(`/acr/${id}/plans/runs/${runId}/complete`, { method: 'POST', body })
 
+// Publication and revisions (PRD §16–17, Phase 4).
+export const getAcrPublication = (id) => call(`/acr/${id}/publication`)
+export const publishAcr = (id) => call(`/acr/${id}/publish`, { method: 'POST', body: {} })
+export const getAcrRevisions = (id) => call(`/acr/${id}/revisions`)
+export const getAcrRevision = (id, n) => call(`/acr/${id}/revisions/${n}`)
+export const reviseAcr = (id) => call(`/acr/${id}/revise`, { method: 'POST', body: {} })
+
 // `preview: true` reports what would be written without writing it. Worth defaulting callers
 // toward: acr_evidence is append-only, and the interesting part of an axe ingest is what it
 // DROPS — inapplicable rules are not evidence, and a user should see that before committing

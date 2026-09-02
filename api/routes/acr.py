@@ -46,6 +46,7 @@ import acr_catalog
 import acr_export_preview
 import acr_freshness
 import acr_plans
+import acr_publish
 import acr_rules
 import acr_validation
 import core
@@ -879,3 +880,284 @@ def grant_role(report_id: str, body: GrantRole, request: Request):
                                        action="role.granted",
                                        detail=f"{body.email} -> {body.role}")
     return {"email": body.email, "role": body.role}
+
+
+# ── publication and revisions (PRD §16, §17, Phase 4) ──────────────────────────
+#
+# THE IRREVERSIBLE ACT. Everything the earlier phases built exists so that what gets frozen here
+# is true. The gate is deliberately ASSEMBLED FROM PARTS THAT ALREADY EXISTED and are tested on
+# their own — acr_validation.validate, acr_authz.may_publish, acr_freshness — rather than a new
+# "can publish?" predicate written for this endpoint. A second implementation of the gate is how a
+# screen ends up green while the real check is red, and this is the check that matters most.
+
+
+def _decision_makers(criteria: list[dict]) -> dict[str, int]:
+    """Who decided how many criteria — the input to PRD §18's separation-of-duties advisory."""
+    counts: dict[str, int] = {}
+    for crit in criteria:
+        who = (crit.get("evaluator") or "").strip().lower()
+        if who and crit.get("final_status"):
+            counts[who] = counts.get(who, 0) + 1
+    return counts
+
+
+def _other_approvers(report_id: str, owner: str, me: str) -> int:
+    """How many OTHER people could approve this report.
+
+    PRD §18 conditions its recommendation on a second qualified reviewer being available, so this
+    count decides whether the warning is meaningful at all. Counting generously would nag a
+    one-person team on every publish until they learned to ignore the warning entirely.
+    """
+    try:
+        holders = core.store.list_acr_role_holders(
+            owner_email=owner, report_id=report_id,
+            roles=(acr_authz.ROLE_APPROVER, acr_authz.ROLE_ADMIN))
+    except Exception:
+        return 0
+    mine = me.strip().lower()
+    return len({h.strip().lower() for h in holders if h.strip().lower() != mine})
+
+
+def _lineage(report: dict, owner: str) -> list[dict]:
+    """This report and every revision it supersedes, newest first.
+
+    A revision is a NEW acr_report row, so "the history of this report" spans several ids and has
+    to be walked. BOUNDED rather than `while True`: a supersedes_id cycle would otherwise hang the
+    request, and a corrupt chain should degrade to a short history rather than an outage.
+    """
+    chain = [report]
+    seen = {report["id"]}
+    current = report
+    for _ in range(50):
+        prev_id = current.get("supersedes_id")
+        if not prev_id or prev_id in seen:
+            break
+        prev = core.store.get_acr_report(prev_id, owner_email=owner)
+        if prev is None:
+            break
+        chain.append(prev)
+        seen.add(prev_id)
+        current = prev
+    return chain
+
+
+@router.get("/acr/{report_id}/publication")
+def publication_readiness(report_id: str, request: Request):
+    """Everything the publish button needs to render itself honestly, from the REAL gate.
+
+    The screen does not decide whether publishing is allowed; it renders what this says. Same rule
+    the criterion detail follows for refusal sentences, and it is why the blocking count here comes
+    from acr_validation.validate rather than from a tally the UI keeps.
+    """
+    owner = _tenant()
+    who = _actor(request)
+    report = _report_or_404(report_id, owner)
+    criteria = core.store.list_acr_criteria(report_id, owner_email=owner)
+    ev_by = _evidence_objects(report_id, owner)
+
+    blockers = acr_validation.validate(
+        report, criteria, ev_by,
+        manual_plan_status=_manual_plan_status(report, report_id, owner))
+    granted = _roles(who, report_id)
+    allowed, why = acr_authz.may_publish(who, granted, report=report,
+                                         is_platform_owner=core.is_owner(who))
+    warning = acr_authz.separation_warning(
+        who, _decision_makers(criteria), other_approvers=_other_approvers(report_id, owner, who))
+    blocking = [b for b in blockers if b.blocking]
+
+    return {
+        "report_id": report_id,
+        "status": report.get("status"),
+        "revision": report.get("revision"),
+        "may_publish": bool(allowed) and not blocking,
+        "role_refusal": "" if allowed else why,
+        "blocking_count": len(blocking),
+        "summary": acr_validation.summary(blockers),
+        "by_category": acr_validation.group(blockers),
+        "category_labels": acr_validation.CATEGORY_LABELS,
+        # Advisory, never a block. PRD §18 words it as a recommendation, and encoding it as a
+        # refusal would stop a one-person team from ever publishing.
+        "separation_warning": warning or "",
+        "irreversible_note": ("Publishing freezes this report as an immutable revision. It cannot "
+                              "be edited or withdrawn afterwards — a correction is published as a "
+                              "new revision that supersedes it."),
+    }
+
+
+@router.post("/acr/{report_id}/publish")
+def publish(report_id: str, request: Request):
+    """Freeze the report as an immutable published revision (PRD §16, §21.11, §21.12).
+
+    THE ORDER OF THESE CHECKS IS NOT ARBITRARY:
+
+      1. the report exists, and is not already published,
+      2. the CALLER may publish — acr_authz, never core.is_admin, which returns True for every
+         authenticated user under the default OPEN_ACCESS=1,
+      3. validation is completely clean — every blocker, recomputed here, never a count the
+         caller passed in.
+
+    (2) before (3) so an unauthorized caller learns nothing about the report's internal readiness,
+    and (3) last because it is the expensive one.
+
+    The snapshot is written by store.create_acr_snapshot, which inserts the row and flips the
+    report's status in ONE transaction — a report marked published whose snapshot write failed
+    would be a report claiming an artifact that does not exist.
+    """
+    owner = _tenant()
+    report = _report_or_404(report_id, owner)
+    who = _actor(request)
+
+    granted = _roles(who, report_id)
+    allowed, why = acr_authz.may_publish(who, granted, report=report,
+                                         is_platform_owner=core.is_owner(who))
+    if not allowed:
+        # 409 when it is already published (a state conflict); 403 when it is about the caller.
+        raise HTTPException(409 if report.get("status") == "published" else 403, why)
+
+    criteria = core.store.list_acr_criteria(report_id, owner_email=owner)
+    ev_by = _evidence_objects(report_id, owner)
+    blockers = acr_validation.validate(
+        report, criteria, ev_by,
+        manual_plan_status=_manual_plan_status(report, report_id, owner))
+    blocking = [b for b in blockers if b.blocking]
+    if blocking:
+        raise HTTPException(400, {
+            "message": f"{len(blocking)} blocker(s) prevent publication",
+            "blockers": [b.to_row() for b in blocking],
+        })
+
+    content = acr_publish.snapshot_content(report, criteria, ev_by,
+                                           catalog_hash=acr_catalog.catalog_hash())
+    digest = acr_publish.content_digest(content)
+    snapshot_id = f"acrsnap_{uuid.uuid4().hex[:12]}"
+    published_at = core.store.create_acr_snapshot(
+        snapshot_id, report_id=report_id, owner_email=owner,
+        revision=int(report.get("revision") or 1), catalog_hash=acr_catalog.catalog_hash(),
+        content_json=json.dumps(content, sort_keys=True, separators=(",", ":"),
+                                ensure_ascii=False),
+        content_digest=digest, published_by=who)
+
+    warning = acr_authz.separation_warning(
+        who, _decision_makers(criteria), other_approvers=_other_approvers(report_id, owner, who))
+    core.store.append_acr_decision_log(
+        report_id, owner_email=owner, actor=who, action="report.published",
+        detail=(f"revision {report.get('revision')} · digest {digest[:12]}"
+                + (f" · {warning}" if warning else "")))
+
+    return {
+        "snapshot_id": snapshot_id, "revision": report.get("revision"),
+        "published_at": published_at, "published_by": who,
+        "content_digest": digest,
+        # Repeated on the response, not left to the module docstring. Someone reading an API
+        # client's log should not be able to conclude this was signed.
+        "digest_note": ("A recomputable SHA-256 over the snapshot content. This is a digest, not "
+                        "a digital signature: it makes alteration detectable and provides no "
+                        "non-repudiation."),
+        "separation_warning": warning or "",
+    }
+
+
+@router.get("/acr/{report_id}/revisions")
+def revisions(report_id: str, request: Request):
+    """Every published revision across this report's supersedes chain, newest first."""
+    owner = _tenant()
+    report = _report_or_404(report_id, owner)
+    chain = _lineage(report, owner)
+    snaps = core.store.list_acr_snapshots_for_lineage([r["id"] for r in chain], owner_email=owner)
+
+    rows = []
+    for snap in snaps:
+        ok, why = acr_publish.verify(snap)
+        rows.append({
+            "snapshot_id": snap["id"], "report_id": snap["report_id"],
+            "revision": snap["revision"], "published_at": snap["published_at"],
+            "published_by": snap["published_by"], "content_digest": snap["content_digest"],
+            "catalog_hash": snap["catalog_hash"],
+            # Verified on every listing rather than on request. A tamper-evident record that
+            # nobody ever checks is a record nobody has checked.
+            "digest_verified": ok, "digest_problem": why,
+        })
+    return {"revisions": rows, "current_report_id": report_id,
+            "lineage": [{"report_id": r["id"], "revision": r.get("revision"),
+                         "status": r.get("status"),
+                         "product_version": r.get("product_version")} for r in chain]}
+
+
+@router.get("/acr/{report_id}/revisions/{revision}")
+def revision_detail(report_id: str, revision: int, request: Request):
+    """One immutable published revision, with its digest re-verified against its contents."""
+    owner = _tenant()
+    report = _report_or_404(report_id, owner)
+    chain = _lineage(report, owner)
+    snaps = core.store.list_acr_snapshots_for_lineage([r["id"] for r in chain], owner_email=owner)
+    snap = next((s for s in snaps if int(s["revision"]) == int(revision)), None)
+    if snap is None:
+        raise HTTPException(404, f"no published revision {revision} for this report")
+
+    ok, why = acr_publish.verify(snap)
+    return {
+        "snapshot_id": snap["id"], "revision": snap["revision"],
+        "published_at": snap["published_at"], "published_by": snap["published_by"],
+        "content_digest": snap["content_digest"], "digest_verified": ok, "digest_problem": why,
+        "content": json.loads(snap["content_json"]),
+    }
+
+
+@router.post("/acr/{report_id}/revise")
+def revise(report_id: str, request: Request):
+    """Open a NEW draft revision that supersedes a published report (PRD §17).
+
+    A published snapshot is never edited, so a correction is a new report row with supersedes_id
+    set and revision+1. What it INHERITS is the interesting part.
+
+    THE RULE PRD §19 ENDS ON: never copy a previous version's "Supports" decisions without
+    freshness validation. `acr_publish.carry_forward` re-derives staleness against the NEW report
+    and sends any Supports claim with no live evidence left back to needs_review — and NO approval
+    carries at all, because an approval granted for the previous product version is not a sign-off
+    on this one. The criteria that were reset are RETURNED rather than applied silently: the person
+    opening the revision needs to know what they are being asked to re-evaluate.
+    """
+    owner = _tenant()
+    report = _report_or_404(report_id, owner)
+    who = _require(acr_authz.ROLE_EDITOR, request, report_id)
+
+    if report.get("status") != "published":
+        raise HTTPException(409, "only a published report is revised; this one is still a draft "
+                                 "and can be edited directly")
+
+    new_id = f"acr_{uuid.uuid4().hex[:12]}"
+    new_revision = int(report.get("revision") or 1) + 1
+    meta = {k: report.get(k) for k in core.store._ACR_REPORT_EDITABLE}
+    new_report = dict(report)
+    new_report.update({"id": new_id, "revision": new_revision, "status": "draft",
+                       "published_at": None, "supersedes_id": report_id})
+
+    criteria = core.store.list_acr_criteria(report_id, owner_email=owner)
+    ev_by = _evidence_objects(report_id, owner)
+    carried, reset = acr_publish.carry_forward(criteria, ev_by, new_report=new_report)
+
+    core.store.create_acr_report(new_id, owner_email=owner,
+                                 catalog_hash=acr_catalog.catalog_hash(),
+                                 criteria=acr_catalog.build_matrix(new_id), metadata=meta,
+                                 supersedes_id=report_id, revision=new_revision)
+    written = core.store.carry_acr_decisions(new_id, carried, owner_email=owner)
+    # Roles carry; approvals do not. A role authorizes someone to act on this report, and a
+    # revision is the same report — without this, every revision would need an admin to re-grant
+    # every role before anyone could touch it, and the person revising may not be one. An
+    # APPROVAL is the opposite kind of fact and is deliberately left behind; see carry_forward.
+    core.store.copy_acr_role_grants(owner_email=owner, from_report_id=report_id,
+                                    to_report_id=new_id)
+
+    core.store.append_acr_decision_log(
+        new_id, owner_email=owner, actor=who, action="report.revised",
+        detail=(f"revision {new_revision}, superseding {report_id}; {written} decision(s) "
+                f"carried, {len(reset)} reset for re-evaluation"))
+
+    return {
+        "report_id": new_id, "revision": new_revision, "supersedes_id": report_id,
+        "carried": written, "reset_criteria": reset,
+        "note": ("Every carried criterion re-enters the approval queue: an approval granted "
+                 "against the previous revision was granted for a different product version. "
+                 f"{len(reset)} criterion/criteria lost a Supports claim because the evidence "
+                 "behind it is stale for this version."),
+    }
