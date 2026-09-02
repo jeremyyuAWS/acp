@@ -6,6 +6,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { statusSegments, severityItems, Bars } from './charts.jsx'
 import Overview from './Overview.jsx'
+import { mountExpanded } from './testAccordion.js'
 import { findingsByCriterion, findingsByLevel, levelOfFinding } from './wcagFinding.js'
 import { statusOf, statusCounts, analysedCount, avgScore, ALL_STATUSES, NOT_ASSESSED } from './docStatus.js'
 import { recommendFor, remediableCount, REMEDIATION_ACTIONS } from './sim.js'
@@ -270,14 +271,17 @@ describe('analysedCount separates documents we opened from documents we merely l
 // that all 258 documents were checked and none passed, which is a stronger claim than the data
 // supports, and a blank tile is not an improvement on it.
 describe('Overview reports absent values as absent, not as zero', () => {
-  it('renders an em dash for an unmeasured headline tile rather than a zero', () => {
-    // Re-pointed when board 7 replaced the four tiles. The invariant is unchanged and is the
-    // reason this test exists: an absent measurement must not render as a measured zero. It moved
-    // from `run.certifiable ?? '—'` to the shared `tile()` helper, which now guards all four.
-    expect(overviewSrc).toMatch(/const tile = \(v\) => \(v == null \? '\\u2014' : v\.toLocaleString\(\)\)/)
-    // and every tile goes through it — a tile that reads a value directly bypasses the guard
-    expect(overviewSrc).toMatch(/<span>files discovered<\/span><b>\{tile\(/)
-    expect(overviewSrc).toMatch(/<span>findings<\/span><b>\{tile\(/)
+  it('renders an em dash for an unmeasured KPI rather than a zero', () => {
+    // The four headline tiles were removed from Overview on 2026-09-02 (PRD "ACP Discover and
+    // Overview Simplification"); EstateProgressPanel's KPI cards are the headline now. The
+    // INVARIANT is the reason this test exists and is unchanged: an absent measurement must not
+    // render as a measured zero. It moved from Overview's `tile()` helper to KpiCard.
+    expect(overviewSrc).not.toMatch(/<span>files discovered<\/span>/)
+    const panel = readFileSync(join(here, 'EstateProgressPanel.jsx'), 'utf8')
+    expect(panel).toMatch(/\{value == null \? '—' : nf\.format\(value\)\}/)
+    // A null KPI reaches the screen as the dash, not as 0.
+    expect(screen({ ...SCAN_12F2_RUN, certifiable: null, scope: { kind: 'drive' } }, []))
+      .not.toMatch(/discovered 0 total estate/)
   })
 
   it('computes audit-ready only when something was actually analysed', () => {
@@ -285,9 +289,13 @@ describe('Overview reports absent values as absent, not as zero', () => {
     expect(overviewSrc).toMatch(/const auditReadyLabel = auditReady == null \? '—'/)
   })
 
-  it('states the scope on screen when part of the estate was never analysed', () => {
-    expect(overviewSrc).toMatch(/analysed < n && \(/)
-    expect(overviewSrc).toMatch(/have been analysed/)
+  it('states the assessed-vs-eligible scope on screen rather than implying full coverage', () => {
+    // The "N of M documents have been analysed" banner went with the headline tiles on
+    // 2026-09-02. The claim it made is still made, by the coverage sentence in the Assessment
+    // section's own heading — which is derived from assessMetrics, not from a second count.
+    expect(overviewSrc).toMatch(/meta=\{coverageSentence\(metrics\)\}/)
+    const am = readFileSync(join(here, 'assessMetrics.js'), 'utf8')
+    expect(am).toMatch(/export function coverageSentence/)
   })
 
   it('derives the open-findings insight by counting documents, not by subtracting counters', () => {
@@ -371,11 +379,13 @@ describe('an unmeasured group renders as absent all the way to the bar', () => {
   })
 
   it('never interpolates a null score into a drill-in title', () => {
-    // Pre-fix both score panels opened a drawer headed "Finance · avg 0 / 100". The score may
-    // still be interpolated — but only on the branch that has established it is not null.
+    // The by-department / by-seniority score panels and the drawers they opened were removed from
+    // Overview on 2026-09-02, so there is no such title left to get wrong. What must not come back
+    // is the shape of the defect: a score interpolated on a branch that has not established it is
+    // not null. Pinned against the source so a restored panel cannot restore the bug with it.
     expect(/title: `\$\{it\.label\}[^`]*· avg/.test(overviewSrc), 'a drill-in title interpolates the score with no null guard').toBe(false)
-    expect(overviewSrc).toMatch(/it\.value == null \? `\$\{it\.label\} · not yet scored`/)
-    expect(overviewSrc).toMatch(/it\.value == null \? `\$\{it\.label\}-owned · not yet scored`/)
+    expect(overviewSrc).not.toMatch(/Average score by department/)
+    expect(overviewSrc).not.toMatch(/Average score by owner seniority/)
   })
 
   it('does not name a lowest-scoring department when none has a score', () => {
@@ -451,23 +461,27 @@ const SCAN_12F2_RUN = {
   error: 0, avg_score: 84, assessed_at: '2026-07-30T14:31:00Z',
   scope: { kind: 'drive', raw: 8, scannable: 4, skipped_acp: 0, kept: 4, truncated: false, cap: 2500 },
 }
+// Overview's sections are disclosures since the 2026-09-02 UI-simplification PRD, and several
+// start closed — a closed one renders no children, so a static render would assert on markup that
+// is not there. Mount it and open every section through its own header button, then read the text.
 const screen = (run = SCAN_12F2_RUN, files = SCAN_12F2_FILES) =>
-  renderToStaticMarkup(createElement(Overview, {
+  mountExpanded(createElement(Overview, {
     run, files, trend: [], trendDates: [], onGo: () => {}, scanList: [], onPickScan: () => {},
     me: { email: 'auditor@example.com' },
-  })).replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ')
+  })).textContent.replace(/\s+/g, ' ')
 
 describe('the Overview totals count the documents the Overview lists', () => {
   it('does not report more documents than the estate it is describing', () => {
     // The four tiles, the donut, the funnel and the score bands are six answers to "how many
     // documents"; they came from two different populations.
     const html = screen()
-    // Board 7 replaced the four tiles. This run's scope carries no inventory, so the two estate
-    // tiles have nothing to report — and report nothing, rather than claiming discovery found 0.
-    expect(html).toMatch(/files discovered —/)
-    expect(html).toMatch(/assessed against WCAG —/)
-    // The invariant this test was written for is the line below, and it is untouched: the donut,
-    // the funnel and the tiles must all describe ONE population.
+    // The four tiles were removed on 2026-09-02. This run's scope carries no inventory, so the
+    // estate KPIs have nothing to report — and report a dash, rather than claiming discovery
+    // found 0 documents.
+    expect(html).toMatch(/discovered—/)
+    expect(html).not.toMatch(/discovered0/)
+    // The invariant this test was written for is the line below, and it is untouched: the
+    // funnel and the KPI row must all describe ONE population.
     expect(statusSegments(SCAN_12F2_RUN, SCAN_12F2_FILES).reduce((a, s) => a + s.value, 0))
       .toBe(SCAN_12F2_RUN.files)
   })
@@ -480,46 +494,56 @@ describe('the Overview totals count the documents the Overview lists', () => {
     expect(screen()).not.toMatch(/discovered but not yet assessed/)
   })
 
-  it('still explains a genuine gap, so the banner is not merely silenced', () => {
+  it('still explains a genuine gap, so the coverage claim is not merely silenced', () => {
+    // The wording moved with the panel: the "N of M documents have been analysed" banner is gone,
+    // and the Assessment heading's coverage sentence carries the same fact. What matters is that
+    // a partly-analysed estate still SAYS it is partly analysed somewhere a reader will see.
     const partial = [...SCAN_12F2_FILES, asApp([driveDoc('never-opened.pdf',
       { status: 'discovered', score: null, compliant: 0 })])[0]]
-    expect(screen({ ...SCAN_12F2_RUN, files: 4 }, partial)).toMatch(/3 of 4 documents have been analysed/)
+    const html = screen({ ...SCAN_12F2_RUN, files: 4 }, partial)
+    expect(html).toMatch(/4,?\s*not eligible|awaiting assessment|of eligible|of discovered/)
+    expect(html).toMatch(/Assessment/)
   })
 })
 
 describe('the Overview says which findings each panel counts', () => {
-  it('reports findings by WCAG level instead of claiming there are none', () => {
-    // Real findings carry no `level`, so `i.level` counted zero and the panel rendered its
-    // empty state — the words "No open findings." — beside a severity panel reporting six.
-    const html = screen()
-    expect(html).toMatch(/Findings by WCAG level[^]*Level A · must-have 3/)
-    expect(html).toMatch(/Level AA · legal target 3/)
-    expect(html).toMatch(/Level AAA · optional 3/)
-    expect(html).not.toMatch(/Findings by WCAG level · [^]{0,80}No open findings/)
+  it('derives the level split from the criterion, not from a `level` field findings do not carry', () => {
+    // The "Findings by WCAG level" panel was removed from Overview on 2026-09-02 (PRD "ACP
+    // Discover and Overview Simplification"). The DEFECT it was written for is not about the
+    // panel: real findings carry no `level`, so counting `i.level` returned zero and any consumer
+    // reading it would report "no findings" over an estate full of them. findingsByLevel is still
+    // exported and still used (scanReport, pdfReport), so the invariant is pinned at the source.
+    expect(overviewSrc).not.toMatch(/Findings by WCAG level/)
+    const lv = findingsByLevel(SCAN_12F2_FILES)
+    expect(lv.A).toBe(3)
+    expect(lv.AA).toBe(3)
+    expect(lv.AAA).toBe(3)
+    expect(lv.unknown).toBe(0)
+    expect(SCAN_12F2_FILES.every((f) => f.issues.every((i) => i.level == null))).toBe(true)
   })
 
   it('counts one criterion once, however the finding spelled it', () => {
     // 'SC_1_3_1' (×2, .NET/Office) and '1.3.1 Info and Relationships' (×1, Python) are one
     // criterion. Keyed raw they were two entries in the violations cloud, both 1.3.1, their
-    // three findings split 2/1 — so "most common failure" was decided by a spelling.
-    const html = screen()
-    expect(html).toMatch(/Info and Relationships/)
-    expect(html).not.toMatch(/info & relationships/)
+    // three findings split 2/1 — so "most common failure" was decided by a spelling. The cloud
+    // itself left Overview on 2026-09-02; findingsByCriterion still feeds the exported report,
+    // which is where a split criterion would now do its damage.
     expect(findingsByCriterion(SCAN_12F2_FILES).filter((c) => c.sc === '1.3.1'))
       .toEqual([expect.objectContaining({ sc: '1.3.1', count: 3 })])
+    const cloud = findingsByCriterion(SCAN_12F2_FILES).map((c) => c.sc)
+    expect(new Set(cloud).size).toBe(cloud.length)
   })
 
   it('accounts for the advisory findings the severity panel leaves out', () => {
     // severityItems buckets the four BLOCKING severities. A review-recommended finding (ADR
-    // 0023) has none of them, so 3 of the estate's 9 findings were in no bucket and the panel's
-    // total silently disagreed with every other finding count on the screen. The panel is not
-    // widened — RiskScore reads the same items as blocking work — so the screen says so.
-    const html = screen()
-    expect(html).toMatch(/Findings by severity · blocking findings/)
-    expect(html).toMatch(/moderate 6/)
-    expect(html).toMatch(/Plus 3 advisory findings/)
-    expect(html).toMatch(/estate holds 9 findings in total/)
-    // The two panels' totals now reconcile through a stated difference rather than by accident.
+    // 0023) has none of them, so 3 of the estate's 9 findings were in no bucket and that total
+    // silently disagreed with every other finding count on the screen. The severity panel left
+    // Overview on 2026-09-02; severityItems still buckets only the blocking four, so the gap it
+    // leaves is still real and is still the thing that must reconcile.
+    expect(overviewSrc).not.toMatch(/Findings by severity · blocking findings/)
+    expect(severityItems(SCAN_12F2_FILES).find((s) => s.label === 'moderate')?.value).toBe(6)
+    expect(SCAN_12F2_FILES.reduce((a, f) => a + f.issues.filter((i) => i.severity === 'REVIEW').length, 0)).toBe(3)
+    // The two counts reconcile through a stated difference rather than by accident.
     const bySeverity = severityItems(SCAN_12F2_FILES).reduce((a, s) => a + s.value, 0)
     const byLevel = Object.values(findingsByLevel(SCAN_12F2_FILES)).reduce((a, n) => a + n, 0)
     expect(bySeverity + 3).toBe(byLevel)
@@ -590,10 +614,12 @@ const UTSW_RUN = {
 
 describe('the Compliance-by-dimension cards agree with the estate beside them', () => {
   it('does not say "No open findings" over an estate scoring 11/100', () => {
-    // The exact pairing on screen: four documents below 50, and a panel claiming nothing failed.
+    // The exact pairing on screen was: four documents below 50, and a panel claiming nothing
+    // failed. Both panels were removed on 2026-09-02, so the contradiction has no surface left —
+    // but the arithmetic underneath is what made it possible, and that is still live.
     const html = screen(UTSW_RUN, UTSW_FILES)
-    expect(html).toMatch(/below 50 · at risk 4/)
-    expect(html).not.toMatch(/Findings by WCAG level · [^]{0,90}No open findings/)
+    expect(html).not.toMatch(/below 50 · at risk/)
+    expect(html).not.toMatch(/Findings by WCAG level/)
     const lv = findingsByLevel(UTSW_FILES)
     expect(lv.A + lv.AA + lv.AAA).toBe(UTSW_FILES.reduce((a, f) => a + f.issues.length, 0))
     expect(lv.unknown).toBe(0)
@@ -604,7 +630,9 @@ describe('the Compliance-by-dimension cards agree with the estate beside them', 
     const all = Object.values(findingsByLevel(UTSW_FILES)).reduce((a, n) => a + n, 0)
     const advisory = UTSW_FILES.reduce((a, f) => a + f.issues.filter((i) => i.severity === 'REVIEW').length, 0)
     expect(blocking + advisory).toBe(all)
-    expect(screen(UTSW_RUN, UTSW_FILES)).toMatch(new RegExp(`estate holds ${all} findings in total`))
+    // The sentence that stated the difference went with the two panels on 2026-09-02. What must
+    // not come back is a screen that prints one of these totals as if it were the other.
+    expect(overviewSrc).not.toMatch(/findings in total/)
   })
 
   it('counts a criterion once when two engines spelled it differently in the same scan', () => {
@@ -617,30 +645,25 @@ describe('the Compliance-by-dimension cards agree with the estate beside them', 
     expect(new Set(cloud).size).toBe(cloud.length)
   })
 
-  it('never renders a dimension card as a heading over blank space', () => {
-    // `seniority` is SIM-only — annotate() gap-fills type/department/tags and never this — so
-    // scoreBySeniority is empty on EVERY real scan and <Bars items={[]}/> drew nothing at all.
-    // A blank card reads as a number that failed to load, which is how #77 announced itself.
-    const html = screen(UTSW_RUN, UTSW_FILES)
+  // THE DIMENSION CARDS ARE GONE. "Average score by department", "by owner seniority" and the
+  // rest were removed from Overview on 2026-09-02 (PRD "ACP Discover and Overview
+  // Simplification"). They are pinned as removed rather than deleted from this file, because the
+  // three defects below are what a restored card would have to avoid all over again: a heading
+  // over an empty <Bars>, a bar drawn from SIM-only metadata, and a one-bar "breakdown" that is
+  // an estate average wearing a breakdown's title.
+  it('renders no dimension card at all — no heading, and so no heading over blank space', () => {
     expect(UTSW_FILES.every((f) => f.seniority == null)).toBe(true)
-    expect(html).toMatch(/Average score by owner seniority[^]{0,60}No owner seniority recorded/)
-    expect(html).toMatch(/a gap in the metadata, not a score of zero/)
-  })
-
-  it('still draws the seniority bars when the data is actually there', () => {
-    const withSeniority = UTSW_FILES.map((f, i) => ({ ...f, seniority: i ? 'Manager' : 'Executive' }))
-    const html = screen(UTSW_RUN, withSeniority)
-    expect(html).toMatch(/Executive/)
+    expect(overviewSrc).not.toMatch(/Average score by owner seniority/)
+    expect(overviewSrc).not.toMatch(/Average score by department/)
+    const html = screen(UTSW_RUN, UTSW_FILES)
     expect(html).not.toMatch(/No owner seniority recorded/)
+    expect(html).not.toMatch(/Average score by/)
   })
 
-  it('says so when "by department" is one bar called Unassigned', () => {
-    // classifyByName files anything its keyword list cannot place under "Unassigned". A single
-    // such bar is an estate average wearing a breakdown's title.
+  it('does not name a department breakdown it no longer draws', () => {
     const unplaceable = UTSW_FILES.map((f) => ({ ...f, department: 'Unassigned' }))
-    expect(screen(UTSW_RUN, unplaceable)).toMatch(/Every document is .Unassigned./)
-    // Two real departments — the note must not fire and imply a gap that isn't there.
-    expect(screen(UTSW_RUN, UTSW_FILES)).not.toMatch(/Every document is .Unassigned./)
+    expect(screen(UTSW_RUN, unplaceable)).not.toMatch(/Every document is .Unassigned./)
+    expect(screen(UTSW_RUN, unplaceable)).not.toMatch(/by department/i)
   })
 })
 

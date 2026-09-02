@@ -1796,7 +1796,7 @@ export default function App() {
         )}
         {scanList.length > 1 && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-              <span className="muted" title="Time-travel — pick any past scan and every tab, dashboard and score reflects that point in time">🕐 Time-travel:</span>
+              <span className="muted" title="Scan History — pick any past scan and every tab, dashboard and score reflects that point in time">🕐 Scan History:</span>
               <select
                 value={scan?.run?.id || ''}
                 onChange={(e) => switchScan(e.target.value)}
@@ -1827,7 +1827,7 @@ export default function App() {
           )}
           {run && (Object.keys(decisions).length + Object.keys(triage).length) > 0 && (
             <span className="muted" style={{ marginLeft: 12, fontSize: 12, color: '#3B6D11', whiteSpace: 'nowrap' }}
-                  title="Your triage + remediation decisions are saved to this scan and restored when you time-travel back to it">
+                  title="Your triage + remediation decisions are saved to this scan and restored when you switch to it in Scan History">
               ✓ {Object.keys(decisions).length + Object.keys(triage).length} decision{(Object.keys(decisions).length + Object.keys(triage).length) !== 1 ? 's' : ''} saved
             </span>
           )}
@@ -1840,7 +1840,7 @@ export default function App() {
               {/* fmtStamp returns null for a missing stamp; the guard on isTimeTravel means that
                   can no longer happen here, but the fallback stays so a null can never again
                   render as a bold empty span followed by a bare period. */}
-              <span style={{ fontSize: 13.5 }}>🕐 <b>Time-travel replay</b> — viewing the scan from <b>{fmtStamp(run.completed_at) ?? 'an earlier scan'}</b>{run.avg_score != null ? ` · ${run.avg_score}/100` : ''}. Every tab, the dashboard and your saved decisions reflect this past scan.</span>
+              <span style={{ fontSize: 13.5 }}>🕐 <b>Scan History replay</b> — viewing the scan from <b>{fmtStamp(run.completed_at) ?? 'an earlier scan'}</b>{run.avg_score != null ? ` · ${run.avg_score}/100` : ''}. Every tab, the dashboard and your saved decisions reflect this past scan.</span>
             </>
           ) : (
             <span style={{ fontSize: 13.5 }}>✨ <b>New scan available</b> from <b>{fmtStamp(scanList[0]?.completed_at) ?? 'just now'}</b> — a more recent scan finished while you were reviewing this one.</span>
@@ -2132,7 +2132,7 @@ export default function App() {
             can't have met yet. QueuePanel is deliberately still not rendered once `<Monitor>`
             itself mounts (assessed) — Monitor already includes it once, at line ~535 of
             Monitor.jsx; rendering it here too on top of `<Monitor>` would just show two. */}
-        {view === 'monitor' && (run ? (assessed ? <Monitor me={me} run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} focusScanId={monitorFocusScanId} onClearFocus={() => setMonitorFocusScanId(null)} /> : <><QueuePanel focusScanId={monitorFocusScanId} onClearFocus={() => setMonitorFocusScanId(null)} />{assessGate}</>) : (overviewPreview ? <MonitorPreviewCard preview={overviewPreview} /> : placeholder))}
+        {view === 'monitor' && (run ? (assessed ? <Monitor me={me} run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} focusScanId={monitorFocusScanId} onClearFocus={() => setMonitorFocusScanId(null)} trend={trend} trendDates={trendDates} /> : <><QueuePanel focusScanId={monitorFocusScanId} onClearFocus={() => setMonitorFocusScanId(null)} />{assessGate}</>) : (overviewPreview ? <MonitorPreviewCard preview={overviewPreview} /> : placeholder))}
 
 
         {/* Standalone Knowledge Graph — was nested inside Assess (findable only after

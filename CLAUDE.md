@@ -511,10 +511,12 @@ the approved design boards and fails if any is not rendered by some screen. Reti
 not on that list; components that are supposed to be live are.
 
 **Currently retired or unmounted, and mounted nowhere** (frontend/src): `AssessScope`,
-`ConfidenceDashboard`, `ControlPlane`, `Dashboard`, `Disposition`,
-`DispositionReviewWorkspace`, `FileTypeConfig`,
-`LiveAssessment`, `ProcessingDetails`, `RemediationApprovals`, `RiskScore`, `RolePrivilege`, `Rubric`, `ScanScope`,
-`ScanSetup`, `ScopeFunnel`, `ScopeRules`, `ScreenReaderDemo`, `Upload`.
+`AssessmentReconciliation`, `ConfidenceDashboard`, `ControlPlane`, `Dashboard`,
+`DiscoverCompleteSummary`, `DiscoveryCompleteness`, `DiscoveryLifecycleResults`, `Disposition`, `DispositionReviewWorkspace`,
+`EstateCoverage`, `EstateTreemap`, `FileTypeConfig`, `Insight`, `LifecycleOverrideControl`, `LiveAssessment`, `PiiPanel`,
+`ProcessingDetails`, `RemediationApprovals`, `RiskScore`, `RolePrivilege`, `Rubric`, `ScanScope`,
+`ScanScopeChip`, `ScanSetup`, `ScopeFunnel`, `ScopeRules`, `ScreenReaderDemo`, `Upload`,
+`WordCloud`.
 
 Do not delete these, and do not "wire them back in" because they look unfinished — several were
 removed on purpose, and one (`RemediationFixPreview`, since deleted) shipped live in exactly that

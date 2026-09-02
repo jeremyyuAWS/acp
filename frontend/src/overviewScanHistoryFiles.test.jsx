@@ -1,12 +1,18 @@
 /**
- * Scan history table (Overview.jsx) — "files" column.
+ * Scan history table (Overview.jsx) — REMOVED on 2026-09-02 by the PRD "ACP Discover and Overview
+ * Simplification", along with the rest of Overview's tables and charts. Nothing on any screen
+ * renders it now; scan selection lives in the header's scan picker.
  *
- * The certifiable column already rendered `certifiable / files` as a fraction, so the discovered
- * count was on screen but easy to miss (a small muted denominator, not its own labelled column).
- * Requested live 2026-08-28 after a user looked at the row and could not tell how many files a
- * past scan had discovered without opening it.
+ * This file is kept and rewritten to pin the removal rather than deleted, because the table came
+ * back once already: the "files" column was added live on 2026-08-28 after a user could not tell
+ * how many files a past scan had discovered without opening it. If the table returns, it has to
+ * return with that column and without the row-as-button defect below — and this test is the
+ * record of both, which a deleted file would not be.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
@@ -21,6 +27,8 @@ vi.mock('./api.js', async (importActual) => ({
 }))
 
 const { default: Overview } = await import('./Overview.jsx')
+
+const overviewSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'Overview.jsx'), 'utf8')
 
 const RUN = { id: 'scan-1', certifiable: 1, files: 1248, scope: null, completed_at: '2026-08-08T00:00:00Z' }
 const OLDER = { id: 'scan-0', certifiable: 0, files: 900, avg_score: 70, scope: null, completed_at: '2026-08-01T00:00:00Z' }
@@ -39,37 +47,36 @@ async function render(props = {}) {
 
 const historyTable = (c) => [...c.querySelectorAll('h2')].find((h) => h.textContent.includes('Scan history'))?.closest('section')?.querySelector('table')
 
-describe('scan history table — files column', () => {
-  it('shows a "files" column header', async () => {
+describe('the scan history table is intentionally NOT on Overview', () => {
+  it('renders no scan history heading, and so no table under one', async () => {
     const c = await render()
-    const table = historyTable(c)
-    expect(table, 'scan history table missing').toBeTruthy()
-    const headers = [...table.querySelectorAll('thead th')].map((th) => th.textContent)
-    expect(headers).toContain('files')
+    expect(historyTable(c)).toBeFalsy()
+    const headings = [...c.querySelectorAll('h2')].map((h) => h.textContent)
+    expect(headings.length, 'Overview rendered no headings at all — the check below proves nothing')
+      .toBeGreaterThan(0)
+    expect(headings.filter((t) => /scan history/i.test(t))).toEqual([])
   })
 
-  it('shows the discovered file count for each row, independent of the certifiable fraction', async () => {
+  it('renders no scan-history row controls anywhere on the screen', async () => {
     const c = await render()
-    const table = historyTable(c)
-    const rowTexts = [...table.querySelectorAll('tbody tr')].map((tr) => tr.textContent)
-    expect(rowTexts[0]).toContain('1,248')
-    expect(rowTexts[1]).toContain('900')
+    expect(c.querySelector('button.scan-history-select')).toBeNull()
+    // The defect the last version of this test guarded: a row that is itself a button, wrapping
+    // another button. Neither may reappear.
+    expect(c.querySelector('tr[role="button"]')).toBeNull()
   })
 
-  it('falls back to 0 when files is missing, same as the certifiable column already did', async () => {
+  it('takes a scanList without rendering it, and without throwing', async () => {
+    // Overview still ACCEPTS `scanList`/`onPickScan` — App passes them — so the props must stay
+    // harmless. A scan whose `files` is missing is the case that used to print a bare 0.
     const noFiles = { id: 'scan-2', certifiable: 0, scope: null, completed_at: '2026-08-08T00:00:00Z' }
-    const c = await render({ run: noFiles, scanList: [noFiles] })
-    const table = historyTable(c)
-    const row = table.querySelector('tbody tr')
-    expect(row.textContent).toContain('0')
+    const c = await render({ run: noFiles, scanList: [noFiles, OLDER] })
+    expect(c.textContent).not.toContain('1,248')
+    expect(c.textContent).not.toContain('900')
   })
 
-  it('does not turn a table row containing a trace button into another interactive control', async () => {
-    const c = await render()
-    const table = historyTable(c)
-    expect(table.querySelector('tbody tr[role="button"]')).toBeNull()
-    const viewButtons = table.querySelectorAll('button.scan-history-select')
-    expect(viewButtons).toHaveLength(2)
-    expect(viewButtons[0].getAttribute('aria-current')).toBe('true')
+  it('still names the source file, so restoring the table has a starting point', () => {
+    // Overview.jsx keeps the props; what it no longer keeps is the markup.
+    expect(overviewSrc).not.toMatch(/scan-history-select/)
+    expect(overviewSrc).toMatch(/scanList = \[\]/)
   })
 })

@@ -201,12 +201,10 @@ describe('and speaks up when it does', () => {
 
 
 describe('the caveat sits ABOVE the numbers it qualifies', () => {
-  // The flaw this fixes was mine. The panel first sat under the export, reasoning that a reader
-  // should meet the caveat before the download button. Wrong reader: the one who matters reads the
-  // COUNTS, and a caveat appearing beneath them arrives after they have been believed.
-  //
-  // Source-level because it asserts ORDER in a tree, which a render of one component cannot see.
-  it('Discover renders it before the results, not after', async () => {
+  // The 2026-09-02 PRD simplification retired DiscoveryCompleteness from Discover. The component
+  // and its logic are preserved for potential restoration; it is tracked in
+  // unmountedComponents.test.jsx. The ordering assertion is moot once it is not mounted.
+  it('DiscoveryCompleteness is no longer mounted in Discover', async () => {
     const { readFileSync } = await import('node:fs')
     const { fileURLToPath } = await import('node:url')
     const { dirname, join } = await import('node:path')
@@ -215,10 +213,8 @@ describe('the caveat sits ABOVE the numbers it qualifies', () => {
       .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
       .replace(/^\s*\/\/.*$/gm, '')
 
-    const caveat = src.indexOf('<DiscoveryCompleteness')
-    const results = src.indexOf('<DiscoveryResults')
-    expect(caveat, 'completeness panel mounted').toBeGreaterThan(-1)
-    expect(results, 'results panel mounted').toBeGreaterThan(-1)
-    expect(caveat, 'the caveat must precede the counts it qualifies').toBeLessThan(results)
+    expect(src).not.toMatch(/<DiscoveryCompleteness\b/)
+    // DiscoveryResults is still mounted — this was a de-duplication, not a capability deletion.
+    expect(src).toMatch(/<DiscoveryResults\b/)
   })
 })

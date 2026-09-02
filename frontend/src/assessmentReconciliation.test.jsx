@@ -134,17 +134,25 @@ describe('the reconciliation renders every bucket and its arithmetic', () => {
   })
 })
 
-describe('Overview mounts the reconciliation', () => {
+// AssessmentReconciliation was UNMOUNTED from Overview on 2026-09-02 (PRD "ACP Discover and
+// Overview Simplification") — EstateProgressPanel's funnel and the compliance funnel carry the
+// estate story now, and the five-bucket partition was a third telling of it. The component file and
+// every test above it stay: the panel is a retired feature, not a deleted one (CLAUDE.md), and it is
+// listed in `unmountedComponents.test.jsx`, which fails if anything mounts it again without the
+// record being updated. The tests above still exercise the panel directly and still pass.
+describe('Overview no longer mounts the reconciliation', () => {
   const screen = (run, files) =>
     renderToStaticMarkup(createElement(Overview, {
       run, files, trend: [], trendDates: [], onGo: () => {}, scanList: [], onPickScan: () => {},
       me: { email: 'auditor@example.com' },
     })).replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ')
 
-  it('renders the panel and its arithmetic on the estate dashboard', () => {
+  it('does not render the panel, even on a run that carries a full inventory', () => {
     const html = screen(RUN, rows(6646, 47))
-    expect(html).toContain('What was assessed, and what was not')
-    expect(html).toContain('6,646 + 343 + 1,300 + 4,072 + 47')
+    // A run this panel WOULD have rendered for — so the absence is the removal, not a null return.
+    expect(html).toContain('Estate progress')
+    expect(html).not.toContain('What was assessed, and what was not')
+    expect(html).not.toContain('6,646 + 343 + 1,300 + 4,072 + 47')
   })
 
   it('leaves the dashboard alone when the scan carries no inventory', () => {
@@ -158,9 +166,15 @@ describe('the wiring is where it says it is', () => {
   const overview = readFileSync(join(here, 'Overview.jsx'), 'utf8')
   const panel = readFileSync(join(here, 'AssessmentReconciliation.jsx'), 'utf8')
 
-  it('Overview imports and renders the panel from the run’s own data', () => {
-    expect(overview).toMatch(/import AssessmentReconciliation from '\.\/AssessmentReconciliation\.jsx'/)
-    expect(overview).toMatch(/<AssessmentReconciliation run=\{run\} files=\{files\} \/>/)
+  it('Overview neither imports nor renders the panel any more', () => {
+    // Not just unrendered — unimported. A dead import is what makes an orphan actively misleading:
+    // a reader greps, finds it, and concludes the component is wired (CLAUDE.md, 2026-08-30).
+    expect(overview).not.toMatch(/import AssessmentReconciliation from/)
+    expect(overview).not.toMatch(/<AssessmentReconciliation[\s/>]/)
+    // It still reads the same two modules the panel does, for the funnel it DID keep — so the
+    // absence above is the panel being retired, not the data going away.
+    expect(overview).toMatch(/import \{ reconcileBuckets, assessmentEligible \} from '\.\/estateFunnel\.js'/)
+    expect(overview).toMatch(/import \{ reconciliationInputs \} from '\.\/reconciliationInputs\.js'/)
   })
 
   it('the panel derives nothing itself — the model is the pure module', () => {

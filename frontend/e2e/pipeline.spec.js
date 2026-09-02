@@ -23,18 +23,20 @@ test('a local scan runs discover → assess and produces WCAG findings', async (
 
   await runDiscovery(page)
 
-  // Three mutually exclusive states share this section, distinguished only by their label:
-  // "Discovery in progress" / "Discovery stopped" / "Discovery complete".
-  await expect(page.getByRole('region', { name: 'Discovery complete' }))
+  // The completion surface is the "Estate overview" section, which only renders once discovery has
+  // finished — DiscoverCompleteSummary's three-state "Discovery in progress / stopped / complete"
+  // region was retired with it on 2026-09-02 (UI-simplification PRD).
+  await expect(page.getByRole('region', { name: 'Estate overview' }))
     .toBeVisible({ timeout: 120_000 })
 
   // The count is what ties this to OUR corpus. SIM's synthetic estate is thousands of files, so
-  // this line can only come from a real scan of .e2e/corpus. Wording is "files inventoried", not
-  // "files discovered" — PR #884 (structured-row completion card) renamed it and updated
-  // discoverCompleteSummary.test.jsx to match, but left this E2E assertion on the old copy, so
-  // it has silently timed out on every main-branch CI run since (visible from commit 0d456ebc
-  // onward).
-  await expect(page.getByText(`${CORPUS_SIZE} files inventoried`, { exact: true })).toBeVisible({ timeout: 30_000 })
+  // this can only come from a real scan of .e2e/corpus. It is read off the "discovered" KPI card
+  // rather than by text: the card is `<span>discovered</span><b>N</b>`, and a bare getByText of
+  // the number would match any "3" anywhere on the page. (The previous wording, "N files
+  // inventoried", was DiscoverCompleteSummary's — this assertion has now been re-pointed twice,
+  // so it is anchored on structure this time, not on copy.)
+  const discoveredKpi = page.locator('.metric').filter({ hasText: /^discovered/ }).first()
+  await expect(discoveredKpi.locator('b')).toHaveText(String(CORPUS_SIZE), { timeout: 30_000 })
 
   const assessTab = tab(page, /Assess/)
   await expect(assessTab).toBeVisible()

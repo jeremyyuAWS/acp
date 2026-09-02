@@ -1,3 +1,4 @@
+import AccordionSection from './AccordionSection.jsx'
 // "NEXT" (approved board 7) — the one thing to do about everything above it.
 //
 // The Overview answers "where does the estate stand". This answers "so what now", which is the
@@ -39,8 +40,7 @@ export default function NextStep({ metrics, awaiting = null, onRemediate, onExpo
   const clear = total === 0
 
   return (
-    <section className="panel" aria-labelledby="nextstep-h">
-      <h2 id="nextstep-h">NEXT</h2>
+    <AccordionSection id="next-step" title="NEXT" ariaLabel="Next" defaultOpen>
 
       {clear ? (
         <p style={{ margin: '8px 0 0', fontSize: 13.5, lineHeight: 1.6 }}>
@@ -79,6 +79,6 @@ export default function NextStep({ metrics, awaiting = null, onRemediate, onExpo
           )}
         </p>
       )}
-    </section>
+    </AccordionSection>
   )
 }

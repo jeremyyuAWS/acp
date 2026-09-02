@@ -2,10 +2,17 @@
  * Discover shows the whole discovered estate, and a Document Location control filters the VIEW
  * (Discover/Assess PRD §4.1).
  *
- * Two changes are pinned here. (1) The file-type gate is gone — Discover no longer narrows its list
- * by document type (that decision moved to Assess), so a fileTypeConfig that would once have hidden
- * a type has no effect. (2) A Document Location filter narrows what is shown by source drive /
- * folder / path, WITHOUT restricting discovery: the estate count beside it stays whole.
+ * Two changes were pinned here. (1) The file-type gate is gone — Discover no longer narrows its
+ * list by document type (that decision moved to Assess), so a fileTypeConfig that would once have
+ * hidden a type has no effect. That is unchanged, and is asserted below against the BY FILE TYPE
+ * breakdown, which is where every discovered type is now listed.
+ *
+ * (2) The Document Location filter — filter-by-source-drive / folder / path, narrowing the VIEW
+ * without restricting discovery — was REMOVED on 2026-09-02 with the per-department block it lived
+ * in (PRD "ACP Discover and Overview Simplification"). That is a capability this screen no longer
+ * offers, not a control that moved: nothing else on Discover filters the list by location. It is
+ * pinned as removed here so its absence is a recorded decision rather than an unnoticed
+ * regression, and so a restored filter has to restore the view-only guarantee with it.
  *
  * DOM-level, not browser-level: the preview server runs vite rooted at the SHARED checkout whatever
  * worktree you are in, so a browser check of a worktree change exercises code that does not contain
@@ -36,16 +43,6 @@ const render = async (props) => {
   })
 }
 
-const type = async (el, v) => {
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
-  await act(async () => { setter.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })) })
-}
-const selectValue = async (el, v) => {
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set
-  await act(async () => { setter.call(el, v); el.dispatchEvent(new Event('change', { bubbles: true })) })
-}
-const locCount = () => container.querySelector('.doclocbar-count')?.textContent || ''
-
 const MIXED = [
   FILE('HR/policies/leave.docx', { sourceName: 'Google Drive', department: 'Human Resources' }),
   FILE('Legal/contracts/nda.pdf', { sourceName: 'Google Drive', department: 'Legal' }),
@@ -56,40 +53,46 @@ const MIXED = [
 describe('Discover no longer gates by document type', () => {
   it('shows every type even when a fileTypeConfig would exclude one', async () => {
     // fileTypeConfig is no longer a Discover prop; passing one must have no effect on what shows.
-    await render({ files: [FILE('a.docx'), FILE('b.pdf'), FILE('c.pptx')], fileTypeConfig: { pdf: false } })
-    const legend = container.querySelector('.typelegend')?.textContent || ''
-    expect(legend, 'pdf was gated out of the type legend').toContain('PDF')
-    expect(legend).toContain('DOCX')
-    expect(legend).toContain('PPTX')
+    await render({ files: [FILE('a.docx'), FILE('b.pdf'), FILE('c.pptx')], fileTypeConfig: { pdf: false },
+                   run: { id: 's1', status: 'discovered', discovered_at: '2026-09-01T00:00:00Z' },
+                   scope: { kind: 'drive', inventory: { discovered: 3 } }, scanId: 's1' })
+    const text = container.textContent
+    expect(text, 'the type breakdown did not render at all').toContain('BY FILE TYPE')
+    expect(text, 'pdf was gated out of the type breakdown').toContain('PDF')
+    expect(text).toContain('DOCX')
+    expect(text).toContain('PPTX')
     // and no "excluded by file-type settings" caveat survives
-    expect(container.textContent).not.toMatch(/excluded by file-type settings/i)
+    expect(text).not.toMatch(/excluded by file-type settings/i)
   })
 })
 
 
-describe('the Document Location filter narrows the shown list', () => {
-  it('filters by a folder/path substring', async () => {
-    await render({ files: MIXED })
-    const input = container.querySelector('input[aria-label="Filter by folder or path"]')
-    expect(input, 'no path filter input').toBeTruthy()
-    await type(input, 'Legal')
-    expect(locCount()).toMatch(/1 of 3 shown/)
+describe('the Document Location filter is gone from Discover', () => {
+  const mounted = async () => {
+    await render({ files: MIXED,
+                   run: { id: 's1', status: 'discovered', discovered_at: '2026-09-01T00:00:00Z' },
+                   scope: { kind: 'drive', inventory: { discovered: 3 } }, scanId: 's1' })
+    // The list itself IS on screen — otherwise the three absences below say nothing about the
+    // filter and everything about a failed mount.
+    expect(container.textContent).toContain('BY FILE TYPE')
+  }
+
+  it('offers no folder/path filter input', async () => {
+    await mounted()
+    expect(container.querySelector('input[aria-label="Filter by folder or path"]')).toBeNull()
   })
 
-  it('filters by source drive', async () => {
-    await render({ files: MIXED })
-    const select = container.querySelector('select[aria-label="Filter by source"]')
-    expect(select, 'no source selector').toBeTruthy()
-    await selectValue(select, 'SharePoint')
-    expect(locCount()).toMatch(/1 of 3 shown/)
+  it('offers no source-drive selector', async () => {
+    await mounted()
+    expect(container.querySelector('select[aria-label="Filter by source"]')).toBeNull()
   })
 
-  it('is a view filter only — the discovered estate count stays whole', async () => {
-    await render({ files: MIXED })
-    const input = container.querySelector('input[aria-label="Filter by folder or path"]')
-    await type(input, 'Legal')
-    // the estate bar still reports all three discovered — the filter did not restrict discovery
-    expect(container.textContent).toContain('3 documents')
-    expect(locCount()).toMatch(/2 hidden by location/)
+  it('shows the whole discovered estate, with no "N hidden by location" count to show', async () => {
+    await mounted()
+    expect(container.querySelector('.doclocbar-count')).toBeNull()
+    expect(container.textContent).not.toMatch(/hidden by location/)
+    // Every discovered document is still counted — the filter never restricted discovery, and
+    // removing it must not have started restricting it either.
+    expect(container.textContent).toMatch(/discovered3/)
   })
 })

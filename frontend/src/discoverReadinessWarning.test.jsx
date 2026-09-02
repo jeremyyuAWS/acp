@@ -103,12 +103,18 @@ describe('capacity-state notice', () => {
     expect(c.textContent).not.toMatch(/Preparing Discovery capacity/i)
   })
 
-  it('does not disable "Re-scan all sources" in starting state — the queue is durable', async () => {
+  it('does not block a scan in starting state — the queue is durable, and it never had a gate here', async () => {
+    // This used to read the "Re-scan all sources" button and assert it was NOT disabled: a
+    // capacity warning is information, not a block, because a queued job survives a cold worker
+    // pool. That button was removed from Discover on 2026-09-02 (PRD "ACP Discover and Overview
+    // Simplification"), so the guarantee is now that the warning renders WITHOUT disabling
+    // anything on the screen — there is nothing here left to disable.
     checkReadiness.mockResolvedValue({ ready: false, capacity_state: 'starting', degraded: ['no_workers'] })
     const c = await mount({})
     await flush()
-    const btn = [...c.querySelectorAll('button')].find((b) => /Re-scan all sources/.test(b.textContent))
-    expect(btn).toBeTruthy()
-    expect(btn.disabled).toBe(false)
+    expect(c.textContent).toMatch(/Preparing Discovery capacity/i)
+    expect([...c.querySelectorAll('button')].find((b) => /Re-scan all sources/.test(b.textContent))).toBeUndefined()
+    // Not one control on the screen was disabled by the capacity read.
+    expect([...c.querySelectorAll('button')].filter((b) => b.disabled)).toEqual([])
   })
 })

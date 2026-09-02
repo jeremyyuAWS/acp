@@ -4,6 +4,7 @@ import { getSchedule, putSchedule, listCampaigns, createCampaign, setCampaignSta
 import { prefersReducedMotion } from './a11y.js'
 import RegressionRadar from './RegressionRadar.jsx'
 import ComplianceDigest from './ComplianceDigest.jsx'
+import { Sparkline } from './ScoreRing.jsx'
 import FailureLane from './FailureLane.jsx'
 import QueuePanel from './QueuePanel.jsx'
 import RevisionHistoryPanel from './RevisionHistoryPanel.jsx'
@@ -112,7 +113,7 @@ function useProgramBatches(files, decisions) {
   }
 }
 
-export default function Monitor({ run, scanList = [], sources = [], files = [], ratified, decisions = {}, publishedFiles = [], aiEnabled = true, onAiToggle, busy = false, progress = null, scanPct = 0, readOnly = false, me, focusScanId = null, onClearFocus = null }) {
+export default function Monitor({ run, scanList = [], sources = [], files = [], ratified, decisions = {}, publishedFiles = [], aiEnabled = true, onAiToggle, busy = false, progress = null, scanPct = 0, readOnly = false, me, focusScanId = null, onClearFocus = null, trend = [], trendDates = [] }) {
   const m = monitoringState(files)
   // Real signed-in org for the evidence report — demo org only in SIM.
   const orgName = SIM ? IDENTITY.org : (me?.email?.split('@')[1]?.replace(/\.[^.]+$/, '') || me?.name || 'your organisation')
@@ -352,6 +353,41 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
 
       <ComplianceDigest run={run} />
 
+      {trend.length > 1 && new Set(trend).size > 1 && (() => {
+        const scored = [...scanList].filter((s) => s.completed_at && s.avg_score != null)
+          .sort((a, b) => a.completed_at.localeCompare(b.completed_at))
+        let velocity = null, etaLabel = null
+        if (scored.length >= 2) {
+          const first = scored[0], last = scored[scored.length - 1]
+          const days = (new Date(last.completed_at) - new Date(first.completed_at)) / 86400000
+          if (days >= 1) {
+            velocity = ((last.avg_score - first.avg_score) / days) * 7
+            if (velocity > 0.05 && last.avg_score < 90) {
+              const weeksToTarget = (90 - last.avg_score) / velocity
+              const eta = new Date(Date.now() + weeksToTarget * 7 * 86400000)
+              etaLabel = eta.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+            }
+          }
+        }
+        return (
+          <section className="panel">
+            <h2>Compliance trend <span className="muted">· {trend.length} scans</span></h2>
+            <Sparkline points={trend} labels={trendDates} width={620} height={104} />
+            {velocity != null && (
+              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span className="badge" style={{ background: velocity > 0 ? '#E7F0DC' : velocity < 0 ? '#FCEBEB' : '#EEEDEA',
+                                                  color: velocity > 0 ? '#3B6D11' : velocity < 0 ? '#A32D2D' : 'var(--muted)' }}>
+                  {velocity > 0 ? '↑' : velocity < 0 ? '↓' : '→'} {Math.abs(velocity).toFixed(1)} pts/week
+                </span>
+                <span className="muted" style={{ fontSize: 12.5 }}>
+                  {etaLabel ? `at this pace, on track for 90/100 by ${etaLabel}` : velocity <= 0 ? 'flat or regressing — no projected path to 90/100 at this pace' : 'already at or above 90/100'}
+                </span>
+              </div>
+            )}
+          </section>
+        )
+      })()}
+
       {/* W7 — operational-failure lane. Corrupt files, expired source sign-ins, unreachable
           sources and worker errors show up here (retry → dead-letter) instead of vanishing.
           Owner-scoped and self-polling, so it needs no run/scan context. */}
@@ -373,13 +409,13 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
               <>
                 <span className={`trstatchip ${campaign.status === 'paused' ? 'defer' : 'inscope'}`} style={{ fontSize: 12 }}>{campaign.status}</span>
                 <button className="ghost small" disabled={campaignBusy || readOnly} onClick={toggleCampaignPause}
-                        title={readOnly ? 'Time-travel replay — switch to the latest scan to manage the program' : undefined}>
+                        title={readOnly ? 'Scan History replay — switch to the latest scan to manage the program' : undefined}>
                   {campaign.status === 'paused' ? '▶ resume' : '⏸ pause'}
                 </button>
               </>
             ) : run?.id && (
               <button className="ghost small" disabled={campaignBusy || readOnly} onClick={persistProgram}
-                      title={readOnly ? 'Time-travel replay — switch to the latest scan to manage the program' : 'Save this program so pause/resume and progress survive a reload'}>
+                      title={readOnly ? 'Scan History replay — switch to the latest scan to manage the program' : 'Save this program so pause/resume and progress survive a reload'}>
                 {campaignBusy ? 'saving…' : '💾 persist this program'}
               </button>
             )}

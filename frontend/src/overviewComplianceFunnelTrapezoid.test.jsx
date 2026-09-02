@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { createElement } from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
 import Overview from './Overview.jsx'
+import { mountExpanded } from './testAccordion.js'
 
 // K8 · the compliance funnel re-skinned as a trapezoid — same `stages` data (Discover / Assess /
 // Remediate / Verify / Publish) the old decreasing-bars form used, a different shape. Pins: the
@@ -27,8 +27,11 @@ const FILES = [
   { file: 'd.pdf', name: 'd.pdf', status: 'done', score: 90, issues: [], published_at: '2026-08-20T01:00:00Z' },
 ]
 
+// The funnel is a disclosure that starts CLOSED (2026-09-02 UI simplification PRD) — it is a
+// drill-down, not a headline. Every assertion here is therefore on the opened section, reached
+// by clicking its header button, which is also what a reader has to do.
 const render = (props = {}) =>
-  renderToStaticMarkup(createElement(Overview, { run: RUN, files: FILES, trend: [], trendDates: [], onGo: () => {}, ...props }))
+  mountExpanded(createElement(Overview, { run: RUN, files: FILES, trend: [], trendDates: [], onGo: () => {}, ...props })).innerHTML
 
 describe('the compliance funnel, re-skinned as a trapezoid', () => {
   it('still shows every stage label and its count', () => {

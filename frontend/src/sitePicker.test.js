@@ -64,16 +64,13 @@ describe('Discover wires it', () => {
   })
 
   it('keeps the SharePoint site picker independent of the Drive scan gate', () => {
-    // The SharePoint site picker is still Discover's own local modal; Drive folder selection no
-    // longer has a matching local state at all — it opens the SAME app-level scan gate every
-    // other entry point does (2026-08-28: a standalone FolderPicker modal used to duplicate that
-    // gate's own folder step, so picking a folder there immediately re-asked the same question a
-    // second time). One shared flag between the two would open both or neither; there is no
-    // longer a flag to share.
+    // The 2026-09-02 PRD simplification removed Discover's Drive scan button entirely — users
+    // initiate scans from the Sources tab. The SharePoint site picker remains as Discover's own
+    // local modal because it is a selection step (which site to scan), not a repeat rescan action.
     const d = read('Discover.jsx')
     expect(d).toMatch(/const \[showSites, setShowSites\] = useState\(false\)/)
     expect(d).not.toMatch(/showPicker/)
-    expect(d).toMatch(/onScan\('drive', null, \{ folderFirst: true \}\)/)
+    expect(d).not.toMatch(/onScan\('drive', null, \{ folderFirst: true \}\)/)
     expect(d).toMatch(/onScan\('sharepoint', siteId\)/)
   })
 })

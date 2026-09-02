@@ -88,20 +88,40 @@ describe('a completed read fills the recommendation surface', () => {
     expect(text()).toContain('Inventory taken')
   })
 
-  it('shows the tag, the rule that produced it and the recorded reason', async () => {
+  // THE RECOMMENDATION SURFACE IS GONE FROM DISCOVER. The RECOMMENDATIONS table, the
+  // per-file lifecycle tag/rule/reason, the EVERY DISCOVERED FILE partition and the "I approve"
+  // acknowledgement bar were all removed on 2026-09-02 (PRD "ACP Discover and Overview
+  // Simplification"). The READ is unchanged and still has to succeed — the inventory snapshot and
+  // the counts below it depend on it — so what these cases pin now is that a completed read still
+  // reaches the screen, and that none of it is re-stated as a lifecycle claim.
+  it('does not restate the read as a lifecycle recommendation', async () => {
     await render()
+    // The read completed and reached the screen…
+    expect(text()).toContain('DISCOVERY RESULTS')
+    expect(text()).not.toContain('The inventory could not be read')
+    // The lifecycle SUMMARY survives — a measured count from a completed read is a fact, and
+    // DiscoveryResults still states it as a stat tile.
     expect(text()).toContain('tagged for archive review')
-    expect(text()).toContain('Legacy clinical policies')
-    expect(text()).toContain("matched archive rule 'Legacy clinical policies'")
-    expect(text()).toContain('I approve these 1 recommendation.')
+    // What went is the per-file detail and the gate: the rule that produced a tag, the reason
+    // recorded against the file, the RECOMMENDATIONS table and the approval bar that blocked
+    // Assess until every row was decided.
+    expect(text()).not.toContain("matched archive rule 'Legacy clinical policies'")
+    expect(text()).not.toContain('Legacy clinical policies')
+    expect(text()).not.toContain('I approve')
+    expect(text()).not.toContain('RECOMMENDATIONS')
   })
 
-  it('reports a MEASURED zero when the rules ran and matched nothing', async () => {
+  it('states a measured zero the same way, with nothing to approve, when the rules matched nothing', async () => {
+    // The pair is the point: the stat tile must report a MEASURED zero here and a measured count
+    // above, while the approval gate is absent from both. "0 tagged for archive review" over an
+    // UNREAD estate is the false reassurance this file was written about, and the
+    // read-did-not-complete cases below still pin that the tile is absent there.
     h.rows = h.rows.map((r) => ({ ...r, lifecycle_status: 'Active', lifecycle_rule_id: null, lifecycle_reason: null }))
     await render()
-    // The columns came back, so a zero here is a fact about the estate, not about the read.
+    expect(text()).toContain('DISCOVERY RESULTS')
+    // The columns came back, so the zero here is a fact about the estate, not about the read.
     expect(text()).toContain('tagged for archive review')
-    // ...and there is nothing to approve.
+    // …and there is nothing to approve, on either input.
     expect(text()).not.toContain('I approve')
   })
 })
@@ -166,12 +186,18 @@ describe('a read that did not complete renders NOTHING — never a zero', () => 
   })
 })
 
-describe('a file the inventory did not cover is its own bucket, not "no recommendation"', () => {
-  it('keeps the partition honest instead of promoting an unread file to checked', async () => {
+describe('a file the inventory did not cover is not promoted to "checked"', () => {
+  it('makes no partition claim at all, rather than an unread file passing as decided', async () => {
+    // The EVERY DISCOVERED FILE partition — which existed to keep an unread file in its own
+    // bucket instead of folding it into "no recommendation" — was removed on 2026-09-02. A
+    // partial read must therefore produce no partition, not a partition missing a bucket: the
+    // second is the failure mode the panel existed to prevent.
     h.rows = [h.rows[0]]     // only one of the two files has an inventory row
     await render()
-    expect(text()).toContain('No lifecycle record was read for these')
-    expect(text()).toContain('The buckets add up to the 2 files discovered')
+    expect(text()).toContain('DISCOVERY RESULTS')       // the screen rendered
+    expect(text()).not.toContain('No lifecycle record was read for these')
+    expect(text()).not.toContain('The buckets add up to the 2 files discovered')
+    expect(text()).not.toContain('EVERY DISCOVERED FILE')
   })
 })
 
@@ -230,13 +256,15 @@ describe('the live 2026-08-28 zero-documents report, reproduced and then fixed',
     })
     expect(h.calls[0]).toMatchObject({ scanId: 'scan-1' })
     expect(text()).toContain('DISCOVERY RESULTS')
-    // The completion banner, the eligibility breakdown and the results panel all agree — this is
-    // the concrete, DOM-level proof the fix works end to end, not just at the API layer.
-    expect(text()).toContain('Discovery complete')
-    expect(text()).toContain('32 files inventoried')
+    // The estate KPI row, the eligibility breakdown and the results panel all agree — this is the
+    // concrete, DOM-level proof the fix works end to end, not just at the API layer. ("Discovery
+    // complete · 32 files inventoried" was DiscoverCompleteSummary's wording; the panel that
+    // replaced it on 2026-09-02 says "discovered 32" in its KPI row.)
+    expect(text()).toContain('Estate overview')
+    expect(text()).toMatch(/discovered32/)
     expect(text()).toContain('32files discovered')
     expect(text()).not.toContain('0files discovered')
-    expect(text()).toMatch(/Assess \d+ documents/)
+    expect(container.querySelector('button[data-advance="assess"]')).toBeTruthy()
   })
 })
 

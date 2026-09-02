@@ -19,11 +19,18 @@ export const tab = (page, re) => page.locator('[role="tab"]', { hasText: re })
 
 // Every scan entry point routes through App.requestScan, which only opens this modal; the
 // wizard's last forward click is the sole thing that dispatches a scan.
+//
+// The entry point is the SOURCES tab's page-level "New scan" (onScan('all')). Discover's own
+// "Re-scan all sources" was removed on 2026-09-02 by the UI-simplification PRD — Discover reports
+// what a scan found, and a scan is started where the sources are configured.
 export async function runDiscovery(page) {
-  await page.getByRole('button', { name: 'Re-scan all sources' }).click()
+  await tab(page, /Sources/).click()
+  await page.getByRole('button', { name: 'New scan', exact: true }).click()
   const modal = page.getByRole('dialog', { name: 'New discovery' })
   await expect(modal).toBeVisible()
   // Three steps: source/folders → lifecycle rules → review, where forward means "run".
   for (let i = 0; i < 3; i += 1) await modal.locator('[data-wizard-forward]').click()
   await expect(modal).toBeHidden()
+  // Back to Discover, which is where the run reports itself.
+  await tab(page, /Discover/).click()
 }

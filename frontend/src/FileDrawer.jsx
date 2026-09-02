@@ -853,7 +853,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
               </p>
               {remNow === null && (
                 <button className="ctago" disabled={readOnly || effectiveRemediated}
-                        title={readOnly ? 'Time-travel replay — switch to the latest scan to remediate'
+                        title={readOnly ? 'Scan History replay — switch to the latest scan to remediate'
                                : effectiveRemediated ? 'Already remediated — the fixed copy is stored; re-validate to refresh the score' : undefined}
                         onClick={remediateNow}>{effectiveRemediated ? '✓ Remediated — fixed copy stored' : '⚡ Remediate this file now'}</button>
               )}

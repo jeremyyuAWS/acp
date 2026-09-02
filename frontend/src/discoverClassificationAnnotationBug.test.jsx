@@ -28,38 +28,50 @@ let container, root
 const mount = async (props) => {
   ;({ container, root } = createTestRoot())
   await act(async () => {
-    root.render(createElement(Discover, { sources: [], busy: false, onScan: () => {}, ...props }))
+    root.render(createElement(Discover, {
+      sources: [], busy: false, onScan: () => {},
+      run: { id: 's1', status: 'discovered', discovered_at: '2026-09-01T00:00:00Z' },
+      scope: { kind: 'drive', inventory: { discovered: 12 } }, scanId: 's1', ...props,
+    }))
   })
   return container.textContent
 }
 afterEach(() => unmountAll())
 
-describe('the annotate() filename guess must not defeat the classification-honesty check', () => {
+describe('the annotate() filename guess would still defeat a classification check', () => {
   it('annotate() really does back-fill department/tags on every one of these — pinning the trap', () => {
     // If this ever stops being true (annotate() changes to leave real files alone), the bug this
-    // test guards against can no longer occur via this path, and the test above should be revisited.
+    // file guards against can no longer occur via this path, and this file should be revisited.
     const annotated = annotate(REAL_SCAN_FILES, null)
     expect(annotated.every((f) => typeof f.department === 'string' && f.department.length > 0)).toBe(true)
+    // …and the pre-annotation records, which are what a restored check must read, carry none.
+    expect(REAL_SCAN_FILES.every((f) => f.department == null)).toBe(true)
   })
 
-  it('reads as classified when only the annotated array is available (the bug, reproduced)', async () => {
+  it('makes no classification claim from the annotated array', async () => {
     const annotated = annotate(REAL_SCAN_FILES, null)
-    // No rawFiles passed — but files itself already carries a guessed department on every row.
-    // This is what App.jsx did before the fix, and it must NOT be what App.jsx does now.
     const t = await mount({ files: annotated })
+    expect(t).toMatch(/discovered12/)          // the screen rendered
     expect(t).not.toContain(NO_CLASSIFICATION_TITLE)
+    expect(t).not.toMatch(/department & exposure come from the classification on each document/i)
+    expect(t).not.toMatch(/expand internal to see its risk flags/i)
   })
 
-  it('reads as UNCLASSIFIED when rawFiles carries the true pre-annotation records', async () => {
+  it('makes no classification claim from rawFiles either — the surface is gone, not conditional', async () => {
+    // The pair matters: a claim that is merely HIDDEN for one input is a claim still being made
+    // for the other, which is how this defect survived the first fix.
     const annotated = annotate(REAL_SCAN_FILES, null)
     const t = await mount({ files: annotated, rawFiles: REAL_SCAN_FILES })
-    expect(t).toContain(NO_CLASSIFICATION_TITLE)
-    expect(t).not.toMatch(/department & exposure come from the classification on each document/i)
+    expect(t).toMatch(/discovered12/)
+    expect(t).not.toContain(NO_CLASSIFICATION_TITLE)
+    expect(t).not.toMatch(/expand internal to see its risk flags/i)
   })
 
-  it('still reads as classified when rawFiles itself carries real data', async () => {
+  it('makes none when rawFiles carries genuinely classified data', async () => {
     const realDept = [{ file: 'a.docx', department: 'Legal', tags: ['legal-hold'] }]
     const t = await mount({ files: annotate(REAL_SCAN_FILES, null), rawFiles: realDept })
+    expect(t).toMatch(/discovered12/)
     expect(t).not.toContain(NO_CLASSIFICATION_TITLE)
+    expect(t).not.toMatch(/expand internal to see its risk flags/i)
   })
 })

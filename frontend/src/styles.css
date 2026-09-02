@@ -2528,3 +2528,22 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
   padding: 4px 10px; cursor: pointer; }
 .caption-editor-loadbtn:disabled { color: var(--muted, #6b6570); cursor: default; }
 .caption-editor-loadbtn:focus-visible { outline: 2px solid var(--plum); outline-offset: 1px; }
+/* ── Accordion (AccordionSection.jsx) ─────────────────────────────────────────
+   The header is a real <button> filling the heading row, so the whole title is the
+   hit target and the keyboard reaches it with Tab / activates it with Enter or Space.
+   The focus ring is stated here as well as globally: these buttons sit on a panel
+   background, and a section that cannot be seen to have focus cannot be operated. */
+.acc-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.acc-heading { font: inherit; }
+.acc-toggle {
+  display: flex; align-items: baseline; gap: 8px; width: 100%;
+  background: none; border: 0; padding: 0; margin: 0; cursor: pointer;
+  text-align: left; color: inherit; font: inherit;
+}
+.acc-toggle .acc-title { font-size: 15px; font-weight: 650; letter-spacing: .01em; }
+.acc-toggle .acc-chevron { flex: 0 0 auto; font-size: 11px; line-height: 1.4; opacity: .7; }
+.acc-toggle .acc-meta { font-weight: 400; font-size: 12.5px; }
+.acc-toggle:hover .acc-title { color: var(--plum, #46303F); }
+.acc-toggle:focus-visible { outline: 2px solid #7a5c8e; outline-offset: 3px; border-radius: 4px; }
+.acc-panel[hidden] { display: none; }
+.acc-panel:not([hidden]) { margin-top: 10px; }

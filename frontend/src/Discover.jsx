@@ -8,20 +8,17 @@ import SegmentDrawer from './SegmentDrawer.jsx'
 import SitePicker from './SitePicker.jsx'
 import DispositionRules from './DispositionRules.jsx'
 import { Bars } from './charts.jsx'
-import { DEPARTMENTS } from './sim.js'
+import { DEPARTMENTS, remediableCount } from './sim.js'
 import { dupeCountOf, duplicateFiles } from './dedupe.js'
 import { scopeSentence, isNarrowScope } from './scanScope.js'
 import DiscoveryResults from './DiscoveryResults.jsx'
 import DiscoverInventoryExport from './DiscoverInventoryExport.jsx'
-import DiscoveryCompleteness from './DiscoveryCompleteness.jsx'
+import { analysedCount } from './docStatus.js'
 import { snapshotTrust, snapshotTrustMessage } from './discoverySnapshotTrust.js'
-import { acknowledgementSummary } from './discoveryRecommendations.js'
 import { assessmentEligible } from './estateFunnel.js'
-import { hasClassificationData, NO_CLASSIFICATION_TITLE, NO_CLASSIFICATION_BODY,
-         NO_CLASSIFICATION_WHY } from './classificationData.js'
 import { loadDiscoveryInventory, mergeLifecycle, inventoryOnlyRows } from './discoveryInventory.js'
 import DiscoverRunProgress from './DiscoverRunProgress.jsx'
-import DiscoverCompleteSummary from './DiscoverCompleteSummary.jsx'
+import EstateProgressPanel from './EstateProgressPanel.jsx'
 import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
 import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation,
          acknowledgeScan, unacknowledgeScan, checkReadiness, getQueueJob, setWorkers,
@@ -36,6 +33,7 @@ import WorkerAvailability from './WorkerAvailability.jsx'
 import FolderActivity from './FolderActivity.jsx'
 import QueueJobDetails from './QueueJobDetails.jsx'
 import DiscoveryQueuedPlaceholder from './DiscoveryQueuedPlaceholder.jsx'
+import AccordionSection from './AccordionSection.jsx'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
@@ -136,7 +134,14 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 const DISCOVERY_JOB_TYPES = new Set(['scan_discover', 'scan_batch', 'scan_finalize', 'scan_file', 'scan'])
 
 export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, preflightDegraded = null, preflightCapacityState = null, scanPct = 0, scanId = null, activeScanId = null, jobId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
-  hasSPToken = false, runAt = null, run = null, scanList = null, rawFiles = null, onStop = null, onViewMonitor = null,
+  hasSPToken = false, runAt = null, run = null, scanList = null,
+  // `rawFiles` — the PRE-annotation records straight from get_scan, before ontology.annotate()
+  // back-fills a department from a filename guess. Unread since the classification surface was
+  // removed (2026-09-02); kept in the signature, and kept passed by App, because any restored
+  // classification claim MUST be checked against these and not against `files`. Checking the
+  // annotated array is the 2026-08-21 defect: annotate() gives every real file a department, so
+  // the check read "classified" on every real scan.
+  rawFiles = null, onStop = null, onViewMonitor = null,
   onOpenSource = null, pendingScanLoad = false }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
   // component is given neither — Discover takes scanId and scope, not the run. The pieces it needs
@@ -176,8 +181,6 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // the acknowledgement can GATE the Assess button at the foot of this tab — an acknowledgement
   // that does not gate anything is a checkbox, not a control.
   // Initialize from the persisted run.acknowledged so a page reload restores the prior decision.
-  const [ackRecs, setAckRecs] = useState(() => !!(run?.acknowledged))
-  const [assessAnyway, setAssessAnyway] = useState([])
   // The per-file lifecycle columns the recommendation surface is made of. They are NOT on
   // `GET /scans/{id}` (it reads file_records, which has no such columns) — they live on
   // scan_inventory, behind `GET /scans/{id}/inventory`. So Discover reads that route itself.
@@ -426,18 +429,6 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       .catch(() => { if (live) setSrcStatus({}) })
     return () => { live = false }
   }, [scanId])
-  // Persist the acknowledgement decision to the backend (PRD §EX-10). Optimistic local state
-  // update so the Assess gate responds immediately; the server write is best-effort and
-  // a failure only means a page reload would reset the checkbox (no data is lost).
-  const handleAcknowledge = useCallback(async (checked) => {
-    setAckRecs(checked)
-    if (!scanId) return
-    try {
-      if (checked) await acknowledgeScan(scanId)
-      else await unacknowledgeScan(scanId)
-    } catch { /* non-fatal — local state is already updated */ }
-  }, [scanId])
-
   // Lifecycle rules #8: POST the override, then reload the inventory so the recorded reason
   // reaches this screen the same way every other lifecycle fact does — through the same
   // all-or-nothing paginated read, never patched into local state (a locally-patched row would
@@ -590,19 +581,17 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   const exposureInternal = { label: 'internal', value: internalDocs.length, color: '#9a948f' }
   const internalRisk = ['PII', 'legal-hold', 'high-traffic'].map((t) => ({ label: t, value: internalDocs.filter((f) => tagsOf(f).includes(t)).length, color: RISK_COLOR[t] })).filter((d) => d.value)
 
-  // DID CLASSIFICATION REACH THIS SCREEN AT ALL? False on every real scan today: file_records
-  // carries no department and no tags, and get_scan projects that table alone. False means the
-  // triage surface is OMITTED, not zeroed — see classificationData.js.
+  // THE CLASSIFICATION TRIAGE SURFACE IS GONE FROM THIS SCREEN. The exposure-and-risk chart, the
+  // per-department grouping and the "not classified yet" caveat that stood in for the chart on an
+  // unclassified estate were all removed on 2026-09-02 (PRD "ACP Discover and Overview
+  // Simplification"). Discover reports the inventory; classification is not part of it.
   //
-  // Checked against `rawFiles` (the PRE-annotation records App.jsx passes straight from
-  // get_scan), never against `files` (POST-annotation). ontology.annotate() back-fills
-  // department/tags from a filename guess on every file that lacks them — real files always
-  // lack them, so annotate() ALWAYS gives every real file a non-empty department, and checking
-  // the annotated array made this read "classified" on every real scan (found live 2026-08-21:
-  // the "How this works" copy and the exposure chart claimed a Deep-scan classification that
-  // never ran). `rawFiles` defaults to `files` so a caller that never learned about this
-  // distinction — every existing test — keeps today's behavior exactly.
-  const classified = hasClassificationData(rawFiles ?? files)
+  // That takes the honesty problem with it rather than leaving it unsolved. The caveat existed
+  // because the chart, rendered over an unclassified estate, read "100% internal" with every risk
+  // flag at zero — each number true and the reading false ("0 legal-hold" asserts a finding nobody
+  // obtained). With no chart there is no false reading to correct, so there is no claim to make.
+  // classificationData.js and its tests stay; the check is simply not asked here any more.
+  // discoverClassificationAbsent.test.jsx pins both halves.
   const isConfirmed = (f) => !!classState[f.file]?.confirmed
   const toggleTag = (f, t) => setClassState((s) => { const cur = s[f.file]?.tags ?? tagsOf(f); const next = cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]; return { ...s, [f.file]: { tags: next, confirmed: false } } })
   const confirmClass = (f) => setClassState((s) => ({ ...s, [f.file]: { tags: tagsOf(f), confirmed: true } }))
@@ -643,11 +632,6 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // one is not silently a change to the other's meaning.
   const acceptable = () => actionable
   const acceptAll = () => setDecisions((s) => { const n = { ...s }; acceptable().forEach((f) => { if (!n[f.file]) n[f.file] = { state: 'accepted' } }); return n })
-  // What the acknowledgement covers — null when the lifecycle rule pass did not reach this screen
-  // or matched nothing, in which case there is nothing to acknowledge and nothing to gate.
-  const recsToAck = acknowledgementSummary(estateFiles, assessAnyway)
-  const needsAck = !!recsToAck && !ackRecs
-
   // Inventory/Classify/Action are no longer formally separated tabs — one dept-grouped
   // list shows the file, its classification tags (colorful pills), and its lifecycle
   // action together, so a reviewer tags AND decides in the same row instead of hopping
@@ -899,82 +883,26 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           the full tree view. */}
       <FolderActivity active={progress?.active_folders} recent={progress?.recent_folders} />
 
-      {/* Completion summary: immutable snapshot of what was found, with the "Continue" CTA.
-          Appears only after discovery finishes — DiscoverRunProgress hides itself at that point. */}
+      {/* Estate progress summary: funnel, doc-types, and pending work.
+          Replaces the verbose DiscoverCompleteSummary — appears once discovery finishes. */}
       {!busy && (run?.discovered_at || run?.status === 'discovered') && (
-        <DiscoverCompleteSummary
-          discoveredCount={completionDiscoveredCount}
-          /* `run.files` (scan_runs.files) — NOT scan?.files/file_records, a differently-named,
-             differently-shaped field. Persisted from scanner.py's _list() RETURN value across
-             every discovery path (local, whole-Drive, folder-BFS, SharePoint — see
-             DiscoverCompleteSummary.jsx's own comment on the line that renders this), which is
-             already filtered to scannable MIME types before the whole-estate inventory is even
-             built. The one comprehensive, consistently-populated "how many of the total are a
-             document type ACP can open" signal — scope.scannable exists too but only
-             _search_drive's whole-Drive path ever sets it, so it is not comprehensive across
-             scan kinds the way this column is. */
-          scannableCount={run?.files ?? null}
-          /* `assessmentEligible()` is the SAME helper DiscoveryResults' headline "Assessable" tile
-             calls (estateFunnel.js) — it prefers the direct `assessment_eligible` field over the
-             older `by_status.assessable` shape, which this line used to read on its own, skipping
-             that preference entirely. The two numbers sit on the same screen once discovery
-             completes; deriving them from two different rules is the exact "four-denominator"
-             defect estateFunnel.js's own header comment warns about, just not yet caught here.
-             The local subtraction survives as the last resort, for a scan whose scope.inventory
-             predates BOTH fields. */
-          assessableCount={assessmentEligible(scope?.inventory)
-            ?? Math.max(0, completionDiscoveredCount - nonAssessable.length - lockedCount)}
-          metadataOnlyCount={scope?.inventory?.by_status?.metadata_only ?? 0}
-          unsupportedCount={scope?.inventory?.by_status?.unsupported ?? 0}
-          eligibilityUnknownCount={scope?.inventory?.by_status?.eligibility_unknown ?? 0}
-          lockedCount={lockedCount || scope?.inventory?.by_status?.locked || 0}
-          excludedCount={scope?.inventory?.by_status?.excluded ?? 0}
-          folderCount={progress?.folders_found ?? scope?.folders_walked ?? null}
-          lifecycleRulesCount={progress?.rules_enabled
-            ?? scope?.lifecycle_rules_enabled
-            ?? (inv?.rows
-              ? new Set(inv.rows.map((r) => r.lifecycle_rule_id).filter(Boolean)).size
-              : null)}
-          lifecycleFilesEvaluated={progress?.files_evaluated
-            ?? scope?.lifecycle_files_evaluated ?? null}
-          lifecycleMatches={progress?.lifecycle_matches
-            ?? scope?.lifecycle_matches ?? null}
-          lifecycleUnevaluable={progress?.lifecycle_unevaluable
-            ?? scope?.lifecycle_unevaluable ?? null}
-          archiveCandidates={progress?.lifecycle_archive ?? scope?.lifecycle_archive ?? null}
-          deleteCandidates={progress?.lifecycle_delete ?? scope?.lifecycle_delete ?? null}
-          tagged={progress?.lifecycle_tagged ?? scope?.lifecycle_tagged ?? null}
-          excInaccessible={progress?.exc_inaccessible_file ?? null}
-          excMetadataFailure={progress?.exc_metadata_failure ?? null}
-          excDeleted={progress?.exc_deleted_during_scan ?? null}
-          inventoryDelta={scope?.inventory_delta ?? null}
-          startedAt={run?.started_at ?? null}
-          discoveredAt={run?.discovered_at ?? null}
-          publishedAt={run?.published_at ?? null}
-          /* Same `runAt` object DiscoveryResults renders a few hundred pixels below this card —
-             not a second call to inventorySnapshot(). Two independently-derived timestamps for
-             "when was this counted" can drift out of formatting sync (a locale change, a staleness
-             threshold edit) even when they resolve to the same instant; sharing the one App.jsx
-             already computed makes that structurally impossible instead of merely unlikely. */
-          runAt={runAt}
-          onAdvance={onAdvance}
-          onReviewInventory={() => {
-            const el = document.getElementById('discover-inventory-table')
-            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-          }}
-          pendingActions={pendingActions}
-          needsAck={needsAck}
-          /* Whether this run's own estate CHANGED since the last scan of this same source is a
-             question this card cannot honestly answer — see the "This run's writes" comment
-             inside DiscoverCompleteSummary.jsx for why. A real cross-scan diff already exists,
-             one tab over: Integrations' SourceDrawer (store.get_inventory_diff). Point there
-             instead of half-answering it here. `run?.source === 'all'` is a real, different
-             fact (a whole-Drive/multi-source scan, not one connector) that SourceDrawer's own
-             sourceKeys() matching cannot resolve to a single source card, so the link is
-             withheld rather than landing on a dead end. */
-          onViewSourceHistory={onOpenSource && run?.source && run.source !== 'all'
-            ? () => onOpenSource(run.source) : undefined}
-        />
+        <AccordionSection id="discover-estate" title="Estate overview"
+                          ariaLabel="Estate overview" defaultOpen
+                          style={{ marginBottom: 14 }}>
+          {(
+            <EstateProgressPanel
+              inventory={scope?.inventory}
+              analysed={analysedCount(files)}
+              needFix={remediableCount(files)}
+              certifiable={run?.certifiable}
+              published={files.filter((f) => f.published_at).length}
+              errorCount={run?.error}
+              files={files}
+              estateFiles={estateFiles}
+              onGo={onAdvance}
+            />
+          )}
+        </AccordionSection>
       )}
 
       {/* Any run whose numbers below cannot be trusted as "the whole source, as of now" —
@@ -1181,40 +1109,17 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
             <div className="muted" style={{ marginTop: 2 }}>the agent crawls metadata, proposes a classification &amp; a lifecycle action — you confirm or override{lockedCount ? <> · <span className="lockwarn">🔒 {lockedCount} could not be opened (password-protected / unsupported)</span></> : null}</div>
           </div>
         )}
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          {hasDriveToken && (
-            // Opens the SAME review wizard "Re-scan all sources" does, pre-set to "Specific
-            // folders" — not a second, standalone folder picker. That used to open its own
-            // FolderPicker modal and, on a selection, immediately reopen this wizard again at its
-            // default "Entire connected source" step: the folder just picked, re-asked from
-            // scratch a moment later, which read as a regression rather than a review step.
-            <button className="ghost" disabled={busy} onClick={() => onScan('drive', null, { folderFirst: true })}
-                    title="Browse your Google Drive and scan just one folder (and its subfolders)">
-              Choose folder to scan…
-            </button>
-          )}
-          {/* Gated on the SharePoint token for the same reason the Drive button is gated on its
-              own: offering a picker that cannot authenticate produces an error where a missing
-              button would have produced an obvious next step (connect the source). */}
-          {hasSPToken && (
+        {/* Gated on the SharePoint token for the same reason the Drive button is gated on its
+            own: offering a picker that cannot authenticate produces an error where a missing
+            button would have produced an obvious next step (connect the source). */}
+        {hasSPToken && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <button className="ghost" disabled={busy} onClick={() => setShowSites(true)}
                     title="Choose a SharePoint site — every document library on it is scanned">
               Choose SharePoint site…
             </button>
-          )}
-          {/* "scanning…" while genuinely queued (nothing has been claimed yet) claimed active work
-              this button is not doing — the same "loading"/"scanning" language the queued card
-              above was found saying at once with "waiting for a worker" (stakeholder UX review,
-              2026-08-30). Same claimed signal ProcessingStatusPanel's own derivation already
-              reads (jobs.locked_at via discoverJobInfo), so the two can't disagree. */}
-          <button disabled={busy} onClick={() => onScan('all', null, { allFolders: true })}>
-            {busy
-              ? (progress?.phase === 'queued'
-                  && !(discoverJobInfo && discoverJobInfo.status && discoverJobInfo.status !== 'queued')
-                  ? 'Queued' : 'scanning…')
-              : 'Re-scan all sources'}
-          </button>
-        </div>
+          </div>
+        )}
       </div>
 
       {/* The site id travels as `folder`, which is what the backend reads it as — _list treats
@@ -1268,10 +1173,8 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           {' '}<button type="button" className="linklike" onClick={() => setShowPreviousResults(false)}>Hide previous results</button>
         </div>
       )}
-      {!hidePreviousInventory && <DiscoveryCompleteness run={run} scanList={scanList}
-                             onRelist={() => onScan && onScan(run?.source === 'sharepoint' ? 'sharepoint' : 'drive')} />}
 
-      {/* The prior inventory stays opt-in throughout discovery. Its explicit historical label
+{/* The prior inventory stays opt-in throughout discovery. Its explicit historical label
           also covers exports and document rows; write actions retain the displayed run's ID. */}
       {/* pendingScanLoad suppresses this whole block the same way it suppresses the header line
           above: DiscoveryResults/DiscoverInventoryExport read `files`/`scope.inventory` from
@@ -1283,12 +1186,12 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                                     onShowPrevious={() => setShowPreviousResults(true)} />
       ) : (
       <div id="discover-inventory-table">
-      <DiscoveryResults files={estateFiles} source={run?.source} inventory={scope?.inventory || null} invRows={inv?.rows ?? null} scopeLine={scopeLine} runAt={runAt}
+      <AccordionSection id="discover-inventory" title="File inventory"
+                        ariaLabel="File inventory" className="" defaultOpen>
+        <><DiscoveryResults files={estateFiles} source={run?.source} inventory={scope?.inventory || null} invRows={inv?.rows ?? null} scopeLine={scopeLine} runAt={runAt}
                         reasonOf={why ? why.reasonOf : undefined}
                         reasonSampleOf={why ? why.sampleOf : null}
                         reasonFetchLikely={why ? why.fetchLikely : null}
-                        acknowledged={ackRecs} onAcknowledge={handleAcknowledge}
-                        overrides={assessAnyway} onOverridesChange={setAssessAnyway}
                         onOverrideRecommendation={overrideRecommendation}
                         actor={me?.email || me?.name || null} scanId={scanId}
                         rawScope={scope} rawDecisions={errLog} runStatus={run?.status ?? null} />
@@ -1307,154 +1210,24 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           the runs the "0 documents" fix (#835) now correctly counts. `inv` is the same paginated
           per-file read already threaded into DiscoveryResults above as `invRows`. */}
       <DiscoverInventoryExport scanId={scanId} run={runForExport}
-                               inventory={scope?.inventory || null} rows={inv?.rows ?? null} />
+                               inventory={scope?.inventory || null} rows={inv?.rows ?? null} /></>
+      </AccordionSection>
       </div>
       )}
 
-      {pendingScanLoad || hidePreviousInventory ? null : files.length === 0 ? (
+      {/* THE EMPTY STATE, kept when the per-department block above it was removed (2026-09-02 UI
+          simplification PRD). Without it a workspace that has never been scanned shows the header
+          and then nothing at all, which reads as a screen that failed to load rather than one with
+          nothing to report — and it is the only line that says where a scan is started from now
+          that Discover has no scan button of its own.
+
+          The same two guards the removed block carried: `pendingScanLoad` means App has a scan
+          whose payload has not arrived (saying "no documents" there would be a claim about an
+          estate nobody has read yet), and `hidePreviousInventory` means a newer scan is queued and
+          the previous results are deliberately hidden. */}
+      {!pendingScanLoad && !hidePreviousInventory && files.length === 0 && (
         <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Sources.</p>
-      ) : (() => {
-        const totalWidth = files.length || 1
-        return (
-        <>
-          <SH id="disc-documents" label="Documents"
-              desc={classified
-                ? 'grouped by department · click to expand · tag &amp; decide right in the row'
-                : 'click to expand · every discovered file, listed'} />
-
-          {/* Document Location — a view filter over source drive / folder / path (PRD §4.1). It
-              narrows only what is shown here; discovery still found every file above, and no
-              stored setting changes. Document type is chosen in Assess, not here. */}
-          <div className="doclocbar" role="group" aria-label="Document location filter">
-            <span className="muted doclocbar-lbl">Document location</span>
-            <select aria-label="Filter by source" value={loc.source}
-                    onChange={(e) => setLoc((s) => ({ ...s, source: e.target.value }))}>
-              <option value="all">All sources</option>
-              {sourceNames.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-            <input type="text" aria-label="Filter by folder or path" placeholder="folder or path…"
-                   value={loc.path} onChange={(e) => setLoc((s) => ({ ...s, path: e.target.value }))} />
-            {locActive && (
-              <>
-                <span className="muted doclocbar-count" role="status">
-                  {visibleFiles.length} of {files.length} shown{hiddenByLoc ? ` · ${hiddenByLoc} hidden by location` : ''}
-                </span>
-                <button className="linklike" onClick={() => setLoc({ source: 'all', path: '' })}>Clear</button>
-              </>
-            )}
-          </div>
-
-          <SearchFilterBar ctl={sf} items={visibleFiles} facets={SF_FACETS}
-                           placeholder="Search all departments by filename…" noun="documents" />
-
-          <div className="typelegend">
-            <span className="muted" style={{ fontSize: 12, marginRight: 2 }}>document types · click to view:</span>
-            {byType.map((t) => (
-              <button key={t.label} className="typekey" onClick={() => setSeg({ title: `${t.label} documents`, subtitle: `${t.value} of ${files.length} · across all departments`, files: files.filter((f) => (f.type || '').toUpperCase() === t.label) })}>
-                <i style={{ background: t.color }} aria-hidden="true" />{t.label}<span className="muted"> · {t.value}</span>
-              </button>
-            ))}
-          </div>
-
-          {/* Discovery facts only. Rubric scores and remediation state used to appear here,
-              which read as "the scan already assessed and remediated your documents" — it
-              does neither. Those belong to the Assess and Remediate steps that own them. */}
-          <div className="filesplit" role="region" aria-label="File breakdown">
-            <div className="filesplit-item">
-              <span className="filesplit-n" style={{ color: 'var(--ink)' }}>{files.length}</span>
-              <span className="filesplit-lbl">total scanned</span>
-              <div className="filesplit-bar"><i style={{ width: '100%', background: '#7a5c8e' }} /></div>
-            </div>
-            <button className="filesplit-item" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: dupeCount ? 'pointer' : 'default' }}
-                    disabled={!dupeCount}
-                    onClick={() => dupeCount && setSeg({ title: 'Duplicate uploads', subtitle: `${dupeCount} extra copies of another document`, files: duplicateFiles(files) })}>
-              <span className="filesplit-n" style={{ color: '#854F0B' }}>{dupeCount}</span>
-              <span className="filesplit-lbl">duplicates</span>
-              <div className="filesplit-bar"><i style={{ width: `${(dupeCount / totalWidth) * 100}%`, background: '#854F0B' }} /></div>
-            </button>
-            <button className="filesplit-item" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: lockedCount ? 'pointer' : 'default' }}
-                    disabled={!lockedCount}
-                    onClick={() => lockedCount && setSeg({ title: 'Password-protected / unreadable', subtitle: `${lockedCount} files the engine could not open`, files: files.filter(isUnreadable) })}>
-              <span className="filesplit-n" style={{ color: '#75706A' }}>{lockedCount}</span>{/* ≥4.5:1 on white (was #9a948f · 3.0) */}
-              <span className="filesplit-lbl">🔒 unreadable</span>
-              <div className="filesplit-bar"><i style={{ width: `${(lockedCount / totalWidth) * 100}%`, background: '#9a948f' }} /></div>
-            </button>
-          </div>
-
-          <div style={{ fontSize: 12.5, color: 'var(--ink)', background: '#F1EFF3', border: '1px solid var(--line)',
-                        borderRadius: 8, padding: '9px 12px', margin: '0 0 12px', lineHeight: 1.5 }}>
-            {/* The claims here have to match what actually reached the screen. This box used to
-                state that department and exposure "are inferred from the file name" — nothing does
-                that for a real file, and the box sat above a grouping that had put the whole estate
-                in one Unassigned bucket. A help text explaining a mechanism that does not run is
-                worse than none: it sends a reader looking for the naming convention that would
-                make it work. */}
-            {classified ? (
-              <>
-                <b>How this works:</b> <strong>document type</strong> comes from the file format ·
-                <strong> department</strong> &amp; <strong>exposure</strong> come from the classification
-                on each document · <strong>sensitive-data</strong> flags come from the scan (Deep scan) —
-                confirm or correct any tag below, your edits win over the agent's guess. Each row also
-                carries the agent's recommended{' '}
-                <strong>lifecycle action</strong> (keep / archive / retain / delete) — accept it, override it, or use
-                <strong> ✓ accept both</strong> to sign off on the tags &amp; the action in one click.
-              </>
-            ) : (
-              <>
-                <b>How this works:</b> <strong>document type</strong> comes from the file format ·
-                every discovered file is listed below with the metadata discovery recorded. Each row
-                carries the agent's recommended <strong>lifecycle action</strong> (keep / archive /
-                retain / delete) — accept it or override it. Department and sensitivity are not
-                collected yet, so there is nothing to confirm on this estate.
-              </>
-            )}
-          </div>
-          <div className="chartrow">
-            {/* THE EXPOSURE CHART IS ABSENT, NOT ZEROED, when nothing classified this estate.
-                Rendered unclassified it read "100% internal" with every risk flag at zero — each
-                number true, and the reading false. "0 legal-hold" states that this estate holds no
-                documents under legal hold, which is a finding nobody obtained, on the screen a
-                compliance reader opens precisely to find them. Same rule as hasLifecycleData. */}
-            {!classified ? (
-              <section className="panel">
-                <h2>By exposure &amp; risk</h2>
-                <p style={{ fontSize: 13, fontWeight: 650, margin: '10px 0 4px' }}>
-                  {NO_CLASSIFICATION_TITLE}
-                </p>
-                <p className="muted" style={{ fontSize: 12.5, margin: 0, lineHeight: 1.55 }}>
-                  {NO_CLASSIFICATION_BODY}
-                </p>
-                <p className="muted" style={{ fontSize: 11.5, margin: '10px 0 0', lineHeight: 1.5 }}>
-                  {NO_CLASSIFICATION_WHY}
-                </p>
-              </section>
-            ) : (
-            <section className="panel"><h2>By exposure &amp; risk <span className="muted" style={{ fontWeight: 400 }}>· expand internal to see its risk flags</span></h2>
-              <ExposureRisk pub={exposurePub} internal={exposureInternal} internalRisk={internalRisk} onPick={(tag) => {
-                const filtered = tag === 'public-facing'
-                  ? visibleFiles.filter((f) => tagsOf(f).includes('public-facing'))
-                  : tag === 'internal'
-                    ? visibleFiles.filter((f) => !tagsOf(f).includes('public-facing'))
-                    : visibleFiles.filter((f) => !tagsOf(f).includes('public-facing') && tagsOf(f).includes(tag))
-                setSeg({ title: `${tag} documents`, subtitle: `${filtered.length} file${filtered.length !== 1 ? 's' : ''}`, files: filtered })
-              }} />
-              <p className="muted ppfoot">Public-facing pages (also your high-traffic content) are the top legal-exposure surface under ADA / EAA. The {exposureInternal.value} internal documents carry the PII &amp; legal-hold content that matters most if mishandled.</p>
-            </section>
-            )}
-            <section className="panel"><h2>By document type</h2><Bars items={byType} cols="70px 1fr 30px" /></section>
-          </div>
-          <div className="hitlbar">
-            <span className="muted">Human-in-the-loop ·{' '}
-              <b style={{ color: 'var(--ink)' }}>{classConfirmed}</b> of {files.length} classified ·{' '}
-              <b style={{ color: 'var(--ink)' }}>{dcount('accepted')}</b> accepted · <b style={{ color: 'var(--ink)' }}>{dcount('override')}</b> changed
-            </span>
-          </div>
-          {locActive && visibleFiles.length === 0
-            ? <p className="muted" style={{ marginTop: 14 }}>No documents match this location filter. <button className="linklike" onClick={() => setLoc({ source: 'all', path: '' })}>Clear the filter</button> to see all {files.length}.</p>
-            : deptList()}
-        </>
-        )
-      })()}
+      )}
 
       {(files.length > 0 || nonAssessable.length > 0) && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12,
@@ -1477,20 +1250,13 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           {/* DX-07 — the discovery-results acknowledgement GATES Assess. Only ever a gate when
               there is something to acknowledge: with no lifecycle recommendations on screen
               `recsToAck` is null and this button behaves exactly as it did before. */}
-          {needsAck && (
-            <span className="muted" style={{ fontSize: 13 }} role="status">
-              Approve the {recsToAck.total.toLocaleString()} discovery recommendation{recsToAck.total === 1 ? '' : 's'} above to continue
-            </span>
-          )}
           {/* `data-advance` is a STABLE hook. Two tests found this control by its label, so a copy
               change broke them for no reason connected to what they assert — they care that the
               advance control is gated, not what it is called this week. */}
-          <button data-advance="assess" onClick={() => onAdvance?.()} disabled={pendingActions > 0 || needsAck}
+          <button data-advance="assess" onClick={() => onAdvance?.()} disabled={pendingActions > 0}
                   title={pendingActions > 0
                     ? `${pendingActions} action${pendingActions === 1 ? '' : 's'} still pending — accept or override each row, or use "Accept all recommendations"`
-                    : needsAck
-                      ? `${recsToAck.total} discovery recommendation${recsToAck.total === 1 ? '' : 's'} need your approval — tick "I approve these recommendations" in Discovery results`
-                      : undefined}>
+                    : undefined}>
             Continue to Assess →
           </button>
         </div>
