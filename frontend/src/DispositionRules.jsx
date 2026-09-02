@@ -1,5 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { confirm, notify } from './ConfirmDialog.jsx'
+
+// Mirrors disposition.SOURCE_MUTATING (api/disposition.py): the actions that change the source
+// file. Only used to decide what to OFFER — the server refuses regardless of what this says, so
+// getting it wrong here costs a misleading button, never an ungated activation.
+const FILE_CHANGING = new Set(['archive', 'delete', 'move', 'rename'])
 import {
   listDispositionPolicies, createDispositionPolicy, setDispositionPolicyEnabled, previewDispositionPolicy,
   updateDispositionPolicy, previewDispositionDraft, deleteDispositionPolicy, reorderDispositionPolicies,
@@ -351,9 +356,18 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
     doSave()
   }
 
-  const doSetEnabled = (next) => {
+  // `previewedCount` is the number the confirm dialog just showed. The server re-derives it at
+  // activation and refuses if it has moved (PRD §7.5), which is the point: the count consented to
+  // and the count in force are checked against each other rather than assumed equal. This screen
+  // already previewed and already showed the number — all that was missing was sending it.
+  const doSetEnabled = (next, previewedCount) => {
     setBusy(true); setErr('')
-    Promise.resolve(setDispositionPolicyEnabled(p.policy_id, next))
+    // Called with two arguments when there is no count, not with a trailing undefined: the
+    // disable path and the unmeasurable path are genuinely not sending one, and a third argument
+    // that is always present but sometimes meaningless is harder to read at the call site.
+    Promise.resolve(previewedCount == null
+      ? setDispositionPolicyEnabled(p.policy_id, next)
+      : setDispositionPolicyEnabled(p.policy_id, next, previewedCount))
       .then(() => {
         onChanged()
         notify({
@@ -394,6 +408,13 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
         onCount(p.policy_id, n)
         setBusy(false); setImpactBusy(false)
         if (n == null) {
+          // A rule that changes files cannot be enabled without a count (PRD §7.5), so offering
+          // "Enable rule" here would be offering something the server will refuse — the kind of
+          // control that is keyboard-reachable, announced as actionable, and answers nothing.
+          if (FILE_CHANGING.has(String(p.action))) {
+            setErr(`"${p.name}" cannot be enabled until its impact can be measured: ${actionSpec(p.action).outcome} changes source files, so the number of documents it selects has to be known first.`)
+            return
+          }
           confirm({
             title: `Enable "${p.name}"?`,
             message: 'This rule will join the next Discovery run. Its current impact could not be measured. Enabling only adds lifecycle recommendations for review—it never moves, archives, or deletes source files.',
@@ -418,7 +439,7 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
           warning: broad ? `⚠ That's ${pct}% of your estate — check the conditions are as narrow as you intended before enabling.` : undefined,
           variant: broad ? 'warning' : 'activation',
           presentation: 'toast', confirmLabel: 'Enable rule',
-        }).then((ok) => { if (ok) doSetEnabled(true) })
+        }).then((ok) => { if (ok) doSetEnabled(true, n) })
       })
       .catch((e) => {
         setBusy(false); setImpactBusy(false)
@@ -429,7 +450,7 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
                   { label: 'Recommendation', value: actionSpec(p.action).outcome },
                   { label: 'Starts', value: 'Next Discovery run' }],
           variant: 'warning', presentation: 'toast', confirmLabel: 'Enable anyway',
-        }).then((ok) => { if (ok) doSetEnabled(true) })
+        }).then((ok) => { if (ok) doSetEnabled(true) })   // refused server-side for file-changing rules
       })
   }
   const runPreview = () => {

@@ -69,7 +69,10 @@ def test_policy_enabled_is_attributed_to_the_real_caller(gated_client, isolated_
     pid = gated_client.post(
         "/disposition/policies",
         json={"name": "x", "match": MATCH, "action": "archive"}).json()["policy_id"]
-    gated_client.put(f"/disposition/policies/{pid}/enabled?enabled=true")
+    # previewed_match_count because `archive` changes files, and PRD §7.5 now requires the
+    # activator to state what the preview showed them. Zero here — this fixture has no estate.
+    # Incidental to the subject, which is WHO the enable is attributed to.
+    gated_client.put(f"/disposition/policies/{pid}/enabled?enabled=true&previewed_match_count=0")
     assert _last_actor(isolated_store, "disposition.policy_enabled") == OWNER
 
 
