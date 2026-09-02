@@ -362,6 +362,32 @@ def readyz():
     except Exception as exc:  # pragma: no cover - defensive: a vision probe must not break /readyz
         vision = {"ready": False, "reason": f"{exc.__class__.__name__}: {exc}"}
 
+    # Tagged-PDF renderer readiness — INFORMATIONAL, like vision and sources.smb, and for the same
+    # reason: a deployment that cannot render a PDF/UA-1 ACR export is not thereby unable to scan,
+    # assess or remediate anything. Folding it into `degraded` would flip `ready` false for the
+    # whole deployment over one export route, which is precisely the mistake the container-probe
+    # note below warns about.
+    #
+    # WHY IT IS HERE AT ALL. It is the one capability in this app whose absence is invisible until
+    # somebody needs it and gets a 503 — and it depends on a SYSTEM library (Pango, via WeasyPrint)
+    # that pip cannot supply, so "the requirements pinned it" is not the same claim as "this
+    # container can produce a tagged PDF". On 2026-09-02 that gap could only be closed by
+    # reproducing the base image's dependency hash by hand and reasoning about what the layer must
+    # contain; there was no surface that simply answered the question. Now there is.
+    #
+    # `variant` states WHAT would be produced rather than only whether something would be — an
+    # untagged PDF is indistinguishable from this one to everybody except the reader it is for, so
+    # "ready: true" alone would be the same shape of half-answer as ACP's own `pdf.tagged` rule
+    # passing on an empty structure tree.
+    try:
+        import acr_export_pdf as _acr_pdf
+        _renderer_ok = _acr_pdf.is_available()
+        report_pdf = {"ready": _renderer_ok,
+                      "reason": None if _renderer_ok else _acr_pdf.MISSING_RENDERER,
+                      "variant": _acr_pdf.PDF_VARIANT}
+    except Exception as exc:  # pragma: no cover - defensive: a renderer probe must not break /readyz
+        report_pdf = {"ready": False, "reason": f"{exc.__class__.__name__}: {exc}", "variant": None}
+
     return {
         "ready": not degraded,
         "capacity_state": capacity_state,
@@ -374,7 +400,10 @@ def readyz():
                     # beat last — measured flapping between two services' answers in production on
                     # 2026-09-01. See store.worker_roles_status.
                     "roles": role_status},
-        "engines": {"pdf": pdf, "vision": vision},
+        # `pdf` is the ANALYSER (can this deployment read a PDF); `pdf_renderer` is the tagged-PDF
+        # WRITER (can it produce one). Deliberately not both under "pdf": they fail independently,
+        # for unrelated reasons, and a single key would make one of them unanswerable.
+        "engines": {"pdf": pdf, "vision": vision, "pdf_renderer": report_pdf},
         "sources": {"smb": smb_ready},
         "service": "acp",
     }
