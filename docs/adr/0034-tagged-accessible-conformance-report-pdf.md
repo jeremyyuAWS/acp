@@ -179,3 +179,85 @@ clears do we commit the full `report.py` migration. A hospital's own accessibili
 reader most likely to run a checker on this PDF, so it stays a **committed-for-pilot** item — but as a
 *gated* one, not an unqualified "ready to build." Until it lands, the gap stays honestly disclosed and
 the self-test keeps it visible.
+
+## Addendum — 2026-09-01: the gate has now actually been run
+
+Everything above is left as written; this records what was measured afterwards, and corrects two
+things the ADR asserts that are no longer true.
+
+**"veraPDF or PAC 2024" was never run.** `spike/weasyprint-report/README.md:66` records it as "not
+runnable here (no local Java)", and that was the state of the whole decision: the automated gate the
+migration is conditioned on had not produced a number. **Java 21 is present**, veraPDF 1.30.2 runs,
+and it has now been pointed at both renderers. So the paragraphs above that say "confirm in veraPDF"
+describe work that has happened.
+
+**The baseline is not ReportLab.** The ADR compares against `report.py`'s ReportLab output, but what
+serves `/scans/{sid}/report.pdf` today is `api/report_tagged.py` — a Chromium
+`--generate-tagged-pdf` pipeline. "Visual parity" therefore means parity with that, and the
+comparison in this slice was made against it.
+
+### What veraPDF says about the renderer we ship today
+
+    clause 7.1 test 8   x1   no XMP metadata stream in the catalog. Chromium writes none; PDF/UA
+                             requires one, and it is what carries the UA identifier.
+    clause 7.1 test 3   x7   content neither marked as Artifact nor tagged as real content.
+                             These are Chromium's own print header and footer.
+
+    NOT PDF/UA-1 conformant.
+
+The passed-check total is around 10,000 and is deliberately not quoted precisely: it moves between
+builds of the same renderer (10083 and 10088 on two runs an hour apart, because the timestamp and
+object ids change what there is to check). The eight failures and their breakdown are the stable
+fact, and are what the fixture pins.
+
+Pinned as an executable fact in `tests/test_report_pdfua_gap.py`, with the validator proven
+non-vacuous in both directions — a known-untagged corpus PDF must fail and a known-good tagged
+document must pass, or "veraPDF says FAIL" is a finding about the validator.
+
+**A second defect fell out of the first.** Those seven orphans are the print furniture, and the
+footer Chromium draws is the local path the HTML was rendered from:
+
+    file:///tmp/acp_report_<random>/report.html
+
+printed on every page of a document ACP hands a customer as audit evidence. The renderer passes
+`--print-to-pdf-no-header` and in this Chromium build it does not suppress it.
+
+### What veraPDF says about the candidate
+
+`api/report_weasy.py` — the same content model, rendered through WeasyPrint's `pdf/ua-1` variant —
+**passes, 0 failed checks**, with a real structure tree: no `/StructTreeRoot` is fabricated anywhere
+in this path.
+
+### Two things veraPDF passing does not mean, learned the expensive way
+
+Recorded because both defects survived a green validator and a green structural suite, and only a
+person looking at the page found them:
+
+1. **The font stack was interpolated through an autoescaping Jinja environment**, arriving as
+   `font-family: &#34;Liberation Sans&#34;, …` — invalid CSS, silently dropped, the entire report
+   set in WeasyPrint's default serif. veraPDF: 0 failures. Structural tests: 13/13 green.
+2. **Retagging row cells as `<th scope="row">` also restyled them** — bold, shaded, heavier rule —
+   redesigning two tables in the name of a structure fix. ISO 14289 wants the cell tagged as a
+   header and says nothing about its weight.
+
+The lesson for the checklist above: `veraPDF or PAC 2024` and the structural suite are gates on
+*semantics*. Neither is a gate on the document still looking like the document, and neither can be.
+
+### Where the migration actually stands
+
+| Gate | State |
+| --- | --- |
+| Structural (heading outline, TH + scope, Figure `/Alt`, Link, lang, title) | 15 tests, green |
+| veraPDF ua1 on the candidate | PASS, 0 failures |
+| veraPDF ua1 on the shipped renderer | FAIL, 8 — pinned as a regression fixture |
+| Visual parity vs Chromium | reviewed page by page; 2 pages both, uniform ~7px offset from mid-page down, non-accumulating |
+| **PAC 2024** | **not run — Windows only** |
+| **NVDA / VoiceOver** | **not run — no screen reader here** |
+
+`scripts/build_report_review_packet.py` builds what a reviewer needs for the last two: both PDFs,
+both rendered page by page with amplified differences, the veraPDF report, and a REVIEW.md naming
+what is still unverified.
+
+**Nothing is switched over.** `api/report_tagged.py`, `api/report.py` and `api/routes/scans.py` are
+untouched, and the cutover stays gated on PAC 2024 and a screen-reader pass — which is what this ADR
+asked for, and is now the only part of it outstanding.
