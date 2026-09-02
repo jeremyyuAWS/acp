@@ -24,6 +24,7 @@ import { createTestRoot, unmountAll } from './testRoots.js'
  */
 
 const api = {
+  getCriterionPlans: vi.fn(),
   getAcrCriterion: vi.fn(),
   addAcrEvidence: vi.fn(),
   decideAcrCriterion: vi.fn(),
@@ -35,6 +36,15 @@ vi.mock('./acrApi', () => ({
   addAcrEvidence: (...a) => api.addAcrEvidence(...a),
   decideAcrCriterion: (...a) => api.decideAcrCriterion(...a),
   approveAcrCriterion: (...a) => api.approveAcrCriterion(...a),
+  // This screen now mounts AcrManualTestPlan (Phase 3), which is a second consumer of this
+  // module. A mock missing one of its fetchers throws inside an effect and surfaces as all
+  // seventeen tests failing with no obvious connection to the child — so the plan fetchers are
+  // stubbed here even though nothing in THIS file asserts on them. AcrManualTestPlan's own
+  // behaviour is covered by acrManualTestPlan.test.jsx.
+  getCriterionPlans: (...a) => api.getCriterionPlans(...a),
+  startPlanRun: vi.fn(),
+  recordPlanStep: vi.fn(),
+  completePlanRun: vi.fn(),
   FINAL_STATUSES: ['Supports', 'Partially Supports', 'Does Not Support', 'Not Applicable'],
   REMARKS_REQUIRED: ['Partially Supports', 'Does Not Support', 'Not Applicable'],
 }))
@@ -75,6 +85,13 @@ const clone = (o) => JSON.parse(JSON.stringify(o))
 let container
 const mount = async (data = AUTOMATED_ONLY, props = {}) => {
   api.getAcrCriterion.mockReset().mockResolvedValue(data)
+  // A resolved default for the child's fetcher, so it renders its empty state rather than
+  // throwing inside an effect.
+  api.getCriterionPlans.mockReset().mockResolvedValue({
+    criterion_num: data.criterion.criterion_num, plans: [], plan_detail: [], runs: [],
+    complete: true, blocking_reason: '', step_outcomes: ['pass', 'fail', 'blocked'],
+    note: 'Completing a plan records what a tester observed. It is not a pass.',
+  })
   api.decideAcrCriterion.mockReset()
   const created = createTestRoot()
   container = created.container
