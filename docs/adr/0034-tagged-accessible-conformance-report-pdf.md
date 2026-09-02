@@ -317,3 +317,83 @@ cutover, and duplicating that work is what this change has already had to unwind
 - `azure-pipelines.yml` installs neither the native stack nor veraPDF, so the same suite means
   something different there than in `ci.yml` — which that file's own dependency-step comment says
   it must not.
+
+## Addendum 3 — 2026-09-02: PAC 2024 was attempted, and what came of trying
+
+### The two gaps above are closed
+
+`deploy/test/Dockerfile` and `azure-pipelines.yml` both got the PDF/UA gate in #1208; the section
+immediately above is left standing as the record of when they were open. Every packet is now built
+from an environment that can run the checks it claims.
+
+### PAC 2024: attempted, and it does not run here
+
+**"PAC is Windows-only, so it cannot run" had been asserted in this work without anyone testing
+it** — Addendum 1's status table gives "not run — Windows only" as the reason, and that reason was
+never checked. (Addendum 2 is not guilty of it: it says only that the gates "have still not been
+run", which was true.) An untested reason attached to a true fact is the shape this repo keeps
+being bitten by, because it reads as settled. So it was tested. Wine 9.0 installs from Ubuntu's own
+archive and `pac.pdf-accessibility.org` is reachable, so PAC 24.4.4.0 was downloaded and run:
+
+```
+apt install wine64                        OK   (after apt-get update; a stale index 404'd first)
+wine --version                            wine-9.0
+PAC_24.4.4.0.zip                          79 MB → PAC.exe, DevExpress WinForms, .NET Framework 4.8
+run under xvfb                            err:mscoree: Wine Mono is not installed
+install wine-mono 9.0.0 into the prefix   OK
+re-run                                    Failed to run module constructor …
+                                          mscorlib.dll TypeInitializationException
+```
+
+The Mono runtime will not initialise, so the DevExpress UI never loads. Wine Mono does not
+implement .NET Framework 4.8; Microsoft's own installer refuses modern Wine; and PAC ships no CLI,
+so there is no headless path either. **The conclusion is the same as before and the standing of it
+is different: it is now a measured result with a reproduction, not an assumption.** Wine and the
+downloads were removed afterwards.
+
+**NVDA was not attempted.** Same runtime stack, plus Windows UIA, a speech synthesiser and a
+Windows PDF reader with accessibility support. That is reasoning from PAC's failure rather than a
+measurement, and is labelled as such here so nobody later cites it as one.
+
+### What ships instead, and what it is not
+
+`scripts/build_report_review_packet.py` writes `reading-order.txt` — the structure tree walked in
+the order an assistive technology traverses it, with every role, alternative and header scope, for
+both the live renderer and the previous one (#1215).
+
+It answers the part of the screen-reader gate that is a property of the DOCUMENT: reading order,
+roles, and whether every graphic carries an alternative. It does not answer the part that is a
+property of the EXPERIENCE — how NVDA, JAWS or VoiceOver actually behave (they differ from each
+other and from the spec), whether an alternative is *useful as speech* rather than merely present
+and non-empty, or anything interactive. **The gate stands.** REVIEW.md says so where a reviewer
+reads it.
+
+### It answered this ADR's own open finding
+
+The validation-gate list above says: *"**Properly scoped table headers** — finding 1; confirm in
+veraPDF."* Confirmed, and the answer is not the comfortable one:
+
+**0 of 57 header cells carry an explicit `/Scope`.** WeasyPrint does not emit `/Scope` from
+`<th scope>`, and veraPDF passes the document anyway, because PDF/UA permits header association to
+be inferred from a regular table's shape.
+
+Not a regression — the Chromium renderer scoped 0 of its own 9 — and the live renderer marks far
+more cells as headers (57 against 9), which is the larger improvement. But **inference is precisely
+where screen readers diverge from one another**, so "are row and column headers announced with each
+cell?" is now the specific question the packet puts to the NVDA pass, rather than something a
+reviewer has to think to ask.
+
+### Status
+
+| Gate | State |
+| --- | --- |
+| Structural suite | green, and running in CI since #1198/#1199 rather than skipping |
+| veraPDF ua1 on the live document | PASS, 0 failures |
+| Visual parity | reviewed page by page |
+| Reading order / roles / alternatives | in every packet since #1215 |
+| **PAC 2024** | **attempted 2026-09-02, does not run here — reproduction above** |
+| **NVDA / VoiceOver** | **not run** |
+
+The renderer has been live since #1201. Both remaining gates are outstanding against output
+customers already receive, and `ACP_REPORT_RENDERER=tagged` reverts the endpoint at runtime if
+either finds a problem.
