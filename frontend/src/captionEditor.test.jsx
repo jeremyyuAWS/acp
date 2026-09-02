@@ -9,7 +9,7 @@
 // property — which is exactly right here: what is under test is the component's own reaction to
 // time changing, so the time is set directly and the `timeupdate` event dispatched, the same way
 // a real element would.
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react'
 import { createTestRoot, unmountAll } from './testRoots.js'
@@ -21,7 +21,24 @@ import { dirname, join } from 'node:path'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
-afterEach(() => unmountAll())
+// MediaPlayer fetches the media with auth headers and creates a blob URL — jsdom has no
+// running server and URL.createObjectURL is not implemented. Stub both so the player renders
+// immediately and tests can interact with the <video>/<audio> element.
+const FAKE_BLOB_SRC = 'blob:fake/test-media'
+
+beforeEach(() => {
+  global.fetch = vi.fn().mockResolvedValue({
+    ok: true,
+    blob: () => Promise.resolve(new Blob([], { type: 'video/mp4' })),
+  })
+  URL.createObjectURL = vi.fn().mockReturnValue(FAKE_BLOB_SRC)
+  URL.revokeObjectURL = vi.fn()
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  unmountAll()
+})
 
 const VTT = 'WEBVTT\nLanguage: en\n\nNOTE\nDrafted by ACP using tiny; awaiting human approval.\n\n'
   + '1\n00:00:00.000 --> 00:00:02.400\nWelcome to the quarterly all-hands.\n\n'
@@ -40,6 +57,10 @@ async function mount(props = {}) {
       filename: 'townhall.mp4', ...props, value: state.value, onChange,
     }))
   })
+  // Flush the async fetch inside MediaPlayer. The mock resolves via microtask, and this
+  // extra act tick lets that microtask run and the resulting setBlobSrc state update land
+  // before any assertion queries the DOM.
+  await act(async () => { await Promise.resolve() })
   return { container, state, root, onChange }
 }
 
@@ -65,12 +86,19 @@ async function typeInto(el, value) {
 }
 
 describe('the media is playable at all', () => {
-  it('renders a video element pointed at the scanned file', async () => {
+  it('renders a video element for the scanned file, via a blob URL', async () => {
+    // <video src="/scans/.../content"> requests are anonymous — browsers cannot attach a bearer
+    // token to a media element load. The component fetches with Authorization and turns the
+    // response into a blob URL. The blob URL is what the video element receives.
     const { container } = await mount()
     const video = container.querySelector('video')
     expect(video).toBeTruthy()
-    expect(video.getAttribute('src')).toBe('/scans/s1/files/townhall.mp4/content')
+    expect(video.getAttribute('src')).toBe(FAKE_BLOB_SRC)
     expect(video.hasAttribute('controls')).toBe(true)
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/scans/s1/files/townhall.mp4/content',
+      expect.objectContaining({ signal: expect.anything() }),
+    )
   })
 
   it('uses an audio element for an audio-only file', async () => {
@@ -81,11 +109,13 @@ describe('the media is playable at all', () => {
     expect(container.querySelector('video')).toBeNull()
   })
 
-  it('preloads metadata only', async () => {
-    // A review queue holds many cards. Fetching every video in full on render would download an
-    // estate's worth of media nobody asked for.
+  it('does not carry a preload attribute — the whole file is already fetched for auth', async () => {
+    // preload="metadata" made sense when the browser loaded the URL directly (lazy download).
+    // fetch() retrieves the whole file upfront to attach the Authorization header, so the blob
+    // URL the player receives is already fully in memory — adding preload="metadata" would be a
+    // claim about a behaviour that no longer exists.
     const { container } = await mount()
-    expect(container.querySelector('video').getAttribute('preload')).toBe('metadata')
+    expect(container.querySelector('video').hasAttribute('preload')).toBe(false)
   })
 
   it('says WHY there is no player rather than rendering a broken one', async () => {

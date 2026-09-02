@@ -31,6 +31,39 @@ export default function CaptionEditor({ value, onChange, mediaSrc, mediaKind = '
   const [now, setNow] = useState(0)
   const [mediaError, setMediaError] = useState(null)
 
+  // WHY FETCH INSTEAD OF src=. A <video src="/scans/.../content"> cannot send ACP's bearer
+  // token — the browser makes that request anonymously. fetch() can carry the Authorization
+  // header; we turn the response into a blob URL the element can open from the same origin.
+  // blobSrc lives HERE, not inside MediaPlayer, so the time-listener effect below can depend on
+  // it and re-run exactly when the <video> element appears in the DOM.
+  const [blobSrc, setBlobSrc] = useState(null)
+
+  useEffect(() => {
+    if (!mediaSrc) { setBlobSrc(null); return }
+    const ctrl = new AbortController()
+    const token = getToken()
+    fetch(mediaSrc, {
+      signal: ctrl.signal,
+      headers: token ? { Authorization: 'Bearer ' + token } : {},
+    })
+      .then((r) => {
+        if (!r.ok) throw Object.assign(new Error(`fetch ${r.status}`), { status: r.status })
+        return r.blob()
+      })
+      .then((blob) => {
+        if (!ctrl.signal.aborted) setBlobSrc(URL.createObjectURL(blob))
+      })
+      .catch((err) => {
+        if (err.name !== 'AbortError') setMediaError('media')
+      })
+    return () => {
+      ctrl.abort()
+      // Revoke whichever blob URL was created, if any. The setState callback runs synchronously
+      // inside React's state machine, so the URL we revoke is always the one we set.
+      setBlobSrc((prev) => { if (prev) URL.revokeObjectURL(prev); return null })
+    }
+  }, [mediaSrc])
+
   // Re-parsed from `value` on every render rather than held in state. The card owns the value —
   // it is what gets approved — and a second copy here would be one more thing that can disagree
   // with what the reviewer is about to sign.
@@ -38,6 +71,10 @@ export default function CaptionEditor({ value, onChange, mediaSrc, mediaKind = '
   const cueFile = isVtt(value)
   const active = activeCueIndex(cues, now)
 
+  // Depends on [blobSrc], NOT [mediaSrc]. The fetch is async: when mediaSrc first arrives,
+  // blobSrc is null and the <video> has not rendered yet, so mediaRef.current is null and a
+  // listener attached here would be attached to nothing. blobSrc changes only after the fetch
+  // resolves and the element renders, so by the time this effect runs the ref is live.
   useEffect(() => {
     const el = mediaRef.current
     if (!el) return
@@ -47,7 +84,7 @@ export default function CaptionEditor({ value, onChange, mediaSrc, mediaKind = '
     // the highlight would sit on the cue the reviewer left rather than the one they moved to.
     el.addEventListener('seeked', tick)
     return () => { el.removeEventListener('timeupdate', tick); el.removeEventListener('seeked', tick) }
-  }, [mediaSrc])
+  }, [blobSrc])
 
   const seekTo = (t) => {
     const el = mediaRef.current
@@ -68,8 +105,8 @@ export default function CaptionEditor({ value, onChange, mediaSrc, mediaKind = '
   if (!cueFile) {
     return (
       <div className="caption-editor">
-        <MediaPlayer refEl={mediaRef} src={mediaSrc} kind={mediaKind} filename={filename}
-                     error={mediaError} onError={setMediaError} />
+        <MediaPlayer refEl={mediaRef} blobSrc={blobSrc} src={mediaSrc} kind={mediaKind}
+                     filename={filename} error={mediaError} onError={setMediaError} />
         <label className="caption-editor-prose">
           <span className="muted" style={{ fontSize: 12 }}>
             Transcript — check it against the recording before approving
@@ -83,8 +120,8 @@ export default function CaptionEditor({ value, onChange, mediaSrc, mediaKind = '
 
   return (
     <div className="caption-editor">
-      <MediaPlayer refEl={mediaRef} src={mediaSrc} kind={mediaKind} filename={filename}
-                   error={mediaError} onError={setMediaError} />
+      <MediaPlayer refEl={mediaRef} blobSrc={blobSrc} src={mediaSrc} kind={mediaKind}
+                   filename={filename} error={mediaError} onError={setMediaError} />
 
       {/* The announcement a sighted reviewer gets from the highlight. `polite` so it waits for a
           gap rather than interrupting, and it names the cue rather than reading its text — the
@@ -120,38 +157,7 @@ export default function CaptionEditor({ value, onChange, mediaSrc, mediaKind = '
   )
 }
 
-function MediaPlayer({ refEl, src, kind, filename, error, onError }) {
-  // WHY FETCH INSTEAD OF src=. A <video src="/scans/.../content"> cannot send ACP's bearer
-  // token — the browser makes that request anonymously. fetch() can carry the Authorization
-  // header; we turn the response into a blob URL the element can open from the same origin.
-  const [blobSrc, setBlobSrc] = useState(null)
-
-  useEffect(() => {
-    if (!src) { setBlobSrc(null); return }
-    const ctrl = new AbortController()
-    const token = getToken()
-    fetch(src, {
-      signal: ctrl.signal,
-      headers: token ? { Authorization: 'Bearer ' + token } : {},
-    })
-      .then((r) => {
-        if (!r.ok) throw Object.assign(new Error(`fetch ${r.status}`), { status: r.status })
-        return r.blob()
-      })
-      .then((blob) => {
-        if (!ctrl.signal.aborted) setBlobSrc(URL.createObjectURL(blob))
-      })
-      .catch((err) => {
-        if (err.name !== 'AbortError') onError('media')
-      })
-    return () => {
-      ctrl.abort()
-      // Revoke whichever blob URL was created, if any. The setState callback runs synchronously
-      // inside React's state machine, so the URL we revoke is always the one we set.
-      setBlobSrc((prev) => { if (prev) URL.revokeObjectURL(prev); return null })
-    }
-  }, [src])
-
+function MediaPlayer({ refEl, blobSrc, src, kind, filename, error, onError }) {
   // NO PLAYER WITHOUT A SOURCE, and no silent absence either. A <video> with src="" renders a
   // broken control that looks like the file failed to load; saying why is the difference between
   // "this is broken" and "this scan has no retrievable original".
