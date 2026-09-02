@@ -228,9 +228,37 @@ def test_nothing_is_still_running_when_discovery_reports_stopped(st):
     for cancel_futures — that is the next test, and it took a bite check to tell them apart."""
     drive = FakeDrive(children=_wide_tree())
 
+    # THE OVERLAP IS FORCED, NOT RACED FOR, and that is the whole reason this barrier exists.
+    #
+    # The final assertion demands max_in_flight > 1 — the test must actually have exercised the
+    # parallel path or it proves nothing about draining it. But `on_request` requests cancellation
+    # on the FIRST non-root fetch, and every queued task hits _cancel_checkpoint() before its own
+    # Drive call, so once that write lands no further task ever enters execute(). Whether a second
+    # thread got inside execute() first was therefore a straight race between pool dispatch and one
+    # database write, with nothing in the test tipping it either way.
+    #
+    # It lost that race on CI (shard 2 of #1190, 2026-09-02): `assert 1 > 1`, "this test never
+    # exercised the parallel path". It wins locally — 30/30 in isolation, 10/10 pinned to one CPU,
+    # 6/6 running the whole file — which is exactly the shape of flake that reads as someone
+    # else's bug. Reproduced deterministically with ACP_DISCOVERY_WORKERS=1, which forces the
+    # single-thread case and yields CI's assertion verbatim.
+    #
+    # Holding the first two folder fetches inside execute() until BOTH have arrived makes
+    # max_in_flight >= 2 structural: neither can leave until the other is in. The root listing is
+    # submitted alone and its 60 children are then submitted in one loop (scanner.py), so a
+    # six-worker pool always has two to give. If it somehow does not, the barrier times out, the
+    # value stays 1, and the assertion fails saying so — the guard keeps its meaning rather than
+    # being quietly satisfied.
+    both_fetching = threading.Barrier(2, timeout=10)
+
     def on_request(d, fid, token):
-        if fid != "root":
-            st.request_job_cancellation(d.job_id)
+        if fid == "root":
+            return
+        try:
+            both_fetching.wait()
+        except threading.BrokenBarrierError:
+            pass        # only one fetch ever arrived; max_in_flight stays 1 and the assert says so
+        st.request_job_cancellation(d.job_id)
 
     drive.on_request = on_request
 
