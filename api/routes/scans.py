@@ -2244,7 +2244,18 @@ def get_file_content(scan_id: str, filename: str, request: Request):
                 "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation"}
-    return Response(data, media_type=mime_map.get(ext, "application/octet-stream"))
+    # Media types come from api/media.py rather than being spelled out here. A caption reviewer
+    # has to WATCH the video they are correcting a transcript for, and a <video> element handed
+    # `application/octet-stream` refuses to play it — browsers do not sniff a container out of a
+    # generic type. So the file the remediation lane drafted captions for came back unplayable.
+    #
+    # NO `Accept-Ranges` HEADER, deliberately. This reads the whole object and returns it in one
+    # Response; it does not honour a Range request. Advertising byte ranges would give the browser
+    # a seek bar that silently re-serves the full body — the reviewer drags the scrubber and the
+    # video jumps back. Not having ranges yet is a limitation; claiming them would be a bug.
+    import media as _media
+    media_type = mime_map.get(ext) or _media.media_mime(filename) or "application/octet-stream"
+    return Response(data, media_type=media_type)
 
 
 def _source_bytes_for_render(request: Request, scan_id: str, filename: str, owner: str) -> bytes | None:

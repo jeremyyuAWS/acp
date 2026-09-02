@@ -42,6 +42,40 @@ MEDIA_EXTS = VIDEO_EXTS + AUDIO_EXTS
 # Sidecar caption files. A media file sitting beside its own captions is already served, and
 # flagging it would be a false positive on the commonest correct arrangement there is.
 CAPTION_EXTS = (".vtt", ".srt", ".ttml", ".dfxp", ".sbv", ".sub", ".ass", ".ssa")
+
+# Extension -> the MIME type a BROWSER needs to play it.
+#
+# WHY THIS EXISTS SEPARATELY FROM scan_formats._MIME_OF. That map answers "which uploaded MIME
+# types are in Discovery's scope" and is a per-FORMAT set — "av" maps to twelve strings, several
+# of them alternates for one extension (audio/wav and audio/x-wav are both .wav). A player needs
+# the opposite shape: one extension, one type to put in a Content-Type header, chosen rather than
+# enumerated. Deriving one from the other would mean picking arbitrarily from a set.
+#
+# THIS IS NOT COSMETIC. A <video> element handed `application/octet-stream` refuses to play the
+# file — browsers will not sniff a container out of a generic type — so a caption reviewer could
+# not watch the video they were correcting a transcript for, which is the one thing the
+# correction requires. The keys are bound to scan_formats._EXT_OF["av"] by
+# tests/test_media_content_type.py, so a format the remediation lane admits cannot come back as a
+# type the reviewer's browser will not open.
+MEDIA_MIME_TYPES: dict[str, str] = {
+    ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime",
+    ".webm": "video/webm", ".mkv": "video/x-matroska", ".avi": "video/x-msvideo",
+    ".wmv": "video/x-ms-wmv", ".mpg": "video/mpeg", ".mpeg": "video/mpeg",
+    ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".wav": "audio/wav",
+    ".aac": "audio/aac", ".ogg": "audio/ogg", ".oga": "audio/ogg",
+    ".opus": "audio/opus", ".flac": "audio/flac", ".wma": "audio/x-ms-wma",
+}
+
+
+def media_mime(name: str) -> str | None:
+    """The playable MIME type for a filename, or None when it is not media we can name one for.
+
+    None rather than a default: a caller that cannot identify the type must fall back to its own
+    honest answer (`application/octet-stream`), not be handed a guess. Telling a browser that an
+    unknown file is video/mp4 is how a player is asked to render something that is not video.
+    """
+    ext = Path(str(name or "")).suffix.lower()
+    return MEDIA_MIME_TYPES.get(ext)
 TRANSCRIPT_EXTS = (".txt", ".md", ".docx", ".pdf", ".rtf")
 
 ASR_MODEL = os.environ.get("ACP_ASR_MODEL", "tiny")
