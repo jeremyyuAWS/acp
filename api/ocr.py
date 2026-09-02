@@ -130,9 +130,32 @@ def ocr_text(img_bytes: bytes, *, min_pixels: int = _MIN_PIXELS_STRICT) -> str:
     Report", axis labels) yields OCR words the description can be anchored in — a High-
     confidence, auto-applyable derivation — whereas a textless photo yields "" and its
     description stays a pure vision guess surfaced for human confirmation (WCAG 1.1.1
-    intent). Defaults to the STRICT pixel floor so a small labelled chart still grounds."""
+    intent). Defaults to the STRICT pixel floor so a small labelled chart still grounds.
+
+    Collapses read_image_text()'s "nothing was read" to "" for the callers that want a string
+    they can put in a prompt. A criterion deciding whether a document CONFORMS must use
+    read_image_text and tell the two apart — see there."""
+    return read_image_text(img_bytes, min_pixels=min_pixels) or ""
+
+
+def read_image_text(img_bytes: bytes, *, min_pixels: int = _MIN_PIXELS_STRICT) -> str | None:
+    """The OCR reading of one image — or **None when no reading happened**.
+
+    The distinction is the whole point of this function, and it is the same fail-closed contract
+    the transcription lane uses: "" means tesseract ran over this image and found no text; None
+    means it did not complete (timed out, raised, OCR unavailable) and NOTHING is known about
+    what the image contains. An image below `min_pixels` is "" — that is a deliberate exclusion
+    from the criterion (icons, bullets), not a failed reading.
+
+    Conflating the two certifies unassessed content. On 2026-09-02 a 30s `_OCR_TIMEOUT_S`
+    elapsed on a contended CI runner, "" came back, `images_of_text` counted zero words, and
+    1.4.5 reported nothing at all on a document holding a full paragraph baked into a picture —
+    output identical to a clean document. The 1.4.9 pass then re-read the same image
+    successfully, because a failure is deliberately not cached, and flagged it. Two
+    contradictory conclusions about one image, and the silent one was the Level AA one.
+    """
     if not is_available():
-        return ""
+        return None
     try:
         from PIL import Image
         import pytesseract
@@ -156,7 +179,9 @@ def ocr_text(img_bytes: bytes, *, min_pixels: int = _MIN_PIXELS_STRICT) -> str:
         _remember_text(cache_key, text)
         return text
     except Exception:
-        return ""
+        # Deliberately NOT cached. A cached failure would be served to every later pass over the
+        # same image, so the two images-of-text criteria would agree — on the answer nobody read.
+        return None
 
 
 def _ooxml_images(path: Path):
@@ -272,8 +297,25 @@ def images_of_text(path: Path, ext: str) -> list[dict]:
         return []
     findings: list[dict] = []
     images, total = _embedded_images_and_total(path, ext)
+    unread = 0
+    retry_left = 1
     for i, img in enumerate(images):
-        text = " ".join(ocr_text(img, min_pixels=_MIN_PIXELS).split())
+        reading = read_image_text(img, min_pixels=_MIN_PIXELS)
+        if reading is None and retry_left:
+            # A timeout is a statement about the machine, not about the image, and the evidence
+            # says so: on the run that exposed this the 1.4.9 pass re-read the very same image
+            # moments later and succeeded. So try once more.
+            #
+            # ONCE PER DOCUMENT, not once per image. A document whose reads keep failing is on a
+            # starved machine, and spending another `_OCR_TIMEOUT_S` on each of `_MAX_IMAGES`
+            # images would turn one 30s stall into fifteen minutes of a scan someone is waiting
+            # on — trading a reported gap for an unusable product.
+            retry_left -= 1
+            reading = read_image_text(img, min_pixels=_MIN_PIXELS)
+        if reading is None:
+            unread += 1
+            continue
+        text = " ".join(reading.split())
         if len(_WORD_RE.findall(text)) >= _MIN_WORDS:
             if _looks_like_chart(text):
                 continue        # Essential exception — a chart/graph, not a picture of prose
@@ -283,6 +325,23 @@ def images_of_text(path: Path, ext: str) -> list[dict]:
                 "severity": "SERIOUS",
                 "detail": f"embedded image {i + 1} contains readable text (OCR): “{text[:160]}”",
             })
+    # SAY WHAT WE COULD NOT READ. Same advisory shape, and the same argument, as the cap notice
+    # below: an image whose reading did not complete has not been assessed, and reporting
+    # nothing about it is a claim of conformance drawn from a measurement that never finished.
+    #
+    # Emitted from the 1.4.5 pass only, for the reason spelled out under the cap notice.
+    if unread:
+        findings.append({
+            "ruleId": "OCR_IMAGE_UNREAD",
+            "wcag": "1.4.5 Images of Text",
+            "severity": "REVIEW",
+            "detail": (f"{unread} of this document's {len(images)} images could not be read by "
+                       f"OCR — the reading did not complete, so nothing is asserted about "
+                       f"whether they contain text. This is usually a timeout on a loaded "
+                       f"machine; raise ACP_OCR_TIMEOUT_S (currently {_OCR_TIMEOUT_S:g}s) and "
+                       f"re-scan, or review those images by hand."),
+        })
+
     # SAY WHAT WE DID NOT LOOK AT. Advisory (REVIEW), because the honest claim is not "these
     # images fail" — nobody read them — it is "this criterion was not fully checked on this
     # document". A blocking finding would assert a defect we have no evidence for; silence
