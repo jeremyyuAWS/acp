@@ -175,6 +175,20 @@ jobs:
         # that ~12 test modules use to build fixtures on the fly. Without them the suite
         # aborts during collection, not merely at runtime.
 
+      - name: Install veraPDF (PDF/UA-1 conformance gate)
+        run: bash scripts/install_verapdf.sh
+        # Turns ON the conformance check rather than merely adding a tool, exactly like the
+        # tesseract step above. tests/verapdf.py degrades to a stated skip when veraPDF is
+        # absent — right for a developer machine, and the wrong thing here: a skipped PDF/UA
+        # check is a compliance claim nothing evaluated, which is the silent-skip shape
+        # tests/test_undeclared_importorskip.py refuses for pip dependencies. veraPDF has no
+        # wheel, so it gets a step instead of a requirements line.
+        #
+        # NOT continue-on-error, and that is the difference from the tesseract step: OCR
+        # degrades to fewer criteria covered, while this gate is the only thing standing
+        # between "we render an accessible PDF" and "we render a PDF". If it cannot install,
+        # the honest outcome is a red job rather than a green one that skipped the check.
+
       - name: Backend suite (shard ${{ matrix.group }}/4)
         # --splits/--group (pytest-split) runs a quarter of the suite on this shard; -n auto +
         # loadfile parallelise within it. Cross-shard file splits are safe — each shard is its own
