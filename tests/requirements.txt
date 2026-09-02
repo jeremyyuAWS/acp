@@ -24,3 +24,15 @@ pytest-split
 # against that recurring was itself silent. See tests/test_undeclared_importorskip.py, which now
 # fails on any importorskip naming a dependency declared nowhere CI installs.
 PyYAML
+
+# The PDF/UA-1 renderer behind api/report_weasy.py and the ACR accessible export. DECLARED here
+# rather than left ambient because tests/test_report_weasy_structure.py and
+# tests/test_report_pdfua_gap.py both `importorskip("weasyprint")`, and an undeclared
+# importorskip is the silent-skip shape tests/test_undeclared_importorskip.py exists to refuse:
+# CI installs exactly this file and api/requirements.txt, so without this line those 21 tests
+# would skip on every run and the PDF/UA gate would be a claim nothing evaluated.
+#
+# veraPDF is the OTHER half of that gate and cannot be declared here — it is a Java tool, not a
+# wheel. It is installed by its own step in ci.yml; tests/verapdf.py degrades to a stated skip
+# when it is absent, which is why the step exists rather than relying on the skip.
+weasyprint
