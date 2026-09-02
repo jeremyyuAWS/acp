@@ -579,11 +579,14 @@ def unacknowledge_scan(sid: str, request: Request):
 
 
 @router.get("/scans/jobs/{job_id}")
-def scan_job(job_id: str):
+def scan_job(job_id: str, request: Request):
     # core.get_job_state, not core.JOBS: the poll must be answerable by whichever replica the
     # request lands on, which is the whole point of removing session affinity.
     j = core.get_job_state(job_id)
     if j is None:
+        raise HTTPException(404, "job not found")
+    scan_id = j.get("scan_id")
+    if scan_id and core.store.get_scan(scan_id, owner=_owner(request)) is None:
         raise HTTPException(404, "job not found")
     return j
 
@@ -2069,15 +2072,21 @@ def report_pdf(sid: str, request: Request):
 
 
 @router.get("/inventory")
-def inventory():
+def inventory(request: Request):
+    # The inventory table has no owner column — it is a global path-dedup index.
+    # Only admins may read it; regular users access per-scan inventory via GET /scans/{sid}/inventory.
+    if not core.is_admin(getattr(request.state, "user_email", None)):
+        raise HTTPException(403, "admin access required")
     return core.store.inventory()
 
 
 # ── Per-file remediation ──────────────────────────────────────────────────────
 
 @router.post("/scans/{scan_id}/files/{filename:path}/remediate")
-def mark_remediated(scan_id: str, filename: str):
+def mark_remediated(scan_id: str, filename: str, request: Request):
     """Record that a file was remediated (download or Drive write-back)."""
+    if core.store.get_scan(scan_id, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
     now = core.store.record_remediation(scan_id, filename)
     core.emit_remediation_span(scan_id, filename, drive_write_url=None)
     return {"remediated_at": now}
