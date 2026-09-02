@@ -193,6 +193,18 @@ HEALTH_OPENAPI_SPEC: dict = {
                             "vision": {"type": "object", "properties": {
                                 "ready": {"type": "boolean"}, "reason": {"type": "string", "nullable": True},
                                 "model": {"type": "string", "nullable": True}, "zone": {"type": "string", "nullable": True}}},
+                            # `pdf` reads a PDF; `pdf_renderer` writes a tagged one. Separate keys
+                            # because they fail independently — the analyser is scan-blocking and
+                            # folds into `degraded`, the renderer is informational and never does.
+                            "pdf_renderer": {"type": "object", "description":
+                                "Informational: can this deployment produce the tagged PDF/UA-1 ACR "
+                                "export? Depends on a system library (Pango) that a pip pin cannot "
+                                "supply. Never folds into `degraded`.",
+                                "properties": {
+                                    "ready": {"type": "boolean"},
+                                    "reason": {"type": "string", "nullable": True},
+                                    "variant": {"type": "string", "nullable": True,
+                                                "example": "pdf/ua-1"}}},
                         },
                     },
                     "sources": {"type": "object", "description": "Informational, per-source-adapter readiness (e.g. smb) — never folds into `degraded`."},

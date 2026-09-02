@@ -188,6 +188,82 @@ def test_readyz_flags_a_missing_vision_model_but_does_not_flip_ready(monkeypatch
     assert r["ready"] is True and r["degraded"] == []
 
 
+# ── /readyz tagged-PDF renderer readiness ────────────────────────────────────────────────
+#
+# WHY THIS FIELD EXISTS, recorded because the reasoning is the whole justification for adding a
+# key to a health endpoint. The ACR's accessible export (GET /acr/{id}/preview?format=pdf) needs
+# WeasyPrint, which binds to Pango — a SYSTEM library pip cannot supply. So "api/requirements.txt
+# pins weasyprint" and "this container can produce a tagged PDF" are different claims, and until
+# now only the first was checkable from outside. On 2026-09-02, answering the second took
+# reproducing the base image's dependency hash by hand and reasoning about apt layers; the
+# endpoint whose absence it explains answers 401 to an unauthenticated caller, so there was no
+# way to ask directly. This is the way to ask directly.
+
+def _mock_renderer(monkeypatch, *, available, variant="pdf/ua-1"):
+    import acr_export_pdf
+    monkeypatch.setattr(acr_export_pdf, "is_available", lambda: available, raising=False)
+    monkeypatch.setattr(acr_export_pdf, "PDF_VARIANT", variant, raising=False)
+
+
+def test_readyz_reports_that_the_tagged_pdf_renderer_can_run(monkeypatch):
+    _mock_renderer(monkeypatch, available=True)
+    r = _readyz(monkeypatch, beat=_iso(seconds=5), local_pool=0, pdf_ok=True)
+    rend = r["engines"]["pdf_renderer"]
+    assert rend["ready"] is True and rend["reason"] is None
+    # The variant is the point: "ready" without it would not say WHAT gets produced, and an
+    # untagged PDF is indistinguishable from a conformant one to everyone but its reader.
+    assert rend["variant"] == "pdf/ua-1"
+
+
+def test_a_missing_renderer_is_named_but_does_not_flip_ready(monkeypatch):
+    """Informational, exactly like vision and sources.smb. A deployment that cannot render the ACR
+    export can still scan, assess and remediate — flipping top-level `ready` over one export route
+    would evict a container that is doing its job, which is the mistake /probe/readyz exists to
+    avoid. The reason must NAME the missing dependency, because that is the only actionable part."""
+    _mock_renderer(monkeypatch, available=False)
+    r = _readyz(monkeypatch, beat=_iso(seconds=5), local_pool=0, pdf_ok=True)
+    rend = r["engines"]["pdf_renderer"]
+    assert rend["ready"] is False
+    assert "weasyprint" in rend["reason"].lower(), rend["reason"]
+    assert r["ready"] is True and r["degraded"] == []
+
+
+def test_the_analyser_and_the_renderer_are_separate_answers(monkeypatch):
+    """`pdf` reads a PDF; `pdf_renderer` writes one. They fail independently and for unrelated
+    reasons, so one key could not answer both — a missing analyser with a working renderer must
+    read as exactly that."""
+    _mock_renderer(monkeypatch, available=True)
+    r = _readyz(monkeypatch, beat=_iso(seconds=5), local_pool=0, pdf_ok=False)
+    assert r["engines"]["pdf"]["available"] is False
+    assert r["engines"]["pdf_renderer"]["ready"] is True
+    # The analyser IS scan-blocking, so unlike the renderer it does flip ready.
+    assert r["ready"] is False and "pdf_engine_missing" in r["degraded"]
+
+
+def test_the_renderer_probe_cannot_break_readyz(monkeypatch):
+    """A health endpoint that 500s because a probe raised is worse than the gap it was added to
+    close — the monitor then cannot read the worker tier either."""
+    import acr_export_pdf
+
+    def boom():
+        raise RuntimeError("libpango.so.0: cannot open shared object file")
+
+    monkeypatch.setattr(acr_export_pdf, "is_available", boom, raising=False)
+    r = _readyz(monkeypatch, beat=_iso(seconds=5), local_pool=0, pdf_ok=True)
+    assert r["engines"]["pdf_renderer"]["ready"] is False
+    assert "libpango" in r["engines"]["pdf_renderer"]["reason"]
+    assert r["ready"] is True and r["degraded"] == []
+
+
+def test_the_field_reports_the_real_renderer_when_nothing_is_mocked(monkeypatch):
+    """The premise for all four above. Every one of them stubs is_available(), so none proves the
+    field is wired to the actual module rather than to a constant — this one reads whatever this
+    environment genuinely has, and only asserts the two are the SAME answer."""
+    import acr_export_pdf
+    r = _readyz(monkeypatch, beat=_iso(seconds=5), local_pool=0, pdf_ok=True)
+    assert r["engines"]["pdf_renderer"]["ready"] is acr_export_pdf.is_available()
+
+
 # ── /readyz source readiness (SMB) ───────────────────────────────────────────────────────
 _SMB_ENV = ("ACP_SMB_SHARES", "ACP_SMB_DOMAIN", "ACP_SMB_USERNAME",
             "ACP_SMB_PASSWORD", "ACP_SMB_CREDENTIAL_KV")

@@ -383,6 +383,44 @@ def test_json_and_html_are_unchanged(client, report_id):
     assert h.status_code == 200 and h.headers["content-type"].startswith("text/html")
 
 
+def test_readyz_and_the_endpoint_give_the_same_answer(client, report_id, monkeypatch):
+    """The whole value of engines.pdf_renderer is that it PREDICTS this endpoint.
+
+    A health field that can say "ready" while the route 503s — or the reverse — is worse than no
+    field, because it is consulted precisely when nobody can try the route themselves. So the two
+    are asserted together, in both directions, rather than each against its own idea of the truth.
+
+    Verified live as well, on a server started with an unimportable weasyprint: /readyz reported
+    ready:false naming WeasyPrint, ?format=pdf answered 503 with the same sentence, and
+    ?format=html still answered 200 — which is exactly what that sentence claims.
+    """
+    # Available: the field says ready, and the route delivers a PDF.
+    r = client(ANALYST).get("/readyz").json()["engines"]["pdf_renderer"]
+    assert r["ready"] is True and r["variant"] == "pdf/ua-1"
+    assert client(ANALYST).get(f"/acr/{report_id}/preview",
+                               params={"format": "pdf"}).status_code == 200
+
+    # Unavailable: the field says not-ready, and the route refuses — with the SAME reason.
+    monkeypatch.setattr(acr_export_pdf, "is_available", lambda: False)
+
+    def boom(_html):
+        raise acr_export_pdf.RendererUnavailable(acr_export_pdf.MISSING_RENDERER)
+
+    monkeypatch.setattr(acr_export_pdf, "render_html", boom)
+
+    r = client(ANALYST).get("/readyz").json()["engines"]["pdf_renderer"]
+    assert r["ready"] is False and "weasyprint" in r["reason"].lower()
+
+    resp = client(ANALYST).get(f"/acr/{report_id}/preview", params={"format": "pdf"})
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == r["reason"], "the two surfaces explain it differently"
+
+    # And the claim that sentence makes about the other formats has to be true.
+    assert client(ANALYST).get(f"/acr/{report_id}/preview",
+                               params={"format": "html"}).status_code == 200
+    assert client(ANALYST).get(f"/acr/{report_id}/preview").status_code == 200
+
+
 def test_a_deployment_that_cannot_tag_says_so_instead_of_serving_an_untagged_pdf(
         client, report_id, monkeypatch):
     """The fail-closed rule. An untagged conformance report is indistinguishable from this one to
