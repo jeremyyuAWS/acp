@@ -2051,6 +2051,46 @@ def pdf_focus_order_checks(path: Path) -> list[dict]:
     return detect(path)
 
 
+def docx_input_purpose_checks(path: Path) -> list[dict]:
+    """1.3.5 Identify Input Purpose — DOCX. Implementation: formats/docx/detectors/input_purpose.py.
+
+    HEURISTIC/LOW: flags interactive content controls (checkbox, date, dropDownList, comboBox)
+    whose w:alias matches the personal-data vocabulary. OOXML has no autocomplete-equivalent
+    mechanism, so matching fields cannot programmatically declare their input purpose."""
+    try:
+        from formats.docx.detectors.input_purpose import detect
+        return detect(path)
+    except Exception:
+        swallowed("docx_input_purpose_checks: detector could not run")
+        return []
+
+
+def pdf_input_purpose_checks(path: Path) -> list[dict]:
+    """1.3.5 Identify Input Purpose — PDF. Implementation: formats/pdf/detectors/input_purpose.py.
+
+    HEURISTIC/LOW: flags AcroForm text fields whose /T or /TU matches the personal-data
+    vocabulary. The PDF spec has no autocomplete-equivalent mechanism."""
+    try:
+        from formats.pdf.detectors.input_purpose import detect
+        return detect(path)
+    except Exception:
+        swallowed("pdf_input_purpose_checks: detector could not run")
+        return []
+
+
+def pdf_label_in_name_checks(path: Path) -> list[dict]:
+    """2.5.3 Label in Name — PDF. Implementation: formats/pdf/detectors/label_in_name.py.
+
+    PARTIAL/HIGH: push buttons only — the sole AcroForm field type where both the visible
+    caption (/MK /CA) and the accessible name (/TU or /T) are in the same field dictionary."""
+    try:
+        from formats.pdf.detectors.label_in_name import detect
+        return detect(path)
+    except Exception:
+        swallowed("pdf_label_in_name_checks: detector could not run")
+        return []
+
+
 def pdf_non_text_content_checks(path: Path) -> list[dict]:
     """1.1.1 findings per tagged /Figure with no /Alt. Implementation: formats/pdf/detectors/
     non_text_content.py.
@@ -2156,7 +2196,8 @@ def checks_for(path: Path, ext: str) -> list[dict]:
         return (docx_checks(path) + office_control_review_checks(path, ext)
                 + office_color_only_checks(path, ext)
                 + office_reflow_checks(path, ext) + office_text_spacing_checks(path, ext)
-                + docx_nontext_contrast_checks(path) + office_non_text_content_checks(path, ext))
+                + docx_nontext_contrast_checks(path) + office_non_text_content_checks(path, ext)
+                + docx_input_purpose_checks(path))
     if ext == ".pptx":
         return (pptx_checks(path) + pptx_contrast_checks(path) + pptx_audio_autoplay_checks(path)
                 + office_control_review_checks(path, ext)
@@ -2171,7 +2212,8 @@ def checks_for(path: Path, ext: str) -> list[dict]:
                 + pdf_text_spacing_checks(path) + pdf_use_of_color_checks(path)
                 + pdf_nontext_contrast_checks(path) + pdf_text_over_image_checks(path)
                 + pdf_focus_order_checks(path) + pdf_scanned_page_checks(path)
-                + pdf_non_text_content_checks(path))
+                + pdf_non_text_content_checks(path)
+                + pdf_input_purpose_checks(path) + pdf_label_in_name_checks(path))
     if ext == ".xlsx":
         return (xlsx_contrast_checks(path) + xlsx_structure_checks(path)
                 + office_control_review_checks(path, ext) + office_color_only_checks(path, ext)
