@@ -277,19 +277,22 @@ exit 0
 """
 
 
-def _extract(name: str) -> str:
-    """The named shell function, verbatim from deploy.sh — so the test runs the shipped code
-    rather than a copy of it that can drift."""
-    src = PROBE_SH.read_text() if name.startswith("_readiness_probe") or name == "_apply_readiness_probe" else DEPLOY_SH.read_text()
-    start = src.index(f"{name}() {{")
-    end = src.index("\n}\n", start) + len("\n}\n")
-    return src[start:end]
-
-
 @pytest.fixture()
 def probe_step(tmp_path, monkeypatch):
-    """Runs deploy.sh's `_apply_readiness_probe` with `az` stubbed. Returns a callable taking
-    the app's current template (a dict) and any env overrides."""
+    """Runs `_apply_readiness_probe` with `az` stubbed. Returns a callable taking the app's
+    current template (a dict) and any env overrides.
+
+    SOURCES THE WHOLE FILE, rather than extracting the two functions by name as it used to.
+    Extraction reassembles a program that never ships: `_readiness_probe_retry` now delegates to
+    the shared `_aca_retry`, which the extraction did not pull, so the retry silently became
+    "command not found" — `_apply_readiness_probe` took its else branch, printed the could-not-
+    write NOTE, and this fixture reported that no `containerapp update --yaml` had happened. The
+    production path was fine; the harness had rebuilt a broken copy of it.
+
+    `deploy.sh` and `redeploy.sh` both `source` this file, so sourcing it is also the more
+    faithful thing to do: it exercises what ships, and cannot go stale when a helper gains a
+    dependency.
+    """
     binn = tmp_path / "bin"
     binn.mkdir()
     (binn / "az").write_text(_STUB_AZ)
@@ -304,7 +307,7 @@ def probe_step(tmp_path, monkeypatch):
         AZ=(--subscription 11111111-2222-3333-4444-555555555555)
         RG=mdk-accessibility
         APP=acp-app
-        """) + _extract("_readiness_probe_retry") + _extract("_apply_readiness_probe") + "\n_apply_readiness_probe\n")
+        """) + f"source {PROBE_SH}\n_apply_readiness_probe\n")
 
     def run(template: dict, **env):
         # Each invocation starts from an empty log, so "did this deploy write?" is answerable
