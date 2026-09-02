@@ -59,7 +59,9 @@ COPY api/requirements.txt /app/api/requirements.txt
 RUN if [ ! -f /app/.acp-base-ready ]; then \
       apt-get update \
       && apt-get install -y --no-install-recommends curl ca-certificates libicu-dev tesseract-ocr \
-         libreoffice-impress libreoffice-writer libreoffice-calc fonts-liberation \
+         libreoffice-impress libreoffice-writer libreoffice-calc \
+         fonts-liberation fonts-dejavu-core \
+         libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libfontconfig1 \
       && curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
       && bash /tmp/dotnet-install.sh --runtime dotnet --channel 10.0 --install-dir /usr/share/dotnet \
       && ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet \
