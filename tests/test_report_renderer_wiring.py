@@ -173,17 +173,59 @@ def test_the_review_packet_ships_a_reading_order_traversal():
     assert "heading level 1" in text and "graphic" in text, (
         "the traversal names no roles; a reviewer cannot read reading order out of it")
 
+    # And that the packet actually CALLS it. Without this the traversal can be perfect and never
+    # run — which is how the bite check found this assertion missing in the first place.
+    src = (ROOT / "scripts" / "build_report_review_packet.py").read_text()
+    assert 'reading_order(live, out / "reading-order.txt")' in src, (
+        "reading_order is never called on the live document; the packet ships without it")
+    assert "figures_without_alt" in src and "th_with_scope" in src, (
+        "REVIEW.md no longer quotes the traversal's counts, so its claims have no measurement")
+
 
 def test_the_traversal_does_not_truncate():
     """An elided traversal reads as a finding rather than as a cut-off.
 
-    The first version of this printed 120 elements and stopped. On this report that hid one of
-    three figure alternatives and the only link — both of which read as real defects, and both of
-    which were the limit. A reviewer cannot tell the difference from the file.
+    The first version printed 120 elements and stopped. On this report that hid one of three
+    figure alternatives and the only link — both read as real defects, and both were the limit.
+    A reviewer cannot tell an elided file from a deficient document.
+
+    Asserted by COUNTING what the file holds against what the walk found, not by grepping the
+    source for `break`. The grep version passed while a `rows[:5]` slice truncated the output:
+    there are unbounded ways to spell "stop early" and only one way to be complete.
     """
-    src = (ROOT / "scripts" / "build_report_review_packet.py").read_text()
-    body = src[src.index("def reading_order("):src.index("@contextlib.contextmanager")]
-    for stop in ("break", "[:120]", "islice"):
-        assert stop not in body, (
-            f"reading_order contains {stop!r}; a truncated traversal silently omits elements a "
-            f"reviewer would read as missing")
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_packet_trunc", ROOT / "scripts" / "build_report_review_packet.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_packet_trunc"] = mod
+    spec.loader.exec_module(mod)
+
+    pytest.importorskip("weasyprint")
+    sys.path.insert(0, str(ROOT / "api"))
+    import report_weasy
+
+    td = tempfile.mkdtemp()
+    pdf_bytes_path = Path(td) / "r.pdf"
+    pdf_bytes_path.write_bytes(report_weasy.build_weasy_report(_RUN, _FILES, _META))
+    out = Path(td) / "reading-order.txt"
+    counts = mod.reading_order(pdf_bytes_path, out)
+    lines = out.read_text().splitlines()
+
+    body = lines[lines.index("=" * 78) + 1:]
+    assert body, "the traversal wrote no elements at all"
+
+    # EXACT, not a ratio. A first attempt asserted len(body) >= elements * 0.4 and failed at
+    # 39.8% on this fixture — a threshold picked to look safe, which is a guess wearing an
+    # assertion's clothes. Re-walk with the module's own helpers and count the roles it does not
+    # silence: every one of those must appear, and nothing else may.
+    rows, seen = [], set()
+    import pikepdf
+
+    with pikepdf.open(str(pdf_bytes_path)) as doc:
+        mod._walk_reading_order(doc.Root.StructTreeRoot, rows, seen)
+    announced = [r for r in rows if r["role"] not in mod._SILENT]
+    assert len(body) == len(announced), (
+        f"{len(body)} lines in the file for {len(announced)} announced elements "
+        f"({counts['elements']} total, {len(rows) - len(announced)} silent) — the traversal "
+        f"dropped content a reviewer would read as missing")
