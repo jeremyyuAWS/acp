@@ -62,9 +62,17 @@ function unmounted() {
 // they are the same fact and a test asserts below that they agree.
 const EXPECTED_UNMOUNTED = [
   'AssessScope',
+  // Retired 2026-09-02: removed from Overview (PRD "ACP Discover and Overview Simplification").
+  // EstateProgressPanel covers the same estate funnel on both tabs. Kept per retired-feature policy.
+  'AssessmentReconciliation',
   'ConfidenceDashboard',
   'ControlPlane',
   'Dashboard',           // never mounted in repo history — unbuilt, not retired
+  // Retired 2026-09-02: replaced by EstateProgressPanel at the top of Discover. Kept per policy.
+  'DiscoverCompleteSummary',
+  // Retired 2026-09-02: removed from Discover (PRD simplification). EstateProgressPanel covers
+  // the same inventory completeness story. Kept per retired-feature policy.
+  'DiscoveryCompleteness',
   'Disposition',
   // Retired 2026-09-02 on the owner's request: mounted in Discover, it listed the WHOLE estate
   // — 200 rows of .pyc, .py and .pfb files, every one "Active · No reason recorded", grouped
@@ -72,8 +80,18 @@ const EXPECTED_UNMOUNTED = [
   // that already answers the same question for the files a rule actually matched. Kept per the
   // retired-feature policy; see dispositionReviewRemoved.test.jsx.
   'DispositionReviewWorkspace',
+  // Retired 2026-09-02: removed from Overview (PRD simplification). EstateProgressPanel
+  // and the compliance funnel are the retained coverage story. Kept per retired-feature policy.
+  'EstateCoverage',
+  // Retired 2026-09-02: removed from Overview (PRD simplification). Kept per retired-feature policy.
+  'EstateTreemap',
   'FileTypeConfig',
+  // Retired 2026-09-02: removed from Overview (PRD simplification). The findings section that
+  // rendered Insight tiles was removed. Kept per retired-feature policy.
+  'Insight',
   'LiveAssessment',      // kept for reference; LiveAssessmentLive.jsx says so in its own header
+  // Retired 2026-09-02: removed from Overview (PRD simplification). Kept per retired-feature policy.
+  'PiiPanel',
   'ProcessingDetails',   // never mounted in repo history
   // Retired 2026-09-01: the Remediate redesign made the inbox's review panel the ONE
   // finding-level approval surface, so this second one was unmounted. Kept per the
@@ -83,11 +101,15 @@ const EXPECTED_UNMOUNTED = [
   'RolePrivilege',
   'Rubric',
   'ScanScope',
+  // Retired 2026-09-02: removed from Overview (PRD simplification). Kept per retired-feature policy.
+  'ScanScopeChip',
   'ScanSetup',           // never mounted in repo history
   'ScopeFunnel',         // never mounted in repo history
   'ScopeRules',
   'ScreenReaderDemo',
   'Upload',
+  // Retired 2026-09-02: removed from Overview (PRD simplification). Kept per retired-feature policy.
+  'WordCloud',
 ]
 
 describe('the set of unmounted components is exactly what we say it is', () => {

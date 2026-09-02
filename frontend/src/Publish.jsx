@@ -213,7 +213,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           </p>
           {setStatus.verifiedUnreleased > 0 && (
             <button className="qbtn approve" style={{ marginTop: 10 }} disabled={readOnly || publishing}
-                    title={readOnly ? 'Time-travel replay — switch to the latest scan to release' : 'Release the remediated formerly-held documents'}
+                    title={readOnly ? 'Scan History replay — switch to the latest scan to release' : 'Release the remediated formerly-held documents'}
                     onClick={graduate}>
               {publishing ? 'Releasing…' : `↑ Release ${setStatus.verifiedUnreleased} remediated document${setStatus.verifiedUnreleased === 1 ? '' : 's'}`}
             </button>
@@ -227,7 +227,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             Every previously-held document has been remediated and re-validated. Release the remaining <b>{setStatus.verifiedUnreleased}</b> {setStatus.verifiedUnreleased === 1 ? 'document' : 'documents'} to promote this conditional release to <b>fully certified</b> — <b>no whole-estate re-scan required</b>.
           </p>
           <button className="qbtn approve" style={{ marginTop: 10 }} disabled={readOnly || publishing}
-                  title={readOnly ? 'Time-travel replay — switch to the latest scan to release' : undefined}
+                  title={readOnly ? 'Scan History replay — switch to the latest scan to release' : undefined}
                   onClick={graduate}>
             {publishing ? 'Graduating…' : `🎓 Graduate to full certification (release ${setStatus.verifiedUnreleased})`}
           </button>
@@ -275,7 +275,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       <section className="panel">
         <div className="rubrichdr">
           <h2 style={{ margin: 0 }}>Release queue <span className="muted">· {ready.length} verified in scope, ready to release</span></h2>
-          <button disabled={readOnly || publishing || !ready.length || Object.keys(done).length >= ready.length} title={readOnly ? 'Time-travel replay — switch to the latest scan to release' : undefined} onClick={() => setConfirm({ kind: 'all' })}>{publishing ? 'Releasing…' : `Release all (${ready.length})`}</button>
+          <button disabled={readOnly || publishing || !ready.length || Object.keys(done).length >= ready.length} title={readOnly ? 'Scan History replay — switch to the latest scan to release' : undefined} onClick={() => setConfirm({ kind: 'all' })}>{publishing ? 'Releasing…' : `Release all (${ready.length})`}</button>
         </div>
         {staleReady.length > 0 && (
           <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 9, background: '#FDECEC', border: '1px solid #E9A8A8', color: '#8A1F1F', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -308,7 +308,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                 {srcOf(f) === 'unavailable' && <span className="muted" title="ACP could not read the source now (moved, deleted, or access lost)" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>source unreachable</span>}
                 {done[f.file]
                   ? <span className="okline" style={{ fontSize: 13 }}>✓ released · fixed copy in Blob · audit recorded{pubUrls[f.file] && <> · <a href={pubUrls[f.file]} target="_blank" rel="noopener noreferrer">↗ open in Drive</a></>}</span>
-                  : <button className="qbtn approve" onClick={() => setConfirm({ kind: 'file', file: f.file })} disabled={readOnly || publishing} title={readOnly ? 'Time-travel replay — switch to the latest scan to release' : undefined}>↺ Release</button>}
+                  : <button className="qbtn approve" onClick={() => setConfirm({ kind: 'file', file: f.file })} disabled={readOnly || publishing} title={readOnly ? 'Scan History replay — switch to the latest scan to release' : undefined}>↺ Release</button>}
               </div>
             ))}
           </div>

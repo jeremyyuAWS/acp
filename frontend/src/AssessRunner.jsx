@@ -932,7 +932,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
           <div role="alert" style={{ margin: '4px 0 12px', padding: '11px 14px', borderRadius: 8, fontSize: 13.5,
                background: '#FBE9E7', border: '1px solid #E7B4AC', color: '#8A2A20' }}>
             ⚠ <b>No score — this scan can’t be opened.</b> {scanGone} Nothing was assessed, so there
-            is no result to show. Pick one of your own scans from <b>Time-travel</b>, or run a new
+            is no result to show. Pick one of your own scans from <b>Scan History</b>, or run a new
             scan from <b>Discover</b>.
           </div>
         )}
