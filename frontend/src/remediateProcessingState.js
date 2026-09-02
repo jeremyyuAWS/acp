@@ -14,6 +14,7 @@ import { fmtPickupRange } from './pickupEstimateFmt.js'
 
 export function deriveRemediateProcessingState({
   remBusy = false, remProg = null,
+  updateMode = 'idle',
   // GET /scans/{id}/queue-estimate?kind=remediate's own result — see discoverProcessingState.js's
   // identical param for the full reasoning. insufficient_history or an unresolved fetch leave
   // pickupUnavailable at its default true rather than a placeholder range.
@@ -21,8 +22,16 @@ export function deriveRemediateProcessingState({
 } = {}) {
   const total = remProg?.total ?? 0
   const done = remProg?.done ?? 0
-  if ((!remBusy && !remProg) || done > 0) {
+  if (!remBusy && !remProg) {
     return { state: 'idle', headline: null, detail: null, recommendedAction: null, severity: 'info' }
+  }
+  if (done > 0) {
+    return {
+      state: 'active', headline: `Applying fixes — ${done} of ${total} complete`,
+      detail: remProg?.activity?.text || (remProg?.latest ? `Last completed: ${remProg.latest}` : null),
+      recommendedAction: null, severity: 'active', live: updateMode === 'live',
+      next: 'ACP re-checks each corrected document before marking its findings complete.',
+    }
   }
   const pickupRange = pickupEstimate?.state === 'estimated' && pickupEstimate.earliest_at && pickupEstimate.latest_at
     ? fmtPickupRange(pickupEstimate.earliest_at, pickupEstimate.latest_at) : null
@@ -38,5 +47,6 @@ export function deriveRemediateProcessingState({
     // early return only ever runs once, at the initial enqueue; this can catch capacity dropping
     // to zero after that, while still queued.
     noWorkerAvailable: pickupEstimate?.state === 'no_worker_available',
+    live: updateMode === 'live',
   }
 }

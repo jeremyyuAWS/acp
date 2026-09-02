@@ -26,7 +26,7 @@ import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_RANK } from './ontology.js'
-import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate } from './api.js'
+import { remediateScan, getRemediationStatus, openRemediationStream, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate } from './api.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
 import QueuePanel from './QueuePanel.jsx'
@@ -401,12 +401,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [remBusy, setRemBusy] = useState(false)
   const [remMsg, setRemMsg] = useState('')
   const [remProg, setRemProg] = useState(null)   // { total, done, latest, failed }
+  const [remUpdates, setRemUpdates] = useState('idle') // live | polling | idle
   const [serverFixed, setServerFixed] = useState(0)  // files fixed server-side this scan (persists after each batch)
   const [staleDismissed, setStaleDismissed] = useState(false)
   const [runDetailsOpen, setRunDetailsOpen] = useState(false)  // the Run details disclosure (PRD §11)
   const pollRef = useRef(null)
+  const streamRef = useRef(null)
   const remStartRef = useRef(false)   // synchronous guard — remBusy is state, two clicks in one frame both read false
-  useEffect(() => () => clearInterval(pollRef.current), [])
+  useEffect(() => () => { clearInterval(pollRef.current); streamRef.current?.close?.() }, [])
   useEffect(() => { setStaleDismissed(false) }, [runId])
   // The "Estimated pickup" range (GET /scans/{id}/queue-estimate?kind=remediate) for the window
   // between clicking Remediate and the first document actually finishing — same 10s cadence as
@@ -427,34 +429,37 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   }, [remBusy, remProg?.done, runId])
   const REMKEY = (id) => `acp-remed-${id || 'none'}`
 
-  // One poll loop, shared by a fresh run and by resume-after-navigation. Ticks the live
-  // counters every 1.5s off the worker queue; on drain it banks the fixed count + clears.
+  const finishRemediation = (total, status = {}) => {
+    clearInterval(pollRef.current); streamRef.current?.close?.(); streamRef.current = null
+    setRemProg(null); setRemBusy(false); setRemUpdates('idle')
+    const ok = Math.max(0, total - (status.failed || 0))
+    setServerFixed((n) => n + ok)
+    setRemMsg(`✓ Remediation complete — ${ok} document${ok === 1 ? '' : 's'} fixed${status.failed ? `, ${status.failed} failed` : ''}.`)
+    try { sessionStorage.removeItem(REMKEY(runId)) } catch { /* ignore */ }
+    onRefresh?.(); fetchFixes()
+    if (!SIM) listHitlQueue(runId, 'pending')
+      .then((items) => setQueue((items || []).map((it) => dbItemToUi(it, files))))
+      .catch(() => {})
+  }
+
+  const applyRemediationStatus = (total, s) => {
+    const done = Math.max(0, total - (s.in_flight || 0))
+    setRemProg({ total, done, latest: s.latest_file, failed: s.failed || 0,
+                 activity: s.activity || null })
+  }
+
+  // Polling remains the fallback for a proxy/browser that cannot keep the authenticated SSE
+  // response open. It reads the exact same server-side snapshot as the stream.
   const startPoll = (total) => {
     clearInterval(pollRef.current)
+    setRemUpdates('polling')
     let pollFails = 0
     pollRef.current = setInterval(async () => {
       try {
         const s = await getRemediationStatus(runId)
         pollFails = 0
-        const done = Math.max(0, total - (s.in_flight || 0))
-        setRemProg({ total, done, latest: s.latest_file, failed: s.failed || 0 })
-        if (!s.in_flight) {                         // queue drained — batch complete
-          clearInterval(pollRef.current)
-          setRemProg(null); setRemBusy(false)
-          const ok = Math.max(0, total - (s.failed || 0))
-          setServerFixed((n) => n + ok)             // bank the fixes so the KPI holds after
-          setRemMsg(`✓ Remediation complete — ${ok} document${ok === 1 ? '' : 's'} fixed${s.failed ? `, ${s.failed} failed` : ''}.`)
-          try { sessionStorage.removeItem(REMKEY(runId)) } catch { /* ignore */ }
-          onRefresh?.()                             // refresh scan so the write-back banner updates
-          fetchFixes()                              // re-pull the applied-fix evidence → hero/impact counts move
-          // Re-list the HITL queue: the just-finished jobs route every finding they could
-          // NOT verifiably auto-clear (contrast sign-off, link purpose, …) to human review
-          // server-side. Without this re-fetch the queue stays on its mount-time snapshot,
-          // so those new review items never surface and the reviewer has nothing to approve.
-          if (!SIM) listHitlQueue(runId, 'pending')
-            .then((items) => setQueue((items || []).map((it) => dbItemToUi(it, files))))
-            .catch(() => {})
-        }
+        applyRemediationStatus(total, s)
+        if (!s.in_flight) finishRemediation(total, s)
       } catch {
         // Transient errors retry, but not forever: ~30s of consecutive misses means
         // the API is unreachable — stop and say so instead of spinning silently.
@@ -468,6 +473,17 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     }, 1500)
   }
 
+  const startLiveUpdates = (total) => {
+    streamRef.current?.close?.()
+    setRemUpdates('live')
+    let latest = { failed: 0 }
+    streamRef.current = openRemediationStream(runId, {
+      onMessage: (s) => { latest = s; applyRemediationStatus(total, s) },
+      onDone: () => finishRemediation(total, latest),
+      onError: () => { streamRef.current = null; startPoll(total) },
+    })
+  }
+
   // Resume the live view across tab switches / reloads: the poll lives in this component, so
   // without this, navigating away mid-run and back would freeze the cards. The denominator is
   // restored from sessionStorage (written when the run starts).
@@ -475,7 +491,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     if (!runId) return
     let saved = null
     try { saved = JSON.parse(sessionStorage.getItem(REMKEY(runId)) || 'null') } catch { /* ignore */ }
-    if (saved?.total) { setRemBusy(true); setRemProg({ total: saved.total, done: 0, latest: null, failed: 0 }); startPoll(saved.total) }
+    if (saved?.total) { setRemBusy(true); setRemProg({ total: saved.total, done: 0, latest: null, failed: 0 }); startLiveUpdates(saved.total) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId])
   // SIM: rebuild queue when triage changes (real mode: queue is DB-driven, unaffected by triage).
@@ -516,7 +532,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       const total = r.enqueued
       setRemProg({ total, done: 0, latest: null, failed: 0 })
       try { sessionStorage.setItem(REMKEY(runId), JSON.stringify({ total })) } catch { /* ignore */ }
-      startPoll(total)
+      startLiveUpdates(total)
     } catch (e) {
       setRemMsg(`Could not enqueue: ${e.message || e}`); setRemBusy(false)
     } finally {
@@ -1231,7 +1247,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             {(serverFixed > 0 || remProg) && <TraceChip scanId={runId} kind="session" label="View scan traces" />}
           </div>
 
-          <ProcessingStatusPanel derived={deriveRemediateProcessingState({ remBusy, remProg, pickupEstimate })} />
+          <ProcessingStatusPanel derived={deriveRemediateProcessingState({ remBusy, remProg, pickupEstimate, updateMode: remUpdates })} />
 
           {remProg && (
             <div style={{ margin: '4px 0 14px', maxWidth: 560 }} role="status" aria-live="polite">
@@ -1245,6 +1261,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 {remProg.latest ? <> · last fixed <span className="fname">{remProg.latest}</span></> : '…'}
                 {remProg.failed ? ` · ${remProg.failed} failed` : ''}
               </div>
+              {remProg.activity?.text && (
+                <div style={{ fontSize: 12.5, marginTop: 5 }}>
+                  <span className="pulsedot" aria-hidden="true" /> {remProg.activity.text}
+                </div>
+              )}
             </div>
           )}
 

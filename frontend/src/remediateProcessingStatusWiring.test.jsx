@@ -28,6 +28,11 @@ describe('the queue-estimate poll is wired into Remediate', () => {
 
   it('mounts ProcessingStatusPanel fed from deriveRemediateProcessingState with the live signals', () => {
     expect(src).toMatch(
-      /<ProcessingStatusPanel derived=\{deriveRemediateProcessingState\(\{ remBusy, remProg, pickupEstimate \}\)\} \/>/)
+      /<ProcessingStatusPanel derived=\{deriveRemediateProcessingState\(\{ remBusy, remProg, pickupEstimate, updateMode: remUpdates \}\)\} \/>/)
+  })
+
+  it('prefers the authenticated remediation SSE stream and retains polling as fallback', () => {
+    expect(src).toMatch(/openRemediationStream\(runId/)
+    expect(src).toMatch(/onError: \(\) => \{ streamRef\.current = null; startPoll\(total\) \}/)
   })
 })

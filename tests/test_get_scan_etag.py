@@ -75,6 +75,15 @@ def test_remediation_progress_is_never_cacheable(client, isolated_store):
     assert r.headers["cache-control"] == "no-store"
 
 
+def test_remediation_progress_stream_is_sse_and_finishes_when_queue_is_empty(client, isolated_store):
+    _seed(isolated_store, "s1")
+    r = client.get("/scans/s1/remediation/stream")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+    assert '"in_flight": 0' in r.text
+    assert "event: done" in r.text
+
+
 def test_matching_if_none_match_returns_304_with_no_body(client, isolated_store):
     _seed(isolated_store, "s1")
     r = client.get("/scans/s1", headers={"If-None-Match": 'W/"0"'})
