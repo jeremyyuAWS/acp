@@ -6,6 +6,7 @@ import RiskChip from './RiskChip.jsx'
 import { authoringScaffold, buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, firstProposed, groupPages, houseStyleOf, imagesOfTextException, isValueFix, leadWithIsolatedImage, primaryActionLabel, proposalsOf, reviewIntent, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview, whyRecommendation, whySafeToApprove } from './reviewCard.js'
 import ProposalThumb, { isSafeThumb } from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
+import CaptionEditor from './CaptionEditor.jsx'
 import { speakAsScreenReader, srSupported } from './srPreview.js'
 import { runAutoDraft, resetAutoDraftBreaker } from './autoDraft.js'
 import { escalationPath, escalationFromDraft } from './escalationPath.js'
@@ -508,6 +509,20 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   // is read-only and `approvedValues` is suppressed, so a reviewer is told to fix a transcript
   // they cannot edit and whose edits would be discarded on approval.
   const companionRow = proposalList.length > 0 && proposalList.every((p) => p.companion_file)
+  // THE MEDIA THE CAPTIONS BELONG TO. `/content` serves the scanned file's original bytes and now
+  // names a playable MIME type for media, so a caption reviewer can hear what they are correcting
+  // — the one thing checking a machine transcript actually requires.
+  //
+  // The proposal's `locator` is the media filename (propose_captions sets it to the file's own
+  // name), which is also how every other route addresses a scanned file. Falling back to
+  // `item.file` covers a row whose locator was lost; a missing source is handled INSIDE the
+  // editor, which says why rather than rendering a broken player.
+  const companionMediaName = companionRow
+    ? (proposalList[0]?.locator || item?.file || '') : ''
+  // Audio-only files get an <audio> element: a <video> tag on an .mp3 renders a black rectangle
+  // where a reviewer expects a transport, which reads as a file that failed to load.
+  const companionMediaKind = /\.(mp3|m4a|wav|aac|flac|ogg|oga|opus|wma)$/i.test(companionMediaName)
+    ? 'audio' : 'video'
   // A DECORATIVE row is the same shape of mistake in the other direction. Its draft reads "Mark
   // as decorative — no alt text needed": an instruction to the reviewer, not a description of the
   // image. Rendered as an editable alt box — which is what happens today — the card invites
@@ -814,7 +829,26 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
               one editable row per image, each with its own "Draft with AI". The old thumbnail
               picker fed one shared textarea, so it could record only a single value; it is gone. */}
 
-          {editable && multi ? (
+          {editable && companionRow ? (
+            /* BEFORE the `multi` branch, and that ordering is the bug this fixes. A companion row
+               carries exactly one proposal, so `instances.length` is 1 and `multi` is TRUE — the
+               per-image editor won the chain and rendered a plain box holding a whole WebVTT
+               document. The card looked right and the reviewer got the surface this slice exists
+               to replace, which is why the wiring has its own test rather than only the
+               component. */
+            <div className="evcard-rec">
+              <span className="evcard-rec-head">
+                <span className="muted" style={{ fontSize: 12 }}>
+                  Machine transcription — play the media and correct any line that is wrong
+                </span>
+              </span>
+              {/* The editor fetches the media through api.js itself. The card used to hand it a
+                  hand-built `/scans/.../content` string, which carried no bearer and no BASE — so
+                  it could only ever have worked against a same-origin, signed-out API. */}
+              <CaptionEditor value={value} onChange={setValue} scanId={item?.scan_id}
+                             mediaKind={companionMediaKind} filename={companionMediaName} />
+            </div>
+          ) : editable && multi ? (
             <>
               {/* Drafts generate automatically once the card is in view (auto-draft effect above),
                   so a 14-image card becomes review-and-approve without a click. While the batch runs
