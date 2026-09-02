@@ -228,9 +228,32 @@ def test_nothing_is_still_running_when_discovery_reports_stopped(st):
     for cancel_futures — that is the next test, and it took a bite check to tell them apart."""
     drive = FakeDrive(children=_wide_tree())
 
+    # Two folder fetches must be in flight AT ONCE, or the assertion at the bottom is measuring
+    # nothing. Getting there by luck is what made this flaky: cancelling on the FIRST non-root
+    # fetch means every later task reaches its cancel checkpoint and raises BEFORE it ever calls
+    # execute(), so max_in_flight only exceeds 1 if a second task wins the race into execute()
+    # before the first one's cancellation lands. On an idle multi-core dev box it almost always
+    # does; on a 2-core CI runner under `-n auto` xdist contention it does not, and the test
+    # failed there while passing everywhere else (PR #1190, shard 2).
+    #
+    # So the overlap is now structural. The first non-root fetch parks on this barrier, INSIDE
+    # execute() and already counted in in_flight, until a second one arrives and joins it. Both
+    # then cancel. The pool is 6 workers against 60 folders, so a second fetch is always
+    # dispatched — what was uncertain was only its timing.
+    #
+    # The timeout is a deadlock guard, not a fallback: if a second fetch never arrives the
+    # barrier breaks, both callers fall through, and max_in_flight is still 1 — so the assertion
+    # below fails exactly as it should. Nothing here can make a serial run look parallel.
+    overlap = threading.Barrier(2, timeout=10)
+
     def on_request(d, fid, token):
-        if fid != "root":
-            st.request_job_cancellation(d.job_id)
+        if fid == "root":
+            return
+        try:
+            overlap.wait()
+        except threading.BrokenBarrierError:
+            pass                     # reported by the max_in_flight assertion, not masked here
+        st.request_job_cancellation(d.job_id)
 
     drive.on_request = on_request
 
