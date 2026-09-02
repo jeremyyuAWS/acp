@@ -11,7 +11,7 @@ import Overview from './Overview.jsx'
 //
 // Re-pointed 2026-09-02 (PRD "ACP Discover and Overview Simplification"). The findings charts that
 // used to appear at the assessed stage were removed from this screen entirely, and the four headline
-// tiles with them; the discovery numbers are EstateProgressPanel's KPI cards now. The growth
+// tiles with them; the discovery numbers are EstateProgressPanel's stage funnel now. The growth
 // behaviour itself — prompt before a run, metrics after one — is unchanged and is what this pins.
 
 const INVENTORY = { discovered: 12408, assessment_eligible: 9000, by_status: { assessable: 9000 } }
@@ -39,8 +39,8 @@ const ASSESSED = [
 describe('the Overview grows organically across the funnel', () => {
   it('shows the discovery numbers and a run-assessment prompt before anything is assessed', () => {
     const html = render(DISCOVERED)
-    // Discovery has populated — the KPI row reports the inventoried estate, not the two scanrows.
-    expect(html).toContain('>discovered<')
+    // Discovery has populated — the stage funnel reports the estate, not the two scanrows.
+    expect(html).toContain('>Discovered<')
     expect(html).toContain('12,408')
     // Assessment is a prompt, not a grid of zeros.
     expect(html).toContain('not yet run')
