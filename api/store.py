@@ -2917,6 +2917,30 @@ class Store:
         events.sort(key=lambda e: (e.get("ts") is None, e.get("ts") or ""))
         return events[:limit]
 
+    def drive_targets_for_files(self, scan_id: str, files: list[str], owner: str) -> dict[str, str]:
+        """{file: drive_file_id} for the files in one scan that have one, in ONE query.
+
+        This is the bridge between the two identifier spaces. The lifecycle evaluator stamps
+        `scan:{scan_id}:{file}` while the governance layer keys on `drive:{id}`, and the value
+        that connects them has been sitting on the inventory row the whole time. Reading it here
+        lets a plan say what WOULD happen to a lifecycle candidate without changing either id
+        scheme, and without a migration.
+
+        A file with no drive_file_id is simply absent, which the caller reports as a blocker —
+        it is not Drive-backed, so nothing could act on it."""
+        if not files:
+            return {}
+        placeholders = ",".join(["%s"] * len(files))
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT file,drive_file_id FROM scan_inventory si WHERE si.scan_id=%s "
+                f"AND si.file IN ({placeholders}) AND si.drive_file_id IS NOT NULL "
+                "AND EXISTS (SELECT 1 FROM scan_runs sr WHERE sr.id=si.scan_id "
+                "AND sr.owner_email=%s)",
+                (scan_id, *files, owner))
+            return {r["file"]: r["drive_file_id"] for r in self._db.fetchall(cur)
+                    if r.get("drive_file_id")}
+
     def pending_approvals_by_file(self, scan_id: str, owner: str) -> dict[str, dict]:
         """The pending disposition decision for each file in one scan, keyed by file, ONE query.
 

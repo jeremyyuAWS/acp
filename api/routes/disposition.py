@@ -814,6 +814,84 @@ class BatchApprovalIn(BaseModel):
     reason: str | None = None
 
 
+@router.post("/disposition/approvals/plan")
+def plan_disposition_batch(body: BatchApprovalIn, request: Request):
+    """What approving this batch WOULD do, without doing any of it (PRD §7.4's source-effect
+    preview, and the safe first half of making lifecycle candidates executable).
+
+    WRITES NOTHING. No audit row moves, no file is touched, no Drive client is even constructed.
+    A dry run that can mutate is not a dry run, and the test suite asserts the absence rather
+    than trusting the reading.
+
+    Validated by the SAME rules as the approval it previews (_validated_batch), because a plan
+    produced by a second copy of those rules is a plan that can drift from what approval will
+    actually accept — showing a batch that is then refused, or worse, calling one safe that is
+    not.
+
+    It resolves the identifier gap rather than papering over it: a Discover-lifecycle candidate
+    is keyed `scan:{scan_id}:{file}`, and the drive_file_id that would make it actionable has
+    been on the inventory row all along. Resolving it HERE, in the one path that cannot act,
+    makes the gap visible per row — "this one could be archived, that one has no Drive id and
+    never could" — before anybody authorises anything.
+
+    Owner-gated like the approval. A preview of what would happen to somebody's estate is still
+    a read of somebody's estate.
+    """
+    _require_owner(request)
+    owner = _owner(request)
+    submitted, policy, rows = _validated_batch(body, owner, verb="planned")
+    cfg = json.loads(policy.get("action_config") or "{}")
+
+    # Resolve every lifecycle row's Drive id in one query per scan, rather than per row.
+    by_scan: dict[str, list[str]] = {}
+    for audit_id in submitted:
+        row = rows.get(audit_id)
+        doc_id = str((row or {}).get("doc_id") or "")
+        if doc_id.startswith("scan:"):
+            _, scan_id, file = doc_id.split(":", 2)
+            by_scan.setdefault(scan_id, []).append(file)
+    targets = {}
+    for scan_id, files in by_scan.items():
+        for file, fid in core.store.drive_targets_for_files(scan_id, files, owner).items():
+            targets[f"scan:{scan_id}:{file}"] = fid
+
+    plan, blocked = [], 0
+    for audit_id in submitted:
+        row = rows.get(audit_id)
+        if row is None:
+            plan.append({"audit_id": audit_id, "blocked": "not found for this owner"})
+            blocked += 1
+            continue
+        doc_id = str(row.get("doc_id") or "")
+        if row.get("result") != "pending_approval":
+            plan.append({"audit_id": audit_id, "doc_id": doc_id,
+                         "blocked": f"already {row.get('result')}"})
+            blocked += 1
+            continue
+        held = _exempt_now(doc_id, owner) if doc_id.startswith("scan:") else None
+        if held:
+            plan.append({"audit_id": audit_id, "doc_id": doc_id, "blocked": held})
+            blocked += 1
+            continue
+        # A resolved lifecycle candidate is planned AS the Drive document it would become, so
+        # the preview is of the real action rather than of the record-only refusal it gets today.
+        fid = targets.get(doc_id)
+        doc = ({"doc_id": f"drive:{fid}", "source": "drive"} if fid
+               else {"doc_id": doc_id, "source": row.get("source") or "unknown"})
+        step = disposition.plan_action(doc, row["action"], cfg)
+        if step.get("blocked"):
+            blocked += 1
+        plan.append({"audit_id": audit_id, "doc_id": doc_id,
+                     "drive_file_id": fid, **step})
+
+    return {"planned": len(plan), "actionable": len(plan) - blocked, "blocked": blocked,
+            "policy_id": body.policy_id, "policy_version": body.policy_version,
+            "action": body.action,
+            # Said in the payload, not only in the docs: a caller cannot mistake this for a
+            # receipt of something that happened.
+            "executed": False, "dry_run": True, "plan": plan}
+
+
 @router.post("/disposition/approvals")
 def approve_disposition_batch(body: BatchApprovalIn, request: Request):
     """Approve a HOMOGENEOUS batch of queued dispositions, by explicit id (PRD §8).
@@ -853,32 +931,7 @@ def approve_disposition_batch(body: BatchApprovalIn, request: Request):
     """
     _require_owner(request)                     # authorises archival of the estate — owner-only
     owner = _owner(request)
-    submitted = list(dict.fromkeys(body.audit_ids))     # de-duped, order preserved
-    if not submitted:
-        raise HTTPException(400, "no audit ids submitted")
-    if body.action in ("delete", "trash") and not (body.reason or "").strip():
-        raise HTTPException(400, "a delete approval must state a reason")
-
-    policy = core.store.get_disposition_policy(body.policy_id, owner=owner)
-    if policy is None:
-        raise HTTPException(404, "no such policy")
-    current_version = int(policy.get("version") or 1)
-    if current_version != body.policy_version:
-        raise HTTPException(409, f"policy {body.policy_id} is now version {current_version}, "
-                                 f"not the version {body.policy_version} these rows were queued "
-                                 f"under — re-evaluate before approving")
-
-    rows = {r["id"]: r for r in core.store.list_disposition_audit_by_ids(submitted, owner)}
-    # Homogeneity is checked across the WHOLE batch before anything is written, so a mixed
-    # submission changes nothing at all rather than applying its consistent prefix.
-    mixed = [rid for rid, r in rows.items()
-             if r.get("policy_id") != body.policy_id
-             or int(r.get("policy_version") or 0) != body.policy_version
-             or r.get("action") != body.action]
-    if mixed:
-        raise HTTPException(409, f"{len(mixed)} of {len(submitted)} rows are not "
-                                 f"{body.action}/{body.policy_id} v{body.policy_version} "
-                                 f"({', '.join(sorted(mixed)[:5])}) — nothing was approved")
+    submitted, policy, rows = _validated_batch(body, owner, verb="approved")
 
     approved, refused, already = [], [], []
     detail = f"approved in batch under {body.policy_id} v{body.policy_version}"
@@ -914,6 +967,47 @@ def approve_disposition_batch(body: BatchApprovalIn, request: Request):
             # a caller that only reads len(approved) still cannot mistake a partial for a whole.
             "reconciled": len(approved) + len(refused) + len(already) == len(submitted),
             "executed": False}
+
+
+def _validated_batch(body, owner: str, *, verb: str):
+    """The batch rules of PRD §8/§11, applied identically to a plan and to an approval.
+
+    Extracted rather than duplicated, and that is the point: a dry run is only a preview if the
+    thing it previews is validated the same way. Two copies of these rules would drift, and the
+    drift would be invisible — the plan would show a batch that approval then refuses, or worse,
+    approve one the plan had called safe.
+
+    Returns (submitted ids, policy row, {audit_id: row}). Raises the same HTTPExceptions either
+    caller would have raised, with `verb` making the message true for both ("nothing was
+    approved" / "nothing was planned").
+    """
+    submitted = list(dict.fromkeys(body.audit_ids))     # de-duped, order preserved
+    if not submitted:
+        raise HTTPException(400, "no audit ids submitted")
+    if body.action in ("delete", "trash") and not (body.reason or "").strip():
+        raise HTTPException(400, "a delete approval must state a reason")
+
+    policy = core.store.get_disposition_policy(body.policy_id, owner=owner)
+    if policy is None:
+        raise HTTPException(404, "no such policy")
+    current_version = int(policy.get("version") or 1)
+    if current_version != body.policy_version:
+        raise HTTPException(409, f"policy {body.policy_id} is now version {current_version}, "
+                                 f"not the version {body.policy_version} these rows were queued "
+                                 f"under — re-evaluate before approving")
+
+    rows = {r["id"]: r for r in core.store.list_disposition_audit_by_ids(submitted, owner)}
+    # Homogeneity is checked across the WHOLE batch before anything is written, so a mixed
+    # submission changes nothing at all rather than applying its consistent prefix.
+    mixed = [rid for rid, r in rows.items()
+             if r.get("policy_id") != body.policy_id
+             or int(r.get("policy_version") or 0) != body.policy_version
+             or r.get("action") != body.action]
+    if mixed:
+        raise HTTPException(409, f"{len(mixed)} of {len(submitted)} rows are not "
+                                 f"{body.action}/{body.policy_id} v{body.policy_version} "
+                                 f"({', '.join(sorted(mixed)[:5])}) — nothing was {verb}")
+    return submitted, policy, rows
 
 
 def _is_lifecycle_doc_id(doc_id: str | None) -> bool:
