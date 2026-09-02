@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import AssertionScope from './AssertionScope.jsx'
+import { mountExpanded } from './testAccordion.js'
 
 // "Scope of this assertion" — what the Overview's numbers are a claim ABOUT.
 //
@@ -32,10 +33,14 @@ const REC = {
   ],
 }
 
+// The panel is a disclosure and starts collapsed on Overview (2026-09-02 UI simplification PRD),
+// so every assertion below is made on the OPENED panel — reached through the real header button,
+// not by reaching past it. `mountExpanded` clicks it; the text read back is what a reader sees.
 const render = (props = {}) =>
-  renderToStaticMarkup(createElement(AssertionScope, {
+  mountExpanded(createElement(AssertionScope, {
     run: SCOPED_RUN, fileCount: 12408, coreScs: CORE, rec: REC, ...props,
-  })).replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&amp;/g, '&')
+  })).innerHTML
+     .replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&amp;/g, '&')
      .replace(/&quot;/g, '"').replace(/&#x2F;/g, '/').replace(/\s+/g, ' ')
 
 describe('the assertion boundary is stated, not assumed', () => {

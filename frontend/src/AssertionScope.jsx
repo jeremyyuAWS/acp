@@ -1,6 +1,7 @@
 import { scanCriteria, scanDocTypes } from './frozenScope.js'
 import { scopeSentence } from './scanScope.js'
 import { deriveLevel } from './AssessSetup.jsx'
+import AccordionSection from './AccordionSection.jsx'
 
 // "Scope of this assertion" (approved board 7) — what the numbers above are a claim ABOUT.
 //
@@ -69,8 +70,8 @@ export default function AssertionScope({ run, fileCount = 0, coreScs, rec = null
   const approvedAt = run.approved_at || null
 
   return (
-    <section className="panel" aria-labelledby="assertscope-h">
-      <h2 id="assertscope-h">SCOPE OF THIS ASSERTION</h2>
+    <AccordionSection id="assertion-scope" title="SCOPE OF THIS ASSERTION"
+                      ariaLabel="Scope of this assertion" defaultOpen={false}>
 
       {source && <Row name="Source">{source}</Row>}
 
@@ -112,6 +113,6 @@ export default function AssertionScope({ run, fileCount = 0, coreScs, rec = null
         assessed</b>. That is not the same as conformance: a criterion nobody could test is neither
         a pass nor a failure, and this assertion says nothing about it.
       </p>
-    </section>
+    </AccordionSection>
   )
 }

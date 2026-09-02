@@ -16,8 +16,6 @@ import DiscoverInventoryExport from './DiscoverInventoryExport.jsx'
 import { analysedCount } from './docStatus.js'
 import { snapshotTrust, snapshotTrustMessage } from './discoverySnapshotTrust.js'
 import { assessmentEligible } from './estateFunnel.js'
-import { hasClassificationData, NO_CLASSIFICATION_TITLE, NO_CLASSIFICATION_BODY,
-         NO_CLASSIFICATION_WHY } from './classificationData.js'
 import { loadDiscoveryInventory, mergeLifecycle, inventoryOnlyRows } from './discoveryInventory.js'
 import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 import EstateProgressPanel from './EstateProgressPanel.jsx'
@@ -35,6 +33,7 @@ import WorkerAvailability from './WorkerAvailability.jsx'
 import FolderActivity from './FolderActivity.jsx'
 import QueueJobDetails from './QueueJobDetails.jsx'
 import DiscoveryQueuedPlaceholder from './DiscoveryQueuedPlaceholder.jsx'
+import AccordionSection from './AccordionSection.jsx'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
@@ -135,7 +134,14 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 const DISCOVERY_JOB_TYPES = new Set(['scan_discover', 'scan_batch', 'scan_finalize', 'scan_file', 'scan'])
 
 export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, preflightDegraded = null, preflightCapacityState = null, scanPct = 0, scanId = null, activeScanId = null, jobId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null,
-  hasSPToken = false, runAt = null, run = null, scanList = null, rawFiles = null, onStop = null, onViewMonitor = null,
+  hasSPToken = false, runAt = null, run = null, scanList = null,
+  // `rawFiles` — the PRE-annotation records straight from get_scan, before ontology.annotate()
+  // back-fills a department from a filename guess. Unread since the classification surface was
+  // removed (2026-09-02); kept in the signature, and kept passed by App, because any restored
+  // classification claim MUST be checked against these and not against `files`. Checking the
+  // annotated array is the 2026-08-21 defect: annotate() gives every real file a department, so
+  // the check read "classified" on every real scan.
+  rawFiles = null, onStop = null, onViewMonitor = null,
   onOpenSource = null, pendingScanLoad = false }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
   // component is given neither — Discover takes scanId and scope, not the run. The pieces it needs
@@ -410,8 +416,6 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // Monitor already surface, now on Discover too, where the PRD's own inventory spec asks for it.
   // Best-effort like those two: an empty map on any failure means no badges, never a false claim.
   const [srcStatus, setSrcStatus] = useState({})
-  const [estateOpen, setEstateOpen] = useState(true)
-  const [inventoryOpen, setInventoryOpen] = useState(true)
   useEffect(() => {
     let live = true
     if (!scanId) { setSrcStatus({}); return undefined }
@@ -577,19 +581,17 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   const exposureInternal = { label: 'internal', value: internalDocs.length, color: '#9a948f' }
   const internalRisk = ['PII', 'legal-hold', 'high-traffic'].map((t) => ({ label: t, value: internalDocs.filter((f) => tagsOf(f).includes(t)).length, color: RISK_COLOR[t] })).filter((d) => d.value)
 
-  // DID CLASSIFICATION REACH THIS SCREEN AT ALL? False on every real scan today: file_records
-  // carries no department and no tags, and get_scan projects that table alone. False means the
-  // triage surface is OMITTED, not zeroed — see classificationData.js.
+  // THE CLASSIFICATION TRIAGE SURFACE IS GONE FROM THIS SCREEN. The exposure-and-risk chart, the
+  // per-department grouping and the "not classified yet" caveat that stood in for the chart on an
+  // unclassified estate were all removed on 2026-09-02 (PRD "ACP Discover and Overview
+  // Simplification"). Discover reports the inventory; classification is not part of it.
   //
-  // Checked against `rawFiles` (the PRE-annotation records App.jsx passes straight from
-  // get_scan), never against `files` (POST-annotation). ontology.annotate() back-fills
-  // department/tags from a filename guess on every file that lacks them — real files always
-  // lack them, so annotate() ALWAYS gives every real file a non-empty department, and checking
-  // the annotated array made this read "classified" on every real scan (found live 2026-08-21:
-  // the "How this works" copy and the exposure chart claimed a Deep-scan classification that
-  // never ran). `rawFiles` defaults to `files` so a caller that never learned about this
-  // distinction — every existing test — keeps today's behavior exactly.
-  const classified = hasClassificationData(rawFiles ?? files)
+  // That takes the honesty problem with it rather than leaving it unsolved. The caveat existed
+  // because the chart, rendered over an unclassified estate, read "100% internal" with every risk
+  // flag at zero — each number true and the reading false ("0 legal-hold" asserts a finding nobody
+  // obtained). With no chart there is no false reading to correct, so there is no claim to make.
+  // classificationData.js and its tests stay; the check is simply not asked here any more.
+  // discoverClassificationAbsent.test.jsx pins both halves.
   const isConfirmed = (f) => !!classState[f.file]?.confirmed
   const toggleTag = (f, t) => setClassState((s) => { const cur = s[f.file]?.tags ?? tagsOf(f); const next = cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]; return { ...s, [f.file]: { tags: next, confirmed: false } } })
   const confirmClass = (f) => setClassState((s) => ({ ...s, [f.file]: { tags: tagsOf(f), confirmed: true } }))
@@ -884,15 +886,10 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       {/* Estate progress summary: funnel, doc-types, and pending work.
           Replaces the verbose DiscoverCompleteSummary — appears once discovery finishes. */}
       {!busy && (run?.discovered_at || run?.status === 'discovered') && (
-        <section className="panel" style={{ marginBottom: 14 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <h2 style={{ margin: 0 }}>Estate overview</h2>
-            <button className="linklike" onClick={() => setEstateOpen((o) => !o)} aria-expanded={estateOpen}
-                    style={{ fontSize: 13, color: 'var(--muted)', whiteSpace: 'nowrap', marginLeft: 12 }}>
-              {estateOpen ? '▴ hide' : '▾ show'}
-            </button>
-          </div>
-          {estateOpen && (
+        <AccordionSection id="discover-estate" title="Estate overview"
+                          ariaLabel="Estate overview" defaultOpen
+                          style={{ marginBottom: 14 }}>
+          {(
             <EstateProgressPanel
               inventory={scope?.inventory}
               analysed={analysedCount(files)}
@@ -905,7 +902,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               onGo={onAdvance}
             />
           )}
-        </section>
+        </AccordionSection>
       )}
 
       {/* Any run whose numbers below cannot be trusted as "the whole source, as of now" —
@@ -1189,14 +1186,9 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                                     onShowPrevious={() => setShowPreviousResults(true)} />
       ) : (
       <div id="discover-inventory-table">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-        <h2 style={{ margin: 0 }}>File inventory</h2>
-        <button className="linklike" onClick={() => setInventoryOpen((o) => !o)} aria-expanded={inventoryOpen}
-                style={{ fontSize: 13, color: 'var(--muted)', whiteSpace: 'nowrap', marginLeft: 12 }}>
-          {inventoryOpen ? '▴ hide' : '▾ show'}
-        </button>
-      </div>
-      {inventoryOpen && <><DiscoveryResults files={estateFiles} source={run?.source} inventory={scope?.inventory || null} invRows={inv?.rows ?? null} scopeLine={scopeLine} runAt={runAt}
+      <AccordionSection id="discover-inventory" title="File inventory"
+                        ariaLabel="File inventory" className="" defaultOpen>
+        <><DiscoveryResults files={estateFiles} source={run?.source} inventory={scope?.inventory || null} invRows={inv?.rows ?? null} scopeLine={scopeLine} runAt={runAt}
                         reasonOf={why ? why.reasonOf : undefined}
                         reasonSampleOf={why ? why.sampleOf : null}
                         reasonFetchLikely={why ? why.fetchLikely : null}
@@ -1218,10 +1210,24 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           the runs the "0 documents" fix (#835) now correctly counts. `inv` is the same paginated
           per-file read already threaded into DiscoveryResults above as `invRows`. */}
       <DiscoverInventoryExport scanId={scanId} run={runForExport}
-                               inventory={scope?.inventory || null} rows={inv?.rows ?? null} /></>}
+                               inventory={scope?.inventory || null} rows={inv?.rows ?? null} /></>
+      </AccordionSection>
       </div>
       )}
 
+      {/* THE EMPTY STATE, kept when the per-department block above it was removed (2026-09-02 UI
+          simplification PRD). Without it a workspace that has never been scanned shows the header
+          and then nothing at all, which reads as a screen that failed to load rather than one with
+          nothing to report — and it is the only line that says where a scan is started from now
+          that Discover has no scan button of its own.
+
+          The same two guards the removed block carried: `pendingScanLoad` means App has a scan
+          whose payload has not arrived (saying "no documents" there would be a claim about an
+          estate nobody has read yet), and `hidePreviousInventory` means a newer scan is queued and
+          the previous results are deliberately hidden. */}
+      {!pendingScanLoad && !hidePreviousInventory && files.length === 0 && (
+        <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Sources.</p>
+      )}
 
       {(files.length > 0 || nonAssessable.length > 0) && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12,

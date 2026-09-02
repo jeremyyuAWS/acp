@@ -53,8 +53,13 @@ describe('the "N documents discovered" headline', () => {
   })
 })
 
-// The completion card ("N files inventoried") reads a SEPARATE, self-healing count from the live
-// banner above — root cause fixed backend-side 2026-08-28 (api/handlers.py's _scan_discover used
+// THE COMPLETION CARD IS NOW THE ESTATE OVERVIEW PANEL. DiscoverCompleteSummary was unmounted on
+// 2026-09-02 (PRD "ACP Discover and Overview Simplification") and EstateProgressPanel's KPI row
+// took its place, so "N files inventoried" reads "discovered N" now. The self-heal moved with it —
+// into EstateProgressPanel, where the comment explaining it now lives — and these tests follow it,
+// because the defect is a property of the DATA, not of the card that displayed it.
+//
+// The completion count reads a SEPARATE, self-healing count from the live banner above — root cause fixed backend-side 2026-08-28 (api/handlers.py's _scan_discover used
 // to flip scan_runs.status to 'discovered' before scope.inventory was actually persisted, so a
 // reader in that race window could see status='discovered' with scope.inventory.discovered still
 // 0). That closes the window for every NEW scan, but a scan that already reached 'discovered' with
@@ -71,7 +76,7 @@ describe('the completion card ("N files inventoried") self-heals a stale zero', 
     const c = await mount({
       files, scope: { kind: 'drive', inventory: { discovered: 0 } }, run: doneRun(),
     })
-    expect(c).toMatch(/6,922 files inventoried/)
+    expect(c).toMatch(/discovered6,922/)
   })
 
   it('does not touch a genuinely correct non-zero discoveredCount', async () => {
@@ -79,14 +84,14 @@ describe('the completion card ("N files inventoried") self-heals a stale zero', 
     const c = await mount({
       files, scope: { kind: 'drive', inventory: { discovered: 170 } }, run: doneRun(),
     })
-    expect(c).toMatch(/170 files inventoried/)
+    expect(c).toMatch(/discovered170/)
   })
 
   it('still shows 0 for a genuinely empty estate — not a false positive', async () => {
     const c = await mount({
       files: [], scope: { kind: 'drive', inventory: { discovered: 0 } }, run: doneRun(),
     })
-    expect(c).toMatch(/0 files inventoried/)
+    expect(c).toMatch(/discovered0/)
   })
 
   it('does not affect the live "N documents discovered" banner while the scan is still running', async () => {
@@ -98,7 +103,8 @@ describe('the completion card ("N files inventoried") self-heals a stale zero', 
       files, scope: { kind: 'drive', inventory: { discovered: 0 } }, busy: true, run: { id: 's1', status: 'running' },
     })
     expect(t).toMatch(/0 documents discovered/i)
-    expect(t).not.toMatch(/files inventoried/)
+    // The completion panel does not render at all mid-scan, so its KPI row is absent too.
+    expect(t).not.toMatch(/Estate overview/)
   })
 })
 
@@ -159,8 +165,10 @@ describe('the completion card\'s "Assessable" count agrees with DiscoveryResults
         inventory: { discovered: 200, assessment_eligible: 170, by_status: { assessable: 40 } },
       },
     })
-    expect(c).toMatch(/\b170\b/)
-    expect(c).not.toMatch(/\b40\b assessable/i)
+    // textContent runs the labels together, so anchor on the label — `\b170\b` would fail on
+    // "eligible17085% of discovered" for the boundary, not for the number.
+    expect(c).toMatch(/eligible170/)
+    expect(c).not.toMatch(/eligible40/)
   })
 
   it('falls back to by_status.assessable when assessment_eligible is absent', async () => {
@@ -169,35 +177,46 @@ describe('the completion card\'s "Assessable" count agrees with DiscoveryResults
       files, run: doneRun(),
       scope: { kind: 'drive', inventory: { discovered: 200, by_status: { assessable: 170 } } },
     })
-    expect(c).toMatch(/\b170\b/)
+    expect(c).toMatch(/eligible170/)
   })
 })
 
-// The completion card's "N of M are scannable document types" line reads run.files —
-// scan_runs.files, a scalar column set from scanner.py's _list() return value (already
-// filtered to scannable MIME types) — NOT scan?.files/file_records, a same-named but
-// differently-shaped field passed as the `files` prop. Found live 2026-08-29: a real Drive
-// scan showed "1,033 documents" in the top nav bar and "6,922 files inventoried" in this
-// exact card, same scan — traced to run.files (scannable-only) vs scope.inventory.discovered
-// (whole estate), two legitimately different, unlabelled numbers read as a contradiction.
-describe('the completion card\'s scannable-document count reads run.files', () => {
+// The completion card's "N of M are scannable document types" line read run.files — scan_runs.files,
+// a scalar column set from scanner.py's _list() return value (already filtered to scannable MIME
+// types) — NOT scan?.files/file_records, a same-named but differently-shaped field passed as the
+// `files` prop. Found live 2026-08-29: a real Drive scan showed "1,033 documents" in the top nav
+// bar and "6,922 files inventoried" in that card, same scan — traced to run.files (scannable-only)
+// vs scope.inventory.discovered (whole estate), two legitimately different, unlabelled numbers read
+// as a contradiction.
+//
+// The line went with the card on 2026-09-02. The two numbers did not stop being different, so the
+// panel that replaced it must not print one where the other belongs: "discovered" is the whole
+// estate, "eligible" is the assessable subset, and each carries its own label.
+describe('the estate overview keeps the whole estate and the assessable subset apart', () => {
   const doneRun = (extra = {}) => ({ id: 's10', status: 'discovered', discovered_at: '2026-08-29T04:00:00Z', ...extra })
 
-  it('threads run.files through as the scannable count, separate from the discovered total', async () => {
+  it('labels the discovered total and the eligible subset as two different numbers', async () => {
     const files = Array.from({ length: 200 }, (_, i) => ({ file: `f${i}.pdf`, status: 'discovered' }))
     const c = await mount({
       files, run: doneRun({ files: 173 }),
       scope: { kind: 'drive', inventory: { discovered: 6922, assessment_eligible: 173 } },
     })
-    expect(c).toMatch(/173 of 6,922/)
+    expect(c).toMatch(/discovered6,922/)
+    expect(c).toMatch(/eligible173/)
+    // The old unlabelled "173 of 6,922" phrasing is what made them look like a contradiction.
+    expect(c).not.toMatch(/173 of 6,922/)
   })
 
-  it('omits the line when run.files is absent — a scan predating the column, not a fabricated 0', async () => {
+  it('reports the eligible count as absent, not as 0, when the inventory never recorded one', async () => {
     const files = Array.from({ length: 200 }, (_, i) => ({ file: `f${i}.pdf`, status: 'discovered' }))
     const c = await mount({
       files, run: doneRun({ files: null }),
       scope: { kind: 'drive', inventory: { discovered: 200 } },
     })
     expect(c).not.toMatch(/scannable document type/)
+    // The em dash IS the assertion: a KPI reading 0 would render "eligible0" here, and the
+    // whole point is that "not measured" must not print as "measured nothing". (A bare
+    // /eligible0/ negative would be ambiguous — the doc-type rows print "0 eligible" too.)
+    expect(c).toMatch(/eligible—/)
   })
 })

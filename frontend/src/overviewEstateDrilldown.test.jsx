@@ -19,6 +19,7 @@ import { dirname, join } from 'node:path'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
+import { collapsedToggles } from './testAccordion.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -51,6 +52,14 @@ const render = async (props = {}) => {
   // Flush loadDiscoveryInventory's internal await + the .then(setInv) + the re-render it schedules.
   await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
   await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+  // "Document types & eligibility" is a disclosure that starts closed on Overview (2026-09-02 UI
+  // simplification PRD), and a closed one renders no children at all. Open every accordion through
+  // its real header button so the assertions below read what a user can actually see.
+  for (let pass = 0; pass < 5; pass++) {
+    const shut = collapsedToggles(container)
+    if (!shut.length) break
+    await act(async () => { shut.forEach((b) => b.click()) })
+  }
   return container
 }
 const text = () => container.textContent
@@ -69,26 +78,31 @@ describe('the estate composition widens to files discovery listed but never scan
       rows: [{ file: 'a.docx', status: 'assessable', format: 'docx' },
              { file: 'b.pdf', status: 'assessable', format: 'pdf' }] })
     await render()
-    // Exactly 2 total across the by-document-type bars — the inventory added nothing new.
-    const rows = [...container.querySelectorAll('.critrow')]
-    const docTypeRows = rows.filter((r) => ['DOCX', 'PDF'].includes(r.firstElementChild?.textContent))
-    const total = docTypeRows.reduce((a, r) => a + Number(r.lastElementChild.textContent.replace(/,/g, '')), 0)
+    // Exactly one DOCX and one PDF across the "Document types & eligibility" rows — the inventory
+    // repeated both scanned files and must have added neither. The panel prints "N · P% eligible"
+    // per type, so the count is the number before the separator.
+    const section = container.querySelector('[data-accordion="doc-types"]')
+    expect(section, 'no Document types & eligibility section').toBeTruthy()
+    const labels = [...section.querySelectorAll('span')]
+      .filter((el) => ['DOCX', 'PDF'].includes(el.textContent.trim()))
+    expect(labels.map((el) => el.textContent.trim()).sort()).toEqual(['DOCX', 'PDF'])
+    const total = labels.reduce((a, el) =>
+      a + Number(el.nextElementSibling.textContent.trim().split('·')[0].replace(/,/g, '')), 0)
     expect(total).toBe(2)
   })
 
-  it('clicking through to an estate-only file opens the lightweight drawer, not FileDrawer', async () => {
+  // THE DRILL-THROUGH IS GONE, DELIBERATELY. Overview's clickable "By document type" bars, the
+  // SegmentDrawer they opened and the EstateOnlyDrawer behind that were removed on 2026-09-02 with
+  // the rest of the Overview charts (PRD "ACP Discover and Overview Simplification"). The WIDENING
+  // survives — the tests above prove estate-only rows still reach the type breakdown — but nothing
+  // on this screen opens a per-file drawer from it any more. Pinned so it cannot creep back
+  // unnoticed; Discover's own file inventory is where a reader drills into files now.
+  it('no longer offers a per-type drill-through on Overview', async () => {
     getScanInventory.mockResolvedValue({ scan_id: 's1', total: 1, offset: 0, limit: 1000,
       rows: [{ file: 'clip.mp4', status: 'metadata_only', format: 'av', size_kb: 20480, owner: 'Dana' }] })
     await render()
-    const typeRow = [...container.querySelectorAll('.critrow')].find((r) => r.firstElementChild?.textContent === 'MP4')
-    expect(typeRow).toBeTruthy()
-    await click(typeRow)   // opens SegmentDrawer, listing the one MP4 file
-    expect(text()).toContain('clip.mp4')
-    const fileRow = [...container.querySelectorAll('.filelistrow')].find((r) => r.textContent.includes('clip.mp4'))
-    expect(fileRow).toBeTruthy()
-    await click(fileRow)   // onPickFile — must route to EstateOnlyDrawer, not FileDrawer
-    expect(text()).toContain('Listed by discovery — not opened')
-    expect(text()).toContain('ACP never opened it')
+    expect(container.querySelector('.critrow')).toBeNull()
+    expect(text()).not.toContain('Listed by discovery — not opened')
   })
 
   it('does not fetch the inventory at all when the scan has no id', async () => {
@@ -110,8 +124,11 @@ describe('the wiring is where it says it is', () => {
     expect(overview).toMatch(/f\._estateOnly \? setEstOnlyFile\(f\) : setSelFile\(f\)/)
   })
 
-  it('by-type and by-pages read estateFiles, not the narrower scanned-only files', () => {
-    expect(overview).toMatch(/countBy\(\(f\) => \(f\.type \|\| ''\)\.toUpperCase\(\), estateFiles\)/)
-    expect(overview).toMatch(/for \(const f of estateFiles\)/)
+  it('hands the widened estate to EstateProgressPanel, which is what renders the type breakdown', () => {
+    // The panel builds its own typeMap from `estateFiles`, so this prop is the whole path by which
+    // a never-opened file reaches "Document types & eligibility".
+    expect(overview).toMatch(/estateFiles=\{estateFiles\}/)
+    const panel = readFileSync(join(here, 'EstateProgressPanel.jsx'), 'utf8')
+    expect(panel).toMatch(/for \(const f of \(estateFiles \|\| \[\]\)\)/)
   })
 })

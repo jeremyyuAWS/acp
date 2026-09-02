@@ -1,5 +1,11 @@
 /**
- * Discover mounts the Discovery results screen, and the acknowledgement GATES Assess.
+ * Discover mounts the Discovery results screen.
+ *
+ * The ACKNOWLEDGEMENT GATE this file was originally written for — "approve the N discovery
+ * recommendations above to continue", blocking the Assess button until a reviewer ticked it — was
+ * removed on 2026-09-02 (PRD "ACP Discover and Overview Simplification") together with the
+ * RECOMMENDATIONS table it gated on. Continue-to-Assess is now held only by `pendingActions`, the
+ * per-row decisions. Both lanes below pin the removal alongside the wiring that survives.
  *
  * Two lanes, deliberately, because neither catches what the other does:
  *
@@ -28,9 +34,11 @@ const loader = read('discoveryInventory.js')
 const api = read('api.js')
 
 describe('source — Discover is the caller, and it passes the real discovery data', () => {
-  it('imports the screen and the acknowledgement model', () => {
+  it('imports the screen, and no longer the acknowledgement model', () => {
     expect(discover).toMatch(/import DiscoveryResults from '\.\/DiscoveryResults\.jsx'/)
-    expect(discover).toMatch(/import \{ acknowledgementSummary \} from '\.\/discoveryRecommendations\.js'/)
+    // discoveryRecommendations.js is retained and still unit-tested — the gate is what went, not
+    // the model. A dead import here would read as a gate that is still wired.
+    expect(discover).not.toMatch(/from '\.\/discoveryRecommendations\.js'/)
   })
 
   it('renders it with the merged file rows, the stored inventory summary and the scope line', () => {
@@ -41,8 +49,9 @@ describe('source — Discover is the caller, and it passes the real discovery da
     // screen cannot tell a floor from a total.
     expect(discover).toMatch(/inventory=\{scope\?\.inventory \|\| null\}/)
     expect(discover).toMatch(/scopeLine=\{scopeLine\}/)
-    expect(discover).toMatch(/acknowledged=\{ackRecs\} onAcknowledge=\{handleAcknowledge\}/)
-    expect(discover).toMatch(/overrides=\{assessAnyway\} onOverridesChange=\{setAssessAnyway\}/)
+    // No acknowledgement props: the bar they drove was removed on 2026-09-02.
+    expect(discover).not.toMatch(/acknowledged=\{ackRecs\}/)
+    expect(discover).not.toMatch(/onAcknowledge=\{handleAcknowledge\}/)
     // Lifecycle rules #8 — a real handler, not a stub: wired to the same reload path every other
     // scan_inventory mutation would need, so the recorded override actually reaches this screen.
     expect(discover).toMatch(/onOverrideRecommendation=\{overrideRecommendation\}/)
@@ -58,10 +67,11 @@ describe('source — Discover is the caller, and it passes the real discovery da
     expect(discover).toMatch(/reloadInventory\(\)/)
   })
 
-  it('gates the Assess button on the acknowledgement', () => {
-    expect(discover).toMatch(/const recsToAck = acknowledgementSummary\(estateFiles, assessAnyway\)/)
-    expect(discover).toMatch(/const needsAck = !!recsToAck && !ackRecs/)
-    expect(discover).toMatch(/disabled=\{pendingActions > 0 \|\| needsAck\}/)
+  it('gates the Assess button on the pending per-row decisions, and on nothing else', () => {
+    // The acknowledgement half of the gate is gone; `pendingActions` is the whole condition now.
+    expect(discover).not.toMatch(/acknowledgementSummary\(/)
+    expect(discover).not.toMatch(/needsAck/)
+    expect(discover).toMatch(/disabled=\{pendingActions > 0\}/)
   })
 })
 
@@ -139,29 +149,29 @@ const byText = (t) => [...container.querySelectorAll('button, label')]
   .find((el) => el.textContent.includes(t))
 const click = async (el) => { await act(async () => { el.click() }) }
 
-describe('DOM — the acknowledgement gates Assess on the Discover tab', () => {
+describe('DOM — Discover mounts the results screen, and Assess is gated only by pending rows', () => {
   it('mounts the Discovery results screen inside Discover', async () => {
     await render([arch('Clinical/old-pathway.docx'), F('Clinical/live.docx', { lifecycle_status: 'Active' })])
     expect(container.textContent).toContain('DISCOVERY RESULTS')
+    // The lifecycle SUMMARY survives as a stat tile — a measured count from a completed read.
     expect(container.textContent).toContain('tagged for archive review')
-    expect(container.textContent).toContain('Legacy clinical policies')
+    // The per-file rule that produced the tag does not: that was the RECOMMENDATIONS table.
+    expect(container.textContent).not.toContain('Legacy clinical policies')
   })
 
-  it('blocks Assess until the recommendations are approved, then releases it', async () => {
+  it('does not block Assess on an approval that no longer exists', async () => {
     await render([arch('Clinical/old-pathway.docx'), F('Clinical/live.docx', { lifecycle_status: 'Active' })])
-    // Accept the per-row lifecycle decisions first, so the ONLY thing left holding the button is
-    // the acknowledgement — otherwise this would pass for the pre-existing pending-actions reason.
-    // Both rows here carry a REAL lifecycle_status (one archive, one a rule pass that measured
-    // Keep), so both are acceptable and the bulk button names them: "Accept all 2 recommendations".
+    // Accept the per-row lifecycle decisions — the only remaining condition on the button. Both
+    // rows carry a REAL lifecycle_status (one archive, one a rule pass that measured Keep), so
+    // both are acceptable and the bulk button names them: "Accept all 2 recommendations".
     await click(byText('Accept all 2 recommendations'))
-    expect(assessBtn().disabled).toBe(true)
-    expect(container.textContent).toContain('Approve the 1 discovery recommendation above to continue')
-
-    await click(byText('I approve these 1 recommendation.').querySelector('input'))
     expect(assessBtn().disabled).toBe(false)
+    // …and nothing asks for an approval on the way.
+    expect(container.textContent).not.toContain('Approve the 1 discovery recommendation above to continue')
+    expect(container.textContent).not.toContain('I approve')
   })
 
-  it('leaves the button alone when there is nothing to acknowledge', async () => {
+  it('leaves the button alone when there is nothing to decide', async () => {
     // No lifecycle column on any row — the recommendation surface is absent, so it cannot gate.
     //
     // Nothing to ACCEPT either, for the same underlying reason: with no lifecycle_status and no

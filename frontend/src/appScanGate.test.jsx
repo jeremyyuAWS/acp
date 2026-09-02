@@ -9,6 +9,11 @@
  *   - confirming in the gate is what starts the scan (the scan API is called then, not before);
  *   - cancelling the gate starts nothing.
  *
+ * Re-pointed 2026-09-02: scan entry moved OFF Discover (PRD "ACP Discover and Overview
+ * Simplification"). Discover's "Re-scan all sources" and "Choose folder to scan…" buttons were
+ * removed; Sources ("New scan", `onScan('all')`) is the entry point these flows now start from.
+ * The gate itself is unchanged — it is app-level and shared by every entry point.
+ *
  * Durable (queuedScan) is the default (2026-08-21) — see App.jsx's own comment on that useState —
  * so a confirm from this gate takes the QUEUED path. startScanQueued is stubbed to throw, so
  * `doScan` bails immediately after calling it — we assert only that it WAS or WAS NOT called,
@@ -18,6 +23,9 @@
  * whatever worktree you are in (CLAUDE.md), so a browser check would exercise code without this.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { readFileSync, readdirSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
@@ -68,18 +76,29 @@ const byText = (c, sel, re) => [...c.querySelectorAll(sel)].find((e) => re.test(
 const durableSwitch = (c) => [...dialog(c).querySelectorAll('[role="switch"]')]
   .find((s) => (s.getAttribute('aria-label') || '').includes('Durable scan'))
 
-async function mountSignedInOnDiscover() {
+// `signIn` picks the demo persona, because RBAC decides which tabs exist (sim.js `allow`): the
+// Compliance Officer the SSO button signs in as has `discover` but NOT `integrations`, and the
+// Platform Admin is the reverse. A test that needs the Sources tab has to be the admin.
+async function mountSignedInOn(tabLabel, { persona = null } = {}) {
   const { root, container } = createTestRoot()
   await act(async () => { root.render(createElement(App)) })
   await flush()
-  // Demo sign-in — the SSO button signs in as the compliance persona (allows Discover).
-  await click(byText(container, 'button', /Sign in with SSO/))
-  // Land on Discover (its "Re-scan all sources" is a scan entry point).
-  const discoverTab = byText(container, '[role="tab"]', /Discover/)
-  expect(discoverTab, 'no Discover tab after sign-in').toBeTruthy()
-  await click(discoverTab)
+  const signIn = persona
+    ? byText(container, 'button.personacard', persona)
+    : byText(container, 'button', /Sign in with SSO/)
+  expect(signIn, `no sign-in control for ${persona || 'SSO'}`).toBeTruthy()
+  await click(signIn)
+  const tab = byText(container, '[role="tab"]', tabLabel)
+  expect(tab, `no ${tabLabel} tab after sign-in`).toBeTruthy()
+  await click(tab)
   return container
 }
+
+const mountSignedInOnDiscover = () => mountSignedInOn(/Discover/)
+// Sources owns the scan entry point since 2026-09-02: its page-level "New scan" is onScan('all'),
+// which is what Discover's "Re-scan all sources" used to be.
+const mountSignedInOnSources = () => mountSignedInOn(/Sources/, { persona: /Platform Admin/ })
+const newScan = (c) => byText(c, 'button', /^New scan$/)
 
 describe('the universal scan gate (App)', () => {
   it('implements one-stop workflow tabs with a resolvable active panel', async () => {
@@ -103,9 +122,9 @@ describe('the universal scan gate (App)', () => {
   })
 
   it('opens the review modal from a scan entry point and does NOT scan yet', async () => {
-    const c = await mountSignedInOnDiscover()
-    const rescan = byText(c, 'button', /Re-scan all sources/)
-    expect(rescan, 'no "Re-scan all sources" button on Discover').toBeTruthy()
+    const c = await mountSignedInOnSources()
+    const rescan = newScan(c)
+    expect(rescan, 'no "New scan" button on Sources').toBeTruthy()
     expect(dialog(c)).toBeNull()
     await click(rescan)
     // The gate is open…
@@ -125,15 +144,15 @@ describe('the universal scan gate (App)', () => {
     // per-run decisions. Their DEFAULTS are still pinned — against App.jsx's source, in
     // scanBehaviourDefaults.test.js — so this assertion moved rather than disappeared, and what
     // it guards here is that they do not come back to the gate.
-    const c = await mountSignedInOnDiscover()
-    await click(byText(c, 'button', /Re-scan all sources/))
+    const c = await mountSignedInOnSources()
+    await click(newScan(c))
     expect(durableSwitch(c), 'the Durable toggle is back on the scan gate').toBeFalsy()
     expect([...dialog(c).querySelectorAll('[role="switch"]')].length).toBe(0)
   })
 
   it('starts the scan only when the gate is confirmed', async () => {
-    const c = await mountSignedInOnDiscover()
-    await click(byText(c, 'button', /Re-scan all sources/))
+    const c = await mountSignedInOnSources()
+    await click(newScan(c))
     expect(startScanQueued).not.toHaveBeenCalled()
     // Durable is ON by default and no longer togglable here, so a confirm takes the queued path
     // (App.jsx's `if (queuedScan) { startScanQueued(...) }`). Three steps, so walk to the run
@@ -148,7 +167,7 @@ describe('the universal scan gate (App)', () => {
     expect(start).toBeTruthy()
     expect(start.textContent).toMatch(/Run discovery/)
     await click(start)
-    // Confirm dispatched the scan (source 'all' for "Re-scan all sources") and closed the gate.
+    // Confirm dispatched the scan (source 'all' for the page-level "New scan") and closed the gate.
     expect(startScanQueued).toHaveBeenCalled()
     expect(startScanQueued.mock.calls[0][0]).toBe('all')
     expect(startScanQueued.mock.calls[0][6]).toEqual([])
@@ -158,8 +177,8 @@ describe('the universal scan gate (App)', () => {
   })
 
   it('cancelling the gate starts nothing', async () => {
-    const c = await mountSignedInOnDiscover()
-    await click(byText(c, 'button', /Re-scan all sources/))
+    const c = await mountSignedInOnSources()
+    await click(newScan(c))
     const cancel = [...dialog(c).querySelectorAll('button')].find((b) => b.textContent.trim() === 'Cancel')
     await click(cancel)
     expect(dialog(c)).toBeNull()
@@ -168,42 +187,74 @@ describe('the universal scan gate (App)', () => {
   })
 })
 
-describe('"Choose folder to scan…" opens the SAME gate, not a second folder picker', () => {
-  // Found live 2026-08-28: this button used to open a standalone FolderPicker modal, and on a
-  // selection immediately opened THIS wizard again at its default "Entire connected source" step
-  // — re-asking the folder question a moment after it was answered, which read as a regression
-  // rather than a review step. It now opens the same gate, pre-set to "Specific folders".
+describe('Discover carries no scan entry point of its own', () => {
+  // Found live 2026-08-28: "Choose folder to scan…" used to open a standalone FolderPicker modal
+  // and then re-open the gate at its default "Entire connected source" step — re-asking the folder
+  // question a moment after it was answered. It was unified onto the gate (`folderFirst`), and on
+  // 2026-09-02 the PRD "ACP Discover and Overview Simplification" removed BOTH of Discover's scan
+  // buttons: a scan is started from Sources, and Discover reports what a scan found.
   //
-  // "Choose folder to scan…" is gated on hasDriveToken (App.jsx), which the demo persona used by
-  // mountSignedInOnDiscover() does not set — matches App.jsx's own `sessionStorage.getItem('gd_token')`
-  // initializer, so the button renders exactly as it would after a real Drive connection.
-  afterEach(() => sessionStorage.removeItem('gd_token'))
-
-  it('lands on "Specific folders" already selected, not "Entire connected source"', async () => {
-    sessionStorage.setItem('gd_token', 'test-token')
-    const c = await mountSignedInOnDiscover()
-    expect(dialog(c)).toBeNull()
-    await click(byText(c, 'button', /Choose folder to scan…/))
-    const d = dialog(c)
-    expect(d, 'no gate opened').toBeTruthy()
-    expect(d.getAttribute('aria-label')).toBe('New discovery')
-    const radios = [...d.querySelectorAll('[role="radio"]')]
-    const specific = radios.find((r) => /Specific folders/.test(r.textContent))
-    const entire = radios.find((r) => /Entire connected source/.test(r.textContent))
-    expect(specific, 'no "Specific folders" option in the gate').toBeTruthy()
-    expect(specific.getAttribute('aria-checked')).toBe('true')
-    expect(entire.getAttribute('aria-checked')).toBe('false')
+  // The unified folder path is not deleted, only unreferenced — App.requestScan still takes
+  // `folderFirst` and still threads it to ScanReviewModal's `startInFolderMode` — so restoring an
+  // entry point stays one commit (CLAUDE.md). Both halves are pinned below.
+  const SAVED_DRIVE_FOLDERS = { locations: { drive: [{ id: 'old-filter', name: 'Previous filtered folder' }] } }
+  afterEach(() => {
+    sessionStorage.removeItem('gd_token')
+    // mockClear (beforeEach) only forgets the CALLS; a per-test mockResolvedValue would otherwise
+    // leak into the next test as a permanently empty saved-locations response.
+    getScanLocations.mockImplementation(async () => SAVED_DRIVE_FOLDERS)
   })
 
-  it('"Re-scan all sources" still lands on "Entire connected source" by default', async () => {
-    // Also needs a connected source with a folder hierarchy — without one, the wizard shows its
-    // flat "no folder hierarchy to narrow" case instead of the two-option radiogroup at all.
+  it('offers neither "Re-scan all sources" nor "Choose folder to scan…" on Discover', async () => {
     sessionStorage.setItem('gd_token', 'test-token')
     const c = await mountSignedInOnDiscover()
-    await click(byText(c, 'button', /Re-scan all sources/))
+    expect(byText(c, 'button', /Re-scan all sources/)).toBeFalsy()
+    expect(byText(c, 'button', /Choose folder to scan/)).toBeFalsy()
+    // Discover DID render — otherwise the two absences above prove nothing about the buttons.
+    expect(c.querySelector('#workflow-panel').textContent.length).toBeGreaterThan(0)
+    expect(dialog(c)).toBeNull()
+    expect(startScanQueued).not.toHaveBeenCalled()
+    expect(startScan).not.toHaveBeenCalled()
+  })
+
+  it('"New scan" on Sources opens the gate on "Entire connected source" when nothing is saved', async () => {
+    // Needs a connected source with a folder hierarchy — without one, the wizard shows its flat
+    // "no folder hierarchy to narrow" case instead of the two-option radiogroup at all.
+    sessionStorage.setItem('gd_token', 'test-token')
+    getScanLocations.mockResolvedValue({ locations: {} })
+    const c = await mountSignedInOnSources()
+    await click(newScan(c))
     const d = dialog(c)
+    expect(d, 'no gate opened from Sources').toBeTruthy()
+    expect(d.getAttribute('aria-label')).toBe('New discovery')
     const radios = [...d.querySelectorAll('[role="radio"]')]
     const entire = radios.find((r) => /Entire connected source/.test(r.textContent))
+    expect(entire, 'no "Entire connected source" option in the gate').toBeTruthy()
     expect(entire.getAttribute('aria-checked')).toBe('true')
+    expect(radios.find((r) => /Specific folders/.test(r.textContent)).getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('restores a saved folder narrowing rather than silently widening the scan', async () => {
+    // The default mock has a saved drive folder. An empty folder list and "everything" look
+    // identical on screen, and the reassuring reading of a blank list is the wrong one
+    // (ScanScopeWizard's own comment) — so a source that was last scanned narrowly must reopen
+    // narrow, not quietly become a whole-Drive crawl because nobody re-picked the folder.
+    sessionStorage.setItem('gd_token', 'test-token')
+    const c = await mountSignedInOnSources()
+    await click(newScan(c))
+    const radios = [...dialog(c).querySelectorAll('[role="radio"]')]
+    expect(radios.find((r) => /Specific folders/.test(r.textContent)).getAttribute('aria-checked')).toBe('true')
+    expect(radios.find((r) => /Entire connected source/.test(r.textContent)).getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('keeps the folder-first path wired, so an entry point can be restored in one commit', () => {
+    const app = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'App.jsx'), 'utf8')
+    expect(app).toMatch(/const requestScan = \(source, folder = null, \{ folderFirst = false/)
+    expect(app).toMatch(/startInFolderMode=\{pendingScan\.folderFirst\}/)
+    // …and nothing calls it, which is why the DOM test above can assert the button is gone.
+    const callers = readdirSync(dirname(fileURLToPath(import.meta.url)))
+      .filter((f) => f.endsWith('.jsx') && !f.includes('.test.'))
+      .filter((f) => /folderFirst: true/.test(readFileSync(join(dirname(fileURLToPath(import.meta.url)), f), 'utf8')))
+    expect(callers).toEqual([])
   })
 })

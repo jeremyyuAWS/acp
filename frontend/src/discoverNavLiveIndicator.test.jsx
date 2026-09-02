@@ -12,12 +12,19 @@
  * DOM-level, not browser-level: this repo's preview server runs vite rooted at the SHARED
  * checkout whatever worktree you are in (CLAUDE.md), so a browser check would exercise code
  * without this.
+ *
+ * Re-pointed 2026-09-02: Discover's own "Re-scan all sources" button, which these tests used to
+ * click to make `busy` true, was removed by the PRD "ACP Discover and Overview Simplification" —
+ * scans start from Sources now, and the Compliance Officer persona these tests sign in as does not
+ * have the Sources tab at all (sim.js `allow`). The scan is therefore started the way a reload
+ * mid-crawl starts one: `sessionStorage['active_job_id']` plus a `getJob` that never reports done,
+ * which is App's own reconnect path (see scanJobReconnect.test.jsx) and sets exactly the same
+ * `busy`. What is under test — the nav badge and the tab locks — is unchanged.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
-import { gotoStep } from './wizardNav.testkit.js'
 
 globalThis.__BUILD_TIME__ = '2026-08-01T00:00:00.000Z'
 globalThis.__BUILD_VERSION__ = '2026.8.1'
@@ -26,6 +33,8 @@ globalThis.__BUILD_VERSION__ = '2026.8.1'
 // the rest of the test, unlike appScanGate.test.jsx's throwing stub (which resets busy via the
 // `finally` block on the very next microtask, too fast to observe here).
 const startScanQueued = vi.fn(() => new Promise(() => {}))
+// A job that isnever done — App's reconnect poll keeps `busy` true for the rest of the test.
+const getJob = vi.fn(async () => ({ done: false, phase: 'discovering', scan_id: 's1' }))
 
 vi.mock('./api.js', async (importActual) => ({
   ...(await importActual()),
@@ -39,12 +48,13 @@ vi.mock('./api.js', async (importActual) => ({
   getScan: vi.fn(async () => ({ run: { id: 's1', status: 'done' }, files: [] })),
   getDecisions: vi.fn(async () => ({})),
   startScanQueued,
+  getJob,
 }))
 
 const { default: App } = await import('./App.jsx')
 
-afterEach(unmountAll)
-beforeEach(() => { startScanQueued.mockClear() })
+afterEach(() => { unmountAll(); sessionStorage.clear() })
+beforeEach(() => { sessionStorage.clear(); startScanQueued.mockClear(); getJob.mockClear() })
 
 const flush = async () => { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() }) }
 const click = async (el) => { await act(async () => { el.click() }); await flush() }
@@ -53,15 +63,17 @@ const byText = (c, sel, re) => [...c.querySelectorAll(sel)].find((e) => re.test(
 const tab = (c, label) => byText(c, '[role="tab"]', new RegExp(label))
 
 async function startABusyScan() {
+  // A scan already in flight when the tab loads — the reconnect path, not a click. App picks the
+  // job up from sessionStorage and polls it; the poll's first tick is 350ms of real time.
+  sessionStorage.setItem('active_job_id', 'j1')
   const { root, container: c } = createTestRoot()
   await act(async () => { root.render(createElement(App)) })
   await flush()
   await click(byText(c, 'button', /Sign in with SSO/))
   await click(tab(c, 'Discover'))
-  await click(byText(c, 'button', /Re-scan all sources/))
-  await gotoStep(dialog(c), act, 3)
-  await click(dialog(c).querySelector('button[data-wizard-forward]'))
-  expect(startScanQueued, 'scan never dispatched — busy will never become true').toHaveBeenCalled()
+  await act(async () => { await new Promise((r) => setTimeout(r, 500)) })
+  await flush()
+  expect(getJob, 'never reconnected — busy will never become true').toHaveBeenCalledWith('j1')
   return c
 }
 

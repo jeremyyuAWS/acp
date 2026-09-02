@@ -39,7 +39,12 @@ export const PERSONAS = [
     allow: ['overview', 'integrations', 'monitor', 'settings'] },
   { id: 'compliance', name: 'Alex Rivera', role: 'Compliance Officer', email: 'alex.rivera@utsouthwestern.edu', sso: 'Okta',
     scope: { label: 'Full estate · all 10 departments', departments: 'all' },
-    allow: ['overview', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'upload', 'graph'] },
+    // `integrations` (the Sources tab) added 2026-09-02. Discover's own scan buttons were removed
+    // by that day's UI-simplification PRD and a scan is started from Sources, so without this the
+    // one persona who can run Discover and Assess had no way to start a scan at all — a workflow
+    // that dead-ends on its first step. Found by the Playwright pipeline spec, which drives this
+    // persona end to end and could no longer reach a scan control anywhere in the app.
+    allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'upload', 'graph'] },
   { id: 'depthead', name: 'Marcus Chen', role: 'Department Head — Finance', email: 'marcus.chen@utsouthwestern.edu', sso: 'Microsoft',
     scope: { label: 'Finance, Legal, HR, Research & Comms — incl. confidential', departments: ['Finance', 'Legal & Compliance', 'Human Resources', 'Research Administration', 'Communications'] },
     allow: ['overview', 'assess', 'monitor', 'graph'] },

@@ -18,6 +18,7 @@ import { assessMetrics, coverageSentence, SEVERITIES, SEVERITY_LABEL } from './a
 import AssertionScope from './AssertionScope.jsx'
 import NextStep from './NextStep.jsx'
 import { CORE_SCS } from './activeScope.js'
+import AccordionSection from './AccordionSection.jsx'
 
 // Inline until PR #643 (process-health-pr1) merges — then replace with:
 // import ProcessHealthAlert from './ProcessHealthAlert.jsx'
@@ -70,8 +71,6 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const reportRef = useRef(null)
   const [exporting, setExporting] = useState(false)
   const [scanExporting, setScanExporting] = useState(false)
-  const [assessOpen, setAssessOpen] = useState(true)
-  const [funnelOpen, setFunnelOpen] = useState(true)
   const doScanExport = async () => {
     setScanExporting(true)
     try {
@@ -430,6 +429,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         files={files}
         estateFiles={estateFiles}
         onGo={onGo}
+        collapsible
       />
 
       {/* ── ASSESSMENT — the section that grows in once documents have actually been assessed.
@@ -438,15 +438,12 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
              the Assess tab reports so one run never shows two different totals across two tabs. ── */}
       {stageAssessed && metrics ? (
         <>
-          <section className="panel overview-assessment" aria-label="Assessment summary">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <h2 style={{ margin: 0 }}>Assessment <span className="muted" style={{ fontWeight: 400 }}>· {coverageSentence(metrics)}</span></h2>
-              <button className="linklike" onClick={() => setAssessOpen((o) => !o)} aria-expanded={assessOpen}
-                      style={{ fontSize: 13, color: 'var(--muted)', whiteSpace: 'nowrap', marginLeft: 12 }}>
-                {assessOpen ? '▴ hide' : '▾ show'}
-              </button>
-            </div>
-            {assessOpen && (
+          {/* The primary KPI summary. It is a disclosure like its neighbours, but it is the one
+              section that opens by default — the screen must not load with its headline numbers
+              hidden behind a control the reader has to find first. */}
+          <AccordionSection id="assessment-summary" className="panel overview-assessment"
+                            ariaLabel="Assessment summary" defaultOpen
+                            title="Assessment" meta={coverageSentence(metrics)}>
               <>
                 <div className="metrics">
                   <div className="metric" title="Documents where at least one selected check completed.">
@@ -472,8 +469,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
                   </div>
                 )}
               </>
-            )}
-          </section>
+          </AccordionSection>
 
           {/* WHAT THE NUMBERS ABOVE ARE A CLAIM ABOUT (board 7). This screen exports as the compliance
               report, and a report that states findings without stating its own boundary is exactly the
@@ -488,15 +484,10 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
                     onReviewLifecycle={() => onGo && onGo('discover')} />
         </>
       ) : (
-        <section className="panel overview-runassess" aria-label="Assessment not yet run">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <h2 style={{ margin: 0 }}>Assessment <span className="muted" style={{ fontWeight: 400 }}>· not yet run</span></h2>
-            <button className="linklike" onClick={() => setAssessOpen((o) => !o)} aria-expanded={assessOpen}
-                    style={{ fontSize: 13, color: 'var(--muted)', whiteSpace: 'nowrap', marginLeft: 12 }}>
-              {assessOpen ? '▴ hide' : '▾ show'}
-            </button>
-          </div>
-          {assessOpen && (n > 0 ? (
+        <AccordionSection id="assessment-summary" className="panel overview-runassess"
+                          ariaLabel="Assessment not yet run" defaultOpen
+                          title="Assessment" meta="not yet run">
+          {(n > 0 ? (
             <>
               <p className="muted" style={{ margin: '4px 0 12px' }}>
                 {n.toLocaleString()} document{n === 1 ? '' : 's'} discovered
@@ -512,18 +503,13 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
               the Discover tab first.
             </p>
           ))}
-        </section>
+        </AccordionSection>
       )}
 
-      <section className="panel">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <h2 style={{ margin: 0 }}>Compliance funnel · click a stage</h2>
-          <button className="linklike" onClick={() => setFunnelOpen((o) => !o)} aria-expanded={funnelOpen}
-                  style={{ fontSize: 13, color: 'var(--muted)', whiteSpace: 'nowrap', marginLeft: 12 }}>
-            {funnelOpen ? '▴ hide' : '▾ show'}
-          </button>
-        </div>
-        {funnelOpen && <div className="trapfunnel">
+      <AccordionSection id="compliance-funnel" title="Compliance funnel"
+                        meta="click a stage" ariaLabel="Compliance funnel"
+                        defaultOpen={false}>
+        <div className="trapfunnel">
           {stages.map((s, i) => {
             // Conversion from the PREVIOUS stage, not from the funnel's first stage — each drop
             // answers "of what reached here, how much reached the next step", which is what a
@@ -549,8 +535,8 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
               </div>
             )
           })}
-        </div>}
-      </section>
+        </div>
+      </AccordionSection>
 
       </div>
 

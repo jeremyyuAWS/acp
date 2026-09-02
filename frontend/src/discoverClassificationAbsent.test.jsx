@@ -1,10 +1,24 @@
 import { describe, it, expect, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import { createElement, act } from 'react'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import { classificationCoverage, hasClassificationData, hasDepartment, hasClassTag,
          CLASSIFICATION_TAGS, NO_CLASSIFICATION_TITLE } from './classificationData.js'
 
 // An unclassified estate is reported as UNCLASSIFIED, not as an estate with nothing in it.
+//
+// 2026-09-02 (PRD "ACP Discover and Overview Simplification"): the triage surface this was written
+// about — the exposure-and-risk chart, the per-department grouping, the risk-flag chips — was
+// removed from Discover outright, and the "not classified yet" caveat that stood in for the chart
+// went with it. That RESOLVES the defect rather than dropping it: the caveat existed only because
+// the chart, drawn over an unclassified estate, read "100% internal" with every flag at zero. With
+// no chart there is no false reading, and so no claim to make.
+//
+// Both halves are pinned below. classificationData.js is unchanged and its unit tests are
+// unchanged — the module is still correct and still used by everything that asks the question —
+// and the screen tests now assert that Discover asks it nowhere and states nothing either way.
 //
 // Discover carries a triage surface — documents grouped by department, PII / legal-hold /
 // public-facing chips, an exposure-and-risk chart, a confirm-or-correct workflow. On the SIM estate
@@ -79,27 +93,34 @@ let container, root
 const mount = async (files) => {
   ;({ container, root } = createTestRoot())
   await act(async () => {
-    root.render(createElement(Discover, { sources: [], files, busy: false, onScan: () => {} }))
+    root.render(createElement(Discover, {
+      sources: [], files, busy: false, onScan: () => {},
+      run: { id: 's1', status: 'discovered', discovered_at: '2026-09-01T00:00:00Z' },
+      scope: { kind: 'drive', inventory: { discovered: files.length } }, scanId: 's1',
+    }))
   })
   return container.textContent
 }
 afterEach(() => unmountAll())
 
 describe('the screen, on an unclassified estate', () => {
-  it('says it is unclassified instead of charting zeros', async () => {
+  it('states nothing about classification, in either direction', async () => {
     const t = await mount(plain(12))
-    expect(t).toContain(NO_CLASSIFICATION_TITLE)
-    expect(t).toMatch(/does not yet derive a department or a sensitivity label/i)
+    // The estate IS on screen — so the absences below are the removal, not a failed mount.
+    expect(t).toMatch(/discovered12/)
+    expect(t).not.toContain(NO_CLASSIFICATION_TITLE)
+    expect(t).not.toMatch(/does not yet derive a department or a sensitivity label/i)
+    expect(t).not.toMatch(/Department and sensitivity are not\s*collected yet/i)
   })
 
   it('renders NO risk-flag COUNT at all', async () => {
     // The claim is "no such number is stated", NOT "the phrase never appears". Those differ, and
-    // the difference bit immediately: the replacement copy quotes "0 legal-hold" in order to deny
-    // it, so a bare /legal-hold/ ban matched its own explanation. Eighth time that shape has failed
-    // on correct output in this repo.
+    // the difference bit immediately when the caveat still existed: the replacement copy quoted
+    // "0 legal-hold" in order to deny it, so a bare /legal-hold/ ban matched its own explanation.
     //
     // So: assert on a tag rendered NEXT TO A NUMBER, which is what a count is, and on the chart's
-    // own affordances being gone.
+    // own affordances being gone. Still the assertion that matters — a restored chart would fail
+    // here first, before anyone noticed it was drawing zeros.
     const t = await mount(plain(12))
     for (const tag of CLASSIFICATION_TAGS) {
       const counted = new RegExp(`${tag.replace('-', '.')}\\s*\\d`, 'i')
@@ -119,26 +140,35 @@ describe('the screen, on an unclassified estate', () => {
     // a reader looking for the naming convention that would make it work.
     const t = await mount(plain(12))
     expect(t).not.toMatch(/inferred from the file name/i)
-    expect(t).toMatch(/Department and sensitivity are not\s*collected yet/i)
   })
 
-  it('still lists the documents — this omits a CLAIM, not the estate', async () => {
-    // The rows live inside collapsed department groups, so filenames are not in textContent until
-    // one is expanded. What must be present is the estate itself: the count, the group, and the
-    // type breakdown, none of which depends on classification.
+  it('still lists the documents — this omitted a CLAIM, not the estate', async () => {
     const t = await mount(plain(12))
-    expect(t).toMatch(/12 documents discovered/i)
-    expect(t).toMatch(/By document type/i)
-    expect(t).toMatch(/Unassigned/i)          // the group is still there; only the CLAIM went
+    expect(t).toMatch(/discovered12/)
+    expect(t).toMatch(/BY FILE TYPE/i)   // the type breakdown never depended on classification
   })
 })
 
 describe('the screen, when classification IS present', () => {
-  it('renders the exposure chart and the department grouping', async () => {
-    // Guards every case above from passing on a component that simply deleted the surface.
+  it('draws no exposure chart or department grouping for it either', async () => {
+    // The counterpart to the cases above: the surface is gone for EVERY estate, not conditionally
+    // hidden for unclassified ones. A conditional hide is how the "0 legal-hold" reading came back
+    // last time — it survived in the branch nobody was testing.
     const t = await mount(classified())
-    expect(t).toMatch(/expand internal to see its risk flags/i)
-    expect(t).toMatch(/grouped by department/i)
+    expect(t).toMatch(/discovered2/)
+    expect(t).not.toMatch(/expand internal to see its risk flags/i)
+    expect(t).not.toMatch(/grouped by department/i)
     expect(t).not.toContain(NO_CLASSIFICATION_TITLE)
+  })
+})
+
+describe('Discover asks the classification question nowhere', () => {
+  it('neither imports the caveat copy nor derives a `classified` flag', async () => {
+    // A dead import is what makes a removal misleading: a reader greps, finds the symbol, and
+    // concludes the surface is wired (CLAUDE.md, 2026-08-30).
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'Discover.jsx'), 'utf8')
+    expect(src).not.toMatch(/NO_CLASSIFICATION_TITLE/)
+    expect(src).not.toMatch(/from '\.\/classificationData\.js'/)
+    expect(src).not.toMatch(/const classified = hasClassificationData/)
   })
 })

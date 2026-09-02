@@ -8,6 +8,11 @@ import Overview from './Overview.jsx'
 // section as its stage completes: the discovery numbers first, the seven assessment metrics (board 4)
 // once documents have actually been assessed. A discovered-not-assessed estate shows a prompt to run
 // Assess, never a wall of empty findings charts, which is the concern the old gate was avoiding.
+//
+// Re-pointed 2026-09-02 (PRD "ACP Discover and Overview Simplification"). The findings charts that
+// used to appear at the assessed stage were removed from this screen entirely, and the four headline
+// tiles with them; the discovery numbers are EstateProgressPanel's KPI cards now. The growth
+// behaviour itself — prompt before a run, metrics after one — is unchanged and is what this pins.
 
 const INVENTORY = { discovered: 12408, assessment_eligible: 9000, by_status: { assessable: 9000 } }
 const RUN = {
@@ -34,14 +39,16 @@ const ASSESSED = [
 describe('the Overview grows organically across the funnel', () => {
   it('shows the discovery numbers and a run-assessment prompt before anything is assessed', () => {
     const html = render(DISCOVERED)
-    // Discovery has populated.
-    expect(html).toContain('files discovered')
+    // Discovery has populated — the KPI row reports the inventoried estate, not the two scanrows.
+    expect(html).toContain('>discovered<')
+    expect(html).toContain('12,408')
     // Assessment is a prompt, not a grid of zeros.
     expect(html).toContain('not yet run')
     expect(html).toContain('Run assessment')
-    // The seven-metric section and the findings charts have NOT appeared yet.
+    // The seven-metric section has NOT appeared yet.
     expect(html, 'the assessment metrics leaked before a run').not.toContain('aria-label="Assessment summary"')
-    expect(html, 'a findings chart rendered over an unassessed estate').not.toContain('Compliance status')
+    // Nor have the findings charts — which is now true because they were removed outright.
+    expect(html).not.toContain('Compliance status')
     expect(html).not.toContain('Findings by severity')
   })
 
@@ -55,10 +62,11 @@ describe('the Overview grows organically across the funnel', () => {
     // The 7th metric — the severity partition, printed as an equation that sums to Total findings.
     expect(html).toMatch(/By severity:/)
     expect(html).toMatch(/=\s*2\b/)   // 1 critical + 1 serious + 0 + 0 = 2
-    // The detailed findings charts are back now that there is something to chart.
-    expect(html).toContain('Compliance status')
     // …and the prompt is gone.
     expect(html).not.toContain('Run assessment')
+    // The detailed findings charts do NOT come back with the metrics — they were removed from this
+    // screen on 2026-09-02. Assess and Remediate are where findings are read now.
+    expect(html).not.toContain('Compliance status')
   })
 
   it('never shows two different findings totals — the section reads assessMetrics', () => {

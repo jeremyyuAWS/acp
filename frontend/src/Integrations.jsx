@@ -320,7 +320,18 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
   // A card's scan arg maps its connector type to the backend source doScan resolves against.
   const cardScanArg = (src) => (src.type === 'google_drive' ? 'drive' : 'sharepoint')
 
-  const canScanAll = SIM || hasDriveToken || hasSPToken
+  // NOT gated on a cloud token. `onScan('all')` reaches App.doScan, which resolves 'all' to the
+  // backend's `local` source whenever no Drive/SharePoint token is present — the path a local
+  // corpus deployment runs on, and the one the Playwright pipeline spec drives. Gating on tokens
+  // alone disabled a scan the app was perfectly able to run.
+  //
+  // That was survivable while Discover carried its own ungated "Re-scan all sources" button. Since
+  // 2026-09-02 (UI-simplification PRD) this is the ONLY scan entry point in the product, so a
+  // disabled button here is a dead end with nothing to route around it. Scope is still reviewed
+  // before anything runs: the button opens the app-level gate, it does not start a scan.
+  //
+  // `busy` is the whole condition — one scan at a time is a real constraint (the backend rejects a
+  // second discovery on the same source), a missing cloud token is not.
 
   // The connected connectable sources (Drive / OneDrive) — the ones a scan can actually run against.
   // Card fields win over the backend row's, so the OneDrive card keeps its id/type/name (the
@@ -360,7 +371,7 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                   onClick={() => availRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
             + Connect source
           </button>
-          <button disabled={busy || !canScanAll} onClick={() => onScan('all')}>
+          <button disabled={busy} onClick={() => onScan('all')}>
             {busy ? 'scanning…' : 'New scan'}
           </button>
         </div>

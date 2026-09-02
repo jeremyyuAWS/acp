@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { ASSESSABLE_FORMATS } from './estateFunnel.js'
+import { ASSESSABLE_FORMATS, assessmentEligible } from './estateFunnel.js'
+import AccordionSection from './AccordionSection.jsx'
 
 // ── Estate Progress Panel ───────────────────────────────────────────────────
 // Three interlocking components:
@@ -186,6 +187,33 @@ function PendingRow({ stage, pending, blocked, action, urgency = 'low', onClick 
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
+// One of this panel's three detail sections. `collapsible` decides whether the heading is a
+// disclosure button (Overview, per the 2026-09-02 UI simplification PRD) or a plain heading
+// (Discover, which mounts the same component and is unchanged by that PRD).
+//
+// Declared at module scope on purpose: an inline component would be a new type on every
+// render of the parent, remounting the accordion and snapping every section back to its
+// default state the moment anything else on the panel changed.
+function PanelSection({ collapsible, accId, heading, label, defaultOpen = true, actions = null, style, children }) {
+  if (collapsible) {
+    return (
+      <AccordionSection id={accId} title={heading} ariaLabel={label}
+                        defaultOpen={defaultOpen} actions={actions} style={style}>
+        {children}
+      </AccordionSection>
+    )
+  }
+  return (
+    <section className="panel" aria-label={label} style={style}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 16 }}>
+        <h2 style={{ margin: 0 }}>{heading}</h2>
+        {actions}
+      </div>
+      {children}
+    </section>
+  )
+}
+
 export default function EstateProgressPanel({
   inventory,       // run.scope?.inventory
   analysed,        // files actually assessed (count)
@@ -196,11 +224,29 @@ export default function EstateProgressPanel({
   files,           // full file array for per-type breakdowns
   estateFiles,     // files + estate-only (for type counts)
   onGo,            // (tab) => void — navigate to a tab
+  // Overview renders the three detail sections below as accordions; Discover keeps them
+  // as plain sections. Opt-in, so no other caller's DOM changes.
+  collapsible = false,
 }) {
   const [showSideBranches, setShowSideBranches] = useState(false)
 
-  const discovered = inventory?.discovered ?? null
-  const eligible   = inventory?.assessment_eligible ?? null
+  // SELF-HEAL A STALE ZERO. Root cause fixed backend-side 2026-08-28 — the durable Discover job
+  // used to flip scan_runs.status to 'discovered' before scope.inventory was persisted, so a
+  // reader in that window wrote "0 discovered" permanently. New scans cannot hit it; a scan that
+  // already recorded the bad snapshot re-reads it on every refresh, because a refresh does not
+  // repair persisted data. Once the rows exist, file_records has been backfilled from
+  // scan_inventory (ADR 0020's get_scan fallback), so `files.length` is ground truth here.
+  //
+  // Only an EXPLICIT zero is overridden, and only when there are rows to override it with. An
+  // ABSENT `discovered` stays absent and still renders as an em dash: "we did not measure" and
+  // "we measured nothing" are different claims, and files.length is not evidence for the second.
+  // This moved here from DiscoverCompleteSummary, which was unmounted on 2026-09-02.
+  const rawDiscovered = inventory?.discovered ?? null
+  const discovered = (rawDiscovered === 0 && (files?.length ?? 0) > 0) ? files.length : rawDiscovered
+  // `assessmentEligible`, not a bare field read: it prefers the direct `assessment_eligible` and
+  // falls back to the older `by_status.assessable` shape, so a scan recorded under either shape
+  // reports the same eligible count here as it does everywhere else that asks estateFunnel.
+  const eligible   = assessmentEligible(inventory)
   const assessed   = analysed ?? null
   const remediated = certifiable ?? null
 
@@ -298,16 +344,15 @@ export default function EstateProgressPanel({
       </div>
 
       {/* ── Estate progress funnel ────────────────────────────────────── */}
-      <section className="panel" aria-label="Estate progress funnel" style={{ marginTop: 12 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 16 }}>
-          <h2 style={{ margin: 0 }}>Estate progress</h2>
-          {(unsupported || excluded || failed) && (
-            <button className="linkbtn" style={{ fontSize: 12 }}
-                    onClick={() => setShowSideBranches((v) => !v)}>
-              {showSideBranches ? 'Hide' : 'Show'} exclusions
-            </button>
-          )}
-        </div>
+      <PanelSection collapsible={collapsible} accId="estate-progress"
+                    heading="Estate progress" label="Estate progress funnel"
+                    defaultOpen style={{ marginTop: 12 }}
+                    actions={(unsupported || excluded || failed) ? (
+                      <button className="linkbtn" type="button" style={{ fontSize: 12 }}
+                              onClick={() => setShowSideBranches((v) => !v)}>
+                        {showSideBranches ? 'Hide' : 'Show'} exclusions
+                      </button>
+                    ) : null}>
 
         <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
           <FunnelStage
@@ -358,27 +403,30 @@ export default function EstateProgressPanel({
             <SideBranch count={failed}      label="could not be opened" color="#B42318" />
           </div>
         )}
-      </section>
+      </PanelSection>
 
       {/* ── Document types + Pending work ────────────────────────────── */}
       <div className="chartrow" style={{ marginTop: 0 }}>
 
         {/* Document types & eligibility */}
         {docRows.length > 0 && (
-          <section className="panel" aria-label="Document types and eligibility" style={{ margin: 0 }}>
-            <h2 style={{ margin: '0 0 4px' }}>Document types &amp; eligibility</h2>
+          <PanelSection collapsible={collapsible} accId="doc-types"
+                        heading={<>Document types &amp; eligibility</>}
+                        label="Document types and eligibility"
+                        defaultOpen={!collapsible} style={{ margin: 0 }}>
             <p className="muted" style={{ margin: '0 0 2px', fontSize: 12 }}>
               Eligible = assessable format. Ineligible = image, video, audio, or other.
             </p>
             {docRows.map((row) => (
               <DocTypeRow key={row.label} {...row} />
             ))}
-          </section>
+          </PanelSection>
         )}
 
         {/* Pending work by stage */}
-        <section className="panel" aria-label="Pending work by stage" style={{ margin: 0 }}>
-          <h2 style={{ margin: '0 0 14px' }}>Pending work by stage</h2>
+        <PanelSection collapsible={collapsible} accId="pending-work"
+                      heading="Pending work by stage" label="Pending work by stage"
+                      defaultOpen={!collapsible} style={{ margin: 0 }}>
           <div className="tablewrap">
             <table style={{ width: '100%' }}>
               <thead>
@@ -432,7 +480,7 @@ export default function EstateProgressPanel({
               No pending work — run a scan to populate.
             </p>
           )}
-        </section>
+        </PanelSection>
 
       </div>
     </>

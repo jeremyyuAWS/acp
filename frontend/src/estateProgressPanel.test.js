@@ -28,8 +28,13 @@ describe('EstateProgressPanel component', () => {
     expect(panel).toMatch(/inventory\?\.discovered/)
   })
 
-  it('accepts assessment_eligible from inventory', () => {
-    expect(panel).toMatch(/inventory\?\.assessment_eligible/)
+  it('reads the eligible count through estateFunnel, not off one field', () => {
+    // `assessmentEligible()` prefers the direct `assessment_eligible` field and falls back to the
+    // older `by_status.assessable` shape. Reading `inventory?.assessment_eligible` alone — which is
+    // what this line used to pin — made a scan recorded under the older shape report an eligible
+    // count here that disagreed with DiscoveryResults' own "Assessable" tile on the same screen.
+    expect(panel).toMatch(/import \{ ASSESSABLE_FORMATS, assessmentEligible \} from '\.\/estateFunnel\.js'/)
+    expect(panel).toMatch(/const eligible\s+= assessmentEligible\(inventory\)/)
   })
 
   it('renders KpiCard sub-components', () => {
