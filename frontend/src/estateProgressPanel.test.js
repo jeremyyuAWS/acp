@@ -88,12 +88,13 @@ describe('EstateProgressPanel wired in Overview', () => {
 })
 
 describe('EstateProgressPanel wired in Discover', () => {
-  it('uses the same single-source funnel without restoring the duplicate KPI row', () => {
+  it('keeps estate context without embedding the latest-scan summary', () => {
     expect(discover).toMatch(
       /import EstateProgressPanel from ['"]\.\/EstateProgressPanel\.jsx['"]/,
     )
     expect(discover).toMatch(/<EstateProgressPanel[\s\S]{0,400}inventory=/)
-    expect(discover).toMatch(/<EstateProgressPanel[\s\S]{0,600}afterProgress=\{\([\s\S]*?<LastSuccessfulScanSummary/)
+    expect(discover).not.toMatch(/<EstateProgressPanel[\s\S]{0,600}afterProgress=/)
+    expect(discover).toMatch(/id="discover-estate"[\s\S]{0,180}defaultOpen=\{false\}/)
     expect(panel).not.toMatch(/<KpiCard/)
   })
 })

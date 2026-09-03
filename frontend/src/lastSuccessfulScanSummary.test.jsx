@@ -37,7 +37,7 @@ describe('LastSuccessfulScanSummary', () => {
     const text = container.textContent
     expect(text).toContain('Last successful scan')
     expect(text).toContain('Discovered2')
-    expect(text).toContain('Can be assessed')
+    expect(text).toContain('Eligible')
     expect(text).toContain('Last scan details')
     const details = container.querySelector('details')
     expect(details.open).toBe(false)
@@ -86,5 +86,28 @@ describe('LastSuccessfulScanSummary', () => {
     })
     expect(container.textContent).toContain('Last successful scan')
     expect(container.textContent).toContain('Whole Drive')
+  })
+
+  it('uses the whole listing total rather than a later assessed-row subset', async () => {
+    const container = await render({
+      run: { id: 'scan-wide', status: 'discovered', source: 'drive' },
+      files: FILES,
+      inventory: { discovered: 6916, assessment_eligible: 986 },
+      scope: { kind: 'drive' },
+    })
+    expect(container.textContent).toContain('Discovered6,916')
+    expect(container.textContent).toContain('Eligible986')
+    expect(container.textContent).not.toContain('Discovered2')
+  })
+
+  it('shows an unknown eligible count as unknown rather than zero', async () => {
+    const container = await render({
+      run: { id: 'scan-old', status: 'discovered', source: 'drive' },
+      files: FILES,
+      inventory: { discovered: 2 },
+      scope: { kind: 'drive' },
+    })
+    expect(container.textContent).toContain('Eligible—')
+    expect(container.textContent).toContain('Assessable count was not recorded')
   })
 })

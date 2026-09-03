@@ -59,8 +59,8 @@ describe('Discover no longer gates by document type', () => {
     const text = container.textContent
     expect(text, 'the type breakdown did not render at all').toContain('BY FILE TYPE')
     expect(text, 'pdf was gated out of the type breakdown').toContain('PDF')
-    expect(text).toContain('DOCX')
-    expect(text).toContain('PPTX')
+    expect(text).toContain('Word')
+    expect(text).toContain('PowerPoint')
     // and no "excluded by file-type settings" caveat survives
     expect(text).not.toMatch(/excluded by file-type settings/i)
   })
