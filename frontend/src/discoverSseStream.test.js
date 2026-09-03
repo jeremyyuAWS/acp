@@ -1,5 +1,5 @@
 /**
- * EventSource-based discovery progress stream wiring in App.jsx.
+ * Authenticated fetch-stream discovery progress wiring in App.jsx.
  *
  * The thread-based (non-queued) scan path opens an EventSource on the job-scoped SSE URL
  * instead of polling GET /scans/jobs/{id} on a timer. Source assertions here guard the wiring
@@ -24,12 +24,13 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const src = () => readFileSync(join(HERE, 'App.jsx'), 'utf8')
 
 describe('non-queued (thread) scan path', () => {
-  it('opens EventSource on the job-scoped SSE URL', () => {
-    expect(src()).toMatch(/new EventSource\(`\/scans\/jobs\/\$\{job_id\}\/stream`\)/)
+  it('opens the authenticated job stream helper', () => {
+    expect(src()).toMatch(/getJob\.openStream\(job_id,/)
+    expect(src()).not.toMatch(/new EventSource\(`\/scans\/jobs/)
   })
 
-  it('falls back to polling when EventSource is not available in the environment', () => {
-    expect(src()).toMatch(/typeof EventSource !== 'undefined'/)
+  it('falls back to polling when streaming is not available in the environment', () => {
+    expect(src()).toMatch(/typeof ReadableStream !== 'undefined'/)
     expect(src()).toMatch(/_pollScanJobPolling/)
   })
 
@@ -39,7 +40,7 @@ describe('non-queued (thread) scan path', () => {
     expect(src()).toMatch(/_pollScanJobPolling\(job_id\)\.then\(resolve, reject\)/)
   })
 
-  it('closes the EventSource in the finally block so it never leaks on error or done', () => {
+  it('closes the stream in the finally block so it never leaks on error or done', () => {
     expect(src()).toMatch(/run\.finally\(/)
   })
 })

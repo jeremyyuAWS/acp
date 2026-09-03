@@ -1010,9 +1010,9 @@ export default function App() {
   const _pollScanJobPolling = async (job_id) => {
     let job
     do {
-      await new Promise((r) => setTimeout(r, 350))
       job = await getJob(job_id)
       setProgress(job)
+      if (!job.done) await new Promise((r) => setTimeout(r, 350))
     } while (!job.done)
     if (job.error) throw new Error(job.error)
     return getScan(job.scan_id)
@@ -1022,39 +1022,31 @@ export default function App() {
     sessionStorage.setItem(ACTIVE_JOB_KEY, job_id)
     sessionStorage.setItem(ACTIVE_JOB_AT_KEY, String(Date.now()))
     const run =
-      typeof EventSource !== 'undefined'
+      typeof ReadableStream !== 'undefined' && typeof getJob.openStream === 'function'
         ? new Promise((resolve, reject) => {
-            const es = new EventSource(`/scans/jobs/${job_id}/stream`)
             let settled = false
+            let lastJob = null
+            let stream = null
             const finish = (job) => {
               if (settled) return
               settled = true
-              es.close()
+              stream?.close()
               if (job?.error) reject(new Error(job.error))
               else getScan(job?.scan_id).then(resolve, reject)
             }
-            es.onmessage = (e) => {
-              try {
-                const job = JSON.parse(e.data)
+            stream = getJob.openStream(job_id, {
+              onMessage: (job) => {
+                lastJob = job
                 setProgress(job)
                 if (job.done) finish(job)
-              } catch {
-                /* ignore malformed frame */
-              }
-            }
-            es.addEventListener('error', (e) => {
-              if (settled) return
-              settled = true
-              es.close()
-              if (e.data != null) {
-                try {
-                  reject(new Error(JSON.parse(e.data).error || 'scan error'))
-                } catch {
-                  reject(new Error('scan error'))
-                }
-              } else {
+              },
+              onDone: () => { if (lastJob?.done) finish(lastJob) },
+              onError: () => {
+                if (settled) return
+                settled = true
+                stream?.close()
                 _pollScanJobPolling(job_id).then(resolve, reject)
-              }
+              },
             })
           })
         : _pollScanJobPolling(job_id)

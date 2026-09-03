@@ -821,6 +821,40 @@ const excludeQ = (exclude) => ((exclude || []).length
 export const startScan = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null, exclude = null) => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}${excludeQ(exclude)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}`, { method: 'POST', headers: headers() }).then(j))
 export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/scans/jobs/${id}`, { headers: headers() }).then(j))
 
+// Authenticated stream for the pre-scan job path. Native EventSource cannot carry ACP's bearer
+// header, so use fetch + ReadableStream just like the scan-anchored Discover stream above.
+export function openJobStream(jobId, { onMessage, onDone, onError } = {}) {
+  if (SIM) return { close: () => {} }
+  const controller = new AbortController()
+  ;(async () => {
+    try {
+      const res = await fetch(`${BASE}/scans/jobs/${encodeURIComponent(jobId)}/stream`,
+        { headers: headers(), signal: controller.signal, cache: 'no-store' })
+      if (!res.ok || !res.body) { onError?.(); return }
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const parsed = parseSSEFrames(buffer)
+        buffer = parsed.rest
+        for (const frame of parsed.frames) {
+          if (frame.event === 'done') { onDone?.(); return }
+          if (frame.event === 'error') { onError?.(); return }
+          try { onMessage?.(JSON.parse(frame.data)) } catch { /* malformed frame */ }
+        }
+      }
+      onDone?.()
+    } catch (e) {
+      if (e?.name !== 'AbortError') onError?.()
+    }
+  })()
+  return { close: () => controller.abort() }
+}
+getJob.openStream = openJobStream
+
 // ── Durable async queue (ADR 0004/0005) ───────────────────────────────────────
 // Queued scan: runs in the worker pool, survives restarts, shows in /jobs + Grafana.
 // `idempotencyKey` comes from submitIntent.js — one key per submit intent, the SAME key on a
