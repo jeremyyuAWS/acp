@@ -39,14 +39,6 @@ function summarySegments(counts) {
   return out
 }
 
-const btnBase = {
-  fontSize: 12.5, padding: '5px 13px', borderRadius: 6, cursor: 'pointer',
-  border: '1px solid var(--line, #e2dce4)', font: 'inherit', lineHeight: 1.4,
-}
-const btnPrimary = { ...btnBase, background: 'var(--plum, #46303F)', color: '#fff',
-                     borderColor: 'var(--plum, #46303F)', fontWeight: 600 }
-const btnGhost = { ...btnBase, background: 'transparent', color: 'var(--ink)' }
-
 /**
  * @param assessedAt        display string for when the assessment ran, or null when not known.
  *                          Null renders NOTHING — never a placeholder date.
@@ -117,13 +109,13 @@ export default function RemediationRunHeader({
         ) : (
           <>
             {secondary && (
-              <button type="button" className="btn ghost" style={btnGhost}
+              <button type="button" className="ghost small"
                       disabled={!!secondary.disabled} onClick={secondary.onClick}>
                 {secondary.label}
               </button>
             )}
             {primary && (
-              <button type="button" className="btn primary" style={btnPrimary}
+              <button type="button" className="primary small"
                       disabled={!!primary.disabled} onClick={primary.onClick}>
                 {primary.label}
               </button>
