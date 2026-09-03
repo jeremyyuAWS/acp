@@ -28,6 +28,7 @@ import VersionToast from './VersionToast.jsx'
 // dep not already behind a dynamic import. Loading it on tab entry keeps d3 out of
 // the main chunk entirely.
 const KnowledgeGraph = lazy(() => import('./KnowledgeGraph.jsx'))
+const AdminLiveTraffic = lazy(() => import('./AdminLiveTraffic.jsx'))
 import SignIn from './SignIn.jsx'
 import Settings from './Settings.jsx'
 import Monitor from './Monitor.jsx'
@@ -80,6 +81,7 @@ const TABS = [
   ['remediate',     'Remediate',     'fix issues',          3],
   ['publish',       'Release',       'approve & deploy',    4],
   ['monitor',       'Monitor',       'track compliance',    5],
+  ['liveops',       'Live Operations', 'Azure traffic',     0],
   ['analytics',     'Scan Analytics', 'compare scans',      0],
   ['graph',         'Knowledge Graph', 'explore findings',   0],
   // ADR 0047 — ACP's OWN conformance against WCAG 2.2 A/AA, in VPAT form. Step 0 (not part of the
@@ -752,7 +754,7 @@ export default function App() {
   const PRIV_PROFILE = {
     id: 'jeremy-yu', name: 'Jeremy Yu', role: 'Compliance Officer & Admin',
     scope: { label: 'Full estate · all departments', departments: 'all' },
-    allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'settings', 'analytics', 'acr'],
+    allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'settings', 'liveops', 'analytics', 'acr'],
   }
   const PRIVILEGED = { 'jeremyyu.movate@gmail.com': PRIV_PROFILE }
 
@@ -825,12 +827,12 @@ export default function App() {
     // review modal instead of a silently-dropped edit; fail-open (null) keeps the owner editable.
     getMe().then((m2) => {
       if (typeof m2?.is_scope_owner === 'boolean') setScopeOwner(m2.is_scope_owner)
-      // Backend-enforced: only grant the analytics tab when /me confirms is_admin, so an admin
-      // who is NOT in PRIV_PROFILE (e.g. Deva) still gets the tab, and a non-admin cannot reach
-      // it by modifying the frontend allow list.
+      // Backend-enforced: grant admin-only operational views from /me, so an admin who is not in
+      // PRIV_PROFILE still sees them and a non-admin cannot reach them through the UI.
       if (m2?.is_admin) setMe((m) => {
         const allow = m.allow || []
-        return allow.includes('analytics') ? m : { ...m, allow: [...allow, 'analytics'] }
+        const adminViews = ['analytics', 'liveops'].filter((view) => !allow.includes(view))
+        return adminViews.length ? { ...m, allow: [...allow, ...adminViews] } : m
       })
     }).catch(() => {})
   }
@@ -2140,6 +2142,12 @@ export default function App() {
 
         {/* Admin-only analytics — backend gate (_require_admin) mirrors the allow check */}
         {view === 'analytics' && me.allow?.includes('analytics') && <AdminInsights me={me} />}
+
+        {/* Admin-only live Azure traffic — its API and SSE endpoints independently enforce the
+            same admin boundary. Kept separate from historical Scan Analytics so operations are
+            visible in one click and do not start streaming until this tab is opened. */}
+        {view === 'liveops' && me.allow?.includes('liveops') &&
+          <Suspense fallback={<Loading />}><AdminLiveTraffic /></Suspense>}
 
         {/* ACP's own Accessibility Conformance Report (ADR 0047). No `run` gate: it is not about a
             scan, and requiring one would make the tab unreachable on a fresh deploy. Every write
