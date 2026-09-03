@@ -8990,11 +8990,17 @@ class Store:
                 "scan_id": row["scan_id"], "owner": row.get("owner_email") or "unknown",
                 "source": row.get("source") or "unknown", "stage": stage,
                 "queued": 0, "running": 0, "completed": 0, "total": 0,
-                "updated_at": row.get("updated_at"), "current_file": None,
+                "started_at": row.get("created_at"), "updated_at": row.get("updated_at"),
+                "oldest_queued_at": None, "current_file": None,
+                "current_job_type": None, "current_rule_id": None,
             })
             status = row.get("status")
             item["total"] += 1
-            if status == "queued": item["queued"] += 1
+            if status == "queued":
+                item["queued"] += 1
+                created = row.get("created_at")
+                if created and (not item["oldest_queued_at"] or str(created) < str(item["oldest_queued_at"])):
+                    item["oldest_queued_at"] = created
             elif status == "running": item["running"] += 1
             elif status == "done": item["completed"] += 1
             if status in ("queued", "running"):
@@ -9007,11 +9013,21 @@ class Store:
                     if isinstance(payload, dict):
                         item["current_file"] = (payload.get("file") or payload.get("filename")
                                                 or payload.get("path"))
+                        item["current_rule_id"] = (payload.get("current_rule_id")
+                                                   or payload.get("rule_id") or payload.get("wcag"))
+                        item["current_job_type"] = row.get("type")
                 except (TypeError, ValueError):
                     pass
+            if row.get("created_at") and str(row["created_at"]) < str(item.get("started_at") or row["created_at"]):
+                item["started_at"] = row["created_at"]
             if str(row.get("updated_at") or "") > str(item.get("updated_at") or ""):
                 item["updated_at"] = row.get("updated_at")
-        return [grouped[key] for key in active]
+        result = [grouped[key] for key in active]
+        waiting = sorted((r for r in result if r["queued"]),
+                         key=lambda r: str(r.get("oldest_queued_at") or ""))
+        for position, item in enumerate(waiting, 1):
+            item["queue_position"] = position
+        return result
 
     def list_scan_jobs_of_type(self, scan_id: str, job_type: str) -> list[dict]:
         """Every job of one type already enqueued for one scan, whatever its status.

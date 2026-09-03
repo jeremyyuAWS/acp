@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from api.routes import system
+
 
 def _scan(owner="admin@example.org"):
     return {
@@ -20,8 +22,27 @@ def test_admin_live_activity_groups_active_stage_without_exposing_payload(isolat
     assert rows[0]["stage"] == "assess"
     assert rows[0]["owner"] == "admin@example.org"
     assert rows[0]["queued"] == 1
+    assert rows[0]["queue_position"] == 1
+    assert rows[0]["oldest_queued_at"]
+    assert rows[0]["started_at"]
     assert "payload" not in rows[0]
     assert "secret" not in str(rows[0])
+
+
+def test_admin_live_activity_exposes_only_safe_running_context(isolated_store):
+    isolated_store.save_scan(_scan())
+    isolated_store.enqueue_job(
+        "remediate_file",
+        {"file": "Private Report.docx", "rule_id": "1.1.1", "secret": "never-return"},
+        scan_id="scan-live-1",
+    )
+    claimed = isolated_store.claim_job("test-worker")
+    assert claimed
+    row = isolated_store.admin_live_activity()[0]
+    assert row["current_file"] == "Private Report.docx"
+    assert row["current_rule_id"] == "1.1.1"
+    assert row["current_job_type"] == "remediate_file"
+    assert "secret" not in str(row)
 
 
 def test_admin_live_activity_omits_inactive_runs(isolated_store):
@@ -31,3 +52,34 @@ def test_admin_live_activity_omits_inactive_runs(isolated_store):
     assert claimed and claimed["id"] == job_id
     isolated_store.complete_job(job_id, worker_id="test-worker", attempt=claimed["attempts"])
     assert isolated_store.admin_live_activity() == []
+
+
+def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(monkeypatch):
+    class ActivityStore:
+        def worker_tier_status(self):
+            return {"alive": True, "pool_size": 4}
+
+        def job_stats(self, owner=None):
+            assert owner is None
+            return {"done": 12}
+
+        def admin_live_activity(self):
+            return [
+                {"owner": "a@example.org", "stage": "assess", "running": 3, "queued": 8,
+                 "completed": 2, "total": 13},
+                {"owner": "b@example.org", "stage": "remediate", "running": 1, "queued": 2,
+                 "completed": 4, "total": 7},
+            ]
+
+    monkeypatch.setattr(system.core, "store", ActivityStore())
+    snapshot = system._admin_activity_snapshot()
+    assert snapshot["summary"] == {
+        "active_runs": 2, "active_users": 2, "waiting_users": 2,
+        "queued": 10, "running": 4, "completed_jobs": 12,
+        "worker_slots": 4, "available_slots": 0, "utilization_pct": 100,
+        "pressure": "saturated", "worker_tier_alive": True,
+        "by_stage": {
+            "assess": {"runs": 1, "running": 3, "queued": 8, "completed": 2, "total": 13},
+            "remediate": {"runs": 1, "running": 1, "queued": 2, "completed": 4, "total": 7},
+        },
+    }
