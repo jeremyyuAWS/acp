@@ -130,7 +130,7 @@ export default function LastSuccessfulScanSummary({
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
                     gap: 10 }}>
         <ResultTile label="Discovered" value={nf.format(result.discovered)}
-                    detail={plural(result.discovered, 'file in this scan', 'files in this scan')} />
+                    detail={`${plural(result.discovered, 'file', 'files')} discovered · this scan`} />
         {result.assessable != null && (
           <ResultTile label="Can be assessed" value={nf.format(result.assessable)}
                       detail={eligibleShare(result.assessable, result.estateListed)}

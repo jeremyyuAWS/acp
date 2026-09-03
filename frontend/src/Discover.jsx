@@ -1196,7 +1196,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       <AccordionSection id="discover-inventory" title="File inventory"
                         ariaLabel="File inventory" className="" defaultOpen>
         <><DiscoveryResults files={estateFiles} source={run?.source} inventory={scope?.inventory || null} invRows={inv?.rows ?? null} scopeLine={scopeLine} runAt={runAt}
-                        showHeadlineTiles={false}
+                        showHeadlineTiles={!run || (!run.discovered_at && run.status !== 'discovered')}
                         reasonOf={why ? why.reasonOf : undefined}
                         reasonSampleOf={why ? why.sampleOf : null}
                         reasonFetchLikely={why ? why.fetchLikely : null}
