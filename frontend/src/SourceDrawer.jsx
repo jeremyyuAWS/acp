@@ -38,6 +38,23 @@ const TONE = {
 }
 const TABS = ['Overview', 'Scope', 'Rules', 'Activity']
 
+// The database stores policy matches as JSON text, while some API versions and fixtures return
+// the already-decoded array. Accept both: calling `.map` on the raw production string was the
+// drawer-breaking exception reported from Manage My Drive.
+export function policyMatchRows(value) {
+  if (Array.isArray(value)) return value.filter((row) => row && typeof row === 'object')
+  if (value && typeof value === 'object') return [value]
+  if (typeof value !== 'string' || !value.trim()) return []
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed)
+      ? parsed.filter((row) => row && typeof row === 'object')
+      : parsed && typeof parsed === 'object' ? [parsed] : []
+  } catch {
+    return []
+  }
+}
+
 const Pill = ({ tone = 'muted', children }) => {
   const [fg, bg] = TONE[tone] || TONE.muted
   return <span className="badge" style={{ background: bg, color: fg }}>{children}</span>
@@ -317,7 +334,7 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
                         <Pill tone={p.enabled === false ? 'muted' : 'ok'}>{p.enabled === false ? 'disabled' : 'enabled'}</Pill>
                       </div>
                       <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>
-                        {(p.match || []).map((m) => `${m.field} ${m.op} ${m.value}`).join(' · ') || NOT_AVAILABLE}
+                        {policyMatchRows(p.match).map((m) => `${m.field} ${m.op} ${m.value}`).join(' · ') || NOT_AVAILABLE}
                       </div>
                       <RuleMatches source={source} policy={p} preview={previews[p.policy_id]}
                                    open={openRule === p.policy_id}
