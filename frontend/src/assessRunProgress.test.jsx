@@ -33,6 +33,7 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toContain('Live')
     expect(html).toContain('Validated assessment scope')
     expect(html).toContain('Started assessment workers')
+    expect(html).toContain('1 active · 3 standing by · 4 total')
     expect(html).toContain('Opened and assessed documents')
     expect(html).toContain('8 of 22 complete · 1 processing')
     expect(html).toContain('Finalized conformance results')
