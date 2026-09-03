@@ -108,7 +108,7 @@ function useProgramBatches(files, decisions) {
       { label: 'Batch 1 · CRITICAL auto-fix',    count: sim ? 47  : b1.length, done: sim ? 38 : decided(b1), color: '#7B1D1D', bg: '#FDECEA', note: 'auto-fix eligible · one click' },
       { label: 'Batch 2 · SERIOUS HITL review',  count: sim ? 189 : b2.length, done: sim ? 44 : decided(b2), color: '#854F0B', bg: '#FAEEDA', note: 'human approval needed' },
       { label: 'Batch 3 · MODERATE sweep',       count: sim ? 521 : b3.length, done: sim ? 0  : decided(b3), color: '#1F5FA8', bg: '#E2EDFB', note: 'auto-fix + spot-check' },
-      { label: 'N/A · excluded from plan',       count: sim ? 490 : na.length, done: sim ? 490: na.length,  color: '#9a948f', bg: '#EFEDEA', note: 'internal / compliant / junk' },
+      { label: 'N/A · excluded from plan',       count: sim ? 490 : na.length, done: sim ? 490: na.length,  color: '#9a948f', textColor: '#6c6470', bg: '#EFEDEA', note: 'internal / compliant / junk' },
     ],
   }
 }
@@ -431,12 +431,12 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
             return (
               <div className="progrow" key={i}>
                 <div className="proglabel">
-                  <span style={{ color: b.color, fontWeight: 600, fontSize: 13 }}>{b.label}</span>
+                  <span style={{ color: b.textColor ?? b.color, fontWeight: 600, fontSize: 13 }}>{b.label}</span>
                   <span className="muted" style={{ fontSize: 11 }}>{b.note}</span>
                 </div>
                 <div className="progtrack">
                   <div className="progbar"><i style={{ width: `${pct}%`, background: b.color, opacity: 0.75 }} /></div>
-                  <span className="progpct" style={{ color: b.color }}>{pct}%</span>
+                  <span className="progpct" style={{ color: b.textColor ?? b.color }}>{pct}%</span>
                   <span className="muted progn">{b.done} / {b.count}</span>
                 </div>
               </div>
