@@ -11,9 +11,9 @@
  *
  * THE COMPONENT IS NOT DELETED, and that is deliberate — CLAUDE.md's standing instruction is to
  * remove the mount, not the code, so a retired surface can come back in one commit.
- * `LiveAssessmentLive` stays live on every other tab; only the Discover case is gated off. This
- * test is the written-down half of that: it fails if the gate is widened again, which is the
- * reminder to update it rather than a regression.
+ * `LiveAssessmentLive` stays live on contextual tabs except Discover and Remediate. Remediate owns
+ * its own live Automated Remediation card, which replaces the completed Assessment card there.
+ * This test is the written-down half of that: it fails if either stage boundary is widened again.
  *
  * Source-level, like assessSetupWiring.test.jsx and assessmentTimeline.test.js: App.jsx is far too
  * large to mount for a one-line gating fact, and this repo already reads it as text for exactly
@@ -34,11 +34,12 @@ const activeExpr = () => {
   return m[1].replace(/\s+/g, ' ')
 }
 
-describe('the live-assess card is gated off Discover', () => {
-  it('the assess-phase clause excludes Discover but keeps Assess resilient', () => {
+describe('the live-assess card yields to the active workflow stage', () => {
+  it('the assess-phase clause excludes Discover and Remediate but keeps Assess resilient', () => {
     const expr = activeExpr()
     expect(expr).not.toMatch(/view !== 'assess'/)
     expect(expr).toMatch(/view !== 'discover'/)
+    expect(expr).toMatch(/view !== 'remediate'/)
   })
 
   it('a running assess no longer activates the card on Discover', () => {
@@ -49,9 +50,15 @@ describe('the live-assess card is gated off Discover', () => {
     expect(gate(false, 'running', 'assess')).toBe(true)
   })
 
-  it('every other tab still shows it during an assess — this is a Discover fix, not a removal', () => {
+  it('the Remediation card replaces it on Remediate', () => {
     const gate = new Function('busy', 'assessPhase', 'view', `return (${activeExpr()})`)
-    for (const view of ['assess', 'overview', 'remediate', 'publish', 'monitor', 'integrations']) {
+    expect(gate(false, 'running', 'remediate')).toBe(false)
+    expect(app).toMatch(/view === 'remediate'[\s\S]*?<Remediate /)
+  })
+
+  it('other contextual tabs still show it during an assess — this is not a removal', () => {
+    const gate = new Function('busy', 'assessPhase', 'view', `return (${activeExpr()})`)
+    for (const view of ['assess', 'overview', 'publish', 'monitor', 'integrations']) {
       expect(gate(false, 'running', view), `${view} should still show the live card`).toBe(true)
     }
   })

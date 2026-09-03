@@ -100,35 +100,42 @@ const STOP_HINTS = {
   finalizing: 'The final inventory write will complete before stopping.',
 }
 
-function DiscoverStep({ label, kpi, status }) {
+function DiscoverStep({ label, kpi, status, sublines = [] }) {
   const isActive = status === 'active'
   return (
-    <div role="listitem" aria-current={isActive ? 'step' : undefined}
-         style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <span style={{ width: 16, flexShrink: 0, display: 'flex', alignItems: 'center',
-                     justifyContent: 'center' }}>
-        {status === 'done' && (
-          <span role="img" aria-label="Completed"
-                style={{ color: 'var(--green,#1a7f45)', fontSize: 13.5 }}>✓</span>
-        )}
-        {status === 'active' && (
-          <span className="prep-pulse" role="status" aria-label="In progress" />
-        )}
-        {status === 'pending' && (
-          <span role="img" aria-label="Not started"
-                style={{ color: 'var(--muted)', fontSize: 13 }}>○</span>
-        )}
-      </span>
-      <span style={{ flex: 1, fontSize: 13.5,
-                     fontWeight: isActive ? 600 : undefined,
-                     color: status === 'pending' ? 'var(--muted)' : 'var(--ink)' }}>
-        {label}
-      </span>
-      {kpi && (
-        <span className="muted" aria-hidden="true"
-              style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>
-          {kpi}
+    <div role="listitem" aria-current={isActive ? 'step' : undefined}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ width: 16, flexShrink: 0, display: 'flex', alignItems: 'center',
+                       justifyContent: 'center' }}>
+          {status === 'done' && (
+            <span role="img" aria-label="Completed"
+                  style={{ color: 'var(--green,#1a7f45)', fontSize: 13.5 }}>✓</span>
+          )}
+          {status === 'active' && (
+            <span className="prep-pulse" role="status" aria-label="In progress" />
+          )}
+          {status === 'pending' && (
+            <span role="img" aria-label="Not started"
+                  style={{ color: 'var(--muted)', fontSize: 13 }}>○</span>
+          )}
         </span>
+        <span style={{ flex: 1, fontSize: 13.5,
+                       fontWeight: isActive ? 600 : undefined,
+                       color: status === 'pending' ? 'var(--muted)' : 'var(--ink)' }}>
+          {label}
+        </span>
+        {kpi && (
+          <span className="muted" aria-hidden="true"
+                style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>
+            {kpi}
+          </span>
+        )}
+      </div>
+      {sublines.length > 0 && (
+        <ul style={{ margin: '5px 0 1px 26px', paddingLeft: 16, color: 'var(--muted)',
+                     fontSize: 12.5, lineHeight: 1.55 }}>
+          {sublines.map((line) => <li key={line}>{line}</li>)}
+        </ul>
       )}
     </div>
   )
@@ -301,7 +308,33 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
       }
     }
 
-    return { ...s, label: displayLabel, status, kpi }
+    const sublines = []
+    if (status !== 'pending' && s.key === 'inventory') {
+      if (foldersFound !== null) sublines.push(`${n(foldersFound)} folder${foldersFound === 1 ? '' : 's'} visited`)
+      if (hasClassStats) {
+        sublines.push(`${n(clsAssessable ?? 0)} assessable · ${n(clsMetadataOnly ?? 0)} metadata only · ${n(clsUnsupported ?? 0)} unsupported`)
+      } else if (assessableCount !== null) {
+        sublines.push(`${n(assessableCount)} assessable · ${n(unsupportedCount ?? 0)} other`)
+      }
+      if (totalExceptions > 0) sublines.push(`${n(totalExceptions)} skipped or unreadable; remaining files continued`)
+    }
+    if (status !== 'pending' && s.key === 'lifecycle') {
+      if (rulesEnabled !== null) sublines.push(`${n(rulesEnabled)} lifecycle rule${rulesEnabled === 1 ? '' : 's'} enabled`)
+      if (filesEvaluated !== null) sublines.push(`${n(filesEvaluated)} file${filesEvaluated === 1 ? '' : 's'} evaluated`)
+      const dispositions = [
+        lcArchive > 0 && `${n(lcArchive)} archive review`,
+        lcDelete > 0 && `${n(lcDelete)} deletion review`,
+        lcTagged > 0 && `${n(lcTagged)} tagged`,
+        lcUnevaluable > 0 && `${n(lcUnevaluable)} unevaluable`,
+      ].filter(Boolean)
+      if (dispositions.length) sublines.push(dispositions.join(' · '))
+    }
+    if (status !== 'pending' && s.key === 'finalizing' && saveNew !== null) {
+      sublines.push(`${n(saveNew ?? 0)} new · ${n(saveUpdated ?? 0)} updated · ${n(saveUnchanged ?? 0)} unchanged`)
+      if ((saveFailed ?? 0) > 0) sublines.push(`${n(saveFailed)} inventory record${saveFailed === 1 ? '' : 's'} could not be saved`)
+    }
+
+    return { ...s, label: displayLabel, status, kpi, sublines }
   })
 
   // No progress ticks for 90 s — connection may be lost.

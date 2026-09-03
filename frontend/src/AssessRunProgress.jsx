@@ -52,23 +52,31 @@ function fmtElapsedSecs(s) {
 }
 
 // One preparation step row: icon (✓ / pulsing dot / ○), label, right-aligned detail.
-function PrepStep({ label, detail, status }) {
+function PrepStep({ label, detail, status, sublines = [] }) {
   return (
-    <div role="listitem" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <span style={{ width: 16, flexShrink: 0, display: 'flex', alignItems: 'center',
-                     justifyContent: 'center' }} aria-hidden="true">
-        {status === 'done' && <span style={{ color: 'var(--green,#1a7f45)', fontSize: 13.5 }}>✓</span>}
-        {status === 'active' && <span className="prep-pulse" />}
-        {status === 'pending' && <span style={{ color: 'var(--muted)', fontSize: 13 }}>○</span>}
-      </span>
-      <span style={{ flex: 1, fontSize: 13.5,
-                     color: status === 'pending' ? 'var(--muted)' : 'var(--ink)' }}>
-        {label}
-      </span>
-      {detail && (
-        <span className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>
-          {detail}
+    <div role="listitem">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ width: 16, flexShrink: 0, display: 'flex', alignItems: 'center',
+                       justifyContent: 'center' }} aria-hidden="true">
+          {status === 'done' && <span style={{ color: 'var(--green,#1a7f45)', fontSize: 13.5 }}>✓</span>}
+          {status === 'active' && <span className="prep-pulse" />}
+          {status === 'pending' && <span style={{ color: 'var(--muted)', fontSize: 13 }}>○</span>}
         </span>
+        <span style={{ flex: 1, fontSize: 13.5,
+                       color: status === 'pending' ? 'var(--muted)' : 'var(--ink)' }}>
+          {label}
+        </span>
+        {detail && (
+          <span className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>
+            {detail}
+          </span>
+        )}
+      </div>
+      {sublines.length > 0 && (
+        <ul style={{ margin: '5px 0 1px 26px', paddingLeft: 16, color: 'var(--muted)',
+                     fontSize: 12.5, lineHeight: 1.55 }}>
+          {sublines.map((line) => <li key={line}>{line}</li>)}
+        </ul>
       )}
     </div>
   )
@@ -220,7 +228,8 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
                           ? `${m.queue.workers.max.toLocaleString()} ready`
                           : 'Workers ready'} />
               <PrepStep status={isFinished ? 'done' : 'active'} label="Opened and assessed documents"
-                        detail={`${completed.toLocaleString()} of ${total.toLocaleString()} complete${processing > 0 ? ` · ${processing.toLocaleString()} processing` : ''}`} />
+                        detail={`${completed.toLocaleString()} of ${total.toLocaleString()} complete${processing > 0 ? ` · ${processing.toLocaleString()} processing` : ''}`}
+                        sublines={!isFinished && cur ? activityLines(cur, completed, total, processing) : []} />
               <PrepStep status={isFinished ? 'done' : 'pending'} label="Finalized conformance results"
                         detail={isFinished ? 'Complete' : eta || 'After all documents finish'} />
             </div>
