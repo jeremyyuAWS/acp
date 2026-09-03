@@ -8,7 +8,7 @@ import threading
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
 import core
@@ -1172,6 +1172,64 @@ def jobs(request: Request, status: str | None = None, limit: int = 100):
             "stats": core.store.job_stats(owner=owner),
             "dead_letters": core.store.dead_letter_breakdown(owner=owner),
             "jobs": core.store.list_jobs(status=status, limit=limit, owner=owner)}
+
+
+def _admin_activity_snapshot() -> dict:
+    wt = core.store.worker_tier_status()
+    stats = core.store.job_stats(owner=None)
+    runs = core.store.admin_live_activity()
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "runs": runs,
+        "summary": {
+            "active_runs": len(runs),
+            "queued": sum(int(r.get("queued") or 0) for r in runs),
+            "running": sum(int(r.get("running") or 0) for r in runs),
+            "completed_jobs": int(stats.get("done") or 0),
+            "worker_slots": wt.get("pool_size") if wt.get("pool_size") is not None else core.WORKERS,
+            "worker_tier_alive": bool(wt.get("alive")),
+        },
+    }
+
+
+@router.get("/admin/activity")
+def admin_activity(request: Request, response: Response):
+    """Payload-sanitized cross-user processing topology for platform administrators."""
+    _require_admin(request)
+    response.headers["Cache-Control"] = "no-store"
+    return _admin_activity_snapshot()
+
+
+@router.get("/admin/activity/stream")
+async def admin_activity_stream(request: Request):
+    """Authenticated SSE snapshots for the live multi-user traffic map."""
+    import asyncio
+
+    _require_admin(request)
+
+    async def _gen():
+        last = None
+        idle = 0
+        while not await request.is_disconnected():
+            snapshot = await asyncio.to_thread(_admin_activity_snapshot)
+            signature = json.dumps({"runs": snapshot["runs"], "summary": snapshot["summary"]},
+                                   sort_keys=True, default=str)
+            if signature != last:
+                last = signature
+                idle = 0
+                yield f"event: activity\ndata: {json.dumps(snapshot, default=str)}\n\n"
+            else:
+                idle += 1
+                if idle >= 5:
+                    idle = 0
+                    yield ": keep-alive\n\n"
+            await asyncio.sleep(2)
+
+    return StreamingResponse(_gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache, no-store",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    })
 
 
 @router.get("/jobs/{job_id}")
