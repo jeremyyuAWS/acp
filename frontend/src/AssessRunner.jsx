@@ -1,12 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { allRules } from './rules'
 import { WCAG } from './wcagCatalog.js'
-import { assessScan, getCapability, getScan, getScanLive, getScanTraces, refreshScanDriveToken, getQueueJob, setWorkers, getQueueEstimate } from './api.js'
+import { assessScan, getCapability, getScan, getScanLive, getScanTraces, refreshScanDriveToken, getQueueJob, setWorkers } from './api.js'
 import { subscribeJobs } from './jobsFeed.js'
 import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
-import WorkerReplicaControl from './WorkerReplicaControl.jsx'
-import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
-import { deriveProcessingState } from './processingState.js'
 import { assessLine } from './phaseNarration.js'
 import { coreStats } from './coreStats.js'
 import { activeAssessmentFiles } from './assessLiveJobs.js'
@@ -46,7 +43,6 @@ export function deriveWorkerHealth(snap) {
   const ago = mins >= 1 ? `${mins}m` : `${Math.round(snap.heartbeatAgeS)}s`
   return { state: 'stale', label: `not responding · last beat ${ago} ago`, tone: 'warn' }
 }
-const HEALTH_TONE = { ok: '#1a7f37', warn: '#854F0B', unknown: '#5B6472' }
 
 // A job status the queue will not act on again without a person asking.
 //
@@ -229,21 +225,6 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                       runtime_mode: d.runtime_mode ?? 'auto' })
     }, { intervalMs: 10000 })
   }, [phase])
-  // The "Estimated pickup" range (GET /scans/{id}/queue-estimate?kind=assess) — same 10s cadence
-  // and running-only gate as workerSnap above, since it answers the same "is anything happening
-  // yet" question. Omitted (stays null) until the backend has enough recent-completion history
-  // for an honest range — processingState.js's deriveProcessingState reads that absence as
-  // pickupUnavailable, same as before this existed, rather than showing a guess.
-  const [pickupEstimate, setPickupEstimate] = useState(null)
-  useEffect(() => {
-    setPickupEstimate(null)
-    if (phase !== 'running' || !runId) return undefined
-    let on = true
-    const load = () => getQueueEstimate(runId, 'assess').then((d) => { if (on) setPickupEstimate(d) }).catch(() => {})
-    load()
-    const id = setInterval(load, 10000)
-    return () => { on = false; clearInterval(id) }
-  }, [phase, runId])
   // Per-scan queue snapshot from GET /scans/{id}/live — accurate in-flight/waiting counts
   // for THIS scan only, unlike workerSnap which counts across all jobs system-wide.
   const [liveQueue, setLiveQueue] = useState(null)   // {inFlight, queued, workersBusy, workersMax}
@@ -254,8 +235,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   // is one line if that decision is reversed. `workerBusy`/`workerMsg` below belong to it and are
   // kept for the same reason. assessTopologyHealth.test.jsx asserts no such control renders, and
   // will fail if one is wired back in, which is the reminder to delete this note rather than a
-  // regression. The AUTHORIZED path is unaffected: WorkerReplicaControl adjusts Azure warm
-  // replicas and gates its buttons on `me?.is_admin`.
+  // regression. Azure replica controls remain available on the administrator surface.
   const adjustWorkers = (delta) => {
     if (!workerSnap || workerBusy) return
     // First click from zero: jump straight to the server's suggested count rather than to 1.
@@ -568,24 +548,6 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docs.length])
 
-  // ONE denominator, the same one `progress` is measured against. `progress` is
-  // `Math.min(scored.length, run.files)` — a SERVER-scale numerator — while `assessN` and
-  // `docs.length` come from the `files` PROP, so dividing by those divided two unrelated scales.
-  // Math.max did not reconcile them; it just picked the larger client number.
-  //
-  // On the deferred path (ADR 0020) the prop legitimately lags the server — Assess is running
-  // precisely BECAUSE the files have no scores yet — so this was the normal case, not an edge
-  // one. With 148 documents server-side and 12 scored, the bar rendered 60% beside a caption
-  // reading "12 of 148", which is 8%.
-  //
-  // `liveTotal` is that server count, and its own declaration already calls it "the REAL total,
-  // not docs.length". The caption, the "Computing conformance · N documents" line and the
-  // no-workers banner all read it; the percentage was the one consumer that did not. The
-  // fallbacks keep the immediate (non-deferred) path and the first render — before any poll has
-  // landed — working exactly as before.
-  const pct = phase === 'running'
-    ? Math.round((progress / Math.max(1, liveTotal || assessN || docs.length)) * 100) : 0
-
   // How many criteria the in-flight file is actually being weighed against. This is the SAME
   // list the result tile and the "By WCAG criterion" table reconcile to — the agreed scope
   // (activeScope.SCOPE_SCS) — narrowed to the levels that block at the chosen target, so the
@@ -662,43 +624,6 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
       <div role="status" aria-live="polite">
         {phase === 'running' && (
           <div className="assessrun">
-            {/* PRD "Processing details" (Phase 1 slice, 2026-08-28) — leads the running view with
-                ONE plain-language sentence before the granular strip below, per the PRD's own
-                principle: "explain status before showing metrics". Reuses the exact same signals
-                the strip and the two banners below already compute (noCapacity/stalled match
-                those banners' own conditions) rather than deriving a second, possibly-diverging
-                notion of the same thing. */}
-            {(() => {
-              // Gated on TOPOLOGY, exactly like the banner below — these must agree, and the
-              // comment above says they do. Before this they did not: #1060 changed the banner
-              // and left this reading `!(distributed && alive)`, so one stale heartbeat made
-              // `noCapacity` true and the panel announced "no worker is currently online to
-              // process them" — the same claim the banner had just been fixed to withhold,
-              // rendered ABOVE it, with a "Start workers" button attached.
-              const activeFiles = activeAssessmentFiles(workerSnap?.jobs, runId)
-              const processingCount = Math.max(liveQueue?.workersBusy ?? 0, activeFiles.size)
-              const noCapacity = !!(workerSnap && workerSnap.workers === 0 && !workersDown
-                && workerSnap.runtime_mode !== 'distributed'
-                && !progressIsConfirmed({ completed: progress, inFlight: processingCount }))
-              const stalled = !!(workerSnap && workerSnap.workers > 0 && assessStartedAt && (() => {
-                const lastActivityMs = Math.max(lastProgressRef.current ?? 0, lastInFlightRef.current ?? 0) || assessStartedAt
-                return lastActivityMs < nowTick - 5 * 60 * 1000
-              })())
-              const waitingCount = liveQueue ? liveQueue.queued : Math.max(0, assessN - progress - processingCount)
-              const lastActivityMs = Math.max(lastProgressRef.current ?? 0, lastInFlightRef.current ?? 0) || null
-              const lastActivityMins = lastActivityMs ? Math.round((nowTick - lastActivityMs) / 60000) : null
-              const derived = deriveProcessingState({
-                phase, noCapacity, stalled, completedCount: progress, totalCount: assessN,
-                processingCount, waitingCount, lastActivityMins, currentFile, currentPhase,
-                pickupEstimate,
-              })
-              // No `onStartWorkers`. The panel renders its "Start workers" button only when the
-              // caller supplies the handler, so withholding it removes the affordance without
-              // touching the panel — which still serves Settings, where an operator may keep one.
-              return (
-                <ProcessingStatusPanel derived={derived} onViewMonitor={onViewMonitor} />
-              )
-            })()}
             {workersDown && !progressIsConfirmed({ completed: progress, inFlight: liveQueue?.workersBusy }) && (
               <div role="alert" style={{ margin: '0 0 10px', padding: '10px 14px', borderRadius: 8,
                    fontSize: 13, background: '#FBE9E7', border: '1px solid #E7B4AC', color: '#8A2A20' }}>
@@ -708,13 +633,6 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                 worker tier.
               </div>
             )}
-            <div className="assessbar">
-              <i style={{ width: `${pct}%` }} />
-            </div>
-            <div className="assessrunmeta">
-              <span className="muted"><b style={{ color: '#1F5FA8' }}>Computing conformance</b> · {(liveTotal || docs.length).toLocaleString()} documents at WCAG 2.1 {level}</span>
-              <span className="assesspct">{pct}%</span>
-            </div>
             {/* Real queue status, not a guess — GET /jobs/{id}, polled only while nothing has
                 scored yet (see pollDeferred). Distinguishes "about to start" from "genuinely
                 stuck" instead of leaving both read as an identical, silent 0%. */}
@@ -794,85 +712,6 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                 Check that the worker service is reachable and that documents are not repeatedly failing.
               </div>
             )}
-            {workerSnap && (() => {
-              // TOPOLOGY, not health. Whether a separate worker tier exists does not stop being
-              // true because one heartbeat poll came back late — and this value decided whether
-              // an ordinary user saw the ± concurrency buttons, so a stale beat handed out
-              // infrastructure controls in a deployment where those controls adjust a pool
-              // (the API container's own) that is 0 by design and does no work.
-              const externallyManaged = workerSnap.runtime_mode === 'distributed'
-              const activeFiles = activeAssessmentFiles(workerSnap?.jobs, runId)
-              const processingCount = Math.max(liveQueue?.workersBusy ?? 0, activeFiles.size)
-              const health = processingCount > 0
-                ? { state: 'active', label: 'active for this run', tone: 'ok' }
-                : deriveWorkerHealth(workerSnap)
-              // TERMINAL STATE OUTRANKS SERVICE HEALTH. A dead or cancelled job does not become
-              // less dead because the tier is answering, so a green "online" light must not sit
-              // beside it as though it were reassurance about this run. When the job is terminal
-              // the light drops to neutral and says what it is actually about.
-              const jobTerminal = isTerminalJob(jobInfo?.status)
-              // NO "assigned next" COUNT. It was `inFlight - workersBusy`, and the backend sets
-              // `workers.busy = in_flight` by construction (live_queue.compose), so that subtraction
-              // is always exactly 0 — a category that could never appear, taking up room in a strip
-              // whose whole job is to say where the work is. The distinction it was reaching for
-              // (claimed-by-a-worker vs actively-being-assessed) is real, but nothing scan-scoped
-              // reports it: `workerSnap.running` is the jobs table system-wide, across every scan
-              // and every user, so subtracting a per-scan number from it would produce a figure
-              // belonging to neither. Rather than invent one, the strip reports the two counts that
-              // ARE measured. Restoring this needs a per-scan claimed count from the backend first.
-              const brokerQueued = liveQueue ? liveQueue.queued : Math.max(0, assessN - progress - processingCount)
-              const workerCount = liveQueue?.workersMax || workerSnap.workers
-              const lastActivityMs = Math.max(lastProgressRef.current ?? 0, lastInFlightRef.current ?? 0) || null
-              const lastActivityMins = lastActivityMs ? Math.round((nowTick - lastActivityMs) / 60000) : null
-              return (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0 2px',
-                            fontSize: 12.5, flexWrap: 'wrap' }}>
-                <span className="assesshealth"
-                      style={{ color: jobTerminal ? HEALTH_TONE.unknown : HEALTH_TONE[health.tone],
-                               fontWeight: 600 }}
-                      title={'Whether the worker service is answering. Not a statement about this '
-                             + "run's progress — a worker that restarts repeatedly answers between "
-                             + 'restarts.'}>
-                  ● Worker service&nbsp;
-                  <span style={{ fontWeight: 400 }}>{health.label}</span>
-                  {jobTerminal && <span style={{ fontWeight: 400 }}> — but this run has stopped</span>}
-                </span>
-                <span className="muted">·</span>
-                <span className="muted">
-                  {progress} of {assessN} completed
-                  {processingCount > 0 && <> · {processingCount} processing</>}
-                  {brokerQueued > 0 && <> · {brokerQueued} waiting</>}
-                  {/* Says nothing about a CAUSE. The client cannot tell a slow first document
-                      from a wedged parser from a queue not yet reached, and a guess here is how
-                      this screen ends up contradicting the job's own status. */}
-                  {!jobTerminal && !progressIsConfirmed({ completed: progress, inFlight: processingCount })
-                    && <> · <span className="assessunconfirmed">progress not confirmed</span></>}
-                </span>
-                {lastActivityMins !== null && lastActivityMins >= 1 && (
-                  <><span className="muted">·</span>
-                  <span className="muted">{workerCount} worker{workerCount === 1 ? '' : 's'} · Last activity {lastActivityMins} min ago</span></>
-                )}
-                {/* The ± worker-concurrency buttons are deliberately gone from this view. They
-                    called setWorkers() with NO admin check at all — unlike WorkerReplicaControl
-                    mounted three lines below, which shows its count to everyone and its buttons
-                    only when `me?.is_admin`, the same value the backend's _require_admin reads.
-                    The right pattern was already in this file, next to the wrong one.
-                    Choosing worker concurrency is an infrastructure decision and the
-                    worker-provisioning PRD is explicit that no ordinary-user surface should
-                    expose one. Both branches now say where capacity is actually managed, which
-                    differs by topology: a separate tier is the deployment's, a local pool is
-                    Settings'. Nothing is deleted — adjustWorkers()/setWorkers stay in this file
-                    (see their retirement note) so restoring a control is one line, and the
-                    authorized path (WorkerReplicaControl) is untouched. */}
-                <span className="muted" style={{ marginLeft: 4, fontStyle: 'italic' }}>
-                  {externallyManaged
-                    ? 'Worker capacity is managed by your deployment administrator.'
-                    : 'Worker capacity is managed in Settings → Worker Configuration.'}
-                </span>
-                <WorkerReplicaControl leadingSeparator me={me} />
-              </div>
-            )
-          })()}
             {(currentFile || currentPhase) && (
               <div className="assessfile">
                 {/* Say what this name IS. Rendered bare inside a running card, beside "Opening &

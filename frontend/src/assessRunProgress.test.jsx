@@ -45,6 +45,14 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toMatch(/Results appear when the run finishes/)
   })
 
+  it('groups current processing and throughput in a collapsible section that starts expanded', () => {
+    const html = render(SNAP, { ratePerMin: 12, points: [1, 3, 5, 8] })
+    expect(html).toMatch(/<details open="" class="assess-live-details"/)
+    expect(html).toContain('Live processing details')
+    expect(html).toContain('Processing now')
+    expect(html).toContain('Assessment throughput')
+  })
+
   it('never renders a mid-run verdict scoreboard', () => {
     // The whole point of board 3: no partially-filled count of failures. The snapshot carries
     // need_attention / unable_to_assess KPIs; this screen must not surface them as counts.

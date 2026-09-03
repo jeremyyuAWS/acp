@@ -77,7 +77,6 @@ const TIER_HEALTHY = {
 }
 
 const text = () => container.textContent
-const healthEl = () => container.querySelector('.assesshealth')
 
 const settle = async (n = 8) => {
   for (let k = 0; k < n; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
@@ -127,52 +126,6 @@ describe('a terminal job outranks a healthy service', () => {
     expect(text()).toMatch(/this run was stopped/i)
   })
 
-  it('does not show a green service light beside a terminal job', async () => {
-    await runWithJobStatus('dead')
-    const el = healthEl()
-    expect(el).toBeTruthy()
-    // #1a7f37 is the ok tone. jsdom serialises it as rgb().
-    expect(el.style.color).not.toBe('rgb(26, 127, 55)')
-    expect(el.textContent).toMatch(/but this run has stopped/i)
-  })
-
-  it('still shows the green light for a healthy service on a live run', async () => {
-    // The invariant. Suppressing the light whenever it might be awkward would be its own
-    // dishonesty; it is outranked only by a TERMINAL job. Passes before AND after.
-    await runWithJobStatus('running', { phase: 'assessing' })
-    expect(healthEl().style.color).toBe('rgb(26, 127, 55)')
-    expect(text()).not.toMatch(/but this run has stopped/i)
-  })
-})
-
-describe('a heartbeat is not progress', () => {
-  it('says progress is not confirmed when nothing has completed and nothing is in flight', async () => {
-    // The tier is answering with a 3s heartbeat and the job is claimed. Neither is evidence that
-    // THIS run is moving, which is exactly how the crash-loop looked from here.
-    await runWithJobStatus('running', { phase: 'assessing' })
-    expect(text()).toMatch(/progress not confirmed/i)
-  })
-
-  it('invents no cause for the missing progress', async () => {
-    await runWithJobStatus('running', { phase: 'assessing' })
-    expect(text()).not.toMatch(/crash|corrupt|stuck|wedged|failing|restart/i)
-  })
-
-  it('drops the caveat once the backend reports work in flight for THIS scan', async () => {
-    // Driven through GET /scans/{id}/live rather than by seeding a scored file, because
-    // `progress` comes from the component's own poll and a fixture cannot set it from outside —
-    // the first version of this test tried and measured a render where progress was still 0.
-    // `workers.busy` is scan-scoped, which is exactly the kind of evidence a heartbeat is not.
-    getScanLive.mockResolvedValue({ queue: { in_flight: 2, queued: 1, workers: { busy: 2, max: 12 } } })
-    await runWithJobStatus('running', { phase: 'assessing' })
-    expect(text()).toMatch(/2 processing/)
-    expect(text()).not.toMatch(/progress not confirmed/i)
-  })
-
-  it('never contradicts a terminal job by also questioning its progress', async () => {
-    await runWithJobStatus('dead')
-    expect(text()).not.toMatch(/progress not confirmed/i)
-  })
 })
 
 describe('the derivations themselves', () => {

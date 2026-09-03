@@ -155,7 +155,7 @@ describe('the Assess status contradiction', () => {
     expect(text()).toMatch(/No local workers active/i)
   })
 
-  it('shows one active state when scan evidence says files are processing', async () => {
+  it('keeps file activity without recreating the retired progress status', async () => {
     // Exact production overlap: the global snapshot still says zero local workers and the
     // stage estimate is one poll behind, while this scan's own live queue proves two files are
     // already executing. Execution evidence must win and redundant queue warnings disappear.
@@ -174,10 +174,9 @@ describe('the Assess status contradiction', () => {
     await clickText('Assess')
     await settle()
 
-    expect(container.querySelector('[aria-label="Processing status"]')?.textContent)
-      .toMatch(/Assessing (documents|a\.docx)/i)
-    expect(text()).toMatch(/2 processing/i)
-    expect(text()).toMatch(/Worker service\s*active for this run/i)
+    expect(container.querySelector('[aria-label="Processing status"]')).toBeNull()
+    expect(container.querySelector('[aria-label="Per-document assessment progress"]')).toBeTruthy()
+    expect(text()).toContain('a.docx')
     expect(text()).not.toMatch(/Waiting for a worker/i)
     expect(text()).not.toMatch(/No local workers active/i)
     expect(text()).not.toMatch(/No compatible worker/i)

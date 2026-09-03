@@ -1,117 +1,21 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { createElement, act } from 'react'
-import { createTestRoot, unmountAll } from './testRoots.js'
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 
-// Proves AssessRunner actually wires live getJobs()-derived signals into ProcessingStatusPanel —
-// deriveProcessingState and ProcessingStatusPanel are both covered on their own (processingState.test.js,
-// processingStatusPanel.test.jsx); this is the third leg, matching this codebase's own
-// SOURCE-vs-DOM-vs-unit split elsewhere (see discoveryResultsWiring.test.jsx's own header comment
-// for why neither half alone would catch a dropped wire-up).
+// Retired from Assess on 2026-09-03. AssessRunProgress now owns the authoritative live progress
+// experience, so mounting ProcessingStatusPanel here would recreate the duplicate green status
+// banner, percentage bar, and worker summary. Keep the shared component for its other consumers.
+const here = dirname(fileURLToPath(import.meta.url))
+const src = readFileSync(join(here, 'AssessRunner.jsx'), 'utf8')
 
-globalThis.IS_REACT_ACT_ENVIRONMENT = true
-
-const assessScan = vi.fn()
-const getScan = vi.fn()
-const getJobs = vi.fn()
-const getQueueEstimate = vi.fn(() => Promise.resolve({ available: false }))
-vi.mock('./api.js', () => ({
-  assessScan: (...a) => assessScan(...a),
-  getScan: (...a) => getScan(...a),
-  getCapability: vi.fn(() => Promise.resolve(null)),
-  refreshScanDriveToken: vi.fn(() => Promise.resolve(null)),
-  getScanTraces: vi.fn(() => Promise.resolve([])),
-  getQueueJob: vi.fn(() => Promise.resolve({ id: 'j1', status: 'queued' })),
-  getScanLive: vi.fn(() => Promise.resolve({ queue: null })),
-  getJobs: (...a) => getJobs(...a),
-  setWorkers: vi.fn(() => Promise.resolve({ workers: 0 })),
-  getWorkerReplicas: vi.fn(() => Promise.resolve({ configured: false })),
-  setWorkerReplicas: vi.fn(() => Promise.resolve({ configured: false })),
-  getQueueEstimate: (...a) => getQueueEstimate(...a),
-}))
-
-// jobsFeed.js shares ONE GET /jobs subscription across every component that wants it, and keeps
-// its cached payload across unmount on purpose: a remount seconds later should draw immediately,
-// and the payload carries its real fetchedAt plus a `stale` flag so it cannot pass as fresh.
-// Within a test file that means one test's cache would otherwise answer the next test's mock.
-// Reset it explicitly here — the module's production behaviour is deliberate and is covered in
-// jobsFeed.test.js; it is this file that needs a cold start, not the cache that needs weakening.
-import { resetJobsFeed } from './jobsFeed.js'
-beforeEach(() => { resetJobsFeed() })
-
-
-const { default: AssessRunner } = await import('./AssessRunner.jsx')
-
-let container, root
-const mount = async (files, props = {}) => {
-  ;({ container, root } = createTestRoot())
-  await act(async () => { root.render(createElement(AssessRunner, { files, runId: 's1', ...props })) })
-}
-const settle = async (n = 8) => { for (let k = 0; k < n; k++) await act(async () => { await new Promise((r) => setTimeout(r, 10)) }) }
-const clickText = async (t) => {
-  const el = [...container.querySelectorAll('button')].find((b) => b.textContent.includes(t))
-  await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
-}
-const text = () => container.textContent
-
-const NOTHING_SCORED = {
-  run: { files: 3 },
-  files: [
-    { file: 'a.docx', score: null, status: 'discovered' },
-    { file: 'b.pdf', score: null, status: 'discovered' },
-    { file: 'c.pptx', score: null, status: 'discovered' },
-  ],
-}
-
-beforeEach(() => {
-  assessScan.mockReset(); getScan.mockReset(); getJobs.mockReset()
-  getQueueEstimate.mockReset(); getQueueEstimate.mockResolvedValue({ available: false })
-})
-afterEach(unmountAll)
-
-describe('ProcessingStatusPanel wired into AssessRunner from live getJobs() signals', () => {
-  it('shows "Waiting for a worker" when getJobs reports zero local workers and no live tier', async () => {
-    assessScan.mockResolvedValue({ deferred: true, job_id: 'j1', workers: 1, worker_tier_alive: true })
-    getScan.mockResolvedValue(NOTHING_SCORED)
-    getJobs.mockResolvedValue({ workers: 0, stats: { running: 0, queued: 3 }, worker_tier_alive: false, runtime_mode: 'auto' })
-    await mount([{ file: 'a.docx', status: 'discovered' }])
-    await clickText('Assess')
-    await settle()
-
-    expect(text()).toMatch(/waiting for a worker/i)
-    expect(text()).toMatch(/pickup estimate unavailable/i)
-    expect(text()).toMatch(/no compatible worker is currently ready/i)
+describe('the shared processing panel is retired from AssessRunner', () => {
+  it('keeps the component available but does not mount it in the Assess file-list panel', () => {
+    expect(src).not.toMatch(/import ProcessingStatusPanel/)
+    expect(src).not.toMatch(/<ProcessingStatusPanel/)
   })
 
-  it('shows a real "Estimated pickup" range once getQueueEstimate resolves one, while waiting', async () => {
-    const now = Date.now()
-    assessScan.mockResolvedValue({ deferred: true, job_id: 'j1', workers: 1, worker_tier_alive: true })
-    getScan.mockResolvedValue(NOTHING_SCORED)
-    getJobs.mockResolvedValue({ workers: 1, stats: { running: 1, queued: 2 }, worker_tier_alive: true, runtime_mode: 'auto' })
-    getQueueEstimate.mockResolvedValue({
-      available: true, state: 'estimated',
-      earliest_at: new Date(now + 60000).toISOString(), latest_at: new Date(now + 3 * 60000).toISOString(),
-    })
-    await mount([{ file: 'a.docx', status: 'discovered' }])
-    await clickText('Assess')
-    await settle()
-
-    expect(getQueueEstimate).toHaveBeenCalledWith('s1', 'assess')
-    expect(text()).toMatch(/estimated pickup: 1–3 min/i)
-    expect(text()).not.toMatch(/pickup estimate is still being calculated|pickup estimate unavailable/i)
-  })
-
-  it('offers a "View in Monitor" link that calls the onViewMonitor prop', async () => {
-    const onViewMonitor = vi.fn()
-    assessScan.mockResolvedValue({ deferred: true, job_id: 'j1', workers: 1, worker_tier_alive: true })
-    getScan.mockResolvedValue(NOTHING_SCORED)
-    getJobs.mockResolvedValue({ workers: 1, stats: { running: 1, queued: 2 }, worker_tier_alive: true, runtime_mode: 'auto' })
-    await mount([{ file: 'a.docx', status: 'discovered' }], { onViewMonitor })
-    await clickText('Assess')
-    await settle()
-
-    const link = [...container.querySelectorAll('button')].find((b) => b.textContent.includes('View in Monitor'))
-    expect(link, 'no View in Monitor link rendered').toBeTruthy()
-    await act(async () => { link.click() })
-    expect(onViewMonitor).toHaveBeenCalledTimes(1)
+  it('keeps the live per-document list mounted', () => {
+    expect(src).toContain('aria-label="Per-document assessment progress"')
   })
 })
