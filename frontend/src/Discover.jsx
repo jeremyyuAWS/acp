@@ -905,9 +905,11 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               files={files}
               estateFiles={estateFiles}
               onGo={onAdvance}
+              afterProgress={(
+                <LastSuccessfulScanSummary run={run} scope={scope} runAt={runAt}
+                                           files={estateFiles} inventory={scope?.inventory || null} />
+              )}
             />
-            <LastSuccessfulScanSummary run={run} scope={scope} runAt={runAt}
-                                       files={estateFiles} inventory={scope?.inventory || null} />
           </>
         </AccordionSection>
       )}
