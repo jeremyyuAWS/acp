@@ -23,18 +23,18 @@ test('a local scan runs discover → assess and produces WCAG findings', async (
 
   await runDiscovery(page)
 
-  // The completion surface is the "Estate overview" section, which only renders once discovery has
-  // finished — DiscoverCompleteSummary's three-state "Discovery in progress / stopped / complete"
-  // region was retired with it on 2026-09-02 (UI-simplification PRD).
-  await expect(page.getByRole('region', { name: 'Estate overview' }))
+  // The scan-specific completion surface only renders once discovery has finished. Full-estate
+  // context is deliberately collapsed underneath it, so the primary assertion stays on the
+  // latest listing rather than depending on Overview's cross-stage panel.
+  await expect(page.getByRole('region', { name: 'Latest discovery results' }))
     .toBeVisible({ timeout: 120_000 })
 
   // The count is what ties this to OUR corpus. SIM's synthetic estate is thousands of files, so
-  // this can only come from a real scan of .e2e/corpus. Read it from the retained Discovered
-  // funnel stage, scoped to the Estate overview region, rather than matching a bare "3" anywhere.
-  const estateOverview = page.getByRole('region', { name: 'Estate overview' })
-  await expect(estateOverview.getByRole('button', {
-    name: new RegExp(`^Discovered ${CORPUS_SIZE} `),
+  // this can only come from a real scan of .e2e/corpus. The tile's accessible name keeps the
+  // assertion exact without matching a bare "3" elsewhere on the screen.
+  const latestDiscovery = page.getByRole('region', { name: 'Latest discovery results' })
+  await expect(latestDiscovery.getByRole('group', {
+    name: `Discovered: ${CORPUS_SIZE}`,
   })).toBeVisible({ timeout: 30_000 })
 
   const assessTab = tab(page, /Assess/)

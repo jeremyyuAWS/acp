@@ -36,7 +36,7 @@ describe('the source-history redirect is intentionally NOT on Discover', () => {
       run: doneRun({ source: 'drive' }), onOpenSource,
     })
     // The panel this link used to sit in IS on screen — so its absence below is the removal.
-    expect(c.textContent).toContain('Estate overview')
+    expect(c.textContent).toContain('Latest discovery results')
     expect(findLink(c)).toBeUndefined()
     expect(onOpenSource).not.toHaveBeenCalled()
   })
@@ -61,7 +61,7 @@ describe('the source-history redirect is intentionally NOT on Discover', () => {
       files: [], scope: { kind: 'drive', inventory: { discovered: 0 } },
       run: doneRun({ source: 'all' }), onOpenSource: vi.fn(),
     })
-    expect(c.textContent).toContain('Estate overview')
+    expect(c.textContent).toContain('Latest discovery results')
     expect(findLink(c)).toBeUndefined()
   })
 })

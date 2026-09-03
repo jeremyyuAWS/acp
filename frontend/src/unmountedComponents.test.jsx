@@ -70,12 +70,6 @@ const EXPECTED_UNMOUNTED = [
   'Dashboard',           // never mounted in repo history — unbuilt, not retired
   // Retired 2026-09-02: replaced by EstateProgressPanel at the top of Discover. Kept per policy.
   'DiscoverCompleteSummary',
-  // Retired 2026-09-02: removed from Discover (PRD simplification). EstateProgressPanel covers
-  // the same inventory completeness story. Kept per retired-feature policy.
-  'DiscoveryCompleteness',
-  // Retired 2026-09-02: removed from DiscoveryResults (PRD simplification). The lifecycle results
-  // panel was removed along with the RECOMMENDATIONS table and acknowledgement bar. Kept per policy.
-  'DiscoveryLifecycleResults',
   'Disposition',
   // Retired 2026-09-02 on the owner's request: mounted in Discover, it listed the WHOLE estate
   // — 200 rows of .pyc, .py and .pfb files, every one "Active · No reason recorded", grouped

@@ -512,7 +512,7 @@ not on that list; components that are supposed to be live are.
 
 **Currently retired or unmounted, and mounted nowhere** (frontend/src): `AssessScope`,
 `AssessmentReconciliation`, `ConfidenceDashboard`, `ControlPlane`, `Dashboard`,
-`DiscoverCompleteSummary`, `DiscoveryCompleteness`, `DiscoveryLifecycleResults`, `Disposition`, `DispositionReviewWorkspace`,
+`DiscoverCompleteSummary`, `Disposition`, `DispositionReviewWorkspace`,
 `EstateCoverage`, `EstateTreemap`, `FileTypeConfig`, `Insight`, `LifecycleOverrideControl`, `LiveAssessment`, `PiiPanel`,
 `ProcessingDetails`, `RemediationApprovals`, `RiskScore`, `RolePrivilege`, `Rubric`, `ScanScope`,
 `ScanScopeChip`, `ScanSetup`, `ScopeFunnel`, `ScopeRules`, `ScreenReaderDemo`, `Upload`,

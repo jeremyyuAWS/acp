@@ -201,10 +201,7 @@ describe('and speaks up when it does', () => {
 
 
 describe('the caveat sits ABOVE the numbers it qualifies', () => {
-  // The 2026-09-02 PRD simplification retired DiscoveryCompleteness from Discover. The component
-  // and its logic are preserved for potential restoration; it is tracked in
-  // unmountedComponents.test.jsx. The ordering assertion is moot once it is not mounted.
-  it('DiscoveryCompleteness is no longer mounted in Discover', async () => {
+  it('DiscoveryCompleteness is restored ahead of the latest-scan figures', async () => {
     const { readFileSync } = await import('node:fs')
     const { fileURLToPath } = await import('node:url')
     const { dirname, join } = await import('node:path')
@@ -213,8 +210,7 @@ describe('the caveat sits ABOVE the numbers it qualifies', () => {
       .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
       .replace(/^\s*\/\/.*$/gm, '')
 
-    expect(src).not.toMatch(/<DiscoveryCompleteness\b/)
-    // DiscoveryResults is still mounted — this was a de-duplication, not a capability deletion.
-    expect(src).toMatch(/<DiscoveryResults\b/)
+    expect(src).toMatch(/<DiscoveryCompleteness\b/)
+    expect(src.indexOf('<DiscoveryCompleteness')).toBeLessThan(src.indexOf('<LastSuccessfulScanSummary'))
   })
 })

@@ -69,7 +69,8 @@ function lifecycleSummary(scope) {
 
 function ResultTile({ label, value, detail, color = 'var(--ink)' }) {
   return (
-    <div style={{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 12,
+    <div role="group" aria-label={`${label}: ${value}`}
+         style={{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 12,
                   padding: '14px 16px', minWidth: 0 }}>
       <div style={{ color: 'var(--muted)', fontSize: 12, textTransform: 'uppercase',
                     letterSpacing: '0.04em', fontWeight: 600 }}>{label}</div>
@@ -117,6 +118,10 @@ export default function LastSuccessfulScanSummary({
   const complete = enumeration?.complete === true && !scope?.truncated
   const result = estateSummary(files, inventory)
   if (!result) return null
+  // This card describes the completed LISTING, not the subset later opened for assessment.
+  // estateSummary deliberately keeps both populations because DiscoveryResults needs to explain
+  // their difference; the headline here always prefers the recorded whole-estate denominator.
+  const discovered = result.estateListed ?? result.discovered
 
   return (
     <section aria-labelledby="last-successful-scan-heading" style={{ marginTop: 14 }}>
@@ -129,13 +134,13 @@ export default function LastSuccessfulScanSummary({
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
                     gap: 10 }}>
-        <ResultTile label="Discovered" value={nf.format(result.discovered)}
-                    detail={`${plural(result.discovered, 'file', 'files')} discovered · this scan`} />
-        {result.assessable != null && (
-          <ResultTile label="Can be assessed" value={nf.format(result.assessable)}
-                      detail={eligibleShare(result.assessable, result.estateListed)}
-                      color={STAT_COLOR.assessable} />
-        )}
+        <ResultTile label="Discovered" value={nf.format(discovered)}
+                    detail={`${plural(discovered, 'file', 'files')} discovered · this scan`} />
+        <ResultTile label="Eligible" value={result.assessable == null ? '—' : nf.format(result.assessable)}
+                    detail={result.assessable == null
+                      ? 'Assessable count was not recorded'
+                      : eligibleShare(result.assessable, result.estateListed)}
+                    color={STAT_COLOR.assessable} />
         {result.archive != null && (
           <ResultTile label="Archive review" value={nf.format(result.archive)}
                       detail="tagged by lifecycle rules" color={STAT_COLOR.archive} />

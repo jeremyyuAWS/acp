@@ -35,6 +35,8 @@ import QueueJobDetails from './QueueJobDetails.jsx'
 import DiscoveryQueuedPlaceholder from './DiscoveryQueuedPlaceholder.jsx'
 import AccordionSection from './AccordionSection.jsx'
 import LastSuccessfulScanSummary from './LastSuccessfulScanSummary.jsx'
+import DiscoveryCompleteness from './DiscoveryCompleteness.jsx'
+import DiscoveryLifecycleResults from './DiscoveryLifecycleResults.jsx'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
@@ -446,6 +448,9 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   }, [scanId, reloadInventory])
   // Un-merged when the read has not completed — mergeLifecycle passes `files` straight through.
   const estateFiles = useMemo(() => mergeLifecycle(files, inv), [files, inv])
+  const lifecycleCandidateRows = useMemo(() => (Array.isArray(estateFiles) ? estateFiles : []).filter((file) =>
+    file?.lifecycle_status === 'Archive Candidate' || file?.lifecycle_status === 'Delete Candidate'
+  ), [estateFiles])
   // Images, videos, and unsupported formats discovery listed but never opened — not assessable.
   // Returns [] when the inventory read is incomplete or missing (same guard as mergeLifecycle).
   const nonAssessable = useMemo(() => inventoryOnlyRows(files, inv), [files, inv])
@@ -888,11 +893,27 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           the full tree view. */}
       <FolderActivity active={progress?.active_folders} recent={progress?.recent_folders} />
 
-      {/* Estate progress summary: funnel, doc-types, and pending work.
-          Replaces the verbose DiscoverCompleteSummary — appears once discovery finishes. */}
+      {/* Discovery leads with facts from THIS listing. Completeness renders only when the source
+          or the prior run gives us something material to qualify; the tiles remain the stable,
+          scan-specific summary. */}
       {!busy && (run?.discovered_at || run?.status === 'discovered') && (
-        <AccordionSection id="discover-estate" title="Estate overview"
-                          ariaLabel="Estate overview" defaultOpen
+        <AccordionSection id="discover-latest" title="Latest discovery results"
+                          ariaLabel="Latest discovery results" defaultOpen
+                          style={{ marginBottom: 14 }}>
+          <>
+            <DiscoveryCompleteness run={run} scanList={scanList}
+              onRelist={() => onScan?.(run?.source === 'sharepoint' ? 'sharepoint' : 'drive')} />
+            <LastSuccessfulScanSummary run={run} scope={scope} runAt={runAt}
+                                       files={estateFiles} inventory={scope?.inventory || null} />
+          </>
+        </AccordionSection>
+      )}
+
+      {/* Cross-stage estate context also appears on Overview. Keep it available for comparison,
+          but subordinate and collapsed so Discover no longer opens looking like Overview. */}
+      {!busy && (run?.discovered_at || run?.status === 'discovered') && (
+        <AccordionSection id="discover-estate" title="Full-estate context"
+                          ariaLabel="Full-estate context" defaultOpen={false}
                           style={{ marginBottom: 14 }}>
           <>
             <EstateProgressPanel
@@ -905,12 +926,20 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               files={files}
               estateFiles={estateFiles}
               onGo={onAdvance}
-              afterProgress={(
-                <LastSuccessfulScanSummary run={run} scope={scope} runAt={runAt}
-                                           files={estateFiles} inventory={scope?.inventory || null} />
-              )}
             />
           </>
+        </AccordionSection>
+      )}
+
+      {/* Only actionable rule matches return to the main flow. The old all-supported-documents
+          presentation duplicated File inventory even when every row was Active. */}
+      {!busy && lifecycleCandidateRows.length > 0 && (
+        <AccordionSection id="discover-lifecycle-results" title="Lifecycle rule matches"
+                          meta={`${lifecycleCandidateRows.length.toLocaleString()} files`}
+                          ariaLabel="Lifecycle rule matches" defaultOpen={false}
+                          style={{ marginBottom: 14 }}>
+          <DiscoveryLifecycleResults rows={lifecycleCandidateRows} scanId={scanId}
+                                     source={run?.source} />
         </AccordionSection>
       )}
 
