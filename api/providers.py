@@ -28,7 +28,7 @@ from swallowed import swallowed
 # The cloud providers the gateway knows how to configure. Slice 2 stores config for all of them;
 # slice 3 wires the Azure OpenAI *adapter* first (the enterprise-safe default). Ollama is the
 # built-in local default and needs no key, so it is not in this table.
-CLOUD_PROVIDERS = ("azure_openai", "openai", "anthropic", "gemini", "bedrock")
+CLOUD_PROVIDERS = ("azure_openai", "openai", "anthropic", "gemini", "bedrock", "huggingface")
 
 
 def zone_for_url(base_url: str) -> str:
@@ -595,6 +595,70 @@ class RunPodServerlessVisionProvider:
                        completion_tokens=usage.get("completion_tokens"))
 
 
+class HuggingFaceVisionProvider:
+    """A private Hugging Face Inference Endpoint via its OpenAI-compatible chat-completions API
+    (ADR 0019). The endpoint URL and model name come from the admin's stored config; the token
+    rides only in the Authorization: Bearer header (never stored/logged/returned). `zone` is
+    derived from the endpoint URL via `zone_for_url` — a public HF endpoint on HF's own cloud
+    infrastructure is 'cloud'; an endpoint on private internal infrastructure is 'local'. Cost
+    is 0.0: private HF endpoints are billed by the hour at the endpoint level, not per token, so
+    there is no per-call token price to look up (ADR 0016 — never invent a cost). Never raises."""
+
+    def __init__(self, endpoint: str, api_key: str, *, model: str):
+        self.endpoint = (endpoint or "").rstrip("/")
+        self._key = api_key
+        self.model = model
+        self.name = "huggingface"
+        self.zone = zone_for_url(self.endpoint)
+
+    def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
+                 timeout: float = 120.0) -> dict:
+        import base64
+        mdl = model or self.model
+        t0 = time.monotonic()
+        url = f"{self.endpoint}/v1/chat/completions"
+
+        def _fail(reason: str) -> dict:
+            return _result(text=None, model=mdl, provider=self.name, zone=self.zone,
+                           latency_ms=int((time.monotonic() - t0) * 1000), ok=False, reason=reason)
+
+        try:
+            import httpx
+            b64 = base64.b64encode(image_bytes).decode("ascii")
+            body = {
+                "model": mdl,
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ]}],
+                "max_tokens": 128, "temperature": 0.2,
+            }
+            # The token rides only in the Authorization header — the URL carries no secret, so
+            # naming the endpoint on failure is safe and distinguishes a 404 (wrong path) from 401.
+            r = httpx.post(url, json=body,
+                           headers={"Authorization": f"Bearer {self._key}"},
+                           timeout=timeout)
+            r.raise_for_status()
+            data = r.json() or {}
+            choice = (data.get("choices") or [{}])[0]
+            text = ((choice.get("message") or {}).get("content", "") or "").strip()
+        except Exception as e:                       # cases 1 and 2 — see the reason constants
+            reason, detail = _classify(e)
+            _log_failure(self.name, mdl, url, detail)
+            return _fail(reason)
+        if not text:
+            _log_failure(self.name, mdl, url,
+                         "model returned empty — HTTP 200 with empty content "
+                         f"(finish_reason={choice.get('finish_reason')!r}, "
+                         f"usage={data.get('usage') or {}}).")
+            return _fail(REASON_EMPTY)
+        usage = data.get("usage") or {}
+        return _result(text=text, model=mdl, provider=self.name, zone=self.zone,
+                       latency_ms=int((time.monotonic() - t0) * 1000), ok=True, cost_usd=0.0,
+                       prompt_tokens=usage.get("prompt_tokens"),
+                       completion_tokens=usage.get("completion_tokens"))
+
+
 def serverless_vision_provider() -> VisionProvider | None:
     """The RunPod Serverless GPU provider from deploy env, or None when unconfigured (→ the vision
     default stays the local CPU floor, so a deploy without serverless config is exactly the keyless
@@ -627,6 +691,7 @@ _REQUIRED_FIELDS = {
     "azure_openai": ("endpoint", "deployment"),
     "openai": ("model",),
     "anthropic": ("model",),
+    "huggingface": ("endpoint", "model"),
 }
 
 
@@ -783,6 +848,11 @@ def _adapter_for(provider: str, cfg: dict) -> VisionProvider | None:
         if not (key and cfg.get("model")):
             return None
         return AnthropicVisionProvider(key, model=cfg.get("model"), endpoint=cfg.get("endpoint"))
+    if provider == "huggingface":
+        endpoint = cfg.get("endpoint")
+        if not (key and endpoint and cfg.get("model")):
+            return None
+        return HuggingFaceVisionProvider(endpoint, key, model=cfg.get("model"))
     return None
 
 
@@ -803,7 +873,7 @@ def cloud_vision_provider() -> VisionProvider | None:
     except Exception:
         setting = ""
     order = ([setting] if setting in CLOUD_PROVIDERS else []) + \
-            [p for p in ("azure_openai", "openai", "anthropic") if p != setting]
+            [p for p in ("azure_openai", "openai", "anthropic", "huggingface") if p != setting]
     for name in order:
         try:
             cfg = core.store.get_ai_provider_config(name)

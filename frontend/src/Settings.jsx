@@ -642,7 +642,7 @@ export function AllowList() {
 // Friendly labels for the provider catalogue.
 const PROVIDER_LABELS = {
   azure_openai: 'Azure OpenAI', openai: 'OpenAI', anthropic: 'Anthropic',
-  gemini: 'Google Gemini', bedrock: 'AWS Bedrock',
+  gemini: 'Google Gemini', bedrock: 'AWS Bedrock', huggingface: 'Hugging Face',
 }
 // Providers with a real adapter behind them — the ones that can be ENABLED here, because enabling
 // anything else would arm an escalation that silently never fires.
@@ -653,7 +653,7 @@ const PROVIDER_LABELS = {
 // escalation path and from the selector; only this gate stood between them and an admin. The
 // backend agrees with this list rather than being told by it — providerActivation.test.js pins
 // that the two cannot drift, and PUT /ai/providers refuses to enable a provider it cannot build.
-const ADAPTER_READY = new Set(['azure_openai', 'openai', 'anthropic'])
+const ADAPTER_READY = new Set(['azure_openai', 'openai', 'anthropic', 'huggingface'])
 
 // ADR 0019 §6 — the admin's AI provider governance page. The KEY is never entered here: an admin's
 // ops team provisions it as a container/Key-Vault secret, and this stores only the secret's NAME
