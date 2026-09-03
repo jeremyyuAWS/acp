@@ -87,14 +87,11 @@ describe('EstateProgressPanel wired in Overview', () => {
   })
 })
 
-describe('EstateProgressPanel wired in Discover', () => {
-  it('keeps estate context without embedding the latest-scan summary', () => {
-    expect(discover).toMatch(
-      /import EstateProgressPanel from ['"]\.\/EstateProgressPanel\.jsx['"]/,
-    )
-    expect(discover).toMatch(/<EstateProgressPanel[\s\S]{0,400}inventory=/)
-    expect(discover).not.toMatch(/<EstateProgressPanel[\s\S]{0,600}afterProgress=/)
-    expect(discover).toMatch(/id="discover-estate"[\s\S]{0,180}defaultOpen=\{false\}/)
+describe('EstateProgressPanel is intentionally absent from Discover', () => {
+  it('keeps the full-estate story on Overview only', () => {
+    expect(discover).not.toMatch(/import EstateProgressPanel/)
+    expect(discover).not.toMatch(/<EstateProgressPanel/)
+    expect(discover).not.toMatch(/id="discover-estate"/)
     expect(panel).not.toMatch(/<KpiCard/)
   })
 })

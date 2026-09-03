@@ -7,12 +7,10 @@ const here = dirname(fileURLToPath(import.meta.url))
 const discover = readFileSync(join(here, 'Discover.jsx'), 'utf8')
 
 describe('Discover keeps its own information hierarchy', () => {
-  it('leads with the latest discovery and subordinates shared estate context', () => {
-    const latest = discover.indexOf('id="discover-latest"')
-    const estate = discover.indexOf('id="discover-estate"')
-    expect(latest).toBeGreaterThan(-1)
-    expect(estate).toBeGreaterThan(latest)
-    expect(discover).toMatch(/id="discover-estate"[\s\S]{0,180}defaultOpen=\{false\}/)
+  it('keeps Discover scan-specific and leaves full-estate context to Overview', () => {
+    expect(discover).toMatch(/id="discover-latest"/)
+    expect(discover).not.toMatch(/id="discover-estate"/)
+    expect(discover).not.toMatch(/<EstateProgressPanel/)
   })
 
   it('shows lifecycle details only when actionable matches exist', () => {
