@@ -320,3 +320,191 @@ def test_failed_call_reports_no_token_usage(monkeypatch):
     res = providers.OpenAIVisionProvider("k", model="gpt-4o").generate("d", b"B")
     assert res["ok"] is False
     assert res["prompt_tokens"] is None and res["completion_tokens"] is None   # nothing to count
+
+
+# ── Hugging Face Inference Endpoint adapter ───────────────────────────────────────────────────
+# A private HF Inference Endpoint is an OpenAI-compatible chat-completions server. The token
+# rides only in Authorization: Bearer, the endpoint URL goes in the model config, and cost
+# is $0 in this system (no published per-token price to look up).
+
+def test_huggingface_adapter_posts_to_endpoint_and_normalizes(monkeypatch):
+    seen = {}
+
+    class _R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content": "  A pie chart.  "}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 800, "completion_tokens": 20}}
+
+    import httpx
+    def fake_post(url, json=None, headers=None, timeout=None):
+        seen.update(url=url, json=json, headers=headers, timeout=timeout)
+        return _R()
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    p = providers.HuggingFaceVisionProvider(
+        "https://my-endpoint.endpoints.huggingface.cloud", "hf-secret",
+        model="meta-llama/Llama-3.2-11B-Vision-Instruct")
+    res = p.generate("describe", b"IMG", timeout=45.0)
+
+    assert seen["url"] == "https://my-endpoint.endpoints.huggingface.cloud/v1/chat/completions"
+    assert seen["timeout"] == 45.0
+    content = seen["json"]["messages"][0]["content"]
+    assert content[0]["type"] == "text" and content[1]["type"] == "image_url"
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert res["ok"] is True and res["provider"] == "huggingface"
+    assert res["text"] == "A pie chart."                    # stripped
+    assert isinstance(res["latency_ms"], int)
+
+
+def test_huggingface_adapter_sends_authorization_bearer_header(monkeypatch):
+    """The token rides in Authorization: Bearer only — never in the URL or body."""
+
+    class _R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content": "x"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+
+    captured = {}
+    import httpx
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured["headers"] = headers; captured["json"] = json
+        return _R()
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    providers.HuggingFaceVisionProvider(
+        "https://ep.endpoints.huggingface.cloud", "my-hf-token", model="m").generate("d", b"B")
+
+    assert captured["headers"] == {"Authorization": "Bearer my-hf-token"}
+    assert "my-hf-token" not in str(captured["json"])
+
+
+def test_huggingface_adapter_model_override(monkeypatch):
+    captured = {}
+
+    class _R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+
+    import httpx
+    monkeypatch.setattr(httpx, "post",
+                        lambda url, json=None, headers=None, timeout=None: captured.update(json=json) or _R())
+
+    p = providers.HuggingFaceVisionProvider("https://ep.hf.co", "tok", model="base-model")
+    p.generate("d", b"B", model="override-model")
+    assert captured["json"]["model"] == "override-model"    # per-call override wins
+
+
+def test_huggingface_adapter_derives_zone_from_endpoint():
+    """A public HF endpoint is 'cloud'; a private internal endpoint is 'local'."""
+    p_cloud = providers.HuggingFaceVisionProvider(
+        "https://my-ep.endpoints.huggingface.cloud", "tok", model="m")
+    assert p_cloud.zone == "cloud"
+
+    p_local = providers.HuggingFaceVisionProvider(
+        "http://localhost:8080", "tok", model="m")
+    assert p_local.zone == "local"
+
+
+def test_huggingface_adapter_never_raises_on_transport_error(monkeypatch):
+    import httpx
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("refused")))
+    res = providers.HuggingFaceVisionProvider("https://ep.hf.co", "tok", model="m").generate("d", b"B")
+    assert res["ok"] is False and res["text"] is None
+    assert res["provider"] == "huggingface"
+    assert res["reason"] == providers.REASON_TRANSPORT
+
+
+def test_huggingface_adapter_degrades_on_http_error(monkeypatch):
+    """A 401 or 5xx results in ok=False with an http_NNN reason, not a raise."""
+    class _R401:
+        status_code = 401
+        text = '{"error": "Unauthorized"}'
+        def raise_for_status(self):
+            err = Exception("HTTP 401"); err.response = self; raise err
+        def json(self): return {"error": "Unauthorized"}
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _R401())
+    res = providers.HuggingFaceVisionProvider("https://ep.hf.co", "bad-tok", model="m").generate("d", b"B")
+    assert res["ok"] is False and res["text"] is None
+    assert res["reason"] == "http_401"
+
+
+def test_huggingface_adapter_degrades_on_empty_response(monkeypatch):
+    class _R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content": ""}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 500, "completion_tokens": 0}}
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _R())
+    res = providers.HuggingFaceVisionProvider("https://ep.hf.co", "tok", model="m").generate("d", b"B")
+    assert res["ok"] is False and res["text"] is None
+    assert res["reason"] == providers.REASON_EMPTY
+
+
+def test_huggingface_result_surfaces_token_usage(monkeypatch):
+    class _R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content": "A chart"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 900, "completion_tokens": 30}}
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", lambda url, json=None, headers=None, timeout=None: _R())
+    res = providers.HuggingFaceVisionProvider("https://ep.hf.co", "tok", model="m").generate("d", b"B")
+    assert res["prompt_tokens"] == 900 and res["completion_tokens"] == 30
+
+
+def test_huggingface_cost_is_zero(monkeypatch):
+    """Private HF endpoints have no published per-token price in this system."""
+    class _R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 10000, "completion_tokens": 500}}
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _R())
+    res = providers.HuggingFaceVisionProvider("https://ep.hf.co", "tok", model="m").generate("d", b"B")
+    assert res["cost_usd"] == 0.0
+
+
+def test_huggingface_conforms_to_protocol():
+    p = providers.HuggingFaceVisionProvider("https://ep.hf.co", "tok", model="m")
+    assert isinstance(p, providers.VisionProvider)
+
+
+def test_selector_routes_to_huggingface(monkeypatch):
+    import ai, core
+    monkeypatch.setattr(ai, "_maybe_refresh_endpoint", lambda: None)
+    monkeypatch.setattr(ai, "OLLAMA_BASE_URL", "http://localhost:11434")
+    monkeypatch.setattr(ai, "OLLAMA_VISION_MODEL", "moondream")
+    monkeypatch.setenv("HF_API_TOKEN", "hf-live-token")
+    cfg = {"provider": "huggingface", "enabled": True,
+           "endpoint": "https://ep.endpoints.huggingface.cloud",
+           "model": "meta-llama/Llama-3.2-11B-Vision-Instruct",
+           "key_secret_ref": "HF_API_TOKEN"}
+    monkeypatch.setattr(core, "store", _store(setting="huggingface", configs={"huggingface": cfg}))
+    p = providers.active_vision_provider()
+    assert isinstance(p, providers.HuggingFaceVisionProvider)
+    assert p.model == "meta-llama/Llama-3.2-11B-Vision-Instruct"
+
+
+def test_huggingface_without_key_falls_back_to_ollama(monkeypatch):
+    import ai, core
+    monkeypatch.setattr(ai, "_maybe_refresh_endpoint", lambda: None)
+    monkeypatch.setattr(ai, "OLLAMA_BASE_URL", "http://localhost:11434")
+    monkeypatch.setattr(ai, "OLLAMA_VISION_MODEL", "moondream")
+    monkeypatch.delenv("HF_API_TOKEN", raising=False)
+    cfg = {"provider": "huggingface", "enabled": True,
+           "endpoint": "https://ep.hf.co",
+           "model": "m", "key_secret_ref": "HF_API_TOKEN"}
+    monkeypatch.setattr(core, "store", _store(setting="huggingface", configs={"huggingface": cfg}))
+    p = providers.active_vision_provider()
+    assert isinstance(p, providers.OllamaVisionProvider)

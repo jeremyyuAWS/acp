@@ -72,6 +72,9 @@ def _anthropic_ok(input_tokens=1200, output_tokens=40, text="A black square on a
     ("anthropic", {}, ["model", "key_secret_ref"]),
     ("anthropic", {"key_secret_ref": "ANTHROPIC_API_KEY"}, ["model"]),
     ("azure_openai", {"key_secret_ref": "AZ"}, ["endpoint", "deployment"]),
+    ("huggingface", {}, ["endpoint", "model", "key_secret_ref"]),
+    ("huggingface", {"endpoint": "https://ep.hf.co", "model": "m"}, ["key_secret_ref"]),
+    ("huggingface", {"endpoint": "https://ep.hf.co", "key_secret_ref": "HF_TOKEN"}, ["model"]),
 ])
 def test_readiness_names_every_missing_field(provider, cfg, expect_missing):
     r = providers.activation_readiness(provider, cfg)
@@ -348,3 +351,63 @@ def test_cloud_status_reports_an_activated_provider_without_leaking_anything(mon
     st = providers.cloud_status()
     assert st == {"enabled": True, "provider": "anthropic", "zone": "cloud"}
     assert "sk-ant-secret-value" not in json.dumps(st)
+
+
+# ── 7. HuggingFace Inference Endpoint ────────────────────────────────────────────────────────
+
+def test_huggingface_is_in_the_cloud_provider_catalogue():
+    """HuggingFace must appear in CLOUD_PROVIDERS so the Settings page renders it and
+    cloud_vision_provider() can select it."""
+    assert "huggingface" in providers.CLOUD_PROVIDERS
+
+
+def test_cloud_vision_provider_can_select_huggingface(monkeypatch, isolated_store):
+    import core
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setenv("HF_API_TOKEN", "hf-live-token")
+    isolated_store.upsert_ai_provider_config(
+        "huggingface", enabled=True,
+        endpoint="https://my-ep.endpoints.huggingface.cloud",
+        deployment=None, model="meta-llama/Llama-3.2-11B-Vision-Instruct",
+        key_secret_ref="HF_API_TOKEN", updated_by="admin")
+    p = providers.cloud_vision_provider()
+    assert isinstance(p, providers.HuggingFaceVisionProvider)
+    assert p.zone == "cloud"
+
+
+def test_huggingface_readiness_requires_endpoint_model_and_key(monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "hf-secret")
+    full = {"endpoint": "https://ep.hf.co", "model": "m", "key_secret_ref": "HF_TOKEN"}
+    r = providers.activation_readiness("huggingface", full)
+    assert r["ready"] is True and r["secret_resolves"] is True
+    assert r["missing"] == []
+
+
+def test_huggingface_without_endpoint_is_not_ready():
+    r = providers.activation_readiness("huggingface", {"model": "m", "key_secret_ref": "K"})
+    assert "endpoint" in r["missing"]
+
+
+def test_huggingface_test_connection_sends_probe_not_customer_content(monkeypatch, isolated_store):
+    import base64, core, httpx
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setenv("HF_API_TOKEN", "hf-test-token")
+    isolated_store.upsert_ai_provider_config(
+        "huggingface", enabled=False,
+        endpoint="https://ep.endpoints.huggingface.cloud",
+        deployment=None, model="meta-llama/Llama-3.2-11B-Vision-Instruct",
+        key_secret_ref="HF_API_TOKEN", updated_by="admin")
+    sent = {}
+
+    def _post(url, **kw):
+        sent.update(url=url, json=kw.get("json"), headers=kw.get("headers"))
+        return _openai_ok()
+    monkeypatch.setattr(httpx, "post", _post)
+
+    res = providers.test_connection("huggingface")
+    assert res["ok"] is True
+
+    url = sent["json"]["messages"][0]["content"][1]["image_url"]["url"]
+    assert base64.b64decode(url.split(",", 1)[1]) == providers.probe_image_bytes()
+    assert sent["headers"]["Authorization"] == "Bearer hf-test-token"
+    assert "hf-test-token" not in json.dumps(res)
