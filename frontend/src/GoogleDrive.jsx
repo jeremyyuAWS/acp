@@ -183,11 +183,11 @@ export function DriveUploadButton({ driveFileId, blob, score, engine }) {
   if (phase === 'saving')    return <span style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0 }}><span className="spinner" style={{ marginRight: 4 }} />Saving…</span>
   if (phase === 'done') return (
     <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0, fontSize: 12 }}>
-      <span style={{ color: '#3B6D11' }}>✓ Saved</span>
-      {viewUrl && <a href={viewUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent, #1F5FA8)', fontSize: 11 }}>Open ↗</a>}
+      <span style={{ color: 'var(--success-fg)' }}>✓ Saved</span>
+      {viewUrl && <a href={viewUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent, var(--info-fg))', fontSize: 11 }}>Open ↗</a>}
     </span>
   )
-  return <span style={{ color: '#854F0B', fontSize: 12, flexShrink: 0 }}>✕ {errMsg}</span>
+  return <span style={{ color: 'var(--warn-fg)', fontSize: 12, flexShrink: 0 }}>✕ {errMsg}</span>
 }
 
 // ── GoogleDrive main component ─────────────────────────────────────────────────
@@ -354,8 +354,8 @@ export default function GoogleDrive({ onFiles }) {
   const scoreBadge = (id) => {
     const s = scores[id]
     if (!s) return null
-    const bg = s.score >= 90 ? '#E7F0DC' : s.score >= 50 ? '#FAEEDA' : '#E2EDFB'
-    const fg = s.score >= 90 ? '#3B6D11' : s.score >= 50 ? '#854F0B' : '#1F5FA8'
+    const bg = s.score >= 90 ? 'var(--success-bg)' : s.score >= 50 ? 'var(--warn-bg)' : 'var(--info-bg)'
+    const fg = s.score >= 90 ? 'var(--success-fg)' : s.score >= 50 ? 'var(--warn-fg)' : 'var(--info-fg)'
     const icon = s.score >= 90 ? '🟢' : s.score >= 50 ? '🟡' : '🔴'
     return React.createElement('span', { style: { fontSize: 10, padding: '1px 5px', borderRadius: 3, background: bg, color: fg, flexShrink: 0, whiteSpace: 'nowrap' } }, icon + ' ' + s.score)
   }
@@ -368,7 +368,7 @@ export default function GoogleDrive({ onFiles }) {
           <img src="https://www.gstatic.com/images/branding/googleg/1x/googleg_standard_color_16dp.png" alt="" width={14} height={14} />
           Connect Google Drive
         </button>
-        {error && <p style={{ color: '#854F0B', fontSize: 12, marginTop: 6, marginBottom: 0 }}>{error}</p>}
+        {error && <p style={{ color: 'var(--warn-fg)', fontSize: 12, marginTop: 6, marginBottom: 0 }}>{error}</p>}
       </div>
     )
   }
@@ -451,7 +451,7 @@ export default function GoogleDrive({ onFiles }) {
         </div>
       )}
 
-      {error && <p style={{ color: '#854F0B', fontSize: 12, marginTop: 6, marginBottom: 0 }}>{error}</p>}
+      {error && <p style={{ color: 'var(--warn-fg)', fontSize: 12, marginTop: 6, marginBottom: 0 }}>{error}</p>}
     </div>
   )
 }

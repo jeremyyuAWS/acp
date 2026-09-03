@@ -300,13 +300,13 @@ const CRIT = {
 }
 export const critLabel = (w) => CRIT[w] ?? (w || '').replace(/^SC_/, '').replace(/_/g, '.')
 const SEV = {
-  CRITICAL: ['#E2EDFB', '#1F5FA8'], SERIOUS: ['#E6EFFB', '#2A5E9E'],
-  MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'],
+  CRITICAL: ['var(--info-bg)', 'var(--info-fg)'], SERIOUS: ['#E6EFFB', '#2A5E9E'],
+  MODERATE: ['var(--warn-bg)', 'var(--warn-fg)'], MINOR: ['#F1EFE8', '#5F5E5A'],
 }
 const SEV_LEGEND = [
-  ['critical', '#1F5FA8', '#E2EDFB', "Completely blocks a group of users — e.g. an unlabelled image or a keyboard trap. Almost always WCAG Level A."],
+  ['critical', 'var(--info-fg)', 'var(--info-bg)', "Completely blocks a group of users — e.g. an unlabelled image or a keyboard trap. Almost always WCAG Level A."],
   ['serious', '#2A5E9E', '#E6EFFB', "A major barrier that's hard to work around — e.g. missing table headers or an empty document title."],
-  ['moderate', '#854F0B', '#FAEEDA', "Noticeable difficulty, but the content is still reachable — e.g. wrong reading order or undeclared language."],
+  ['moderate', 'var(--warn-fg)', 'var(--warn-bg)', "Noticeable difficulty, but the content is still reachable — e.g. wrong reading order or undeclared language."],
   ['minor', '#5F5E5A', '#F1EFE8', "A minor annoyance or best-practice gap — e.g. unclear worksheet names."],
 ]
 // A file's verdict. 'issues' means it has OPEN FINDINGS — so it must key on the findings,
@@ -407,12 +407,12 @@ function journeyStates(st, remNow) {
   return [...base, 'current', 'proj', 'proj', 'proj', 'proj'] // issues / uncertain
 }
 const STATE = {
-  done:       ['✓', '#3B6D11', '#E7F0DC'],
-  remediated: ['✓', '#3B6D11', '#E7F0DC'],
-  reviewed:   ['✓', '#3B6D11', '#E7F0DC'],
-  current:    ['●', '#854F0B', '#FAEEDA'],
+  done:       ['✓', 'var(--success-fg)', 'var(--success-bg)'],
+  remediated: ['✓', 'var(--success-fg)', 'var(--success-bg)'],
+  reviewed:   ['✓', 'var(--success-fg)', 'var(--success-bg)'],
+  current:    ['●', 'var(--warn-fg)', 'var(--warn-bg)'],
   proj:       ['◯', '#716B76', '#f1eff4'],
-  blocked:    ['✕', '#1F5FA8', '#E2EDFB'],
+  blocked:    ['✕', 'var(--info-fg)', 'var(--info-bg)'],
   skip:       ['–', '#716B76', '#f1eff4'],
 }
 const STATE_NOTE = {
@@ -750,7 +750,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           <div><span className="muted">Views · 90d</span><b>{file.views90d != null ? file.views90d.toLocaleString() : '—'}</b></div>
           <div><span className="muted">Size</span><b>{sizeKB != null ? (sizeKB >= 1024 ? `${(sizeKB / 1024).toFixed(1)} MB` : `${sizeKB} KB`) : '—'}</b></div>
           <div><span className="muted">{file.duration ? 'Duration' : file.sheets ? 'Sheets' : 'Pages'}</span><b>{file.duration || file.pages || file.sheets || '—'}</b></div>
-          <div><span className="muted">Owner</span><b>{overrideOwner || file.owner || '—'}{delegatedFrom && <span className="badge" style={{ marginLeft: 6, background: '#E7F0DC', color: '#3B6D11', fontSize: 10, fontWeight: 400 }}>delegated from {delegatedFrom}</span>}</b></div>
+          <div><span className="muted">Owner</span><b>{overrideOwner || file.owner || '—'}{delegatedFrom && <span className="badge" style={{ marginLeft: 6, background: 'var(--success-bg)', color: 'var(--success-fg)', fontSize: 10, fontWeight: 400 }}>delegated from {delegatedFrom}</span>}</b></div>
         </>) : (
           <div style={{ gridColumn: '1 / -1' }}><span className="muted" style={{ fontSize: 12 }}>Extended metadata (modified date, views, owner) not returned by this source connector.</span></div>
         )}
@@ -771,8 +771,8 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
   const shownTags = context === 'discover' ? (file.tags || []).filter((t) => !STATUS_TAGS.has(t)) : (file.tags || [])
   const provBlock = file.acp_stamped ? (
-    <div style={{ margin: '0 0 12px', padding: '8px 12px', borderRadius: 8, background: '#E7F0DC',
-                  border: '1px solid #C5DBA8', fontSize: 12.5, color: '#2F5310',
+    <div style={{ margin: '0 0 12px', padding: '8px 12px', borderRadius: 8, background: 'var(--success-bg)',
+                  border: '1px solid #C5DBA8', fontSize: 12.5, color: 'var(--success-fg-strong)',
                   display: 'flex', alignItems: 'center', gap: 8 }}>
       <span aria-hidden="true">🛡️</span>
       <span>Remediated by <b>Mova.io ACP</b>{file.acp_stamped !== 'yes' ? ` · ${file.acp_stamped}` : ''} — carries an ACP provenance stamp.</span>
@@ -876,7 +876,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                 <span className="dectag ok" style={{ fontSize: 12, padding: '3px 10px' }}>✓ Remediated — fixed copy stored{hitlQueued ? ' · queued for human review' : ''}</span>
               )}
               {remNow === 'error' && (
-                <span style={{ color: '#B43A2A' }}>
+                <span style={{ color: 'var(--error-fg)' }}>
                   Couldn't remediate this file — <button className="ghost small" onClick={remediateNow}>try again</button>
                 </span>
               )}
@@ -917,7 +917,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
               {dl === 'loading' ? '⏳ Preparing…' : '⤓ Download fixed copy'}
             </button>
             {dl?.error && (
-              <div className="muted" role="status" aria-live="polite" style={{ flexBasis: '100%', color: '#B43A2A', fontSize: 12 }}>
+              <div className="muted" role="status" aria-live="polite" style={{ flexBasis: '100%', color: 'var(--error-fg)', fontSize: 12 }}>
                 {dl.error}
               </div>
             )}
@@ -1039,7 +1039,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
               const [bg, fg] = SEV[i.severity] || SEV.MINOR
               const lane = laneOf(i)
               const laneHeader = (n === 0 || laneOf(groups[n - 1]) !== lane) ? (
-                <div className="findlane" key={`lane-${lane}`} style={{ margin: n === 0 ? '2px 0 6px' : '14px 0 6px', fontSize: 12.5, fontWeight: 700, color: lane === 'auto' ? '#2E6B0E' : '#854F0B' }}>
+                <div className="findlane" key={`lane-${lane}`} style={{ margin: n === 0 ? '2px 0 6px' : '14px 0 6px', fontSize: 12.5, fontWeight: 700, color: lane === 'auto' ? '#2E6B0E' : 'var(--warn-fg)' }}>
                   {lane === 'auto' ? `⚡ Automatic — ACP fixes these (${autoCount})` : `✎ Needs review — a person decides (${reviewCount})`}
                 </div>
               ) : null
@@ -1533,7 +1533,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           collapse it so the drawer leads with status/findings, not a diagnostic dump. The journey
           is now a compact HORIZONTAL row (was a tall vertical list eating ~1/5 of the panel). */}
       <details className="drawer-audit">
-        <summary style={{ cursor: 'pointer', color: '#1F5FA8', fontWeight: 600, margin: '14px 0 0' }}>
+        <summary style={{ cursor: 'pointer', color: 'var(--info-fg)', fontWeight: 600, margin: '14px 0 0' }}>
           Audit details <span className="muted" style={{ fontWeight: 400 }}>· journey · trace · history</span>
         </summary>
         <h4 className="drawerh" style={{ marginTop: 12 }}>Document journey</h4>

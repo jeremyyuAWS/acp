@@ -91,7 +91,7 @@ export function parseNL(text, opts) {
   return { conditions, match, actions: { priority: priority || 'High', slaDays: sla ? +sla : null } }
 }
 
-export const PRI_COLOR = { Critical: ['#1F5FA8', '#E2EDFB'], High: ['#854F0B', '#FAEEDA'], Medium: ['#3C3489', '#EEEDFE'], Low: ['#5F5E5A', '#EFEDEA'] }
+export const PRI_COLOR = { Critical: ['var(--info-fg)', 'var(--info-bg)'], High: ['var(--warn-fg)', 'var(--warn-bg)'], Medium: ['#3C3489', '#EEEDFE'], Low: ['#5F5E5A', '#EFEDEA'] }
 export const PRI_RANK = { Critical: 0, High: 1, Medium: 2, Low: 3 }
 export const condText = (c) => `${FIELDS[c.field]?.label || c.field} ${c.op} “${c.value}”`
 
@@ -155,8 +155,8 @@ export function annotate(files, pub) {
 // ---- Seed ontology — an org's starting model, live by default so the demo shows the
 // loop closed without a manual publish. The admin edits → drafts → re-publishes. ----
 export const DEFAULT_LABELS = [
-  { id: 'l1', name: 'Patient Consent Forms', color: '#1F5FA8' },
-  { id: 'l2', name: 'High-Risk Legal Contracts', color: '#854F0B' },
+  { id: 'l1', name: 'Patient Consent Forms', color: 'var(--info-fg)' },
+  { id: 'l2', name: 'High-Risk Legal Contracts', color: 'var(--warn-fg)' },
   { id: 'l3', name: 'Board Minutes', color: '#3C3489' },
   { id: 'l4', name: 'Legacy HR Policies', color: '#5F5E5A' },
 ]

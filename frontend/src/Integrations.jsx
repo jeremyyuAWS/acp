@@ -351,8 +351,8 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
       sub: `${h.totalErr} file${h.totalErr !== 1 ? 's' : ''} couldn’t be accessed in recent scans` }
   }
   const HEALTH_STATE = {
-    ok:   ['#3B6D11', '#E7F0DC'],
-    attn: ['#A32D2D', '#FCEBEB'],
+    ok:   ['var(--success-fg)', 'var(--success-bg)'],
+    attn: ['var(--error-fg-strong)', '#FCEBEB'],
     none: ['var(--muted)', 'var(--line)'],
   }
 

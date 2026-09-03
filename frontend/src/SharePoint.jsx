@@ -80,8 +80,8 @@ export function SpUploadButton({ itemId, driveId, blob, score, engine, scanId, f
     </span>
   )
   if (phase === 'saving') return <span style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0 }}><span className="spinner" style={{ marginRight: 4 }} />Saving…</span>
-  if (phase === 'done')   return <span style={{ fontSize: 12, color: '#3B6D11', flexShrink: 0 }}>✓ Saved to SharePoint</span>
-  return <span style={{ fontSize: 12, color: '#854F0B', flexShrink: 0 }}>✕ {errMsg}</span>
+  if (phase === 'done')   return <span style={{ fontSize: 12, color: 'var(--success-fg)', flexShrink: 0 }}>✓ Saved to SharePoint</span>
+  return <span style={{ fontSize: 12, color: 'var(--warn-fg)', flexShrink: 0 }}>✕ {errMsg}</span>
 }
 
 // ── Main SharePoint component ─────────────────────────────────────────────────
@@ -253,8 +253,8 @@ export default function SharePoint({ onFiles }) {
   const scoreBadge = (id) => {
     const s = scores[id]
     if (!s) return null
-    const bg = s.score >= 90 ? '#E7F0DC' : s.score >= 50 ? '#FAEEDA' : '#E2EDFB'
-    const fg = s.score >= 90 ? '#3B6D11' : s.score >= 50 ? '#854F0B' : '#1F5FA8'
+    const bg = s.score >= 90 ? 'var(--success-bg)' : s.score >= 50 ? 'var(--warn-bg)' : 'var(--info-bg)'
+    const fg = s.score >= 90 ? 'var(--success-fg)' : s.score >= 50 ? 'var(--warn-fg)' : 'var(--info-fg)'
     const icon = s.score >= 90 ? '🟢' : s.score >= 50 ? '🟡' : '🔴'
     return React.createElement('span', { style: { fontSize: 10, padding: '1px 5px', borderRadius: 3, background: bg, color: fg, flexShrink: 0, whiteSpace: 'nowrap' } }, `${icon} ${s.score}`)
   }
@@ -273,7 +273,7 @@ export default function SharePoint({ onFiles }) {
           Connect SharePoint / OneDrive
         </button>
         {!CLIENT_ID && <p style={{ color: 'var(--muted)', fontSize: 12, marginTop: 6, marginBottom: 0 }}>Add <code>VITE_AZURE_CLIENT_ID</code> to <code>frontend/.env</code> to enable.</p>}
-        {error && <p style={{ color: '#854F0B', fontSize: 12, marginTop: 6, marginBottom: 0 }}>{error}</p>}
+        {error && <p style={{ color: 'var(--warn-fg)', fontSize: 12, marginTop: 6, marginBottom: 0 }}>{error}</p>}
       </div>
     )
   }
@@ -377,7 +377,7 @@ export default function SharePoint({ onFiles }) {
         </div>
       )}
 
-      {error && <p style={{ color: '#854F0B', fontSize: 12, marginTop: 6, marginBottom: 0 }}>{error}</p>}
+      {error && <p style={{ color: 'var(--warn-fg)', fontSize: 12, marginTop: 6, marginBottom: 0 }}>{error}</p>}
     </div>
   )
 }

@@ -586,14 +586,14 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               : <>Run all {assessN.toLocaleString()} readable documents against the success criteria at your target conformance level.</>}
           </p>
           {!deferredPending && excludedCount > 0 && (
-            <p style={{ margin: '5px 0 0', fontSize: 12.5, color: '#854F0B', background: '#FAEEDA', border: '1px solid #E8C98A', borderRadius: 6, padding: '5px 10px', display: 'inline-block' }}>
+            <p style={{ margin: '5px 0 0', fontSize: 12.5, color: 'var(--warn-fg)', background: 'var(--warn-bg)', border: '1px solid #E8C98A', borderRadius: 6, padding: '5px 10px', display: 'inline-block' }}>
               ⚠ {excludedCount} of {files.length} files excluded — could not be parsed during scan (password-protected, unsupported format, or corrupt). Only {docs.length} parsable files are assessed.
             </p>
           )}
-          {scanBusy && <p style={{ margin: '6px 0 0', fontSize: 13, color: '#854F0B' }}>⏳ A scan is still running — assessment will be available once it finishes.</p>}
+          {scanBusy && <p style={{ margin: '6px 0 0', fontSize: 13, color: 'var(--warn-fg)' }}>⏳ A scan is still running — assessment will be available once it finishes.</p>}
         </div>
         <button className="assessbtn" onClick={() => assess()} disabled={phase === 'running' || !assessN || scanBusy}
-                style={phase === 'done' ? { background: 'transparent', color: '#1F5FA8', border: '1.5px solid #9DBCE4', fontWeight: 600 } : undefined}
+                style={phase === 'done' ? { background: 'transparent', color: 'var(--info-fg)', border: '1.5px solid #9DBCE4', fontWeight: 600 } : undefined}
                 title={scanBusy ? 'A scan is still running — assessment will be available when it completes'
                        : phase === 'done' ? 'Already assessed — re-run only if you changed the target level or re-scanned' : undefined}>
           {phase === 'running' ? 'Assessing…'
@@ -640,7 +640,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               && (isTerminalJob(jobInfo.status) || !progressIsConfirmed({ inFlight: liveQueue?.workersBusy })) && (
               <div style={{ fontSize: 13, margin: '4px 0 0', display: 'flex', alignItems: 'center', gap: 6 }}>
                 {jobInfo.status === 'queued'
-                  ? <><span style={{ background: '#FAEEDA', color: '#854F0B', fontWeight: 600,
+                  ? <><span style={{ background: 'var(--warn-bg)', color: 'var(--warn-fg)', fontWeight: 600,
                                      padding: '2px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>
                         ⏳ Queued
                       </span>
@@ -706,7 +706,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               return lastActivityMs < nowTick - 5 * 60 * 1000
             })() && (
               <div role="alert" style={{ margin: '8px 0', padding: '10px 14px', borderRadius: 8,
-                   fontSize: 13, background: '#FAEEDA', border: '1px solid #D4A017', color: '#7A5800' }}>
+                   fontSize: 13, background: 'var(--warn-bg)', border: '1px solid #D4A017', color: '#7A5800' }}>
                 ⚠ <b>Assessment may be stalled</b> — {assessN - progress} document{assessN - progress === 1 ? '' : 's'} remain,
                 but no worker has started or completed a document in the last 5 minutes.
                 Check that the worker service is reachable and that documents are not repeatedly failing.

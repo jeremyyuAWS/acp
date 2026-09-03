@@ -222,7 +222,7 @@ export const BUCKET_META = {
   assessed: {
     label: 'Assessed',
     note: 'a selected document type, no lifecycle flag, and at least one selected criterion applies',
-    color: '#3B6D11',
+    color: 'var(--success-fg)',
   },
   lifecycle: {
     label: 'Not eligible — lifecycle',
@@ -242,7 +242,7 @@ export const BUCKET_META = {
   unreadable: {
     label: 'Not eligible — access or error',
     note: 'could not be read when its content was needed',
-    color: '#A32D2D',
+    color: 'var(--error-fg-strong)',
   },
 }
 

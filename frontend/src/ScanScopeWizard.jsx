@@ -108,7 +108,7 @@ const SIM_NOT_WRITTEN =
 const EMPTY_GUARD =
   'Pick at least one criterion, or choose “Everything supported” — an empty selection would assess '
   + 'everything, which is the opposite of what it looks like.'
-const msgColor = (m) => (m.startsWith('✓') ? '#3B6D11' : m.startsWith('SIM') ? '#6B4A0B' : '#A32D2D')
+const msgColor = (m) => (m.startsWith('✓') ? 'var(--success-fg)' : m.startsWith('SIM') ? '#6B4A0B' : 'var(--error-fg-strong)')
 
 // The stored value is a preset NAME or a JSON map — the two forms the backend accepts. Both resolve
 // to {sc: Set(formats)} so nothing downstream has to care which was stored. (Same as ScanScope.)

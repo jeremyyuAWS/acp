@@ -6,7 +6,7 @@ import { reviewType } from './reviewCard.js'
 // severity, and whether the proposal is grounded — into ONE prioritization the reviewer can sort by
 // and clear quick wins first. Every input is real; the tier is a rule, not a fabricated score.
 const TIERS = {
-  critical: { key: 'critical', label: 'Critical', color: '#B43A2A', bg: '#FBE7E2', rank: 4 },
+  critical: { key: 'critical', label: 'Critical', color: 'var(--error-fg)', bg: '#FBE7E2', rank: 4 },
   high:     { key: 'high',     label: 'High',     color: '#8A5A00', bg: '#FBEECB', rank: 3 },
   medium:   { key: 'medium',   label: 'Medium',   color: '#2C5209', bg: '#EDF4E3', rank: 2 },
   low:      { key: 'low',      label: 'Low',      color: '#475569', bg: '#ECEEF1', rank: 1 },

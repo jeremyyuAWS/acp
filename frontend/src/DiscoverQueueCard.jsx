@@ -88,7 +88,7 @@ export default function DiscoverQueueCard({
 
       {provisioning && (
         <div style={{ fontSize: 12.5, marginBottom: 10, padding: '6px 10px', borderRadius: 6,
-                       background: 'var(--surface-2, #F6EEDF)', color: '#854F0B' }}>
+                       background: 'var(--surface-2, #F6EEDF)', color: 'var(--warn-fg)' }}>
           Azure is provisioning additional capacity — workers usually become ready in under a minute.
         </div>
       )}

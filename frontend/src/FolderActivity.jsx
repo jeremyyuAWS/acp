@@ -14,7 +14,7 @@
 // folder concept at all; a scan not yet in the discovering/lifecycle phase has neither) simply
 // have nothing to show, which is different from "loading" and should not look like it.
 const STATE_LABEL = {
-  completed: { text: 'Scanned', ink: '#3B6D11', icon: '✓' },
+  completed: { text: 'Scanned', ink: 'var(--success-fg)', icon: '✓' },
   failed: { text: 'Failed', ink: '#8A2A20', icon: '✗' },
   rate_limited: { text: 'Rate-limited', ink: '#7A5800', icon: '⚠' },
 }

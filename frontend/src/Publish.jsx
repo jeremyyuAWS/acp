@@ -175,7 +175,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           automated checks verify WITHIN the selected scope; they cannot certify overall WCAG
           conformance. The estate score and "certifiable/conformant" language are gone for exactly
           that reason, and the PDF is a secondary evidence artifact, not the headline. */}
-      <section className="panel" style={{ borderLeft: '4px solid #3B6D11' }}>
+      <section className="panel" style={{ borderLeft: '4px solid var(--success-fg)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 18, flexWrap: 'wrap' }}>
           <div style={{ flex: '1 1 340px' }}>
             <h2 style={{ margin: 0 }}>🚀 Release Center</h2>
@@ -183,12 +183,12 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
               {orgLabel} · WCAG 2.1 Level AA · {reportDate}
             </div>
             <p style={{ fontSize: 13.5, lineHeight: 1.6, margin: '12px 0 0', maxWidth: 620 }}>
-              <b style={{ color: '#3B6D11' }}>{run?.certifiable ?? 0}</b> of <b>{(run?.files ?? 0).toLocaleString()}</b> documents were <b>automatically verified within the selected scope</b> and are ready to release{run?.error ? <> · {run.error} could not be analysed</> : null}. ACP verifies the criteria in scope — it does not certify overall conformance.
+              <b style={{ color: 'var(--success-fg)' }}>{run?.certifiable ?? 0}</b> of <b>{(run?.files ?? 0).toLocaleString()}</b> documents were <b>automatically verified within the selected scope</b> and are ready to release{run?.error ? <> · {run.error} could not be analysed</> : null}. ACP verifies the criteria in scope — it does not certify overall conformance.
             </p>
           </div>
           <div style={{ textAlign: 'right', minWidth: 150, fontSize: 13.5, lineHeight: 1.9 }}>
-            <div><b style={{ color: '#3B6D11', fontSize: 17 }}>{ready.length}</b> ready for release</div>
-            <div><b style={{ color: pubStarted ? '#3B6D11' : 'var(--muted)', fontSize: 17 }}>{pubStarted ? publishedCount : 0}</b> released</div>
+            <div><b style={{ color: 'var(--success-fg)', fontSize: 17 }}>{ready.length}</b> ready for release</div>
+            <div><b style={{ color: pubStarted ? 'var(--success-fg)' : 'var(--muted)', fontSize: 17 }}>{pubStarted ? publishedCount : 0}</b> released</div>
             <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Policy: remediated copy → {driveMirrorEnabled && anyDrive ? <>Drive “{driveMirrorFolder}” + Blob</> : 'Blob'}</div>
           </div>
         </div>
@@ -201,8 +201,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       {/* W5 — conditional-release → full-certification graduation. Shown only once a release has
           started (setStatus is NONE before that, and this renders nothing). */}
       {setStatus.status === SET_STATUS.CONDITIONAL && (
-        <section className="panel" style={{ borderLeft: '4px solid #854F0B' }} aria-label="Conditional release status">
-          <b style={{ fontSize: 13.5, color: '#854F0B' }}>◐ Conditionally released</b>
+        <section className="panel" style={{ borderLeft: '4px solid var(--warn-fg)' }} aria-label="Conditional release status">
+          <b style={{ fontSize: 13.5, color: 'var(--warn-fg)' }}>◐ Conditionally released</b>
           <p style={{ fontSize: 13, lineHeight: 1.6, margin: '8px 0 0', maxWidth: 680 }}>
             <b>{setStatus.released}</b> of <b>{setStatus.total}</b> in-scope documents are released.
             {setStatus.heldOpen > 0 && <> <b>{setStatus.heldOpen}</b> {setStatus.heldOpen === 1 ? 'document is' : 'documents are'} still <b>held</b> pending remediation.</>}
@@ -221,8 +221,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         </section>
       )}
       {setStatus.status === SET_STATUS.GRADUATABLE && (
-        <section className="panel" style={{ borderLeft: '4px solid #3B6D11', background: '#F3F8EC' }} aria-label="Ready to graduate to full certification">
-          <b style={{ fontSize: 13.5, color: '#3B6D11' }}>✓ Ready to graduate to full certification</b>
+        <section className="panel" style={{ borderLeft: '4px solid var(--success-fg)', background: '#F3F8EC' }} aria-label="Ready to graduate to full certification">
+          <b style={{ fontSize: 13.5, color: 'var(--success-fg)' }}>✓ Ready to graduate to full certification</b>
           <p style={{ fontSize: 13, lineHeight: 1.6, margin: '8px 0 0', maxWidth: 680 }}>
             Every previously-held document has been remediated and re-validated. Release the remaining <b>{setStatus.verifiedUnreleased}</b> {setStatus.verifiedUnreleased === 1 ? 'document' : 'documents'} to promote this conditional release to <b>fully certified</b> — <b>no whole-estate re-scan required</b>.
           </p>
@@ -234,8 +234,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         </section>
       )}
       {setStatus.status === SET_STATUS.FULL && setStatus.total > 0 && (
-        <section className="panel" style={{ borderLeft: '4px solid #3B6D11' }} aria-label="Fully certified">
-          <b style={{ fontSize: 13.5, color: '#3B6D11' }}>🎓 Fully certified</b>
+        <section className="panel" style={{ borderLeft: '4px solid var(--success-fg)' }} aria-label="Fully certified">
+          <b style={{ fontSize: 13.5, color: 'var(--success-fg)' }}>🎓 Fully certified</b>
           <span className="muted" style={{ fontSize: 13, marginLeft: 8 }}>all {setStatus.total} in-scope documents released.</span>
         </section>
       )}
@@ -244,11 +244,11 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           real settings, not a selector for a behaviour ACP can't perform. There is one policy:
           write a corrected COPY; the original is never overwritten. The explainer says plainly why
           replace-in-place isn't on offer. */}
-      <section className="panel" style={{ borderLeft: '3px solid #1F5FA8' }}>
+      <section className="panel" style={{ borderLeft: '3px solid var(--info-fg)' }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
           <b style={{ fontSize: 13.5 }}>Release policy</b>
           <span style={{ fontSize: 13 }}>
-            <span aria-hidden="true" style={{ color: '#1F5FA8' }}>●</span> Remediated copy → {releaseDestinationPhrase({ anyDrive, driveMirrorEnabled, driveMirrorFolder })}
+            <span aria-hidden="true" style={{ color: 'var(--info-fg)' }}>●</span> Remediated copy → {releaseDestinationPhrase({ anyDrive, driveMirrorEnabled, driveMirrorFolder })}
           </span>
         </div>
         <div className="muted" style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.6 }}>
@@ -302,7 +302,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             {shownReady.length === 0 ? <p className="muted">No files match — <button className="ghost small" onClick={sfP.clear}>clear the filters</button></p> : shownReady.map((f) => (
               <div className={`pubrow${done[f.file] ? ' pubdone' : ''}`} key={f.file}>
                 <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span></button>
-                <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11' }}>{f.score} / 100</span>
+                <span className="badge" style={{ background: 'var(--success-bg)', color: 'var(--success-fg)' }}>{f.score} / 100</span>
                 <span className="muted" title="Where this document’s corrected copy will be written" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>→ {releaseDestination({ driveFileId: f.drive_file_id, driveMirrorEnabled, driveMirrorFolder }).label}</span>
                 {srcOf(f) === 'stale' && <span title="The source file in Drive changed after this scan — re-scan before releasing" style={{ fontSize: 11.5, whiteSpace: 'nowrap', color: '#8A1F1F', fontWeight: 600 }}>⚠ source changed</span>}
                 {srcOf(f) === 'unavailable' && <span className="muted" title="ACP could not read the source now (moved, deleted, or access lost)" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>source unreachable</span>}

@@ -57,11 +57,11 @@ const WBTN = {
   cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
 }
 const STATUS = {
-  queued:  ['#854F0B', '#FAEEDA', 'queued'],
+  queued:  ['var(--warn-fg)', 'var(--warn-bg)', 'queued'],
   running: ['#185FA5', '#E7F0FB', 'running'],
-  done:    ['#3B6D11', '#E7F0DC', 'done'],
-  failed:  ['#A32D2D', '#FCEBEB', 'failed'],
-  dead:    ['#A32D2D', '#FCEBEB', 'dead-letter'],
+  done:    ['var(--success-fg)', 'var(--success-bg)', 'done'],
+  failed:  ['var(--error-fg-strong)', '#FCEBEB', 'failed'],
+  dead:    ['var(--error-fg-strong)', '#FCEBEB', 'dead-letter'],
 }
 // The deterministic WCAG fixes the server-side remediator applies (alt text, contrast,
 // title, language, reading order). Cycled next to the title while a file is in flight to
@@ -388,7 +388,7 @@ export default function QueuePanel({ focusScanId = null, onClearFocus = null }) 
       )}
       {diagnosis && (
         <div role="alert" style={{ marginTop: 8, fontSize: 12,
-                                    color: diagnosis.severity === 'critical' ? '#8A2A20' : '#854F0B',
+                                    color: diagnosis.severity === 'critical' ? '#8A2A20' : 'var(--warn-fg)',
                                     display: 'flex', alignItems: 'baseline', gap: 5 }}>
           <span aria-hidden="true">⚠</span>
           <span>{diagnosis.message}</span>

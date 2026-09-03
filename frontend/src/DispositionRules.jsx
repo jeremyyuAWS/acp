@@ -72,7 +72,7 @@ const sentenceBox = {
   background: 'color-mix(in srgb, var(--plum) 6%, transparent)',
   border: '1px solid color-mix(in srgb, var(--plum) 18%, transparent)',
 }
-const alertStyle = { fontSize: 12.5, color: '#A32D2D', margin: '8px 0 0', lineHeight: 1.5 }
+const alertStyle = { fontSize: 12.5, color: 'var(--error-fg-strong)', margin: '8px 0 0', lineHeight: 1.5 }
 
 const MAX_PREVIEW_INLINE = 25
 const COMMON_CONDITION_KEYS = new Set(['folder', 'modifiedBefore', 'notModifiedDays'])
@@ -246,7 +246,7 @@ function RuleSentence({ match, action, count, countOverride }) {
 
 function ActionTag({ action }) {
   const spec = actionSpec(action)
-  const tone = spec.action === 'delete' ? ['#FBE9E9', '#E5C4C4', '#A32D2D'] : ['#EEF2FB', '#D3DDF1', '#2B4A7E']
+  const tone = spec.action === 'delete' ? ['#FBE9E9', '#E5C4C4', 'var(--error-fg-strong)'] : ['#EEF2FB', '#D3DDF1', '#2B4A7E']
   return (
     <span className="lifecycle-tag" style={{ fontSize: 11, fontWeight: 600, padding: '2px 9px', borderRadius: 20,
                                              background: tone[0], border: `1px solid ${tone[1]}`, color: tone[2] }}>
@@ -555,7 +555,7 @@ function RuleRow({ p, count, onCount, onChanged, onDuplicate, onMove, isFirst, i
                       aria-label={`Edit rule ${p.name}`} style={{ textAlign: 'left' }}>Edit</button>
               <button className="ghost small" onClick={duplicate} disabled={busy || editing} style={{ textAlign: 'left' }}>Duplicate</button>
               <button className="ghost small" onClick={remove} disabled={busy || editing}
-                      aria-label={`Delete rule ${p.name}`} style={{ textAlign: 'left', color: '#A32D2D' }}>Delete</button>
+                      aria-label={`Delete rule ${p.name}`} style={{ textAlign: 'left', color: 'var(--error-fg-strong)' }}>Delete</button>
             </div>
           </details>
         </span>
@@ -672,7 +672,7 @@ function NewRule({ onCreated, defaultExpanded = false }) {
 
       <p className="muted" style={{ fontSize: 12, margin: '8px 0 0', lineHeight: 1.5 }}>{spec.safety}</p>
       {problem && <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>{problem}</p>}
-      {added && <p style={{ fontSize: 12.5, color: '#2F5310', margin: '8px 0 0' }} role="status">
+      {added && <p style={{ fontSize: 12.5, color: 'var(--success-fg-strong)', margin: '8px 0 0' }} role="status">
         Added “{added}”. It is disabled — nothing is tagged until you enable it.
       </p>}
       {err && <p style={alertStyle} role="alert">⚠ {err}</p>}

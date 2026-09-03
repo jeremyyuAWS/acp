@@ -30,7 +30,7 @@ import { ageBucketDistribution, sizeBucketDistribution, folderDistribution } fro
 // Every number is derived from a prop. Nothing here estimates.
 
 const BAR_COLOR = { assessable: '#6B8FC7', other: '#B9B1BD' }
-const STAT_COLOR = { archive: '#2B4A7E', delete: '#A32D2D', unreadable: '#8a6d1f', assessable: '#3B6D11' }
+const STAT_COLOR = { archive: '#2B4A7E', delete: 'var(--error-fg-strong)', unreadable: '#8a6d1f', assessable: 'var(--success-fg)' }
 
 const Stat = ({ n, label, color, sub = null }) => (
   <div style={{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 12,

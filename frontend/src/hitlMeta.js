@@ -41,7 +41,7 @@ export const metaFor = (item) => RULE_META[scOf(item?.rule_id)] || DEFAULT_META
 
 // Severity → display + ranking. Three honest tiers from real criteria (no fabricated 4th).
 export const SEV = {
-  high: { rank: 3, label: 'High', color: '#B43A2A', bg: '#FBE7E2', dot: '#D0492F' },
+  high: { rank: 3, label: 'High', color: 'var(--error-fg)', bg: '#FBE7E2', dot: '#D0492F' },
   medium: { rank: 2, label: 'Medium', color: '#8A5A00', bg: '#FBEECB', dot: '#C98A0A' },
   low: { rank: 1, label: 'Low', color: '#475569', bg: '#ECEEF1', dot: '#8A94A6' },
 }

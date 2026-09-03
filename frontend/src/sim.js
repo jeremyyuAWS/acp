@@ -18,10 +18,10 @@ export const SOURCES = [
 const SRC = Object.fromEntries(SOURCES.map((s) => [s.id, s]))
 
 export const TAGS = {
-  'public-facing': ['#E6F1FB', '#185FA5'], 'PII': ['#E2EDFB', '#1F5FA8'],
-  'legal-hold': ['#EEEDFE', '#3C3489'], 'high-traffic': ['#FAEEDA', '#854F0B'],
+  'public-facing': ['#E6F1FB', '#185FA5'], 'PII': ['var(--info-bg)', 'var(--info-fg)'],
+  'legal-hold': ['#EEEDFE', '#3C3489'], 'high-traffic': ['var(--warn-bg)', 'var(--warn-fg)'],
   'auto-fixable': ['#E1F5EE', '#0F6E56'], 'needs-review': ['#E6EFFB', '#2A5E9E'],
-  'remediation-queued': ['#FAEEDA', '#854F0B'], 'certified': ['#E7F0DC', '#3B6D11'],
+  'remediation-queued': ['var(--warn-bg)', 'var(--warn-fg)'], 'certified': ['var(--success-bg)', 'var(--success-fg)'],
   'policy': ['#F1EFE8', '#5F5E5A'], 'financial': ['#F1EFE8', '#5F5E5A'], 'marketing': ['#F1EFE8', '#5F5E5A'],
 }
 

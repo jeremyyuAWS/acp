@@ -16,7 +16,7 @@ const pctLabel = (a, b) => `${pct(a, b)}%`
 
 // ── 1. Horizontal estate progress funnel ─────────────────────────────────────
 
-const STAGE_COLOR = ['#46303F', '#7a5c8e', '#1F5FA8', '#067647']
+const STAGE_COLOR = ['#46303F', '#7a5c8e', 'var(--info-fg)', '#067647']
 const STAGE_LIGHT = ['#f3eef6', '#ede7f6', '#eff8ff', '#ecfdf3']
 const STAGE_FG    = ['#46303F', '#4B3460', '#0B3A7A', '#074D31']
 
@@ -93,7 +93,7 @@ function DocTypeRow({ label, total, eligible, assessed, ineligible }) {
                     marginBottom: 6, gap: 8 }}>
         <span style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--ink)' }}>{label}</span>
         <span style={{ fontSize: 12, color: 'var(--muted)', flexShrink: 0 }}>
-          {nf.format(total)} · <span style={{ color: eligPct >= 80 ? '#3B6D11' : '#854F0B',
+          {nf.format(total)} · <span style={{ color: eligPct >= 80 ? 'var(--success-fg)' : 'var(--warn-fg)',
                                               fontWeight: 600 }}>{eligPct}% eligible</span>
         </span>
       </div>

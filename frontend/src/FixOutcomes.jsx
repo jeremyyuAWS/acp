@@ -41,7 +41,7 @@ const muted = { fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }
 // Tone separates the states that mean something BROKE from the states that mean the system worked
 // and produced no change. Colouring all six would make that distinction disappear.
 const TONE = {
-  failed: '#A32D2D', unreadable: '#A32D2D', unverified: '#8A4B0B',
+  failed: 'var(--error-fg-strong)', unreadable: 'var(--error-fg-strong)', unverified: '#8A4B0B',
   refused: 'var(--muted)', applied: '#2F7D32', not_attempted: 'var(--muted)',
 }
 
@@ -72,7 +72,7 @@ function OutcomeRow({ r, autoLane, onRetry, retried, busy }) {
             </span>
           )}
           {r.retryable && (retried
-            ? <span style={{ fontSize: 11.5, color: '#3B6D11', whiteSpace: 'nowrap' }}>✓ re-queued</span>
+            ? <span style={{ fontSize: 11.5, color: 'var(--success-fg)', whiteSpace: 'nowrap' }}>✓ re-queued</span>
             : <button className="ghost small" disabled={busy} onClick={() => onRetry(r)}
                       title="Re-run the remediation for this one document as a new job">↻ Retry this document</button>)}
         </div>

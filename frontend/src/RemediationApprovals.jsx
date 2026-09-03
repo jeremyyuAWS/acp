@@ -97,7 +97,7 @@ export default function RemediationApprovals({ items, onApprove, onReject, busyI
               />
             ) : (
               <div style={{ ...mono, marginTop: 6, padding: '7px 9px', borderRadius: 8,
-                            background: '#EDF5EA', color: '#2F5310', lineHeight: 1.6 }}>
+                            background: '#EDF5EA', color: 'var(--success-fg-strong)', lineHeight: 1.6 }}>
                 {item.draft}
               </div>
             )}

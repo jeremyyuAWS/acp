@@ -53,9 +53,9 @@ import { canClaimLowRisk, unassessedRiskText } from './riskOverUnassessed.js'
 // confidence and risk statement traces to real pipeline data (applied-fix evidence, the
 // live HITL queue, confidence.js, the recommendation model); nothing is fabricated.
 const REM_ACTIONS = REMEDIATION_ACTIONS
-const SR_COLOR = { Executive: '#1F5FA8', Director: '#D85A30', Manager: '#BF8C00', Staff: '#9a948f' }
+const SR_COLOR = { Executive: 'var(--info-fg)', Director: '#D85A30', Manager: '#BF8C00', Staff: '#9a948f' }
 const exposureOf = (f) => (f.tags || []).includes('public-facing') ? 'public-facing' : (f.tags || []).includes('high-traffic') ? 'high-traffic' : 'internal'
-const EXP_COLOR = { 'public-facing': '#1F5FA8', 'high-traffic': '#D85A30', internal: '#9a948f' }
+const EXP_COLOR = { 'public-facing': 'var(--info-fg)', 'high-traffic': '#D85A30', internal: '#9a948f' }
 const SR_W = { Executive: 3, Director: 2, Manager: 1, Staff: 0 }
 const priority = (f) => (f.tags || []).filter((t) => t === 'public-facing' || t === 'high-traffic').length * 2 + (SR_W[f.seniority] || 0) + (f.issues || []).filter((i) => i.severity === 'CRITICAL').length * 2
 
@@ -1023,7 +1023,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   title="The same changes as a machine-readable CSV — one row per document × criterion, for pulling into your own tracker">
             {reportBusy ? 'Generating…' : '⤓ Changes (CSV)'}
           </button>
-          {reportErr && <span style={{ fontSize: 12, color: '#A32D2D' }} role="alert">⚠ {reportErr}</span>}
+          {reportErr && <span style={{ fontSize: 12, color: 'var(--error-fg-strong)' }} role="alert">⚠ {reportErr}</span>}
           <div className="triagesum">
             <span className="trstatchip inscope">{inscopeCount} in scope</span>
             <span className="trstatchip na">{naCount} N/A</span>
@@ -1040,7 +1040,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         </div>
         <p className="muted" style={{ fontSize: 12, margin: '0 0 10px' }}>
           Everything about each document in one place — progress, fixes applied, items needing you, and whether it’s in scope.
-          Set scope per row: <b style={{ color: '#3B6D11' }}>✓</b> in scope · <b>N/A</b> skip · <b style={{ color: '#1F5FA8' }}>⏸</b> defer.
+          Set scope per row: <b style={{ color: 'var(--success-fg)' }}>✓</b> in scope · <b>N/A</b> skip · <b style={{ color: 'var(--info-fg)' }}>⏸</b> defer.
           {scopeInfo.restrictedBySelection
             ? <> <b style={{ color: '#8A2A20' }}>Because you marked {inscopeCount.toLocaleString()} document{inscopeCount === 1 ? '' : 's'} ✓, remediation runs on those alone</b> — the other {scopeInfo.excluded.outOfScope.toLocaleString()} are excluded until you mark them or clear the selection.</>
             : <> No document is marked ✓, so remediation runs on <b>all eligible documents</b>. Marking even one ✓ restricts the run to marked documents only.</>}
@@ -1073,11 +1073,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   </div>
                 </div>
                 <div className="docprog">
-                  <div className="docbar"><i style={{ width: `${pct}%`, background: pct >= 90 ? '#3B6D11' : pct >= 60 ? '#BF8C00' : '#B43A2A' }} /></div>
+                  <div className="docbar"><i style={{ width: `${pct}%`, background: pct >= 90 ? 'var(--success-fg)' : pct >= 60 ? '#BF8C00' : 'var(--error-fg)' }} /></div>
                   <span className="docpct">{done ? '✓ certified' : `${pct}%`}</span>
                 </div>
-                <span className="doccount">{nFix > 0 ? <b style={{ color: '#3B6D11' }}>{nFix}</b> : <span className="muted">—</span>}</span>
-                <span className="doccount">{nRev > 0 ? <b style={{ color: '#854F0B' }}>{nRev}</b> : <span className="muted">—</span>}</span>
+                <span className="doccount">{nFix > 0 ? <b style={{ color: 'var(--success-fg)' }}>{nFix}</b> : <span className="muted">—</span>}</span>
+                <span className="doccount">{nRev > 0 ? <b style={{ color: 'var(--warn-fg)' }}>{nRev}</b> : <span className="muted">—</span>}</span>
                 <span className="docscope">
                   {done ? <span className="trstatchip inscope">done</span>
                   : dec ? <><span className={`trstatchip ${dec}`}>{dec === 'inscope' ? '✓ in scope' : dec === 'na' ? 'N/A' : '⏸ deferred'}</span><button className="ghost small" onClick={() => triageFile(f.file, null)} title="Undo">↺</button></>
@@ -1156,23 +1156,23 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         <div className="rem-adv-body">
 
           <div className="metrics">
-            <div className={`metric${remLive ? ' livecard' : ''}`} title="Estimated number of issues that can be fixed automatically — populates once you run remediation"><span>auto-fixable (est.)</span><b style={{ color: remStarted ? '#3B6D11' : '#9AA1B4' }}>{remStarted ? autoFixed : 0}</b></div>
+            <div className={`metric${remLive ? ' livecard' : ''}`} title="Estimated number of issues that can be fixed automatically — populates once you run remediation"><span>auto-fixable (est.)</span><b style={{ color: remStarted ? 'var(--success-fg)' : '#9AA1B4' }}>{remStarted ? autoFixed : 0}</b></div>
             <div className={`metric${remLive && queue.length > 0 ? ' livecard' : ''}`}>
               <span>HITL queue{remLive && queue.length > 0 && <span className="activedot" aria-hidden="true" style={{ marginLeft: 5 }} />}</span>
               {remStarted
-              ? <><b key={queue.length} className={remStarted ? 'tick' : undefined} style={{ color: queue.length ? '#854F0B' : '#3B6D11' }}>{totalHitl === 0 ? 'no items' : `${queue.length} remaining`}</b>{totalHitl > 0 && <span className="muted" style={{ fontSize: 11 }}> · {hitlProgress}% done</span>}</>
+              ? <><b key={queue.length} className={remStarted ? 'tick' : undefined} style={{ color: queue.length ? 'var(--warn-fg)' : 'var(--success-fg)' }}>{totalHitl === 0 ? 'no items' : `${queue.length} remaining`}</b>{totalHitl > 0 && <span className="muted" style={{ fontSize: 11 }}> · {hitlProgress}% done</span>}</>
               : <b style={{ color: '#9AA1B4' }}>—</b>}</div>
             {pureAutomated ? (
-              <div className="metric" title="Fixed copies written back to the source Drive folder"><span>written to Drive</span><b key={written} className={written ? 'tick' : undefined} style={{ color: '#3B6D11' }}>{written}</b></div>
+              <div className="metric" title="Fixed copies written back to the source Drive folder"><span>written to Drive</span><b key={written} className={written ? 'tick' : undefined} style={{ color: 'var(--success-fg)' }}>{written}</b></div>
             ) : (
               <>
                 <div className="metric"><span>approved</span><b key={acted.approved} className={acted.approved ? 'tick' : undefined}>{acted.approved}</b></div>
-                <div className="metric"><span>deferred</span><b key={acted.deferred} className={acted.deferred ? 'tick' : undefined} style={{ color: '#1F5FA8' }}>{acted.deferred}</b></div>
+                <div className="metric"><span>deferred</span><b key={acted.deferred} className={acted.deferred ? 'tick' : undefined} style={{ color: 'var(--info-fg)' }}>{acted.deferred}</b></div>
               </>
             )}
             <div className={`metric${remLive ? ' livecard' : ''}`} title="Documents fixed and re-validated against all engines — ticks in real time as the worker queue completes each file">
               <span>re-verified{remLive && <span className="livedot">live</span>}</span>
-              <b key={reVerified} className={reVerified ? 'tick' : undefined} style={{ color: '#3B6D11' }}>{reVerified.toLocaleString()}</b>
+              <b key={reVerified} className={reVerified ? 'tick' : undefined} style={{ color: 'var(--success-fg)' }}>{reVerified.toLocaleString()}</b>
             </div>
           </div>
 
@@ -1181,9 +1181,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           {/* Write-back results — proof the fixed copies landed in Drive / Blob. */}
           {(written2.length > 0 || downloadOnly.length > 0) && (
             <div style={{ margin: '12px 0 14px', padding: '10px 14px', borderRadius: 9,
-                          background: '#E7F0DC', border: '1px solid #C5DBA8',
+                          background: 'var(--success-bg)', border: '1px solid #C5DBA8',
                           display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 13, fontWeight: 600, color: '#2F5310' }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--success-fg-strong)' }}>
                 ✓ {written2.length} fixed document{written2.length !== 1 ? 's' : ''} written back to Drive
                 {downloadOnly.length > 0 && ` · ${downloadOnly.length} remediated (no Drive write)`}
               </span>
@@ -1241,7 +1241,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               {remMsg && (
                 <span role="status" aria-live="polite"
                       style={{ marginLeft: 12,
-                               color: remMsg.startsWith('✓') ? '#3B6D11'
+                               color: remMsg.startsWith('✓') ? 'var(--success-fg)'
                                     : remMsg.startsWith('Nothing to remediate') ? '#8A4B00'
                                     : 'var(--muted)',
                                fontWeight: remMsg.startsWith('Nothing to remediate') ? 600 : undefined }}>
@@ -1316,7 +1316,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           </div>
           {totalHitl > 0 && (
             <div className="rem-sec-prog">
-              <div className="conftrack" style={{ width: 120 }}><i style={{ width: `${hitlProgress}%`, background: hitlProgress === 100 ? '#3B6D11' : '#1F5FA8' }} /></div>
+              <div className="conftrack" style={{ width: 120 }}><i style={{ width: `${hitlProgress}%`, background: hitlProgress === 100 ? 'var(--success-fg)' : 'var(--info-fg)' }} /></div>
               <span className="muted">{totalHitl - queue.length} of {totalHitl} resolved</span>
             </div>
           )}
@@ -1345,8 +1345,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               {(reviewStats.by_rule || []).filter((r) => r.reviewed > 0).slice(0, 4).map((r, i) => (
                 <span key={r.key} title={Object.entries(r.reject_reasons || {}).map(([k, n]) => `${k.replace(/_/g, ' ')}: ${n}`).join(' · ') || 'no rejections'}>
                   {i > 0 && ' · '}
-                  <b style={{ color: r.rejected > 0 ? '#A32D2D' : 'var(--ink)' }}>{r.key}</b>
-                  {' '}{r.approved}✓{r.rejected > 0 && <span style={{ color: '#A32D2D' }}> {r.rejected}✕</span>}
+                  <b style={{ color: r.rejected > 0 ? 'var(--error-fg-strong)' : 'var(--ink)' }}>{r.key}</b>
+                  {' '}{r.approved}✓{r.rejected > 0 && <span style={{ color: 'var(--error-fg-strong)' }}> {r.rejected}✕</span>}
                 </span>
               ))}
               {Object.keys(reviewStats.reject_reasons || {}).length > 0 && (

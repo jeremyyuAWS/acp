@@ -15,7 +15,7 @@ import ScopeGrid, { scopeTotalPairs } from './ScopeGrid.jsx'
 const SIM_NOT_WRITTEN =
   'SIM — nothing was written. This demo build has no backend, so the change is local to this browser tab. '
   + 'Use a build served by the real API to save a personal scope.'
-const msgColor = (m) => (m.startsWith('✓') ? '#3B6D11' : m.startsWith('SIM') ? '#6B4A0B' : '#A32D2D')
+const msgColor = (m) => (m.startsWith('✓') ? 'var(--success-fg)' : m.startsWith('SIM') ? '#6B4A0B' : 'var(--error-fg-strong)')
 
 const toPayload = (sel) => {
   const out = {}
@@ -111,7 +111,7 @@ export default function MyScanScope() {
 
       {loaded && ownerScope === null ? (
         <p role="status" style={{ fontSize: 13, background: '#EAF4EC', border: '1px solid #CDE6D2',
-                                  borderRadius: 8, padding: '10px 12px', color: '#3B6D11' }}>
+                                  borderRadius: 8, padding: '10px 12px', color: 'var(--success-fg)' }}>
           Your organization already assesses every supported criterion, so there is nothing a personal
           override can add.
         </p>

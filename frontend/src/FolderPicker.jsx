@@ -347,7 +347,7 @@ export default function FolderPicker({
       // rendering "covers all of OneDrive" there authorised the whole estate in the name of a
       // restriction (#501's failed folder list is one way to arrive here without noticing).
       requireSelection ? (
-        <div style={{ fontSize: 12.5, color: '#854F0B' }}>
+        <div style={{ fontSize: 12.5, color: 'var(--warn-fg)' }}>
           <strong>{INCOMPLETE_LINE}</strong>
         </div>
       ) : (

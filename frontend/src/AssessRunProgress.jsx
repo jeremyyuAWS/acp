@@ -207,7 +207,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
               <strong style={{ fontSize: 14.5 }}>{isFinished ? 'Assessment complete' : 'Assessing documents'}</strong>
               <span role="status" style={{ fontSize: 11.5, padding: '2px 7px', borderRadius: 4,
                                             display: 'inline-flex', alignItems: 'center', gap: 5,
-                                            background: 'var(--green-bg,#f0f7e6)', color: 'var(--green,#3B6D11)',
+                                            background: 'var(--green-bg,#f0f7e6)', color: 'var(--success-fg)',
                                             border: '1px solid var(--green-line,#a8cf7a)' }}>
                 {!isFinished && <span className="pulsedot" aria-hidden="true" />}
                 {isFinished ? 'Updates complete' : 'Live'}

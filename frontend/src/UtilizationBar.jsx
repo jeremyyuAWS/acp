@@ -9,7 +9,7 @@ const WARN_UTILIZATION_PCT = 60
 
 function barColor(percent) {
   if (percent >= HIGH_UTILIZATION_PCT) return '#8A2A20'   // matches this app's existing critical red
-  if (percent >= WARN_UTILIZATION_PCT) return '#854F0B'   // matches this app's existing warning amber
+  if (percent >= WARN_UTILIZATION_PCT) return 'var(--warn-fg)'   // matches this app's existing warning amber
   return '#1a7f37'                                        // matches this app's existing healthy green
 }
 

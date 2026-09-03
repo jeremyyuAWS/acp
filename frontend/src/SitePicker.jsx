@@ -60,7 +60,7 @@ export default function SitePicker({ onScan, onClose }) {
         {/* Verbatim, not flattened. The route distinguishes a missing SCOPE from a transport
             failure and names the consent that would fix it; collapsing that to "could not load"
             would send an operator looking in the wrong place. */}
-        {err && <p role="alert" style={{ fontSize: 12.5, color: '#A32D2D' }}>⚠ {err}</p>}
+        {err && <p role="alert" style={{ fontSize: 12.5, color: 'var(--error-fg-strong)' }}>⚠ {err}</p>}
 
         {!loading && !err && sites.length === 0 && (
           <p className="muted" style={{ fontSize: 13 }}>

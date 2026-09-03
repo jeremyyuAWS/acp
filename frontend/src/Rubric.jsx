@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { getRules, getRubric, updateRubric } from './api'
 
 const SEV = {
-  CRITICAL: ['#E2EDFB', '#1F5FA8'], SERIOUS: ['#FAEEDA', '#854F0B'],
+  CRITICAL: ['var(--info-bg)', 'var(--info-fg)'], SERIOUS: ['var(--warn-bg)', 'var(--warn-fg)'],
   MODERATE: ['#E6F1FB', '#185FA5'], MINOR: ['#F1EFE8', '#5F5E5A'],
 }
 const SEVRANK = { CRITICAL: 0, SERIOUS: 1, MODERATE: 2, MINOR: 3 }

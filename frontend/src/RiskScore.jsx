@@ -12,7 +12,7 @@ import { CAPABILITY_FALLBACK } from './capability.js'
 export const SEVERITY_WEIGHTS = { critical: 25, serious: 15, moderate: 8, minor: 3 }
 
 const wrap = { marginTop: 6, fontSize: 11.5 }
-const sumStyle = { cursor: 'pointer', color: '#1F5FA8', fontWeight: 600, listStyle: 'none' }
+const sumStyle = { cursor: 'pointer', color: 'var(--info-fg)', fontWeight: 600, listStyle: 'none' }
 const rowStyle = { display: 'flex', justifyContent: 'space-between', gap: 12, padding: '2px 0', fontSize: 12 }
 const dot = (c) => ({ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: c, marginRight: 6 })
 const listStyle = { margin: '4px 0 0', paddingLeft: 16, fontSize: 12, lineHeight: 1.6 }
@@ -45,9 +45,9 @@ export default function RiskScore({ run, files = [] }) {
   files.forEach((f) => (f.issues || []).forEach((i) => { const sc = scOfWcag(i.wcag); if (sc) allFailed.add(sc) }))
   const criticalN = sev.find((s) => s.label === 'critical')?.value || 0
   const publicCrit = files.filter((f) => (f.tags || []).some((t) => ['public-facing', 'high-traffic'].includes(t)) && (f.issues || []).some((i) => i.severity === 'CRITICAL')).length
-  const exposure = publicCrit >= 8 ? ['High', '#1F5FA8'] : publicCrit >= 3 ? ['Elevated', '#854F0B'] : ['Moderate', '#3B6D11']
+  const exposure = publicCrit >= 8 ? ['High', 'var(--info-fg)'] : publicCrit >= 3 ? ['Elevated', 'var(--warn-fg)'] : ['Moderate', 'var(--success-fg)']
   const score = run?.avg_score ?? '—'
-  const scoreColor = score >= 90 ? '#3B6D11' : score >= 50 ? '#854F0B' : '#1F5FA8'
+  const scoreColor = score >= 90 ? 'var(--success-fg)' : score >= 50 ? 'var(--warn-fg)' : 'var(--info-fg)'
   // Effort from the capability-grounded finding split (auto ≈ a minute, a person ≈ 35), NOT the
   // SIM-only rec (which is 0 on real scans). Still a planning estimate — rendered via fmtEffort
   // ("est.") with EFFORT_BASIS as the tooltip.
@@ -77,7 +77,7 @@ export default function RiskScore({ run, files = [] }) {
               <div style={{ marginTop: 4 }}>
                 <div style={rowStyle}><span>Start</span><b>100</b></div>
                 {penaltyRows.map((r) => (
-                  <div style={rowStyle} key={r.label}><span><i style={dot(r.color)} />{r.value} {r.label} × {r.weight}</span><b style={{ color: '#854F0B' }}>−{r.sub}</b></div>
+                  <div style={rowStyle} key={r.label}><span><i style={dot(r.color)} />{r.value} {r.label} × {r.weight}</span><b style={{ color: 'var(--warn-fg)' }}>−{r.sub}</b></div>
                 ))}
                 <div style={{ ...rowStyle, borderTop: '1px solid var(--line)', marginTop: 2, paddingTop: 4 }}>
                   <span>{exactCalc ? 'Score' : `Score · avg of ${scoredDocs} docs`}</span><b style={{ color: scoreColor }}>{score}{floored ? ' (floor)' : ''}</b>
@@ -122,8 +122,8 @@ export default function RiskScore({ run, files = [] }) {
             <details style={wrap}>
               <summary style={sumStyle}>Plan</summary>
               <div style={{ marginTop: 4 }}>
-                <div style={rowStyle}><span><i style={dot('#3B6D11')} />ACP fixes automatically</span><b style={{ color: '#3B6D11' }}>{core.coreAutoFix.toLocaleString()}</b></div>
-                <div style={rowStyle}><span><i style={dot('#854F0B')} />A person reviews</span><b style={{ color: '#854F0B' }}>{core.coreHuman.toLocaleString()}</b></div>
+                <div style={rowStyle}><span><i style={dot('var(--success-fg)')} />ACP fixes automatically</span><b style={{ color: 'var(--success-fg)' }}>{core.coreAutoFix.toLocaleString()}</b></div>
+                <div style={rowStyle}><span><i style={dot('var(--warn-fg)')} />A person reviews</span><b style={{ color: 'var(--warn-fg)' }}>{core.coreHuman.toLocaleString()}</b></div>
               </div>
               <p className="muted" style={{ margin: '5px 0 0', fontSize: 11 }}>Per finding, from the remediation-capability table (which fix each WCAG criterion supports on each file type) — the same split the Assess tab shows. Effort is a planning estimate, not a measurement.</p>
             </details>

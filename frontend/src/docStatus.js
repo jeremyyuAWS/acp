@@ -60,7 +60,7 @@ export const ALL_STATUSES = ['certifiable', 'issues', 'clean', NOT_ASSESSED, 'un
 // 'not-assessed' is deliberately NOT the reassuring blue 'clean' wears — a reviewer scanning
 // the inventory must be able to see at a glance that a row is a gap, not a pass.
 export const STATUS_BADGE = {
-  certifiable: ['#E7F0DC', '#3B6D11'], issues: ['#FAEEDA', '#854F0B'],
+  certifiable: ['var(--success-bg)', 'var(--success-fg)'], issues: ['var(--warn-bg)', 'var(--warn-fg)'],
   uncertain: ['#E6EFFB', '#2A5E9E'], unanalysable: ['#EEEDEA', '#5F5E5A'],
   clean: ['#E8F0FB', '#2A5E9E'], [NOT_ASSESSED]: ['#EEEDFE', '#3C3489'],
 }

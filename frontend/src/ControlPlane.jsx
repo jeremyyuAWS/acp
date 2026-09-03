@@ -31,7 +31,7 @@ export default function ControlPlane() {
     return () => { live = false }
   }, [dept, owner])
 
-  if (err) return <p role="alert" style={{ fontSize: 13, color: '#A32D2D' }}>⚠ {err}</p>
+  if (err) return <p role="alert" style={{ fontSize: 13, color: 'var(--error-fg-strong)' }}>⚠ {err}</p>
   if (!data && busy) return <p className="muted" style={{ fontSize: 13 }}>Loading the estate…</p>
   if (!data) return null
 

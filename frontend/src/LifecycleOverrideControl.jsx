@@ -51,7 +51,7 @@ export default function LifecycleOverrideControl({ file, override = null, onSave
                style={{ fontSize: 11, padding: '2px 6px', minWidth: 160 }} />
         <button type="button" className="explain-btn" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
         <button type="button" className="explain-btn" disabled={busy} onClick={cancel}>Cancel</button>
-        {error && <span role="alert" className="muted" style={{ color: '#B43A2A', fontSize: 11, flexBasis: '100%' }}>{error}</span>}
+        {error && <span role="alert" className="muted" style={{ color: 'var(--error-fg)', fontSize: 11, flexBasis: '100%' }}>{error}</span>}
       </span>
     )
   }

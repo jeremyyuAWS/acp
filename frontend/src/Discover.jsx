@@ -43,17 +43,17 @@ const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
 // bucket off `label.startsWith('Archive')` meant the badge TEXT was load-bearing: rewording it
 // silently re-bucketed every row, and there was no `unassessed` string to match on at all.
 const RET_BUCKET = retentionBucket
-const RET_COLOR = { keep: '#639922', archive: '#7a5c8e', retain: '#D85A30', locked: '#9a948f', delete: '#1F5FA8', unassessed: '#9a948f' }
+const RET_COLOR = { keep: '#639922', archive: '#7a5c8e', retain: '#D85A30', locked: '#9a948f', delete: 'var(--info-fg)', unassessed: '#9a948f' }
 const RET_ORDER = ['keep', 'archive', 'retain']
-const RET_BADGE = { keep: ['Keep', '#E7F0DC', '#3B6D11'], archive: ['Archive', '#EEEDFE', '#3C3489'], retain: ['Retain · legal hold', '#FAEEDA', '#854F0B'], locked: ['🔒 Could not open', '#EEEDEA', '#5F5E5A'], delete: ['Delete', '#E2EDFB', '#1F5FA8'],
+const RET_BADGE = { keep: ['Keep', 'var(--success-bg)', 'var(--success-fg)'], archive: ['Archive', '#EEEDFE', '#3C3489'], retain: ['Retain · legal hold', 'var(--warn-bg)', 'var(--warn-fg)'], locked: ['🔒 Could not open', '#EEEDEA', '#5F5E5A'], delete: ['Delete', 'var(--info-bg)', 'var(--info-fg)'],
   // Grey, and it says the thing rather than implying it. No lifecycle rule matched and no age
   // or usage signal reached this screen, so there is no recommendation — which is what a real
   // estate looks like today, and what a hardcoded 'Keep' was hiding.
   unassessed: ['Not assessed', '#F1EFF3', '#5F5E5A'] }
-const RISK_COLOR = { PII: '#1F5FA8', 'legal-hold': '#854F0B', 'high-traffic': '#A56814' }
+const RISK_COLOR = { PII: 'var(--info-fg)', 'legal-hold': 'var(--warn-fg)', 'high-traffic': '#A56814' }
 const TYPE_COLOR = { PDF: '#C2410C', DOCX: '#2563EB', PPTX: '#D97706', XLSX: '#15803D', HTML: '#7A5C8E', VIDEO: '#9333EA', AUDIO: '#0891B2' }
 const CLASS_TAGS = ['PII', 'legal-hold', 'public-facing', 'high-traffic']
-const CLASS_COLOR = { PII: '#1F5FA8', 'legal-hold': '#854F0B', 'public-facing': '#D85A30', 'high-traffic': '#A56814' }
+const CLASS_COLOR = { PII: 'var(--info-fg)', 'legal-hold': 'var(--warn-fg)', 'public-facing': '#D85A30', 'high-traffic': '#A56814' }
 const OVERRIDE_ACTIONS = ['keep', 'archive', 'retain', 'delete']
 // Source freshness badge text/color, from a /source-status row. 'unchanged'/'untracked' render
 // nothing — same convention the Release Center and Monitor already use, so a normal, unremarkable
@@ -64,15 +64,15 @@ export function sourceFreshnessBadge(row) {
   if (!row) return null
   // PRD Phase 3's fuller sync-state vocabulary — ACP's own side of the round trip, layered by
   // the backend (source_staleness.classify_sync_state) on top of the four states below.
-  if (row.state === 'importing') return { label: 'importing…', color: '#1F5FA8', title: 'ACP is still importing this file from the source' }
+  if (row.state === 'importing') return { label: 'importing…', color: 'var(--info-fg)', title: 'ACP is still importing this file from the source' }
   if (row.state === 'import_failed') return { label: 'import failed', color: '#8A1F1F', title: 'ACP could not import this file from the source' }
   if (row.state === 'conflict') return { label: '⚠ conflict', color: '#8A1F1F', title: 'The source changed and ACP holds an unpublished fix — both sides changed since the scan' }
-  if (row.state === 'acp_newer') return { label: 'ACP version newer', color: '#3B6D11', title: "ACP's fixed version is newer than the current source file" }
-  if (row.state === 'publish_pending') return { label: 'publish pending', color: '#854F0B', title: 'A fixed version is ready but has not been published back to the source yet' }
+  if (row.state === 'acp_newer') return { label: 'ACP version newer', color: 'var(--success-fg)', title: "ACP's fixed version is newer than the current source file" }
+  if (row.state === 'publish_pending') return { label: 'publish pending', color: 'var(--warn-fg)', title: 'A fixed version is ready but has not been published back to the source yet' }
   if (row.state === 'stale') return { label: '⚠ source changed', color: '#8A1F1F', title: 'The source file in Drive changed after this scan' }
   if (row.state !== 'unavailable') return null
   if (row.error === 'not_found') return { label: 'deleted at source', color: '#8A1F1F', title: 'The source file in Drive no longer exists' }
-  if (row.error === 'forbidden') return { label: 'authorization required', color: '#854F0B', title: 'ACP no longer has permission to read this file in Drive' }
+  if (row.error === 'forbidden') return { label: 'authorization required', color: 'var(--warn-fg)', title: 'ACP no longer has permission to read this file in Drive' }
   return { label: 'source unreachable', color: '#5F5E5A', title: 'ACP could not read the source now (moved, deleted, or access lost)' }
 }
 
@@ -693,7 +693,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                   {f.locked
                     ? <span className="lockflag">🔒 {f.openIssue}</span>
                     : <span className="muted">{f.modifiedAge} · {f.views90d?.toLocaleString()} views/90d{f.superseded ? ' · superseded' : ''}
-                        {isDelegated(f) && <span className="badge" style={{ marginLeft: 6, background: '#E7F0DC', color: '#3B6D11', fontSize: 10 }}>delegated → {ownerOf(f)}</span>}
+                        {isDelegated(f) && <span className="badge" style={{ marginLeft: 6, background: 'var(--success-bg)', color: 'var(--success-fg)', fontSize: 10 }}>delegated → {ownerOf(f)}</span>}
                         {fresh && <span title={fresh.title} style={{ marginLeft: 6, fontWeight: 600, color: fresh.color }}>{fresh.label}</span>}
                       </span>}
                 </div>
@@ -1284,7 +1284,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               )}
             </>
           ) : (
-            <span className="muted" style={{ fontSize: 13, color: '#3B6D11' }}>✓ All recommendations decided — done here? Continue →</span>
+            <span className="muted" style={{ fontSize: 13, color: 'var(--success-fg)' }}>✓ All recommendations decided — done here? Continue →</span>
           )}
           {/* DX-07 — the discovery-results acknowledgement GATES Assess. Only ever a gate when
               there is something to acknowledge: with no lifecycle recommendations on screen

@@ -107,8 +107,8 @@ export function baFor(sc, docTitle) {
 const SEV_ORDER = { CRITICAL: 0, SERIOUS: 1, MODERATE: 2, MINOR: 3 }
 const SEV_COLOR = {
   CRITICAL: ['#7B1D1D', '#FDECEA'],
-  SERIOUS:  ['#854F0B', '#FAEEDA'],
-  MODERATE: ['#1F5FA8', '#E2EDFB'],
+  SERIOUS:  ['var(--warn-fg)', 'var(--warn-bg)'],
+  MODERATE: ['var(--info-fg)', 'var(--info-bg)'],
   MINOR:    ['#444', '#F1EFF4'],
 }
 

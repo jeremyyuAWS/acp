@@ -55,7 +55,7 @@ export default function OwnerDelegate({ files = [], onChanged }) {
               <td>
                 {o.delegatedTo ? (
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11', fontWeight: 500 }}>→ {o.delegatedTo}</span>
+                    <span className="badge" style={{ background: 'var(--success-bg)', color: 'var(--success-fg)', fontWeight: 500 }}>→ {o.delegatedTo}</span>
                     <button className="ghost small" style={{ fontSize: 11 }} onClick={() => delegate(o.name, null)}>✕ undo</button>
                   </span>
                 ) : (

@@ -70,7 +70,7 @@ export function retentionSignal(f) {
     const attribution = named || (rule ? `matched lifecycle rule ${rule}` : 'set by the discovery rule pass')
     const s = status.toLowerCase()
     if (s.includes('delete')) {
-      return { bucket: 'delete', label: 'Delete', bg: '#E2EDFB', fg: '#1F5FA8', source: 'rule',
+      return { bucket: 'delete', label: 'Delete', bg: 'var(--info-bg)', fg: 'var(--info-fg)', source: 'rule',
                why: `Tagged for deletion review — ${attribution}. Nothing is trashed; this is a recommendation.` }
     }
     if (s.includes('archive')) {
@@ -78,13 +78,13 @@ export function retentionSignal(f) {
                why: `Tagged for archive review — ${attribution}. Nothing is moved; this is a recommendation.` }
     }
     // A status that ran and matched nothing IS a measurement — "Keep" is earned here, unlike below.
-    return { bucket: 'keep', label: 'Keep', bg: '#E7F0DC', fg: '#3B6D11', source: 'rule',
+    return { bucket: 'keep', label: 'Keep', bg: 'var(--success-bg)', fg: 'var(--success-fg)', source: 'rule',
              why: `The lifecycle rules ran and matched nothing — ${attribution}.` }
   }
 
   // 3. Signals that are real when present. `legal-hold` outranks age, as it always did.
   if (Array.isArray(row.tags) && row.tags.includes('legal-hold')) {
-    return { bucket: 'retain', label: 'Retain · legal hold', bg: '#FAEEDA', fg: '#854F0B', source: 'signal',
+    return { bucket: 'retain', label: 'Retain · legal hold', bg: 'var(--warn-bg)', fg: 'var(--warn-fg)', source: 'signal',
              why: 'Under legal hold — must be retained regardless of age or usage.' }
   }
   if (row.superseded) {
@@ -98,7 +98,7 @@ export function retentionSignal(f) {
   }
   // Age and usage present but under the threshold: measured, and the answer is Keep.
   if (Number.isFinite(row.ageDays) && Number.isFinite(row.views90d)) {
-    return { bucket: 'keep', label: 'Keep', bg: '#E7F0DC', fg: '#3B6D11', source: 'signal',
+    return { bucket: 'keep', label: 'Keep', bg: 'var(--success-bg)', fg: 'var(--success-fg)', source: 'signal',
              why: 'Active and in use — keep in the live estate.' }
   }
 

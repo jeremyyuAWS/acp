@@ -121,15 +121,15 @@ function FailRow({ jb, kind, onRetry, retried }) {
       </div>
       <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5 }}>
         {kind === 'retrying'
-          ? <span style={{ fontSize: 11.5, fontWeight: 600, color: '#854F0B', whiteSpace: 'nowrap' }}>
+          ? <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--warn-fg)', whiteSpace: 'nowrap' }}>
               ↻ retrying{max ? ` · attempt ${attempts} of ${max}` : attempts ? ` · attempt ${attempts}` : ''}
             </span>
-          : <span style={{ fontSize: 11.5, fontWeight: 600, color: '#A32D2D', whiteSpace: 'nowrap' }}>
+          : <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--error-fg-strong)', whiteSpace: 'nowrap' }}>
               ✕ dead-letter{max ? ` · ${attempts}/${max} attempts` : ''}
             </span>}
         {canRetry && (
           retried
-            ? <span style={{ fontSize: 11.5, color: '#3B6D11', whiteSpace: 'nowrap' }}>✓ re-queued</span>
+            ? <span style={{ fontSize: 11.5, color: 'var(--success-fg)', whiteSpace: 'nowrap' }}>✓ re-queued</span>
             : <button className="ghost small" onClick={() => onRetry(jb)}
                 title={`Re-run the ${JOBLABEL[jb.type] || jb.type} for this file as a new job`}>
                 ↻ Retry
@@ -236,7 +236,7 @@ export default function FailureLane() {
       {dead.length > 0 && (
         <div style={{ marginTop: 14 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-            <div className="muted" style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', color: '#A32D2D' }}>
+            <div className="muted" style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--error-fg-strong)' }}>
               Dead-letter <span style={{ fontWeight: 400, textTransform: 'none', color: 'var(--muted)' }}>· retries exhausted — fix the cause, then retry, or clear</span>
             </div>
             <button className="ghost small" onClick={clearDead} disabled={busy}

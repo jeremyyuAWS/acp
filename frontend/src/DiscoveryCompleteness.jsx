@@ -16,7 +16,7 @@ const Row = ({ tone = 'muted', children }) => (
   <p style={{
     margin: '8px 0 0', fontSize: 13, lineHeight: 1.6,
     ...(tone === 'warn'
-      ? { color: '#854F0B', background: '#FAEEDA', border: '1px solid #E8C98A',
+      ? { color: 'var(--warn-fg)', background: 'var(--warn-bg)', border: '1px solid #E8C98A',
           borderRadius: 8, padding: '10px 12px' }
       : { color: 'var(--muted)' }),
   }}>{children}</p>

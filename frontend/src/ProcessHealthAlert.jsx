@@ -24,10 +24,10 @@ const LEVELS = {
   warning: {
     label: 'WARNING',
     icon: '⚠',
-    color: 'var(--health-warning-text, #854F0B)',
+    color: 'var(--health-warning-text, var(--warn-fg))',
     background: 'var(--health-warning-bg, #FFF7E6)',
     border: 'var(--health-warning-border, #FEDF89)',
-    leftBorder: 'var(--health-warning-left, #854F0B)',
+    leftBorder: 'var(--health-warning-left, var(--warn-fg))',
   },
   info: {
     label: 'INFORMATION',

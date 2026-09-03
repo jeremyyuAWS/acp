@@ -15,7 +15,7 @@ const SIM_NOT_WRITTEN =
 const wrote = (s, ok) => (s?.simulated ? SIM_NOT_WRITTEN : ok)
 // Three tones, not two. `msg.startsWith('✓') ? green : red` had no room for "the request was never
 // made": amber says it plainly without dressing a demo build up as a platform error.
-const msgColor = (m) => (m.startsWith('✓') ? '#3B6D11' : m.startsWith('SIM') ? '#6B4A0B' : '#A32D2D')
+const msgColor = (m) => (m.startsWith('✓') ? 'var(--success-fg)' : m.startsWith('SIM') ? '#6B4A0B' : 'var(--error-fg-strong)')
 
 // Danger zone — wipe scan results (Grafana + in-app charts) and/or Langfuse
 // traces so the dashboards start fresh. Settings are preserved. Typed-confirm.
@@ -66,20 +66,20 @@ export function ResetData() {
       </label>
       <div style={{ marginTop: 14 }}>
         <button onClick={run} disabled={busy || typed !== 'RESET'}
-                style={{ background: typed === 'RESET' ? '#A32D2D' : '#ccc', color: '#fff', border: 'none',
+                style={{ background: typed === 'RESET' ? 'var(--error-fg-strong)' : '#ccc', color: '#fff', border: 'none',
                          borderRadius: 8, padding: '8px 16px', cursor: typed === 'RESET' ? 'pointer' : 'not-allowed', fontWeight: 600 }}>
           {busy ? 'Resetting…' : 'Reset data'}
         </button>
       </div>
       {result && (
-        <p style={{ marginTop: 12, fontSize: 13, color: '#3B6D11' }}>
+        <p style={{ marginTop: 12, fontSize: 13, color: 'var(--success-fg)' }}>
           ✓ Reset done — cleared {result.cleared_tables?.length || 0} table(s)
           {result.scope !== 'grafana' && `, deleted ${result.langfuse_traces_deleted} Langfuse trace(s)`}.
           {result.scope !== 'grafana' && result.langfuse_traces_deleted === 0 &&
             ' (No traces deleted — if Langfuse still shows data, clear it from its UI / retention settings.)'}
         </p>
       )}
-      {err && <p style={{ marginTop: 12, fontSize: 13, color: '#A32D2D' }}>⚠ {err}</p>}
+      {err && <p style={{ marginTop: 12, fontSize: 13, color: 'var(--error-fg-strong)' }}>⚠ {err}</p>}
     </div>
   )
 }
@@ -115,17 +115,17 @@ export function ResetMyData() {
       </label>
       <div style={{ marginTop: 14 }}>
         <button onClick={run} disabled={busy || typed !== 'RESET'}
-                style={{ background: typed === 'RESET' ? '#A32D2D' : '#ccc', color: '#fff', border: 'none',
+                style={{ background: typed === 'RESET' ? 'var(--error-fg-strong)' : '#ccc', color: '#fff', border: 'none',
                          borderRadius: 8, padding: '8px 16px', cursor: typed === 'RESET' ? 'pointer' : 'not-allowed', fontWeight: 600 }}>
           {busy ? 'Resetting…' : 'Reset my data'}
         </button>
       </div>
       {result && (
-        <p style={{ marginTop: 12, fontSize: 13, color: '#3B6D11' }}>
+        <p style={{ marginTop: 12, fontSize: 13, color: 'var(--success-fg)' }}>
           ✓ Reset done — cleared {result.cleared_tables?.length || 0} table(s) for {result.owner}.
         </p>
       )}
-      {err && <p style={{ marginTop: 12, fontSize: 13, color: '#A32D2D' }}>⚠ {err}</p>}
+      {err && <p style={{ marginTop: 12, fontSize: 13, color: 'var(--error-fg-strong)' }}>⚠ {err}</p>}
     </div>
   )
 }
@@ -334,7 +334,7 @@ export function DriveMirror() {
           requiring the reason meant a server that said false without explaining itself rendered
           nothing at all. The warning follows the verdict; the reason only refines it. */}
       {aiStatus?.vision_available === false && (
-        <p role="status" style={{ margin: '10px 0 0', fontSize: 13, color: '#A32D2D' }}>
+        <p role="status" style={{ margin: '10px 0 0', fontSize: 13, color: 'var(--error-fg-strong)' }}>
           ⚠ <b>Genuine alt text is off</b>
           {aiStatus.vision_unavailable_reason ? ` — ${aiStatus.vision_unavailable_reason}` : ''}.
           Until this resolves, WCAG 1.1.1 findings get a fill-in template for a human to complete,
@@ -480,7 +480,7 @@ export function AllowList() {
           That is the failure this panel exists to prevent, on the panel itself. */}
       {domains.length > 0 && (
         <div role="note" style={{ marginTop: 12, padding: '12px 14px', borderRadius: 10, background: '#FBF1DF', border: '1px solid #EAD9BF' }}>
-          <div style={{ fontSize: 12.5, fontWeight: 700, color: '#854F0B', marginBottom: 5 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--warn-fg)', marginBottom: 5 }}>
             ⚠ Anyone at {domains.length === 1 ? 'this domain' : 'these domains'} can sign in without being listed below
           </div>
           <div style={{ fontSize: 12.5, color: '#5C3D0B', lineHeight: 1.55 }}>
@@ -599,7 +599,7 @@ export function AllowList() {
           )
           return (
             <div key={e} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 11px', borderRadius: 9, background: 'var(--surface)', border: '1px solid var(--line)' }}>
-              <span aria-hidden="true" style={{ width: 30, height: 30, borderRadius: '50%', background: isOwner ? '#854F0B' : (isAdmin ? '#1D4ED8' : '#6D28D9'), color: '#fff', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{avatar(e)}</span>
+              <span aria-hidden="true" style={{ width: 30, height: 30, borderRadius: '50%', background: isOwner ? 'var(--warn-fg)' : (isAdmin ? '#1D4ED8' : '#6D28D9'), color: '#fff', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{avatar(e)}</span>
               <span style={{ fontSize: 14, flex: 1, wordBreak: 'break-all' }}>{e}</span>
               {/* Admin badge: owner and env-admins are permanent; a promoted admin shows a plain badge. */}
               {!isOwner && isEnvAdmin && adminBadge('admin · set at deploy', 'Platform Admin via ACP_ADMIN_EMAILS — permanent, managed at deploy time')}
@@ -612,7 +612,7 @@ export function AllowList() {
                 </button>
               )}
               {isOwner
-                ? <span title="The owner can’t be removed — anti-lockout safety" style={{ fontSize: 11.5, fontWeight: 600, color: '#854F0B', background: '#FBF1DF', border: '1px solid #EAD9BF', borderRadius: 20, padding: '3px 9px', whiteSpace: 'nowrap' }}>🔒 owner</span>
+                ? <span title="The owner can’t be removed — anti-lockout safety" style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--warn-fg)', background: '#FBF1DF', border: '1px solid #EAD9BF', borderRadius: 20, padding: '3px 9px', whiteSpace: 'nowrap' }}>🔒 owner</span>
                 : <button className="ghost small" onClick={() => remove(e)} aria-label={`Remove ${e}`}>Remove</button>}
             </div>
           )

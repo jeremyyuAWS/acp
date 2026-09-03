@@ -60,8 +60,8 @@ export default function PdfImageContrastCheck({ scanId, file }) {
 
   // Measured. Worst sampled ratio across the checked runs; a fail is the actionable signal.
   const { worst_ratio: worst, any_fail_aa: fail, checked, total } = result
-  const bg = fail ? '#FAEEDA' : '#EEF4E4'
-  const fg = fail ? '#854F0B' : '#3B6D11'
+  const bg = fail ? 'var(--warn-bg)' : '#EEF4E4'
+  const fg = fail ? 'var(--warn-fg)' : 'var(--success-fg)'
   return (
     <div className="hybridcontrast" role="status">
       <span className="dectag" style={{ background: bg, color: fg }}>

@@ -18,7 +18,7 @@ export default function ContrastSwatch({ fg, bg, ratio, needs, passes }) {
         <div style={{ fontSize: 13 }}>jumps over the lazy dog — sample body text as it appears.</div>
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
-        <span style={chip(passes ? '#E7F1DA' : '#FBE9E7', passes ? '#2C5209' : '#A32D2D',
+        <span style={chip(passes ? '#E7F1DA' : '#FBE9E7', passes ? '#2C5209' : 'var(--error-fg-strong)',
                           passes ? '#B9D49A' : '#E7B4AC')}>
           {passes ? '✓' : '✗'} measured {ratio.toFixed(1)}:1
         </span>
