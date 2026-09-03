@@ -8,6 +8,7 @@ import { Sparkline } from './ScoreRing.jsx'
 import FailureLane from './FailureLane.jsx'
 import QueuePanel from './QueuePanel.jsx'
 import RevisionHistoryPanel from './RevisionHistoryPanel.jsx'
+import ScanActivityPanel from './ScanActivityPanel.jsx'
 
 // Step 10 · Monitor — the always-on surface. Shows every connected source being
 // continuously watched for new files and changes, a live event stream (with demo
@@ -352,6 +353,8 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
       </section>
 
       <ComplianceDigest run={run} />
+
+      <ScanActivityPanel run={run} scanList={scanList} />
 
       {trend.length > 1 && new Set(trend).size > 1 && (() => {
         const scored = [...scanList].filter((s) => s.completed_at && s.avg_score != null)
