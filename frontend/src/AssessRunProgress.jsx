@@ -247,7 +247,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
 
             {isFinished && (
               <p style={{ margin: '12px 0 0', fontSize: 12.5 }}>
-                <strong>{completed.toLocaleString()} documents assessed.</strong>{' '}
+                <strong>Assessment finished for {completed.toLocaleString()} documents.</strong>{' '}
                 Conformance results and remediation recommendations are ready.
               </p>
             )}

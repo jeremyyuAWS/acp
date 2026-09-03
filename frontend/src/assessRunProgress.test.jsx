@@ -62,7 +62,7 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toContain('Assessment complete')
     expect(html).toContain('22 of 22 complete')
     expect(html).toContain('Updates complete')
-    expect(html).toContain('22 documents assessed')
+    expect(html).toContain('Assessment finished for 22 documents')
     expect(html).not.toContain('Processing now:')
   })
 
