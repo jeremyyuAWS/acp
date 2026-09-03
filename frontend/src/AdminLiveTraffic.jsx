@@ -54,14 +54,14 @@ function RunNode({ data }) {
     borderRadius: 10, boxShadow: '0 3px 10px rgba(24,20,28,.10)' }}>
     <Handle type="target" position={Position.Left} />
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-      <b>{cfg.label}</b><span style={{ color: cfg.color, fontWeight: 700 }}>{pct}%</span>
+      <b>{cfg.label}</b><span style={{ color: cfg.color, fontWeight: 700 }}>{data.run.status === 'recent' ? 'Complete' : `${pct}%`}</span>
     </div>
     <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{data.run.owner}</div>
     <div style={{ height: 5, background: 'var(--border)', borderRadius: 4, margin: '9px 0 7px' }}>
       <div style={{ width: `${pct}%`, height: '100%', background: cfg.color, borderRadius: 4 }} />
     </div>
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'end' }}>
-      <span style={{ fontSize: 12 }}>{data.run.completed}/{data.run.total} · {data.run.running} active</span>
+      <span style={{ fontSize: 12 }}>{data.run.status === 'recent' ? `Finished ${age(data.run.updated_at)} ago` : `${data.run.completed}/${data.run.total} · ${data.run.running} active`}</span>
       <MiniTrend values={data.history} color={cfg.color} />
     </div>
     {!!data.run.queued && <div style={{ fontSize: 11, marginTop: 5, color: 'var(--muted)' }}>
@@ -124,9 +124,9 @@ export default function AdminLiveTraffic() {
   const stageRows = Object.entries(summary.by_stage || {})
   return <section className="panel" style={{ padding: 16, marginBottom: 20 }} aria-label="Live Azure processing traffic">
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
-      <div><b>Live Azure traffic</b><div className="muted" style={{ fontSize: 12 }}>All active scans and worker flow</div></div>
+      <div><b>Live Azure traffic</b><div className="muted" style={{ fontSize: 12 }}>Active worker flow plus the last 15 minutes</div></div>
       <span className="chip" style={{ marginLeft: 'auto' }}>● {connection}</span>
-      <span className="chip">{summary.active_runs || 0} runs · {summary.active_users || 0} users</span>
+      <span className="chip">{summary.active_runs || 0} active · {summary.recent_runs || 0} recent</span>
       <span className="chip" style={{ color: pressure.color }}>● {pressure.label}</span>
     </div>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10, marginBottom: 12 }}>
@@ -151,7 +151,7 @@ export default function AdminLiveTraffic() {
       {snapshot?.runs?.length ? <ReactFlow nodes={graph.nodes} edges={graph.edges} nodeTypes={nodeTypes}
         fitView minZoom={0.35} maxZoom={1.5} onNodeClick={(_, node) => node.type === 'run' && setSelected(node.data.run)}>
         <Background gap={18} size={1} /><MiniMap pannable zoomable /><Controls showInteractive={false} />
-      </ReactFlow> : <div className="muted" style={{ padding: 28 }}>No scans are actively processing. This map will populate automatically.</div>}
+      </ReactFlow> : <div className="muted" style={{ padding: 28 }}>No active or recently completed processing. Start a scan and this map will populate automatically.</div>}
     </div>
     {selected && <div className="panel" style={{ marginTop: 12, padding: 14, borderLeft: `4px solid ${STAGE[selected.stage]?.color || '#6B7280'}` }}>
       <div style={{ display: 'flex', justifyContent: 'space-between' }}><b>{STAGE[selected.stage]?.label || selected.stage} run details</b>
@@ -159,7 +159,7 @@ export default function AdminLiveTraffic() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 8, marginTop: 8, fontSize: 13 }}>
         <span><b>User</b><br />{selected.owner}</span><span><b>Source</b><br />{selected.source}</span>
         <span><b>Progress</b><br />{selected.completed} of {selected.total}</span><span><b>Queue</b><br />{selected.running} active · {selected.queued} waiting</span>
-        <span><b>Queue position</b><br />{selected.queue_position || (selected.running ? 'Running now' : '—')}</span>
+        <span><b>Status</b><br />{selected.status === 'recent' ? 'Recently completed' : (selected.queue_position ? `Queue position ${selected.queue_position}` : 'Running now')}</span>
         <span><b>Oldest wait</b><br />{age(selected.oldest_queued_at)}</span>
         <span><b>Job type</b><br />{selected.current_job_type?.replaceAll('_', ' ') || '—'}</span>
         <span><b>Last activity</b><br />{age(selected.updated_at)} ago</span>
