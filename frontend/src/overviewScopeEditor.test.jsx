@@ -51,6 +51,16 @@ describe('Assessment scope on the Overview tab', () => {
     expect(c.querySelector('[role="radio"]'), 'editable profile radios must not appear on results screen').toBeFalsy()
   })
 
+  it('places the scope card immediately after the Estate progress tiles', async () => {
+    const c = await render({ onScan: vi.fn() })
+    const estate = [...c.querySelectorAll('section')]
+      .find((section) => section.getAttribute('aria-label') === 'Estate progress funnel')
+    const card = scopeCard(c)
+    expect(estate, 'Estate progress panel missing').toBeTruthy()
+    expect(card, 'scope card missing').toBeTruthy()
+    expect(estate.nextElementSibling).toBe(card)
+  })
+
   it('shows "Change scope and reassess" when rescanning is available', async () => {
     const c = await render({ onScan: vi.fn() })
     const btns = [...c.querySelectorAll('button')]
@@ -85,7 +95,9 @@ describe('Assessment scope on the Overview tab', () => {
       scope: { inventory: { assessment_eligible: 1041 } },
     }
     const c = await render({ run: discoveredRun, files: [] })
+    await act(async () => {})
     const card = scopeCard(c)
+    expect(card, 'scope card missing for a discovery-only scan').toBeTruthy()
     expect(card?.textContent).toMatch(/1[,.]?041 documents? in scope/)
     expect(card?.textContent).not.toMatch(/^0 documents? in scope/)
   })

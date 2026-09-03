@@ -362,6 +362,15 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
     })
     return Math.min(100, Math.round(projScores.reduce((a, b) => a + b, 0) / projScores.length))
   })()
+  const scopeCard = <AssessmentScopeCard
+    run={run}
+    fileCount={files.length > 0
+      ? files.length
+      : (run?.scope?.inventory?.assessment_eligible ?? 0)}
+    state={busy ? 'running' : 'done'}
+    onReassess={onScan ? () => onGo('assess') : undefined}
+  />
+  const hasEstateProgress = run?.scope?.inventory?.discovered != null || files.length > 0
   return (
     <>
       <div className="dashtoolbar">
@@ -372,20 +381,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           <button className="exportbtn alt" onClick={() => openReport(run.id)} title="Backend-generated WCAG compliance report PDF">⤓ Compliance report (PDF)</button>
         )}
       </div>
-      {/* Compact, read-only scope record — replaces the full editable ScanSetup.
-          The pre-run editor lives on the Assess tab (AssessSetup.jsx). This surface reports
-          results; the configuration decision belongs on the screen that gates the run.
-          Deliberately OUTSIDE reportRef — the PDF export rasterises that node, and a
-          scope card that names the boundary is fine in a report, but interactive controls
-          (change / reassess) have no meaning in a static export. */}
-      <AssessmentScopeCard
-        run={run}
-        fileCount={files.length > 0
-          ? files.length
-          : (run?.scope?.inventory?.assessment_eligible ?? 0)}
-        state={busy ? 'running' : 'done'}
-        onReassess={onScan ? () => onGo('assess') : undefined}
-      />
+      {!hasEstateProgress && scopeCard}
       <div ref={reportRef}>
       {/* Process health banners — rendered above the findings summary so a degraded run is
           immediately visible. Amber when files errored out (could not be opened); red when the
@@ -430,6 +426,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         estateFiles={estateFiles}
         onGo={onGo}
         collapsible
+        afterProgress={hasEstateProgress ? scopeCard : null}
       />
 
       {/* ── ASSESSMENT — the section that grows in once documents have actually been assessed.
