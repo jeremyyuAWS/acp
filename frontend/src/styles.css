@@ -269,6 +269,16 @@ input:focus-visible, [role="tab"]:focus-visible {
 .impact { background: #FAEEDA; color: #854F0B; padding: 2px 9px; border-radius: 999px; font-size: 12px; }
 
 .dashtoolbar { display: flex; justify-content: flex-end; gap: 8px; margin: 16px 0 -6px; }
+.reports-menu { position: relative; }
+.reports-menu > summary { cursor: pointer; list-style: none; }
+.reports-menu > summary::-webkit-details-marker { display: none; }
+.reports-menu > summary::after { content: '▾'; font-size: 11px; }
+.reports-menu-items { position: absolute; z-index: 20; right: 0; top: calc(100% + 6px); min-width: 230px;
+  display: grid; gap: 4px; padding: 6px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 10px; box-shadow: 0 10px 24px rgba(38, 29, 40, .14); }
+.reports-menu-items button { width: 100%; text-align: left; background: transparent; color: var(--ink);
+  border: 0; padding: 8px 10px; border-radius: 6px; }
+.reports-menu-items button:hover { background: var(--bg); }
 .exportbtn.alt { color: #46404C; }
 .govcover { display: flex; align-items: flex-start; gap: 16px; padding: 16px 18px; background: #fff; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 14px; }
 .govtitle { font-size: 17px; font-weight: 700; color: var(--ink); }

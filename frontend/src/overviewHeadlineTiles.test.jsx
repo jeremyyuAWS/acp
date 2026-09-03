@@ -59,7 +59,7 @@ describe('the four headline tiles are gone, and stay gone', () => {
 describe('the stage funnel is the single visible source for the four estate values', () => {
   it('does not render the duplicate metric-card row', () => {
     const html = render()
-    const estatePanel = html.match(/aria-label="Estate progress funnel"[\s\S]*?data-accordion="doc-types"/)?.[0]
+    const estatePanel = html.match(/aria-label="Estate progress funnel"[\s\S]*?data-accordion="estate-composition"/)?.[0]
     expect(estatePanel).toBeTruthy()
     expect(estatePanel).not.toContain('class="metrics"')
     for (const label of ['Discovered', 'Eligible', 'Assessed', 'Remediated']) {
@@ -69,12 +69,10 @@ describe('the stage funnel is the single visible source for the four estate valu
 })
 
 describe('every headline number is read from an authority the screen already trusts', () => {
-  it('takes discovered and assessed from the same call the reconciliation makes', () => {
-    // Not a second derivation: reconcileBuckets(inv, reconciliationInputs(run, files)) is exactly
-    // what AssessmentReconciliation computes, so the tiles and the partition explaining them are
-    // one computation and cannot disagree.
+  it('passes the recorded inventory and analysed count to the one estate summary', () => {
     expect(src).toMatch(/reconcileBuckets\(run\?\.scope\?\.inventory, reconciliationInputs\(run, files\)\)/)
-    expect(src).toMatch(/rows\.find\(\(r\) => r\.key === 'assessed'\)/)
+    expect(src).toMatch(/<EstateProgressPanel[\s\S]{0,400}inventory=\{run\.scope\?\.inventory\}/)
+    expect(src).toMatch(/<EstateProgressPanel[\s\S]{0,400}analysed=\{analysed\}/)
   })
 
   it('takes findings from assessMetrics, the module the Assess tab uses', () => {
