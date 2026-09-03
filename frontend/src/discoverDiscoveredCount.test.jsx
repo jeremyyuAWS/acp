@@ -108,6 +108,33 @@ describe('the completion card ("N files inventoried") self-heals a stale zero', 
   })
 })
 
+describe('the completed Discovery SSE checklist survives a refresh', () => {
+  it('reconstructs the completed card from the persisted scan when live progress is absent', async () => {
+    const t = await mount({
+      progress: null,
+      files: [],
+      scope: {
+        kind: 'drive',
+        folders_walked: 12,
+        lifecycle_rules_enabled: 2,
+        lifecycle_archive: 3,
+        lifecycle_delete: 1,
+        inventory: { discovered: 170 },
+      },
+      // Assessment may advance status beyond "discovered"; discovered_at remains the durable
+      // proof that Discovery itself completed successfully.
+      run: { id: 's1', status: 'assessed', discovered_at: '2026-09-03T12:00:00Z' },
+    })
+    expect(t).toContain('Discovery complete')
+    expect(t).toContain('Connected to source')
+    expect(t).toContain('Built document inventory')
+    expect(t).toContain('170 files · 12 folders')
+    expect(t).toContain('Applied lifecycle rules')
+    expect(t).toContain('4 matched')
+    expect(t).toContain('Finalized Discovery')
+  })
+})
+
 // A scan that has been created but not yet claimed by a worker (progress.phase === 'queued')
 // looked identical to a genuine empty result: DiscoverRunProgress already shows its own
 // "Discovery queued" card, but the bold "0 documents discovered" line directly below it repeated

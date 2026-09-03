@@ -529,6 +529,21 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // (ADR 0020's get_scan fallback), so files.length is real ground truth here — `||`, not `??`,
   // so it also overrides an explicit-but-wrong 0, not just a missing value.
   const completionDiscoveredCount = discoveredCount || files.length
+  // SSE progress is browser-memory state and is absent after a refresh. Reconstruct only the
+  // terminal checklist facts from the durable scan record so the completed card remains visible
+  // when the user returns to Discover. No timing, rate, or live-connection state is inferred.
+  const completedDiscoveryProgress = !busy && (run?.discovered_at || run?.status === 'discovered')
+    ? {
+        phase: 'done',
+        files_found: completionDiscoveredCount,
+        folders_found: scope?.folders_walked ?? null,
+        rules_enabled: scope?.lifecycle_rules_enabled ?? null,
+        lifecycle_matches: (Number(scope?.lifecycle_archive) || 0)
+          + (Number(scope?.lifecycle_delete) || 0)
+          + (Number(scope?.lifecycle_tagged) || 0),
+      }
+    : null
+  const discoveryProgressForCard = progress ?? completedDiscoveryProgress
   // Live-activity rate for the discovering/lifecycle stage (stakeholder review, 2026-08-28):
   // a "recent discovery rate" derived client-side from real (count, timestamp) poll samples —
   // not a backend field. progress.files_found is the true live counter here (the Redis job
@@ -807,7 +822,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           from the last GET /scans/{id} the outer `scan` state holds, which during an active run
           can be the PREVIOUS scan's terminal value until this one settles. */}
       {/* The queue/assignment card below owns status until listing starts. */}
-      {!(busy && ['queued', 'preparing', 'submitting'].includes(progress?.phase)) && <DiscoverRunProgress progress={progress} busy={busy} onStop={onStop} onContinue={onAdvance} sources={sources} inv={inv} preflightDegraded={preflightDegraded} freshness={progress?.freshness ?? run?.freshness ?? null} runStartedAt={run?.started_at ?? null} />}
+      {!(busy && ['queued', 'preparing', 'submitting'].includes(progress?.phase)) && <DiscoverRunProgress progress={discoveryProgressForCard} busy={busy} onStop={onStop} onContinue={onAdvance} sources={sources} inv={inv} preflightDegraded={preflightDegraded} freshness={progress?.freshness ?? run?.freshness ?? null} runStartedAt={run?.started_at ?? null} />}
 
       {(() => {
         const jobClaimed = !!(discoverJobInfo && discoverJobInfo.status && discoverJobInfo.status !== 'queued')
