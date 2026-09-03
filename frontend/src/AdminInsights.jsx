@@ -1,5 +1,7 @@
-import { useEffect, useState, useCallback } from 'react'
+import { lazy, Suspense, useEffect, useState, useCallback } from 'react'
 import { getAdminAnalytics } from './api.js'
+
+const AdminLiveTraffic = lazy(() => import('./AdminLiveTraffic.jsx'))
 
 const SOURCE_COLOR = { drive: '#4285F4', sharepoint: '#0078D4', local: '#6E62C4', unknown: '#9a948f' }
 const SOURCE_LABEL = { drive: 'Google Drive', sharepoint: 'SharePoint', local: 'Local', unknown: 'Unknown' }
@@ -158,6 +160,7 @@ function PlaceholderPanel({ title, detail }) {
 }
 
 export function AdminInsights({ me }) {
+  const [showLive, setShowLive] = useState(false)
   const [period, setPeriod]   = useState('30d')
   const [source, setSource]   = useState(null)
   const [data, setData]       = useState(null)
@@ -193,6 +196,19 @@ export function AdminInsights({ me }) {
         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>Scan Analytics</h1>
         <span style={{ fontSize: 13, color: 'var(--muted)' }}>Compare scans</span>
       </div>
+
+      <div className="subtabs" role="tablist" aria-label="Admin analytics views" style={{ marginBottom: 16 }}>
+        <button role="tab" aria-selected={!showLive} className={!showLive ? 'fchip on' : 'fchip'}
+          onClick={() => setShowLive(false)}>Historical analytics</button>
+        <button role="tab" aria-selected={showLive} className={showLive ? 'fchip on' : 'fchip'}
+          onClick={() => setShowLive(true)}>Live Azure traffic</button>
+      </div>
+
+      {showLive && <Suspense fallback={<div className="panel" style={{ padding: 18, marginBottom: 20 }}>Loading live Azure traffic…</div>}>
+        <AdminLiveTraffic />
+      </Suspense>}
+
+      {!showLive && <>
 
       {/* Control bar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 24 }}>
@@ -459,6 +475,8 @@ export function AdminInsights({ me }) {
           No completed scans in this period.
         </div>
       )}
+
+      </>}
 
     </div>
   )

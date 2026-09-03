@@ -9001,8 +9001,12 @@ class Store:
                 active.add(key)
             if status == "running" and not item["current_file"]:
                 try:
-                    payload = json.loads(row.get("payload") or "{}")
-                    item["current_file"] = payload.get("file")
+                    payload = row.get("payload") or {}
+                    if isinstance(payload, str):
+                        payload = json.loads(payload)
+                    if isinstance(payload, dict):
+                        item["current_file"] = (payload.get("file") or payload.get("filename")
+                                                or payload.get("path"))
                 except (TypeError, ValueError):
                     pass
             if str(row.get("updated_at") or "") > str(item.get("updated_at") or ""):
