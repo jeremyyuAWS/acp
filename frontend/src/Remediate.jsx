@@ -401,7 +401,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [seg, setSeg] = useState(null)
   const [remBusy, setRemBusy] = useState(false)
   const [remMsg, setRemMsg] = useState('')
-  const [remProg, setRemProg] = useState(null)   // { total, done, latest, failed }
+  const [remProg, setRemProg] = useState(null)   // { total, done, latest, failed, activity, history }
   const [remUpdates, setRemUpdates] = useState('idle') // live | polling | idle
   const [serverFixed, setServerFixed] = useState(0)  // files fixed server-side this scan (persists after each batch)
   const [staleDismissed, setStaleDismissed] = useState(false)
@@ -432,8 +432,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
   const finishRemediation = (total, status = {}) => {
     clearInterval(pollRef.current); streamRef.current?.close?.(); streamRef.current = null
-    setRemProg({ total, done: total, latest: status.latest_file || null,
-                 failed: status.failed || 0, activity: null })
+    setRemProg((previous) => ({ total, done: total, latest: status.latest_file || previous?.latest || null,
+                 failed: status.failed || 0, activity: null, history: previous?.history || [] }))
     setRemBusy(false); setRemUpdates('idle')
     const ok = Math.max(0, total - (status.failed || 0))
     setServerFixed((n) => n + ok)
@@ -447,8 +447,15 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
   const applyRemediationStatus = (total, s) => {
     const done = Math.max(0, total - (s.in_flight || 0))
-    setRemProg({ total, done, latest: s.latest_file, failed: s.failed || 0,
-                 activity: s.activity || null })
+    setRemProg((previous) => {
+      const activity = s.activity || null
+      const history = [...(previous?.history || [])]
+      if (activity?.text && history[0]?.text !== activity.text) {
+        history.unshift(activity)
+        history.splice(6)
+      }
+      return { total, done, latest: s.latest_file, failed: s.failed || 0, activity, history }
+    })
   }
 
   // Polling remains the fallback for a proxy/browser that cannot keep the authenticated SSE
@@ -494,7 +501,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     if (!runId) return
     let saved = null
     try { saved = JSON.parse(sessionStorage.getItem(REMKEY(runId)) || 'null') } catch { /* ignore */ }
-    if (saved?.total) { setRemBusy(true); setRemProg({ total: saved.total, done: 0, latest: null, failed: 0 }); startLiveUpdates(saved.total) }
+    if (saved?.total) { setRemBusy(true); setRemProg({ total: saved.total, done: 0, latest: null, failed: 0, history: [] }); startLiveUpdates(saved.total) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId])
   // SIM: rebuild queue when triage changes (real mode: queue is DB-driven, unaffected by triage).
@@ -533,7 +540,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       // In-process pool OR the standalone worker container's heartbeat (#113) counts as manned.
       if (!r.workers && !r.worker_tier_alive) { setRemMsg(`Enqueued ${r.enqueued}, but no workers are available — the worker service looks down; check Monitor.`); setRemBusy(false); return }
       const total = r.enqueued
-      setRemProg({ total, done: 0, latest: null, failed: 0 })
+      setRemProg({ total, done: 0, latest: null, failed: 0, history: [] })
       try { sessionStorage.setItem(REMKEY(runId), JSON.stringify({ total })) } catch { /* ignore */ }
       startLiveUpdates(total)
     } catch (e) {

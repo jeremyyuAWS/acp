@@ -70,7 +70,7 @@ export default function AssertionScope({ run, fileCount = 0, coreScs, rec = null
   const approvedAt = run.approved_at || null
 
   return (
-    <AccordionSection id="assertion-scope" title="SCOPE OF THIS ASSERTION"
+    <AccordionSection id="assertion-scope" title="Scope of this Assertion"
                       ariaLabel="Scope of this assertion" defaultOpen={false}>
 
       {source && <Row name="Source">{source}</Row>}

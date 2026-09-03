@@ -678,6 +678,16 @@ def _remediate_file(payload: dict, job: dict) -> None:
     if not (scan_id and filename) or (source == "drive" and not drive_file_id):
         raise FatalJobError("remediate_file job missing scan_id/file/source identity")
 
+    import activity as _activity
+    try:
+        _eligible_rules = core.store.list_auto_fail_rules(scan_id, filename)
+    except Exception:
+        _eligible_rules = []
+    _rule_detail = ("WCAG " + ", ".join(sorted(_eligible_rules))
+                    if _eligible_rules else "checking eligible WCAG criteria")
+    _activity.record(scan_id, file=filename, action="starting automated remediation",
+                     detail=_rule_detail, phase="remediating", force=True)
+
     # Never remediate ACP's own remediated copy. POST /scans/{sid}/remediate already can't
     # enqueue one — it iterates get_scan's filtered file list — but jobs are DURABLE: a job
     # queued before that filter existed, or retried from the dead-letter, still arrives here.
@@ -717,6 +727,8 @@ def _remediate_file(payload: dict, job: dict) -> None:
     # job that later runs on another replica (or after a restart) would otherwise fail
     # with "no Drive token". The payload token survives both; fall back to in-memory.
     _phase(job, f"downloading {filename}")
+    _activity.record(scan_id, file=filename, action="opening source document",
+                     detail=_rule_detail, phase="downloading", force=True)
     svc = None
     if source == "local":
         from scanner import read_cached_source
@@ -768,6 +780,8 @@ def _remediate_file(payload: dict, job: dict) -> None:
     rem_skipped: list = []
 
     _phase(job, f"applying fixes to {filename}")
+    _activity.record(scan_id, file=filename, action="applying eligible WCAG fixes",
+                     detail=_rule_detail, phase="remediating", force=True)
     _scope_allows = _remediation_scope(filename, scan_id)
     # The gap #137 recorded here as `remediate.scope_partial` is CLOSED. The office/pdf
     # deterministic fixers now take the same `in_scope` predicate the HTML fixer does, gated at
@@ -908,6 +922,8 @@ def _remediate_file(payload: dict, job: dict) -> None:
     # longer fails the whole remediation, since Blob already has the durable copy.
     import blob as _blob
     _phase(job, "storing the corrected copy")
+    _activity.record(scan_id, file=filename, action="recording corrected copy",
+                     detail="preserving the source document", phase="storing", force=True)
     owner = (core.store.get_scan(scan_id) or {}).get("run", {}).get("owner_email")
     blob_url = _blob.upload_remediated(owner, scan_id, filename, fixed_bytes, mimetype)
 
@@ -1008,6 +1024,8 @@ def _remediate_file(payload: dict, job: dict) -> None:
     # ACTUALLY cleared; the rest stay failing for review, so the app never shows a fix
     # that did not take.
     _phase(job, "re-verifying the corrected copy")
+    _activity.record(scan_id, file=filename, action="re-checking corrected document",
+                     detail=_rule_detail, phase="verifying", force=True)
     verification = _verify_residual(fixed_bytes, filename)
     # Enqueue the inline AI proposals (2.4.4 link text …) now that the re-scan has run, so a
     # deterministic fix that verifiably cleared carries validated=True (confidence.js reads

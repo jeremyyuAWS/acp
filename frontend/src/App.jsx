@@ -1958,10 +1958,15 @@ export default function App() {
           Discover answers "what do we have"; how far the assessment has got belongs to Assess,
           which owns a better view of it.
 
+          REMEDIATE is suppressed too. Once that stage starts, Remediate.jsx owns the live
+          RemediationRunProgress card. Keeping the completed Assessment card above it produced two
+          stage-status panels and made the finished stage look like the active one. Assessment
+          remains available on its own tab and the remediation card replaces it on Remediate.
+
           `busy` means a DISCOVER run is live; the assess panel must not activate during
           discovery. Only assessPhase==='running' should trigger it. */}
       <LiveAssessmentLive scanId={liveScanId || run?.id}
-                          active={assessPhase === 'running' && view !== 'discover'}
+                          active={assessPhase === 'running' && view !== 'discover' && view !== 'remediate'}
                           onStop={() => stopScan(liveScanId || run?.id)} />
 
       <main id="main-content" tabIndex={-1}>

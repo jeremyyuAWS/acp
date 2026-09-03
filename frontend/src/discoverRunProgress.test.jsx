@@ -42,6 +42,23 @@ describe('DiscoverRunProgress renders nothing until a scan is live', () => {
     expect(html).toContain('Finalized Discovery')
     expect(html).not.toContain('prep-pulse')
   })
+
+  it('keeps measured inventory and lifecycle sub-bullets after completion', () => {
+    const prog = {
+      phase: 'done', files_found: 100, folders_found: 8,
+      assessable: 82, metadata_only: 5, unsupported: 13,
+      rules_enabled: 3, files_evaluated: 100, lifecycle_matches: 12,
+      lifecycle_archive: 7, lifecycle_delete: 3, lifecycle_tagged: 2,
+      save_new: 90, save_updated: 8, save_unchanged: 2, save_failed: 0,
+    }
+    const html = render(prog, false)
+    expect(html).toContain('8 folders visited')
+    expect(html).toContain('82 assessable · 5 metadata only · 13 unsupported')
+    expect(html).toContain('3 lifecycle rules enabled')
+    expect(html).toContain('100 files evaluated')
+    expect(html).toContain('7 archive review · 3 deletion review · 2 tagged')
+    expect(html).toContain('90 new · 8 updated · 2 unchanged')
+  })
 })
 
 describe('the discovery step checklist', () => {

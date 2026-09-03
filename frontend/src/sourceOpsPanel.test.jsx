@@ -75,7 +75,7 @@ vi.mock('./api.js', () => ({
   getScanProposals: vi.fn(async () => ([])),
 }))
 
-const { default: SourceDrawer } = await import('./SourceDrawer.jsx')
+const { default: SourceDrawer, policyMatchRows } = await import('./SourceDrawer.jsx')
 
 const ONEDRIVE = { id: 'sp-root', type: 'onedrive', name: 'OneDrive', user: 'acp@utsw.edu',
   access: 'read-only', agent: 'continuous' }
@@ -101,6 +101,16 @@ const click = async (el) => { await act(async () => { el.click() }); await act(a
 const tab = (c, name) => [...c.querySelectorAll('[role="tab"]')].find((b) => b.textContent.trim() === name)
 
 describe('the source operations drawer', () => {
+  it('decodes production JSON match fields instead of crashing the Rules tab', () => {
+    expect(policyMatchRows('[{"field":"age_days","op":"gt","value":2555}]')).toEqual([
+      { field: 'age_days', op: 'gt', value: 2555 },
+    ])
+    expect(policyMatchRows('{"field":"type","op":"eq","value":"pdf"}')).toEqual([
+      { field: 'type', op: 'eq', value: 'pdf' },
+    ])
+    expect(policyMatchRows('not-json')).toEqual([])
+  })
+
   it('is titled "Manage <source>" and states the connection and the last run', async () => {
     const c = await mount()
     expect(c.textContent).toMatch(/Manage OneDrive/)
