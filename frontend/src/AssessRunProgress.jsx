@@ -234,25 +234,31 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
                         detail={isFinished ? 'Complete' : eta || 'After all documents finish'} />
             </div>
 
-            {!isFinished && (cur || m.queue?.laneLabel) && (
-              <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 12, marginTop: 14,
-                            fontSize: 12.5, lineHeight: 1.5 }}>
-                <div className="muted" style={{ marginBottom: 4 }}>Processing now</div>
-                {cur ? (
-                  <>
-                    {cur.file && <strong style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{cur.file}</strong>}
-                    <ul aria-live="polite" style={{ margin: '6px 0 0', paddingLeft: 20 }}>
-                      {activityLines(cur, completed, total, processing).map((line) => <li key={line}>{line}</li>)}
-                    </ul>
-                  </>
-                ) : <span className="muted">{m.queue?.laneLabel || 'Waiting for a worker'}</span>}
-              </div>
-            )}
+            <details open className="assess-live-details"
+                     style={{ borderTop: '1px solid var(--line,#e4e8ec)', marginTop: 14 }}>
+              <summary style={{ cursor: 'pointer', padding: '10px 0 4px', fontSize: 12.5,
+                                fontWeight: 650, color: 'var(--ink)' }}>
+                {isFinished ? 'Assessment details' : 'Live processing details'}
+              </summary>
+              {!isFinished && (cur || m.queue?.laneLabel) && (
+                <div style={{ paddingTop: 7, fontSize: 12.5, lineHeight: 1.5 }}>
+                  <div className="muted" style={{ marginBottom: 4 }}>Processing now</div>
+                  {cur ? (
+                    <>
+                      {cur.file && <strong style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{cur.file}</strong>}
+                      <ul aria-live="polite" style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+                        {activityLines(cur, completed, total, processing).map((line) => <li key={line}>{line}</li>)}
+                      </ul>
+                    </>
+                  ) : <span className="muted">{m.queue?.laneLabel || 'Waiting for a worker'}</span>}
+                </div>
+              )}
 
-            <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 10, marginTop: 12 }}>
-              <LiveThroughput points={throughput?.points || []} ratePerMin={throughput?.ratePerMin}
-                              label="Assessment throughput" />
-            </div>
+              <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 10, marginTop: 12 }}>
+                <LiveThroughput points={throughput?.points || []} ratePerMin={throughput?.ratePerMin}
+                                label="Assessment throughput" />
+              </div>
+            </details>
 
             {isFinished && (
               <p style={{ margin: '12px 0 0', fontSize: 12.5 }}>

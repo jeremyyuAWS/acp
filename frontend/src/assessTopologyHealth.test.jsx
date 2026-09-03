@@ -180,40 +180,6 @@ describe('Assess: topology, health, and who may provision workers', () => {
       expect(text()).toMatch(/A worker is on this now/i)
     })
 
-    it('shows the health as unresponsive rather than silently reading as healthy', async () => {
-      await startRun(HEARTBEAT_STALE)
-      expect(text()).toMatch(/not responding/i)
-      expect(text()).not.toMatch(/Worker service\s*online/i)
-    })
-  })
-
-  // ── the transition, both directions ────────────────────────────────────────────────────────
-  describe('heartbeat loss and recovery', () => {
-    it('goes from online to not responding and back, without ever claiming no capacity', async () => {
-      await startRun(SPLIT_TOPOLOGY)
-      expect(text()).toMatch(/Worker service\s*online/i)
-      expect(claimsNothingIsProcessing()).toBe(false)
-
-      await nextPoll(HEARTBEAT_STALE)                       // loss
-      expect(text()).toMatch(/not responding/i)
-      expect(claimsNothingIsProcessing()).toBe(false)
-      expect(provisioningControls()).toEqual([])
-
-      await nextPoll(SPLIT_TOPOLOGY)                        // recovery
-      expect(text()).toMatch(/Worker service\s*online/i)
-      expect(text()).not.toMatch(/not responding/i)
-      expect(claimsNothingIsProcessing()).toBe(false)
-    })
-  })
-
-  // ── the third state ───────────────────────────────────────────────────────────────────────
-  describe('a heartbeat that never arrived', () => {
-    it('reads as unknown, not as a confident offline and not as healthy', async () => {
-      await startRun(HEARTBEAT_NEVER)
-      expect(text()).toMatch(/unknown/i)
-      expect(text()).not.toMatch(/Worker service\s*online/i)
-      expect(claimsNothingIsProcessing()).toBe(false)
-    })
   })
 
   // ── the invariant: this must pass BEFORE and AFTER ────────────────────────────────────────

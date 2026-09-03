@@ -13,18 +13,18 @@ const code = (f) => readFileSync(join(here, f), 'utf8')
   .filter((l) => { const t = l.trim(); return !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*') && !t.startsWith('{/*') })
   .join('\n')
 
-describe('the header counts documents that exist, not documents that finished', () => {
+describe('the legacy progress summary is retired in favor of AssessRunProgress', () => {
   const src = code('AssessRunner.jsx')
 
-  it('prefers the run total over the scored-only list', () => {
-    // `docs = files.filter(f => f.score != null)` is empty until the first file lands, so on a
-    // deferred run the header read "Computing conformance · 0 documents" from start to finish.
-    expect(src).toMatch(/\{\(liveTotal \|\| docs\.length\)\.toLocaleString\(\)\} documents/)
+  it('does not render the duplicate bar, percentage, or conformance caption', () => {
+    expect(src).not.toMatch(/className="assessbar"/)
+    expect(src).not.toMatch(/className="assessrunmeta"/)
+    expect(src).not.toMatch(/Computing conformance/)
   })
 
-  it('takes the total from the scan run, which knows it before any file is scored', () => {
-    expect(src).toMatch(/const total = run\.files \|\| fs\.length \|\| 1/)
-    expect(src).toMatch(/setLiveTotal\(total\)/)
+  it('keeps the per-document list mounted', () => {
+    expect(src).toMatch(/className="assesslist"/)
+    expect(src).toMatch(/aria-label="Per-document assessment progress"/)
   })
 })
 
