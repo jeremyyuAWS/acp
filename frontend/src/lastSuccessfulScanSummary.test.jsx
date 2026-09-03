@@ -38,6 +38,7 @@ describe('LastSuccessfulScanSummary', () => {
     expect(text).toContain('Last successful scan')
     expect(text).toContain('Discovered2')
     expect(text).toContain('Eligible')
+    expect(container.querySelector('[role="group"][aria-label="Discovered: 2"]')).toBeTruthy()
     expect(text).toContain('Last scan details')
     const details = container.querySelector('details')
     expect(details.open).toBe(false)

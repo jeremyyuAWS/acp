@@ -69,7 +69,8 @@ function lifecycleSummary(scope) {
 
 function ResultTile({ label, value, detail, color = 'var(--ink)' }) {
   return (
-    <div style={{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 12,
+    <div role="group" aria-label={`${label}: ${value}`}
+         style={{ background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 12,
                   padding: '14px 16px', minWidth: 0 }}>
       <div style={{ color: 'var(--muted)', fontSize: 12, textTransform: 'uppercase',
                     letterSpacing: '0.04em', fontWeight: 600 }}>{label}</div>
