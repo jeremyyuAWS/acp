@@ -41,7 +41,7 @@ function BuildStamp() {
   return (
     <p style={{ margin: '10px 0 0', fontSize: 11, color: 'var(--muted)', textAlign: 'center', letterSpacing: 0.2 }}
        title={stamp ? `Version dated in Pacific time · built ${stamp} (your local time)` : undefined}>
-      {ver && <span>v{ver}<span style={{ opacity: 0.7 }}>{' '}PT</span></span>}
+      {ver && <span>v{ver}<span>{' '}PT</span></span>}
       {ver && iso && <span style={{ margin: '0 5px' }}>·</span>}
       {iso && <span>{stamp}</span>}
       {iso && <span style={{ margin: '0 5px' }}>·</span>}

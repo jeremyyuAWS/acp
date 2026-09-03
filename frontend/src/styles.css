@@ -1117,6 +1117,11 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 [data-wcag="on"] .aibadge.off {
   background: #6b6470;       /* white on #6b6470 = 5.80:1 (was #8c8694 = 3.54:1) */
 }
+/* .loadingbox-preview inherits --muted from .loadingbox; opacity:0.8 composites it to 4.39:1 on
+   #faf8fb in WCAG mode.  Remove the opacity so the full #595060 value applies (5.68:1). */
+[data-wcag="on"] .loadingbox-preview {
+  opacity: 1;
+}
 .setoverlay { position: fixed; inset: 0; background: rgba(40, 30, 48, 0.38); backdrop-filter: blur(2px); z-index: 80; display: flex; align-items: flex-start; justify-content: center; padding: 36px 20px; overflow-y: auto; }
 .setpanel { background: var(--bg); border-radius: 16px; width: min(1360px, 97vw); box-shadow: 0 24px 64px rgba(30, 22, 34, 0.4); overflow: hidden; }
 .sethead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 22px; background: var(--card); border-bottom: 1px solid var(--line); font-size: 15px; position: sticky; top: 0; }
