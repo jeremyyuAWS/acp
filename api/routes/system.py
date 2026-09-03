@@ -1201,7 +1201,8 @@ def _admin_activity_snapshot() -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "runs": runs,
         "summary": {
-            "active_runs": len(runs),
+            "active_runs": sum(1 for r in runs if r.get("status") == "active"),
+            "recent_runs": sum(1 for r in runs if r.get("status") == "recent"),
             "active_users": len({r.get("owner") for r in runs if r.get("owner")}),
             "waiting_users": len({r.get("owner") for r in runs if r.get("owner") and r.get("queued")}),
             "queued": queued,

@@ -51,7 +51,11 @@ def test_admin_live_activity_omits_inactive_runs(isolated_store):
     claimed = isolated_store.claim_job("test-worker")
     assert claimed and claimed["id"] == job_id
     isolated_store.complete_job(job_id, worker_id="test-worker", attempt=claimed["attempts"])
-    assert isolated_store.admin_live_activity() == []
+    recent = isolated_store.admin_live_activity()
+    assert len(recent) == 1
+    assert recent[0]["status"] == "recent"
+    assert recent[0]["completed"] == 1
+    assert isolated_store.admin_live_activity(recent_seconds=0) == []
 
 
 def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(monkeypatch):
@@ -65,16 +69,16 @@ def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(mo
 
         def admin_live_activity(self):
             return [
-                {"owner": "a@example.org", "stage": "assess", "running": 3, "queued": 8,
+                {"owner": "a@example.org", "stage": "assess", "status": "active", "running": 3, "queued": 8,
                  "completed": 2, "total": 13},
-                {"owner": "b@example.org", "stage": "remediate", "running": 1, "queued": 2,
+                {"owner": "b@example.org", "stage": "remediate", "status": "recent", "running": 1, "queued": 2,
                  "completed": 4, "total": 7},
             ]
 
     monkeypatch.setattr(system.core, "store", ActivityStore())
     snapshot = system._admin_activity_snapshot()
     assert snapshot["summary"] == {
-        "active_runs": 2, "active_users": 2, "waiting_users": 2,
+        "active_runs": 1, "recent_runs": 1, "active_users": 2, "waiting_users": 2,
         "queued": 10, "running": 4, "completed_jobs": 12,
         "worker_slots": 4, "available_slots": 0, "utilization_pct": 100,
         "pressure": "saturated", "worker_tier_alive": True,

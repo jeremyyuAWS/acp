@@ -8955,13 +8955,18 @@ class Store:
             self._db.execute(cur, "SELECT * FROM jobs" + where + " ORDER BY updated_at DESC LIMIT %s", tuple(params))
             return self._db.fetchall(cur)
 
-    def admin_live_activity(self) -> list[dict]:
-        """Cross-user, payload-free live work for the administrator traffic map.
+    def admin_live_activity(self, *, recent_seconds: int = 900) -> list[dict]:
+        """Cross-user, payload-free live and recently completed work for the admin map.
 
-        A run is returned once per active pipeline stage, with aggregate job counts.  The newest
-        running filename is extracted for the authorized detail drawer; raw payloads and document
-        contents never leave this method.
+        A run is returned once per active pipeline stage, plus completed stages whose last job
+        changed within ``recent_seconds``. Keeping a short tail matters operationally: otherwise
+        a fast run disappears between the user's click and the next two-second SSE snapshot and
+        the map looks broken. The newest running filename is extracted for the authorized detail
+        drawer; raw payloads and document contents never leave this method.
         """
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+        recent_cutoff = (_dt.now(_tz.utc) - _td(seconds=max(0, recent_seconds))).isoformat()
         kinds = {
             "scan_discover": "discover", "scan_folder": "discover", "scan_batch": "discover",
             "scan_file": "assess", "scan_assess": "assess", "assess_trace": "assess",
@@ -8975,12 +8980,14 @@ class Store:
                 "sr.owner_email,sr.source,sr.files,sr.files_done "
                 "FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
                 "WHERE j.scan_id IN (SELECT DISTINCT scan_id FROM jobs "
-                "WHERE status IN ('queued','running')) "
-                "ORDER BY j.updated_at DESC LIMIT %s", (5000,))
+                "WHERE status IN ('queued','running')) OR "
+                "(j.status='done' AND j.updated_at>=%s) "
+                "ORDER BY j.updated_at DESC LIMIT %s", (recent_cutoff, 5000))
             rows = self._db.fetchall(cur)
 
         grouped: dict[tuple[str, str], dict] = {}
         active: set[tuple[str, str]] = set()
+        recent: set[tuple[str, str]] = set()
         for row in rows:
             stage = kinds.get(row.get("type"))
             if not stage:
@@ -9002,7 +9009,10 @@ class Store:
                 if created and (not item["oldest_queued_at"] or str(created) < str(item["oldest_queued_at"])):
                     item["oldest_queued_at"] = created
             elif status == "running": item["running"] += 1
-            elif status == "done": item["completed"] += 1
+            elif status == "done":
+                item["completed"] += 1
+                if str(row.get("updated_at") or "") >= recent_cutoff:
+                    recent.add(key)
             if status in ("queued", "running"):
                 active.add(key)
             if status == "running" and not item["current_file"]:
@@ -9022,7 +9032,9 @@ class Store:
                 item["started_at"] = row["created_at"]
             if str(row.get("updated_at") or "") > str(item.get("updated_at") or ""):
                 item["updated_at"] = row.get("updated_at")
-        result = [grouped[key] for key in active]
+        result = [grouped[key] for key in active | recent]
+        for item in result:
+            item["status"] = "active" if (item["queued"] or item["running"]) else "recent"
         waiting = sorted((r for r in result if r["queued"]),
                          key=lambda r: str(r.get("oldest_queued_at") or ""))
         for position, item in enumerate(waiting, 1):

@@ -30,4 +30,10 @@ describe('Admin live traffic graph', () => {
       { owner: 'b@example.org', queued: 2 },
     ])).toEqual({ owner: 'a@example.org', count: 8, total: 10, pct: 80 })
   })
+
+  it('keeps recently completed stages in the graph without animating them', () => {
+    const graph = buildTrafficGraph({ runs: [{ ...run, status: 'recent', completed: 20, running: 0, queued: 0 }] })
+    expect(graph.nodes.find((node) => node.type === 'run').data.run.status).toBe('recent')
+    expect(graph.edges.every((edge) => !edge.animated)).toBe(true)
+  })
 })
