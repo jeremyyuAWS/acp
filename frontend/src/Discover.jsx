@@ -906,7 +906,8 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               estateFiles={estateFiles}
               onGo={onAdvance}
             />
-            <LastSuccessfulScanSummary run={run} scope={scope} runAt={runAt} />
+            <LastSuccessfulScanSummary run={run} scope={scope} runAt={runAt}
+                                       files={estateFiles} inventory={scope?.inventory || null} />
           </>
         </AccordionSection>
       )}
@@ -1195,6 +1196,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       <AccordionSection id="discover-inventory" title="File inventory"
                         ariaLabel="File inventory" className="" defaultOpen>
         <><DiscoveryResults files={estateFiles} source={run?.source} inventory={scope?.inventory || null} invRows={inv?.rows ?? null} scopeLine={scopeLine} runAt={runAt}
+                        showHeadlineTiles={false}
                         reasonOf={why ? why.reasonOf : undefined}
                         reasonSampleOf={why ? why.sampleOf : null}
                         reasonFetchLikely={why ? why.fetchLikely : null}

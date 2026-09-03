@@ -153,8 +153,10 @@ describe('DOM — Discover mounts the results screen, and Assess is gated only b
   it('mounts the Discovery results screen inside Discover', async () => {
     await render([arch('Clinical/old-pathway.docx'), F('Clinical/live.docx', { lifecycle_status: 'Active' })])
     expect(container.textContent).toContain('DISCOVERY RESULTS')
-    // The lifecycle SUMMARY survives as a stat tile — a measured count from a completed read.
-    expect(container.textContent).toContain('tagged for archive review')
+    // Discover suppresses the duplicate headline row inside File inventory. The same measured
+    // counts now live directly below Estate progress in LastSuccessfulScanSummary.
+    expect(container.textContent).not.toContain('tagged for archive review')
+    expect(read('Discover.jsx')).toMatch(/<DiscoveryResults[\s\S]{0,500}?showHeadlineTiles=\{false\}/)
     // The per-file rule that produced the tag does not: that was the RECOMMENDATIONS table.
     expect(container.textContent).not.toContain('Legacy clinical policies')
   })
