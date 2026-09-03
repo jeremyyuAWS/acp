@@ -11,8 +11,7 @@ import { createTestRoot, unmountAll } from './testRoots.js'
 // Four steps: Connect to source → Build document inventory → Apply lifecycle rules →
 // Finalize Discovery. "Build document inventory" encompasses listing, metadata, classification,
 // and batch saves — these are ONE concurrent operation in the backend, not sequential.
-// When phase='done' and busy=false, DiscoverRunProgress returns null so that
-// DiscoverCompleteSummary can render the immutable completion card.
+// When phase='done' and busy=false, the checklist remains as a compact completion record.
 
 const PROG = { phase: 'discovering', files_found: 8420 }
 const render = (progress, busy, onStop, sources, inv) =>
@@ -33,9 +32,15 @@ describe('DiscoverRunProgress renders nothing until a scan is live', () => {
     expect(render(null, false)).toBe('')
   })
 
-  it('returns null (empty string) when phase is done and not busy — DiscoverCompleteSummary takes over', () => {
+  it('keeps the completed SSE checklist visible when phase is done and not busy', () => {
     const prog = { phase: 'done', files_found: 100 }
-    expect(render(prog, false)).toBe('')
+    const html = render(prog, false)
+    expect(html).toContain('Discovery complete')
+    expect(html).toContain('Updates complete')
+    expect(html).toContain('Built document inventory')
+    expect(html).toContain('Applied lifecycle rules')
+    expect(html).toContain('Finalized Discovery')
+    expect(html).not.toContain('prep-pulse')
   })
 })
 
@@ -769,11 +774,13 @@ describe('stopped card (§9): scan ended before completion', () => {
     expect(html).toContain('Partial inventory retained')
   })
 
-  it('returns null (empty string) when phase is done and not busy — completion card handled by DiscoverCompleteSummary', () => {
+  it('renders the completed checklist and optional Assessment action when the run is done', () => {
     const prog = { phase: 'done', files_found: 100 }
-    const html = render(prog, false)
-    expect(html).toBe('')
-    expect(html).not.toContain('Discovery complete')
+    const html = renderToStaticMarkup(createElement(DiscoverRunProgress, {
+      progress: prog, busy: false, onContinue: () => {},
+    }))
+    expect(html).toContain('Discovery complete')
+    expect(html).toContain('Continue to Assessment')
     expect(html).not.toContain('Discovery stopped')
   })
 })

@@ -560,8 +560,45 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
     )
   }
 
-  // DiscoverCompleteSummary takes over once the scan is fully done and not running.
-  if (isDone && !busy) return null
+  // Keep the SSE checklist visible after the final event. DiscoverCompleteSummary used to own
+  // this state, so the live card was hidden to avoid two completion cards. That summary is now
+  // intentionally retired; retaining this compact checklist gives the user a clear record of
+  // what the scan completed without duplicating the separate last-scan result tiles below.
+  if (isDone && !busy) {
+    return (
+      <section className="discover-run-progress" role="region" aria-label="Discovery complete"
+               style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
+        <div className="assess-run-card" style={{ border: '1px solid var(--green-line,#a8cf7a)', borderRadius: 12,
+                                                  padding: '14px 16px', background: 'var(--panel,#fff)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 14.5, fontWeight: 650 }}>Discovery complete</div>
+            <span role="status"
+                  style={{ fontSize: 11.5, padding: '2px 7px', borderRadius: 4,
+                           background: 'var(--green-bg,#f0f7e6)', color: 'var(--green,#3B6D11)',
+                           border: '1px solid var(--green-line,#a8cf7a)' }}>
+              Updates complete
+            </span>
+          </div>
+          <div role="list" aria-label="Discovery steps"
+               style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+            {steps.map(({ key, ...rest }) => <DiscoverStep key={key} {...rest} />)}
+          </div>
+          <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 12, marginTop: 14,
+                        fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.6 }}>
+            No source documents were assessed or changed.
+          </div>
+          {onContinue && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
+              <button type="button" className="primary small" onClick={onContinue}>
+                Continue to Assessment
+              </button>
+            </div>
+          )}
+        </div>
+      </section>
+    )
+  }
 
   return (
     <section className="discover-run-progress" role="region" aria-label="Discovery in progress"
