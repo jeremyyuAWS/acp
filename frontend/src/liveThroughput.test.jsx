@@ -10,6 +10,9 @@ describe('LiveThroughput', () => {
     expect(html).toContain('<polyline')
     expect(html).toContain('18 documents/min')
     expect(html).toContain('completed count moved from 2 to 12')
+    expect(html).toContain('2 → 12 completed · 4 live updates')
+    expect(html).toContain('Earlier')
+    expect(html).toContain('Now')
   })
 
   it('says it is calibrating rather than inventing a line from one sample', () => {

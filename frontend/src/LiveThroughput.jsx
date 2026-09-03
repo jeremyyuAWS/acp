@@ -5,24 +5,38 @@ export default function LiveThroughput({ points = [], ratePerMin = null, label =
   if (points.length < 2) return (
     <div className="muted" style={{ fontSize: 12.5 }}>{label} · calibrating…</div>
   )
-  const width = 180, height = 34, pad = 3
+  const width = 260, height = 72
+  const plot = { left: 30, right: 6, top: 6, bottom: 18 }
   const lo = Math.min(...points), hi = Math.max(...points)
   const range = Math.max(1, hi - lo)
   const coords = points.map((value, index) => {
-    const x = pad + (index * (width - pad * 2)) / Math.max(1, points.length - 1)
-    const y = height - pad - ((value - lo) / range) * (height - pad * 2)
+    const x = plot.left + (index * (width - plot.left - plot.right)) / Math.max(1, points.length - 1)
+    const y = height - plot.bottom - ((value - lo) / range) * (height - plot.top - plot.bottom)
     return `${x.toFixed(1)},${y.toFixed(1)}`
   }).join(' ')
   const rate = ratePerMin == null ? 'calibrating…' : `${ratePerMin.toLocaleString()} documents/min`
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-      <span className="muted" style={{ fontSize: 12.5 }}>{label}</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      <div style={{ minWidth: 145 }}>
+        <div className="muted" style={{ fontSize: 12.5 }}>{label}</div>
+        <strong style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>{rate}</strong>
+        <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+          {lo.toLocaleString()} → {hi.toLocaleString()} completed · {points.length} live updates
+        </div>
+      </div>
       <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img"
-           aria-label={`${label}: ${rate}; completed count moved from ${lo} to ${hi}`}>
+           aria-label={`${label}: ${rate}; completed count moved from ${lo} to ${hi} across ${points.length} live updates`}>
+        <line x1={plot.left} y1={plot.top} x2={plot.left} y2={height - plot.bottom}
+              stroke="var(--line,#d9dde3)" />
+        <line x1={plot.left} y1={height - plot.bottom} x2={width - plot.right} y2={height - plot.bottom}
+              stroke="var(--line,#d9dde3)" />
+        <text x={plot.left - 5} y={plot.top + 4} textAnchor="end" fontSize="9" fill="var(--muted,#667085)">{hi}</text>
+        <text x={plot.left - 5} y={height - plot.bottom + 3} textAnchor="end" fontSize="9" fill="var(--muted,#667085)">{lo}</text>
+        <text x={plot.left} y={height - 4} textAnchor="start" fontSize="9" fill="var(--muted,#667085)">Earlier</text>
+        <text x={width - plot.right} y={height - 4} textAnchor="end" fontSize="9" fill="var(--muted,#667085)">Now</text>
         <polyline points={coords} fill="none" stroke="var(--purple,#6f4a78)" strokeWidth="2"
                   strokeLinecap="round" strokeLinejoin="round" />
       </svg>
-      <strong style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>{rate}</strong>
     </div>
   )
 }

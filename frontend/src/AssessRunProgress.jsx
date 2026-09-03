@@ -51,6 +51,14 @@ function fmtElapsedSecs(s) {
   return r ? `${m}m ${r}s` : `${m}m`
 }
 
+function workerDetail(queue) {
+  const workers = queue?.workers
+  if (!workers || workers.max == null) return 'Worker status unavailable for this run'
+  const active = workers.busy || 0
+  const standingBy = workers.idle == null ? Math.max(0, workers.max - active) : workers.idle
+  return `${active.toLocaleString()} active · ${standingBy.toLocaleString()} standing by · ${workers.max.toLocaleString()} total`
+}
+
 // One preparation step row: icon (✓ / pulsing dot / ○), label, right-aligned detail.
 function PrepStep({ label, detail, status, sublines = [] }) {
   return (
@@ -224,9 +232,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
               <PrepStep status="done" label="Validated assessment scope"
                         detail={`${total.toLocaleString()} documents`} />
               <PrepStep status="done" label="Started assessment workers"
-                        detail={m.queue?.workers?.max != null
-                          ? `${m.queue.workers.max.toLocaleString()} ready`
-                          : 'Workers ready'} />
+                        detail={workerDetail(m.queue)} />
               <PrepStep status={isFinished ? 'done' : 'active'} label="Opened and assessed documents"
                         detail={`${completed.toLocaleString()} of ${total.toLocaleString()} complete${processing > 0 ? ` · ${processing.toLocaleString()} processing` : ''}`}
                         sublines={!isFinished && cur ? activityLines(cur, completed, total, processing) : []} />
