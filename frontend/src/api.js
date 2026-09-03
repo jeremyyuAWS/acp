@@ -853,6 +853,7 @@ export function openJobStream(jobId, { onMessage, onDone, onError } = {}) {
   })()
   return { close: () => controller.abort() }
 }
+getJob.openStream = openJobStream
 
 // ── Durable async queue (ADR 0004/0005) ───────────────────────────────────────
 // Queued scan: runs in the worker pool, survives restarts, shows in /jobs + Grafana.

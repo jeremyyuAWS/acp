@@ -12,7 +12,7 @@ import { armNotifyOnComplete, notifyScanComplete, notifyScanFailed, notification
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, startScan, startScanQueued, cancelScan, getJob, openJobStream, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, SCAN_UNAVAILABLE, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
+import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, SCAN_UNAVAILABLE, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
 import { beginOrResumeIntent, completeIntent, abandonIntent, outcomeIsUncertain } from './submitIntent'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
@@ -1010,9 +1010,9 @@ export default function App() {
   const _pollScanJobPolling = async (job_id) => {
     let job
     do {
-      await new Promise((r) => setTimeout(r, 350))
       job = await getJob(job_id)
       setProgress(job)
+      if (!job.done) await new Promise((r) => setTimeout(r, 350))
     } while (!job.done)
     if (job.error) throw new Error(job.error)
     return getScan(job.scan_id)
@@ -1022,7 +1022,7 @@ export default function App() {
     sessionStorage.setItem(ACTIVE_JOB_KEY, job_id)
     sessionStorage.setItem(ACTIVE_JOB_AT_KEY, String(Date.now()))
     const run =
-      typeof ReadableStream !== 'undefined'
+      typeof ReadableStream !== 'undefined' && typeof getJob.openStream === 'function'
         ? new Promise((resolve, reject) => {
             let settled = false
             let lastJob = null
@@ -1034,7 +1034,7 @@ export default function App() {
               if (job?.error) reject(new Error(job.error))
               else getScan(job?.scan_id).then(resolve, reject)
             }
-            stream = openJobStream(job_id, {
+            stream = getJob.openStream(job_id, {
               onMessage: (job) => {
                 lastJob = job
                 setProgress(job)

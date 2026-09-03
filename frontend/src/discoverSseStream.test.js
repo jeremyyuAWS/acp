@@ -25,7 +25,7 @@ const src = () => readFileSync(join(HERE, 'App.jsx'), 'utf8')
 
 describe('non-queued (thread) scan path', () => {
   it('opens the authenticated job stream helper', () => {
-    expect(src()).toMatch(/openJobStream\(job_id,/)
+    expect(src()).toMatch(/getJob\.openStream\(job_id,/)
     expect(src()).not.toMatch(/new EventSource\(`\/scans\/jobs/)
   })
 
