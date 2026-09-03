@@ -5,6 +5,7 @@ import ReviewDrawer from './ReviewDrawer.jsx'
 import RemediationInbox from './RemediationInbox.jsx'
 import RemediationRunHeader from './RemediationRunHeader.jsx'
 import RemediationRunDetails from './RemediationRunDetails.jsx'
+import RemediationRunProgress from './RemediationRunProgress.jsx'
 // The approved-board core (R2/R3, R5, R6, R9, R11, R12). Every one of these shipped to main
 // unmounted; this is the pass that puts them on the screen they were written for.
 import RemediationWork from './RemediationWork.jsx'
@@ -1494,6 +1495,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         primary={primary}
         readOnly={readOnly}
         onOpenRunDetails={() => setRunDetailsOpen((v) => !v)} />
+      {/* The authenticated remediation SSE already supplies these values. Keep its progress in
+          the main workflow, rather than hiding the only live signal inside Run details. */}
+      {remBusy && remProg && (
+        <RemediationRunProgress progress={remProg} updateMode={remUpdates} />
+      )}
       {/* THE WORK. Second on the page, not eleventh — the review workspace is the only part of this
           screen that needs a person, so nothing but the run header and a blocking warning precedes
           it. It is also the ONLY finding-level approval surface: the standalone approvals panel that
