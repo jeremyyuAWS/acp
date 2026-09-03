@@ -124,25 +124,28 @@ describe('the removed panels are hidden, not deleted', () => {
   })
 })
 
-describe('the Users tab onboards Microsoft and Google testers equally', () => {
-  it('renders both a Microsoft and a Google onboarding card', async () => {
+describe('the Users tab onboards Microsoft and Google identities in one flow', () => {
+  it('offers both providers in a unified Add people dialog', async () => {
     const c = await render()
+    const add = [...c.querySelectorAll('button')].find((b) => b.textContent.includes('Add people'))
+    expect(add).toBeTruthy()
+    await act(async () => add.click())
     expect(c.textContent).toContain('Microsoft')
     expect(c.textContent).toContain('Google')
-    // The Google card whitelists a Gmail; the OAuth-consent test-user step is surfaced too.
-    expect([...c.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Whitelist')).toBe(true)
-    expect(c.querySelector('a[href*="console.cloud.google.com/apis/credentials/consent"]')).toBeTruthy()
+    expect(c.querySelector('[role="dialog"][aria-modal="true"]')).toBeTruthy()
+    expect(c.textContent).toContain('Google test user')
   })
 
-  it('whitelisting a Google tester persists it to the list', async () => {
+  it('adding a Google user persists it to the people roster', async () => {
     const c = await render()
-    const input = c.querySelector('input[aria-label="Whitelist a Google tester by email"]')
+    await act(async () => [...c.querySelectorAll('button')].find((b) => b.textContent.includes('Add people')).click())
+    const input = c.querySelector('input[type="email"]')
     expect(input).toBeTruthy()
     setValue(input, 'newtester@gmail.com')
-    const btn = [...c.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Whitelist')
-    await act(async () => { btn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    const btn = [...c.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Add person')
+    await act(async () => { btn.click() })
     await settle()
-    expect(c.textContent).toContain('Whitelisted newtester@gmail.com')
+    expect(c.textContent).toContain('newtester@gmail.com is ready to join ACP')
     expect(c.textContent).toContain('newtester@gmail.com')
   })
 })

@@ -3,6 +3,7 @@ import { resetDemoData, resetMyData, getAllowlist, setAllowlist, inviteTester, g
 import { SIM } from './sim.js'
 import WorkerReplicaControl from './WorkerReplicaControl.jsx'
 import ReviewMemory from './ReviewMemory.jsx'
+import PeopleAccess from './PeopleAccess.jsx'
 
 // What a write is allowed to claim when the API layer marked its own answer `simulated`.
 // A simulated response never reached a server, so it is neither a success nor a failure — the
@@ -904,7 +905,7 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
         </div>
         <div className="setbody">
           {tab === 'owners' && <OwnerDelegate files={files} onChanged={onDelegationChange} />}
-          {tab === 'users' && <AllowList />}
+          {tab === 'users' && <PeopleAccess />}
           {tab === 'mydata' && <><ResetMyData /><CopyToken /></>}
           {tab === 'myscope' && <MyScanScope />}
           {tab === 'workers' && <WorkerConfiguration me={me} />}

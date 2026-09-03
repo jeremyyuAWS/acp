@@ -7377,6 +7377,30 @@ class Store:
         self.set_setting("allowed_emails", ",".join(clean))
         return clean
 
+    def get_people(self) -> list[dict]:
+        """Durable onboarding metadata; the allowlist remains the login gate."""
+        import json as _json
+        try:
+            rows = _json.loads(self.get_setting("people_records", "[]") or "[]")
+        except (TypeError, ValueError):
+            rows = []
+        return sorted((r for r in rows if isinstance(r, dict) and r.get("email")),
+                      key=lambda r: r["email"])
+
+    def upsert_person(self, person: dict) -> dict:
+        import json as _json
+        email = (person.get("email") or "").strip().lower()
+        rows = {r["email"]: r for r in self.get_people()}
+        rows[email] = {**rows.get(email, {}), **person, "email": email}
+        self.set_setting("people_records", _json.dumps(list(rows.values()), sort_keys=True))
+        return rows[email]
+
+    def remove_person(self, email: str) -> None:
+        import json as _json
+        target = (email or "").strip().lower()
+        rows = [r for r in self.get_people() if r.get("email") != target]
+        self.set_setting("people_records", _json.dumps(rows, sort_keys=True))
+
     def get_admins(self) -> list[str]:
         """Runtime-editable additional Platform Admins (managed from Settings → Users), lowercased.
         Distinct from the env grants: ACP_OWNER_EMAIL (the immutable owner) and ACP_ADMIN_EMAILS

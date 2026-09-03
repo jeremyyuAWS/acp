@@ -5,6 +5,7 @@ import hmac
 import json
 import re
 import threading
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -184,6 +185,120 @@ def set_allowlist(body: dict, request: Request):
     core.store.log_decision("admin", "settings.allowlist",
                             detail=f"test-user list set to {len(saved)} email(s)")
     return {"emails": saved, "owner": core.OWNER_EMAIL}
+
+
+_PEOPLE_ROLES = {"user", "admin"}
+_PEOPLE_PROVIDERS = {"google", "microsoft"}
+
+
+def _people_payload(can_manage: bool = True) -> dict:
+    import invites
+    records = {r["email"]: r for r in core.store.get_people()}
+    admins = set(core.store.get_admins()) | set(core.ADMIN_EMAILS)
+    for email in core.store.get_allowlist():
+        records.setdefault(email, {"email": email, "provider": None, "status": "access_ready",
+                                   "role": "admin" if email in admins else "user"})
+    if core.OWNER_EMAIL:
+        records[core.OWNER_EMAIL] = {**records.get(core.OWNER_EMAIL, {}),
+                                     "email": core.OWNER_EMAIL, "status": "active",
+                                     "role": "owner", "protected": True}
+    return {"people": sorted(records.values(), key=lambda r: r["email"]),
+            "invite_enabled": invites.invite_configured(), "domains": core.ALLOWED_DOMAINS,
+            "can_manage": can_manage}
+
+
+@router.get("/admin/people")
+def list_people(request: Request):
+    _require_admin(request)
+    email = (getattr(request.state, "user_email", None) or "").lower()
+    return _people_payload(can_manage=not core.OWNER_EMAIL or core.is_owner(email))
+
+
+@router.post("/admin/people")
+def add_person(body: dict, request: Request):
+    """Authorize an existing identity and start provider-specific onboarding."""
+    _require_owner(request)
+    email = (body.get("email") or "").strip().lower()
+    provider = (body.get("provider") or "").strip().lower()
+    role = (body.get("role") or "user").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(400, "a valid email is required")
+    if provider not in _PEOPLE_PROVIDERS:
+        raise HTTPException(400, "provider must be google or microsoft")
+    if role not in _PEOPLE_ROLES:
+        raise HTTPException(400, "role must be user or admin")
+    if email == core.OWNER_EMAIL:
+        raise HTTPException(409, "the owner already has access")
+    if any(p["email"] == email for p in _people_payload()["people"]):
+        raise HTTPException(409, "this person already has access")
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    status, redemption_url, failure = "access_ready", None, None
+    if provider == "microsoft":
+        import invites
+        if invites.invite_configured():
+            try:
+                invited = invites.send_guest_invite(email, body.get("redirect_url"))
+                redemption_url, status = invited.get("redemption_url"), "invited"
+            except Exception as exc:
+                status, failure = "failed", str(exc)
+        else:
+            status = "setup_required"
+    keep = list(dict.fromkeys([*core.store.get_allowlist(), email]
+                              + ([core.OWNER_EMAIL] if core.OWNER_EMAIL else [])))
+    core.store.set_allowlist(keep)
+    if role == "admin":
+        core.store.set_admins([*core.store.get_admins(), email])
+    actor = getattr(request.state, "user_email", None) or "admin"
+    record = core.store.upsert_person({"email": email, "provider": provider, "role": role,
+                                       "status": status, "invited_at": now, "invited_by": actor,
+                                       "redemption_url": redemption_url, "failure": failure})
+    core.store.log_decision(actor, "settings.person.add",
+                            detail=f"{email} · {provider} · {role} · {status}")
+    return {"person": record, **_people_payload()}
+
+
+@router.put("/admin/people/{email:path}")
+def update_person(email: str, body: dict, request: Request):
+    _require_owner(request)
+    target = email.strip().lower()
+    if target == core.OWNER_EMAIL:
+        raise HTTPException(409, "the owner cannot be changed")
+    current = next((r for r in _people_payload()["people"] if r["email"] == target), None)
+    if current is None:
+        raise HTTPException(404, "person not found")
+    role = (body.get("role") or current.get("role") or "user").lower()
+    status = (body.get("status") or current.get("status") or "access_ready").lower()
+    if role not in _PEOPLE_ROLES:
+        raise HTTPException(400, "role must be user or admin")
+    if status not in {"access_ready", "invited", "setup_required", "failed", "suspended"}:
+        raise HTTPException(400, "unsupported status")
+    allowed = [e for e in core.store.get_allowlist() if e != target]
+    if status != "suspended":
+        allowed.append(target)
+    core.store.set_allowlist(allowed + ([core.OWNER_EMAIL] if core.OWNER_EMAIL else []))
+    admins = [e for e in core.store.get_admins() if e != target]
+    if role == "admin" and status != "suspended":
+        admins.append(target)
+    core.store.set_admins(admins)
+    record = core.store.upsert_person({**current, "role": role, "status": status,
+                                       "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+    actor = getattr(request.state, "user_email", None) or "admin"
+    core.store.log_decision(actor, "settings.person.update", detail=f"{target} · {role} · {status}")
+    return {"person": record, **_people_payload()}
+
+
+@router.delete("/admin/people/{email:path}")
+def delete_person(email: str, request: Request):
+    _require_owner(request)
+    target = email.strip().lower()
+    if target == core.OWNER_EMAIL:
+        raise HTTPException(409, "the owner cannot be removed")
+    core.store.set_allowlist([e for e in core.store.get_allowlist() if e != target])
+    core.store.set_admins([e for e in core.store.get_admins() if e != target])
+    core.store.remove_person(target)
+    actor = getattr(request.state, "user_email", None) or "admin"
+    core.store.log_decision(actor, "settings.person.remove", detail=target)
+    return _people_payload()
 
 
 @router.get("/admin/admins")

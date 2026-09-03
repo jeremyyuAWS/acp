@@ -874,6 +874,20 @@ export const setAdmins = (emails) => (SIM
 export const inviteTester = (email) => (SIM
   ? sim({ email, emails: ['demo@sim', email], status: 'PendingAcceptance' })
   : fetch(`${BASE}/admin/invite`, { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ email }) }).then(j))
+// Unified people onboarding. Authentication stays with Google or Microsoft; ACP stores only
+// the access grant, role, and lifecycle state needed to explain who can enter the workspace.
+export const getPeople = () => (SIM
+  ? sim({ people: [{ email: 'demo@sim', provider: 'google', role: 'owner', status: 'active', protected: true }], invite_enabled: false, domains: [], can_manage: true })
+  : fetch(`${BASE}/admin/people`, { headers: headers() }).then(j))
+export const addPerson = (person) => (SIM
+  ? sim({ person: { ...person, status: person.provider === 'microsoft' ? 'setup_required' : 'access_ready' } })
+  : fetch(`${BASE}/admin/people`, { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(person) }).then(j))
+export const updatePerson = (email, change) => (SIM
+  ? sim({ person: { email, ...change } })
+  : fetch(`${BASE}/admin/people/${encodeURIComponent(email)}`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(change) }).then(j))
+export const removePerson = (email) => (SIM
+  ? sim({ people: [] })
+  : fetch(`${BASE}/admin/people/${encodeURIComponent(email)}`, { method: 'DELETE', headers: headers() }).then(j))
 // The immutable decision log for one scan (system.py GET /decisions). The drawer reads the
 // `scan.file_error` rows out of it to say WHY a document failed, instead of guessing "unreadable"
 // — handlers records the verbatim exception per file and nothing was showing it.
