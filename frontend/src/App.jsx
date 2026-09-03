@@ -12,7 +12,7 @@ import { armNotifyOnComplete, notifyScanComplete, notifyScanFailed, notification
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, SCAN_UNAVAILABLE, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
+import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, startScan, startScanQueued, cancelScan, getJob, openJobStream, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, SCAN_UNAVAILABLE, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
 import { beginOrResumeIntent, completeIntent, abandonIntent, outcomeIsUncertain } from './submitIntent'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
@@ -1022,39 +1022,31 @@ export default function App() {
     sessionStorage.setItem(ACTIVE_JOB_KEY, job_id)
     sessionStorage.setItem(ACTIVE_JOB_AT_KEY, String(Date.now()))
     const run =
-      typeof EventSource !== 'undefined'
+      typeof ReadableStream !== 'undefined'
         ? new Promise((resolve, reject) => {
-            const es = new EventSource(`/scans/jobs/${job_id}/stream`)
             let settled = false
+            let lastJob = null
+            let stream = null
             const finish = (job) => {
               if (settled) return
               settled = true
-              es.close()
+              stream?.close()
               if (job?.error) reject(new Error(job.error))
               else getScan(job?.scan_id).then(resolve, reject)
             }
-            es.onmessage = (e) => {
-              try {
-                const job = JSON.parse(e.data)
+            stream = openJobStream(job_id, {
+              onMessage: (job) => {
+                lastJob = job
                 setProgress(job)
                 if (job.done) finish(job)
-              } catch {
-                /* ignore malformed frame */
-              }
-            }
-            es.addEventListener('error', (e) => {
-              if (settled) return
-              settled = true
-              es.close()
-              if (e.data != null) {
-                try {
-                  reject(new Error(JSON.parse(e.data).error || 'scan error'))
-                } catch {
-                  reject(new Error('scan error'))
-                }
-              } else {
+              },
+              onDone: () => { if (lastJob?.done) finish(lastJob) },
+              onError: () => {
+                if (settled) return
+                settled = true
+                stream?.close()
                 _pollScanJobPolling(job_id).then(resolve, reject)
-              }
+              },
             })
           })
         : _pollScanJobPolling(job_id)

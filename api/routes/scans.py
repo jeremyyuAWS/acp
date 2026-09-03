@@ -337,7 +337,7 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
     # what blocks multi-revision mode and therefore blue-green.
     core.set_job(job_id, {"phase": "queued", "files_found": 0, "files_done": 0, "current": None,
                           "done": False, "scan_id": None, "error": None, "source": source,
-                          "ai": effective_ai})
+                          "ai": effective_ai, "owner_email": user})
 
     # Liveness heartbeat, separate from progress. The deferred-discovery path below makes exactly
     # one core.update_job call (at the very end) — during the crawl itself, a large estate can go
@@ -585,14 +585,30 @@ def scan_job(job_id: str, request: Request):
     j = core.get_job_state(job_id)
     if j is None:
         raise HTTPException(404, "job not found")
-    scan_id = j.get("scan_id")
-    if scan_id and core.store.get_scan(scan_id, owner=_owner(request)) is None:
-        raise HTTPException(404, "scan not found")
+    _require_job_owner(job_id, j, request)
     return j
 
 
+def _require_job_owner(job_id: str, state: dict, request: Request) -> None:
+    """Fail closed unless this job belongs to the signed-in caller."""
+    owner = _owner(request)
+    scan_id = state.get("scan_id")
+    if scan_id:
+        if core.store.get_scan(scan_id, owner=owner) is None:
+            raise HTTPException(404, "scan not found")
+        return
+    state_owner = state.get("owner_email") or state.get("user")
+    if not state_owner:
+        durable = core.store.get_job(job_id)
+        payload = durable.get("payload") if durable else None
+        if isinstance(payload, dict):
+            state_owner = payload.get("user") or payload.get("owner_email")
+    if state_owner != owner:
+        raise HTTPException(404, "job not found")
+
+
 @router.get("/scans/jobs/{job_id}/stream")
-async def stream_job_state(job_id: str):
+async def stream_job_state(job_id: str, request: Request):
     """SSE stream for live job progress. Yields an event whenever the job's seq counter
     advances (i.e. any field changed), then a final event when done/error. Polls Redis
     every 250 ms — fine-grained enough given the 500 ms coalesce window in core.update_job.
@@ -605,6 +621,11 @@ async def stream_job_state(job_id: str):
     strip SSE connections."""
     import asyncio
     import json as _j
+
+    initial = core.get_job_state(job_id)
+    if initial is None:
+        raise HTTPException(404, "job not found")
+    _require_job_owner(job_id, initial, request)
 
     async def _generate():
         last_seq = -1
