@@ -102,6 +102,6 @@ def test_handler_routes_the_heading_map_to_its_rule():
     assert '"2.4.6", "Headings and Labels"' in src
 
 
-def test_capability_promoted_to_assisted():
+def test_capability_is_human_without_heading_writeback():
     import remediation_capability as cap
-    assert cap.mode_for("pdf", "2.4.6") == cap.ASSISTED
+    assert cap.mode_for("pdf", "2.4.6") == cap.HUMAN

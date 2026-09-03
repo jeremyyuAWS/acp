@@ -40,9 +40,11 @@ Every lane below was DERIVED by running that round-trip, not copied from a catal
     is painted on backgrounds that pull opposite ways. What it abstains on stays a finding and
     routes to a human — it is never recoloured on an assumption, which is what the earlier
     white-page model did (it turned compliant white-on-dark text into an AA failure).
-    Structure (re-tagging) can't be auto-written, but an untagged PDF gets a deterministic
-    heading-map proposal (font-size rank) a human confirms — assisted, like figure alt and
-    reading order (which are AI proposals). 4.1.2 form-field names are the SAME honest-partial
+    Structure (re-tagging) can't be auto-written. Heading-map (_propose_pdf_headings /
+    _propose_structure_map) and reading-order (_propose_reading_order) proposals all carry
+    explain_only=True and have no routing in apply_pdf_approved — they have no write-back path
+    and are correctly HUMAN. Figure alt (1.1.1) is ASSISTED — the vision proposer backs it and
+    apply_pdf_figure_alt is a real applier. 4.1.2 form-field names are the SAME honest-partial
     shape as 1.4.3: `_fix_pdf_form_fields` copies a meaningful field name (/T) into the
     accessible name (/TU), which is a mechanical restatement of data already sitting in the
     field dictionary — no model, no human, ADR-0016 safe — and the same abstention rule refuses
@@ -237,15 +239,20 @@ REMEDIATION: dict[str, dict[str, str]] = {
     "pptx": {
         "1.1.1": ASSISTED,
         "1.3.1": AUTO,       # multi-row tables get firstRow="1" (_pptx_mark_table_headers) — round-trip proven
-        "1.4.2": ASSISTED,   # auto-starting audio — exact play-on-click card, human elects
+        "1.4.2": HUMAN,      # auto-starting audio — propose_autoplay_fix emits a card but
+                             # _apply_approved_values has no "1.4.2" handler and
+                             # has_approved_values_to_write never reads rule_id "1.4.2",
+                             # so the apply_approved_values job is never enqueued on approval.
         "1.3.2": AUTO,       # shapes reordered to visual top-to-bottom reading order
         "1.3.3": ASSISTED,
         "1.4.1": HUMAN,      # colour-only hyperlink — no pptx write-back restores the suppressed underline
         "1.4.3": AUTO,       # low-contrast run recolour
         "1.4.4": HUMAN,      # resize text — fixed text box that may clip at 200%; reviewer verifies rendered output
-        "1.4.5": ASSISTED,
+        "1.4.5": HUMAN,      # images-of-text — OCR proposer exists but no getter in
+                             # has_approved_values_to_write reads rule_id "1.4.5"; no write-back.
         "1.4.6": AUTO,       # same recolour reaches the AAA threshold
-        "1.4.9": ASSISTED,
+        "1.4.9": HUMAN,      # images-of-text (AAA) — same broken chain as 1.4.5; no getter
+                             # reads rule_id "1.4.9" in has_approved_values_to_write.
         "1.4.10": HUMAN,     # reflow — wide table; whether it two-dim scrolls at 320px is a rendered call
         "1.4.11": HUMAN,     # non-text contrast — shape outline vs fill; no write-back applier for pptx shapes
         "1.4.12": HUMAN,     # text spacing — exact (fixed) line spacing; clip outcome is rendered, not in the file
@@ -261,28 +268,37 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "2.4.2": AUTO,       # missing slide/document title
         "2.4.3": HUMAN,      # focus order — placeholder reorder is a layout decision; no deterministic fix
         "2.4.4": ASSISTED,   # link purpose — same link-text proposer as docx (a:hlinkClick)
-        "2.4.6": ASSISTED,   # empty title placeholder — AI names the slide from its own content
+        "2.4.6": HUMAN,      # empty title placeholder — propose_slide_titles emits cards but
+                             # pptx is not in _STRUCTURE_LABEL_EXTS (only xlsx), so
+                             # _apply_approved_values never writes the approved title back.
         "2.4.9": ASSISTED,   # reused link text — link-text proposer, per destination
         "3.1.1": AUTO,       # presentation language (docProps/core.xml)
         "3.1.2": ASSISTED,
-        "3.1.5": ASSISTED,
+        "3.1.5": HUMAN,      # reading level — propose_reading_level emits a card but no getter
+                             # reads rule_id "3.1.5" in has_approved_values_to_write; no write-back.
         "4.1.2": HUMAN,      # name/role/value — embedded ActiveX/OLE control; name/role not in the file
     },
-    # PDF — only language/title/outline are safe to set deterministically. Contrast and structure
-    # (re-tagging) need re-authoring; figure alt and reading order are AI proposals.
+    # PDF — only language/title/outline are safe to set deterministically. Contrast is auto
+    # (partial). Structure, reading order, headings, sensory and language marks are HUMAN —
+    # the proposals exist but have no write-back paths (explain_only or missing applier).
+    # Figure alt (1.1.1) is the only ASSISTED lane with a real apply_pdf_figure_alt applier.
     "pdf": {
-        "1.1.1": ASSISTED,   # tagged-figure alt — vision proposal
-        "1.3.1": ASSISTED,   # tag structure — deterministic heading-map proposal, human confirms
-        "1.3.2": ASSISTED,   # reading order — vision proposal for an untagged/scanned PDF
-        "1.3.3": ASSISTED,
+        "1.1.1": ASSISTED,   # tagged-figure alt — vision proposal; apply_pdf_figure_alt writes it back
+        "1.3.1": HUMAN,      # tag structure — _propose_structure_map has explain_only=True;
+                             # no locator type that apply_pdf_approved routes. No write-back.
+        "1.3.2": HUMAN,      # reading order — _propose_reading_order has explain_only=True;
+                             # no locator type that apply_pdf_approved routes. No write-back.
+        "1.3.3": HUMAN,      # sensory rewrite — pdf not in _SENSORY_EXTS; apply_text_values
+                             # explicitly excludes PDF for sensory rewrites. No write-back.
         "1.3.5": HUMAN,      # input purpose — heuristic vocabulary match on AcroForm field names;
                              # PDF has no autocomplete attribute; fix is a human relabelling the field
         "1.4.1": HUMAN,      # colour-only link — no PDF write-back adds a non-colour cue; a human re-styles
         "1.4.3": AUTO,       # text fill colours recoloured in content streams vs the resolved
                              # background (text-scoped; abstains where it can't resolve one)
-        "1.4.5": ASSISTED,
+        "1.4.5": HUMAN,      # images-of-text — OCR proposer exists but no getter reads rule_id
+                             # "1.4.5" in has_approved_values_to_write; no write-back.
         "1.4.6": AUTO,       # cleared incidentally by the 1.4.3 recolour (it targets 7:1 first)
-        "1.4.9": ASSISTED,
+        "1.4.9": HUMAN,      # images-of-text (AAA) — same broken chain as 1.4.5.
         "1.4.11": HUMAN,     # non-text contrast — solid-colour shape; no write-back recolours PDF shapes
         "1.4.12": HUMAN,     # text spacing — line-pitch measurement; clip outcome is rendered, not in the file
         "2.4.1": AUTO,       # bookmark outline built from the document's headings
@@ -297,11 +313,14 @@ REMEDIATION: dict[str, dict[str, str]] = {
                              # is easy; writing it is not (the text-showing operators re-flow),
                              # and there is no PDF link write-back, so an approval could never
                              # be honoured. Assessed and routed to a human, never proposed.
-        "2.4.6": ASSISTED,   # tagged PDF, no headings — heading map derived from the font hierarchy, human confirms
+        "2.4.6": HUMAN,      # tagged PDF — _propose_pdf_headings has explain_only=True;
+                             # no locator type that apply_pdf_approved routes. No write-back.
         "2.5.3": HUMAN,      # label in name — push button /MK /CA not in /TU or /T; no write-back built yet
         "3.1.1": AUTO,       # catalog /Lang
-        "3.1.2": ASSISTED,
-        "3.1.5": ASSISTED,
+        "3.1.2": HUMAN,      # language-of-parts — pdf not in _LANGUAGE_EXTS; apply_text_values
+                             # explicitly excludes PDF for language marks. No write-back.
+        "3.1.5": HUMAN,      # reading level — no getter reads rule_id "3.1.5" in
+                             # has_approved_values_to_write; no write-back.
         "4.1.2": AUTO,       # AcroForm accessible names — /TU copied from a meaningful /T by
                              # _fix_pdf_form_fields (mechanical, no model). Honest-partial like
                              # 1.4.3: a generic /T is refused, stays a finding, and routes to a

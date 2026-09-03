@@ -73,6 +73,6 @@ def test_handler_routes_kinds_to_their_rules():
     assert src.index('"1.3.2", "Meaningful Sequence"') < src.index('"1.3.1", "Info and Relationships"')
 
 
-def test_capability_promoted_to_assisted():
+def test_capability_is_human_without_structure_writeback():
     import remediation_capability as cap
-    assert cap.mode_for("pdf", "1.3.1") == cap.ASSISTED
+    assert cap.mode_for("pdf", "1.3.1") == cap.HUMAN
