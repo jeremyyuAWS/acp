@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { createElement } from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
 import Overview from './Overview.jsx'
+import { htmlExpanded } from './testAccordion.js'
 
 // The Overview grows organically across the funnel (owner direction, 2026-08-20). It renders once an
 // estate is DISCOVERED — reversing the old OV-01/OV-04 "blank until assessed" gate — and reveals each
@@ -20,7 +20,7 @@ const RUN = {
   completed_at: '2026-08-20T16:04:00Z', scope: { kind: 'drive', inventory: INVENTORY },
 }
 const render = (files, props = {}) =>
-  renderToStaticMarkup(createElement(Overview, {
+  htmlExpanded(createElement(Overview, {
     run: RUN, files, trend: [], trendDates: [], onGo: () => {}, ...props,
   }))
 

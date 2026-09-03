@@ -358,9 +358,9 @@ export default function EstateProgressPanel({
 
         {/* Document types & eligibility */}
         {docRows.length > 0 && (
-          <PanelSection collapsible={collapsible} accId="doc-types"
-                        heading={<>Document types &amp; eligibility</>}
-                        label="Document types and eligibility"
+          <PanelSection collapsible={collapsible} accId={collapsible ? 'estate-composition' : 'doc-types'}
+                        heading={collapsible ? 'Estate composition' : <>Document types &amp; eligibility</>}
+                        label={collapsible ? 'Estate composition' : 'Document types and eligibility'}
                         defaultOpen={!collapsible} style={{ margin: 0 }}>
             <p className="muted" style={{ margin: '0 0 2px', fontSize: 12 }}>
               Eligible = assessable format. Ineligible = image, video, audio, or other.
@@ -372,8 +372,9 @@ export default function EstateProgressPanel({
         )}
 
         {/* Pending work by stage */}
-        <PanelSection collapsible={collapsible} accId="pending-work"
-                      heading="Pending work by stage" label="Pending work by stage"
+        <PanelSection collapsible={collapsible} accId={collapsible ? 'operational-details' : 'pending-work'}
+                      heading={collapsible ? 'Operational details' : 'Pending work by stage'}
+                      label={collapsible ? 'Operational details' : 'Pending work by stage'}
                       defaultOpen={!collapsible} style={{ margin: 0 }}>
           <div className="tablewrap">
             <table style={{ width: '100%' }}>

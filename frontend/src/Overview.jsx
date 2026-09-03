@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import AssessmentScopeCard from './AssessmentScopeCard.jsx'
 import { severityItems } from './charts.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer, { statusOf } from './FileDrawer.jsx'
@@ -7,7 +6,6 @@ import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
 import { loadDiscoveryInventory, inventoryOnlyRows } from './discoveryInventory.js'
 import { findingsByCriterion, findingsByLevel, levelOfFinding } from './wcagFinding.js'
 import { analysedCount, avgScore } from './docStatus.js'
-import { estateProgressFromFiles } from './estateProgress.js'
 import { IDENTITY, SIM, remediableCount, recommendationSummary } from './sim.js'
 import { openReport, getScanInventory } from './api.js'
 import { loadPublished } from './ontology.js'
@@ -47,7 +45,6 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
                                    onFileTypeChange, cap, assessment }) {
   // Real signed-in org (email domain) — the hardcoded demo org only ever shows in SIM.
   const orgName = SIM ? IDENTITY.org : (me?.email?.split('@')[1]?.replace(/\.[^.]+$/, '') || me?.name || 'your organisation')
-  const [on, setOn] = useState(false)
   const [seg, setSeg] = useState(null)
   const [selFile, setSelFile] = useState(null)
   const [estOnlyFile, setEstOnlyFile] = useState(null)
@@ -79,7 +76,6 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
     } catch (e) { console.error('scan report export failed', e) }
     finally { setTimeout(() => setScanExporting(false), 600) }
   }
-  useEffect(() => { const t = setTimeout(() => setOn(true), 80); return () => clearTimeout(t) }, [])
   const doExport = async () => {
     setExporting(true)
     try {
@@ -142,7 +138,6 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   // Verify + Publish are REAL counts, never projections: a document is "verified" when it is
   // confirmed compliant (run.certifiable — passed as-is, or remediated then re-scan-cleared),
   // and "published" only when it has an actual published record (file_records.published_at).
-  const verify = run.certifiable || 0
   const publish = files.filter((f) => f.published_at).length
   // How much of the estate was actually opened. A Discover-only scan (ADR 0020) lists the
   // inventory without analysing it, and a cancelled/interrupted one stops partway, so `n` is
@@ -162,18 +157,12 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   //   published    = documents with an actual published record (file_records.published_at), already
   //     computed above as `publish` and used by the horizontal funnel — it was the one number left
   //     reading "pending" while sitting one variable away.
-  // Funnel progress (stages 4–9), shared with the Discover tab so the two funnels never disagree.
-  // remediation_eligible is the honest finding-level count (documents with an auto/AI-fixable
-  // finding), not `needFix` (documents with any remediation action, which the "need remediation"
-  // metric and the Remediate tab use). See estateProgress.js.
-  const estateProgress = estateProgressFromFiles(files)
   // audit-ready is a rate, and a rate needs a denominator that was measured. Over an estate
   // nobody analysed it is not 0% — it is unknown, and printing "0%" asserts that every one of
   // 258 documents was checked and none passed. Both this and the certifiable tile render '—'
   // rather than a number derived from an absent one.
   const auditReady = (analysed && n && run.certifiable != null) ? Math.round((run.certifiable / n) * 100) : null
   const auditReadyLabel = auditReady == null ? '—' : `${auditReady}%`
-  const maxN = Math.max(1, n)
 
   // ── The four headline tiles (board 7) ───────────────────────────────────────────────────────
   // Read, never derived. `rec` is the SAME call AssessmentReconciliation makes below, so the two
@@ -181,7 +170,6 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   // `metrics` is the module the Assess tab's summary uses, so one run cannot report two different
   // findings totals depending on which tab you are standing on.
   const rec = reconcileBuckets(run?.scope?.inventory, reconciliationInputs(run, files))
-  const assessedBucket = rec ? rec.rows.find((r) => r.key === 'assessed') : null
   const metrics = assessMetrics(files, { cap, assessment })
   // The by-severity addends for the assessment section's equation — printed so the partition is
   // checkable on screen, the same rule the Assess tab's summary obeys.
@@ -202,22 +190,6 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   // it tracks the real discovery-side filter, not a derivation from file rows (which only
   // covers the opened subset).
   const eligible = assessmentEligible(run?.scope?.inventory)
-  // Actual count of files given a WCAG verdict — may be smaller than `n` when the run was
-  // cancelled, interrupted, or narrowed by document-type scope. `assessedBucket.value`
-  // and `analysed` are the same number from different sources; bucket wins when measured
-  // because it uses the same reconciliation the panel below does.
-  const assessedCount = (assessedBucket?.measured ? assessedBucket.value : null) ?? analysed
-
-  const stages = [
-    { label: 'Discover', v: n, go: 'discover' },
-    // Only insert an "Eligible" stage when it is strictly less than discovered — when
-    // everything is eligible the stage adds noise without narrowing the funnel.
-    ...(eligible != null && eligible < n ? [{ label: 'Eligible', v: eligible, go: 'discover' }] : []),
-    { label: 'Assess', v: assessedCount, go: 'assess' },
-    { label: 'Remediate', v: needFix, go: 'remediate' },
-    { label: 'Verify', v: verify, go: 'remediate' },
-    { label: 'Publish', v: publish, go: 'monitor' },
-  ]
   const severity = severityItems(files)
   // "Findings by severity" buckets CRITICAL/SERIOUS/MODERATE/MINOR — the blocking severities.
   // An advisory finding (severity REVIEW, ADR 0023: assessed-for-review, never certified) has
@@ -362,26 +334,31 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
     })
     return Math.min(100, Math.round(projScores.reduce((a, b) => a + b, 0) / projScores.length))
   })()
-  const scopeCard = <AssessmentScopeCard
+  const scopePanel = <AssertionScope
     run={run}
     fileCount={files.length > 0
       ? files.length
       : (run?.scope?.inventory?.assessment_eligible ?? 0)}
-    state={busy ? 'running' : 'done'}
-    onReassess={onScan ? () => onGo('assess') : undefined}
+    coreScs={CORE_SCS}
+    rec={rec}
   />
   const hasEstateProgress = run?.scope?.inventory?.discovered != null || files.length > 0
   return (
     <>
       <div className="dashtoolbar">
-        <button className="exportbtn" onClick={doExport} disabled={exporting}>{exporting ? 'Generating PDF…' : '⤓ Quarterly governance report'}</button>
-        <button className="exportbtn alt" onClick={doScanExport} disabled={scanExporting} title="Whole-scan estate report: conformance, WCAG failure heatmap, per-department breakdown, remediation throughput, HITL queue & a per-document appendix">{scanExporting ? 'Generating PDF…' : '⤓ Export scan report'}</button>
-        <button className="exportbtn alt" onClick={exportCsv} title="Every finding as a spreadsheet row">⤓ Findings (CSV)</button>
-        {!SIM && run?.id && (
-          <button className="exportbtn alt" onClick={() => openReport(run.id)} title="Backend-generated WCAG compliance report PDF">⤓ Compliance report (PDF)</button>
-        )}
+        <details className="reports-menu">
+          <summary className="exportbtn">Reports</summary>
+          <div className="reports-menu-items" aria-label="Report exports">
+            <button type="button" onClick={doExport} disabled={exporting}>{exporting ? 'Generating PDF…' : 'Quarterly governance report'}</button>
+            <button type="button" onClick={doScanExport} disabled={scanExporting} title="Whole-scan estate report: conformance, WCAG failure heatmap, per-department breakdown, remediation throughput, HITL queue & a per-document appendix">{scanExporting ? 'Generating PDF…' : 'Scan report'}</button>
+            <button type="button" onClick={exportCsv} title="Every finding as a spreadsheet row">Findings (CSV)</button>
+            {!SIM && run?.id && (
+              <button type="button" onClick={() => openReport(run.id)} title="Backend-generated WCAG compliance report PDF">Compliance report (PDF)</button>
+            )}
+          </div>
+        </details>
       </div>
-      {!hasEstateProgress && scopeCard}
+      {!hasEstateProgress && scopePanel}
       <div ref={reportRef}>
       {/* Process health banners — rendered above the findings summary so a degraded run is
           immediately visible. Amber when files errored out (could not be opened); red when the
@@ -426,7 +403,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         estateFiles={estateFiles}
         onGo={onGo}
         collapsible
-        afterProgress={hasEstateProgress ? scopeCard : null}
+        afterProgress={hasEstateProgress ? scopePanel : null}
       />
 
       {/* ── ASSESSMENT — the section that grows in once documents have actually been assessed.
@@ -435,11 +412,10 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
              the Assess tab reports so one run never shows two different totals across two tabs. ── */}
       {stageAssessed && metrics ? (
         <>
-          {/* The primary KPI summary. It is a disclosure like its neighbours, but it is the one
-              section that opens by default — the screen must not load with its headline numbers
-              hidden behind a control the reader has to find first. */}
+          {/* Supporting assessment evidence stays collapsed. Its concise coverage summary remains
+              visible in the header; the four estate stages above own the open headline view. */}
           <AccordionSection id="assessment-summary" className="panel overview-assessment"
-                            ariaLabel="Assessment summary" defaultOpen
+                            ariaLabel="Assessment summary" defaultOpen={false}
                             title="Assessment" meta={coverageSentence(metrics)}>
               <>
                 <div className="metrics">
@@ -468,16 +444,10 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
               </>
           </AccordionSection>
 
-          {/* WHAT THE NUMBERS ABOVE ARE A CLAIM ABOUT (board 7). This screen exports as the compliance
-              report, and a report that states findings without stating its own boundary is exactly the
-              document an auditor should not be handed. Fed the SAME `rec` the tiles use. */}
-          <AssertionScope run={run} fileCount={n} coreScs={CORE_SCS} rec={rec} />
-
           {/* SO WHAT NOW (board 7). The only panel on this screen with a primary action. */}
           <NextStep metrics={metrics}
                     awaiting={lifecycleAwaiting}
                     onRemediate={() => onGo && onGo('remediate')}
-                    onExport={() => openReport(run.id)}
                     onReviewLifecycle={() => onGo && onGo('discover')} />
         </>
       ) : (
@@ -502,38 +472,6 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           ))}
         </AccordionSection>
       )}
-
-      <AccordionSection id="compliance-funnel" title="Compliance funnel"
-                        meta="click a stage" ariaLabel="Compliance funnel"
-                        defaultOpen={false}>
-        <div className="trapfunnel">
-          {stages.map((s, i) => {
-            // Conversion from the PREVIOUS stage, not from the funnel's first stage — each drop
-            // answers "of what reached here, how much reached the next step", which is what a
-            // funnel is for. Absent (not 0%) when the previous stage has nothing to convert from,
-            // so a 0-document funnel doesn't print a division-by-zero "0%" and call it measured.
-            const prev = i > 0 ? stages[i - 1] : null
-            const pct = prev && prev.v > 0 ? Math.round((s.v / prev.v) * 100) : null
-            const widthPct = on ? Math.max(8, (s.v / maxN) * 100) : 0
-            return (
-              <div key={s.label}>
-                {prev && (
-                  <div className="trapdrop" aria-hidden="true">
-                    {pct == null ? '— no prior stage to convert from' : `↓ ${pct}%`}
-                  </div>
-                )}
-                <button className="trapstage" onClick={() => onGo(s.go)}
-                        aria-label={`${s.label}${s.proj ? ' projected' : ''}: ${s.v.toLocaleString()} documents — open`}>
-                  <div className="trapshape" style={{ width: `${widthPct}%`, background: s.proj ? '#c4aecb' : '#7a5c8e' }}>
-                    <span className="trapstage-label">{s.label} {s.proj && <em>· proj</em>}</span>
-                    <span className="trapstage-n">{s.v.toLocaleString()}</span>
-                  </div>
-                </button>
-              </div>
-            )
-          })}
-        </div>
-      </AccordionSection>
 
       </div>
 

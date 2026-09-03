@@ -145,12 +145,13 @@ describe('ScanSetup is retired from the Overview tab', () => {
   // Overview is a results surface; mixing a configuration UI into it was the regression
   // this change removes. This assertion fires if ScanSetup is re-mounted there.
   it('Overview.jsx does not mount ScanSetup', () => {
-    expect(code('Overview.jsx'), 'ScanSetup was re-mounted on the Overview tab — use AssessmentScopeCard instead')
+    expect(code('Overview.jsx'), 'ScanSetup was re-mounted on the Overview tab — use AssertionScope instead')
       .not.toMatch(/<ScanSetup\b/)
   })
 
-  it('Overview.jsx imports AssessmentScopeCard, not ScanSetup', () => {
-    expect(code('Overview.jsx')).toContain("import AssessmentScopeCard from './AssessmentScopeCard.jsx'")
+  it('Overview.jsx imports AssertionScope, not either editable or duplicate scope card', () => {
+    expect(code('Overview.jsx')).toContain("import AssertionScope from './AssertionScope.jsx'")
+    expect(code('Overview.jsx')).not.toContain("import AssessmentScopeCard")
     expect(code('Overview.jsx')).not.toContain("import ScanSetup")
   })
 })

@@ -81,8 +81,8 @@ describe('the estate composition widens to files discovery listed but never scan
     // Exactly one DOCX and one PDF across the "Document types & eligibility" rows — the inventory
     // repeated both scanned files and must have added neither. The panel prints "N · P% eligible"
     // per type, so the count is the number before the separator.
-    const section = container.querySelector('[data-accordion="doc-types"]')
-    expect(section, 'no Document types & eligibility section').toBeTruthy()
+    const section = container.querySelector('[data-accordion="estate-composition"]')
+    expect(section, 'no Estate composition section').toBeTruthy()
     const labels = [...section.querySelectorAll('span')]
       .filter((el) => ['DOCX', 'PDF'].includes(el.textContent.trim()))
     expect(labels.map((el) => el.textContent.trim()).sort()).toEqual(['DOCX', 'PDF'])

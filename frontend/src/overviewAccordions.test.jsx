@@ -1,5 +1,5 @@
 /**
- * Overview's seven detail sections are accessible accordions (2026-09-02 UI-simplification PRD).
+ * Overview's supporting sections are accessible accordions.
  *
  * WHAT AN ACCORDION HAS TO BE, and why each of these is asserted rather than assumed:
  *   · a real <button> — a <div onClick> is not in the tab order and does not fire on Enter or
@@ -64,31 +64,27 @@ const byId = (id) => [...container.querySelectorAll('[id]')].find((el) => el.id 
 const sectionOf = (id) => container.querySelector(`[data-accordion="${id}"]`)
 const toggleOf = (id) => sectionOf(id)?.querySelector('button.acc-toggle')
 
-// The seven, and the state each is in when the screen loads. Detail and audit panels start
-// closed; the estate story, the KPI summary and the one primary action start open. "Keep the
-// primary KPI summary visible" is the constraint these defaults are chosen against — a dashboard
-// whose headline numbers need a click first is not simpler, it is emptier.
-const SEVEN = [
+// The estate story and the one primary action start open. Supporting evidence starts collapsed.
+const SECTIONS = [
   ['estate-progress',    'Estate progress',           true],
-  ['doc-types',          'Document types & eligibility', false],
-  ['pending-work',       'Pending work by stage',     false],
-  ['assessment-summary', 'Assessment',                true],
   ['assertion-scope',    'SCOPE OF THIS ASSERTION',   false],
+  ['estate-composition', 'Estate composition',        false],
+  ['operational-details','Operational details',       false],
+  ['assessment-summary', 'Assessment',                false],
   ['next-step',          'NEXT',                      true],
-  ['compliance-funnel',  'Compliance funnel',         false],
 ]
 
-describe('Overview renders exactly the seven identified sections as accordions', () => {
+describe('Overview renders the simplified sections as accessible accordions', () => {
   it('has one accordion per section, and no others', async () => {
     await render()
-    expect(toggles()).toHaveLength(SEVEN.length)
+    expect(toggles()).toHaveLength(SECTIONS.length)
     expect([...container.querySelectorAll('[data-accordion]')].map((el) => el.dataset.accordion).sort())
-      .toEqual(SEVEN.map(([id]) => id).sort())
+      .toEqual(SECTIONS.map(([id]) => id).sort())
   })
 
   it('titles each one', async () => {
     await render()
-    for (const [id, title] of SEVEN) {
+    for (const [id, title] of SECTIONS) {
       expect(toggleOf(id), `no accordion for ${id}`).toBeTruthy()
       expect(toggleOf(id).textContent, `wrong title on ${id}`).toContain(title)
     }
@@ -96,12 +92,12 @@ describe('Overview renders exactly the seven identified sections as accordions',
 
   it('opens the ones a reader needs on load and collapses the detail', async () => {
     await render()
-    for (const [id, , open] of SEVEN) {
+    for (const [id, , open] of SECTIONS) {
       expect(toggleOf(id).getAttribute('aria-expanded'), `wrong default state for ${id}`).toBe(String(open))
     }
     // At least one of each, or "sensible default state" would be satisfied by all-open/all-closed.
-    expect(SEVEN.some(([, , o]) => o)).toBe(true)
-    expect(SEVEN.some(([, , o]) => !o)).toBe(true)
+    expect(SECTIONS.some(([, , o]) => o)).toBe(true)
+    expect(SECTIONS.some(([, , o]) => !o)).toBe(true)
   })
 })
 
@@ -162,7 +158,7 @@ describe('each accordion header is a real, labelled, operable control', () => {
 describe('operating an accordion moves both the state and the content', () => {
   it('opens a collapsed section and unmounts its content again when closed', async () => {
     await render()
-    const b = toggleOf('compliance-funnel')
+    const b = toggleOf('estate-composition')
     const panel = byId(b.getAttribute('aria-controls'))
     // Closed: announced closed, hidden from the a11y tree, and genuinely empty — not merely
     // invisible. Text still in the DOM would let a later test assert on content nobody can read.
@@ -173,20 +169,35 @@ describe('operating an accordion moves both the state and the content', () => {
     await act(async () => { b.click() })
     expect(b.getAttribute('aria-expanded')).toBe('true')
     expect(panel.hasAttribute('hidden')).toBe(false)
-    expect(panel.textContent).toContain('Discover')
+    expect(panel.textContent).toContain('Eligible')
 
     await act(async () => { b.click() })
     expect(b.getAttribute('aria-expanded')).toBe('false')
     expect(panel.textContent).toBe('')
   })
 
-  it('closes an open section without touching its neighbours', async () => {
+  it('opens a closed section without touching the primary action', async () => {
     await render()
     const assess = toggleOf('assessment-summary')
     const next = toggleOf('next-step')
     await act(async () => { assess.click() })
-    expect(assess.getAttribute('aria-expanded')).toBe('false')
+    expect(assess.getAttribute('aria-expanded')).toBe('true')
     expect(next.getAttribute('aria-expanded')).toBe('true')
+  })
+})
+
+describe('report exports are consolidated', () => {
+  it('uses one native Reports disclosure for every export', async () => {
+    await render()
+    const menu = container.querySelector('details.reports-menu')
+    expect(menu, 'Reports disclosure missing').toBeTruthy()
+    expect(menu.querySelector(':scope > summary')?.textContent).toContain('Reports')
+    const labels = [...menu.querySelectorAll('.reports-menu-items button')]
+      .map((button) => button.textContent)
+    expect(labels).toContain('Quarterly governance report')
+    expect(labels).toContain('Scan report')
+    expect(labels).toContain('Findings (CSV)')
+    expect(container.querySelectorAll('.dashtoolbar > button')).toHaveLength(0)
   })
 })
 
