@@ -153,6 +153,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
   const processing = m.available && snapshot?.kpis ? Number(snapshot.kpis.processing) || 0 : 0
   const pct = total ? Math.min(100, Math.round((completed / total) * 100)) : 0
   const isPreparing = m.available && pct === 0
+  const isFinished = total > 0 && completed >= total
 
   // Elapsed seconds since this screen first appeared — stops ticking once real progress begins.
   const [startedAt] = useState(() => Date.now())
@@ -166,30 +167,13 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
 
   if (!m.available) return null
 
-  // The document IN FLIGHT is the one after those completed — 1-based, clamped so it never reads
-  // "Document 23 of 22" on the last frame before the run leaves 'running'.
-  const position = total ? Math.min(total, completed + (m.active ? 1 : 0)) : completed
   const cur = m.queue ? m.queue.current : null
   const eta = throughput && (throughput.etaText || (throughput.calibrating ? 'estimating…' : null))
 
   return (
-    <section className="assess-run-progress" role="region" aria-label="Assessment in progress"
+    <section className="assess-run-progress" role="region"
+             aria-label={isFinished ? 'Assessment complete' : 'Assessment in progress'}
              style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <header style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-        {/* aria-live on the heading only: the document-of-N line changes every couple of seconds and
-            a live region over it would spam a screen reader; the phase and the estate size do not. */}
-        <h3 style={{ margin: 0, fontSize: 16 }}>
-          {isPreparing
-            ? total > 0
-              ? `Preparing to assess ${total.toLocaleString()} document${total === 1 ? '' : 's'}`
-              : 'Preparing assessment'
-            : `Assessing ${total.toLocaleString()} document${total === 1 ? '' : 's'}`}
-        </h3>
-        {!isPreparing && m.phaseLabel && (
-          <span className="muted" style={{ fontSize: 13 }}>{m.phaseLabel}</span>
-        )}
-      </header>
-
       <div className="assess-run-card" style={{ border: '1px solid var(--line,#e4e8ec)', borderRadius: 12,
                                                 padding: '14px 16px', background: 'var(--panel,#fff)' }}>
         {isPreparing ? (
@@ -197,35 +181,43 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
                          processing={processing} elapsed={elapsed} />
         ) : (
           <>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
-                          alignItems: 'baseline' }}>
-              <div style={{ fontSize: 15, fontWeight: 650 }} aria-live="polite">
-                {total ? `Document ${position} of ${total.toLocaleString()}` : 'Preparing…'}
-              </div>
-              {eta && <div className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>
-                {eta}
-              </div>}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                          gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+              <strong style={{ fontSize: 14.5 }}>{isFinished ? 'Assessment complete' : 'Assessing documents'}</strong>
+              <span role="status" style={{ fontSize: 11.5, padding: '2px 7px', borderRadius: 4,
+                                            display: 'inline-flex', alignItems: 'center', gap: 5,
+                                            background: 'var(--green-bg,#f0f7e6)', color: 'var(--green,#3B6D11)',
+                                            border: '1px solid var(--green-line,#a8cf7a)' }}>
+                {!isFinished && <span className="pulsedot" aria-hidden="true" />}
+                {isFinished ? 'Updates complete' : 'Live'}
+              </span>
             </div>
 
-            <div className="track"
-                 style={{ height: 8, borderRadius: 999, background: 'var(--line,#eceff2)',
-                          overflow: 'hidden', margin: '10px 0' }}>
-              <i style={{ display: 'block', height: '100%', width: `${pct}%`, background: '#4A2C4D',
-                          transition: 'width .3s' }} />
+            <progress value={completed} max={Math.max(1, total)}
+                      aria-label={`Assessment: ${completed.toLocaleString()} of ${total.toLocaleString()} documents complete`}
+                      aria-valuetext={`${completed.toLocaleString()} of ${total.toLocaleString()} documents complete`}
+                      style={{ width: '100%', height: 7, display: 'block', marginBottom: 12 }} />
+
+            <div role="list" aria-live="polite" aria-atomic="false"
+                 style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+              <PrepStep status="done" label="Validated assessment scope"
+                        detail={`${total.toLocaleString()} documents`} />
+              <PrepStep status="done" label="Started assessment workers"
+                        detail={m.queue?.workers?.max != null
+                          ? `${m.queue.workers.max.toLocaleString()} ready`
+                          : 'Workers ready'} />
+              <PrepStep status={isFinished ? 'done' : 'active'} label="Opened and assessed documents"
+                        detail={`${completed.toLocaleString()} of ${total.toLocaleString()} complete${processing > 0 ? ` · ${processing.toLocaleString()} processing` : ''}`} />
+              <PrepStep status={isFinished ? 'done' : 'pending'} label="Finalized conformance results"
+                        detail={isFinished ? 'Complete' : eta || 'After all documents finish'} />
             </div>
 
-            {cur ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                {cur.file && (
-                  <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12.5 }}>
-                    {cur.file}
-                  </div>
-                )}
-                <div className="muted" style={{ fontSize: 12.5 }} aria-live="polite">{stepLabel(cur)}</div>
-              </div>
-            ) : (
-              <div className="muted" style={{ fontSize: 12.5 }}>
-                {(m.queue && m.queue.laneLabel) || 'Preparing…'}
+            {!isFinished && (cur || m.queue?.laneLabel) && (
+              <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 12, marginTop: 14,
+                            fontSize: 12.5, lineHeight: 1.5 }}>
+                <span className="muted">Processing now: </span>
+                {cur?.file && <strong style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{cur.file}</strong>}
+                <span className="muted">{cur?.file ? ' · ' : ''}{stepLabel(cur) || m.queue?.laneLabel}</span>
               </div>
             )}
           </>

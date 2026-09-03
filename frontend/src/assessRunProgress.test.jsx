@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import AssessRunProgress from './AssessRunProgress.jsx'
 
-// The Assess RUNNING screen (board assess-03): a per-document focus card, NOT a mid-run scoreboard.
+// The Assess RUNNING screen (board assess-03): a live stage checklist, NOT a mid-run scoreboard.
 // The rule it enforces is that no verdict-shaped count renders while the run is in flight — those
 // live on the Overview now, where they read as a result. This screen says which document is being
 // worked, how far through the estate we are, and that the results arrive at the end.
@@ -27,11 +27,15 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(render({ available: false })).toBe('')
   })
 
-  it('names the estate size and the document being worked, 1-based', () => {
+  it('shows the live assessment stages, estate progress, and current document', () => {
     const html = render(SNAP, { etaText: 'about 1 min 50s left' })
-    expect(html).toContain('Assessing 22 documents')
-    // 8 completed → the 9th is in flight.
-    expect(html).toContain('Document 9 of 22')
+    expect(html).toContain('Assessing documents')
+    expect(html).toContain('Live')
+    expect(html).toContain('Validated assessment scope')
+    expect(html).toContain('Started assessment workers')
+    expect(html).toContain('Opened and assessed documents')
+    expect(html).toContain('8 of 22 complete · 1 processing')
+    expect(html).toContain('Finalized conformance results')
     expect(html).toContain('Finance/Q3 Board Pack.pdf')
     expect(html).toContain('Describing 6 images that have no alt text')
     expect(html).toContain('about 1 min 50s left')
@@ -49,15 +53,19 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).not.toMatch(/<b[^>]*>3<\/b>/)
   })
 
-  it('clamps the position so the last frame never reads "23 of 22"', () => {
+  it('turns every stage complete on the final live frame', () => {
     const last = { ...SNAP, kpis: { ...SNAP.kpis, completed: 22 } }
-    expect(render(last)).toContain('Document 22 of 22')
+    const html = render(last)
+    expect(html).toContain('Assessment complete')
+    expect(html).toContain('22 of 22 complete')
+    expect(html).toContain('Updates complete')
+    expect(html).not.toContain('Processing now:')
   })
 
   it('falls back to the lane label when no document is currently reported', () => {
     const idle = { ...SNAP, queue: { ...SNAP.queue, current: null, in_flight: 0 } }
     const html = render(idle)
-    expect(html).toContain('Assessing 22 documents')
+    expect(html).toContain('Assessing documents')
     expect(html).toContain('Idle')
   })
 
@@ -66,7 +74,7 @@ describe('the assessment running screen focuses on the document in flight', () =
     // communicates what ACP is doing rather than just animating across the page.
     const starting = { ...SNAP, kpis: { ...SNAP.kpis, completed: 0 } }
     const html = render(starting)
-    expect(html).toContain('Preparing to assess 22 documents')
+    expect(html).toContain('Preparing assessment')
     expect(html).not.toContain('track indeterminate')
     expect(html).toContain('Validating scan inventory')
     expect(html).toContain('Starting assessment workers')
@@ -76,12 +84,11 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).not.toContain('Opening the first documents')
   })
 
-  it('switches to the determinate bar once the first file completes', () => {
-    // 8 of 22 done — progress is measurable; the checklist gives way to the real fill bar.
+  it('switches from preparation to the live stage checklist once the first file completes', () => {
     const html = render(SNAP)
-    expect(html).toContain('Assessing 22 documents')
+    expect(html).toContain('Assessing documents')
     expect(html).not.toContain('Preparing assessment')
-    expect(html).not.toContain('Validating scan inventory')
+    expect(html).toContain('Validated assessment scope')
   })
 })
 
