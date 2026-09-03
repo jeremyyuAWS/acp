@@ -1,3 +1,6 @@
+import { useThroughput } from './useThroughput.js'
+import LiveThroughput from './LiveThroughput.jsx'
+
 const n = (value) => Number(value || 0).toLocaleString()
 
 function Step({ status, label, detail }) {
@@ -16,7 +19,10 @@ function Step({ status, label, detail }) {
   )
 }
 
-export default function RemediationRunProgress({ progress, updateMode = 'idle' }) {
+export default function RemediationRunProgress({ progress, updateMode = 'idle', runId = 'remediation' }) {
+  const totalForRate = Math.max(0, Number(progress?.total || 0))
+  const doneForRate = Math.max(0, Number(progress?.done || 0))
+  const throughput = useThroughput(runId, doneForRate, Math.max(0, totalForRate - doneForRate))
   if (!progress) return null
   const total = Math.max(0, Number(progress.total || 0))
   const done = Math.min(total, Math.max(0, Number(progress.done || 0)))
@@ -56,14 +62,33 @@ export default function RemediationRunProgress({ progress, updateMode = 'idle' }
                 detail={progress.latest ? `Latest: ${progress.latest}` : 'Waiting for first result'} />
         </div>
 
-        {progress.activity?.text && !finished && (
-          <p className="muted" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5 }}>
-            {progress.activity.text}
+        {!finished && progress.activity?.text && (
+          <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 10, marginTop: 12,
+                        fontSize: 12.5, lineHeight: 1.5 }}>
+            <div className="muted" style={{ marginBottom: 4 }}>Processing now</div>
+            {progress.activity?.file && <strong style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{progress.activity.file}</strong>}
+            <ul aria-live="polite" style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+              {progress.activity?.text && <li>{progress.activity.text}</li>}
+              <li>{n(Math.max(0, total - done))} document{total - done === 1 ? '' : 's'} remaining</li>
+            </ul>
+          </div>
+        )}
+
+        <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 10, marginTop: 12 }}>
+          <LiveThroughput points={throughput.points} ratePerMin={throughput.ratePerMin}
+                          label="Fix throughput" />
+        </div>
+
+        {finished && (
+          <p style={{ margin: '12px 0 0', fontSize: 12.5 }}>
+            <strong>{n(done - failed)} documents remediated and verified.</strong>{' '}
+            {failed ? `${n(failed)} routed for attention.` : 'Corrected copies are ready for review and release.'}
           </p>
         )}
         {failed > 0 && (
           <p role="alert" style={{ fontSize: 12.5, margin: '12px 0 0', color: 'var(--red,#b91c1c)' }}>
-            {n(failed)} document{failed === 1 ? '' : 's'} could not be remediated; the remaining work is continuing.
+            {n(failed)} document{failed === 1 ? '' : 's'} could not be remediated
+            {finished ? ' and will require attention.' : '; the remaining work is continuing.'}
           </p>
         )}
       </div>

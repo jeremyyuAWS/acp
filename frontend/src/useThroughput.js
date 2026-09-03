@@ -9,14 +9,15 @@ import { recordSample, estimate, etaRangeText } from './throughputEta.js'
 export function useThroughput(runId, done, remaining) {
   const histRef = useRef([])
   const idRef = useRef(runId)
-  const [out, setOut] = useState({ ratePerMin: null, etaText: null, calibrating: true })
+  const [out, setOut] = useState({ ratePerMin: null, etaText: null, calibrating: true, points: [] })
 
   useEffect(() => {
     if (idRef.current !== runId) { histRef.current = []; idRef.current = runId }   // new run → fresh
     if (typeof done !== 'number') return
     histRef.current = recordSample(histRef.current, done, Date.now())
     const e = estimate(histRef.current, remaining)
-    setOut({ ratePerMin: e.ratePerMin, etaText: etaRangeText(e.eta), calibrating: e.calibrating })
+    setOut({ ratePerMin: e.ratePerMin, etaText: etaRangeText(e.eta), calibrating: e.calibrating,
+             points: histRef.current.map((sample) => sample.done) })
   }, [runId, done, remaining])
 
   return out

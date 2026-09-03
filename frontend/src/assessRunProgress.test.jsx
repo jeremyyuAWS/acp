@@ -28,7 +28,7 @@ describe('the assessment running screen focuses on the document in flight', () =
   })
 
   it('shows the live assessment stages, estate progress, and current document', () => {
-    const html = render(SNAP, { etaText: 'about 1 min 50s left' })
+    const html = render(SNAP, { etaText: 'about 1 min 50s left', ratePerMin: 12, points: [1, 3, 5, 8] })
     expect(html).toContain('Assessing documents')
     expect(html).toContain('Live')
     expect(html).toContain('Validated assessment scope')
@@ -38,6 +38,9 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toContain('Finalized conformance results')
     expect(html).toContain('Finance/Q3 Board Pack.pdf')
     expect(html).toContain('Describing 6 images that have no alt text')
+    expect(html).toContain('Checking Non-text content')
+    expect(html).toContain('Assessment throughput')
+    expect(html).toContain('12 documents/min')
     expect(html).toContain('about 1 min 50s left')
     expect(html).toMatch(/Results appear when the run finishes/)
   })
@@ -59,6 +62,7 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toContain('Assessment complete')
     expect(html).toContain('22 of 22 complete')
     expect(html).toContain('Updates complete')
+    expect(html).toContain('22 documents assessed')
     expect(html).not.toContain('Processing now:')
   })
 

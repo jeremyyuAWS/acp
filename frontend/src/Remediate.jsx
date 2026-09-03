@@ -432,7 +432,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
   const finishRemediation = (total, status = {}) => {
     clearInterval(pollRef.current); streamRef.current?.close?.(); streamRef.current = null
-    setRemProg(null); setRemBusy(false); setRemUpdates('idle')
+    setRemProg({ total, done: total, latest: status.latest_file || null,
+                 failed: status.failed || 0, activity: null })
+    setRemBusy(false); setRemUpdates('idle')
     const ok = Math.max(0, total - (status.failed || 0))
     setServerFixed((n) => n + ok)
     setRemMsg(`✓ Remediation complete — ${ok} document${ok === 1 ? '' : 's'} fixed${status.failed ? `, ${status.failed} failed` : ''}.`)
@@ -1497,8 +1499,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         onOpenRunDetails={() => setRunDetailsOpen((v) => !v)} />
       {/* The authenticated remediation SSE already supplies these values. Keep its progress in
           the main workflow, rather than hiding the only live signal inside Run details. */}
-      {remBusy && remProg && (
-        <RemediationRunProgress progress={remProg} updateMode={remUpdates} />
+      {remProg && (
+        <RemediationRunProgress progress={remProg} updateMode={remUpdates} runId={runId} />
       )}
       {/* THE WORK. Second on the page, not eleventh — the review workspace is the only part of this
           screen that needs a person, so nothing but the run header and a blocking warning precedes

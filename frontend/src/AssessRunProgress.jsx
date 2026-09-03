@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { normalizeLive } from './liveAssessment.js'
+import LiveThroughput from './LiveThroughput.jsx'
 
 // The Assess RUNNING screen (approved board assess-03). It replaces the mid-run KPI scoreboard
 // (LiveAssessment.jsx, kept but no longer mounted here) with a single per-DOCUMENT focus card.
@@ -29,6 +30,18 @@ function stepLabel(cur) {
   if (cur.criterion) return `Checking ${cur.criterion}`
   if (cur.text) return cur.text
   return 'Assessing this document'
+}
+
+function activityLines(cur, completed, total, processing) {
+  const lines = []
+  if (cur?.action) lines.push(cur.action)
+  if (cur?.criterionName || cur?.criterion_name) {
+    const name = cur.criterionName || cur.criterion_name
+    lines.push(`Checking ${name}${cur?.criterion ? ` · WCAG ${cur.criterion}` : ''}`)
+  } else if (cur?.criterion) lines.push(`Checking WCAG ${cur.criterion}`)
+  if (processing > 0) lines.push(`${processing.toLocaleString()} document${processing === 1 ? '' : 's'} processing in parallel`)
+  if (!lines.length) lines.push(`Opening and assessing document ${Math.min(total, completed + 1).toLocaleString()} of ${total.toLocaleString()}`)
+  return [...new Set(lines)]
 }
 
 function fmtElapsedSecs(s) {
@@ -215,10 +228,28 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
             {!isFinished && (cur || m.queue?.laneLabel) && (
               <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 12, marginTop: 14,
                             fontSize: 12.5, lineHeight: 1.5 }}>
-                <span className="muted">Processing now: </span>
-                {cur?.file && <strong style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{cur.file}</strong>}
-                <span className="muted">{cur?.file ? ' · ' : ''}{stepLabel(cur) || m.queue?.laneLabel}</span>
+                <div className="muted" style={{ marginBottom: 4 }}>Processing now</div>
+                {cur ? (
+                  <>
+                    {cur.file && <strong style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{cur.file}</strong>}
+                    <ul aria-live="polite" style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+                      {activityLines(cur, completed, total, processing).map((line) => <li key={line}>{line}</li>)}
+                    </ul>
+                  </>
+                ) : <span className="muted">{m.queue?.laneLabel || 'Waiting for a worker'}</span>}
               </div>
+            )}
+
+            <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 10, marginTop: 12 }}>
+              <LiveThroughput points={throughput?.points || []} ratePerMin={throughput?.ratePerMin}
+                              label="Assessment throughput" />
+            </div>
+
+            {isFinished && (
+              <p style={{ margin: '12px 0 0', fontSize: 12.5 }}>
+                <strong>{completed.toLocaleString()} documents assessed.</strong>{' '}
+                Conformance results and remediation recommendations are ready.
+              </p>
             )}
           </>
         )}

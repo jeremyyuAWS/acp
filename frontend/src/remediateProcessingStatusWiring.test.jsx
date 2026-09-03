@@ -38,6 +38,7 @@ describe('the queue-estimate poll is wired into Remediate', () => {
 
   it('puts the SSE-fed remediation progress card in the main workflow', () => {
     expect(src).toMatch(/import RemediationRunProgress from '\.\/RemediationRunProgress\.jsx'/)
-    expect(src).toMatch(/remBusy && remProg && \([\s\S]*?<RemediationRunProgress progress=\{remProg\} updateMode=\{remUpdates\}/)
+    // The card remains mounted for its final completed snapshot after remBusy turns false.
+    expect(src).toMatch(/remProg && \([\s\S]*?<RemediationRunProgress progress=\{remProg\} updateMode=\{remUpdates\}/)
   })
 })
