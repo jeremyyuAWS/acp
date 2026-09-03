@@ -1961,8 +1961,7 @@ export default function App() {
           `busy` means a DISCOVER run is live; the assess panel must not activate during
           discovery. Only assessPhase==='running' should trigger it. */}
       <LiveAssessmentLive scanId={liveScanId || run?.id}
-                          active={assessPhase === 'running'
-                                  && view !== 'assess' && view !== 'discover'}
+                          active={assessPhase === 'running' && view !== 'discover'}
                           onStop={() => stopScan(liveScanId || run?.id)} />
 
       <main id="main-content" tabIndex={-1}>

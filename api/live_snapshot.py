@@ -112,6 +112,17 @@ def build_snapshot(store, scan_id: str, owner: str | None = None, now_iso: str |
     failed = _pos_int(run.get("error"))             # the file could not be assessed at all
     total_files = _pos_int(run.get("files"))        # files the scan queued (assessment-eligible)
     files_done = _pos_int(run.get("files_done"))
+    # `scan_runs.files_done` is an optimization counter and may lag the durable per-file rows
+    # during a distributed assessment. The finalize gate already treats count_files_done as the
+    # idempotent authority, and AssessRunner counts those same persisted results. Reconcile to
+    # that count here so a reload or tab switch cannot fall back from 427 completed to stale zero.
+    _count_done = getattr(store, "count_files_done", None)
+    if callable(_count_done):
+        try:
+            durable_done, _ = _count_done(scan_id)
+            files_done = max(files_done, _pos_int(durable_done))
+        except Exception:
+            swallowed("live_snapshot.build_snapshot: reconciling durable completed files failed")
     completed = min(files_done, total_files) if total_files else files_done
     processing = max(0, total_files - completed)     # leased + queued combined (the split needs the
                                                      # job queue — see kpis_pending)
@@ -164,6 +175,11 @@ def build_snapshot(store, scan_id: str, owner: str | None = None, now_iso: str |
     queue = _live_queue_block(store, scan_id)
     if queue is not None:
         snap["queue"] = queue
+        # Remaining work is not all "processing". When the queue knows the leased/in-flight
+        # count, expose that real number and leave queued work in queue.queued. This prevents a
+        # fresh 986-file run with 9 active workers from claiming "986 processing".
+        in_flight = _pos_int(queue.get("in_flight")) if isinstance(queue, dict) else 0
+        snap["kpis"]["processing"] = min(in_flight, max(0, eligible - completed))
         pending = [k for k in pending if k not in ("queued", "throughput", "workers")]
     snap["kpis_pending"] = pending
     return snap

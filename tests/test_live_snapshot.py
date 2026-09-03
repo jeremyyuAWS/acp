@@ -27,6 +27,9 @@ class _FakeStore:
     def live_findings_count(self, sid):
         return self._findings
 
+    def count_files_done(self, sid):
+        return (0, self._run.get("files") or 0)
+
 
 def _snap(run, now="2026-08-20T20:00:00Z", findings=None):
     return live_snapshot.build_snapshot(_FakeStore(run, findings), "s1", owner="o", now_iso=now)
@@ -38,7 +41,7 @@ def test_maps_run_summary_to_reconciled_kpis():
     snap = _snap({"status": "running", "source": "drive", "files": 100, "files_done": 40,
                   "certifiable": 30, "uncertain": 7, "error": 3})
     assert snap["kpis"]["completed"] == 40
-    assert snap["kpis"]["processing"] == 60           # files − completed
+    assert snap["kpis"]["processing"] == 0            # no worker activity is currently reported
     assert snap["kpis"]["need_attention"] == 7        # uncertain → needs review
     assert snap["kpis"]["unable_to_assess"] == 3      # error → could not be assessed
     assert snap["outcomes"] == {"passed": 30, "review": 7, "failed": 3, "processing": 60}
@@ -113,9 +116,26 @@ def test_queue_layer_is_folded_in_when_present(monkeypatch):
     snap = _snap({"status": "running", "files": 100, "files_done": 40,
                   "certifiable": 30, "uncertain": 7, "error": 3})
     assert snap["queue"] == block
+    assert snap["kpis"]["processing"] == 4       # in flight, not all 60 remaining
     assert set(snap["kpis_pending"]) == {"findings_so_far"}    # queued/throughput/workers now supplied
     # the coarse roll-up still reconciles with the authoritative split
     assert snap["queue"]["in_flight"] + snap["queue"]["queued"] >= 0
+
+
+def test_durable_results_override_a_lagging_run_counter(monkeypatch):
+    class _LaggingStore(_FakeStore):
+        def count_files_done(self, sid):
+            return (427, 986)
+
+    monkeypatch.setattr(live_snapshot, "_live_queue_block", lambda store, sid: {
+        "in_flight": 9, "queued": 550, "workers": {"busy": 9, "max": 12},
+    })
+    run = {"status": "running", "files": 986, "files_done": 0,
+           "certifiable": 0, "uncertain": 0, "error": 0}
+    snap = live_snapshot.build_snapshot(_LaggingStore(run), "s1")
+    assert snap["kpis"]["completed"] == 427
+    assert snap["kpis"]["processing"] == 9
+    assert snap["sequence"] == 427
 
 
 # ── the reconciliation guarantee, against a real store ────────────────────────

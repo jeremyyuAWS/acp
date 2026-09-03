@@ -286,7 +286,7 @@ describe('App composes the Assess tab the way the board specifies', () => {
     // it signals a DISCOVERY run, not an assessment run, and its presence caused the assess panel
     // to activate (showing "Preparing assessment") on all non-Discover tabs during discovery.
     expect(s).toMatch(/assessPhase === 'running'/)
-    expect(s).toMatch(/view !== 'assess'/)
+    expect(s).not.toMatch(/assessPhase === 'running'[\s\S]{0,100}?view !== 'assess'/)
   })
 })
 
