@@ -41,7 +41,6 @@ const Stat = ({ n, label, color, sub = null }) => (
     {sub && <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>{sub}</div>}
   </div>
 )
-
 /** The eligible share, as a string, or null when it cannot be stated.
  *
  *  THE DENOMINATOR IS THE ESTATE LISTING, NOT THE ROWS ON SCREEN, and that is the whole difficulty.
@@ -104,6 +103,7 @@ const Reconciliation = ({ id, heading, note, rec, renderLabel }) => (
 
 export default function DiscoveryResults({
   source = null, files = null, inventory = null, invRows = null, scopeLine = null, runAt = null, policies = null,
+  showHeadlineTiles = true,
   reasonOf = undefined,
   reasonSampleOf = null, reasonFetchLikely = null,
   scanId = null,
@@ -253,29 +253,23 @@ export default function DiscoveryResults({
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: 12, marginTop: 16, flexWrap: 'wrap' }}>
-        <Stat n={summary.discovered} label={`${plural(summary.discovered, 'file', 'files')} discovered`} />
-        {/* SECOND, because it qualifies the number beside it. Discovery lists everything; only some
-            of it carries an accessibility test at all, and on an estate of 12,408 files where 22
-            are Office or PDF that single number reframes the engagement. It was previously visible
-            only inside a funnel and a bar chart — never as a headline.
-
-            Absent when nothing measured it. A "0" here would assert the estate contains nothing
-            testable, which is a discovery result nobody obtained. */}
-        {summary.assessable != null && (
-          <Stat n={summary.assessable} label="can be assessed" color={STAT_COLOR.assessable}
-                sub={eligibleShare(summary.assessable, summary.estateListed)} />
-        )}
-        {/* Absent until the lifecycle columns reach this screen — a "0" here would be a claim
-            about the estate made from a field nobody read. */}
-        {summary.archive != null && (
-          <Stat n={summary.archive} label="tagged for archive review" color={STAT_COLOR.archive} />
-        )}
-        {summary.delete != null && (
-          <Stat n={summary.delete} label="tagged for deletion review" color={STAT_COLOR.delete} />
-        )}
-        <Stat n={summary.unreadable} label={<Term k="unreadable">could not be read</Term>} color={STAT_COLOR.unreadable} />
-      </div>
+      {showHeadlineTiles && (
+        <div style={{ display: 'flex', gap: 12, marginTop: 16, flexWrap: 'wrap' }}>
+          <Stat n={summary.discovered} label={`${plural(summary.discovered, 'file', 'files')} discovered`} />
+          {summary.assessable != null && (
+            <Stat n={summary.assessable} label="can be assessed" color={STAT_COLOR.assessable}
+                  sub={eligibleShare(summary.assessable, summary.estateListed)} />
+          )}
+          {summary.archive != null && (
+            <Stat n={summary.archive} label="tagged for archive review" color={STAT_COLOR.archive} />
+          )}
+          {summary.delete != null && (
+            <Stat n={summary.delete} label="tagged for deletion review" color={STAT_COLOR.delete} />
+          )}
+          <Stat n={summary.unreadable} label={<Term k="unreadable">could not be read</Term>}
+                color={STAT_COLOR.unreadable} />
+        </div>
+      )}
 
       {summary.truncated && (
         <p className="scopewarn" role="status" style={{ fontSize: 12.5, margin: '8px 0 0', lineHeight: 1.5 }}>

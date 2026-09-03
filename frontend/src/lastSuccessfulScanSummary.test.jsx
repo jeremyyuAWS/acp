@@ -13,12 +13,18 @@ async function render(props) {
 }
 
 const RUN_AT = { recorded: true, absolute: 'Sep 2, 2026, 8:04 AM PDT', relative: '6 hours ago' }
+const FILES = [
+  { id: '1', name: 'one.docx', file_type: 'docx', can_assess: true },
+  { id: '2', name: 'two.pdf', file_type: 'pdf', can_assess: true, unreadable: true },
+]
 
 describe('LastSuccessfulScanSummary', () => {
   it('shows the recorded source, folders, criteria, lifecycle outcomes and enumeration evidence', async () => {
     const container = await render({
       run: { id: 'scan-123', status: 'discovered', source: 'drive' },
       runAt: RUN_AT,
+      files: FILES,
+      inventory: { discovered: 2, assessment_eligible: 2 },
       scope: {
         kind: 'folder', folder_name: 'UTSW DEMO V3', folders_walked: 7,
         folders: [{ id: 'f1', name: 'UTSW DEMO V3' }],
@@ -30,7 +36,12 @@ describe('LastSuccessfulScanSummary', () => {
     })
     const text = container.textContent
     expect(text).toContain('Last successful scan')
-    expect(text).toContain('Scan ID scan-123')
+    expect(text).toContain('Discovered2')
+    expect(text).toContain('Can be assessed')
+    expect(text).toContain('Last scan details')
+    const details = container.querySelector('details')
+    expect(details.open).toBe(false)
+    expect(details.textContent).toContain('Scan IDscan-123')
     expect(text).toContain('Google Drive')
     expect(text).toContain('UTSW DEMO V3')
     expect(text).toContain('7 folders traversed')
@@ -45,6 +56,7 @@ describe('LastSuccessfulScanSummary', () => {
   it('distinguishes unrestricted and unrecorded historical scan settings', async () => {
     const unrestricted = await render({
       run: { id: 'scan-1', status: 'discovered', source: 'sharepoint' },
+      files: FILES,
       scope: { kind: 'sharepoint', scan_scope: null, lifecycle_rules_enabled: 0,
                enumeration: { complete: false, files_found: 10 } },
     })
@@ -54,7 +66,7 @@ describe('LastSuccessfulScanSummary', () => {
     expect(unrestricted.textContent).toContain('Not verified')
 
     const historical = await render({
-      run: { id: 'scan-old', status: 'discovered', source: 'drive' }, scope: { kind: 'drive' },
+      run: { id: 'scan-old', status: 'discovered', source: 'drive' }, scope: { kind: 'drive' }, files: FILES,
     })
     expect(historical.textContent).toContain('Criteria were not preserved on this historical run.')
     expect(historical.textContent).toContain('Lifecycle execution details are unavailable.')
@@ -69,6 +81,7 @@ describe('LastSuccessfulScanSummary', () => {
     const container = await render({
       run: { id: 'scan-assessed', status: 'done', source: 'drive', discovered_at: '2026-09-02T15:04:00Z' },
       runAt: RUN_AT,
+      files: FILES,
       scope: { kind: 'drive', scan_scope: null, lifecycle_rules_enabled: 0 },
     })
     expect(container.textContent).toContain('Last successful scan')
