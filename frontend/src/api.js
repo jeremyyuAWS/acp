@@ -1590,13 +1590,19 @@ export const updateDispositionPolicy = (policyId, updates) => (SIM
       method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(updates),
     }).then(j))
-export const setDispositionPolicyEnabled = (policyId, enabled) => (SIM
+// `previewedMatchCount` is required by the server before a rule that CHANGES FILES may be turned
+// on (PRD §7.5): the activator states what the preview showed them, and the server re-derives the
+// count at activation and refuses if it has moved. Omitted for tag/leave and for disabling, which
+// are not gated.
+export const setDispositionPolicyEnabled = (policyId, enabled, previewedMatchCount) => (SIM
   ? sim((() => {
       const p = _simDisp.policies.find((x) => x.policy_id === policyId)
       if (p) p.enabled = enabled ? 1 : 0
       return p
     })())
-  : fetch(`${BASE}/disposition/policies/${encodeURIComponent(policyId)}/enabled?enabled=${enabled}`, { method: 'PUT', headers: headers() }).then(j))
+  : fetch(`${BASE}/disposition/policies/${encodeURIComponent(policyId)}/enabled?enabled=${enabled}`
+          + (previewedMatchCount == null ? '' : `&previewed_match_count=${previewedMatchCount}`),
+          { method: 'PUT', headers: headers() }).then(j))
 export const deleteDispositionPolicy = (policyId) => (SIM
   ? sim((() => {
       const i = _simDisp.policies.findIndex((x) => x.policy_id === policyId)

@@ -253,11 +253,54 @@ def list_conflicts(request: Request):
 
 
 @router.put("/disposition/policies/{policy_id}/enabled")
-def set_policy_enabled(policy_id: str, enabled: bool, request: Request):
+def set_policy_enabled(policy_id: str, enabled: bool, request: Request,
+                       previewed_match_count: int | None = Query(None)):
+    """Turn a rule on or off.
+
+    PRD §7.5: "A rule cannot activate until preview completes successfully." Enforced here for
+    the rules that CHANGE FILES, and the check is not merely that a preview could run — the
+    server can always run one. It is that a person saw the result: the caller states the count
+    they were shown, and activation is refused if the rule no longer selects that many.
+
+    That closes the window the preview otherwise leaves open. Somebody previews a rule at 12
+    files, goes to lunch, a Discover run lands 4,000 more documents, and the toggle they come
+    back to arms a rule against an estate they never looked at. The count is re-derived at the
+    moment of activation, so the number consented to is the number in force.
+
+    The flow is deliberately two-step and self-describing: called without the count, the refusal
+    NAMES the current one, so a client learns what to confirm by asking.
+
+    DISABLING IS NEVER GATED. It is the safety valve, and a valve you have to argue with is not
+    one. Nor are tag/leave rules: they change no file, and gating them would train people
+    through the confirmation by reflex — the same reasoning that exempts them from
+    confirm_unattended.
+    """
     _require_admin(request)
     owner = _owner(request)
-    if core.store.get_disposition_policy(policy_id, owner=owner) is None:
+    policy = core.store.get_disposition_policy(policy_id, owner=owner)
+    if policy is None:
         raise HTTPException(404, "policy not found")
+
+    if enabled and str(policy.get("action")) in disposition.SOURCE_MUTATING:
+        try:
+            pv = _preview(json.loads(policy["match"]), policy["action"], policy_id, owner)
+        except Exception as exc:      # noqa: BLE001 — an unrunnable preview must not activate
+            # "until preview completes SUCCESSFULLY". A rule whose conditions cannot be evaluated
+            # is precisely the one nobody should be arming on trust.
+            raise HTTPException(422, f"the preview for this rule did not complete, so it cannot "
+                                     f"be activated: {exc}") from exc
+        current = pv["would_match"]
+        if previewed_match_count is None:
+            raise HTTPException(422, (
+                f"'{policy.get('action')}' changes files, so this rule cannot be turned on until "
+                f"someone has seen what it selects. It matches {current} document(s) right now — "
+                f"re-send with previewed_match_count={current} to confirm you have reviewed that."))
+        if previewed_match_count != current:
+            raise HTTPException(409, (
+                f"this rule selected {previewed_match_count} document(s) when you previewed it and "
+                f"selects {current} now — the estate or the rule changed in between. Preview it "
+                f"again before turning it on."))
+
     core.store.set_disposition_policy_enabled(policy_id, enabled)
     core.store.log_decision(owner, f"disposition.policy_{'enabled' if enabled else 'disabled'}",
                             detail=policy_id)

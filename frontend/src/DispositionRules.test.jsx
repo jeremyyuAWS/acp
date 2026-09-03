@@ -349,7 +349,10 @@ describe('the existing rules list', () => {
 
     confirmMock.mockResolvedValue(true)
     await click(byLabel('Enable rule Superseded drafts')); await flush()
-    expect(setDispositionPolicyEnabled).toHaveBeenCalledWith('p2', true)
+    // The count the dialog just showed is sent with the activation: the server re-derives it and
+    // refuses if the estate moved in between (PRD §7.5). Previously the number was displayed to a
+    // person and then thrown away, so nothing checked that what they agreed to still held.
+    expect(setDispositionPolicyEnabled).toHaveBeenCalledWith('p2', true, 41)
     expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({
       title: expect.stringContaining('enabled'), actionLabel: 'Undo',
     }))
