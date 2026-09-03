@@ -38,8 +38,9 @@ describe('the mock is gone', () => {
 })
 
 describe('one Users tab, and it is the real one', () => {
-  it('renders AllowList', () => {
-    expect(code('Settings.jsx')).toMatch(/\{tab === 'users' && <AllowList \/>\}/)
+  it('renders the unified People access experience', () => {
+    expect(code('Settings.jsx')).toMatch(/\{tab === 'users' && <PeopleAccess \/>\}/)
+    expect(code('Settings.jsx')).toMatch(/import PeopleAccess from '\.\/PeopleAccess\.jsx'/)
   })
 
   it('has no second user tab', () => {
