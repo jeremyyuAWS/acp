@@ -35,4 +35,9 @@ describe('the queue-estimate poll is wired into Remediate', () => {
     expect(src).toMatch(/openRemediationStream\(runId/)
     expect(src).toMatch(/onError: \(\) => \{ streamRef\.current = null; startPoll\(total\) \}/)
   })
+
+  it('puts the SSE-fed remediation progress card in the main workflow', () => {
+    expect(src).toMatch(/import RemediationRunProgress from '\.\/RemediationRunProgress\.jsx'/)
+    expect(src).toMatch(/remBusy && remProg && \([\s\S]*?<RemediationRunProgress progress=\{remProg\} updateMode=\{remUpdates\}/)
+  })
 })
