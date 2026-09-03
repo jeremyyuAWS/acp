@@ -8955,6 +8955,64 @@ class Store:
             self._db.execute(cur, "SELECT * FROM jobs" + where + " ORDER BY updated_at DESC LIMIT %s", tuple(params))
             return self._db.fetchall(cur)
 
+    def admin_live_activity(self) -> list[dict]:
+        """Cross-user, payload-free live work for the administrator traffic map.
+
+        A run is returned once per active pipeline stage, with aggregate job counts.  The newest
+        running filename is extracted for the authorized detail drawer; raw payloads and document
+        contents never leave this method.
+        """
+        kinds = {
+            "scan_discover": "discover", "scan_folder": "discover", "scan_batch": "discover",
+            "scan_file": "assess", "scan_assess": "assess", "assess_trace": "assess",
+            "remediate_file": "remediate", "rescore_file": "remediate",
+            "apply_approved_values": "remediate",
+            "publish_file": "release", "publish_batch": "release",
+        }
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT j.scan_id,j.type,j.status,j.created_at,j.updated_at,j.payload,"
+                "sr.owner_email,sr.source,sr.files,sr.files_done "
+                "FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
+                "WHERE j.scan_id IN (SELECT DISTINCT scan_id FROM jobs "
+                "WHERE status IN ('queued','running')) "
+                "ORDER BY j.updated_at DESC LIMIT %s", (5000,))
+            rows = self._db.fetchall(cur)
+
+        grouped: dict[tuple[str, str], dict] = {}
+        active: set[tuple[str, str]] = set()
+        for row in rows:
+            stage = kinds.get(row.get("type"))
+            if not stage:
+                continue
+            key = (row["scan_id"], stage)
+            item = grouped.setdefault(key, {
+                "scan_id": row["scan_id"], "owner": row.get("owner_email") or "unknown",
+                "source": row.get("source") or "unknown", "stage": stage,
+                "queued": 0, "running": 0, "completed": 0, "total": 0,
+                "updated_at": row.get("updated_at"), "current_file": None,
+            })
+            status = row.get("status")
+            item["total"] += 1
+            if status == "queued": item["queued"] += 1
+            elif status == "running": item["running"] += 1
+            elif status == "done": item["completed"] += 1
+            if status in ("queued", "running"):
+                active.add(key)
+            if status == "running" and not item["current_file"]:
+                try:
+                    payload = row.get("payload") or {}
+                    if isinstance(payload, str):
+                        payload = json.loads(payload)
+                    if isinstance(payload, dict):
+                        item["current_file"] = (payload.get("file") or payload.get("filename")
+                                                or payload.get("path"))
+                except (TypeError, ValueError):
+                    pass
+            if str(row.get("updated_at") or "") > str(item.get("updated_at") or ""):
+                item["updated_at"] = row.get("updated_at")
+        return [grouped[key] for key in active]
+
     def list_scan_jobs_of_type(self, scan_id: str, job_type: str) -> list[dict]:
         """Every job of one type already enqueued for one scan, whatever its status.
 

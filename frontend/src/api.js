@@ -1298,6 +1298,53 @@ export const getJobs = (status = null) => (SIM
     { id: 'j1a5', type: 'scan_batch', status: 'queued', scan_id: 'sim-all', payload: '{"items":[]}', created_at: '2026-06-29T17:05:05Z', updated_at: '2026-06-29T17:05:05Z' },
   ] })
   : fetch(`${BASE}/jobs${status ? `?status=${status}` : ''}`, { headers: headers() }).then(j))
+
+const _simActivity = () => ({
+  generated_at: new Date().toISOString(),
+  summary: { active_runs: 3, queued: 4, running: 7, completed_jobs: 427, worker_slots: 10, worker_tier_alive: true },
+  runs: [
+    { scan_id: 'sim-assess', owner: 'jeremy@example.com', source: 'drive', stage: 'assess', completed: 427, total: 986, running: 4, queued: 555, current_file: 'Clinical Trial Protocol.docx', updated_at: new Date().toISOString() },
+    { scan_id: 'sim-discover', owner: 'devanathan@example.com', source: 'sharepoint', stage: 'discover', completed: 6910, total: 6916, running: 2, queued: 4, current_file: 'Policies', updated_at: new Date().toISOString() },
+    { scan_id: 'sim-remediate', owner: 'ana@example.com', source: 'drive', stage: 'remediate', completed: 18, total: 32, running: 1, queued: 13, current_file: 'Patient Education.pdf', updated_at: new Date().toISOString() },
+  ],
+})
+
+export const getAdminActivity = () => (SIM
+  ? sim(_simActivity(), 80)
+  : fetch(`${BASE}/admin/activity`, { headers: headers(), cache: 'no-store' }).then(j))
+
+export function openAdminActivityStream({ onMessage, onError } = {}) {
+  if (SIM) {
+    onMessage?.(_simActivity())
+    return { close: () => {} }
+  }
+  const controller = new AbortController()
+  ;(async () => {
+    try {
+      const res = await fetch(`${BASE}/admin/activity/stream`,
+        { headers: headers(), signal: controller.signal, cache: 'no-store' })
+      if (!res.ok || !res.body) { onError?.(new Error(`activity stream ${res.status}`)); return }
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const parsed = parseSSEFrames(buffer)
+        buffer = parsed.rest
+        for (const frame of parsed.frames) {
+          if (frame.event !== 'activity' && frame.event !== 'message') continue
+          try { onMessage?.(JSON.parse(frame.data)) } catch { /* skip malformed event */ }
+        }
+      }
+      if (!controller.signal.aborted) onError?.(new Error('activity stream disconnected'))
+    } catch (e) {
+      if (e?.name !== 'AbortError') onError?.(e)
+    }
+  })()
+  return { close: () => controller.abort() }
+}
 // "When will my work actually begin?" for one scan's Discover/Assess/Remediate job — backs the
 // pickup-estimate line in each tab's Processing status panel. `kind` is 'discover'|'assess'|
 // 'remediate'. Always resolves (never throws for a missing/foreign scan or one with no live job
