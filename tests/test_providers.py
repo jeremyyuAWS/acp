@@ -496,7 +496,7 @@ def test_selector_routes_to_huggingface(monkeypatch):
     assert p.model == "meta-llama/Llama-3.2-11B-Vision-Instruct"
 
 
-def test_huggingface_without_key_falls_back_to_ollama(monkeypatch):
+def test_huggingface_without_key_excluded_from_cloud_selection(monkeypatch):
     import ai, core
     monkeypatch.setattr(ai, "_maybe_refresh_endpoint", lambda: None)
     monkeypatch.setattr(ai, "OLLAMA_BASE_URL", "http://localhost:11434")
