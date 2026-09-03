@@ -89,6 +89,64 @@ describe('semantic token usage — selectors must not hard-code colors that have
   })
 })
 
+describe('status-token definitions in :root — must not regress to hard-coded values', () => {
+  // Pin that the canonical hex values live in the token, not scattered through rules.
+  // These tests fail if someone removes the token from :root or changes its value.
+  it('--success-fg is defined in :root as #3B6D11', () => {
+    expect(css).toMatch(/--success-fg:\s*#3B6D11/)
+  })
+  it('--success-fg-strong is defined in :root as #2F5310', () => {
+    expect(css).toMatch(/--success-fg-strong:\s*#2F5310/)
+  })
+  it('--success-bg is defined in :root as #E7F0DC', () => {
+    expect(css).toMatch(/--success-bg:\s*#E7F0DC/)
+  })
+  it('--warn-fg is defined in :root as #854F0B', () => {
+    expect(css).toMatch(/--warn-fg:\s*#854F0B/)
+  })
+  it('--warn-bg is defined in :root as #FAEEDA', () => {
+    expect(css).toMatch(/--warn-bg:\s*#FAEEDA/)
+  })
+  it('--info-fg is defined in :root as #1F5FA8', () => {
+    expect(css).toMatch(/--info-fg:\s*#1F5FA8/)
+  })
+  it('--info-bg is defined in :root as #E2EDFB', () => {
+    expect(css).toMatch(/--info-bg:\s*#E2EDFB/)
+  })
+  it('--error-fg is defined in :root as #B43A2A', () => {
+    expect(css).toMatch(/--error-fg:\s*#B43A2A/)
+  })
+  it('--error-fg-strong is defined in :root as #A32D2D', () => {
+    expect(css).toMatch(/--error-fg-strong:\s*#A32D2D/)
+  })
+
+  // Pin that the migrated selectors use tokens, not literal hex
+  it('.readywarn uses var(--warn-fg) and var(--warn-bg) — not hard-coded hex', () => {
+    const match = css.match(/\.readywarn\s*\{[^}]+\}/)
+    expect(match).not.toBeNull()
+    expect(match[0]).toContain('var(--warn-fg)')
+    expect(match[0]).toContain('var(--warn-bg)')
+    expect(match[0]).not.toMatch(/#854F0B/i)
+    expect(match[0]).not.toMatch(/#FAEEDA/i)
+  })
+
+  it('.err uses var(--info-fg) and var(--info-bg) — not hard-coded hex', () => {
+    const match = css.match(/\.err\s*\{[^}]+\}/)
+    expect(match).not.toBeNull()
+    expect(match[0]).toContain('var(--info-fg)')
+    expect(match[0]).toContain('var(--info-bg)')
+    expect(match[0]).not.toMatch(/#1F5FA8/i)
+    expect(match[0]).not.toMatch(/#E2EDFB/i)
+  })
+
+  it('.certtitle uses var(--success-fg) — not hard-coded hex', () => {
+    const match = css.match(/\.certtitle\s*\{[^}]+\}/)
+    expect(match).not.toBeNull()
+    expect(match[0]).toContain('var(--success-fg)')
+    expect(match[0]).not.toMatch(/#3B6D11/i)
+  })
+})
+
 describe('standard-mode token values must not have drifted', () => {
   it('--muted standard value is #6c6470', () => {
     expect(css).toMatch(/--muted:\s*#6c6470/)

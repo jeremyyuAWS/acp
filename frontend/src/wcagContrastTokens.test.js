@@ -41,15 +41,26 @@ function contrastRatio(fg, bg) {
 // --- Token definitions (must match styles.css :root and [data-wcag="on"]) --
 
 const STANDARD = {
-  '--plum':          '#46303F',
-  '--ink':           '#2b2330',
-  '--muted':         '#6c6470',
-  '--bg':            '#faf8fb',
-  '--card':          '#ffffff',
-  '--line':          '#ece8ee',
-  '--focus-ring':    '#7a5c8e',
-  '--text-secondary':'#9aa2ac',
-  '--text-disabled': '#B9B4C0',
+  '--plum':              '#46303F',
+  '--ink':               '#2b2330',
+  '--muted':             '#6c6470',
+  '--bg':                '#faf8fb',
+  '--card':              '#ffffff',
+  '--line':              '#ece8ee',
+  '--focus-ring':        '#7a5c8e',
+  '--text-secondary':    '#9aa2ac',
+  '--text-disabled':     '#B9B4C0',
+  // Status tokens (same in standard and WCAG mode — standard values already pass AA)
+  '--success-fg':        '#3B6D11',
+  '--success-fg-strong': '#2F5310',
+  '--success-bg':        '#E7F0DC',
+  '--warn-fg':           '#854F0B',
+  '--warn-bg':           '#FAEEDA',
+  '--info-fg':           '#1F5FA8',
+  '--info-bg':           '#E2EDFB',
+  '--error-fg':          '#B43A2A',
+  '--error-fg-strong':   '#A32D2D',
+  '--error-bg':          '#FBEAEA',
 }
 
 const WCAG = {
@@ -132,6 +143,55 @@ describe('WCAG-mode standard-fail tokens — verify they improve', () => {
     const wcagRatio = contrastRatio(WCAG['--text-disabled'], bg)
     expect(stdRatio,  'standard --text-disabled should be below 4.5:1').toBeLessThan(4.5)
     expect(wcagRatio, 'WCAG --text-disabled must reach 4.5:1').toBeGreaterThanOrEqual(4.5)
+  })
+})
+
+describe('status-token standard values — all must pass WCAG AA on white', () => {
+  // These tokens are used for text/icons in both standard and WCAG mode.
+  // They are defined deep enough to pass 4.5:1 on white without any override.
+  const STATUS_FG_ON_WHITE = [
+    ['--success-fg',        4.5, 'success green on white'],
+    ['--success-fg-strong', 4.5, 'success-strong green on white'],
+    ['--warn-fg',           4.5, 'warn amber on white'],
+    ['--info-fg',           4.5, 'info blue on white'],
+    ['--error-fg',          4.5, 'error red on white'],
+    ['--error-fg-strong',   4.5, 'error-strong red on white'],
+  ]
+  STATUS_FG_ON_WHITE.forEach(([token, min, label]) => {
+    it(`${label} ≥ ${min}:1`, () => {
+      const ratio = contrastRatio(STANDARD[token], '#ffffff')
+      expect(ratio, `${STANDARD[token]} on #ffffff = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(min)
+    })
+  })
+
+  it('--success-fg-strong on --success-bg ≥ 4.5:1 (text on green tint)', () => {
+    const ratio = contrastRatio(STANDARD['--success-fg-strong'], STANDARD['--success-bg'])
+    expect(ratio, `${STANDARD['--success-fg-strong']} on ${STANDARD['--success-bg']} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('--warn-fg on --warn-bg ≥ 4.5:1 (text on amber tint)', () => {
+    const ratio = contrastRatio(STANDARD['--warn-fg'], STANDARD['--warn-bg'])
+    expect(ratio, `${STANDARD['--warn-fg']} on ${STANDARD['--warn-bg']} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('--info-fg on --info-bg ≥ 4.5:1 (text on blue tint)', () => {
+    const ratio = contrastRatio(STANDARD['--info-fg'], STANDARD['--info-bg'])
+    expect(ratio, `${STANDARD['--info-fg']} on ${STANDARD['--info-bg']} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('--error-fg-strong on --error-bg ≥ 4.5:1 (text on red tint)', () => {
+    const ratio = contrastRatio(STANDARD['--error-fg-strong'], STANDARD['--error-bg'])
+    expect(ratio, `${STANDARD['--error-fg-strong']} on ${STANDARD['--error-bg']} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('white text on --info-fg ≥ 4.5:1 (download/action buttons)', () => {
+    const ratio = contrastRatio('#ffffff', STANDARD['--info-fg'])
+    expect(ratio, `#ffffff on ${STANDARD['--info-fg']} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('white text on --success-fg ≥ 4.5:1 (ctago button)', () => {
+    const ratio = contrastRatio('#ffffff', STANDARD['--success-fg'])
+    expect(ratio, `#ffffff on ${STANDARD['--success-fg']} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5)
   })
 })
 
