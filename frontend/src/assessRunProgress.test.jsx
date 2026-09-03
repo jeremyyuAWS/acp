@@ -71,7 +71,9 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toContain('Validating scan inventory')
     expect(html).toContain('Starting assessment workers')
     expect(html).toContain('Building the document queue')
-    expect(html).toContain('Opening the first documents')
+    expect(html).toContain('Assessment in progress')
+    expect(html).toContain('0 of 22 completed · 1 processing')
+    expect(html).not.toContain('Opening the first documents')
   })
 
   it('switches to the determinate bar once the first file completes', () => {
