@@ -14,9 +14,9 @@
 // Says so explicitly instead of silently omitting the topic.
 const SEVERITY_COLORS = {
   blocked: { bg: '#FBE9E7', border: '#E7B4AC', ink: '#8A2A20' },
-  warning: { bg: '#FAEEDA', border: '#D4A017', ink: '#7A5800' },
+  warning: { bg: 'var(--warn-bg)', border: '#D4A017', ink: '#7A5800' },
   waiting: { bg: '#EEF4FB', border: '#B7D3EE', ink: '#1B4C7A' },
-  active: { bg: '#E7F0DC', border: '#C9E0B0', ink: '#3B6D11' },
+  active: { bg: 'var(--success-bg)', border: '#C9E0B0', ink: 'var(--success-fg)' },
   info: { bg: 'var(--surface)', border: 'var(--line)', ink: 'var(--ink)' },
 }
 
@@ -40,7 +40,7 @@ export default function ProcessingStatusPanel({ derived, onStartWorkers, onRerun
           {live && (
             <span title="Receiving live updates for this scan" role="status"
                   style={{ fontSize: 11, padding: '1px 7px', borderRadius: 4,
-                           background: 'var(--green-bg,#f0f7e6)', color: 'var(--green,#3B6D11)',
+                           background: 'var(--green-bg,#f0f7e6)', color: 'var(--success-fg)',
                            border: '1px solid var(--green-line,#a8cf7a)',
                            display: 'inline-flex', alignItems: 'center', gap: 5 }}>
               <span className="pulsedot" aria-hidden="true" /> live

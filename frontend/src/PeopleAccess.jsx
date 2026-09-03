@@ -6,7 +6,7 @@ const statusCopy = {
   access_ready: ['Access ready', '#287D3C', '#EDF8F0'],
   invited: ['Invitation sent', '#315F9E', '#EDF4FF'],
   setup_required: ['Setup needed', '#8A5B00', '#FFF6DF'],
-  failed: ['Invite failed', '#A32D2D', '#FFF0F0'],
+  failed: ['Invite failed', 'var(--error-fg-strong)', '#FFF0F0'],
   suspended: ['Suspended', '#66616A', '#F2F0F3'],
 }
 
@@ -87,7 +87,7 @@ export default function PeopleAccess() {
     {data.domains?.length > 0 && <div role="note" style={{ marginTop: 14, padding: 12, border: '1px solid #E5C875', borderRadius: 9, background: '#FFF8E7', fontSize: 13 }}>
       <b>Domain-wide access is on.</b> Anyone at {data.domains.map((d) => `@${d}`).join(', ')} can sign in even if they are not listed here.
     </div>}
-    <div role="status" aria-live="polite" style={{ minHeight: 22, marginTop: 10, color: error ? '#A32D2D' : '#287D3C', fontSize: 13 }}>{error || message}</div>
+    <div role="status" aria-live="polite" style={{ minHeight: 22, marginTop: 10, color: error ? 'var(--error-fg-strong)' : '#287D3C', fontSize: 13 }}>{error || message}</div>
     <div style={{ border: '1px solid var(--line)', borderRadius: 10, overflow: 'hidden' }}>
       {data.people.length === 0 ? <p className="muted" style={{ padding: 18, margin: 0 }}>No people have been added yet.</p> : data.people.map((person, i) => <div key={person.email} style={{ display: 'grid', gridTemplateColumns: 'minmax(210px, 1.5fr) 110px 140px minmax(180px, 1fr)', gap: 12, alignItems: 'center', padding: '13px 14px', borderTop: i ? '1px solid var(--line)' : 0 }}>
         <div><b style={{ fontSize: 13 }}>{person.email}</b><div className="muted" style={{ fontSize: 12, marginTop: 3 }}>{person.provider === 'microsoft' ? 'Microsoft · SharePoint / OneDrive' : person.provider === 'google' ? 'Google · Drive' : person.role === 'owner' ? 'Workspace owner' : 'Provider not recorded'}</div></div>
@@ -95,7 +95,7 @@ export default function PeopleAccess() {
         {person.protected ? <b style={{ fontSize: 12 }}>Owner</b> : data.can_manage ? <select aria-label={`Access level for ${person.email}`} value={person.role || 'user'} onChange={(e) => change(person, { role: e.target.value })}><option value="user">User</option><option value="admin">Platform Admin</option></select> : <span style={{ fontSize: 12 }}>{person.role === 'admin' ? 'Platform Admin' : 'User'}</span>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {person.status === 'setup_required' && <a href="https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/UserManagementMenuBlade/~/GuestUsers" target="_blank" rel="noreferrer">Invite in Entra ↗</a>}
-          {person.failure && <span title={person.failure} style={{ fontSize: 12, color: '#A32D2D' }}>Invitation needs attention</span>}
+          {person.failure && <span title={person.failure} style={{ fontSize: 12, color: 'var(--error-fg-strong)' }}>Invitation needs attention</span>}
           {data.can_manage && !person.protected && <><button className="ghost small" onClick={() => change(person, { status: person.status === 'suspended' ? 'access_ready' : 'suspended' })}>{person.status === 'suspended' ? 'Restore' : 'Suspend'}</button><button className="ghost small" onClick={() => remove(person)}>Remove</button></>}
         </div>
       </div>)}
@@ -113,7 +113,7 @@ export default function PeopleAccess() {
         </div></fieldset>
         <label style={{ display: 'grid', gap: 6, marginTop: 16, fontSize: 13, fontWeight: 700 }}>Access level<select value={role} onChange={(e) => setRole(e.target.value)}><option value="user">User — scan and work with documents</option><option value="admin">Platform Admin — manage ACP settings</option></select></label>
         <div role="note" className="muted" style={{ marginTop: 14, padding: 11, borderRadius: 8, background: '#F4F2F5', fontSize: 12, lineHeight: 1.5 }}>{provider === 'microsoft' ? (data.invite_enabled ? 'ACP will send a Microsoft guest invitation and grant access when you add them.' : 'ACP will grant access now. Microsoft guest invitations are not connected, so you will see one short setup step afterward.') : 'ACP will grant access now. If the Google OAuth app is still in testing, also add this email as a Google test user.'}</div>
-        {error && <p role="alert" style={{ color: '#A32D2D', fontSize: 13 }}>{error}</p>}
+        {error && <p role="alert" style={{ color: 'var(--error-fg-strong)', fontSize: 13 }}>{error}</p>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}><button type="button" className="ghost" onClick={close}>Cancel</button><button type="submit" disabled={busy}>{busy ? 'Adding…' : 'Add person'}</button></div>
       </form>
       </div>

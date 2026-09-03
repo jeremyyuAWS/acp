@@ -116,9 +116,9 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
             <span>WCAG AA target: <b>90+</b></span>
             <span>industry avg: <b>~72</b></span>
             {run.avg_score != null && run.avg_score >= 90
-              ? <span style={{ color: '#3B6D11', fontWeight: 600 }}>✓ above target</span>
+              ? <span style={{ color: 'var(--success-fg)', fontWeight: 600 }}>✓ above target</span>
               : run.avg_score != null && run.avg_score >= 80
-                ? <span style={{ color: '#854F0B' }}>approaching target</span>
+                ? <span style={{ color: 'var(--warn-fg)' }}>approaching target</span>
                 : run.avg_score != null
                   ? <span style={{ color: '#7B1D1D' }}>below target</span>
                   : null}
@@ -228,8 +228,8 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
                   <td className="fname">{groupDupes && f._copies > 1 ? baseName(f.file) : f.file}
                     {groupDupes && f._copies > 1 && (
                       <span title={`${f._copies} identical copies in Drive:\n${f._names.join('\n')}`}
-                        style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, color: '#854F0B',
-                          background: '#FAEEDA', borderRadius: 10, padding: '1px 7px', verticalAlign: 'middle' }}>
+                        style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, color: 'var(--warn-fg)',
+                          background: 'var(--warn-bg)', borderRadius: 10, padding: '1px 7px', verticalAlign: 'middle' }}>
                         ×{f._copies} copies
                       </span>
                     )}

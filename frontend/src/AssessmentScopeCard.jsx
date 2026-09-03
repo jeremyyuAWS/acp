@@ -56,8 +56,8 @@ export default function AssessmentScopeCard({ run, fileCount = 0, state = 'done'
           {state === 'done' ? 'Scope used for this assessment' : 'Assessment scope'}
         </b>
         {state === 'running' && (
-          <span style={{ fontSize: 11.5, color: '#854F0B', fontWeight: 500,
-                         background: '#FAEEDA', padding: '1px 7px', borderRadius: 4 }}>
+          <span style={{ fontSize: 11.5, color: 'var(--warn-fg)', fontWeight: 500,
+                         background: 'var(--warn-bg)', padding: '1px 7px', borderRadius: 4 }}>
             locked while running
           </span>
         )}
@@ -84,7 +84,7 @@ export default function AssessmentScopeCard({ run, fileCount = 0, state = 'done'
 
       {/* Per-document scope warning — only shown when the operator has marked specific docs */}
       {docScope && (
-        <div style={{ marginTop: 4, color: '#854F0B', fontSize: 12.5 }}>
+        <div style={{ marginTop: 4, color: 'var(--warn-fg)', fontSize: 12.5 }}>
           ⚠ {docScope}
         </div>
       )}

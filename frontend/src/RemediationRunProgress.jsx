@@ -9,7 +9,7 @@ function Step({ status, label, detail, sublines = [] }) {
     <div role="listitem">
       <div style={{ display: 'grid', gridTemplateColumns: '18px minmax(0,1fr) auto', gap: 8,
                     alignItems: 'center', minHeight: 22 }}>
-        <span aria-hidden="true" style={{ color: status === 'done' ? 'var(--green,#3B6D11)' : 'var(--muted)',
+        <span aria-hidden="true" style={{ color: status === 'done' ? 'var(--success-fg)' : 'var(--muted)',
                                           fontWeight: 700, textAlign: 'center' }}>
           {status === 'active' ? <span className="pulsedot" /> : icon}
         </span>
@@ -50,7 +50,7 @@ export default function RemediationRunProgress({ progress, updateMode = 'idle', 
           <strong style={{ fontSize: 14.5 }}>Automated remediation</strong>
           <span role="status" style={{ fontSize: 11.5, padding: '2px 7px', borderRadius: 4,
                                         display: 'inline-flex', alignItems: 'center', gap: 5,
-                                        background: 'var(--green-bg,#f0f7e6)', color: 'var(--green,#3B6D11)',
+                                        background: 'var(--green-bg,#f0f7e6)', color: 'var(--success-fg)',
                                         border: '1px solid var(--green-line,#a8cf7a)' }}>
             {!finished && <span className="pulsedot" aria-hidden="true" />}
             {finished ? 'complete' : updateMode === 'live' ? 'live' : 'updating'}

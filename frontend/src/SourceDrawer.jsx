@@ -31,9 +31,9 @@ import {
 // awaiting a human, not broken.
 
 const TONE = {
-  ok:     ['#3B6D11', '#E7F0DC'],
-  review: ['#854F0B', '#FAEEDA'],
-  fail:   ['#A32D2D', '#FCEBEB'],
+  ok:     ['var(--success-fg)', 'var(--success-bg)'],
+  review: ['var(--warn-fg)', 'var(--warn-bg)'],
+  fail:   ['var(--error-fg-strong)', '#FCEBEB'],
   muted:  ['#5F5E5A', '#EEEDEA'],
 }
 const TABS = ['Overview', 'Scope', 'Rules', 'Activity']

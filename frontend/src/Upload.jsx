@@ -24,7 +24,7 @@ import { loadAiModels, modelLabel, UNKNOWN_MODEL } from './aiModel.js'
 const isOffice = (name) => /\.(docx|pptx|xlsx)$/i.test(name || '')
 const HKEY = 'mova_upload_history'
 const loadHistory = () => { try { return JSON.parse(localStorage.getItem(HKEY) || '[]') } catch { return [] } }
-const SEV_BADGE2 = { CRITICAL: ['#E2EDFB', '#1F5FA8'], SERIOUS: ['#E6EFFB', '#2A5E9E'], MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'] }
+const SEV_BADGE2 = { CRITICAL: ['var(--info-bg)', 'var(--info-fg)'], SERIOUS: ['#E6EFFB', '#2A5E9E'], MODERATE: ['var(--warn-bg)', 'var(--warn-fg)'], MINOR: ['#F1EFE8', '#5F5E5A'] }
 const fmtDate = (iso) => { try { return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) } catch { return '' } }
 const FIX_PROPOSAL = {
   '1.1.1': ['<img> with no alt text', 'AI-generated alt text written into the document (local vision model)'],
@@ -81,7 +81,7 @@ const EXT_ISSUES = {
   html: [['WEB-CONTRAST-001', '1.4.3 contrast (AA)', 'SERIOUS', '3 elements below 4.5:1 contrast'], ['WEB-ALT-001', '1.1.1 non-text content', 'CRITICAL', '2 images missing alt'], ['WEB-LABEL-001', '1.3.1 info & relationships', 'MODERATE', 'a form input has no label']],
 }
 const SEV_PEN = { CRITICAL: 16, SERIOUS: 11, MODERATE: 5, MINOR: 2 }
-const SEV_BADGE = { CRITICAL: ['#E2EDFB', '#1F5FA8'], SERIOUS: ['#E6EFFB', '#2A5E9E'], MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'] }
+const SEV_BADGE = { CRITICAL: ['var(--info-bg)', 'var(--info-fg)'], SERIOUS: ['#E6EFFB', '#2A5E9E'], MODERATE: ['var(--warn-bg)', 'var(--warn-fg)'], MINOR: ['#F1EFE8', '#5F5E5A'] }
 const extOf = (name) => { const m = /\.([a-z0-9]+)$/i.exec(name || ''); return (m ? m[1] : 'pdf').toLowerCase() }
 const issuesFor = (name) => (isVideo(name) ? VIDEO_ISSUES : isAudio(name) ? AUDIO_ISSUES : isImage(name) ? IMAGE_ISSUES : (EXT_ISSUES[extOf(name)] || EXT_ISSUES.pdf)).map(([rule, wcag, sev, detail]) => ({ rule, wcag, sev, detail }))
 
@@ -654,7 +654,7 @@ export default function Upload({ onCertified, me }) {
     finally { setTimeout(() => setExporting(false), 600) }
   }
   const sevCount = {}; issues.forEach((i) => { sevCount[i.sev] = (sevCount[i.sev] || 0) + 1 })
-  const SEVCLR = { CRITICAL: '#1F5FA8', SERIOUS: '#4A8FE0', MODERATE: '#BF8C00', MINOR: '#888780' }
+  const SEVCLR = { CRITICAL: 'var(--info-fg)', SERIOUS: '#4A8FE0', MODERATE: '#BF8C00', MINOR: '#888780' }
   const sevItems = ['CRITICAL', 'SERIOUS', 'MODERATE', 'MINOR'].filter((s) => sevCount[s]).map((s) => ({ label: s.toLowerCase(), value: sevCount[s], color: SEVCLR[s] }))
   const today = new Date().toISOString().slice(0, 10)
 
@@ -705,9 +705,9 @@ export default function Upload({ onCertified, me }) {
             >
               {queue.map((item) => {
                 const statusIcon = item.status === 'done' ? '✓' : item.status === 'error' ? '✕' : item.status === 'scanning' ? null : '·'
-                const statusColor = item.status === 'done' ? '#3B6D11' : item.status === 'error' ? '#854F0B' : item.status === 'scanning' ? '#1F5FA8' : '#888780'
-                const scoreBg = (item.score ?? 0) >= 90 ? '#E7F0DC' : (item.score ?? 0) >= 50 ? '#FAEEDA' : '#E2EDFB'
-                const scoreFg = (item.score ?? 0) >= 90 ? '#3B6D11' : (item.score ?? 0) >= 50 ? '#854F0B' : '#1F5FA8'
+                const statusColor = item.status === 'done' ? 'var(--success-fg)' : item.status === 'error' ? 'var(--warn-fg)' : item.status === 'scanning' ? 'var(--info-fg)' : '#888780'
+                const scoreBg = (item.score ?? 0) >= 90 ? 'var(--success-bg)' : (item.score ?? 0) >= 50 ? 'var(--warn-bg)' : 'var(--info-bg)'
+                const scoreFg = (item.score ?? 0) >= 90 ? 'var(--success-fg)' : (item.score ?? 0) >= 50 ? 'var(--warn-fg)' : 'var(--info-fg)'
                 return (
                   <div
                     key={item.id}
@@ -764,11 +764,11 @@ export default function Upload({ onCertified, me }) {
               </button>
             )}
             {batchDone && queue.some((i) => i.driveFileId && i.remBlob && i.status === 'done') && !bulkSaved && (
-              <button onClick={handleBulkSaveToDrive} disabled={bulkSaving} style={{ background: '#1F5FA8', color: '#fff', border: 'none' }}>
+              <button onClick={handleBulkSaveToDrive} disabled={bulkSaving} style={{ background: 'var(--info-fg)', color: '#fff', border: 'none' }}>
                 {bulkSaving ? '↑ Saving to Drive…' : '↑ Save all to Drive'}
               </button>
             )}
-            {bulkSaved && <span style={{ fontSize: 13, color: '#3B6D11' }}>✓ All saved to Drive</span>}
+            {bulkSaved && <span style={{ fontSize: 13, color: 'var(--success-fg)' }}>✓ All saved to Drive</span>}
             {queue.length > 0 && !batchRunning && (
               <button className="ghost" style={{ marginLeft: 'auto' }} onClick={() => { setQueue([]); setBatchDone(false); setBulkSaved(false) }}>✕ Clear queue</button>
             )}
@@ -787,7 +787,7 @@ export default function Upload({ onCertified, me }) {
             const avgScore = Math.round(driveItems.reduce((s, i) => s + i.score, 0) / driveItems.length)
             const totalFindings = driveItems.reduce((s, i) => s + (i.issues?.length || 0), 0)
             return (
-              <div style={{ background: '#E7F0DC', border: '1px solid #B8D89A', borderRadius: 8, padding: '10px 14px', marginTop: 10, fontSize: 13 }}>
+              <div style={{ background: 'var(--success-bg)', border: '1px solid #B8D89A', borderRadius: 8, padding: '10px 14px', marginTop: 10, fontSize: 13 }}>
                 <b>Google Drive remediation complete</b>
                 <span className="muted"> · </span>
                 {driveItems.length} file{driveItems.length !== 1 ? 's' : ''} from Drive
@@ -850,7 +850,7 @@ export default function Upload({ onCertified, me }) {
                   <button className="uphrow" key={h.id} onClick={() => setViewing(h)}>
                     <span className="uphname">{h.name}<span className="muted"> · {fmtDate(h.date)}{h.real ? ' · axe-core' : ''}</span></span>
                     <span className="muted">{h.findings.length} finding{h.findings.length === 1 ? '' : 's'}</span>
-                    <span className="badge" style={{ background: h.score >= 90 ? '#E7F0DC' : h.score >= 50 ? '#FAEEDA' : '#E2EDFB', color: h.score >= 90 ? '#3B6D11' : h.score >= 50 ? '#854F0B' : '#1F5FA8' }}>{h.score} / 100</span>
+                    <span className="badge" style={{ background: h.score >= 90 ? 'var(--success-bg)' : h.score >= 50 ? 'var(--warn-bg)' : 'var(--info-bg)', color: h.score >= 90 ? 'var(--success-fg)' : h.score >= 50 ? 'var(--warn-fg)' : 'var(--info-fg)' }}>{h.score} / 100</span>
                   </button>
                 ))}
               </div>
@@ -882,9 +882,9 @@ export default function Upload({ onCertified, me }) {
             <section className="panel">
               <div className="rubrichdr"><h2 style={{ margin: 0 }}>Assessment · <span className="fname" style={{ fontSize: 14 }}>{file?.name}</span>
                 {realEngine && <span className="realbadge" title="Findings detected by live in-browser analysis">⚡ live {realEngine} analysis</span>}</h2>
-                <span className="badge" style={{ background: '#FAEEDA', color: '#854F0B' }}>{issues.length} findings</span></div>
+                <span className="badge" style={{ background: 'var(--warn-bg)', color: 'var(--warn-fg)' }}>{issues.length} findings</span></div>
               <div className="lift" style={{ margin: '12px 0 16px' }}>
-                <div className="liftcol"><div className="liftnum" style={{ color: score >= 90 ? '#3B6D11' : score >= 50 ? '#854F0B' : '#1F5FA8' }}>{score}</div><div className="muted">score / 100</div></div>
+                <div className="liftcol"><div className="liftnum" style={{ color: score >= 90 ? 'var(--success-fg)' : score >= 50 ? 'var(--warn-fg)' : 'var(--info-fg)' }}>{score}</div><div className="muted">score / 100</div></div>
                 <div className="muted" style={{ flex: 1 }}>Scored against WCAG 2.1 AA. {score < 90 ? 'Below the certifiable threshold — remediation needed.' : 'Meets the bar.'}</div>
               </div>
               <div className="findings">
@@ -908,7 +908,7 @@ export default function Upload({ onCertified, me }) {
               <div className="findings" style={{ marginBottom: 14 }}>
                 {autoFixed.map((i, n) => (
                   <div className="finding" key={n}>
-                    <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11' }}>fixed</span>
+                    <span className="badge" style={{ background: 'var(--success-bg)', color: 'var(--success-fg)' }}>fixed</span>
                     <div className="findingmain"><div>{i.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{i.detail}</div></div>
                   </div>
                 ))}
@@ -1005,8 +1005,8 @@ export default function Upload({ onCertified, me }) {
                   </div>
                 </div>
 
-                <section className="certbanner certreveal" style={rejected ? { background: '#FAEEDA', borderColor: '#e8d2a8' } : undefined}>
-                  <div className="certmark certpop" aria-hidden="true" style={rejected ? { background: '#854F0B' } : undefined}>{rejected ? '!' : '✓'}</div>
+                <section className="certbanner certreveal" style={rejected ? { background: 'var(--warn-bg)', borderColor: '#e8d2a8' } : undefined}>
+                  <div className="certmark certpop" aria-hidden="true" style={rejected ? { background: 'var(--warn-fg)' } : undefined}>{rejected ? '!' : '✓'}</div>
                   <div>
                     <div className="certtitle">{rejected ? `Conditional · ${finalScore} / 100` : 'Certified · 100 / 100'}</div>
                     <div className="muted"><span className="fname">{file?.name}</span> {rejected ? 'remediated except 1 finding deferred to manual review — not yet fully WCAG ' + wcagVersion + ' AA compliant.' : 'passed WCAG ' + wcagVersion + ' AA after remediation & re-validation.'}</div>
@@ -1017,9 +1017,9 @@ export default function Upload({ onCertified, me }) {
                 <div className="chartrow">
                   <section className="panel"><h2>Compliance lift</h2>
                     <div className="lift">
-                      <div className="liftcol"><div className="liftnum" style={{ color: '#1F5FA8' }}>{score}</div><div className="muted">as received</div></div>
+                      <div className="liftcol"><div className="liftnum" style={{ color: 'var(--info-fg)' }}>{score}</div><div className="muted">as received</div></div>
                       <div className="liftarrow" aria-hidden="true">→</div>
-                      <div className="liftcol"><div className="liftnum" style={{ color: rejected ? '#854F0B' : '#3B6D11' }}><CountUp from={score} to={finalScore} /></div><div className="muted">{rejected ? 'conditional' : 'certified'}</div></div>
+                      <div className="liftcol"><div className="liftnum" style={{ color: rejected ? 'var(--warn-fg)' : 'var(--success-fg)' }}><CountUp from={score} to={finalScore} /></div><div className="muted">{rejected ? 'conditional' : 'certified'}</div></div>
                     </div>
                     <p className="muted">{rejected ? `${issues.length - 1} of ${issues.length} finding(s) resolved · 1 deferred to manual remediation.` : `${issues.length} finding(s) resolved across ${sevItems.length} severity level(s).`}</p>
                   </section>
@@ -1051,7 +1051,7 @@ export default function Upload({ onCertified, me }) {
                               aria-expanded={guide ? isOpen : undefined}
                             >
                               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                                <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11', flexShrink: 0 }}>fixed</span>
+                                <span className="badge" style={{ background: 'var(--success-bg)', color: 'var(--success-fg)', flexShrink: 0 }}>fixed</span>
                                 <div className="findingmain" style={{ flex: 1 }}><div>{i.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{i.detail}</div></div>
                                 <span className="badge" style={{ background: bg, color: fg, flexShrink: 0 }}>{i.sev.toLowerCase()}</span>
                                 {guide && <span aria-hidden="true" style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0, paddingTop: 3 }}>{isOpen ? '▲' : '▼'}</span>}

@@ -50,7 +50,7 @@ export default function WorkerAvailability({ snap, busy, msg, onAdjust,
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, margin: '6px 0 10px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, flexWrap: 'wrap' }}>
-        <span style={{ color: snap.alive ? '#1a7f37' : '#854F0B', fontWeight: 600 }}>
+        <span style={{ color: snap.alive ? '#1a7f37' : 'var(--warn-fg)', fontWeight: 600 }}>
           ● Worker service&nbsp;<span style={{ fontWeight: 400 }}>{snap.alive ? 'online' : 'offline'}</span>
         </span>
         <span className="muted">·</span>
@@ -118,7 +118,7 @@ export default function WorkerAvailability({ snap, busy, msg, onAdjust,
         </div>
       )}
       {showDiagnosis && (
-        <div role="alert" style={{ fontSize: 12, color: diagnosis.severity === 'critical' ? '#8A2A20' : '#854F0B',
+        <div role="alert" style={{ fontSize: 12, color: diagnosis.severity === 'critical' ? '#8A2A20' : 'var(--warn-fg)',
                                     display: 'flex', alignItems: 'baseline', gap: 5 }}>
           <span aria-hidden="true">⚠</span>
           <span>{diagnosis.message}</span>

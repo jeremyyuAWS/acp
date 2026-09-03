@@ -15,10 +15,10 @@ import ScanActivityPanel from './ScanActivityPanel.jsx'
 // controls to inject events), scheduled re-scans, drift detection, and the rules.
 const KIND = {
   new: ['＋', '#185FA5', '#E7F0FB', 'new file'],
-  changed: ['✎', '#854F0B', '#FAEEDA', 'changed'],
+  changed: ['✎', 'var(--warn-fg)', 'var(--warn-bg)', 'changed'],
   scanned: ['◷', '#3C3489', '#EEEDFE', 'scanned'],
-  regressed: ['▼', '#1F5FA8', '#E2EDFB', 'regression'],
-  recertified: ['✓', '#3B6D11', '#E7F0DC', 're-certified'],
+  regressed: ['▼', 'var(--info-fg)', 'var(--info-bg)', 'regression'],
+  recertified: ['✓', 'var(--success-fg)', 'var(--success-bg)', 're-certified'],
   clean: ['✓', '#5F5E5A', '#EFEDEA', 'no change'],
 }
 const SRC_ICON = { sharepoint: '▤', gdrive: '▣', box: '◰', confluence: '❖', cms: '🌐', s3: '☁', onedrive: '☁' }
@@ -27,7 +27,7 @@ const hrs = (m) => m >= 90 ? `${(m / 60).toFixed(1)} hrs` : `${Math.round(m)} mi
 const DEC_ACT = { auto: 'auto-fix', assisted: 'review', review: 'review', archive: 'archive', keep: 'archive', manual: 'review' }
 const DEC_WHAT = { auto: 'issues auto-remediated', assisted: 'AI fix queued for approval', review: 'flagged for manual review', archive: 'marked for archive — superseded', keep: 'kept as-is', manual: 'flagged for manual rebuild' }
 const ACTOR = { 'auto-fix': 'mova engine', review: 'you', publish: 'mova engine', 're-scan': 'mova engine', archive: 'mova engine' }
-const ACOLOR = { 'auto-fix': '#157A56', review: '#854F0B', publish: '#185FA5', 're-scan': '#3B6D11', archive: '#5F5E5A' }
+const ACOLOR = { 'auto-fix': '#157A56', review: 'var(--warn-fg)', publish: '#185FA5', 're-scan': 'var(--success-fg)', archive: '#5F5E5A' }
 
 function Toggle({ label, hint, on, set }) {
   return (
@@ -107,8 +107,8 @@ function useProgramBatches(files, decisions) {
     deadline: '2026-06-28',
     batches: [
       { label: 'Batch 1 · CRITICAL auto-fix',    count: sim ? 47  : b1.length, done: sim ? 38 : decided(b1), color: '#7B1D1D', bg: '#FDECEA', note: 'auto-fix eligible · one click' },
-      { label: 'Batch 2 · SERIOUS HITL review',  count: sim ? 189 : b2.length, done: sim ? 44 : decided(b2), color: '#854F0B', bg: '#FAEEDA', note: 'human approval needed' },
-      { label: 'Batch 3 · MODERATE sweep',       count: sim ? 521 : b3.length, done: sim ? 0  : decided(b3), color: '#1F5FA8', bg: '#E2EDFB', note: 'auto-fix + spot-check' },
+      { label: 'Batch 2 · SERIOUS HITL review',  count: sim ? 189 : b2.length, done: sim ? 44 : decided(b2), color: 'var(--warn-fg)', bg: 'var(--warn-bg)', note: 'human approval needed' },
+      { label: 'Batch 3 · MODERATE sweep',       count: sim ? 521 : b3.length, done: sim ? 0  : decided(b3), color: 'var(--info-fg)', bg: 'var(--info-bg)', note: 'auto-fix + spot-check' },
       { label: 'N/A · excluded from plan',       count: sim ? 490 : na.length, done: sim ? 490: na.length,  color: '#9a948f', textColor: '#6c6470', bg: '#EFEDEA', note: 'internal / compliant / junk' },
     ],
   }
@@ -225,7 +225,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
         metrics: [
           { label: 'Documents in scope', value: files.length.toLocaleString() },
           { label: 'In remediation plan', value: prog.total.toLocaleString() },
-          { label: 'Resolved', value: prog.batches.reduce((a, b) => a + b.done, 0).toLocaleString(), color: '#3B6D11' },
+          { label: 'Resolved', value: prog.batches.reduce((a, b) => a + b.done, 0).toLocaleString(), color: 'var(--success-fg)' },
           { label: 'Sources', value: new Set(files.map((f) => f.sourceName).filter(Boolean)).size || 1 },
         ],
         events: realAuditSrc.map(([action, change, document]) => ({ action, actor: ACTOR[action] || 'mova engine', change, document })),
@@ -337,7 +337,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
               <h3 style={{ margin: '0 0 8px' }}>Scan triggers <span className="muted" style={{ fontWeight: 400 }}>· event-based automation (preview) — the live schedule is below</span></h3>
               <div className="scanctl">
                 <div className="ctlcol">
-                  <div className="ctlsub">Event-based triggers <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, color: '#854F0B', background: '#FBF1DF', border: '1px solid #EAD9BF', borderRadius: 4, padding: '1px 5px', marginLeft: 6, verticalAlign: 'middle' }}>PREVIEW</span></div>
+                  <div className="ctlsub">Event-based triggers <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, color: 'var(--warn-fg)', background: '#FBF1DF', border: '1px solid #EAD9BF', borderRadius: 4, padding: '1px 5px', marginLeft: 6, verticalAlign: 'middle' }}>PREVIEW</span></div>
                   <div className="muted" style={{ fontSize: 11.5, margin: '0 0 8px', lineHeight: 1.45 }}>Planned agent behaviour — needs Drive change-notifications; not wired yet. The <b>scheduled sweep</b> on the right <b>is live</b>.</div>
                   <div style={{ opacity: 0.5, pointerEvents: 'none' }} aria-hidden="true">
                   <Toggle label="Scan new files on arrival" hint="within 1 hour of landing in a watched source" on={triggers.newFile} set={(v) => setTriggers((t) => ({ ...t, newFile: v }))} />
@@ -378,8 +378,8 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
             <Sparkline points={trend} labels={trendDates} width={620} height={104} />
             {velocity != null && (
               <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <span className="badge" style={{ background: velocity > 0 ? '#E7F0DC' : velocity < 0 ? '#FCEBEB' : '#EEEDEA',
-                                                  color: velocity > 0 ? '#3B6D11' : velocity < 0 ? '#A32D2D' : 'var(--muted)' }}>
+                <span className="badge" style={{ background: velocity > 0 ? 'var(--success-bg)' : velocity < 0 ? '#FCEBEB' : '#EEEDEA',
+                                                  color: velocity > 0 ? 'var(--success-fg)' : velocity < 0 ? 'var(--error-fg-strong)' : 'var(--muted)' }}>
                   {velocity > 0 ? '↑' : velocity < 0 ? '↓' : '→'} {Math.abs(velocity).toFixed(1)} pts/week
                 </span>
                 <span className="muted" style={{ fontSize: 12.5 }}>
@@ -422,7 +422,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
                 {campaignBusy ? 'saving…' : '💾 persist this program'}
               </button>
             )}
-            {campaignErr && <span style={{ fontSize: 12, color: '#A32D2D' }} role="alert">⚠ {campaignErr}</span>}
+            {campaignErr && <span style={{ fontSize: 12, color: 'var(--error-fg-strong)' }} role="alert">⚠ {campaignErr}</span>}
             <span className="trstatchip pending" style={{ fontSize: 12 }}>
               {prog.batches.reduce((a, b) => a + b.done, 0)} / {prog.batches.reduce((a, b) => a + b.count, 0)} resolved
             </span>
@@ -454,7 +454,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
       <div className="moncards">
         <div className="moncard"><span className="muted">Documents in scope</span><b>{files.length.toLocaleString()}</b><span className="muted">{new Set(files.map((f) => f.sourceName).filter(Boolean)).size || 1} source{(new Set(files.map((f) => f.sourceName).filter(Boolean)).size || 1) !== 1 ? 's' : ''}</span></div>
         <div className="moncard"><span className="muted">In remediation plan</span><b>{prog.total.toLocaleString()}</b><span className="muted">across {prog.batches.length} batches</span></div>
-        <div className="moncard"><span className="muted">Resolved</span><b style={{ color: '#3B6D11' }}>{prog.batches.reduce((a, b) => a + b.done, 0).toLocaleString()}</b><span className="muted">of {prog.batches.reduce((a, b) => a + b.count, 0).toLocaleString()}</span></div>
+        <div className="moncard"><span className="muted">Resolved</span><b style={{ color: 'var(--success-fg)' }}>{prog.batches.reduce((a, b) => a + b.done, 0).toLocaleString()}</b><span className="muted">of {prog.batches.reduce((a, b) => a + b.count, 0).toLocaleString()}</span></div>
       </div>
 
       {/* R5 — Source drift: REAL staleness from the source (getSourceStatus), the same signal the
@@ -462,7 +462,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
       {!SIM && run?.id && (
         <section className="panel mon-drift" style={{ marginBottom: 14 }}>
           <div className="slahd">
-            <h2 style={{ margin: 0 }}>Source drift <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, color: '#3B6D11', background: '#E7F0DC', border: '1px solid #C9E0B0', borderRadius: 4, padding: '1px 5px', marginLeft: 8, verticalAlign: 'middle' }}>LIVE</span> <span className="muted">· files changed at the source since this scan</span></h2>
+            <h2 style={{ margin: 0 }}>Source drift <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, color: 'var(--success-fg)', background: 'var(--success-bg)', border: '1px solid #C9E0B0', borderRadius: 4, padding: '1px 5px', marginLeft: 8, verticalAlign: 'middle' }}>LIVE</span> <span className="muted">· files changed at the source since this scan</span></h2>
             {drift.loaded && drift.stale > 0 && <span className="slachip breached">⚠ {drift.stale} changed</span>}
           </div>
           {!drift.loaded ? (
@@ -498,10 +498,10 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
             {slaBreached.length > 0 && <span className="slachip breached">⚠ {slaBreached.length} breached</span>}
           </div>
           <div className="slastats">
-            <div className="slastat"><b style={{ color: '#1F5FA8' }}>{slaItems.length}</b><span className="muted">under SLA</span></div>
-            <div className="slastat"><b style={{ color: slaBreached.length ? '#854F0B' : '#5F5E5A' }}>{slaBreached.length}</b><span className="muted">breached</span></div>
+            <div className="slastat"><b style={{ color: 'var(--info-fg)' }}>{slaItems.length}</b><span className="muted">under SLA</span></div>
+            <div className="slastat"><b style={{ color: slaBreached.length ? 'var(--warn-fg)' : '#5F5E5A' }}>{slaBreached.length}</b><span className="muted">breached</span></div>
             <div className="slastat"><b style={{ color: '#996F08' }}>{slaAtRisk.length}</b><span className="muted">at risk</span></div>
-            <div className="slastat"><b style={{ color: '#3B6D11' }}>{slaOnTrack.length}</b><span className="muted">on track</span></div>
+            <div className="slastat"><b style={{ color: 'var(--success-fg)' }}>{slaOnTrack.length}</b><span className="muted">on track</span></div>
           </div>
           <div className="slalist">
             {slaItems.slice(0, 8).map((s, i) => (
@@ -518,7 +518,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
 
       <section className="panel" style={{ marginBottom: 14 }}>
         <div className="proghd">
-          <h2 style={{ margin: 0 }}>Scheduled re-scans <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, color: '#3B6D11', background: '#E7F0DC', border: '1px solid #C9E0B0', borderRadius: 4, padding: '1px 5px', marginLeft: 8, verticalAlign: 'middle' }}>LIVE</span> <span className="muted">· automatic re-scan of your estate, server-side via the service account</span></h2>
+          <h2 style={{ margin: 0 }}>Scheduled re-scans <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, color: 'var(--success-fg)', background: 'var(--success-bg)', border: '1px solid #C9E0B0', borderRadius: 4, padding: '1px 5px', marginLeft: 8, verticalAlign: 'middle' }}>LIVE</span> <span className="muted">· automatic re-scan of your estate, server-side via the service account</span></h2>
           {schedNext && (Object.values(cad)[0] || 'off') !== 'off' && (
             <span className="trstatchip pending" style={{ fontSize: 12 }}>next {new Date(schedNext).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
           )}
@@ -538,7 +538,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
                   border: '1px solid ' + (on ? '#7C3AED' : 'var(--line)'), background: on ? '#7C3AED' : '#fff', color: on ? '#fff' : 'var(--ink)' }}>{v}</button>
             )
           })}
-          {schedErr && <span style={{ fontSize: 12, color: '#A32D2D' }} role="alert">⚠ {schedErr}</span>}
+          {schedErr && <span style={{ fontSize: 12, color: 'var(--error-fg-strong)' }} role="alert">⚠ {schedErr}</span>}
         </div>
         {lastSweep && lastSweep.ok === false && (
           <div role="alert" style={{ marginTop: 12, padding: '11px 14px', borderRadius: 8, fontSize: 13.5,

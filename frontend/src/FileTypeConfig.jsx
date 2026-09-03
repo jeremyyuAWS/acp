@@ -171,7 +171,7 @@ export default function FileTypeConfig({ onChanged }) {
         Remediate and Publish. That is a platform-wide setting, not a preference for this browser.
         {' '}<b>HTML, video, audio and custom extensions</b> only filter what Discover lists; the
         engine has no scope axis for them.
-        {disabledCount > 0 && <b style={{ color: '#854F0B', marginLeft: 6 }}>{disabledCount} type{disabledCount !== 1 ? 's' : ''} switched off.</b>}
+        {disabledCount > 0 && <b style={{ color: 'var(--warn-fg)', marginLeft: 6 }}>{disabledCount} type{disabledCount !== 1 ? 's' : ''} switched off.</b>}
         {restricted === false && (
           <span className="muted" style={{ display: 'block', marginTop: 6 }}>
             Nothing is restricted today. Switching a document format off creates an explicit
@@ -180,7 +180,7 @@ export default function FileTypeConfig({ onChanged }) {
           </span>
         )}
         {msg && <span role="status" aria-live="polite" style={{ display: 'block', marginTop: 6,
-                       color: msg.startsWith('✓') ? '#3B6D11' : msg.startsWith('SIM') ? '#6B4A0B' : '#A32D2D' }}>{msg}</span>}
+                       color: msg.startsWith('✓') ? 'var(--success-fg)' : msg.startsWith('SIM') ? '#6B4A0B' : 'var(--error-fg-strong)' }}>{msg}</span>}
       </p>
 
       <table className="ruletable" style={{ width: '100%', marginBottom: 18 }}>

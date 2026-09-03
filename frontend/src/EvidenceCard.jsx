@@ -23,8 +23,8 @@ import TracePanel from './TracePanel.jsx'
 // onAct(id, status, note, approvedValue, telemetry) — the parent owns the write, so its
 // optimistic update and the queue-drain event stay wired. traceUrl is optional.
 // Trust-state pill styling (ADR 0019) — a verifiable state, never a confidence colour-by-score.
-const _TRUST_BG = { ok: '#E1F5EE', warn: '#FAEEDA', todo: 'rgba(0,0,0,.05)' }
-const _TRUST_FG = { ok: '#0F6E56', warn: '#854F0B', todo: '#6b6b6b' }
+const _TRUST_BG = { ok: '#E1F5EE', warn: 'var(--warn-bg)', todo: 'rgba(0,0,0,.05)' }
+const _TRUST_FG = { ok: '#0F6E56', warn: 'var(--warn-fg)', todo: '#6b6b6b' }
 const trustPill = (tone) => ({ padding: '2px 9px', borderRadius: 6, fontSize: 12, whiteSpace: 'nowrap',
   background: _TRUST_BG[tone] || _TRUST_BG.todo, color: _TRUST_FG[tone] || _TRUST_FG.todo })
 const trustIcon = (tone) => (tone === 'ok' ? '✓' : tone === 'warn' ? '◐' : '○')
@@ -1010,8 +1010,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
           {aiValueShown && provZone && (
             <div className="evcard-prov-surface" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '2px 0 8px' }}>
               <span style={{ padding: '2px 9px', borderRadius: 6, fontSize: 11.5, fontWeight: 600, whiteSpace: 'nowrap',
-                   background: provZone === 'local' ? '#E1F5EE' : '#FAEEDA',
-                   color: provZone === 'local' ? '#0F6E56' : '#854F0B' }}>
+                   background: provZone === 'local' ? '#E1F5EE' : 'var(--warn-bg)',
+                   color: provZone === 'local' ? '#0F6E56' : 'var(--warn-fg)' }}>
                 {provZone === 'local' ? '🟢 Local AI' : '🟡 Cloud AI'}
               </span>
               <span className="muted" style={{ fontSize: 12 }}>
@@ -1080,8 +1080,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
             <div className="evcard-provenance" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 12, margin: '2px 0 8px' }}>
               <span className="muted">🤖 {card.proposalSource || `${aiProv.provider} · ${card.sc === '1.1.1' ? aiProv.vision_model : aiProv.model}`}</span>
               <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 11.5, whiteSpace: 'nowrap',
-                   background: provZone === 'local' ? '#E1F5EE' : '#FAEEDA',
-                   color: provZone === 'local' ? '#0F6E56' : '#854F0B' }}>
+                   background: provZone === 'local' ? '#E1F5EE' : 'var(--warn-bg)',
+                   color: provZone === 'local' ? '#0F6E56' : 'var(--warn-fg)' }}>
                 {provZone === 'local' ? '🟢 Local only' : '🟡 Cloud'}
               </span>
               <span className="muted">{provZone === 'local'
@@ -1153,8 +1153,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
               so the reviewer understands the ask before approving. Null → nothing shown. */}
           {whyReview && (
             <div className="evcard-whyreview" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12.5,
-                 background: '#FAEEDA', border: '1px solid var(--line)', borderRadius: 8, padding: '8px 11px', margin: '0 0 8px' }}>
-              <span aria-hidden="true" style={{ color: '#854F0B' }}>❓</span>
+                 background: 'var(--warn-bg)', border: '1px solid var(--line)', borderRadius: 8, padding: '8px 11px', margin: '0 0 8px' }}>
+              <span aria-hidden="true" style={{ color: 'var(--warn-fg)' }}>❓</span>
               <span><b>Why human review?</b> {whyReview}</span>
             </div>
           )}

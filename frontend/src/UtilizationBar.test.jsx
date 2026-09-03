@@ -46,7 +46,7 @@ describe('UtilizationBar', () => {
 
   it('colors the fill amber between the warning and high thresholds', async () => {
     const c = await mount({ label: 'CPU', percent: 65 })
-    const fill = c.querySelector('span[style*="background: rgb(133, 79, 11)"]')
+    const fill = c.querySelector('span[style*="background: var(--warn-fg)"]')
     expect(fill).toBeTruthy()
   })
 

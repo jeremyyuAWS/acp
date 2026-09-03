@@ -20,10 +20,10 @@ export default function PiiPanel({ scanId }) {
   const max = Math.max(1, ...byType.map((t) => t.count || 0))
 
   return (
-    <section className="panel" style={{ borderLeft: '4px solid #1F5FA8' }}>
+    <section className="panel" style={{ borderLeft: '4px solid var(--info-fg)' }}>
       <h2>🔒 Sensitive data exposure <span className="muted" style={{ fontWeight: 400 }}>· PII detected by the deep scan</span></h2>
       <div className="metrics" style={{ marginTop: 8 }}>
-        <div className="metric"><span>documents with PII</span><b style={{ color: '#1F5FA8' }}>{summary.documents.toLocaleString()}</b></div>
+        <div className="metric"><span>documents with PII</span><b style={{ color: 'var(--info-fg)' }}>{summary.documents.toLocaleString()}</b></div>
         <div className="metric"><span>items detected</span><b>{(summary.items || 0).toLocaleString()}</b></div>
         <div className="metric"><span>data types</span><b>{byType.length}</b></div>
       </div>
@@ -35,7 +35,7 @@ export default function PiiPanel({ scanId }) {
             <div className="critrow" key={`${t.pii_type}-${t.label}`} style={{ gridTemplateColumns: '150px 78px 1fr 44px', marginBottom: 4 }}>
               <span className="critlabel" style={{ textAlign: 'left' }}>{t.label || t.pii_type}</span>
               <span className={confClass(conf.level)} title={`Match confidence: ${conf.level.label} — ${conf.basis}`}>{conf.level.label}</span>
-              <span className="track"><i style={{ width: `${(t.count / max) * 100}%`, background: '#1F5FA8', transition: 'width .9s ease' }} /></span>
+              <span className="track"><i style={{ width: `${(t.count / max) * 100}%`, background: 'var(--info-fg)', transition: 'width .9s ease' }} /></span>
               <span className="critn">{(t.count || 0).toLocaleString()}</span>
             </div>
           )})}

@@ -28,7 +28,7 @@ function statusOrCount(status, value, render) {
   const label = SCAN_STATUS_LABEL[status]
   if (label && !value) {
     return (
-      <span style={{ color: '#854F0B', fontStyle: 'italic', fontSize: 12.5 }} title={SCAN_STATUS_TITLE[status]}>
+      <span style={{ color: 'var(--warn-fg)', fontStyle: 'italic', fontSize: 12.5 }} title={SCAN_STATUS_TITLE[status]}>
         {label}
       </span>
     )
@@ -55,7 +55,7 @@ function fmtDate(iso) {
 
 function scoreColor(v) {
   if (v == null) return undefined
-  return v >= 80 ? '#3B6D11' : v >= 50 ? '#854F0B' : '#A32D2D'
+  return v >= 80 ? 'var(--success-fg)' : v >= 50 ? 'var(--warn-fg)' : 'var(--error-fg-strong)'
 }
 
 function LineChart({ points, height = 100, color = '#4285F4' }) {
@@ -116,8 +116,8 @@ function DirectionBadge({ direction }) {
   }
   const cfg = {
     improving: { label: 'Improving', color: '#639922' },
-    declining:  { label: 'Declining',  color: '#A32D2D' },
-    flat:       { label: 'Stable',     color: '#854F0B' },
+    declining:  { label: 'Declining',  color: 'var(--error-fg-strong)' },
+    flat:       { label: 'Stable',     color: 'var(--warn-fg)' },
   }[direction]
   if (!cfg) return null
   return (
@@ -239,7 +239,7 @@ export function AdminInsights({ me }) {
           label="Open risk"
           value={data ? fmt(totalDocs - certifiable) : '—'}
           sub={data?.uncertain ? `${fmt(data.uncertain)} uncertain` : undefined}
-          color={data && (totalDocs - certifiable) > 0 ? '#A32D2D' : undefined}
+          color={data && (totalDocs - certifiable) > 0 ? 'var(--error-fg-strong)' : undefined}
         />
         <KpiCard
           label="Avg score"
@@ -258,7 +258,7 @@ export function AdminInsights({ me }) {
           <KpiCard
             label="Review queue"
             value={fmt(data.review_pending)}
-            color={data.review_pending > 0 ? '#854F0B' : undefined}
+            color={data.review_pending > 0 ? 'var(--warn-fg)' : undefined}
           />
         )}
       </div>
@@ -272,11 +272,11 @@ export function AdminInsights({ me }) {
             <span style={{ fontSize: 16, color: 'var(--muted)', paddingBottom: 14, flexShrink: 0 }}>→</span>
             <FunnelStage label="Assessed" count={assessed} maxCount={totalDocs} color="#4285F4" />
             <span style={{ fontSize: 16, color: 'var(--muted)', paddingBottom: 14, flexShrink: 0 }}>→</span>
-            <FunnelStage label="Certifiable" count={certifiable} maxCount={totalDocs} color="#3B6D11" />
+            <FunnelStage label="Certifiable" count={certifiable} maxCount={totalDocs} color="var(--success-fg)" />
             {(data?.review_pending ?? 0) > 0 && (
               <>
                 <span style={{ fontSize: 16, color: 'var(--muted)', paddingBottom: 14, flexShrink: 0 }}>→</span>
-                <FunnelStage label="In review" count={data.review_pending} maxCount={totalDocs} color="#854F0B" />
+                <FunnelStage label="In review" count={data.review_pending} maxCount={totalDocs} color="var(--warn-fg)" />
               </>
             )}
           </div>
@@ -376,11 +376,11 @@ export function AdminInsights({ me }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
               {[
                 { label: 'Processing errors', value: data.error_docs ?? 0, unit: 'docs',
-                  color: (data.error_docs ?? 0) > 0 ? '#A32D2D' : undefined },
+                  color: (data.error_docs ?? 0) > 0 ? 'var(--error-fg-strong)' : undefined },
                 { label: 'Scans with exceptions', value: data.scan_exceptions ?? 0, unit: 'scans',
-                  color: (data.scan_exceptions ?? 0) > 0 ? '#854F0B' : undefined },
+                  color: (data.scan_exceptions ?? 0) > 0 ? 'var(--warn-fg)' : undefined },
                 { label: 'Uncertain docs', value: data.uncertain ?? 0, unit: 'docs',
-                  color: (data.uncertain ?? 0) > 0 ? '#854F0B' : undefined },
+                  color: (data.uncertain ?? 0) > 0 ? 'var(--warn-fg)' : undefined },
               ].map(({ label, value, unit, color }, i, arr) => (
                 <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                                           padding: '10px 0',

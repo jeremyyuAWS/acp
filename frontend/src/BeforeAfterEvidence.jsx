@@ -8,7 +8,7 @@ const CHIP = (tone) => ({
   display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 12px', borderRadius: 8,
   fontSize: 13, fontWeight: 700,
   ...(tone === 'bad'
-    ? { background: '#FBE9E7', color: '#A32D2D', border: '1px solid #E7B4AC' }
+    ? { background: '#FBE9E7', color: 'var(--error-fg-strong)', border: '1px solid #E7B4AC' }
     : { background: '#E7F1DA', color: '#2C5209', border: '1px solid #B9D49A' }),
 })
 

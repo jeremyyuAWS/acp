@@ -1826,7 +1826,7 @@ export default function App() {
             </label>
           )}
           {run && (Object.keys(decisions).length + Object.keys(triage).length) > 0 && (
-            <span className="muted" style={{ marginLeft: 12, fontSize: 12, color: '#3B6D11', whiteSpace: 'nowrap' }}
+            <span className="muted" style={{ marginLeft: 12, fontSize: 12, color: 'var(--success-fg)', whiteSpace: 'nowrap' }}
                   title="Your triage + remediation decisions are saved to this scan and restored when you switch to it in Scan History">
               ✓ {Object.keys(decisions).length + Object.keys(triage).length} decision{(Object.keys(decisions).length + Object.keys(triage).length) !== 1 ? 's' : ''} saved
             </span>

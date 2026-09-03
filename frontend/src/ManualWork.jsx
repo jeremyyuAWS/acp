@@ -31,7 +31,7 @@ const kicker = { fontSize: 11.5, letterSpacing: '.07em', textTransform: 'upperca
                  color: 'var(--muted)', fontWeight: 600 }
 const muted = { fontSize: 12, color: 'var(--muted)', lineHeight: 1.5 }
 
-const SEV_TONE = { CRITICAL: '#A32D2D', SERIOUS: '#8A4B0B', MODERATE: '#5B5B5B', MINOR: '#5B5B5B' }
+const SEV_TONE = { CRITICAL: 'var(--error-fg-strong)', SERIOUS: '#8A4B0B', MODERATE: '#5B5B5B', MINOR: '#5B5B5B' }
 
 // The two ways a pair reaches this lane, in the words that distinguish them. `declared` is a
 // statement about the fix; `default` is a statement about the table.

@@ -34,7 +34,7 @@ import ScopeGrid, { OFFERED, scopeTotalPairs } from './ScopeGrid.jsx'
 const SIM_NOT_WRITTEN =
   'SIM — nothing was written. This demo build has no backend, so the change is local to this browser '
   + 'tab and the platform still holds its previous value. Use a build served by the real API to change it.'
-const msgColor = (m) => (m.startsWith('✓') ? '#3B6D11' : m.startsWith('SIM') ? '#6B4A0B' : '#A32D2D')
+const msgColor = (m) => (m.startsWith('✓') ? 'var(--success-fg)' : m.startsWith('SIM') ? '#6B4A0B' : 'var(--error-fg-strong)')
 
 // The stored value is a preset NAME or a JSON map — the same two forms the backend accepts. Both
 // resolve to {sc: Set(formats)} here so the grid never has to care which was stored.

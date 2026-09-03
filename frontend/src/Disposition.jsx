@@ -24,7 +24,7 @@ const OP_LABEL = { eq: '=', ne: '≠', gt: '>', gte: '≥', lt: '<', lte: '≤',
 const inp = { padding: '5px 8px', border: '1px solid var(--line)', borderRadius: 6, background: 'var(--surface)', color: 'inherit', fontSize: 13 }
 
 function actionBadge(action) {
-  const tone = action === 'delete' ? ['#FBE9E9', '#E5C4C4', '#A32D2D']
+  const tone = action === 'delete' ? ['#FBE9E9', '#E5C4C4', 'var(--error-fg-strong)']
     : action === 'leave' ? ['#EAF3EC', '#CFE5D6', '#2F6B43'] : ['#EEF2FB', '#D3DDF1', '#2B4A7E']
   return (
     <span style={{ fontSize: 11.5, fontWeight: 600, padding: '2px 9px', borderRadius: 20,
@@ -93,12 +93,12 @@ function CreatePolicy({ onCreated }) {
         {ACTIONS.find(([v]) => v === action)?.[2]} Policies start <b>disabled</b> — enable explicitly before executing.
       </div>
       {field === 'department' && (
-        <div style={{ fontSize: 12, marginTop: 6, padding: '6px 10px', borderRadius: 8, background: '#FBF1DF', border: '1px solid #EAD9BF', color: '#854F0B' }}>
+        <div style={{ fontSize: 12, marginTop: 6, padding: '6px 10px', borderRadius: 8, background: '#FBF1DF', border: '1px solid #EAD9BF', color: 'var(--warn-fg)' }}>
           ⚠ <b>department</b> stays empty until the ontology classifies documents — on a raw estate this
           matches nothing. Use <b>source</b>, <b>age days</b> or <b>triage score</b> instead, or classify first.
         </div>
       )}
-      {err && <p style={{ fontSize: 13, color: '#A32D2D', marginBottom: 0 }}>⚠ {err}</p>}
+      {err && <p style={{ fontSize: 13, color: 'var(--error-fg-strong)', marginBottom: 0 }}>⚠ {err}</p>}
     </div>
   )
 }
@@ -127,7 +127,7 @@ function PolicyRow({ p, onChanged }) {
         <b style={{ fontSize: 13.5 }}>{p.name}</b>
         {actionBadge(p.action)}
         {p.requires_approval ? <span className="muted" style={{ fontSize: 11.5 }}>🔎 approval-gated</span>
-          : <span style={{ fontSize: 11.5, color: '#854F0B' }}>⚡ immediate</span>}
+          : <span style={{ fontSize: 11.5, color: 'var(--warn-fg)' }}>⚡ immediate</span>}
         <span style={{ flex: 1 }} />
         <label style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 12.5, cursor: 'pointer' }}>
           <input type="checkbox" checked={!!p.enabled} disabled={busy}
@@ -145,16 +145,16 @@ function PolicyRow({ p, onChanged }) {
           <button className="ghost small" style={{ marginLeft: 8 }} onClick={() => setPreview(null)}>dismiss</button>
         </div>
       )}
-      {msg && <div role="status" style={{ fontSize: 12.5, marginTop: 6, color: msg.tone === 'ok' ? '#3B6D11' : '#A32D2D' }}>{msg.tone === 'ok' ? '✓ ' : '⚠ '}{msg.text}</div>}
+      {msg && <div role="status" style={{ fontSize: 12.5, marginTop: 6, color: msg.tone === 'ok' ? 'var(--success-fg)' : 'var(--error-fg-strong)' }}>{msg.tone === 'ok' ? '✓ ' : '⚠ '}{msg.text}</div>}
     </div>
   )
 }
 
 const RESULT_TONE = {
   applied: ['#EAF3EC', '#CFE5D6', '#2F6B43'],
-  pending_approval: ['#FBF1DF', '#EAD9BF', '#854F0B'],
+  pending_approval: ['#FBF1DF', '#EAD9BF', 'var(--warn-fg)'],
   rejected: ['#EEEDEA', '#DDD9D2', '#5F5E5A'],
-  failed: ['#FBE9E9', '#E5C4C4', '#A32D2D'],
+  failed: ['#FBE9E9', '#E5C4C4', 'var(--error-fg-strong)'],
 }
 
 // The visible face of the append-only disposition_audit table — every outcome,
@@ -169,7 +169,7 @@ function History() {
       <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 14 }}>
         History <span className="muted" style={{ fontWeight: 400, fontSize: 12.5 }}>· every recorded outcome, newest first</span>
       </summary>
-      {err && <p style={{ fontSize: 13, color: '#A32D2D' }}>⚠ {err}</p>}
+      {err && <p style={{ fontSize: 13, color: 'var(--error-fg-strong)' }}>⚠ {err}</p>}
       {rows === null && !err && <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>Loading…</p>}
       {rows !== null && rows.length === 0 && <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>No dispositions recorded yet.</p>}
       {rows !== null && rows.length > 0 && (
@@ -207,7 +207,7 @@ function ApprovalQueue({ items, onDecided }) {
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-      {err && <p style={{ fontSize: 13, color: '#A32D2D', margin: 0 }}>⚠ {err}</p>}
+      {err && <p style={{ fontSize: 13, color: 'var(--error-fg-strong)', margin: 0 }}>⚠ {err}</p>}
       {items.map((a) => (
         <div key={a.id} style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', padding: '8px 11px', border: '1px solid var(--line)', borderRadius: 9, background: 'var(--surface)' }}>
           {actionBadge(a.action)}
@@ -241,7 +241,7 @@ export default function Disposition() {
         below before anything touches a file, and <b>delete only ever moves a Drive file to the
         trash</b> — it's recoverable, never permanent.
       </p>
-      {loadErr && <p style={{ fontSize: 13, color: '#A32D2D' }}>⚠ {loadErr}</p>}
+      {loadErr && <p style={{ fontSize: 13, color: 'var(--error-fg-strong)' }}>⚠ {loadErr}</p>}
       {policies === null && !loadErr && <p className="muted">Loading…</p>}
       {policies !== null && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

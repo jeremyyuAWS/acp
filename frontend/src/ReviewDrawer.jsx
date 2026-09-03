@@ -88,7 +88,7 @@ export default function ReviewDrawer({ item, onClose, onAct, onDraft }) {
           ? onAct(item.id, 'approved', values[0], values)
           : onAct(item.id, 'approved', item.aiDraftable ? afterText : undefined))}>&#10003; approve fix</button>
         <button className="ghost" onClick={() => onAct(item.id, 'self')}>&#9995; I&apos;ll fix it myself</button>
-        <button className="ghost" style={{ color: '#1F5FA8' }} onClick={() => onAct(item.id, 'deferred')}>&#9208; defer to next cycle</button>
+        <button className="ghost" style={{ color: 'var(--info-fg)' }} onClick={() => onAct(item.id, 'deferred')}>&#9208; defer to next cycle</button>
         <button className="ghost" onClick={() => onAct(item.id, 'rejected')}>&#10005; reject</button>
       </div>
       <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>Defer if the fix needs more information or belongs in a later remediation batch &mdash; it resurfaces on the next scheduled scan.</p>

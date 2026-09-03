@@ -106,7 +106,7 @@ export default function AssessmentReconciliation({ run, files, inventory }) {
       ) : (
         // Said out loud, with role="status", rather than left for a reader to discover by adding up
         // a column that does not reach the headline. Same discipline as the age-band reconciliation.
-        <p role="status" style={{ fontSize: 12.5, margin: '8px 0 0', lineHeight: 1.55, color: '#854F0B' }}>
+        <p role="status" style={{ fontSize: 12.5, margin: '8px 0 0', lineHeight: 1.55, color: 'var(--warn-fg)' }}>
           <strong>
             {rec.overlap
               ? `These rows total ${nf.format(rec.total)}, which is ${nf.format(-rec.unaccounted)} MORE than the ${nf.format(rec.discovered)} files discovered — they overlap, so some files are counted twice.`

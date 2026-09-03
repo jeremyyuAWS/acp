@@ -5,8 +5,8 @@ import { TraceChip } from './Transparency.jsx'
 // Mirrors FileDrawer's SEV map (not exported there) — same severity → color
 // convention across the app.
 const SEV = {
-  CRITICAL: ['#E2EDFB', '#1F5FA8'], SERIOUS: ['#E6EFFB', '#2A5E9E'],
-  MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'],
+  CRITICAL: ['var(--info-bg)', 'var(--info-fg)'], SERIOUS: ['#E6EFFB', '#2A5E9E'],
+  MODERATE: ['var(--warn-bg)', 'var(--warn-fg)'], MINOR: ['#F1EFE8', '#5F5E5A'],
 }
 
 // Real drift detection (ADR 0009) — diffs the viewed scan against the prior one and surfaces

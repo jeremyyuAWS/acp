@@ -3,7 +3,7 @@ import { estateSummary, plural } from './discoveryRecommendations.js'
 const nf = new Intl.NumberFormat('en-US')
 
 const STAT_COLOR = {
-  archive: '#2B4A7E', delete: '#A32D2D', unreadable: '#8a6d1f', assessable: '#3B6D11',
+  archive: '#2B4A7E', delete: 'var(--error-fg-strong)', unreadable: '#8a6d1f', assessable: 'var(--success-fg)',
 }
 
 const sourceLabel = (source) => ({

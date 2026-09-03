@@ -15,9 +15,9 @@ import {
 // count, and it is the FIRST thing the handoff sends you back to.
 
 const TONE = {
-  [VERIFY.CLEARED]: { mark: '✓', color: '#3B6D11' },
+  [VERIFY.CLEARED]: { mark: '✓', color: 'var(--success-fg)' },
   [VERIFY.STILL_FAILING]: { mark: '✕', color: '#8A1F1F' },
-  [VERIFY.UNVERIFIED]: { mark: '?', color: '#854F0B' },
+  [VERIFY.UNVERIFIED]: { mark: '?', color: 'var(--warn-fg)' },
   [VERIFY.NOT_REMEDIATED]: { mark: '·', color: 'var(--muted)' },
 }
 
@@ -40,9 +40,9 @@ export default function CloseoutPanel({ docs = [], onReverify, onReview, onRemed
       <div data-testid="closeout-verification" style={{ marginTop: 12 }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>Re-verification · the corrected copy was scanned again</div>
         <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', fontSize: 13.5 }}>
-          <span data-testid="count-cleared"><b style={{ color: '#3B6D11', fontSize: 17 }}>{summary.cleared}</b> verified cleared</span>
+          <span data-testid="count-cleared"><b style={{ color: 'var(--success-fg)', fontSize: 17 }}>{summary.cleared}</b> verified cleared</span>
           <span data-testid="count-still-failing"><b style={{ color: summary.stillFailing ? '#8A1F1F' : 'var(--muted)', fontSize: 17 }}>{summary.stillFailing}</b> still failing</span>
-          <span data-testid="count-unverified"><b style={{ color: summary.unverified ? '#854F0B' : 'var(--muted)', fontSize: 17 }}>{summary.unverified}</b> not verified</span>
+          <span data-testid="count-unverified"><b style={{ color: summary.unverified ? 'var(--warn-fg)' : 'var(--muted)', fontSize: 17 }}>{summary.unverified}</b> not verified</span>
           <span data-testid="count-pending-review" className="muted">
             {/* null is rendered as an absence. A queue nobody read is not an empty queue. */}
             {summary.pendingReview === null

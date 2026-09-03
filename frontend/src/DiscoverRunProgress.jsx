@@ -608,7 +608,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
             <div style={{ fontSize: 14.5, fontWeight: 650 }}>Discovery complete</div>
             <span role="status"
                   style={{ fontSize: 11.5, padding: '2px 7px', borderRadius: 4,
-                           background: 'var(--green-bg,#f0f7e6)', color: 'var(--green,#3B6D11)',
+                           background: 'var(--green-bg,#f0f7e6)', color: 'var(--success-fg)',
                            border: '1px solid var(--green-line,#a8cf7a)' }}>
               Updates complete
             </span>
@@ -657,7 +657,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
             {freshness === 'live' && (
               <span title="Receiving live updates for this scan" role="status"
                     style={{ fontSize: 11.5, padding: '2px 7px', borderRadius: 4,
-                             background: 'var(--green-bg,#f0f7e6)', color: 'var(--green,#3B6D11)',
+                             background: 'var(--green-bg,#f0f7e6)', color: 'var(--success-fg)',
                              border: '1px solid var(--green-line,#a8cf7a)',
                              display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                 <span className="pulsedot" aria-hidden="true" /> live

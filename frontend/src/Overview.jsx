@@ -23,7 +23,7 @@ import AccordionSection from './AccordionSection.jsx'
 function ProcessHealthAlert({ level, label, children }) {
   const styles = {
     critical: { border: '#B42318', bg: '#FEF3F2', fg: '#7A271A', icon: '✕' },
-    warning:  { border: '#854F0B', bg: '#FFF7E6', fg: '#6B3A00', icon: '⚠' },
+    warning:  { border: 'var(--warn-fg)', bg: '#FFF7E6', fg: '#6B3A00', icon: '⚠' },
     info:     { border: '#175CD3', bg: '#EFF8FF', fg: '#0B3A7A', icon: 'ℹ' },
     recovered:{ border: '#067647', bg: '#ECFDF3', fg: '#074D31', icon: '✓' },
   }
@@ -96,7 +96,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       // A verdict needs a measurement. With nothing analysed there is no evidence for
       // "ACTION REQUIRED" either — say so rather than let null fall through the comparisons.
       const verdict = auditReady == null ? ['NOT YET ASSESSED', '#5F5E5A']
-        : auditReady >= 80 ? ['ON TRACK TO COMPLIANT', '#3B6D11'] : auditReady >= 45 ? ['DEVELOPING', '#854F0B'] : ['ACTION REQUIRED', '#1F5FA8']
+        : auditReady >= 80 ? ['ON TRACK TO COMPLIANT', 'var(--success-fg)'] : auditReady >= 45 ? ['DEVELOPING', 'var(--warn-fg)'] : ['ACTION REQUIRED', 'var(--info-fg)']
       const criteria = wm.map((c) => ({ sc: c.sc, label: c.name, count: c.count }))
       const { exportGovernanceReport } = await import('./pdfReport.js')
       await exportGovernanceReport({
@@ -267,7 +267,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   // reporting six. The level comes from the WCAG catalog (wcagFinding.js), and a criterion the
   // catalog cannot place is shown as its own row rather than defaulted into Level A.
   const levelC = findingsByLevel(files)
-  const byLevel = [['A', '#1F5FA8', 'Level A · must-have'], ['AA', '#D85A30', 'Level AA · legal target'],
+  const byLevel = [['A', 'var(--info-fg)', 'Level A · must-have'], ['AA', '#D85A30', 'Level AA · legal target'],
                    ['AAA', '#9a948f', 'Level AAA · optional'], ['unknown', '#9a948f', 'level not in the catalog']]
     .filter(([k]) => levelC[k]).map(([k, color, label]) => ({ label, value: levelC[k], color, lvl: k }))
   const band = (lo, hi) => files.filter((f) => f.score != null && f.score >= lo && f.score <= hi).length
@@ -422,7 +422,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
                   <div className="metric" title="Documents where at least one selected check completed.">
                     <span>documents assessed</span><b>{metrics.documentsAssessed}</b></div>
                   <div className="metric" title="Assessed documents carrying at least one unresolved finding.">
-                    <span>needing attention</span><b style={{ color: '#854F0B' }}>{metrics.documentsNeedingAttention}</b></div>
+                    <span>needing attention</span><b style={{ color: 'var(--warn-fg)' }}>{metrics.documentsNeedingAttention}</b></div>
                   <div className="metric" title="Unresolved finding instances across all assessed documents. One criterion can produce many.">
                     <span>total findings</span><b>{metrics.totalFindings}</b></div>
                   <div className="metric" title="Findings with a deterministic remediation — same input, same fix, no person needed.">

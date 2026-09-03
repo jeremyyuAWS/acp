@@ -12,7 +12,7 @@ export default function WordCloud({ items }) {
   // colored *text*, not chart fills, so the lighter severity palette would fail.
   const color = (v) => {
     const t = max === min ? 1 : (v - min) / (max - min)
-    return t > 0.66 ? '#1F5FA8' : t > 0.33 ? '#2E72C9' : '#8A5A00'
+    return t > 0.66 ? 'var(--info-fg)' : t > 0.33 ? '#2E72C9' : '#8A5A00'
   }
   // big terms toward the middle, smaller toward the edges
   const ordered = [...items].sort((a, b) => b.value - a.value)

@@ -59,8 +59,8 @@ export default function ResizeHeadroomCheck({ scanId, file }) {
   }
 
   const { worst_fill: fill, worst_shape: shape, any_overflow_at_200: overflow, checked, total } = result
-  const bg = overflow ? '#FAEEDA' : '#EEF4E4'
-  const fg = overflow ? '#854F0B' : '#3B6D11'
+  const bg = overflow ? 'var(--warn-bg)' : '#EEF4E4'
+  const fg = overflow ? 'var(--warn-fg)' : 'var(--success-fg)'
   const need = Math.min(200, Math.round(fill * 200))   // ≥2× the current fill, capped for display
   return (
     <div className="resizecheck" role="status">

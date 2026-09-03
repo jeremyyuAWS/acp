@@ -59,9 +59,9 @@ function laneFor(sc, formats) {
 }
 
 const LANE_TONE = {
-  auto: ['#E7F0DC', '#3B6D11'],
+  auto: ['var(--success-bg)', 'var(--success-fg)'],
   assisted: ['#EEF2FB', '#2B4A7E'],
-  human: ['#FBF1DF', '#854F0B'],
+  human: ['#FBF1DF', 'var(--warn-fg)'],
   mixed: ['#EFEDEA', '#5F5E5A'],
 }
 
