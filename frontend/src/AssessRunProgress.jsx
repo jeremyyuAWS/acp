@@ -64,7 +64,7 @@ function PrepStep({ label, detail, status }) {
 // Four-step preparation checklist shown while 0 files have completed (indeterminate phase).
 // Each step infers its completion state from real snapshot data — no fabricated percentages.
 // One pulsing dot (●) marks the active step; done steps show ✓; not-yet-started show ○.
-function PrepChecklist({ m, total, elapsed }) {
+function PrepChecklist({ m, total, completed, processing, elapsed }) {
   const q = m.queue
   const workers = q ? q.workers : null
   const workersCount = workers ? (workers.busy + (workers.idle ?? 0)) : 0
@@ -97,8 +97,14 @@ function PrepChecklist({ m, total, elapsed }) {
       done: queueDone,
       detail: q && q.queued > 0 ? `${q.queued.toLocaleString()} queued` : null,
     },
-    // This step is never "done" here — pct > 0 transitions the parent to the determinate bar.
-    { label: 'Opening the first documents', done: false, detail: null },
+    // Generic on purpose: several workers open and assess documents concurrently, so naming a
+    // single "first" document is both visually noisy and quickly inaccurate. The count at right
+    // is the authoritative live snapshot and updates until the determinate view takes over.
+    {
+      label: 'Assessment in progress',
+      done: false,
+      detail: `${completed.toLocaleString()} of ${total.toLocaleString()} completed${processing > 0 ? ` · ${processing.toLocaleString()} processing` : ''}`,
+    },
   ]
 
   const firstActiveIdx = phases.findIndex(p => !p.done)
@@ -144,6 +150,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
 
   const total = m.available ? (m.totals.eligible || m.totals.discovered || 0) : 0
   const completed = m.available && snapshot?.kpis ? Number(snapshot.kpis.completed) || 0 : 0
+  const processing = m.available && snapshot?.kpis ? Number(snapshot.kpis.processing) || 0 : 0
   const pct = total ? Math.min(100, Math.round((completed / total) * 100)) : 0
   const isPreparing = m.available && pct === 0
 
@@ -186,7 +193,8 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
       <div className="assess-run-card" style={{ border: '1px solid var(--line,#e4e8ec)', borderRadius: 12,
                                                 padding: '14px 16px', background: 'var(--panel,#fff)' }}>
         {isPreparing ? (
-          <PrepChecklist m={m} total={total} elapsed={elapsed} />
+          <PrepChecklist m={m} total={total} completed={completed}
+                         processing={processing} elapsed={elapsed} />
         ) : (
           <>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
