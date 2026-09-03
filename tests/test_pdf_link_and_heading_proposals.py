@@ -102,6 +102,8 @@ def test_handler_routes_the_heading_map_to_its_rule():
     assert '"2.4.6", "Headings and Labels"' in src
 
 
-def test_capability_is_human_without_heading_writeback():
+def test_capability_is_human_no_write_back():
     import remediation_capability as cap
+    # _propose_pdf_headings has explain_only=True; apply_pdf_approved has no routing for its
+    # locator type — no write-back path exists, so the lane is HUMAN, not ASSISTED.
     assert cap.mode_for("pdf", "2.4.6") == cap.HUMAN

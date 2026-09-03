@@ -153,7 +153,7 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     expect(statusAcross('1.3.1', ['docx', 'pdf'], assessmentIn)).toBe('auto')   // 🟢 in docx wins
     expect(statusAcross('1.3.1', ['pdf'], assessmentIn)).toBe('review')          // pdf 1.3.1 is 🟡
     expect(statusAcross('2.4.6', ['docx'], remediationIn)).toBe('auto')          // ⚡ in docx
-    expect(statusAcross('2.4.6', ['pdf'], remediationIn)).toBe('human')          // no PDF write-back
+    expect(statusAcross('2.4.6', ['pdf'], remediationIn)).toBe('human')          // 🔴 pdf: explain_only, no write-back
   })
 
   it('isAssessable = 🟢|🟡 (a verdict or a flag); isCertifiable = 🟢 only', () => {

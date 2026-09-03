@@ -63,9 +63,9 @@ def test_ai_off_degrades_to_plain_review(tmp_path):
     assert proposals.propose_slide_titles(src, ".pptx", ai_enabled=False) == []
 
 
-def test_proposal_exists_but_capability_is_human_without_writeback():
+def test_wiring_and_capability():
     src = (Path(__file__).resolve().parent.parent / "api" / "handlers.py").read_text()
     assert "propose_slide_titles" in src and '"2.4.6", "Headings and Labels"' in src
     import remediation_capability as cap
-    assert cap.mode_for("pptx", "2.4.6") == cap.HUMAN
+    assert cap.mode_for("pptx", "2.4.6") == cap.HUMAN    # pptx not in _STRUCTURE_LABEL_EXTS (xlsx only)
     assert cap.mode_for("pptx", "1.3.1") == cap.AUTO    # firstRow fixer, round-trip proven

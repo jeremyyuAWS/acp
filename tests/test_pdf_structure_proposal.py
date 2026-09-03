@@ -73,6 +73,8 @@ def test_handler_routes_kinds_to_their_rules():
     assert src.index('"1.3.2", "Meaningful Sequence"') < src.index('"1.3.1", "Info and Relationships"')
 
 
-def test_capability_is_human_without_structure_writeback():
+def test_capability_is_human_no_write_back():
     import remediation_capability as cap
+    # _propose_structure_map has explain_only=True; apply_pdf_approved has no routing for its
+    # locator type — no write-back path exists, so the lane is HUMAN, not ASSISTED.
     assert cap.mode_for("pdf", "1.3.1") == cap.HUMAN
