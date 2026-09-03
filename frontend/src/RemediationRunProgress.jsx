@@ -48,9 +48,11 @@ export default function RemediationRunProgress({ progress, updateMode = 'idle' }
         <div role="list" aria-live="polite" aria-atomic="false"
              style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <Step status="done" label="Remediation work queued" detail={`${n(total)} documents`} />
-          <Step status={finished ? 'done' : 'active'} label="Applying fixes and re-checking documents"
+          <Step status={finished ? 'done' : 'active'} label="Applied approved automatic fixes"
                 detail={`${n(done)} of ${n(total)} complete`} />
-          <Step status={finished ? 'done' : 'active'} label="Recording corrected copies"
+          <Step status={finished ? 'done' : done > 0 ? 'active' : 'pending'} label="Re-checked corrected documents"
+                detail={done > 0 ? `${n(done)} verified` : 'Waiting for first result'} />
+          <Step status={finished ? 'done' : done > 0 ? 'active' : 'pending'} label="Recorded corrected copies"
                 detail={progress.latest ? `Latest: ${progress.latest}` : 'Waiting for first result'} />
         </div>
 
