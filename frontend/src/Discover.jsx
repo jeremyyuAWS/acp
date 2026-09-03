@@ -37,6 +37,7 @@ import AccordionSection from './AccordionSection.jsx'
 import LastSuccessfulScanSummary from './LastSuccessfulScanSummary.jsx'
 import DiscoveryCompleteness from './DiscoveryCompleteness.jsx'
 import DiscoveryLifecycleResults from './DiscoveryLifecycleResults.jsx'
+import DiscoveryLifecycleEstateSummary from './DiscoveryLifecycleEstateSummary.jsx'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
@@ -943,6 +944,14 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               onGo={onAdvance}
             />
           </>
+        </AccordionSection>
+      )}
+
+      {!busy && scanId && (run?.discovered_at || run?.status === 'discovered') && (
+        <AccordionSection id="discover-lifecycle-estate" title="Lifecycle estate summary"
+                          ariaLabel="Lifecycle estate summary" defaultOpen
+                          style={{ marginBottom: 14 }}>
+          <DiscoveryLifecycleEstateSummary scanId={scanId} />
         </AccordionSection>
       )}
 

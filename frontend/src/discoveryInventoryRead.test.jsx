@@ -195,9 +195,10 @@ describe('a file the inventory did not cover is not promoted to "checked"', () =
     h.rows = [h.rows[0]]     // only one of the two files has an inventory row
     await render()
     expect(text()).toContain('DISCOVERY RESULTS')       // the screen rendered
-    expect(text()).not.toContain('No lifecycle record was read for these')
+    expect(text()).toContain('EVERY DISCOVERED FILE')
+    expect(text()).toContain('No lifecycle record was read for these')
+    expect(text()).toContain('1 file has no lifecycle record')
     expect(text()).not.toContain('The buckets add up to the 2 files discovered')
-    expect(text()).not.toContain('EVERY DISCOVERED FILE')
   })
 })
 

@@ -126,6 +126,15 @@ button.ghost { background: #fff; color: var(--plum); border: 1px solid var(--lin
 .track { height: 8px; background: #f0edf2; border-radius: 999px; overflow: hidden; display: block; }
 .track.sm { width: 70px; }
 .track > i { display: block; height: 100%; box-shadow: inset 0 0 0 1px rgba(20, 14, 26, 0.34); }
+.lifecycle-funnel { border-collapse: collapse; table-layout: fixed; }
+.lifecycle-funnel td, .lifecycle-funnel th { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.lifecycle-funnel td:first-child, .lifecycle-funnel th:first-child { width: 190px; padding-right: 12px; }
+.lifecycle-funnel td:nth-child(2) { width: auto; }
+.lifecycle-funnel td:last-child, .lifecycle-funnel th:last-child { width: 72px; padding-left: 12px; text-align: right; }
+.lifecycle-funnel .track { width: 100%; }
+@media (max-width: 680px) {
+  .lifecycle-funnel td:first-child, .lifecycle-funnel th:first-child { width: 145px; }
+}
 /* Preparation-checklist active-step indicator — a small dot that pulses beside the current step.
    The global prefers-reduced-motion rule above (animation-duration: 0.001ms) makes it static. */
 .prep-pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #4A2C4D;

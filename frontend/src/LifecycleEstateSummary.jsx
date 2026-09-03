@@ -17,12 +17,13 @@ export default function LifecycleEstateSummary({ summary, onSelect, onReview, on
     <h2 id="lifecycle-estate-heading">Lifecycle estate summary</h2>
     <p role="status">{balanced ? `${summary.reconciled_total.toLocaleString()} of ${summary.total.toLocaleString()} files reconciled.` : `Reconciliation warning: ${summary.reconciled_total.toLocaleString()} of ${summary.total.toLocaleString()} files accounted for.`}</p>
     {!verified && <div role="alert" className="lifecycle-integrity-warning"><b>Lifecycle evidence incomplete.</b> {Number(integrity.candidate_count || 0).toLocaleString()} candidates were recorded, but only {Number(integrity.candidates_with_evidence || 0).toLocaleString()} have immutable rule evidence. Rerun Discovery after all workers are updated before relying on these recommendations.</div>}
-    <div aria-hidden="true" style={{ display: 'flex', height: 14, borderRadius: 8, overflow: 'hidden', background: 'var(--line)' }}>
-      {SEGMENTS.map(([key], index) => summary.counts[key] > 0 && <span key={key} style={{ width: `${summary.counts[key] / Math.max(1, summary.total) * 100}%`, background: COLORS[index] }} />)}
-    </div>
-    <table style={{ width: '100%', marginTop: 12 }}><caption className="sr-only">Lifecycle disposition counts</caption><tbody>
+    <table className="lifecycle-funnel" style={{ width: '100%', marginTop: 12 }}><caption className="sr-only">Lifecycle disposition counts</caption><tbody>
       {SEGMENTS.map(([key, label, status], index) => <tr key={key}>
         <td><span aria-hidden="true" style={{ color: COLORS[index] }}>●</span> {label}</td>
+        <td><span className="track" aria-hidden="true"><i style={{
+          width: `${Number(summary.counts[key] || 0) / Math.max(1, summary.total) * 100}%`,
+          background: COLORS[index],
+        }} /></span></td>
         {/* A count is a CONTROL only when somebody is listening. Discover no longer mounts the
             review queue these filtered, and a button that does nothing is worse than a figure:
             it is reachable by keyboard, announced as actionable, and answers nothing. */}
@@ -30,7 +31,7 @@ export default function LifecycleEstateSummary({ summary, onSelect, onReview, on
           ? <button type="button" className="linklike" onClick={() => onSelect(status)}>{Number(summary.counts[key] || 0).toLocaleString()}</button>
           : Number(summary.counts[key] || 0).toLocaleString()}</td>
       </tr>)}
-      <tr><th scope="row">Reconciled total</th><th style={{ textAlign: 'right' }}>{summary.reconciled_total.toLocaleString()}</th></tr>
+      <tr><th scope="row">Reconciled total</th><td /><th style={{ textAlign: 'right' }}>{summary.reconciled_total.toLocaleString()}</th></tr>
     </tbody></table>
     <p><b>{summary.assessment_excluded.toLocaleString()}</b> disposition candidates marked outside Assess by default; some may also be unsupported file types.</p>
     <p className="muted">Recommendations only — no source files were moved or deleted.</p>

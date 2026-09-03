@@ -173,15 +173,19 @@ describe('the could-not-be-read panel is separate, and never guesses', () => {
   })
 })
 
-describe('retired sections — intentionally absent', () => {
+describe('lifecycle review surfaces', () => {
   it('does not render lifecycle recommendations', async () => {
     await render({ files: ESTATE })
     expect(text()).not.toContain('RECOMMENDATIONS')
   })
 
-  it('does not render the every-discovered-file reconciliation', async () => {
+  it('restores the every-discovered-file reconciliation with expandable file buckets', async () => {
     await render({ files: ESTATE })
-    expect(text()).not.toContain('EVERY DISCOVERED FILE')
+    expect(text()).toContain('EVERY DISCOVERED FILE, IN ONE BUCKET')
+    expect(text()).toContain('Tagged for archive review')
+    expect(text()).toContain('Tagged for deletion review')
+    expect(text()).toContain('Total · files discovered')
+    expect(container.querySelectorAll('details').length).toBeGreaterThan(0)
   })
 
   it('does not render the acknowledgement bar', async () => {
