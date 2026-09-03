@@ -21,13 +21,13 @@ update_app() {
   fi
 }
 
-# The web tier retains burst headroom. Discovery can now use its existing CPU
-# scale rule. Assess and Remediate retain four worker processes apiece across
-# two replicas, while avoiding five permanently warm replicas per stage.
+# The web tier retains burst headroom. Discovery can use its existing CPU scale
+# rule. Assessment and Remediation are throughput-sensitive batch stages: keep
+# five replicas warm so large runs retain the production performance baseline.
 update_app acp-app       1.0 2Gi 1 3
 update_app acp-discovery 1.0 2Gi 1 2
-update_app acp-assess    2.0 4Gi 2 2
-update_app acp-remediate 2.0 4Gi 2 2
+update_app acp-assess    2.0 4Gi 5 5
+update_app acp-remediate 2.0 4Gi 5 5
 
 # Production and staging point at acp-ollama-gpu. Keep this legacy fallback
 # available but cold until explicitly addressed through its internal ingress.
