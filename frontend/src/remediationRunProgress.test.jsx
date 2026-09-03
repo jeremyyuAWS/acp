@@ -20,6 +20,9 @@ describe('RemediationRunProgress', () => {
     expect(html).toContain('Recorded corrected copies')
     expect(html).toContain('Latest: report.docx')
     expect(html).toContain('Applying document language')
+    expect(html).toContain('Processing now')
+    expect(html).toContain('13 documents remaining')
+    expect(html).toContain('Fix throughput')
     expect(html).toContain('1 document could not be remediated')
     expect(html).toContain('live')
     expect(html).toContain('aria-live="polite"')
@@ -27,5 +30,15 @@ describe('RemediationRunProgress', () => {
 
   it('does not render without a live progress snapshot', () => {
     expect(renderToStaticMarkup(<RemediationRunProgress progress={null} />)).toBe('')
+  })
+
+  it('keeps a completion summary visible after the stream drains', () => {
+    const html = renderToStaticMarkup(
+      <RemediationRunProgress progress={{ total: 20, done: 20, failed: 2, latest: 'report.docx' }} />,
+    )
+    expect(html).toContain('complete')
+    expect(html).toContain('18 documents remediated and verified')
+    expect(html).toContain('2 routed for attention')
+    expect(html).not.toContain('Processing now')
   })
 })
