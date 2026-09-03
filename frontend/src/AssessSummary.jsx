@@ -21,10 +21,10 @@ import { assessMetrics, reconcile, coverageSentence, SEVERITIES, SEVERITY_LABEL,
 // damaging thing this product could print.
 
 const TONE = {
-  attention: { c: '#B07A00', bar: '#B07A00' },
-  partial: { c: '#B07A00', bar: '#B07A00' },
+  attention: { c: '#8a5a00', bar: '#B07A00' },
+  partial: { c: '#8a5a00', bar: '#B07A00' },
   failed: { c: '#B3261E', bar: '#B3261E' },
-  awaiting_review: { c: '#B07A00', bar: '#B07A00' },
+  awaiting_review: { c: '#8a5a00', bar: '#B07A00' },
   clear: { c: '#2F7D32', bar: '#2F7D32' },
   empty: { c: '#6c6470', bar: '#9A93A0' },
 }
