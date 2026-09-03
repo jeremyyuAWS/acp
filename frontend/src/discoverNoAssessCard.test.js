@@ -6,9 +6,8 @@
  * two progress readings of two different phases stacked on one screen. Discover answers "what do
  * we have"; how far the assessment has got belongs to Assess, which owns a better view of it.
  *
- * The Assess tab was already excluded for the same reason (AssessRunner owns that view, and
- * showing both produced contradictory "Document 0 of 148" vs "10 of 148 · 7%" readings at once).
- * Discover was simply never added to that exclusion.
+ * Assess remains included as a resilient progress surface across tab navigation. Its snapshot is
+ * reconciled to durable file results, so it no longer contradicts AssessRunner's local view.
  *
  * THE COMPONENT IS NOT DELETED, and that is deliberate — CLAUDE.md's standing instruction is to
  * remove the mount, not the code, so a retired surface can come back in one commit.
@@ -36,9 +35,9 @@ const activeExpr = () => {
 }
 
 describe('the live-assess card is gated off Discover', () => {
-  it('the assess-phase clause excludes BOTH assess and discover', () => {
+  it('the assess-phase clause excludes Discover but keeps Assess resilient', () => {
     const expr = activeExpr()
-    expect(expr).toMatch(/view !== 'assess'/)
+    expect(expr).not.toMatch(/view !== 'assess'/)
     expect(expr).toMatch(/view !== 'discover'/)
   })
 
@@ -47,12 +46,12 @@ describe('the live-assess card is gated off Discover', () => {
     // that mentions 'discover' in any position, including one that re-enables it.
     const gate = new Function('busy', 'assessPhase', 'view', `return (${activeExpr()})`)
     expect(gate(false, 'running', 'discover')).toBe(false)
-    expect(gate(false, 'running', 'assess')).toBe(false)
+    expect(gate(false, 'running', 'assess')).toBe(true)
   })
 
   it('every other tab still shows it during an assess — this is a Discover fix, not a removal', () => {
     const gate = new Function('busy', 'assessPhase', 'view', `return (${activeExpr()})`)
-    for (const view of ['overview', 'remediate', 'publish', 'monitor', 'integrations']) {
+    for (const view of ['assess', 'overview', 'remediate', 'publish', 'monitor', 'integrations']) {
       expect(gate(false, 'running', view), `${view} should still show the live card`).toBe(true)
     }
   })
