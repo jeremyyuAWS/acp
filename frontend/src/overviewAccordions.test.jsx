@@ -67,7 +67,7 @@ const toggleOf = (id) => sectionOf(id)?.querySelector('button.acc-toggle')
 // The estate story and the one primary action start open. Supporting evidence starts collapsed.
 const SECTIONS = [
   ['estate-progress',    'Estate progress',           true],
-  ['assertion-scope',    'SCOPE OF THIS ASSERTION',   false],
+  ['assertion-scope',    'Scope of this Assertion',   false],
   ['estate-composition', 'Estate composition',        false],
   ['operational-details','Operational details',       false],
   ['assessment-summary', 'Assessment',                false],

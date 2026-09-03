@@ -37,7 +37,7 @@ describe('the single Overview scope disclosure', () => {
     const c = await render()
     const scope = c.querySelector('[data-accordion="assertion-scope"]')
     expect(scope).toBeTruthy()
-    expect(scope.querySelector('.acc-title').textContent).toBe('SCOPE OF THIS ASSERTION')
+    expect(scope.querySelector('.acc-title').textContent).toBe('Scope of this Assertion')
     expect(scope.querySelector('button.acc-toggle').getAttribute('aria-expanded')).toBe('false')
   })
 
