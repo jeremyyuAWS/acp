@@ -3,7 +3,8 @@ import { supportedDiscoveryRow } from './DiscoveryLifecycleResults.jsx'
 import DiscoveryFolderLabel from './DiscoveryFolderLabel.jsx'
 import Term from './Term.jsx'
 import {
-  estateSummary, estateTypeReconciliation, plural, typeReconciliation, unreadableReasons,
+  estateSummary, estateTypeReconciliation, plural, recommendationBucketOf,
+  recommendationReconciliation, typeReconciliation, unreadableReasons,
 } from './discoveryRecommendations.js'
 import { contentTypeBreakdown } from './contentTypeBreakdown.js'
 import { ageBucketDistribution, sizeBucketDistribution, folderDistribution } from './discoveryDistributions.js'
@@ -101,6 +102,24 @@ const Reconciliation = ({ id, heading, note, rec, renderLabel }) => (
   </table>
 )
 
+const FileBucket = ({ bucket, files }) => {
+  const rows = files.filter((file) => recommendationBucketOf(file) === bucket.key)
+  return <details>
+    <summary style={{ cursor: 'pointer', fontSize: 13, padding: '9px 0' }}>
+      <span style={{ display: 'inline-flex', width: 'calc(100% - 18px)',
+                     justifyContent: 'space-between', gap: 16 }}>
+        <span>{bucket.label}</span>
+        <b>{bucket.count.toLocaleString()}</b>
+      </span>
+    </summary>
+    <ul style={{ margin: '0 0 10px 20px', padding: 0, fontSize: 12.5, lineHeight: 1.65 }}>
+      {rows.map((file, index) => <li key={`${file.id || file.file || file.path || 'file'}-${index}`}>
+        {file.file || file.name || file.path || 'Name not recorded'}
+      </li>)}
+    </ul>
+  </details>
+}
+
 export default function DiscoveryResults({
   source = null, files = null, inventory = null, invRows = null, scopeLine = null, runAt = null, policies = null,
   showHeadlineTiles = true,
@@ -144,6 +163,7 @@ export default function DiscoveryResults({
   const ageDist = ageBucketDistribution(invRows)
   const sizeDist = sizeBucketDistribution(invRows)
   const folderDist = folderDistribution(invRows?.filter(supportedDiscoveryRow))
+  const recommendations = recommendationReconciliation(files)
 
   const maxType = types ? Math.max(1, ...types.buckets.map((b) => b.count)) : 1
 
@@ -480,6 +500,29 @@ export default function DiscoveryResults({
           </div>
         )}
       </div>
+
+      {recommendations && <div className="panel" style={{ marginTop: 16 }}>
+        <h2>EVERY DISCOVERED FILE, IN ONE BUCKET</h2>
+        <div aria-label={`Bucket · ${recommendations.population}`}>
+          {recommendations.buckets.map((bucket) =>
+            <FileBucket key={bucket.key} bucket={bucket} files={files} />)}
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16,
+                        borderTop: '1px solid var(--line)', paddingTop: 9,
+                        fontSize: 13, fontWeight: 600 }}>
+            <span>{recommendations.balanced
+              ? `Total · ${recommendations.population}`
+              : `⚠ Total · ${recommendations.population} — ${recommendations.total.toLocaleString()} expected`}</span>
+            <span>{recommendations.sum.toLocaleString()}</span>
+          </div>
+        </div>
+        <p className="muted" style={{ fontSize: 11.5, margin: '12px 0 0', lineHeight: 1.5 }}>
+          {recommendations.buckets.some((bucket) => bucket.key === 'unknown' && bucket.count > 0)
+            ? `Every discovered file appears once; ${recommendations.buckets.find((bucket) => bucket.key === 'unknown').count.toLocaleString()} ${plural(recommendations.buckets.find((bucket) => bucket.key === 'unknown').count, 'file has', 'files have')} no lifecycle record and ${plural(recommendations.buckets.find((bucket) => bucket.key === 'unknown').count, 'is', 'are')} called out separately.`
+            : recommendations.balanced
+            ? `The buckets add up to the ${recommendations.total.toLocaleString()} ${plural(recommendations.total, 'file', 'files')} discovered, so no file is counted twice and none is missing.`
+            : `The buckets sum to ${recommendations.sum.toLocaleString()} but ${recommendations.total.toLocaleString()} ${plural(recommendations.total, 'file was', 'files were')} discovered.`}
+        </p>
+      </div>}
 
     </section>
   )

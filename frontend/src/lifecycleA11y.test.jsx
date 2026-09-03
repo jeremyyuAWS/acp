@@ -138,6 +138,14 @@ describe('disposition colour never carries meaning alone', () => {
 // ── 2. the chart has an equivalent table ─────────────────────────────────────
 
 describe('the estate bar is not the only way to read the estate', () => {
+  it('renders one proportional horizontal bar for every labeled disposition', async () => {
+    const c = await mount(LifecycleEstateSummary, { summary: SUMMARY })
+    const tracks = [...c.querySelectorAll('.lifecycle-funnel .track')]
+    expect(tracks).toHaveLength(9)
+    expect(tracks[0].querySelector('i').style.width).toBe('50%')
+    expect(tracks[2].querySelector('i').style.width).toBe('20%')
+  })
+
   it('carries an equivalent table with a caption and every count', async () => {
     const c = await mount(LifecycleEstateSummary, { summary: SUMMARY })
     const table = c.querySelector('table')

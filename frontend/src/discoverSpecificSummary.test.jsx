@@ -20,4 +20,9 @@ describe('Discover keeps its own information hierarchy', () => {
     expect(discover).toMatch(/lifecycle_status === 'Archive Candidate'/)
     expect(discover).toMatch(/lifecycle_status === 'Delete Candidate'/)
   })
+
+  it('shows the lifecycle estate summary even when no rule produced a candidate', () => {
+    expect(discover).toMatch(/id="discover-lifecycle-estate"[\s\S]{0,350}<DiscoveryLifecycleEstateSummary/)
+    expect(discover).not.toMatch(/lifecycleCandidateRows\.length > 0[\s\S]{0,350}id="discover-lifecycle-estate"/)
+  })
 })
