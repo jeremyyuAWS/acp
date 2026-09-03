@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildTrafficGraph } from './AdminLiveTraffic.jsx'
+import { buildTrafficGraph, queueConcentration } from './AdminLiveTraffic.jsx'
 
 const run = {
   scan_id: 's1', owner: 'operator@example.org', source: 'drive', stage: 'assess',
@@ -22,5 +22,12 @@ describe('Admin live traffic graph', () => {
     }
     expect(history.get('s1:assess')).toHaveLength(18)
     expect(history.get('s1:assess').at(-1)).toBe(24)
+  })
+
+  it('identifies when one user dominates the shared waiting queue', () => {
+    expect(queueConcentration([
+      { owner: 'a@example.org', queued: 8 },
+      { owner: 'b@example.org', queued: 2 },
+    ])).toEqual({ owner: 'a@example.org', count: 8, total: 10, pct: 80 })
   })
 })

@@ -1178,16 +1178,41 @@ def _admin_activity_snapshot() -> dict:
     wt = core.store.worker_tier_status()
     stats = core.store.job_stats(owner=None)
     runs = core.store.admin_live_activity()
+    slots = wt.get("pool_size") if wt.get("pool_size") is not None else core.WORKERS
+    running = sum(int(r.get("running") or 0) for r in runs)
+    queued = sum(int(r.get("queued") or 0) for r in runs)
+    by_stage: dict[str, dict] = {}
+    for run in runs:
+        stage = run.get("stage") or "unknown"
+        stage_row = by_stage.setdefault(stage, {"runs": 0, "running": 0, "queued": 0,
+                                                  "completed": 0, "total": 0})
+        stage_row["runs"] += 1
+        for field in ("running", "queued", "completed", "total"):
+            stage_row[field] += int(run.get(field) or 0)
+    if queued and not wt.get("alive"):
+        pressure = "stalled"
+    elif queued and slots and running >= slots:
+        pressure = "saturated"
+    elif queued:
+        pressure = "busy"
+    else:
+        pressure = "healthy"
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "runs": runs,
         "summary": {
             "active_runs": len(runs),
-            "queued": sum(int(r.get("queued") or 0) for r in runs),
-            "running": sum(int(r.get("running") or 0) for r in runs),
+            "active_users": len({r.get("owner") for r in runs if r.get("owner")}),
+            "waiting_users": len({r.get("owner") for r in runs if r.get("owner") and r.get("queued")}),
+            "queued": queued,
+            "running": running,
             "completed_jobs": int(stats.get("done") or 0),
-            "worker_slots": wt.get("pool_size") if wt.get("pool_size") is not None else core.WORKERS,
+            "worker_slots": slots,
+            "available_slots": max(0, int(slots or 0) - running),
+            "utilization_pct": min(100, round((running / slots) * 100)) if slots else None,
+            "pressure": pressure,
             "worker_tier_alive": bool(wt.get("alive")),
+            "by_stage": by_stage,
         },
     }
 

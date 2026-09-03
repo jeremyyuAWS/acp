@@ -10,6 +10,33 @@ const STAGE = {
   release: { label: 'Release', color: '#A66A16' },
 }
 
+const PRESSURE = {
+  healthy: { label: 'Capacity available', color: '#4F7F2A' },
+  busy: { label: 'Work waiting', color: '#A66A16' },
+  saturated: { label: 'At capacity', color: '#B45309' },
+  stalled: { label: 'Queue stalled', color: '#B4232F' },
+}
+
+function age(iso) {
+  if (!iso) return '—'
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000))
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
+}
+
+export function queueConcentration(runs = []) {
+  const byOwner = new Map()
+  let total = 0
+  for (const run of runs) {
+    const queued = Number(run.queued || 0)
+    total += queued
+    byOwner.set(run.owner, (byOwner.get(run.owner) || 0) + queued)
+  }
+  const [owner, count] = [...byOwner.entries()].sort((a, b) => b[1] - a[1])[0] || []
+  return { owner, count: count || 0, total, pct: total ? Math.round((count / total) * 100) : 0 }
+}
+
 function MiniTrend({ values = [], color }) {
   const points = values.slice(-18)
   if (points.length < 2) return <span className="muted" style={{ fontSize: 11 }}>collecting activity…</span>
@@ -37,6 +64,9 @@ function RunNode({ data }) {
       <span style={{ fontSize: 12 }}>{data.run.completed}/{data.run.total} · {data.run.running} active</span>
       <MiniTrend values={data.history} color={cfg.color} />
     </div>
+    {!!data.run.queued && <div style={{ fontSize: 11, marginTop: 5, color: 'var(--muted)' }}>
+      {data.run.queued} waiting{data.run.queue_position ? ` · queue position ${data.run.queue_position}` : ''}
+    </div>}
     <Handle type="source" position={Position.Right} />
   </div>
 }
@@ -89,14 +119,33 @@ export default function AdminLiveTraffic() {
   const graph = useMemo(() => buildTrafficGraph(snapshot, history.current), [snapshot])
 
   const summary = snapshot?.summary || {}
+  const concentration = queueConcentration(snapshot?.runs)
+  const pressure = PRESSURE[summary.pressure] || PRESSURE.healthy
+  const stageRows = Object.entries(summary.by_stage || {})
   return <section className="panel" style={{ padding: 16, marginBottom: 20 }} aria-label="Live Azure processing traffic">
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
       <div><b>Live Azure traffic</b><div className="muted" style={{ fontSize: 12 }}>All active scans and worker flow</div></div>
       <span className="chip" style={{ marginLeft: 'auto' }}>● {connection}</span>
-      <span className="chip">{summary.active_runs || 0} runs</span>
-      <span className="chip">{summary.running || 0} active jobs</span>
-      <span className="chip">{summary.worker_slots ?? '—'} worker slots</span>
+      <span className="chip">{summary.active_runs || 0} runs · {summary.active_users || 0} users</span>
+      <span className="chip" style={{ color: pressure.color }}>● {pressure.label}</span>
     </div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10, marginBottom: 12 }}>
+      <div className="panel" style={{ padding: 12 }}><div className="muted" style={{ fontSize: 11 }}>WORKER CAPACITY</div>
+        <b style={{ fontSize: 20 }}>{summary.running || 0} active</b><div className="muted">{summary.available_slots ?? '—'} available of {summary.worker_slots ?? '—'}</div></div>
+      <div className="panel" style={{ padding: 12 }}><div className="muted" style={{ fontSize: 11 }}>SHARED QUEUE</div>
+        <b style={{ fontSize: 20 }}>{summary.queued || 0} jobs</b><div className="muted">{summary.waiting_users || 0} users waiting</div></div>
+      <div className="panel" style={{ padding: 12 }}><div className="muted" style={{ fontSize: 11 }}>UTILIZATION</div>
+        <b style={{ fontSize: 20 }}>{summary.utilization_pct ?? '—'}%</b><div className="muted">{summary.worker_tier_alive ? 'Worker tier online' : 'Worker tier unavailable'}</div></div>
+    </div>
+    {!!stageRows.length && <div aria-label="Load by processing stage" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+      {stageRows.map(([stage, row]) => <span className="chip" key={stage} style={{ borderColor: STAGE[stage]?.color }}>
+        <b>{STAGE[stage]?.label || stage}</b>&nbsp; {row.running} active · {row.queued} waiting
+      </span>)}
+    </div>}
+    {concentration.pct >= 70 && concentration.total > 1 && <div role="status" style={{ padding: '9px 11px', marginBottom: 12,
+      borderLeft: `4px solid ${PRESSURE.busy.color}`, background: 'var(--page)', fontSize: 12 }}>
+      <b>Queue concentration:</b> one user holds {concentration.pct}% of waiting jobs. Scheduling is shared priority/FIFO; tenant-fair allocation is not enabled yet.
+    </div>}
     <div style={{ height: Math.max(330, (snapshot?.runs?.length || 1) * 125 + 45), maxHeight: 650,
       border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', background: 'var(--page)' }}>
       {snapshot?.runs?.length ? <ReactFlow nodes={graph.nodes} edges={graph.edges} nodeTypes={nodeTypes}
@@ -110,8 +159,13 @@ export default function AdminLiveTraffic() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 8, marginTop: 8, fontSize: 13 }}>
         <span><b>User</b><br />{selected.owner}</span><span><b>Source</b><br />{selected.source}</span>
         <span><b>Progress</b><br />{selected.completed} of {selected.total}</span><span><b>Queue</b><br />{selected.running} active · {selected.queued} waiting</span>
+        <span><b>Queue position</b><br />{selected.queue_position || (selected.running ? 'Running now' : '—')}</span>
+        <span><b>Oldest wait</b><br />{age(selected.oldest_queued_at)}</span>
+        <span><b>Job type</b><br />{selected.current_job_type?.replaceAll('_', ' ') || '—'}</span>
+        <span><b>Last activity</b><br />{age(selected.updated_at)} ago</span>
       </div>
       {selected.current_file && <div style={{ marginTop: 10 }}><b>Processing now</b><br /><code>{selected.current_file}</code></div>}
+      {selected.current_rule_id && <div style={{ marginTop: 8 }}><b>WCAG criterion</b><br />{selected.current_rule_id}</div>}
     </div>}
   </section>
 }
