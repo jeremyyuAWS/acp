@@ -8,17 +8,15 @@ import SegmentDrawer from './SegmentDrawer.jsx'
 import SitePicker from './SitePicker.jsx'
 import DispositionRules from './DispositionRules.jsx'
 import { Bars } from './charts.jsx'
-import { DEPARTMENTS, remediableCount } from './sim.js'
+import { DEPARTMENTS } from './sim.js'
 import { dupeCountOf, duplicateFiles } from './dedupe.js'
 import { scopeSentence, isNarrowScope } from './scanScope.js'
 import DiscoveryResults from './DiscoveryResults.jsx'
 import DiscoverInventoryExport from './DiscoverInventoryExport.jsx'
-import { analysedCount } from './docStatus.js'
 import { snapshotTrust, snapshotTrustMessage } from './discoverySnapshotTrust.js'
 import { assessmentEligible } from './estateFunnel.js'
 import { loadDiscoveryInventory, mergeLifecycle, inventoryOnlyRows } from './discoveryInventory.js'
 import DiscoverRunProgress from './DiscoverRunProgress.jsx'
-import EstateProgressPanel from './EstateProgressPanel.jsx'
 import EstateOnlyDrawer from './EstateOnlyDrawer.jsx'
 import { getScanInventory, listScanDecisions, overrideLifecycleRecommendation,
          acknowledgeScan, unacknowledgeScan, checkReadiness, getQueueJob, setWorkers,
@@ -921,28 +919,6 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               onRelist={() => onScan?.(run?.source === 'sharepoint' ? 'sharepoint' : 'drive')} />
             <LastSuccessfulScanSummary run={run} scope={scope} runAt={runAt}
                                        files={estateFiles} inventory={scope?.inventory || null} />
-          </>
-        </AccordionSection>
-      )}
-
-      {/* Cross-stage estate context also appears on Overview. Keep it available for comparison,
-          but subordinate and collapsed so Discover no longer opens looking like Overview. */}
-      {!busy && (run?.discovered_at || run?.status === 'discovered') && (
-        <AccordionSection id="discover-estate" title="Full-estate context"
-                          ariaLabel="Full-estate context" defaultOpen={false}
-                          style={{ marginBottom: 14 }}>
-          <>
-            <EstateProgressPanel
-              inventory={scope?.inventory}
-              analysed={analysedCount(files)}
-              needFix={remediableCount(files)}
-              certifiable={run?.certifiable}
-              published={files.filter((f) => f.published_at).length}
-              errorCount={run?.error}
-              files={files}
-              estateFiles={estateFiles}
-              onGo={onAdvance}
-            />
           </>
         </AccordionSection>
       )}
