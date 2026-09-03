@@ -58,6 +58,11 @@ describe('EstateProgressPanel component', () => {
   it('returns null when no estate data exists', () => {
     expect(panel).toMatch(/hasAnyData[\s\S]{0,50}return null/)
   })
+
+  it('places optional recent-scan content before document types', () => {
+    expect(panel.indexOf('{afterProgress}')).toBeGreaterThan(panel.indexOf('Estate progress funnel'))
+    expect(panel.indexOf('{afterProgress}')).toBeLessThan(panel.indexOf('Document types + Pending work'))
+  })
 })
 
 describe('EstateProgressPanel wired in Overview', () => {
@@ -88,6 +93,7 @@ describe('EstateProgressPanel wired in Discover', () => {
       /import EstateProgressPanel from ['"]\.\/EstateProgressPanel\.jsx['"]/,
     )
     expect(discover).toMatch(/<EstateProgressPanel[\s\S]{0,400}inventory=/)
+    expect(discover).toMatch(/<EstateProgressPanel[\s\S]{0,600}afterProgress=\{\([\s\S]*?<LastSuccessfulScanSummary/)
     expect(panel).not.toMatch(/<KpiCard/)
   })
 })

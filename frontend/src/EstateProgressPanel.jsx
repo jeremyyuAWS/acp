@@ -200,6 +200,7 @@ export default function EstateProgressPanel({
   files,           // full file array for per-type breakdowns
   estateFiles,     // files + estate-only (for type counts)
   onGo,            // (tab) => void — navigate to a tab
+  afterProgress = null, // optional content directly below the four funnel stages
   // Overview renders the three detail sections below as accordions; Discover keeps them
   // as plain sections. Opt-in, so no other caller's DOM changes.
   collapsible = false,
@@ -349,6 +350,8 @@ export default function EstateProgressPanel({
           </div>
         )}
       </PanelSection>
+
+      {afterProgress}
 
       {/* ── Document types + Pending work ────────────────────────────── */}
       <div className="chartrow" style={{ marginTop: 0 }}>
