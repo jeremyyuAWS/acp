@@ -423,10 +423,14 @@ export default function AdminLiveTraffic() {
     return null
   }, [graph, snapshot, capacity, connection, observedAt])
 
+  // One capacity value for the whole drawer. Passing the last good reading to the fact tiles while
+  // telling the visualizations it is unavailable would put a measured figure and "Not reported"
+  // side by side in the same panel, describing the same thing.
+  const liveCapacity = capacityState === 'unavailable' ? null : capacity
   const selectedNode = graph.nodes.find((node) => node.id === selectedKey)?.data
   const selected = selectedNode?.run
   const selectedFacts = selectedNode
-    ? (selected ? runFacts(selected) : infrastructureDetail(selectedNode, snapshot, capacity).facts)
+    ? (selected ? runFacts(selected) : infrastructureDetail(selectedNode, snapshot, liveCapacity).facts)
     : []
   const selectedAccent = selected
     ? (STAGE[selected.stage]?.color || '#6B7280')
@@ -490,7 +494,7 @@ export default function AdminLiveTraffic() {
       </ReactFlow>
     </div>
     {selectedNode && <LiveOpsDrawer nodeId={selectedKey} node={selectedNode} snapshot={snapshot}
-      capacity={capacityState === 'unavailable' ? null : capacity} connection={connection}
+      capacity={liveCapacity} connection={connection}
       samples={trends.current.get(selectedKey) || []} events={eventLog.current}
       facts={selectedFacts} accent={selectedAccent} onClose={() => setSelectedKey(null)} />}
   </section>

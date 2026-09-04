@@ -126,7 +126,7 @@ describe('Admin live traffic graph', () => {
   it('opens both run and infrastructure tiles through the same accessible drawer', () => {
     expect(source).toContain("type: 'infra'")
     expect(source).toMatch(/onNodeClick=.*setSelectedKey/)
-    expect(source).toContain('infrastructureDetail(selectedNode, snapshot, capacity).facts')
+    expect(source).toContain('infrastructureDetail(selectedNode, snapshot, liveCapacity).facts')
     expect(drawer).toContain('facts.map(([label, value])')
     expect(source).toContain('Idle · select any tile to inspect the ready processing path')
   })

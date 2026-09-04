@@ -253,6 +253,31 @@ describe('Event timeline', () => {
   })
 })
 
+describe('Dialog behaviour', () => {
+  it('closes on Escape, on the scrim, and on the close button', async () => {
+    for (const dismiss of ['escape', 'scrim', 'button']) {
+      let closed = false
+      const container = await mount({ nodeId: 'stage:assess',
+        node: { kind: 'worker', label: 'Assess workers', service }, onClose: () => { closed = true } })
+      if (dismiss === 'escape') {
+        await act(async () => {
+          window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        })
+      } else if (dismiss === 'scrim') {
+        await click(container.querySelector('button[aria-label="Close component details"]'))
+      } else {
+        await click(buttonNamed(container, 'Close'))
+      }
+      expect(closed, dismiss).toBe(true)
+    }
+  })
+
+  it('moves focus into the dialog so a keyboard user is not left behind on the map', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: { kind: 'worker', label: 'Assess workers', service } })
+    expect(container.querySelector('[role="dialog"]').contains(document.activeElement)).toBe(true)
+  })
+})
+
 describe('Detailed facts are preserved, not discarded', () => {
   it('keeps the operational fact tiles available for inspection', async () => {
     const container = await mount({ nodeId: 'stage:assess', node: { kind: 'worker', label: 'Assess workers', service },
