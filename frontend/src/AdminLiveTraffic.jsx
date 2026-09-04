@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Background, Controls, Handle, MiniMap, Position, ReactFlow } from '@xyflow/react'
+import { Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { getAdminActivity, getWorkerCapacity, openAdminActivityStream } from './api.js'
 import { ensureResizeObserver } from './resizeObserverFallback.js'
@@ -21,6 +21,12 @@ const PRESSURE = {
   saturated: { label: 'At capacity', color: '#B45309' },
   stalled: { label: 'Queue stalled', color: '#B4232F' },
 }
+
+// `bezier` rather than the stepped router this replaced: one continuous curve per line, with no
+// corners to round off, which is as smooth as this graph gets. `curvature` pushes the control
+// points further out so the three lines fanning out of the shared queue separate before they turn
+// — at the default they overlap for the first stretch and read as a single line.
+const EDGE_ROUTING = { type: 'bezier', pathOptions: { curvature: 0.42 } }
 
 function age(iso) {
   if (!iso) return '—'
@@ -300,6 +306,34 @@ export function runFacts(run = {}, nowMs = Date.now()) {
   ]
 }
 
+/**
+ * One line on the map. Three things every edge needs and none of them are decoration:
+ *
+ * · A DIRECTION a reader can see. Work flows one way through this topology and a plain line does
+ *   not say which — the arrowhead does, and it is drawn in the line's own colour so a stage's
+ *   path stays followable where several converge on the same node.
+ *
+ * · ACTIVITY carried by more than the animation. `animated` alone fails WCAG 1.4.1's motion
+ *   equivalent and disappears entirely under prefers-reduced-motion, which is exactly when a
+ *   reader still needs to know which lines have work on them. A live line is thicker and more
+ *   opaque, so it reads as live in a screenshot and with animation off.
+ *
+ * · A DESTINATION for a click. `detail` names the node whose drawer explains the work on this
+ *   line, so selecting the line that is moving answers "what is that?" — the question the motion
+ *   provokes. `interactionWidth` widens the hit area well past the 1.5px stroke; the same drawer
+ *   is reachable from either node the line joins, so a pointer is never the only way to it.
+ */
+export function flowEdge({ id, source, target, color, active = false, detail, ...rest }) {
+  return {
+    id, source, target, animated: active, focusable: true, interactionWidth: 20,
+    data: { detail: detail || target, active },
+    style: { stroke: color, strokeWidth: active ? 2.4 : 1.4, opacity: active ? 1 : 0.75,
+      cursor: 'pointer' },
+    markerEnd: { type: MarkerType.ArrowClosed, color, width: 15, height: 15 },
+    ...rest,
+  }
+}
+
 export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = null, connection = 'connecting') {
   const runs = snapshot?.runs || []
   const services = workerServiceRows(snapshot?.summary || {})
@@ -351,13 +385,19 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
       { id: 'discover', top: '22%' }, { id: 'assess', top: '50%' }, { id: 'remediate', top: '78%' },
     ] } })
   const edges = [
-    ...sourceKinds.map((source) => ({ id: `${source}:intake`, source: `source:${source}`, target: 'infra:intake', style: { stroke: '#246B79' } })),
-    { id: 'intake:queue', source: 'infra:intake', target: 'infra:queue', animated: Boolean(snapshot?.summary?.active_runs), style: { stroke: '#51404E' } },
+    ...sourceKinds.map((source) => flowEdge({ id: `${source}:intake`, source: `source:${source}`,
+      target: 'infra:intake', color: '#246B79',
+      active: runs.some((run) => run.source === source && run.running > 0),
+      detail: `source:${source}` })),
+    flowEdge({ id: 'intake:queue', source: 'infra:intake', target: 'infra:queue', color: '#51404E',
+      active: Boolean(snapshot?.summary?.active_runs), detail: 'infra:queue' }),
     ...['discover', 'assess', 'remediate'].flatMap((stage) => [
-      { id: `queue:${stage}`, source: 'infra:queue', sourceHandle: stage, target: `stage:${stage}`,
-        animated: Boolean(serviceByStage.get(stage)?.active), style: { stroke: STAGE[stage].color } },
-      { id: `${stage}:output`, source: `stage:${stage}`, target: 'infra:output', targetHandle: stage,
-        animated: Boolean(serviceByStage.get(stage)?.active), style: { stroke: STAGE[stage].color } },
+      flowEdge({ id: `queue:${stage}`, source: 'infra:queue', sourceHandle: stage,
+        target: `stage:${stage}`, color: STAGE[stage].color,
+        active: Boolean(serviceByStage.get(stage)?.active), detail: `stage:${stage}` }),
+      flowEdge({ id: `${stage}:output`, source: `stage:${stage}`, target: 'infra:output',
+        targetHandle: stage, color: STAGE[stage].color,
+        active: Boolean(serviceByStage.get(stage)?.active), detail: `stage:${stage}` }),
     ]),
   ]
   runs.forEach((run, i) => {
@@ -369,10 +409,14 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
     if (!last || ['completed', 'running', 'queued'].some((field) => Number(last[field] || 0) !== sample[field])) series.push(sample)
     historyMap.set(key, series.slice(-30))
     nodes.push({ id: key, type: 'run', position: { x: 335 + (i % 3) * 255, y: 455 + Math.floor(i / 3) * 145 }, data: { kind: 'run', run, history: series } })
-    edges.push({ id: `in:${key}`, source: sourceKinds.includes(run.source) ? `source:${run.source}` : 'infra:intake', target: key,
-      animated: run.running > 0, style: { stroke: STAGE[run.stage]?.color || '#6B7280' } })
-    edges.push({ id: `out:${key}`, source: key, target: `stage:${run.stage}`,
-      animated: run.running > 0, style: { stroke: STAGE[run.stage]?.color || '#6B7280' } })
+    // Both of a run's lines resolve to the RUN's own drawer, not to the stage they end at: the
+    // work moving along them belongs to this run, and the stage node answers a different question
+    // (that service's capacity) that its own line already reaches.
+    edges.push(flowEdge({ id: `in:${key}`,
+      source: sourceKinds.includes(run.source) ? `source:${run.source}` : 'infra:intake',
+      target: key, color: STAGE[run.stage]?.color || '#6B7280', active: run.running > 0, detail: key }))
+    edges.push(flowEdge({ id: `out:${key}`, source: key, target: `stage:${run.stage}`,
+      color: STAGE[run.stage]?.color || '#6B7280', active: run.running > 0, detail: key }))
   })
   return { nodes, edges }
 }
@@ -498,13 +542,17 @@ export default function AdminLiveTraffic() {
     <div style={{ height: Math.max(540, 495 + Math.ceil((snapshot?.runs?.length || 0) / 3) * 145), maxHeight: 760,
       border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', background: 'var(--page)' }}>
       <ReactFlow nodes={graph.nodes} edges={graph.edges} nodeTypes={nodeTypes}
-        defaultEdgeOptions={{ type: 'smoothstep', pathOptions: { borderRadius: 12, offset: 18 } }}
+        defaultEdgeOptions={EDGE_ROUTING}
         fitView minZoom={0.35} maxZoom={1.5}
         onNodeClick={(_, node) => setSelectedKey(node.id)}
-        onNodeDoubleClick={(_, node) => setSelectedKey(node.id)}>
+        onNodeDoubleClick={(_, node) => setSelectedKey(node.id)}
+        onEdgeClick={(_, edge) => setSelectedKey(edge.data?.detail || edge.target)}>
         <Background gap={18} size={1} /><MiniMap pannable zoomable /><Controls showInteractive={false} />
         {!snapshot?.runs?.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
           Idle · select any tile to inspect the ready processing path
+        </div>}
+        {!!snapshot?.runs?.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
+          Moving lines carry work in flight · select a line, or either tile it joins, for details
         </div>}
       </ReactFlow>
     </div>

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { buildTrafficGraph, capacityValue, infrastructureDetail, queueConcentration, sizeScopeNote, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
+import { buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, queueConcentration, sizeScopeNote, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, 'AdminLiveTraffic.jsx'), 'utf8')
@@ -129,6 +129,72 @@ describe('Admin live traffic graph', () => {
     expect(source).toContain('infrastructureDetail(selectedNode, snapshot, liveCapacity).facts')
     expect(drawer).toContain('facts.map(([label, value])')
     expect(source).toContain('Idle · select any tile to inspect the ready processing path')
+  })
+})
+
+describe('The lines carry direction, activity and a way in', () => {
+  const styles = readFileSync(join(here, 'styles.css'), 'utf8')
+  const busy = { runs: [{ scan_id: 's1', owner: 'a@example.org', source: 'drive', stage: 'assess',
+    completed: 8, total: 20, running: 2, queued: 4, status: 'active' }],
+    summary: { active_runs: 1, by_stage: { assess: { running: 2 } }, worker_roles: {
+      assess: { alive: true, pool_size: 3, age_s: 2 } } } }
+
+  it('draws one continuous curve per line rather than a stepped route', () => {
+    // The stepped router this replaced put right-angle corners around every node; a bezier has
+    // no corners to round, which is what "as smooth as possible" means for this graph.
+    expect(source).toContain("const EDGE_ROUTING = { type: 'bezier', pathOptions: { curvature: 0.42 } }")
+    expect(source).toContain('defaultEdgeOptions={EDGE_ROUTING}')
+    expect(source).not.toContain("type: 'smoothstep'")
+  })
+
+  it('points every line in the direction work actually flows', () => {
+    const edges = buildTrafficGraph(busy).edges
+    expect(edges.every((edge) => edge.markerEnd?.type === 'arrowclosed')).toBe(true)
+    // Drawn in the line's own colour, so converging paths stay separable at the arrowhead.
+    const assess = edges.find((edge) => edge.id === 'queue:assess')
+    expect(assess.markerEnd.color).toBe(assess.style.stroke)
+  })
+
+  it('animates only the lines that have work on them', () => {
+    const edges = buildTrafficGraph(busy).edges
+    expect(edges.find((edge) => edge.id === 'in:s1:assess').animated).toBe(true)
+    expect(edges.find((edge) => edge.id === 'queue:assess').animated).toBe(true)
+    expect(edges.find((edge) => edge.id === 'sharepoint:intake').animated).toBe(false)
+    expect(buildTrafficGraph({ runs: [], summary: {} }).edges.every((edge) => !edge.animated)).toBe(true)
+  })
+
+  it('says a line is live by weight as well as by motion', () => {
+    // WCAG 1.4.1: animation is the only activity cue for a reader who has motion turned off, and
+    // the global reduced-motion rule shortens rather than stops an infinite animation — so the
+    // map needs both the static cue and a rule that actually stops the dashes.
+    const live = flowEdge({ id: 'e', source: 'a', target: 'b', color: '#000', active: true })
+    const quiet = flowEdge({ id: 'e', source: 'a', target: 'b', color: '#000' })
+    expect(live.style.strokeWidth).toBeGreaterThan(quiet.style.strokeWidth)
+    expect(live.style.opacity).toBeGreaterThan(quiet.style.opacity)
+    expect(styles).toMatch(/prefers-reduced-motion: reduce\)\s*\{\s*\.react-flow__edge\.animated path/)
+  })
+
+  it('sends a click on a line to the drawer that explains the work on it', () => {
+    const edges = buildTrafficGraph(busy).edges
+    // Both of a run's lines resolve to that run, not to the stage one of them ends at.
+    expect(edges.find((edge) => edge.id === 'in:s1:assess').data.detail).toBe('s1:assess')
+    expect(edges.find((edge) => edge.id === 'out:s1:assess').data.detail).toBe('s1:assess')
+    expect(edges.find((edge) => edge.id === 'queue:assess').data.detail).toBe('stage:assess')
+    expect(edges.find((edge) => edge.id === 'drive:intake').data.detail).toBe('source:drive')
+    expect(source).toContain('onEdgeClick={(_, edge) => setSelectedKey(edge.data?.detail || edge.target)}')
+    expect(edges.every((edge) => edge.interactionWidth >= 20)).toBe(true)
+  })
+
+  it('never leaves a line as the only route to what it explains', () => {
+    // An edge is not keyboard-focusable in ReactFlow, so clicking one has to be a shortcut, never
+    // the sole path. Every detail target is a node on the map, and nodes are tab-reachable.
+    const graph = buildTrafficGraph(busy)
+    const ids = new Set(graph.nodes.map((node) => node.id))
+    expect(graph.edges.filter((edge) => !ids.has(edge.data.detail))).toEqual([])
+  })
+
+  it('tells the reader the moving lines are selectable', () => {
+    expect(source).toContain('Moving lines carry work in flight · select a line, or either tile it joins, for details')
   })
 })
 
