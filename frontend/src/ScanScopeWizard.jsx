@@ -732,7 +732,8 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
               selection is something you SEE rather than something the count tells you afterwards,
               which is the whole shape of the defect this screen exists to prevent. */}
           {savedFolders === null ? (
-            <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>Loading…</div>
+            <div className="muted" role="status" aria-live="polite"
+                 style={{ fontSize: 12.5, marginBottom: 8 }}>Loading saved discovery scope…</div>
           ) : scopeMode === 'all' ? (
             // Said out loud rather than left blank. "Nothing selected" and "everything" look the
             // same on screen otherwise, and the reassuring reading of a blank row is the wrong one.
