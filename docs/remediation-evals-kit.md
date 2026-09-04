@@ -170,7 +170,20 @@ human. That is the intended conservatism: the ladder routes a category autonomou
 
 ## 6. Running it against a paid tier
 
-Locally, the key comes from the environment (`ANTHROPIC_API_KEY`, or `ant auth login`):
+**Where the key comes from.** The kit reads the environment variable first
+(`ANTHROPIC_API_KEY` / `EVALS_API_KEY`), then falls back to the product's own provider config —
+the `key_secret_ref` an admin sets in **Settings → AI providers** — via
+`api/providers.credential_for()`. So a credential your ops team provisioned under a name of its
+own choosing works for the evals without a second place to configure it, and the Settings page's
+"key present" light also tells you the evals will run.
+
+The key value still never reaches the database or the browser: the page stores the secret's NAME,
+both readers resolve it from the environment. The pre-flight prints the SOURCE per candidate
+(`key: env:ANTHROPIC_API_KEY`, `key: provider_config:ACP_ANTHROPIC_KEY`,
+`key: missing (secret_absent:ACP_ANTHROPIC_KEY)`) so "which credential did this run use" is
+answerable from the log rather than by assumption.
+
+Locally:
 
 ```bash
 python scripts/run_remediation_evals.py --estimate-only --repeats 3 \

@@ -91,8 +91,12 @@ def main() -> int:
     for c in resolved:
         est = estimate_run_usd(c.pricing, calls)
         total += est
+        # The key SOURCE, never the key. "which credential did this run use" is the question
+        # that otherwise gets answered by assumption — and answered wrong when the product's
+        # provider config names a secret the environment does not carry.
         print(f"  {c.name:34s} ~${est:,.4f}  ({c.pricing.kind}"
-              f"{': ' + c.pricing.note if c.pricing.note else ''})", file=sys.stderr)
+              f"{': ' + c.pricing.note if c.pricing.note else ''})"
+              f"  key: {c.key_source()}", file=sys.stderr)
     print(f"  {'TOTAL':34s} ~${total:,.4f}", file=sys.stderr)
     if args.estimate_only:
         return 0
