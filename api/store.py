@@ -3818,7 +3818,9 @@ class Store:
                          # anyone out: acr_authz gives the protected ACP_OWNER_EMAIL every role
                          # unconditionally, so the owner can always grant the first role again —
                          # the same anti-lockout property core.is_owner exists to provide.
-                         "acr_role"]
+                         "acr_role",
+                         # ADR 0027 Tier A — vision layout descriptions are per-scan customer data.
+                         "scanned_pdf_layouts"]
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
