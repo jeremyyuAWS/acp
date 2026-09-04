@@ -120,6 +120,10 @@ describe('CoverageScorecard renders the two-axis capability view (ADR 0023)', ()
     const cellsWith = (glyph) => [...container.querySelectorAll('td')].filter((td) => td.textContent.trim() === glyph)
     expect(cellsWith('✓').length, 'no ✓ (Fully Assessed) cell in the grid').toBeGreaterThan(0)
     expect(cellsWith('!').length, 'no ! (Potential Issue) cell in the grid').toBeGreaterThan(0)
+    const labelled = [...container.querySelectorAll('td[aria-label]')]
+    expect(labelled.length).toBeGreaterThan(0)
+    expect(labelled[0].getAttribute('aria-label')).toMatch(/\.docx: .+; .+ remediation/)
+    expect(labelled[0].querySelector('[aria-hidden="true"]')).toBeTruthy()
   })
 
   it('toggling to all-document criteria grows the total beyond 20', async () => {

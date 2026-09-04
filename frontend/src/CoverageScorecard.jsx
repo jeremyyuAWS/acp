@@ -76,8 +76,10 @@ function RuleFormatMatrix({ rows }) {
                 const remTxt = rem === 'na' ? 'no ACP fix' : `${REM_EMOJI[rem]} ${rem === 'ai' ? 'AI Generated Fix' : rem} remediation`
                 const label = a === 'auto' ? 'Fully Assessed' : a === 'review' ? 'Potential Issue' : a === 'human' ? 'Human Assessment Required' : 'N/A for this format'
                 return (
-                  <td key={f} style={{ textAlign: 'center', fontSize: 16 }} title={`${p.sc} · .${f} — ${label} · ${remTxt}`}>
-                    {LANE_EMOJI[a] || '–'}
+                  <td key={f} style={{ textAlign: 'center', fontSize: 16 }}
+                      title={`${p.sc} · .${f} — ${label} · ${remTxt}`}
+                      aria-label={`${p.sc}, .${f}: ${label}; ${remTxt}`}>
+                    <span aria-hidden="true">{LANE_EMOJI[a] || '–'}</span>
                   </td>
                 )
               })}
