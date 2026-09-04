@@ -2004,6 +2004,7 @@ export default function App() {
              a single ad-hoc file without wiring a whole source. */
           onStop={() => stopScan(liveScanId)} me={me}
           onViewMonitor={() => { setMonitorFocusScanId(liveScanId || run?.id); setView('monitor') }}
+          onViewLiveOps={me?.allow?.includes('liveops') ? () => { setView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) } : undefined}
           onOpenSource={(sourceKey) => { setPendingSourceOpen(sourceKey); setView('integrations'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />}
 
         {view === 'assess' && (run ? (

@@ -34,6 +34,11 @@ describe('discoveryFailureReason', () => {
     expect(discoveryFailureReason(rows)).toBe(detail)
   })
 
+  it('surfaces a scope-collapse decision for historical diagnostics', () => {
+    const detail = 'Discovery found 37 files, down from 6,970; refusing to publish or assess'
+    expect(discoveryFailureReason([decision('scan.scope_collapse', detail)])).toBe(detail)
+  })
+
   it('ignores unrelated scan.* kinds — matches by allowlist, not by prefix', () => {
     const rows = [
       decision('scan.discovered', 'discovery completed'),
