@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Background, Controls, Handle, MiniMap, Position, ReactFlow } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { getAdminActivity, getWorkerCapacity, openAdminActivityStream } from './api.js'
+import { ensureResizeObserver } from './resizeObserverFallback.js'
+
+ensureResizeObserver(typeof window === 'undefined' ? globalThis : window)
 
 const STAGE = {
   discover: { label: 'Discover', color: '#4F7F2A' },
