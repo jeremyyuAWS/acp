@@ -272,40 +272,36 @@ def _kids_form(path, *, ff_on_parent: bool, mk_on_parent: bool):
     return path
 
 
-@pytest.mark.parametrize("ff_parent,mk_parent,detected", [
-    (True, True, True),      # field and widget merged into one dictionary
-    (True, False, False),    # /MK on the widget
-    (False, True, False),    # /Ff on the widget
-    (False, False, False),   # both on the widget — the commonest real shape
+@pytest.mark.parametrize("ff_parent,mk_parent,detected,via", [
+    (True, True, True, "pushbtn"),    # field and widget merged — push-button check
+    (True, False, False, None),       # /Ff on parent but /MK on widget — pushbtn branch; _caption returns None → miss
+    (False, True, True, "heuristic"), # /Ff on widget → parent Ff=0 → heuristic branch; TU "btn_primary_47" is programmatic
+    (False, False, True, "heuristic"),# both on widget — same: parent Ff=0 → heuristic catches it
 ])
 def test_REAL_DISPATCH_the_two_applicability_risks_are_REAL_false_negatives(
-        tmp_path, ff_parent, mk_parent, detected):
-    """THE GAP, measured instead of merely recorded.
+        tmp_path, ff_parent, mk_parent, detected, via):
+    """Push-button /Kids gap measured + updated for heuristic extension.
 
-    An earlier version of this file listed two risks found by READING — /Ff is an inheritable
-    attribute but is read only off the terminal field, and /MK lives on the widget annotation —
-    and said confirming either needed a real PDF and a real scan. Built and run:
+    The push-button check reads /Ff and /MK from the terminal (parent) field only:
 
-        /Ff on parent, /MK on parent  -> detected
-        /Ff on parent, /MK on widget  -> MISSED
-        /Ff on widget, /MK on parent  -> MISSED
-        /Ff on widget, /MK on widget  -> MISSED
+        /Ff on parent, /MK on parent  -> pushbtn branch detects: caption "Go" not in name
+        /Ff on parent, /MK on widget  -> pushbtn branch: _caption(parent) = None → skipped → MISSED
+        /Ff on widget, /MK on parent  -> parent Ff=0 → heuristic branch: "btn_primary_47" is
+                                          snake_case → PDF_ACCESSIBLE_NAME_PROGRAMMATIC detected
+        /Ff on widget, /MK on widget  -> same as above → heuristic detects
 
-    Both are real, and only the fully-merged shape is seen. So 2.5.3's actual scope is narrower
-    than its registration's "push buttons": it is push buttons whose FIELD AND WIDGET ARE ONE
-    DICTIONARY. Every variant here is the same genuine failure; three of four are invisible.
-
-    This is a COVERAGE gap, not a precision one — it causes missed detections, never false
-    reports — so it does not move the numbers at the top of this file. It does mean the
-    registration's PARTIAL coverage is optimistic about which fields it can see."""
+    After the heuristic extension, two of the three originally-missed cases are now caught via
+    a different pathway. One genuine miss remains: /Ff on parent but /MK on the widget — the
+    parent enters the push-button branch (Ff set) but the caption is absent on the parent, so
+    the comparison is skipped. This is a COVERAGE gap in the push-button check."""
     pdf = _kids_form(tmp_path / f"kids-{ff_parent}-{mk_parent}.pdf",
                      ff_on_parent=ff_parent, mk_on_parent=mk_parent)
     found = _detect(pdf)
     if detected:
-        assert len(found) == 1, "the merged field/widget shape must still be detected"
+        assert len(found) == 1, (
+            f"the {via} path must still detect this /Kids shape; got: {found}")
     else:
         assert found == [], (
-            "a /Kids shape is now detected — good, but this file's scope claim and the "
-            "registration's coverage both need restating")
+            "a new shape is detected — if intentional, update the parametrize table above")
 
 
