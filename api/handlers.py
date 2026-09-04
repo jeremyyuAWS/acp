@@ -1147,6 +1147,32 @@ def _count_inventory_classes(scan_id: str) -> dict:
 # (routes/disposition.list_conflicts) so both make the same call from one place.
 
 
+def _sp_scan_cursors(user: str, plan: dict) -> dict:
+    """The Graph deltaLink each library stood at when this scan listed it.
+
+    Read from the store AFTER the plan ran, because that is when they are correct: building the
+    plan advances (or seeds) every library's cursor to "now", immediately before the walk. So the
+    stored value is the position this scan's estate describes, and replaying the delta from it
+    later answers "what has changed since ACP listed this" — one Graph call per LIBRARY, not one
+    per document, which is the only reason freshness is affordable for SharePoint at all.
+
+    Best-effort per library: a cursor that cannot be read is simply absent, and freshness for that
+    library reports `untracked` rather than a guess. Never raises — this is a diagnostic recorded
+    on the way past, and it must not be able to fail a scan that has already listed its estate.
+    """
+    out: dict = {}
+    for drive_id in list((plan.get("delta") or {}).keys()) + list((plan.get("full") or {}).keys()):
+        try:
+            cur = core.store.get_sync_cursor(core._sp_interactive_cursor_key(user, drive_id))
+            if cur and cur.get("page_token"):
+                # "" is the OneDrive/no-drive key: JSON object keys must be strings, and the
+                # reader maps it back (routes/scans._sp_freshness).
+                out[drive_id or ""] = cur["page_token"]
+        except Exception:  # noqa: BLE001
+            logger.debug("could not record the delta cursor for drive %s", drive_id, exc_info=True)
+    return out
+
+
 def _sp_site_delta_plan(user: str, token: str, folder, folders) -> dict | None:
     """Phase 3: the per-library incremental plan for a SITE-scoped SharePoint request.
 
@@ -2398,6 +2424,17 @@ def _scan_discover(payload: dict, job: dict) -> None:
                     # and owns its job state precisely because nothing else will touch it.
                     raise RuntimeError(_msg)
 
+        # THE DELTA POSITION THIS SCAN LISTED FROM, recorded on the scan's own scope so freshness
+        # is answerable later. Without it, "has SharePoint changed since this scan?" can only be
+        # asked as "since the LAST sync", which is a different question the moment a second scan
+        # runs — and the answer to the wrong question is indistinguishable from the answer to the
+        # right one.
+        #
+        # In the scope blob rather than a new column: the scope is already persisted per scan
+        # (merge_scan_scope, below), already the place a run records what it covered, and a
+        # migration for a per-scan JSON fact would be a schema change bought for nothing.
+        if source == "sharepoint" and sp_delta_plan:
+            scope["sp_cursors"] = _sp_scan_cursors(user, sp_delta_plan)
         _enforce_scope_collapse_guard(scan_id, user, scope, items, inventory)
         core.store.set_scan_files(scan_id, len(items))
         core.store.merge_scan_scope(scan_id, scope)

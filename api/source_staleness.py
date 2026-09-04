@@ -39,17 +39,28 @@ def compare_state(baseline, current):
     return "stale" if c > b else "unchanged"
 
 
-def classify_file(file_row, current, *, source_is_drive, fetch_error=None):
+def classify_file(file_row, current, *, source_is_drive, fetch_error=None,
+                  source_tracked=None):
     """Classify one file for the /source-status response.
 
     file_row      — the get_scan file dict (uses 'source_modified' + 'drive_file_id').
     current       — the source's current modifiedTime (str) or None.
-    source_is_drive — whether the scan's source is Drive at all (SharePoint/local can't be checked).
-    fetch_error   — a short code when the Drive read failed ('not_found' / 'forbidden' / 'drive_error').
+    source_is_drive — the Drive-era spelling of the question below, kept because every existing
+                    caller and test passes it and it means exactly the same thing for Drive.
+    source_tracked — CAN this source's freshness be checked at all. Defaults to `source_is_drive`,
+                    which is what it meant when Drive was the only source that could answer.
+                    SharePoint can now answer too, by a different route: not a per-file poll but
+                    ONE Graph delta call per library, replayed from the cursor the scan recorded
+                    (routes/scans.py). The classification below is identical either way — it is a
+                    timestamp comparison — so the difference belongs in how `current` was
+                    obtained, not in a second copy of this logic.
+    fetch_error   — a short code when the source read failed ('not_found' / 'forbidden' /
+                    'drive_error' / 'deleted').
     """
+    tracked = source_is_drive if source_tracked is None else source_tracked
     baseline = (file_row or {}).get("source_modified")
     drive_id = (file_row or {}).get("drive_file_id")
-    if not source_is_drive or not drive_id or not baseline:
+    if not tracked or not drive_id or not baseline:
         return {"state": "untracked", "baseline": baseline, "current": None}
     if fetch_error:
         return {"state": "unavailable", "baseline": baseline, "current": None, "error": fetch_error}
@@ -68,7 +79,8 @@ def classify_file(file_row, current, *, source_is_drive, fetch_error=None):
 # caller (Release Center, Monitor) is untouched and every new caller gets the fuller vocabulary
 # from one function.
 
-def classify_sync_state(file_row, current, *, source_is_drive, fetch_error=None, run_status=None):
+def classify_sync_state(file_row, current, *, source_is_drive, fetch_error=None, run_status=None,
+                        source_tracked=None):
     """The fuller PRD Phase 3 vocabulary. A file is EXACTLY ONE of, checked in this order:
 
       'importing'       — the scan is still running and this file has not been analysed yet.
@@ -97,7 +109,8 @@ def classify_sync_state(file_row, current, *, source_is_drive, fetch_error=None,
 
     'acp_newer' and the newer-wins carve-out inside 'conflict' both need a live `current` reading
     to compare against, so — like classify_file's own 'stale' — they are only reachable for a
-    Drive-tracked file (`source_is_drive`, a drive_file_id and a baseline). A fix that is merely
+    TRACKED file (`source_tracked`, a drive_file_id and a baseline; see classify_file for what
+    tracked now means for SharePoint). A fix that is merely
     unpublished still surfaces as 'publish_pending' for any source, since that needs no comparison
     against the source at all.
     """
@@ -109,7 +122,8 @@ def classify_sync_state(file_row, current, *, source_is_drive, fetch_error=None,
         return {"state": "import_failed", "baseline": (file_row or {}).get("source_modified"),
                 "current": None}
 
-    base = classify_file(file_row, current, source_is_drive=source_is_drive, fetch_error=fetch_error)
+    base = classify_file(file_row, current, source_is_drive=source_is_drive,
+                         fetch_error=fetch_error, source_tracked=source_tracked)
 
     remediated_at = (file_row or {}).get("remediated_at")
     if not remediated_at:
