@@ -238,6 +238,28 @@ def ai_suggest(request: Request, scan_id: str = Query(...), file: str = Query(..
     return result
 
 
+@router.get("/ai/copilot")
+def ai_copilot(request: Request, scan_id: str = Query(...), file: str = Query(...),
+               rule_id: str = Query(...), locator: str | None = Query(None)):
+    """Interpretive guidance for an image finding — tells the reviewer what the image shows
+    so they can write a good description. Cloud-only (premium models); returns 403 when no
+    governed cloud provider is configured."""
+    if not core.store.get_ai_enabled():
+        raise HTTPException(403, "AI is disabled (deterministic-only mode)")
+    import providers as _providers
+    if _providers.cloud_vision_provider() is None:
+        raise HTTPException(403, "Cloud AI not configured — enable a governed cloud provider in Settings → AI Providers")
+    img = _image_for_locator(request, scan_id, file, locator) if locator else None
+    if img is None:
+        raise HTTPException(404, "Image not found for this finding")
+    import ai as _ai
+    result = _ai.copilot_guidance(img, rule_id=rule_id, filename=file,
+                                  scan_id=scan_id, file=file)
+    if result is None:
+        raise HTTPException(503, "Cloud AI call failed — the provider returned no usable guidance")
+    return result
+
+
 @router.get("/ai/validate")
 def ai_validate(request: Request, scan_id: str = Query(...), file: str = Query(...),
                 rule_id: str = Query(...), alt: str = Query(...), locator: str | None = Query(None)):

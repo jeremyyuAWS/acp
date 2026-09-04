@@ -1313,6 +1313,12 @@ export const suggestFix = (scanId, file, ruleId, locator = null, style = null) =
       + (style ? `&style=${encodeURIComponent(style)}` : ''),
       { headers: headers() }).then(j))
 
+export const getCopilotGuidance = (scanId, file, ruleId, locator = null) => (SIM
+  ? sim({ guidance: 'This chart compares quarterly revenue across regions — focus on the trend and which region leads.', provider: 'demo' }, 800)
+  : fetch(`${BASE}/ai/copilot?scan_id=${encodeURIComponent(scanId)}&file=${encodeURIComponent(file)}&rule_id=${encodeURIComponent(ruleId)}`
+      + (locator ? `&locator=${encodeURIComponent(locator)}` : ''),
+      { headers: headers() }).then(j))
+
 // Re-download and re-score ONE file the user fixed externally. Returns {job_id} for polling.
 export const rescoreFile = (scanId, file) => (SIM
   ? sim({ job_id: 'sim-rescore', workers: 1 }, 200)

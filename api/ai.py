@@ -1010,6 +1010,46 @@ def _escalate_vision(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     }
 
 
+def _copilot_prompt(filename: str = "") -> str:
+    name = filename.rsplit("/", 1)[-1] if filename else "this image"
+    return (
+        f"You are helping an accessibility reviewer write alt text for {name}. "
+        "Look at this image and tell the reviewer what it shows in 1–2 sentences — focus on "
+        "the CONTENT and MEANING so they know what a good description would cover. "
+        "Do NOT write alt text. Give only the interpretive guidance, no preamble."
+    )
+
+
+def copilot_guidance(image_bytes: bytes, *, rule_id: str = "", filename: str = "",
+                     scan_id: str | None = None, file: str | None = None) -> dict | None:
+    """Interpretive guidance for an image (not alt text) from the configured cloud provider.
+    Returns {guidance, provider, zone, model, cost_usd} or None when no cloud is configured
+    or the call fails. Cloud-only: gated on cloud_vision_provider() is not None."""
+    import providers as _providers
+    cloud = _providers.cloud_vision_provider()
+    if cloud is None:
+        return None
+    import time as _t
+    _t0 = _t.monotonic()
+    prompt = _copilot_prompt(filename)
+    res = cloud.generate(prompt, image_bytes, timeout=OLLAMA_VISION_TIMEOUT)
+    mdl = res.get("model")
+    _trace_ai("copilot", prompt, res.get("text"), _t0, ok=bool(res.get("ok")), model=mdl,
+              provider=res.get("provider") or "cloud", zone=res.get("zone"),
+              cost_usd=res.get("cost_usd", 0.0), scan_id=scan_id, file=file,
+              reason=res.get("reason"),
+              prompt_tokens=res.get("prompt_tokens"),
+              completion_tokens=res.get("completion_tokens"),
+              prompt_version="copilot-guidance-v1")
+    if not res.get("ok"):
+        return None
+    text = (res.get("text") or "").strip()
+    if not text or len(text) < 10:
+        return None
+    return {"guidance": text, "model": mdl, "provider": res.get("provider"),
+            "zone": res.get("zone"), "cost_usd": res.get("cost_usd", 0.0)}
+
+
 _ORDER_FIRST_ITEM = re.compile(r"(?:^|\s)(1\s*[.)]\s+\S)")
 
 

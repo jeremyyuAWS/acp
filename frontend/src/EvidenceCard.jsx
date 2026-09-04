@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { aiProvenance, getFileGeometry, getFileRemediationDiffs, getScanAiCalls, suggestFix, validateAlt } from './api.js'
+import { aiProvenance, getCopilotGuidance, getFileGeometry, getFileRemediationDiffs, getScanAiCalls, suggestFix, validateAlt } from './api.js'
 import Thumbnail from './Thumbnail.jsx'
 import BeforeAfterEvidence from './BeforeAfterEvidence.jsx'
 import RiskChip from './RiskChip.jsx'
@@ -126,6 +126,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   // setHouseStyle's call sites in draftAll, where one image's rules must not be blanked by the
   // next image in the same batch.
   const [draftHouseStyle, setHouseStyle] = useState(null)
+  const [copilotResult, setCopilotResult] = useState(null)
+  const [copilotLoading, setCopilotLoading] = useState(false)
   // Which deferred image the reviewer is looking at. The vision model describes ONE image, so
   // a row carrying nineteen must say which — defaulting to the first silently captions the
   // wrong picture and the reviewer approves alt text for an image they never saw.
@@ -326,6 +328,19 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
     }
   }
 
+  const askCopilot = async () => {
+    setCopilotLoading(true)
+    setCopilotResult(null)
+    try {
+      const r = await getCopilotGuidance(item?.scan_id, item?.file, item?.rule_id, heroLocator)
+      setCopilotResult(r)
+    } catch (e) {
+      setCopilotResult({ error: e?.message || 'Could not reach the cloud model — try again.' })
+    } finally {
+      setCopilotLoading(false)
+    }
+  }
+
   const card = buildEvidenceCard(item, diffs)
   // Everything about the "current" image follows the pager (#122) so the hero box, the object thumb,
   // and the kind chip all describe the SAME image — paging to image 3 must not leave image 1's thumb
@@ -421,6 +436,20 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
     })()
     return () => { live = false }
   }, [draftFailed, escalation, cloudStatus])
+  // Fetch cloud status eagerly for 1.1.1 evidence-only cards so the "Help me" copilot
+  // button can appear without needing a draft failure first. loadAiModels is module-cached
+  // (one /ai/status call for the whole inbox), so this adds no extra network cost.
+  useEffect(() => {
+    if (cloudStatus !== null || card.sc !== '1.1.1' || !usingEvidence) return
+    let live = true
+    ;(async () => {
+      try {
+        const s = await loadAiModels()
+        if (live) setCloudStatus(s || {})
+      } catch { if (live) setCloudStatus({}) }
+    })()
+    return () => { live = false }
+  }, [card.sc, usingEvidence]) // eslint-disable-line react-hooks/exhaustive-deps
   const cloudEnabled = !!cloudStatus?.cloud_enabled
   const cloudProvider = (typeof cloudStatus?.cloud_provider === 'string' && cloudStatus.cloud_provider.trim())
     ? cloudStatus.cloud_provider.trim() : null
@@ -879,6 +908,35 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
                 </span>
               )}
               {usingEvidence && !draftingAll && draftingIdx == null && manualCloudHint}
+              {usingEvidence && cloudEnabled && card.sc === '1.1.1' && (
+                <div className="evcard-copilot" style={{ margin: '8px 0 0' }}>
+                  <button type="button" className="evcard-linkbtn"
+                          disabled={copilotLoading}
+                          onClick={askCopilot}
+                          style={{ fontSize: 12.5 }}>
+                    {copilotLoading ? '✨ Asking the cloud model…' : '✨ Help me understand this image'}
+                  </button>
+                  {copilotResult && !copilotResult.error && (
+                    <div role="note"
+                         style={{ marginTop: 6, fontSize: 12.5, fontStyle: 'italic',
+                                  background: 'var(--surface-2, #eff6ff)',
+                                  border: '1px solid var(--line)', borderRadius: 8,
+                                  padding: '7px 11px' }}>
+                      <span style={{ display: 'block', fontStyle: 'normal', fontWeight: 600,
+                                     fontSize: 11, color: 'var(--muted)', marginBottom: 3 }}>
+                        AI guidance — not a draft{copilotResult.provider ? ` · ${copilotResult.provider}` : ''}
+                      </span>
+                      {copilotResult.guidance}
+                    </div>
+                  )}
+                  {copilotResult?.error && (
+                    <span className="evcard-draft-msg evcard-draft-error" role="alert"
+                          style={{ marginTop: 4 }}>
+                      {copilotResult.error}
+                    </span>
+                  )}
+                </div>
+              )}
               {usingEvidence && ocrAid && (
                 <details className="evcard-ocr-aid">
                   <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>
