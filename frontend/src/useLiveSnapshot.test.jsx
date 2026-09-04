@@ -70,4 +70,28 @@ describe('useLiveSnapshot', () => {
     await flush()
     expect(getScanLive).not.toHaveBeenCalled()
   })
+
+  it('clears the completed assessment frame when its stage becomes inactive', async () => {
+    getScanLive.mockResolvedValue(frame(37, 37))
+    const { container, root } = createTestRoot()
+    await act(async () => { root.render(createElement(Probe, { scanId: 's1', active: true })) })
+    await flush()
+    expect(container.textContent).toBe('seq:37 done:37')
+
+    await act(async () => { root.render(createElement(Probe, { scanId: 's1', active: false })) })
+    await flush()
+    expect(container.textContent).toBe('none')
+  })
+
+  it('does not carry a completed frame into a different scan', async () => {
+    getScanLive.mockResolvedValueOnce(frame(37, 37)).mockImplementation(() => new Promise(() => {}))
+    const { container, root } = createTestRoot()
+    await act(async () => { root.render(createElement(Probe, { scanId: 's1' })) })
+    await flush()
+    expect(container.textContent).toBe('seq:37 done:37')
+
+    await act(async () => { root.render(createElement(Probe, { scanId: 's2' })) })
+    await flush()
+    expect(container.textContent).toBe('none')
+  })
 })

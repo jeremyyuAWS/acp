@@ -9,6 +9,11 @@ describe('RemediationRunProgress', () => {
       <RemediationRunProgress
         updateMode="live"
         progress={{ total: 20, done: 7, failed: 1, latest: 'report.docx',
+                    metrics: { fixes: 19, verified: 6, stored: 7, failed: 1 },
+                    deltas: { fixes: 4, verified: 2, stored: 1, failed: 0 },
+                    queued: 10, running: 3, workers: { active: 3, capacity: 5 },
+                    byRule: [{ rule: '1.3.1', fixes: 12 }, { rule: '2.4.2', fixes: 7 }],
+                    recentFiles: [{ file: 'saved.docx', at: '2026-09-04T12:00:00Z' }],
                     activity: { text: 'report.docx · 3.1.1 Language of Page · applying fix',
                                 file: 'report.docx', sc: '3.1.1', sc_name: 'Language of Page',
                                 action: 'applying fix', detail: 'setting document language', in_flight: 3 },
@@ -22,9 +27,16 @@ describe('RemediationRunProgress', () => {
     expect(html).toContain('Remediation work queued')
     expect(html).toContain('Applied approved automatic fixes')
     expect(html).toContain('Re-checked corrected documents')
-    expect(html).toContain('7 verified')
+    expect(html).toContain('6 verified')
     expect(html).toContain('Recorded corrected copies')
-    expect(html).toContain('Latest: report.docx')
+    expect(html).toContain('7 saved')
+    expect(html).toContain('Fixes applied')
+    expect(html).toContain('+4')
+    expect(html).toContain('WCAG 1.3.1 · 12 fixes')
+    expect(html).toContain('3 active')
+    expect(html).toContain('2 standby')
+    expect(html).toContain('10 queued')
+    expect(html).toContain('saved.docx')
     expect(html).toContain('WCAG 3.1.1 · Language of Page')
     expect(html).toContain('applying fix')
     expect(html).toContain('setting document language')

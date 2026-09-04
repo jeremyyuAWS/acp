@@ -3,6 +3,16 @@ import LiveThroughput from './LiveThroughput.jsx'
 
 const n = (value) => Number(value || 0).toLocaleString()
 
+function Metric({ label, value, delta, displayValue }) {
+  return (
+    <div className="rem-live-metric">
+      <span className="muted">{label}</span>
+      <strong>{displayValue ?? n(value)}</strong>
+      {delta > 0 && <span className="rem-live-delta" aria-label={`${n(delta)} newly reported`}>+{n(delta)}</span>}
+    </div>
+  )
+}
+
 function Step({ status, label, detail, sublines = [] }) {
   const icon = status === 'done' ? '✓' : status === 'active' ? null : '·'
   return (
@@ -37,6 +47,11 @@ export default function RemediationRunProgress({ progress, updateMode = 'idle', 
   const failed = Math.max(0, Number(progress.failed || 0))
   const finished = total > 0 && done >= total
   const activity = progress.activity || null
+  const metrics = progress.metrics || {}
+  const workers = progress.workers || {}
+  const workerCapacity = Math.max(0, Number(workers.capacity || 0))
+  const activeWorkers = Math.max(0, Number(workers.active ?? progress.running ?? activity?.in_flight ?? 0))
+  const standbyWorkers = workerCapacity ? Math.max(0, workerCapacity - activeWorkers) : null
   const recent = (progress.history || []).filter((item, index, rows) =>
     item?.text && rows.findIndex((other) => other?.text === item.text) === index).slice(0, 4)
 
@@ -62,6 +77,14 @@ export default function RemediationRunProgress({ progress, updateMode = 'idle', 
                   aria-valuetext={`${n(done)} of ${n(total)} documents complete`}
                   style={{ width: '100%', height: 7, display: 'block', marginBottom: 12 }} />
 
+        <div className="rem-live-metrics" aria-label="Live remediation totals">
+          <Metric label="Documents" value={done} displayValue={`${n(done)} / ${n(total)}`} delta={progress.deltas?.stored} />
+          <Metric label="Fixes applied" value={metrics.fixes} delta={progress.deltas?.fixes} />
+          <Metric label="Verified" value={metrics.verified} delta={progress.deltas?.verified} />
+          <Metric label="Corrected copies" value={metrics.stored} delta={progress.deltas?.stored} />
+          <Metric label="Failed" value={metrics.failed ?? failed} delta={progress.deltas?.failed} />
+        </div>
+
         <div role="list" aria-live="polite" aria-atomic="false"
              style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <Step status="done" label="Remediation work queued" detail={`${n(total)} documents`} />
@@ -69,10 +92,18 @@ export default function RemediationRunProgress({ progress, updateMode = 'idle', 
                 detail={`${n(done)} of ${n(total)} complete`}
                 sublines={!finished && activity?.text ? [activity.text] : []} />
           <Step status={finished ? 'done' : done > 0 ? 'active' : 'pending'} label="Re-checked corrected documents"
-                detail={done > 0 ? `${n(done)} verified` : 'Waiting for first result'} />
+                detail={(metrics.verified ?? done) > 0 ? `${n(metrics.verified ?? done)} verified` : 'Waiting for first result'} />
           <Step status={finished ? 'done' : done > 0 ? 'active' : 'pending'} label="Recorded corrected copies"
-                detail={progress.latest ? `Latest: ${progress.latest}` : 'Waiting for first result'} />
+                detail={metrics.stored > 0 ? `${n(metrics.stored)} saved` : progress.latest ? `Latest: ${progress.latest}` : 'Waiting for first result'} />
         </div>
+
+        {(progress.byRule || []).length > 0 && (
+          <div className="rem-rule-progress" aria-label="Verified fixes by WCAG criterion">
+            {(progress.byRule || []).map((item) => (
+              <span className="fmtchip" key={item.rule}>WCAG {item.rule} · {n(item.fixes)} fixes</span>
+            ))}
+          </div>
+        )}
 
         {!finished && activity?.text && (
           <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 10, marginTop: 12,
@@ -91,12 +122,27 @@ export default function RemediationRunProgress({ progress, updateMode = 'idle', 
           </div>
         )}
 
-        {!finished && recent.length > 1 && (
+        {!finished && (activeWorkers > 0 || workerCapacity > 0 || progress.queued > 0) && (
+          <div className="rem-worker-line" aria-label="Remediation worker activity">
+            <span><span className="pulsedot" aria-hidden="true" /> {n(activeWorkers)} active</span>
+            {standbyWorkers != null && <span>{n(standbyWorkers)} standby</span>}
+            <span>{n(progress.queued)} queued</span>
+            {workerCapacity > 0 && <span>{Math.round((activeWorkers / workerCapacity) * 100)}% utilization</span>}
+          </div>
+        )}
+
+        {!finished && (recent.length > 1 || (progress.recentFiles || []).length > 0) && (
           <details style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 9, marginTop: 10 }}>
             <summary style={{ cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>
               Recent remediation activity
             </summary>
             <ul style={{ margin: '8px 0 0', paddingLeft: 20, fontSize: 12.5, lineHeight: 1.55 }}>
+              {(progress.recentFiles || []).map((item) => (
+                <li key={`${item.at}-${item.file}`}>
+                  <time dateTime={item.at}>{item.at ? new Date(item.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''}</time>
+                  {' '}✓ {item.file} saved
+                </li>
+              ))}
               {recent.map((item, index) => <li key={`${item.at || index}-${item.text}`}>{item.text}</li>)}
             </ul>
           </details>

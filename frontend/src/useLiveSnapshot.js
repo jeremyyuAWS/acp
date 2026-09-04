@@ -14,9 +14,24 @@ import { isNewerFrame } from './liveAssessment.js'
 export function useLiveSnapshot(scanId, { active = true, intervalMs = 2000 } = {}) {
   const [snapshot, setSnapshot] = useState(null)
   const seqRef = useRef(null)
+  const scanRef = useRef(null)
 
   useEffect(() => {
-    if (!scanId || !active) return undefined
+    // An inactive stage must not keep rendering the last frame it fetched. App turns this hook
+    // off when Remediate owns the screen; retaining the completed assessment snapshot here made
+    // that old card remain above the live remediation card even though the stage gate was false.
+    if (!scanId || !active) {
+      scanRef.current = null
+      seqRef.current = null
+      setSnapshot(null)
+      return undefined
+    }
+    // Likewise, never show one scan's frame while the first poll for another scan is pending.
+    if (scanRef.current !== scanId) {
+      scanRef.current = scanId
+      seqRef.current = null
+      setSnapshot(null)
+    }
     let cancelled = false
 
     const poll = async () => {
