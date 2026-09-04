@@ -196,6 +196,7 @@ _map_many([
     ("GET", "/admin/roles"), ("GET", "/admin/roles/{role_id}"), ("GET", "/admin/capabilities"),
     ("POST", "/admin/roles"), ("PUT", "/admin/roles/{role_id}"),
     ("DELETE", "/admin/roles/{role_id}"), ("POST", "/admin/workspace-roles/bootstrap"),
+    ("GET", "/admin/workspace-roles/preflight"),
 ], {"roles.manage"})
 # Wiping the workspace is the most destructive action ACP has; it stays owner-only at the route
 # (_require_owner) and is additionally mapped here so it can never be reached by a role.
