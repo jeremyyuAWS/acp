@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { prefersReducedMotion, useDialog } from './a11y.js'
 import {
-  EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, arcPath, capacityMatchesService, chartModel, componentState,
-  defaultMetricFor, eventClock, eventsForNode, filterEvents, formatDuration, gaugeModel,
-  metricsForKind, nodeTypeLabel, outputModel, queueModel, reported, revisionLabel, runModel,
-  sourceModel, tenantConcentration, trendMarkers, updatedAgo,
+  EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, arcPath, capacityMatchesService, chartModel,
+  componentState, defaultMetricFor, eventClock, eventsForNode, filterEvents, formatDuration,
+  gaugeModel, metricGroups, nodeTypeLabel, outputModel, provenance, queueModel, reported,
+  revisionLabel, runModel, seriesForMetric, sourceModel, tenantConcentration, trendMarkers,
+  updatedAgo,
 } from './liveOpsDrawer.js'
 
 /**
@@ -29,11 +30,22 @@ function Value({ children }) {
   return <b style={{ fontSize: 15, overflowWrap: 'anywhere' }}>{children}</b>
 }
 
-function Tile({ label, value, detail }) {
+/** Where a number came from and how stale it is, next to the number. Live Operations mixes a
+ *  two-second event stream, a one-minute Azure sample and figures that were never measured at
+ *  all; rendered identically they all read as "now". */
+function Source({ kind, at, nowMs, detail }) {
+  const source = provenance(kind, { at, nowMs, detail })
+  return <div className="muted" style={{ fontSize: 10.5, marginTop: 3, overflowWrap: 'anywhere' }}>
+    {source.text}
+  </div>
+}
+
+function Tile({ label, value, detail, source, at, nowMs }) {
   return <div style={PANEL}>
     <span style={LABEL}>{label}</span>
     <Value>{value}</Value>
     {detail && <div className="muted" style={{ fontSize: 11, marginTop: 3, overflowWrap: 'anywhere' }}>{detail}</div>}
+    {source && <Source kind={source} at={at} nowMs={nowMs} />}
   </div>
 }
 
@@ -79,7 +91,7 @@ function LiveHeader({ name, kind, state, connection, generatedAt, revision, nowM
 
 /* ─────────────── B. Primary operational visualization ─────────────── */
 
-function WorkerGauge({ gauge, service, capacity }) {
+function WorkerGauge({ gauge, service, capacity, nowMs }) {
   if (!gauge.available) {
     return <div style={{ ...PANEL, padding: 14 }} role="status">
       <b>Worker utilization unavailable</b>
@@ -122,12 +134,63 @@ function WorkerGauge({ gauge, service, capacity }) {
         </div>
       </div>
     </div>
+    <AzureMetrics capacity={capacity} service={service} nowMs={nowMs} />
   </section>
+}
+
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB']
+
+export function humanBytes(value) {
+  if (value == null || !Number.isFinite(Number(value))) return NOT_REPORTED
+  let n = Number(value)
+  let unit = 0
+  while (n >= 1024 && unit < BYTE_UNITS.length - 1) { n /= 1024; unit += 1 }
+  return `${Math.round(n * 10) / 10} ${BYTE_UNITS[unit]}`
+}
+
+/**
+ * What Azure Monitor reports about THIS service's container app, when the app it measured is
+ * this service's. Production runs three differently sized worker apps and WORKER_APP_NAME names
+ * one, so the alternative to this guard is showing one app's restarts and network as another's.
+ */
+function AzureMetrics({ capacity, service, nowMs }) {
+  const mine = capacityMatchesService(capacity, service)
+  if (!capacity?.configured) {
+    return <p className="muted" style={{ fontSize: 11, marginTop: 10 }}>
+      Azure Monitor is not configured, so replica, restart and network measurements are unavailable.
+    </p>
+  }
+  if (!mine) {
+    return <p className="muted" style={{ fontSize: 11, marginTop: 10 }}>
+      Azure Monitor measured <code>{capacity.worker_app_name || 'another app'}</code>, not this
+      service, so its replica, restart and network figures are not shown here — they would not
+      describe this service.
+    </p>
+  }
+  const rows = [
+    ['REPLICAS', 'replicas', (v) => `${v}`],
+    ['CPU IN USE', 'cpu_cores_used', (v) => `${v} cores`],
+    ['MEMORY WORKING SET', 'working_set_bytes', humanBytes],
+    ['REPLICA RESTARTS', 'restarts', (v) => `${v}`],
+    ['NETWORK IN', 'network_in_bytes', humanBytes],
+    ['NETWORK OUT', 'network_out_bytes', humanBytes],
+    ['RESERVED CORES', 'reserved_cores', (v) => `${v} cores`],
+  ]
+  return <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8, marginTop: 11 }}>
+    {rows.map(([label, key, render]) => {
+      const metric = capacity.metrics?.[key]
+      const available = metric?.available && metric.latest != null
+      return <Tile key={key} label={label}
+        value={available ? render(metric.latest) : NOT_REPORTED}
+        detail={metric?.azure_metric ? `Azure metric ${metric.azure_metric}` : undefined}
+        source={available ? 'azure' : 'unavailable'} at={capacity.measured_at} nowMs={nowMs} />
+    })}
+  </div>
 }
 
 const SEGMENT_GLYPH = { running: '●', waiting: '◐', retrying: '▲', failed: '■' }
 
-function QueueBar({ queue, concentration }) {
+function QueueBar({ queue, concentration, generatedAt, nowMs }) {
   const total = queue.total
   return <section aria-label="Shared queue composition" style={{ ...PANEL, padding: 14 }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
@@ -159,13 +222,17 @@ function QueueBar({ queue, concentration }) {
       never estimated from the counts that are.
     </p>}
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8, marginTop: 11 }}>
-      <Tile label="OLDEST WAIT" value={queue.oldestWaitS == null ? NOT_REPORTED : formatDuration(queue.oldestWaitS)} />
+      <Tile label="OLDEST WAIT" value={queue.oldestWaitS == null ? NOT_REPORTED : formatDuration(queue.oldestWaitS)}
+        source={queue.oldestWaitS == null ? 'unavailable' : 'live'} at={generatedAt} nowMs={nowMs} />
       <Tile label="ARRIVAL RATE" value={queue.arrivalPerMin == null ? NOT_REPORTED : `${queue.arrivalPerMin}/min`}
-        detail={queue.arrivalPerMin == null ? undefined : `Over the last ${Math.round(queue.windowMinutes)} min`} />
+        detail={queue.arrivalPerMin == null ? undefined : `Over the last ${Math.round(queue.windowMinutes)} min`}
+        source={queue.arrivalPerMin == null ? 'unavailable' : 'live'} at={generatedAt} nowMs={nowMs} />
       <Tile label="COMPLETION RATE" value={queue.completionPerMin == null ? NOT_REPORTED : `${queue.completionPerMin}/min`}
-        detail={queue.completionPerMin == null ? undefined : `Over the last ${Math.round(queue.windowMinutes)} min`} />
+        detail={queue.completionPerMin == null ? undefined : `Over the last ${Math.round(queue.windowMinutes)} min`}
+        source={queue.completionPerMin == null ? 'unavailable' : 'live'} at={generatedAt} nowMs={nowMs} />
       <Tile label="USERS WAITING" value={queue.waitingUsers == null ? NOT_REPORTED : queue.waitingUsers}
-        detail={queue.schedulingPolicy ? queue.schedulingPolicy.replaceAll('_', ' ') : undefined} />
+        detail={queue.schedulingPolicy ? queue.schedulingPolicy.replaceAll('_', ' ') : undefined}
+        source={queue.waitingUsers == null ? 'unavailable' : 'live'} at={generatedAt} nowMs={nowMs} />
     </div>
     {concentration.concentrated && <p role="status" style={{ margin: '10px 0 0', padding: '9px 11px', fontSize: 12,
       borderLeft: `4px solid ${TONE.warn}`, background: 'var(--warn-bg)', color: 'var(--ink)' }}>
@@ -228,7 +295,8 @@ function SourceHealth({ model, state, nowMs }) {
       <Tile label="LATEST SUCCESSFUL READ"
         value={model.latestRead ? `${formatDuration(Math.max(0, Math.round((nowMs - new Date(model.latestRead).getTime()) / 1000)))} ago` : NOT_REPORTED} />
       {model.unavailable.map((label) => <Tile key={label} label={label.toUpperCase()} value={NOT_REPORTED}
-        detail="The connector layer does not publish this to the activity snapshot" />)}
+        detail="The connector layer does not publish this to the activity snapshot"
+        source="unavailable" />)}
     </div>
   </section>
 }
@@ -244,7 +312,8 @@ function OutputSummary({ model }) {
       <Tile label="WRITES AWAITING COMPLETION" value={model.awaitingWrite} />
       <Tile label="STORAGE FAILURES" value={model.storageFailures == null ? NOT_REPORTED : model.storageFailures}
         detail={model.storageFailures == null ? undefined : 'Dead-lettered jobs in the reporting window'} />
-      <Tile label="TOTAL OUTPUT SIZE" value={NOT_REPORTED} detail="Azure does not report this to the activity snapshot" />
+      <Tile label="TOTAL OUTPUT SIZE" value={NOT_REPORTED} source="unavailable"
+        detail="Azure does not report this to the activity snapshot" />
     </div>
     <p className="muted" style={{ fontSize: 11, margin: '9px 0 0' }}>
       Original source documents are never modified; corrected copies and their evidence are written alongside.
@@ -268,7 +337,7 @@ function IntakeSummary({ snapshot, state }) {
 
 /* ─────────────────── C. Real-time trend strip ─────────────────── */
 
-function TrendStrip({ metrics, metricKey, onMetric, chart, markers, paused }) {
+function TrendStrip({ groups, metricKey, onMetric, chart, markers, paused, source, measuredAt, nowMs }) {
   const [active, setActive] = useState(null)
   const point = active == null ? null : chart.points[active]
   const { width, height, padLeft, padBottom, padTop } = chart.geometry
@@ -277,13 +346,17 @@ function TrendStrip({ metrics, metricKey, onMetric, chart, markers, paused }) {
       <b>Last 15 minutes</b>
       <span style={{ fontSize: 18, fontWeight: 700 }}>{chart.currentLabel}</span>
     </div>
-    <div role="group" aria-label="Trend metric" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '9px 0' }}>
-      {metrics.map((metric) => <button key={metric.key} type="button" className="ghost small"
-        aria-pressed={metric.key === metricKey} onClick={() => { setActive(null); onMetric(metric.key) }}
-        style={metric.key === metricKey ? { borderColor: 'var(--plum)', fontWeight: 700 } : undefined}>
-        {metric.label}
-      </button>)}
-    </div>
+    {groups.map((group) => <div key={group.source} role="group" aria-label={`${group.label} metrics`}
+      style={{ margin: '9px 0' }}>
+      <div className="muted" style={{ fontSize: 10.5, marginBottom: 4 }}>{group.label}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {group.metrics.map((metric) => <button key={metric.key} type="button" className="ghost small"
+          aria-pressed={metric.key === metricKey} onClick={() => { setActive(null); onMetric(metric.key) }}
+          style={metric.key === metricKey ? { borderColor: 'var(--plum)', fontWeight: 700 } : undefined}>
+          {metric.label}
+        </button>)}
+      </div>
+    </div>)}
     {chart.insufficient
       ? <div className="muted" role="status" style={{ height, display: 'grid', placeItems: 'center', fontSize: 12,
         border: '1px dashed var(--line)', borderRadius: 8, textAlign: 'center', padding: 10 }}>
@@ -316,6 +389,7 @@ function TrendStrip({ metrics, metricKey, onMetric, chart, markers, paused }) {
       {point ? `${eventClock(point.at)} — ${point.value}${chart.metric.unit}`
         : `${chart.metric.label}: ${chart.currentLabel} now${paused ? ' · updates paused' : ''}`}
     </div>
+    <Source kind={source} at={source === 'azure' ? measuredAt : undefined} nowMs={nowMs} />
     {!!markers.length && <div className="muted" style={{ fontSize: 11 }}>
       Dashed markers: deployment and scaling moments observed during this session.
     </div>}
@@ -400,8 +474,12 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
   const name = node?.kind === 'run'
     ? `${node.run?.stage || 'Run'} run · ${node.run?.owner || 'unknown user'}`
     : node?.label || 'Component'
-  const metrics = metricsForKind(node?.kind)
-  const chart = useMemo(() => chartModel(shown.samples, metricKey, { nowMs }), [shown.samples, metricKey, nowMs])
+  const groups = metricGroups(node?.kind)
+  // Azure Monitor's own fifteen minutes where it has them — that history covers time before this
+  // tab was opened, which the browser's own samples never can.
+  const picked = seriesForMetric(shown.samples, metricKey,
+    { capacity, service: node?.kind === 'worker' ? node.service : null })
+  const chart = useMemo(() => chartModel(picked.samples, metricKey, { nowMs }), [picked.samples, metricKey, nowMs])
   const nodeEvents = useMemo(() => filterEvents(eventsForNode(shown.events, nodeId), filter), [shown.events, nodeId, filter])
   const markers = useMemo(() => trendMarkers(eventsForNode(shown.events, nodeId),
     { start: nowMs - 15 * 60000, end: nowMs }), [shown.events, nodeId, nowMs])
@@ -413,11 +491,11 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
 
   let primary = null
   if (node?.kind === 'worker') {
-    primary = <WorkerGauge service={node.service} capacity={capacity}
+    primary = <WorkerGauge service={node.service} capacity={capacity} nowMs={nowMs}
       gauge={gaugeModel(node.service, { stalled: snapshot?.summary?.pressure === 'stalled' })} />
   } else if (node?.kind === 'queue') {
-    primary = <QueueBar queue={queueModel(snapshot?.summary, { nowMs })}
-      concentration={tenantConcentration(snapshot?.runs)} />
+    primary = <QueueBar queue={queueModel(snapshot?.summary, { nowMs })} nowMs={nowMs}
+      generatedAt={snapshot?.generated_at} concentration={tenantConcentration(snapshot?.runs)} />
   } else if (node?.kind === 'run') {
     primary = <RunRadial run={node.run || {}} accent={accent}
       model={runModel(node.run, shown.samples, { nowMs })} />
@@ -445,8 +523,9 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
         onClose={onClose} onViewAll={onClose} />
       {state.detail && <p className="muted" style={{ fontSize: 12, margin: 0 }}>{state.detail}</p>}
       {primary}
-      <TrendStrip metrics={metrics} metricKey={metricKey} onMetric={setMetricKey} chart={chart}
-        markers={markers} paused={paused} />
+      <TrendStrip groups={groups} metricKey={metricKey} onMetric={setMetricKey} chart={chart}
+        markers={markers} paused={paused} source={picked.source} measuredAt={picked.measuredAt}
+        nowMs={nowMs} />
       <EventTimeline events={nodeEvents} filter={filter} onFilter={setFilter} paused={paused}
         onPause={() => setFrozen((held) => (held ? null : { samples, events }))}
         showAll={showAll} onShowAll={() => setShowAll(true)}

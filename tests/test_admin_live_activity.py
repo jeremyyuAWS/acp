@@ -28,10 +28,37 @@ class _Response:
 
 def test_live_activity_read_is_available_to_any_signed_in_user(monkeypatch):
     monkeypatch.setattr(system, "_admin_activity_snapshot", lambda: {"runs": [], "summary": {}})
+    monkeypatch.setattr(system, "_azure_block", lambda: None)
     response = _Response()
     assert system.admin_activity(_Request("viewer@example.org"), response) == {
         "runs": [], "summary": {}}
     assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_the_first_read_carries_the_azure_block_so_the_page_is_not_blank(monkeypatch):
+    """A tab that has just loaded should have the infrastructure reading immediately rather than
+    waiting for the stream's next Azure frame, which is up to a TTL away."""
+    monkeypatch.setattr(system, "_admin_activity_snapshot", lambda: {"runs": [], "summary": {}})
+    monkeypatch.setattr(system, "_azure_block", lambda: {"configured": True, "measured_at": "t0"})
+    body = system.admin_activity(_Request("viewer@example.org"), _Response())
+    assert body["azure"] == {"configured": True, "measured_at": "t0"}
+
+
+def test_an_azure_read_that_fails_leaves_the_topology_intact(monkeypatch):
+    """None means "no Azure block", never an empty one: replacing a real reading with zeroes is
+    the failure this whole surface is built to avoid."""
+    monkeypatch.setattr(system, "_admin_activity_snapshot", lambda: {"runs": [], "summary": {}})
+    monkeypatch.setattr(system, "_azure_block", lambda: None)
+    assert "azure" not in system.admin_activity(_Request("viewer@example.org"), _Response())
+
+
+def test_the_azure_block_never_takes_the_live_map_down(monkeypatch):
+    """_azure_block swallows an unimportable control module, a branch without the cache, and a
+    read that raises — all three degrade to None rather than propagating."""
+    import routes.control as control_module
+    monkeypatch.setattr(control_module, "cached_capacity",
+                        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("azure is down")))
+    assert system._azure_block() is None
 
 
 def test_live_activity_read_still_rejects_anonymous_users():

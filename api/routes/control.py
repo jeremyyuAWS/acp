@@ -18,6 +18,8 @@ document nobody sees is recoverable, a document the wrong customer sees is not.
 from __future__ import annotations
 
 import os
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -197,6 +199,126 @@ def set_replicas(body: ReplicaBody, request: Request):
 # metrics/read permission) on the acp-worker resource for the metrics half.
 # ---------------------------------------------------------------------------
 
+# ── The Azure Monitor metric set ────────────────────────────────────────────────────────────
+#
+# REST API names, aggregations and units taken from Microsoft's own supported-metrics reference
+# for Microsoft.App/containerApps (the 2026-07-31 revision of
+# learn.microsoft.com/azure/azure-monitor/reference/supported-metrics/microsoft-app-containerapps-metrics),
+# not from memory. That matters here more than usual: a wrong metric name is not an error — Azure
+# Monitor simply returns nothing for it, which is indistinguishable from a metric that has no data
+# yet, so a typo would present as "Azure has not reported this" forever.
+#
+# `agg` is the aggregation asked for AND the attribute the data point carries it in (Average →
+# `dp.average`, Total → `dp.total`, Maximum → `dp.maximum`). Metrics are requested in ONE call per
+# aggregation, because metrics.list takes a single aggregation for every name in the call.
+#
+# Deliberately NOT here: the Java (Jvm*) and Gpu categories. ACP's workers are Python and run no
+# GPU, so those would be permanently empty rows — "not reported" is only useful when it describes
+# something that could have been reported.
+_AZ_METRICS = (
+    # rest name,                   key,                 agg,       unit,     scale, label
+    ("CpuPercentage",              "cpu_percent",       "Average", "%",      1,     "CPU utilization"),
+    ("MemoryPercentage",           "memory_percent",    "Average", "%",      1,     "Memory utilization"),
+    ("Replicas",                   "replicas",          "Average", "",       1,     "Replica count"),
+    ("UsageNanoCores",             "cpu_cores_used",    "Average", " cores", 1e-9,  "CPU in use"),
+    ("WorkingSetBytes",            "working_set_bytes", "Average", " B",     1,     "Memory working set"),
+    ("ResponseTime",               "response_ms",       "Average", " ms",    1,     "Average response time"),
+    ("TotalCoresQuotaUsed",        "reserved_cores",    "Maximum", " cores", 1,     "Reserved cores"),
+    ("RestartCount",               "restarts",          "Total",   "",       1,     "Replica restarts"),
+    ("Requests",                   "requests",          "Total",   "",       1,     "Requests"),
+    ("RxBytes",                    "network_in_bytes",  "Total",   " B",     1,     "Network in"),
+    ("TxBytes",                    "network_out_bytes", "Total",   " B",     1,     "Network out"),
+    ("ResiliencyRequestRetries",   "retries",           "Total",   "",       1,     "Request retries"),
+    ("ResiliencyConnectTimeouts",  "connect_timeouts",  "Total",   "",       1,     "Connection timeouts"),
+    ("ResiliencyEjectedHosts",     "ejected_hosts",     "Total",   "",       1,     "Ejected hosts"),
+)
+
+# Azure Monitor samples these at PT1M, so 15 one-minute points is the finest real history there is
+# for a 15-minute strip. The window is REPORTED in the payload rather than assumed by the reader:
+# the panel used to hardcode "last 5 min" next to a figure whose window lived only in this file.
+_AZ_METRIC_WINDOW_MIN = 15
+_AZ_METRIC_INTERVAL = "PT1M"
+
+
+def _metric_points(metric, agg: str, scale: float) -> list[dict]:
+    """One Azure metric's data points as [{at, value}], newest last.
+
+    A point with no value for this aggregation is DROPPED rather than carried as a zero — Azure
+    returns gaps for minutes it has no sample for, and a zero in a gap is a measurement nobody
+    took. A point with no timestamp is kept for the average and left out of the series, because
+    something has to place it on a time axis and nothing here may invent that.
+    """
+    attr = agg.lower()
+    points = []
+    for series in (getattr(metric, "timeseries", None) or []):
+        for dp in (getattr(series, "data", None) or []):
+            value = getattr(dp, attr, None)
+            if value is None:
+                continue
+            stamp = getattr(dp, "time_stamp", None) or getattr(dp, "timestamp", None)
+            points.append({"at": _iso(stamp) if stamp is not None else None,
+                           "value": round(float(value) * scale, 4)})
+    points.sort(key=lambda p: (p["at"] is None, p["at"] or ""))
+    return points
+
+
+def _gather_metrics(app_id: str, now: datetime) -> tuple[dict, str | None]:
+    """Every metric in _AZ_METRICS, with its per-minute series, or ({}, reason) on failure.
+
+    One call per aggregation rather than one per metric: metrics.list accepts a comma-separated
+    name list but a single aggregation, so three calls cover fourteen metrics. A group that fails
+    degrades only its own metrics — the reason is recorded, the other groups still return.
+
+    A metric Azure does not answer for is present in the result with `available: false` and null
+    values, never absent and never zero. The distinction the UI needs is between "nothing is
+    happening" and "nobody measured", and dropping the key would erase it.
+    """
+    timespan = (f"{(now - timedelta(minutes=_AZ_METRIC_WINDOW_MIN)).isoformat()}"
+                f"/{now.isoformat()}")
+    out = {key: {"label": label, "unit": unit, "aggregation": agg, "azure_metric": rest,
+                 "available": False, "latest": None, "average": None, "series": []}
+           for rest, key, agg, unit, _scale, label in _AZ_METRICS}
+    by_agg: dict[str, dict[str, tuple]] = {}
+    for rest, key, agg, unit, scale, label in _AZ_METRICS:
+        by_agg.setdefault(agg, {})[rest] = (key, scale)
+    reason = None
+    client = _monitor_client()
+    for agg, group in by_agg.items():
+        try:
+            answer = client.metrics.list(
+                app_id, metricnames=",".join(group), aggregation=agg,
+                timespan=timespan, interval=_AZ_METRIC_INTERVAL)
+        except Exception as e:  # noqa: BLE001 — this group degrades; the others still run.
+            status = getattr(e, "status_code", None)
+            # 401/403 is the one actionable case: the identity is missing the Monitoring Reader
+            # role. Recorded once for the whole response rather than per group, since one missing
+            # grant fails every group identically.
+            reason = "permission" if status in (401, 403) else (reason or "error")
+            continue
+        for metric in (getattr(answer, "value", None) or []):
+            name = getattr(getattr(metric, "name", None), "value", None)
+            spec = group.get(name)
+            # A name this group did not ask for: ignore it rather than mapping it into whichever
+            # key happens to share the name under a different aggregation.
+            if spec is None:
+                continue
+            key, scale = spec
+            points = _metric_points(metric, agg, scale)
+            if not points:
+                continue
+            values = [p["value"] for p in points]
+            out[key].update(available=True, latest=values[-1],
+                            average=round(sum(values) / len(values), 4),
+                            series=[p for p in points if p["at"]])
+    if reason is None and not any(m["available"] for m in out.values()):
+        # The calls succeeded and came back empty. CpuPercentage and MemoryPercentage are
+        # Microsoft Preview metrics and are simply unpopulated on a fresh or freshly-scaled
+        # resource — "we asked and got nothing" wants a different operator response from
+        # "we could not ask", so it keeps its own reason.
+        reason = "no_data"
+    return out, reason
+
+
 def _empty_capacity(configured: bool) -> dict:
     return {
         "configured": configured, "current_replicas": None, "min_replicas": None,
@@ -212,6 +334,10 @@ def _empty_capacity(configured: bool) -> dict:
         # `configured: true` and every value None. The caller cannot tell the difference, which
         # is how a panel pointed at a retired app went unnoticed.
         "app_unavailable": False,
+        # Per-metric detail with each metric's own 15-minute PT1M series. Present in every shape
+        # (empty here) so a caller never has to test for the key's existence before the values.
+        "metrics": {}, "metrics_window_minutes": _AZ_METRIC_WINDOW_MIN,
+        "metrics_interval": _AZ_METRIC_INTERVAL,
     }
 
 
@@ -317,29 +443,19 @@ def get_capacity():
         swallowed("routes.control.get_capacity: listing the container-app revision replicas failed")
 
     try:
-        metrics = _monitor_client().metrics.list(
-            app.id, metricnames="CpuPercentage,MemoryPercentage", aggregation="Average",
-            timespan=f"{(now - timedelta(minutes=5)).isoformat()}/{now.isoformat()}",
-            interval="PT1M")
-        for m in metrics.value:
-            points = [dp.average for ts in (m.timeseries or []) for dp in ts.data
-                      if dp.average is not None]
-            if not points:
-                continue
-            avg = round(sum(points) / len(points), 1)
-            metric_name = getattr(m.name, "value", None)
-            if metric_name == "CpuPercentage":
-                result["cpu_percent"] = avg
-            elif metric_name == "MemoryPercentage":
-                result["memory_percent"] = avg
+        metrics, reason = _gather_metrics(app.id, now)
+        result["metrics"] = metrics
+        # cpu_percent / memory_percent keep exactly the meaning they have always had — the AVERAGE
+        # over the metric window — so every existing caller is unaffected. What changed is that
+        # the window is now REPORTED (metrics_window_minutes) instead of living only in this file
+        # while the panel next to the figure said "last 5 min" from a hardcoded string.
+        result["cpu_percent"] = metrics["cpu_percent"]["average"]
+        result["memory_percent"] = metrics["memory_percent"]["average"]
         result["metrics_available"] = result["cpu_percent"] is not None or result["memory_percent"] is not None
-        if not result["metrics_available"]:
-            # The call succeeded — this is Azure Monitor genuinely having no data points yet
-            # (CpuPercentage/MemoryPercentage are Microsoft Preview metrics and can simply be
-            # unpopulated on a freshly-created or freshly-scaled resource), not a permission or
-            # network problem. Distinct from the except branch below on purpose: "we asked and
-            # got nothing back" and "we couldn't ask at all" want different operator responses.
-            result["metrics_unavailable_reason"] = "no_data"
+        # Unchanged in meaning: this flag and this reason are about UTILIZATION specifically. A
+        # deployment where CPU/memory are unpopulated but Replicas and RestartCount are not is
+        # real, and each metric carries its own `available` for exactly that case.
+        result["metrics_unavailable_reason"] = None if result["metrics_available"] else reason
     except Exception as e:  # noqa: BLE001 — metrics_available stays False; min/max/current_replicas
         # `status_code` is the standard azure-core HttpResponseError attribute — checked via
         # getattr rather than an isinstance import, since this module only imports the Azure SDK
@@ -391,6 +507,49 @@ def get_capacity():
         swallowed("routes.control.get_capacity: reading a replica's capacity fields failed")
 
     return result
+
+
+# ── One Azure reading, shared by every SSE client ───────────────────────────────────────────
+#
+# The live map's SSE stream builds a frame every two seconds, and there is one stream per open
+# Live Operations tab. Calling Azure Monitor on that cadence, per client, would be both slow (the
+# metrics API is a network round trip on the critical path of a frame) and a good way to meet its
+# rate limit; it also answers PT1M metrics, so asking more than once a minute cannot return
+# anything new anyway.
+#
+# So the reading is taken at most once per TTL and shared. `measured_at` inside the payload says
+# when it was actually taken, which is what lets the UI label the value's freshness honestly
+# rather than implying the age of the frame it arrived in.
+_CAPACITY_TTL_S = float(os.environ.get("WORKER_CAPACITY_TTL_S") or 30)
+_capacity_lock = threading.Lock()
+_capacity_cache: dict = {"at": 0.0, "value": None}
+
+
+def cached_capacity(ttl_s: float | None = None) -> dict | None:
+    """The most recent Azure capacity reading, refreshed at most once per `ttl_s`.
+
+    Returns None only if the read itself raised — callers treat that as "no Azure block this
+    frame" and keep whatever they last had, rather than replacing a real reading with an empty
+    one. An UNCONFIGURED deployment is not that case: it returns the ordinary
+    `configured: false` payload, because "Azure is not set up" is an answer the UI shows.
+
+    Thread-safe because the SSE route calls it from asyncio.to_thread, so several event loops can
+    land here at once. The lock is held across the refresh deliberately: the alternative lets N
+    clients each start their own Azure call on the same expiry.
+    """
+    ttl = _CAPACITY_TTL_S if ttl_s is None else ttl_s
+    now = time.monotonic()
+    with _capacity_lock:
+        cached = _capacity_cache["value"]
+        if cached is not None and (now - _capacity_cache["at"]) < ttl:
+            return cached
+        try:
+            value = get_capacity()
+        except Exception:  # noqa: BLE001 — never take the live map down for a capacity read.
+            swallowed("routes.control.cached_capacity: refreshing the Azure capacity reading failed")
+            return cached
+        _capacity_cache.update(at=now, value=value)
+        return value
 
 
 def _iso(v):

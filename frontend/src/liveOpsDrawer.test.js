@@ -8,8 +8,9 @@ import {
   CAPACITY_RULES, NOT_REPORTED, TREND_WINDOW_MS, appendSample, arcPath, capacityMatchesService,
   chartModel, componentState, defaultMetricFor, deriveEvents, etaSeconds, eventClock,
   eventsForNode, filterEvents, formatDuration, gaugeModel, mergeEvents, metricsForKind,
-  niceCeiling, num, outputModel, queueModel, rateSeries, reported, revisionLabel, runModel,
-  sampleForNode, secondsSince, sourceModel, tenantConcentration, trendMarkers, updatedAgo,
+  PROVENANCE, metricGroups, niceCeiling, num, outputModel, provenance, queueModel, rateSeries,
+  reported, revisionLabel, runModel, sampleForNode, secondsSince, seriesForMetric, sourceModel,
+  tenantConcentration, trendMarkers, updatedAgo,
 } from './liveOpsDrawer.js'
 
 const NOW = Date.parse('2026-09-04T14:32:00Z')
@@ -235,7 +236,90 @@ describe('The fifteen-minute trend keeps only what it measured', () => {
     expect(defaultMetricFor('queue')).toBe('queue_depth')
     expect(defaultMetricFor('run')).toBe('throughput')
     expect(metricsForKind('worker').map((m) => m.key))
-      .toEqual(['active_jobs', 'queue_depth', 'throughput', 'cpu', 'memory', 'replicas'])
+      .toEqual(['active_jobs', 'queue_depth', 'throughput', 'cpu', 'memory', 'replicas',
+        'cpu_cores', 'working_set', 'restarts', 'network_in', 'network_out'])
+  })
+
+  it('keeps a two-second ACP reading and a one-minute Azure sample in separate groups', () => {
+    // Rendered side by side in one picker they read as the same kind of fact; they are not, and
+    // the difference is exactly what the provenance line exists to state.
+    expect(metricGroups('worker').map((group) => [group.label, group.metrics.length]))
+      .toEqual([['ACP live', 3], ['Azure Monitor', 8]])
+  })
+
+  it('offers request health on intake, where the requests actually arrive', () => {
+    // The workers claim from a queue rather than serving requests, so ingress metrics on a worker
+    // node would be a permanent row of zeroes.
+    const intake = metricsForKind('intake').map((m) => m.key)
+    expect(intake).toContain('requests')
+    expect(intake).toContain('response_ms')
+    expect(metricsForKind('worker')).not.toContain('requests')
+  })
+})
+
+describe('Azure Monitor history is preferred over what this tab happened to see', () => {
+  const capacity = { worker_app_name: 'acp-assess', measured_at: iso(-20), metrics: {
+    cpu_percent: { available: true, latest: 54, average: 47,
+      series: [{ at: iso(-120), value: 40 }, { at: iso(-60), value: 47 }, { at: iso(0), value: 54 }] },
+    restarts: { available: false, latest: null, series: [] },
+  } }
+  const observed = [{ at: iso(-30), cpu_pct: 51 }]
+
+  it('charts Azure own fifteen minutes rather than the minute this tab has been open', () => {
+    const picked = seriesForMetric(observed, 'cpu', { capacity, service })
+    expect(picked.source).toBe('azure')
+    expect(picked.samples.map((sample) => sample.cpu_pct)).toEqual([40, 47, 54])
+    expect(picked.measuredAt).toBe(iso(-20))
+  })
+
+  it('refuses another container app history for a service it does not describe', () => {
+    const picked = seriesForMetric(observed, 'cpu', { capacity, service: { role: 'discovery' } })
+    expect(picked).toEqual({ samples: [], source: 'unavailable' })
+  })
+
+  it('reports an Azure metric with no data as Azure having none, not as no such metric', () => {
+    expect(seriesForMetric(observed, 'restarts', { capacity, service })).toEqual({ samples: [], source: 'azure' })
+    expect(seriesForMetric(observed, 'network_in', { capacity, service })).toEqual({ samples: [], source: 'unavailable' })
+  })
+
+  it('leaves an ACP-measured trend on what this session observed', () => {
+    expect(seriesForMetric(observed, 'active_jobs', { capacity, service }))
+      .toEqual({ samples: observed, source: 'live' })
+  })
+
+  it('prefers the newest one-minute sample over the window average for "right now"', () => {
+    const snapshot = { generated_at: iso(0), summary: { by_stage: { assess: { queued: 2, completed: 9 } } } }
+    const sample = sampleForNode({ kind: 'worker', service }, { snapshot, capacity })
+    expect(sample.cpu_pct).toBe(54)      // latest, not the 47 average
+    expect(sample.restarts).toBe(null)   // reported unavailable stays unavailable
+  })
+
+  it('falls back to the flat average for a backend that publishes no metrics block', () => {
+    const older = { worker_app_name: 'acp-assess', metrics_available: true, cpu_percent: 33, memory_percent: 44 }
+    const snapshot = { generated_at: iso(0), summary: { by_stage: {} } }
+    const sample = sampleForNode({ kind: 'worker', service }, { snapshot, capacity: older })
+    expect(sample.cpu_pct).toBe(33)
+    expect(sample.memory_pct).toBe(44)
+  })
+})
+
+describe('Every value says where it came from and how stale it is', () => {
+  it('states the source and the age together', () => {
+    expect(provenance('live', { at: iso(-2), nowMs: NOW }).text).toBe('Live · ACP event stream · 2s ago')
+    expect(provenance('azure', { at: iso(-20), nowMs: NOW }).text)
+      .toBe('Azure Monitor · 1 min interval · 20s ago')
+  })
+
+  it('does not imply an age it cannot compute', () => {
+    // A source with no timestamp says what it is and stops, rather than reading as "just now".
+    expect(provenance('estimate').text).toBe('Estimated from configured capacity · derived, not measured')
+    expect(provenance('estimate').ageS).toBe(null)
+  })
+
+  it('names an estimate as an estimate and billing as billing', () => {
+    expect(PROVENANCE.estimate.detail).toMatch(/not measured/)
+    expect(PROVENANCE.billing.detail).toMatch(/not live/)
+    expect(provenance('nonsense').label).toBe('Not reported')
   })
 })
 

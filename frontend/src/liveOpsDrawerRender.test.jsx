@@ -17,9 +17,26 @@ const NOW = Date.parse('2026-09-04T14:32:00Z')
 const iso = (offsetS) => new Date(NOW + offsetS * 1000).toISOString()
 
 const service = { role: 'assess', stage: 'assess', active: 2, slots: 3, available: 1, alive: true, age_s: 4, version: 'v25' }
+const azureMetric = (label, rest, latest, series = [], available = true) => ({
+  label, azure_metric: rest, available, latest, average: latest, unit: '',
+  series: series.map(([offsetS, value]) => ({ at: iso(offsetS), value })),
+})
+
 const capacity = { configured: true, worker_app_name: 'acp-assess', current_replicas: 2,
-  metrics_available: true, cpu_percent: 54, memory_percent: 67,
-  active_revision_name: 'acp-assess--v25', revision_provisioning_state: 'Provisioned' }
+  metrics_available: true, cpu_percent: 47, memory_percent: 67, measured_at: iso(-20),
+  metrics_window_minutes: 15, metrics_interval: 'PT1M',
+  active_revision_name: 'acp-assess--v25', revision_provisioning_state: 'Provisioned',
+  metrics: {
+    cpu_percent: azureMetric('CPU utilization', 'CpuPercentage', 54, [[-120, 40], [-60, 47], [0, 54]]),
+    memory_percent: azureMetric('Memory utilization', 'MemoryPercentage', 67, [[-60, 63], [0, 67]]),
+    replicas: azureMetric('Replica count', 'Replicas', 2, [[-60, 1], [0, 2]]),
+    cpu_cores_used: azureMetric('CPU in use', 'UsageNanoCores', 1.5, [[-60, 1.2], [0, 1.5]]),
+    working_set_bytes: azureMetric('Memory working set', 'WorkingSetBytes', 2147483648, [[0, 2147483648]]),
+    restarts: azureMetric('Replica restarts', 'RestartCount', 3, [[-60, 1], [0, 3]]),
+    network_in_bytes: azureMetric('Network in', 'RxBytes', 1048576, [[0, 1048576]]),
+    network_out_bytes: azureMetric('Network out', 'TxBytes', 524288, [[0, 524288]]),
+    reserved_cores: azureMetric('Reserved cores', 'TotalCoresQuotaUsed', null, [], false),
+  } }
 
 const snapshot = {
   generated_at: iso(-3),
@@ -159,6 +176,71 @@ describe('Primary visualization per node', () => {
     expect(container.textContent).toContain('CORRECTED COPIES PRODUCED')
     expect(container.textContent).toMatch(/TOTAL OUTPUT SIZE\s*Not reported/)
     expect(container.textContent).toContain('Original source documents are never modified')
+  })
+})
+
+describe('Azure Monitor in the drawer', () => {
+  const workerNode = { kind: 'worker', label: 'Assess workers', service }
+
+  it('shows what Azure actually reports about this service app', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode })
+    expect(container.textContent).toContain('REPLICA RESTARTS')
+    expect(container.textContent).toContain('Azure metric RestartCount')
+    expect(container.textContent).toContain('NETWORK IN')
+    expect(container.textContent).toContain('1 MB')            // bytes rendered as bytes
+    expect(container.textContent).toContain('2 GB')            // working set
+    expect(container.textContent).toContain('1.5 cores')
+  })
+
+  it('names a metric Azure did not answer for rather than showing it as zero', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode })
+    expect(container.textContent).toMatch(/RESERVED CORES\s*Not reported/)
+  })
+
+  it('refuses to show one container app measurements as another service own', async () => {
+    // Production runs three differently sized worker apps and WORKER_APP_NAME names one.
+    const container = await mount({ nodeId: 'stage:discover',
+      node: { kind: 'worker', label: 'Discover workers', service: { ...service, role: 'discovery', stage: 'discover' } } })
+    expect(container.textContent).toContain('Azure Monitor measured')
+    expect(container.textContent).toContain('not this service')
+    expect(container.textContent).not.toContain('REPLICA RESTARTS')
+  })
+
+  it('says so plainly when Azure is not configured at all', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, capacity: { configured: false } })
+    expect(container.textContent).toContain('Azure Monitor is not configured')
+  })
+
+  it('plots Azure own history rather than the minute this tab has been open', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode })
+    await click(buttonNamed(container, 'CPU utilization'))
+    // Three Azure points, not the browser's own samples — which carry no cpu at all here.
+    expect(container.querySelectorAll('circle[tabindex="0"]').length).toBe(3)
+    expect(container.textContent).toContain('Azure Monitor · 1 min interval · 20s ago')
+  })
+
+  it('separates a two-second ACP reading from a one-minute Azure sample in the picker', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode })
+    expect(container.querySelector('[aria-label="ACP live metrics"]')).toBeTruthy()
+    expect(container.querySelector('[aria-label="Azure Monitor metrics"]')).toBeTruthy()
+  })
+})
+
+describe('Provenance', () => {
+  it('labels a live reading with its age and an unmeasured one as unavailable', async () => {
+    const container = await mount({ nodeId: 'infra:queue', node: { kind: 'queue', label: 'Shared queue' } })
+    expect(container.textContent).toContain('Live · ACP event stream · 3s ago')
+    const output = await mount({ nodeId: 'infra:output', node: { kind: 'output', label: 'Durable outputs' } })
+    expect(output.textContent).toContain('Not reported · no measurement available')
+  })
+
+  it('never labels an Azure sample as live', async () => {
+    const container = await mount({ nodeId: 'stage:assess',
+      node: { kind: 'worker', label: 'Assess workers', service } })
+    const azureLines = [...container.querySelectorAll('div')]
+      .filter((el) => el.textContent.startsWith('Azure Monitor ·'))
+    expect(azureLines.length).toBeGreaterThan(0)
+    expect(azureLines.every((el) => el.textContent.includes('1 min interval'))).toBe(true)
   })
 })
 

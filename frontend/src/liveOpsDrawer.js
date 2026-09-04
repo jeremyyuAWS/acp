@@ -31,6 +31,43 @@ export function reported(value, suffix = '') {
   return n == null ? NOT_REPORTED : `${n}${suffix}`
 }
 
+/* ───────────────────── Provenance and freshness ───────────────────── */
+
+/**
+ * Where a number came from and how stale it is, attached to the number itself.
+ *
+ * Live Operations mixes measurements with very different standing: a job tally from a two-second
+ * event stream, an Azure Monitor metric sampled once a minute, a Log Analytics row three minutes
+ * behind, a figure derived from configured capacity that was never measured at all, and billing
+ * data Microsoft refreshes roughly every four hours. Rendered identically they all read as "now",
+ * which is the quiet way a dashboard becomes untrustworthy — the reader cannot tell which numbers
+ * they may act on immediately.
+ *
+ * So every value carries its source. An estimate says it is an estimate, in the same place a
+ * measurement says when it was measured.
+ */
+export const PROVENANCE = {
+  live: { label: 'Live', detail: 'ACP event stream' },
+  azure: { label: 'Azure Monitor', detail: '1 min interval' },
+  session: { label: 'Observed in this session', detail: 'sampled from the live stream' },
+  logs: { label: 'Log Analytics', detail: 'delayed' },
+  estimate: { label: 'Estimated from configured capacity', detail: 'derived, not measured' },
+  billing: { label: 'Cost Management', detail: 'billing data, not live' },
+  unavailable: { label: 'Not reported', detail: 'no measurement available' },
+}
+
+/**
+ * "Live · 2s ago", "Azure Monitor · 1 min interval · 20s ago", "Estimated from configured
+ * capacity". An age is shown only when there is an instant to compute it from — a source with no
+ * timestamp says what it is and stops, rather than implying it was measured just now.
+ */
+export function provenance(kind, { at, nowMs = Date.now(), detail } = {}) {
+  const source = PROVENANCE[kind] || PROVENANCE.unavailable
+  const age = at ? secondsSince(at, nowMs) : null
+  const parts = [source.label, detail ?? source.detail, age == null ? null : `${formatDuration(age)} ago`]
+  return { kind, label: source.label, ageS: age, text: parts.filter(Boolean).join(' · ') }
+}
+
 /* ─────────────────────────── A. Live header ─────────────────────────── */
 
 /** Status is icon + text, never colour alone (WCAG 1.4.1). The glyphs are deliberately
@@ -381,28 +418,76 @@ export function outputModel(snapshot = {}) {
 
 /* ─────────────────────── C. Real-time trend strip ─────────────────────── */
 
+/**
+ * `azure` names the key in the capacity payload's `metrics` block that this trend is measured
+ * from. Those come with Azure Monitor's OWN fifteen-minute, one-minute-interval history, which
+ * covers time before this tab was opened — so where an Azure series exists it is preferred over
+ * the samples this browser collected, and the strip says which it is showing.
+ */
 export const TREND_METRICS = {
-  active_jobs: { key: 'active_jobs', label: 'Active jobs', field: 'active_jobs', unit: '' },
-  queue_depth: { key: 'queue_depth', label: 'Queue depth', field: 'queue_depth', unit: '' },
-  throughput: { key: 'throughput', label: 'Throughput', field: 'completed', rate: true, unit: '/min' },
-  cpu: { key: 'cpu', label: 'CPU utilization', field: 'cpu_pct', unit: '%' },
-  memory: { key: 'memory', label: 'Memory utilization', field: 'memory_pct', unit: '%' },
-  failure_rate: { key: 'failure_rate', label: 'Failure rate', field: 'failure_pct', unit: '%' },
-  replicas: { key: 'replicas', label: 'Replica count', field: 'replicas', unit: '' },
-  oldest_wait: { key: 'oldest_wait', label: 'Oldest queue wait', field: 'oldest_wait_s', unit: 's' },
+  active_jobs: { key: 'active_jobs', label: 'Active jobs', field: 'active_jobs', unit: '', source: 'live' },
+  queue_depth: { key: 'queue_depth', label: 'Queue depth', field: 'queue_depth', unit: '', source: 'live' },
+  throughput: { key: 'throughput', label: 'Throughput', field: 'completed', rate: true, unit: '/min', source: 'session' },
+  failure_rate: { key: 'failure_rate', label: 'Failure rate', field: 'failure_pct', unit: '%', source: 'live' },
+  oldest_wait: { key: 'oldest_wait', label: 'Oldest queue wait', field: 'oldest_wait_s', unit: 's', source: 'live' },
+  cpu: { key: 'cpu', label: 'CPU utilization', field: 'cpu_pct', unit: '%', source: 'azure', azure: 'cpu_percent' },
+  memory: { key: 'memory', label: 'Memory utilization', field: 'memory_pct', unit: '%', source: 'azure', azure: 'memory_percent' },
+  replicas: { key: 'replicas', label: 'Replica count', field: 'replicas', unit: '', source: 'azure', azure: 'replicas' },
+  cpu_cores: { key: 'cpu_cores', label: 'CPU in use', field: 'cpu_cores', unit: ' cores', source: 'azure', azure: 'cpu_cores_used' },
+  working_set: { key: 'working_set', label: 'Memory working set', field: 'working_set_bytes', unit: ' B', bytes: true, source: 'azure', azure: 'working_set_bytes' },
+  restarts: { key: 'restarts', label: 'Replica restarts', field: 'restarts', unit: '', source: 'azure', azure: 'restarts' },
+  network_in: { key: 'network_in', label: 'Network in', field: 'network_in_bytes', unit: ' B', bytes: true, source: 'azure', azure: 'network_in_bytes' },
+  network_out: { key: 'network_out', label: 'Network out', field: 'network_out_bytes', unit: ' B', bytes: true, source: 'azure', azure: 'network_out_bytes' },
+  requests: { key: 'requests', label: 'Requests', field: 'requests', unit: '', source: 'azure', azure: 'requests' },
+  response_ms: { key: 'response_ms', label: 'Average response time', field: 'response_ms', unit: ' ms', source: 'azure', azure: 'response_ms' },
+  retries: { key: 'retries', label: 'Request retries', field: 'retries', unit: '', source: 'azure', azure: 'retries' },
+  connect_timeouts: { key: 'connect_timeouts', label: 'Connection timeouts', field: 'connect_timeouts', unit: '', source: 'azure', azure: 'connect_timeouts' },
+  ejected_hosts: { key: 'ejected_hosts', label: 'Ejected hosts', field: 'ejected_hosts', unit: '', source: 'azure', azure: 'ejected_hosts' },
 }
 
 const METRICS_BY_KIND = {
-  worker: ['active_jobs', 'queue_depth', 'throughput', 'cpu', 'memory', 'replicas'],
+  worker: ['active_jobs', 'queue_depth', 'throughput',
+    'cpu', 'memory', 'replicas', 'cpu_cores', 'working_set', 'restarts', 'network_in', 'network_out'],
   queue: ['queue_depth', 'oldest_wait', 'throughput', 'failure_rate', 'active_jobs'],
   run: ['throughput', 'active_jobs', 'queue_depth'],
   source: ['active_jobs', 'throughput'],
   output: ['throughput', 'failure_rate'],
-  intake: ['active_jobs', 'queue_depth', 'throughput'],
+  intake: ['active_jobs', 'queue_depth', 'throughput',
+    'requests', 'response_ms', 'retries', 'connect_timeouts', 'ejected_hosts'],
 }
 
 export function metricsForKind(kind) {
   return (METRICS_BY_KIND[kind] || ['active_jobs', 'queue_depth', 'throughput']).map((key) => TREND_METRICS[key])
+}
+
+/** The same metrics, split by where they are measured, so the picker never puts a two-second ACP
+ *  reading and a one-minute Azure sample side by side as though they were the same kind of fact. */
+export function metricGroups(kind) {
+  const groups = new Map()
+  for (const metric of metricsForKind(kind)) {
+    const source = metric.source === 'azure' ? 'azure' : 'live'
+    if (!groups.has(source)) groups.set(source, { source, label: source === 'azure' ? 'Azure Monitor' : 'ACP live', metrics: [] })
+    groups.get(source).metrics.push(metric)
+  }
+  return [...groups.values()]
+}
+
+/**
+ * The samples to chart for one metric: Azure Monitor's own series when this component's app is
+ * the one Azure measured, otherwise what this browser observed.
+ *
+ * The guard is the same one that governs the CPU and memory numbers — production runs three
+ * differently sized worker apps and only one is measured, so charting the measured app's history
+ * on a service it does not describe would be a fabrication with real data in it.
+ */
+export function seriesForMetric(observed = [], metricKey, { capacity = null, service = null } = {}) {
+  const metric = TREND_METRICS[metricKey]
+  if (!metric?.azure) return { samples: observed, source: metric?.source || 'session' }
+  if (service && !capacityMatchesService(capacity, service)) return { samples: [], source: 'unavailable' }
+  const azure = capacity?.metrics?.[metric.azure]
+  if (!azure?.series?.length) return { samples: [], source: azure ? 'azure' : 'unavailable' }
+  return { samples: azure.series.map((point) => ({ at: point.at, [metric.field]: num(point.value) })),
+    source: 'azure', measuredAt: capacity?.measured_at }
 }
 
 export function defaultMetricFor(kind) {
@@ -426,23 +511,49 @@ export function sampleForNode(data = {}, ctx = {}) {
   const blank = {
     active_jobs: null, queue_depth: null, completed: null, cpu_pct: null,
     memory_pct: null, failure_pct: null, replicas: null, oldest_wait_s: null,
+    cpu_cores: null, working_set_bytes: null, restarts: null,
+    network_in_bytes: null, network_out_bytes: null,
+    requests: null, response_ms: null, retries: null, connect_timeouts: null, ejected_hosts: null,
   }
   if (data.kind === 'worker') {
     const service = data.service || {}
     const stage = stages[service.stage] || {}
     const mine = capacityMatchesService(capacity, service)
+    // `latest` is the newest one-minute sample; the flat cpu_percent/memory_percent fields are the
+    // window AVERAGE and are the fallback for a backend that does not publish the metrics block.
+    const azure = (key, fallback) => {
+      if (!mine) return null
+      const metric = capacity?.metrics?.[key]
+      if (metric) return metric.available ? num(metric.latest) : null
+      return fallback === undefined ? null : num(fallback)
+    }
     return { ...blank, ...base,
       active_jobs: num(service.active), queue_depth: num(stage.queued),
       completed: num(stage.completed),
-      cpu_pct: mine && capacity?.metrics_available ? num(capacity.cpu_percent) : null,
-      memory_pct: mine && capacity?.metrics_available ? num(capacity.memory_percent) : null,
-      replicas: mine ? num(capacity.current_replicas) : null }
+      cpu_pct: azure('cpu_percent', capacity?.metrics_available ? capacity.cpu_percent : null),
+      memory_pct: azure('memory_percent', capacity?.metrics_available ? capacity.memory_percent : null),
+      replicas: azure('replicas', capacity?.current_replicas),
+      cpu_cores: azure('cpu_cores_used'),
+      working_set_bytes: azure('working_set_bytes'),
+      restarts: azure('restarts'),
+      network_in_bytes: azure('network_in_bytes'),
+      network_out_bytes: azure('network_out_bytes') }
   }
   if (data.kind === 'queue' || data.kind === 'intake') {
     const failed = num(queue.failed)
     const done = num(queue.completed)
     const denominator = (failed ?? 0) + (done ?? 0)
+    // Request health belongs to whatever app Azure measured. It is attached to intake rather than
+    // to a worker because these are ingress metrics and the workers claim from a queue instead of
+    // serving requests — on a worker app they would be a permanent row of zeroes.
+    const ingress = (key) => {
+      const metric = data.kind === 'intake' ? capacity?.metrics?.[key] : null
+      return metric?.available ? num(metric.latest) : null
+    }
     return { ...blank, ...base,
+      requests: ingress('requests'), response_ms: ingress('response_ms'),
+      retries: ingress('retries'), connect_timeouts: ingress('connect_timeouts'),
+      ejected_hosts: ingress('ejected_hosts'),
       active_jobs: num(summary.running), queue_depth: num(summary.queued),
       completed: num(summary.completed_jobs),
       failure_pct: failed == null || done == null || !denominator

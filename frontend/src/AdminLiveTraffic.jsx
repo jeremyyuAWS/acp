@@ -113,6 +113,23 @@ export function capacityValue(value, suffix = '') {
   return value == null || value === '' ? 'Not reported' : `${value}${suffix}`
 }
 
+/** One Azure metric's newest one-minute sample, or "Not reported" — never a zero standing in for
+ *  a metric Azure did not answer for. */
+export function azureLatest(capacity, key, suffix = '') {
+  const metric = capacity?.metrics?.[key]
+  return metric?.available && metric.latest != null ? `${metric.latest}${suffix}` : 'Not reported'
+}
+
+export function azureBytes(capacity, key) {
+  const metric = capacity?.metrics?.[key]
+  if (!metric?.available || metric.latest == null) return 'Not reported'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let n = Number(metric.latest)
+  let unit = 0
+  while (n >= 1024 && unit < units.length - 1) { n /= 1024; unit += 1 }
+  return `${Math.round(n * 10) / 10} ${units[unit]}`
+}
+
 function AzureCapacity({ capacity, state }) {
   if (state === 'loading' && !capacity) return <div className="panel muted" style={{ padding: 12, marginBottom: 12 }}>Loading Azure capacity…</div>
   if (state === 'unavailable') return <div className="panel" role="status" style={{ padding: 12, marginBottom: 12 }}>
@@ -138,9 +155,20 @@ function AzureCapacity({ capacity, state }) {
     ['RUNNING REPLICAS', capacityValue(capacity.current_replicas), `${capacityValue(capacity.min_replicas)} min · ${capacityValue(capacity.max_replicas)} max`],
     ['COMPUTE / REPLICA', capacityValue(capacity.cpu_cores_per_replica, ' vCPU'), `${capacityValue(capacity.memory_per_replica)} memory`],
     ['EPHEMERAL STORAGE / REPLICA', capacityValue(capacity.ephemeral_storage_per_replica), 'Temporary worker disk; corrected files use durable storage'],
-    ['LIVE UTILIZATION', capacity.metrics_available ? `${capacityValue(capacity.cpu_percent, '%')} CPU` : 'Not reported', capacity.metrics_available ? `${capacityValue(capacity.memory_percent, '%')} memory · last 5 min` : metricReason],
+    // The window is READ from the payload, not written here. It used to say "last 5 min" from a
+    // string in this file while the actual timespan lived in routes/control.py — so widening the
+    // window there would have left this label quietly describing the wrong average.
+    ['LIVE UTILIZATION', capacity.metrics_available ? `${capacityValue(capacity.cpu_percent, '%')} CPU` : 'Not reported',
+      capacity.metrics_available
+        ? `${capacityValue(capacity.memory_percent, '%')} memory · average over ${capacityValue(capacity.metrics_window_minutes)} min`
+        : metricReason],
     ['ACTIVE REVISION', capacityValue(capacity.revision_health), `${capacityValue(capacity.revision_provisioning_state)} · ${capacityValue(capacity.revision_traffic_percent, '%')} traffic`],
     ['ROLLOUT', capacityValue(capacity.draining_replicas), `${capacityValue(capacity.workload_profile_name)} profile · ${capacity.active_revision_name || 'revision not reported'}`],
+    // What Azure Monitor reports beyond utilization. Each is null when Azure answered nothing for
+    // it, and renders as "Not reported" rather than as a zero that would read as a healthy app
+    // with no restarts and no traffic.
+    ['REPLICA RESTARTS', azureLatest(capacity, 'restarts'), 'Azure metric RestartCount · cumulative'],
+    ['NETWORK', `${azureBytes(capacity, 'network_in_bytes')} in`, `${azureBytes(capacity, 'network_out_bytes')} out · RxBytes / TxBytes`],
   ]
   return <section className="panel" aria-label="Azure worker infrastructure" style={{ padding: 12, marginBottom: 12 }}>
     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 9 }}>
@@ -436,24 +464,37 @@ export default function AdminLiveTraffic() {
   const eventLog = useRef([])
   const lastContext = useRef(null)
 
+  // Azure arrives on the SAME stream as the job topology, on its own `azure` event, so an
+  // infrastructure reading reaches the page the moment the server takes it rather than up to
+  // thirty seconds later. The first GET carries it too, so a tab that has just loaded is not
+  // blank while it waits for the first Azure frame.
   useEffect(() => {
     let active = true
-    getAdminActivity().then((d) => { if (active) { setSnapshot(d); setConnection('live') } })
-      .catch(() => { if (active) setConnection('unavailable') })
+    const takeAzure = (block) => { if (active && block) { setCapacity(block); setCapacityState('live') } }
+    getAdminActivity().then((d) => {
+      if (!active) return
+      setSnapshot(d); setConnection('live'); takeAzure(d.azure)
+    }).catch(() => { if (active) setConnection('unavailable') })
     const stream = openAdminActivityStream({
       onMessage: (d) => { if (active) { setSnapshot(d); setConnection('live') } },
+      onAzure: takeAzure,
       onError: () => { if (active) setConnection('reconnecting') },
     })
     return () => { active = false; stream.close() }
   }, [])
 
+  // The poll stays as the fallback for a backend that does not push `azure` on the stream, and as
+  // a recovery path if the stream drops. It is deliberately slower than the stream's own cadence:
+  // when the stream is delivering, this changes nothing, and when it is not, this is the only
+  // source. Kept rather than deleted because "the SSE path works" is a claim about the server the
+  // browser cannot make on its own.
   useEffect(() => {
     let active = true
     const refresh = () => getWorkerCapacity()
-      .then((data) => { if (active) { setCapacity(data); setCapacityState('live') } })
-      .catch(() => { if (active) setCapacityState('unavailable') })
+      .then((data) => { if (active) { setCapacity((held) => held || data); setCapacityState((s) => s === 'live' ? s : 'live') } })
+      .catch(() => { if (active) setCapacityState((s) => s === 'live' ? s : 'unavailable') })
     refresh()
-    const timer = window.setInterval(refresh, 30000)
+    const timer = window.setInterval(refresh, 60000)
     return () => { active = false; window.clearInterval(timer) }
   }, [])
 

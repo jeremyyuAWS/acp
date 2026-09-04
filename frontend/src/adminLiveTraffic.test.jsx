@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, queueConcentration, sizeScopeNote, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
+import { azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, queueConcentration, sizeScopeNote, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, 'AdminLiveTraffic.jsx'), 'utf8')
@@ -99,7 +99,12 @@ describe('Admin live traffic graph', () => {
     expect(source).toContain('Azure worker infrastructure')
     expect(source).toContain('EPHEMERAL STORAGE / REPLICA')
     expect(source).toContain('getWorkerCapacity')
-    expect(source).toContain('window.setInterval(refresh, 30000)')
+    // Azure now arrives on the live stream's own `azure` event, so the reading reaches the page
+    // when the server takes it rather than up to a poll interval later. The poll is kept, slower,
+    // as the fallback for a backend that does not push it and as a recovery path after a drop —
+    // deleting it would make "the SSE path works" an assumption the browser cannot check.
+    expect(source).toContain('onAzure: takeAzure')
+    expect(source).toContain('window.setInterval(refresh, 60000)')
   })
 
   it('puts reported compute, memory, storage, replicas, and health in worker drilldown', () => {
@@ -129,6 +134,31 @@ describe('Admin live traffic graph', () => {
     expect(source).toContain('infrastructureDetail(selectedNode, snapshot, liveCapacity).facts')
     expect(drawer).toContain('facts.map(([label, value])')
     expect(source).toContain('Idle · select any tile to inspect the ready processing path')
+  })
+})
+
+describe('The Azure panel reports what Azure reported, and states its own window', () => {
+  const metrics = {
+    restarts: { available: true, latest: 3, azure_metric: 'RestartCount' },
+    network_in_bytes: { available: true, latest: 1572864, azure_metric: 'RxBytes' },
+    network_out_bytes: { available: false, latest: null, azure_metric: 'TxBytes' },
+  }
+
+  it('renders a metric Azure answered and names one it did not', () => {
+    expect(azureLatest({ metrics }, 'restarts')).toBe('3')
+    expect(azureBytes({ metrics }, 'network_in_bytes')).toBe('1.5 MB')
+    // The one that matters: a metric with no data is "Not reported", never a zero that would read
+    // as an app which has never restarted and moved no traffic.
+    expect(azureBytes({ metrics }, 'network_out_bytes')).toBe('Not reported')
+    expect(azureLatest({ metrics }, 'requests')).toBe('Not reported')
+    expect(azureLatest(null, 'restarts')).toBe('Not reported')
+  })
+
+  it('reads the averaging window from the payload rather than hardcoding it', () => {
+    // It used to say "last 5 min" from a string in this file while the real timespan lived in
+    // routes/control.py — widening the window there would have left this label wrong and silent.
+    expect(source).toContain('average over ${capacityValue(capacity.metrics_window_minutes)} min')
+    expect(source).not.toContain('memory · last 5 min')
   })
 })
 
