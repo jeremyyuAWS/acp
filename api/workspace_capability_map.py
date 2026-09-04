@@ -132,6 +132,7 @@ _map_many([
     ("GET", "/scans/{scan_id}/files/{filename:path}/verify-resize"),
     ("GET", "/scans/{scan_id}/files/{filename:path}/verify-pdf-contrast"),
     ("GET", "/scans/{scan_id}/files/{filename:path}/dispositions"),
+    ("GET", "/scans/{scan_id}/files/{filename:path}/scanned-layout"),
 ], _ASSESS_READ)
 _map_many([
     ("POST", "/scans/{scan_id}/files/{filename:path}/dispose"),
