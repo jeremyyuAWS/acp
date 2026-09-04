@@ -401,7 +401,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [seg, setSeg] = useState(null)
   const [remBusy, setRemBusy] = useState(false)
   const [remMsg, setRemMsg] = useState('')
-  const [remProg, setRemProg] = useState(null)   // { total, done, latest, failed, activity, history }
+  const [remProg, setRemProg] = useState(null)   // authoritative SSE status + client-known batch total
   const [remUpdates, setRemUpdates] = useState('idle') // live | polling | idle
   const [serverFixed, setServerFixed] = useState(0)  // files fixed server-side this scan (persists after each batch)
   const [staleDismissed, setStaleDismissed] = useState(false)
@@ -432,7 +432,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
   const finishRemediation = (total, status = {}) => {
     clearInterval(pollRef.current); streamRef.current?.close?.(); streamRef.current = null
-    setRemProg((previous) => ({ total, done: total, latest: status.latest_file || previous?.latest || null,
+    setRemProg((previous) => ({ ...previous, total, done: total,
+                 latest: status.latest_file || previous?.latest || null,
                  failed: status.failed || 0, activity: null, history: previous?.history || [] }))
     setRemBusy(false); setRemUpdates('idle')
     const ok = Math.max(0, total - (status.failed || 0))
@@ -454,7 +455,18 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         history.unshift(activity)
         history.splice(6)
       }
-      return { total, done, latest: s.latest_file, failed: s.failed || 0, activity, history }
+      const metrics = {
+        fixes: Number(s.fixes_applied || 0), verified: Number(s.verified_documents || 0),
+        stored: Number(s.stored_documents || 0), failed: Number(s.failed || 0),
+      }
+      const before = previous?.metrics || {}
+      const deltas = previous?.metrics
+        ? Object.fromEntries(Object.entries(metrics).map(([key, value]) =>
+            [key, Math.max(0, value - Number(before[key] || 0))]))
+        : {}
+      return { total, done, latest: s.latest_file, failed: s.failed || 0, activity, history,
+               metrics, deltas, queued: s.queued, running: s.running, workers: s.workers,
+               byRule: s.by_rule || [], recentFiles: s.recent_files || [] }
     })
   }
 

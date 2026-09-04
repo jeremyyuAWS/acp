@@ -5978,24 +5978,50 @@ class Store:
         return [r["rule_id"] for r in rows]
 
     def remediation_status(self, scan_id: str) -> dict:
-        """Live progress for an in-flight remediation batch: how many remediate_file
-        jobs are still queued/running for this scan, plus the most recently fixed file."""
+        """Live remediation facts used by both polling and SSE.
+
+        Keep these as database facts rather than UI estimates: job state explains the queue,
+        file_records proves a corrected copy was stored, and remediation_diff proves a fix
+        survived the verification pass.
+        """
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT COUNT(*) AS n FROM jobs WHERE scan_id=%s AND type='remediate_file' "
-                "AND status IN ('queued','running')", (scan_id,))
-            in_flight = self._db.fetchone(cur)["n"]
+                "SELECT status,COUNT(*) AS n FROM jobs WHERE scan_id=%s "
+                "AND type='remediate_file' AND status IN ('queued','running') GROUP BY status",
+                (scan_id,))
+            job_counts = {row["status"]: row["n"] for row in self._db.fetchall(cur)}
+            queued = int(job_counts.get("queued", 0) or 0)
+            running = int(job_counts.get("running", 0) or 0)
             self._db.execute(cur,
                 "SELECT COUNT(*) AS n FROM jobs WHERE scan_id=%s AND type='remediate_file' "
                 "AND status='dead'", (scan_id,))
             failed = self._db.fetchone(cur)["n"]
             self._db.execute(cur,
-                "SELECT file,drive_write_url FROM file_records WHERE scan_id=%s "
-                "AND remediated_at IS NOT NULL ORDER BY remediated_at DESC LIMIT 1", (scan_id,))
-            latest = self._db.fetchone(cur)
-        return {"in_flight": in_flight, "failed": failed,
+                "SELECT file,drive_write_url,remediated_at FROM file_records WHERE scan_id=%s "
+                "AND remediated_at IS NOT NULL ORDER BY remediated_at DESC LIMIT 5", (scan_id,))
+            recent = self._db.fetchall(cur)
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM file_records WHERE scan_id=%s AND remediated_at IS NOT NULL",
+                (scan_id,))
+            stored = int(self._db.fetchone(cur)["n"] or 0)
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS fixes,COUNT(DISTINCT file) AS documents "
+                "FROM remediation_diff WHERE scan_id=%s", (scan_id,))
+            verified = self._db.fetchone(cur) or {}
+            self._db.execute(cur,
+                "SELECT rule_id,COUNT(*) AS n FROM remediation_diff WHERE scan_id=%s "
+                "GROUP BY rule_id ORDER BY n DESC,rule_id LIMIT 8", (scan_id,))
+            by_rule = [{"rule": row["rule_id"], "fixes": int(row["n"] or 0)}
+                       for row in self._db.fetchall(cur)]
+        latest = recent[0] if recent else None
+        return {"in_flight": queued + running, "queued": queued, "running": running,
+                "failed": failed, "stored_documents": stored,
+                "verified_documents": int(verified.get("documents", 0) or 0),
+                "fixes_applied": int(verified.get("fixes", 0) or 0), "by_rule": by_rule,
                 "latest_file": latest["file"] if latest else None,
-                "latest_url": latest["drive_write_url"] if latest else None}
+                "latest_url": latest["drive_write_url"] if latest else None,
+                "recent_files": [{"file": row["file"], "at": row["remediated_at"]}
+                                 for row in recent]}
 
     def get_file_drive_id(self, scan_id: str, file: str) -> str | None:
         with self._db.cursor() as cur:

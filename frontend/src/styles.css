@@ -2728,3 +2728,12 @@ html[data-wcag="on"] .wcag-toggle--on {
   color: #1f5128 !important;
   border: 2px solid #1f5128 !important;
 }
+.rem-live-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:0 0 14px}
+.rem-live-metric{border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0;display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
+.rem-live-metric>.muted{flex-basis:100%;font-size:11.5px}.rem-live-metric>strong{font-size:16px;font-variant-numeric:tabular-nums}
+.rem-live-delta{color:var(--success-fg);font-size:12px;font-weight:700;animation:rem-delta 3s ease-out forwards}
+@keyframes rem-delta{0%,65%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-3px)}}
+.rem-rule-progress{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 0 26px}
+.rem-worker-line{display:flex;gap:16px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:10px;margin-top:12px;font-size:12.5px;color:var(--muted)}
+@media(max-width:800px){.rem-live-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(prefers-reduced-motion:reduce){.rem-live-delta{animation:none}}

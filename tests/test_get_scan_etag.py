@@ -75,6 +75,31 @@ def test_remediation_progress_is_never_cacheable(client, isolated_store):
     assert r.headers["cache-control"] == "no-store"
 
 
+def test_remediation_progress_reports_queue_verified_fixes_and_recent_files(client, isolated_store):
+    _seed(isolated_store, "s1")
+    isolated_store.save_file_result("s1", {
+        "file": "policy.docx", "engine": "office", "status": "assessed", "score": 82,
+        "compliant": 0, "skipped_rules": 0, "issues": [],
+    }, "2026-09-04T00:00:00Z")
+    isolated_store.record_remediation("s1", "policy.docx")
+    isolated_store.record_remediation_diffs("s1", "policy.docx", [
+        {"rule_id": "1.3.1", "before": "body text", "after": "Heading 1"},
+        {"rule_id": "1.3.1", "before": "plain row", "after": "header row"},
+    ])
+    isolated_store.enqueue_job("remediate_file", {"file": "next.docx"}, scan_id="s1")
+
+    body = client.get("/scans/s1/remediation-status").json()
+    assert body["queued"] == 1
+    assert body["running"] == 0
+    assert body["in_flight"] == 1
+    assert body["stored_documents"] == 1
+    assert body["verified_documents"] == 1
+    assert body["fixes_applied"] == 2
+    assert body["by_rule"] == [{"rule": "1.3.1", "fixes": 2}]
+    assert body["recent_files"][0]["file"] == "policy.docx"
+    assert body["workers"]["active"] == 0
+
+
 def test_remediation_progress_stream_is_sse_and_finishes_when_queue_is_empty(client, isolated_store):
     _seed(isolated_store, "s1")
     r = client.get("/scans/s1/remediation/stream")

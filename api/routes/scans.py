@@ -1432,6 +1432,8 @@ def remediation_status(sid: str, request: Request, response: Response):
     import activity
     out = core.store.remediation_status(sid)
     out["activity"] = activity.current(sid)
+    out["workers"] = {"active": int(out.get("running") or 0),
+                      "capacity": int(getattr(core, "WORKERS", 0) or 0)}
     # Live queue depth must never be served from the browser cache; every completed remediation
     # job reduces in_flight and drives the visible completed count.
     response.headers["Cache-Control"] = "no-store"
@@ -1463,6 +1465,8 @@ async def stream_remediation_status(sid: str, request: Request):
                 return
             out = await asyncio.to_thread(core.store.remediation_status, sid)
             out["activity"] = activity.current(sid)
+            out["workers"] = {"active": int(out.get("running") or 0),
+                              "capacity": int(getattr(core, "WORKERS", 0) or 0)}
             sig = _json.dumps(out, sort_keys=True, default=str)
             if sig != last:
                 last = sig
