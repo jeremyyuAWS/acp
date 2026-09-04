@@ -24,7 +24,11 @@ export function queuedProgress(g, elapsed, job) {
   const run = g && g.run
   if (job && job.phase && job.phase !== 'queued') {
     return { ...job, elapsed, outcomes: outcomesFromRun(run), files: (g && g.files) || [],
-             inventory: (run && run.scope && run.scope.inventory) || null }
+             inventory: (run && run.scope && run.scope.inventory) || null,
+             // The active scan row is the authoritative clock. The selected scan in App state
+             // may still be the previous completed run until this one settles, so keep this
+             // timestamp attached to every live phase, not only the queued stub.
+             started_at: (run && run.started_at) || job.started_at }
   }
   const total = (run && run.files) || 0
   const done = (run && run.files_done) || 0
@@ -37,7 +41,7 @@ export function queuedProgress(g, elapsed, job) {
   // minutes, which is exactly the kind of dishonest-progress bug this component exists to avoid
   // elsewhere (see DiscoverRunProgress.jsx's own comments on simulated progress).
   if (run && run.status === 'queued') return { phase: 'queued', elapsed, started_at: run.started_at }
-  if (!total) return { phase: 'discovering', elapsed }        // estate not listed yet
+  if (!total) return { phase: 'discovering', elapsed, started_at: run && run.started_at } // estate not listed yet
   const phase = done < total ? 'analysing' : 'scoring'
   const pct = Math.round(12 + Math.min(1, done / total) * (95 - 12))
   // Outcome tally, streamed live off the run summary (certifiable/uncertain/error, derived from
@@ -45,5 +49,6 @@ export function queuedProgress(g, elapsed, job) {
   // `files` carries the per-file results get_scan streams, for the expandable Processing details table.
   return { phase, files_found: total, files_done: done, current: null, elapsed, pct,
            outcomes: outcomesFromRun(run), files: (g && g.files) || [],
-           inventory: (run && run.scope && run.scope.inventory) || null }
+           inventory: (run && run.scope && run.scope.inventory) || null,
+           started_at: run && run.started_at }
 }

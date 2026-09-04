@@ -23,8 +23,10 @@ describe('queuedProgress — no live job state (job is null/undefined)', () => {
   })
 
   it('reports discovering before any file has been listed', () => {
-    const g = { run: { status: 'running', files: 0 } }
-    expect(queuedProgress(g, 5, null)).toEqual({ phase: 'discovering', elapsed: 5 })
+    const g = { run: { status: 'running', files: 0, started_at: '2026-09-04T17:54:55Z' } }
+    expect(queuedProgress(g, 5, null)).toEqual({
+      phase: 'discovering', elapsed: 5, started_at: '2026-09-04T17:54:55Z',
+    })
   })
 
   it('falls back to the coarse analysing/scoring split once files exist', () => {
@@ -43,7 +45,7 @@ describe('queuedProgress — no live job state (job is null/undefined)', () => {
   })
 
   it('tolerates a missed getScan poll (g is null) the same as no job', () => {
-    expect(queuedProgress(null, 1, null)).toEqual({ phase: 'discovering', elapsed: 1 })
+    expect(queuedProgress(null, 1, null)).toEqual({ phase: 'discovering', elapsed: 1, started_at: null })
   })
 })
 
@@ -81,11 +83,12 @@ describe('queuedProgress — live job state available', () => {
   })
 
   it('attaches elapsed, outcomes, files and inventory the same way as the no-job path', () => {
-    const g = { run: { ...run, scope: { inventory: { discovered: 1041 } } }, files: [{ file: 'a.pdf' }] }
+    const g = { run: { ...run, started_at: '2026-09-04T17:54:55Z', scope: { inventory: { discovered: 1041 } } }, files: [{ file: 'a.pdf' }] }
     const job = { phase: 'listing', files_found: 300 }
     const p = queuedProgress(g, 9, job)
     expect(p.elapsed).toBe(9)
     expect(p.files).toEqual([{ file: 'a.pdf' }])
     expect(p.inventory).toEqual({ discovered: 1041 })
+    expect(p.started_at).toBe('2026-09-04T17:54:55Z')
   })
 })

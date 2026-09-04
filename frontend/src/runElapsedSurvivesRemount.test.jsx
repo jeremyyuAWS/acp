@@ -83,6 +83,19 @@ describe('a running scan, viewed after switching away and back', () => {
       progress: { ...RUNNING, started_at: iso(200) }, busy: true, runStartedAt: null })
     expect(c.textContent).toMatch(/3m 20s elapsed/)
   })
+
+  it('uses the active scan timestamp instead of the previously selected scan timestamp', async () => {
+    // Production regression: starting a new SharePoint scan left the old completed run selected
+    // in App state for the duration of the poll. The card mixed the new run's progress with that
+    // old run's started_at and immediately displayed "68m elapsed".
+    const c = await mountCard({
+      progress: { ...RUNNING, started_at: iso(4) },
+      busy: true,
+      runStartedAt: iso(68 * 60),
+    })
+    expect(c.textContent).toMatch(/4s elapsed/)
+    expect(c.textContent).not.toMatch(/68m elapsed/)
+  })
 })
 
 describe('the rate and ETA derived from it', () => {

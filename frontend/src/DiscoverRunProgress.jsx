@@ -196,7 +196,10 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
   // the caller passes scan_runs.started_at straight through. `progress.started_at` is the
   // queuedProgress fallback for the one phase that carries it. Null when neither exists, and
   // every renderer below has to say so rather than substitute the mount clock.
-  const runAge = deriveRunAge({ startedAt: runStartedAt ?? progress.started_at })
+  // During a newly started scan, `runStartedAt` can still belong to the previously selected
+  // completed scan until App replaces its top-level scan state. Live progress is keyed to the
+  // active scan and therefore wins whenever it carries its own persisted timestamp.
+  const runAge = deriveRunAge({ startedAt: progress.started_at ?? runStartedAt })
   const phase = progress.phase || 'queued'
   const isDone = phase === 'done'
   const isStopped = !busy && !isDone
