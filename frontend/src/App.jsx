@@ -12,7 +12,7 @@ import { armNotifyOnComplete, notifyScanComplete, notifyScanFailed, notification
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, SCAN_UNAVAILABLE, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
+import { getSources, getRubric, getConfig, getMe, getMyAccess, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, SCAN_UNAVAILABLE, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
 import { beginOrResumeIntent, completeIntent, abandonIntent, outcomeIsUncertain } from './submitIntent'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
@@ -68,6 +68,8 @@ import { useScanRefetch } from './scanRefetch.js'
 import ConfirmDialog from './ConfirmDialog.jsx'
 import { AdminInsights } from './AdminInsights.jsx'
 import AcrWorkspace from './AcrWorkspace.jsx'
+import AccessRestricted from './AccessRestricted.jsx'
+import { visibleTabs, isVisible, canOperate, firstPermittedTab } from './access.js'
 import { handleWorkflowTabKeyDown } from './workflowTabs.js'
 
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
@@ -322,6 +324,49 @@ export default function App() {
   // fault that does not exist.
   const [stopped, setStopped] = useState(null)
   const [view, setView] = useState('overview')
+  // Whether the user has CHOSEN the tab they are on. 'overview' is the app's own default, so a
+  // role that hides it must move them rather than showing an Access restricted screen for a place
+  // they never asked to be — see AccessRestricted.jsx for why an explicit navigation gets the
+  // screen instead of a silent bounce. A ref, not state: nothing renders from it, and making it
+  // state would re-render the whole workspace on the first tab click.
+  const viewWasChosen = useRef(false)
+  const goToView = (next) => { viewWasChosen.current = true; setView(next) }
+  // The server's answer to "which tabs may this user see, and what may they do inside them".
+  // `null` until bootstrap answers, and null means NOT TOLD — everything renders. The refusal
+  // that matters is the server's; see the header of access.js for why this direction is right
+  // here and the opposite direction is right there.
+  const [access, setAccess] = useState(null)
+
+  // PRD §10 — the app's own default view is 'overview'. A role that hides it must move the user
+  // on rather than greeting them with Access restricted for a tab they never chose. Only the
+  // default: once they have picked a tab, an inaccessible one gets the screen, which explains
+  // itself instead of silently bouncing them somewhere they did not ask to go.
+  useEffect(() => {
+    if (!access?.enforced || viewWasChosen.current) return
+    if (isVisible(access, view)) return
+    const target = firstPermittedTab(access, TABS)
+    if (target && target !== view) setView(target)
+  }, [access, view])
+
+  // PRD §9 — a role changed by an administrator must reach an open session without a sign-out.
+  // On focus rather than on a timer: the moment somebody comes back to the tab is when they are
+  // about to act on it, and a poll would spend the shared API budget on sessions nobody is
+  // looking at. A failed refresh leaves the previous answer in place (getMyAccess resolves null
+  // on error, and null would mean "not told" — so it is only applied when it is real), because a
+  // network blip is not a permission decision.
+  useEffect(() => {
+    if (!access) return
+    const refresh = () => {
+      if (document.visibilityState === 'hidden') return
+      getMyAccess().then((next) => { if (next) setAccess(next) }).catch(() => {})
+    }
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [access])
   // A pending "open this source's history" redirect from Discover's completion card (the "See
   // what's changed since your last scan of this source" link) to Integrations' SourceDrawer —
   // the raw scan-source string (run.source), not a source object; Integrations does its own
@@ -647,6 +692,11 @@ export default function App() {
         // carries the pick, the scan-picker list, the active-job summary, and (Phase 1a) the
         // picked scan's cached Overview snapshot, in place of listScans + getActiveScan.
         setScanList(b.scans || [])
+        // Workspace access (PRD §13) rides this same request rather than a second one, so the
+        // navigation can draw with the right tabs on its FIRST render. Fetched separately it
+        // would render every tab and then remove some — a visible flicker that also briefly
+        // advertises surfaces the user may not have.
+        setAccess(b.me?.access || null)
         setOverviewPreview(b.overview || null)
         hadPreviewForPerf = !!b.overview
         const scanId = b.scan_id || null
@@ -1700,7 +1750,13 @@ export default function App() {
 
       <nav aria-label="Compliance workflow">
         <div className="tabs" role="tablist" aria-label="Compliance workflow">
-          {TABS.filter(([k]) => !me.allow || me.allow.includes(k)).map(([k, label, rg, step]) => {
+          {/* Two filters, deliberately kept separate. `me.allow` is the demo-persona surface list
+              that predates this feature; `visibleTabs` applies the SERVER's workspace role and
+              renumbers the workflow so it reads 1..n over what is actually there (PRD §10 — a
+              role that hides Discover must not leave a stepper starting at 2, which tells the
+              user they have skipped something rather than that it was never theirs). */}
+          {visibleTabs(access, TABS.filter(([k]) => !me.allow || me.allow.includes(k)))
+            .map(([k, label, rg, step]) => {
             const stageDone = {
               // A scan record existing is not the same as discovery having FINISHED — `run` is
               // truthy the instant a scan starts (even mid-listing, `status='running'`), so `!!run`
@@ -1737,7 +1793,7 @@ export default function App() {
                       title={locked ? 'A scan or assessment is running — this step opens when it finishes' : rg}
                       className={`tab${view === k ? ' on' : ''}${done ? ' done' : ''}${step ? ' stepTab' : ''}${locked ? ' locked' : ''}`}
                       onKeyDown={handleWorkflowTabKeyDown}
-                      onClick={() => setView(k)}>
+                      onClick={() => goToView(k)}>
                 {step > 0 && <span className="stepnum" aria-hidden="true">{done ? '✓' : step}</span>}
                 <span className="tablbl">{done && <span className="vh">completed: </span>}{label}</span>
                 <span className="rg">{rg}</span>
@@ -1970,6 +2026,15 @@ export default function App() {
       <main id="main-content" tabIndex={-1}>
       <div id="workflow-panel" role="tabpanel" aria-labelledby={`workflow-tab-${view}`}>
       <ErrorBoundary key={view}>
+      {/* PRD §10 — a tab the role does not include renders an explanation instead of its body.
+          Wrapping the whole panel rather than gating each `view === 'x'` branch is deliberate:
+          a per-branch check is one edit away from being forgotten on the next tab somebody adds,
+          and the branch that gets forgotten renders its real contents. This is presentation, not
+          protection — every route behind these tabs enforces its own capability server-side. */}
+      {!isVisible(access, view) ? (
+        <AccessRestricted access={access} tabKey={view} tabs={TABS} onGo={goToView}
+                          label={(TABS.find(([k]) => k === view) || [])[1]} />
+      ) : (<>
         {/* onScan/busy/tokens are threaded so Overview can offer the scan-scope editor after a
             scan exists. Before one, `placeholder` (EmptyState → ScanSetup) is the whole screen;
             without these the editor would still be reachable exactly once per workspace. */}
@@ -2167,9 +2232,14 @@ export default function App() {
           const label = { discover: '1 · Discover — classify the estate', assess: '2 · Assess — score vs WCAG',
                           remediate: '3 · Remediate — fix the issues', publish: '4 · Publish — certify what passes',
                           monitor: '5 · Monitor — keep it compliant' }
+          // PRD §10 — "Workflow calls to action must respect destination access." A hidden
+          // destination is skipped entirely rather than offered and refused on arrival, so
+          // "Continue to Remediate" cannot appear for someone who has no Remediate.
           let nxt = null
           for (let j = flow.indexOf(view) + 1; j < flow.length; j++) {
-            if (!me.allow || me.allow.includes(flow[j])) { nxt = flow[j]; break }
+            if ((!me.allow || me.allow.includes(flow[j])) && isVisible(access, flow[j])) {
+              nxt = flow[j]; break
+            }
           }
           // Same "is this tab's task done" signal the tab stepper uses — the CTA can't
           // advance until the current tab's own work is actually finished.
@@ -2185,12 +2255,18 @@ export default function App() {
               <span className="muted" style={{ fontSize: 13 }}>
                 {taskDone ? 'Done here? Continue →' : 'Finish this step to continue →'}
               </span>
+              {/* §10 again: "If a destination is view-only, wording changes from Start to View."
+                  The label promising work the user cannot do there is worse than no label — the
+                  button works, and it was wrong about what it does. */}
               <button disabled={!taskDone}
                       title={taskDone ? undefined : "Complete this tab's task before moving on"}
-                      onClick={() => { setView(nxt); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>{label[nxt]} →</button>
+                      onClick={() => { goToView(nxt); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>
+                {canOperate(access, nxt) ? label[nxt] : `View ${label[nxt].split(' — ')[0]}`} →
+              </button>
             </div>
           ) : null
         })()}
+      </>)}
       </ErrorBoundary>
       </div>
       </main>

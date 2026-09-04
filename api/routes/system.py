@@ -333,6 +333,38 @@ def set_admins(body: dict, request: Request):
     return {"owner": core.OWNER_EMAIL, "env_admins": sorted(core.ADMIN_EMAILS), "admins": saved}
 
 
+@router.get("/me/access")
+def my_access(request: Request):
+    """What this identity may see and do (PRD §13).
+
+    NOT AUTHORIZATION — a description of it. The SPA reads this to decide which tabs to render and
+    whether a button says "Start" or "View"; every route still enforces its own capability
+    (slice 4). If this endpoint and a route ever disagree, the route wins and the UI was merely
+    wrong about what it offered. That ordering is the whole reason PRD §11 exists: "Hiding a tab
+    alone is not considered a security control."
+
+    Unauthenticated callers get an empty identity's answer rather than a 401, because the SPA
+    calls this during sign-in bootstrapping — and with the flag off that answer is today's access,
+    which is what it must be for a signed-out shell to render exactly as it does now.
+    """
+    import workspace_roles as wr
+    email = getattr(request.state, "user_email", None)
+    return wr.access_for_email(core.store, email, owner_email=core.OWNER_EMAIL,
+                               is_suspended=_is_suspended)
+
+
+def _is_suspended(email: str) -> bool:
+    """Is this person suspended? PRD §14: a suspended user has no effective permissions.
+
+    Read from the managed-person record, which is where the People screen already writes it —
+    rather than inferred from absence in the allowlist, which would also be true of somebody who
+    was never added and of the demo path where no allowlist is configured at all.
+    """
+    target = (email or "").strip().lower()
+    person = next((p for p in core.store.get_people() if p.get("email") == target), None)
+    return (person or {}).get("status") == "suspended"
+
+
 @router.post("/admin/workspace-roles/bootstrap")
 def bootstrap_workspace_roles(request: Request, body: dict | None = None):
     """Seed the six built-in workspace roles and map existing people onto them (PRD §15 step 1).

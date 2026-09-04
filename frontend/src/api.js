@@ -691,6 +691,17 @@ export const addFindingComment = (scanId, { findingKey, body, file = '', ruleId 
                  body: JSON.stringify({ finding_key: findingKey, body, file, rule_id: ruleId }) }).then(j)
 }
 export const getMe = () => (SIM ? sim(simIdentity()) : fetch(`${BASE}/me`, { headers: headers() }).then(j))
+// Workspace access (PRD §13). The first copy arrives on /workspace/bootstrap so the navigation can
+// draw correctly on its first render; this is for re-reading it after an administrator changes a
+// role — §9: "Users whose permissions change during an active session receive the new permissions
+// on their next API request. Navigation refreshes automatically."
+//
+// Resolves to `null` in SIM and on any failure, and null means NOT TOLD, which leaves every tab
+// visible (see frontend/src/access.js). A failed refresh must not narrow a working session: the
+// server is the control, and a network blip is not a permission decision.
+export const getMyAccess = () => (SIM
+  ? sim(null)
+  : fetch(`${BASE}/me/access`, { headers: headers() }).then(j).catch(() => null))
 export const getAdminAnalytics = (period = '30d', source = null) =>
   fetch(`${BASE}/admin/analytics/overview?period=${period}${source ? `&source=${encodeURIComponent(source)}` : ''}`,
         { headers: headers() }).then(j)
