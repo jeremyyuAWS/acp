@@ -99,7 +99,7 @@ export default function DiscoverInventoryExport({
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                     gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
         <h3 style={{ margin: 0, fontSize: 16 }}>Inventory snapshot</h3>
-        {!unread && preview && (
+        {!unread && preview && showActions && (
           <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
             <button type="button" onClick={() => build('csv')} disabled={!canExport}>
               Export CSV
