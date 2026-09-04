@@ -9,8 +9,8 @@ import {
   chartModel, componentState, defaultMetricFor, deriveEvents, etaSeconds, eventClock,
   eventsForNode, filterEvents, formatDuration, gaugeModel, mergeEvents, metricsForKind,
   PROVENANCE, metricGroups, niceCeiling, num, outputModel, provenance, queueModel, rateSeries,
-  reported, revisionLabel, runModel, sampleForNode, secondsSince, seriesForMetric, sourceModel,
-  tenantConcentration, trendMarkers, updatedAgo,
+  replicaLifecycle, reported, revisionLabel, runModel, sampleForNode, saturationModel, secondsSince,
+  seriesForMetric, sourceModel, tenantConcentration, trendMarkers, updatedAgo,
 } from './liveOpsDrawer.js'
 
 const NOW = Date.parse('2026-09-04T14:32:00Z')
@@ -464,5 +464,99 @@ describe('Source and output panels name what they cannot measure', () => {
     expect(secondsSince(iso(-90), NOW)).toBe(90)
     expect(secondsSince(null, NOW)).toBe(null)
     expect(secondsSince('nonsense', NOW)).toBe(null)
+  })
+})
+
+
+describe('Worker saturation keeps ACP slots and Azure replicas apart', () => {
+  const cap = (over = {}) => ({ configured: true, worker_app_name: 'acp-assess', measured_at: iso(-20),
+    min_replicas: 1, max_replicas: 4, current_replicas: 2,
+    metrics: { replicas: { available: true, latest: 3, series: [] } }, ...over })
+  const done = (points) => points.map(([offsetS, completed]) => ({ at: iso(offsetS), completed }))
+
+  it('reports the two capacities separately, because they are opposite problems', () => {
+    // Every slot busy with replicas to spare, and every replica up with slots idle, look identical
+    // once the two are added together — and call for opposite responses.
+    const model = saturationModel({ ...service, active: 3, slots: 3, available: 0 }, cap(),
+      { samples: [], queueDepth: 5 })
+    expect(model.slots).toEqual({ active: 3, total: 3, available: 0 })
+    expect(model.replicas).toMatchObject({ running: 3, min: 1, max: 4, headroom: 1, atMax: false, source: 'azure' })
+  })
+
+  it('prefers the Azure replica metric over the control-plane count', () => {
+    expect(saturationModel(service, cap()).replicas.running).toBe(3)   // metric latest, not current_replicas
+    const noMetric = saturationModel(service, cap({ metrics: {} }))
+    expect(noMetric.replicas.running).toBe(2)                          // falls back to current_replicas
+  })
+
+  it('says a service is at its scale ceiling rather than implying room', () => {
+    const model = saturationModel(service, cap({ metrics: { replicas: { available: true, latest: 4 } } }))
+    expect(model.replicas).toMatchObject({ running: 4, headroom: 0, atMax: true })
+  })
+
+  it('refuses to call a limit headroom when the running count is unmeasured', () => {
+    const model = saturationModel(service, cap({ current_replicas: null, metrics: {} }))
+    expect(model.replicas.running).toBe(null)
+    expect(model.replicas.headroom).toBe(null)      // max alone is a limit, not spare capacity
+    expect(model.replicas.atMax).toBe(false)
+  })
+
+  it('reports nothing about replicas for a service Azure did not measure', () => {
+    const model = saturationModel({ ...service, role: 'discovery' }, cap())
+    expect(model.replicas).toMatchObject({ running: null, min: null, max: null, source: 'unavailable' })
+  })
+
+  it('measures the drain from this service own completions', () => {
+    // 8 completed over 120s = 1 every 15s; 10 waiting → 150s.
+    const model = saturationModel(service, cap(), { samples: done([[-120, 4], [0, 12]]), queueDepth: 10 })
+    expect(model.drainSeconds).toBe(150)
+    expect(model.drainReason).toBe(null)
+  })
+
+  it('refuses a drain time it cannot measure, and says why', () => {
+    // The number an operator would use to decide NOT to scale, so a made-up one is worse than none.
+    const stalled = saturationModel(service, cap(), { samples: done([[-120, 4], [0, 4]]), queueDepth: 10 })
+    expect(stalled.drainSeconds).toBe(null)
+    expect(stalled.drainReason).toMatch(/30s of samples with completions/)
+    const unknown = saturationModel(service, cap(), { samples: done([[-120, 4], [0, 12]]), queueDepth: null })
+    expect(unknown.drainSeconds).toBe(null)
+    expect(unknown.drainReason).toMatch(/Queue depth is not reported/)
+  })
+
+  it('calls an empty queue clear rather than unmeasurable', () => {
+    const model = saturationModel(service, cap(), { samples: [], queueDepth: 0 })
+    expect(model.drainSeconds).toBe(0)
+    expect(model.drainReason).toBe(null)
+  })
+})
+
+describe('Replica lifecycle is scoped to the service Azure measured', () => {
+  const capacity = { configured: true, worker_app_name: 'acp-assess',
+    replicas: [{ name: 'r1', state: 'ready' }],
+    revisions: [{ name: 'acp-assess--v25', active: true, provisioning_state: 'Provisioned', traffic_percent: 100 }],
+    replica_lifecycle: { counts: { ready: 1, starting: 0, allocating: 0, not_running: 0, draining: 0, unknown: 0 },
+      total: 1, unreported_states: ['requested', 'failed'], unreported_reason: 'because Azure does not list them' } }
+
+  it('orders the counts as a rollout reads and carries the unreported states', () => {
+    const model = replicaLifecycle(capacity, service)
+    expect(model.available).toBe(true)
+    expect(model.counts.map((row) => row.state))
+      .toEqual(['ready', 'starting', 'allocating', 'draining', 'not_running', 'unknown'])
+    expect(model.unreported).toEqual(['requested', 'failed'])
+    expect(model.active.name).toBe('acp-assess--v25')
+    expect(model.blocked).toBe(null)
+  })
+
+  it('surfaces a revision that is not Provisioned as the blocker it is', () => {
+    const failed = { ...capacity, revisions: [{ name: 'v26', active: true, provisioning_state: 'Failed',
+      provisioning_error: 'ImagePullFailure', age_s: 240 }] }
+    expect(replicaLifecycle(failed, service).blocked)
+      .toEqual({ state: 'Failed', error: 'ImagePullFailure', ageS: 240 })
+  })
+
+  it('declines for a service the measured app does not describe, and when Azure is unconfigured', () => {
+    expect(replicaLifecycle(capacity, { role: 'discovery' }).available).toBe(false)
+    expect(replicaLifecycle(capacity, { role: 'discovery' }).reason).toMatch(/not this service/)
+    expect(replicaLifecycle({ configured: false }, service).reason).toMatch(/not configured/)
   })
 })

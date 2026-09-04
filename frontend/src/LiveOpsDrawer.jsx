@@ -4,7 +4,7 @@ import {
   EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, arcPath, capacityMatchesService, chartModel,
   componentState, defaultMetricFor, eventClock, eventsForNode, filterEvents, formatDuration,
   REPLICA_STATES, gaugeModel, metricGroups, nodeTypeLabel, outputModel, provenance, queueModel,
-  replicaLifecycle, reported,
+  replicaLifecycle, reported, saturationModel,
   revisionLabel, runModel, seriesForMetric, sourceModel, tenantConcentration, trendMarkers,
   updatedAgo,
 } from './liveOpsDrawer.js'
@@ -92,7 +92,7 @@ function LiveHeader({ name, kind, state, connection, generatedAt, revision, nowM
 
 /* ─────────────── B. Primary operational visualization ─────────────── */
 
-function WorkerGauge({ gauge, service, capacity, nowMs }) {
+function WorkerGauge({ gauge, service, capacity, nowMs, saturation }) {
   if (!gauge.available) {
     return <div style={{ ...PANEL, padding: 14 }} role="status">
       <b>Worker utilization unavailable</b>
@@ -135,6 +135,7 @@ function WorkerGauge({ gauge, service, capacity, nowMs }) {
         </div>
       </div>
     </div>
+    <Saturation saturation={saturation} nowMs={nowMs} measuredAt={capacity?.measured_at} />
     <ReplicaLifecycle lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs}
       measuredAt={capacity?.measured_at} />
     <AzureMetrics capacity={capacity} service={service} nowMs={nowMs} />
@@ -212,6 +213,34 @@ function ReplicaLifecycle({ lifecycle, nowMs, measuredAt }) {
     </ul>}
     <Source kind="azure" at={measuredAt} nowMs={nowMs} detail="Container Apps control plane" />
   </section>
+}
+
+/**
+ * Slots and replicas are two different capacities and are shown as two. ACP's worker slots are
+ * concurrency INSIDE a replica; Azure's replicas are how many copies are running against the
+ * scale rule. Every slot busy with replicas to spare, and every replica up with slots idle, are
+ * opposite problems that look identical when the two are added together.
+ */
+function Saturation({ saturation, nowMs, measuredAt }) {
+  if (!saturation) return null
+  const { slots, replicas, queueDepth, drainSeconds, drainReason } = saturation
+  return <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8, marginTop: 11 }}>
+    <Tile label="WORKER SLOTS" source="live" at={measuredAt ? undefined : undefined} nowMs={nowMs}
+      value={slots.total == null ? NOT_REPORTED : `${slots.active ?? 0} of ${slots.total} busy`}
+      detail={slots.available == null ? undefined : `${slots.available} available`} />
+    <Tile label="REPLICAS" nowMs={nowMs} at={measuredAt} source={replicas.source}
+      value={replicas.running == null ? NOT_REPORTED : `${replicas.running} running`}
+      detail={replicas.min == null && replicas.max == null ? undefined
+        : `${replicas.min ?? '—'} min · ${replicas.max ?? '—'} max`} />
+    <Tile label="SCALE HEADROOM" nowMs={nowMs} at={measuredAt} source={replicas.source}
+      value={replicas.headroom == null ? NOT_REPORTED : `${replicas.headroom} more`}
+      detail={replicas.atMax ? 'At the scale rule maximum — Azure will not add more' : undefined} />
+    <Tile label="QUEUE FOR THIS SERVICE" source={queueDepth == null ? 'unavailable' : 'live'} nowMs={nowMs}
+      value={queueDepth == null ? NOT_REPORTED : `${queueDepth} waiting`} />
+    <Tile label="TIME TO CLEAR QUEUE" source={drainSeconds == null ? 'unavailable' : 'session'} nowMs={nowMs}
+      value={drainSeconds == null ? 'Not enough evidence' : drainSeconds === 0 ? 'Queue is clear' : formatDuration(drainSeconds)}
+      detail={drainReason || (drainSeconds ? 'From this service own completion rate' : undefined)} />
+  </div>
 }
 
 const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB']
@@ -568,7 +597,9 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
   let primary = null
   if (node?.kind === 'worker') {
     primary = <WorkerGauge service={node.service} capacity={capacity} nowMs={nowMs}
-      gauge={gaugeModel(node.service, { stalled: snapshot?.summary?.pressure === 'stalled' })} />
+      gauge={gaugeModel(node.service, { stalled: snapshot?.summary?.pressure === 'stalled' })}
+      saturation={saturationModel(node.service, capacity, { samples: shown.samples,
+        queueDepth: snapshot?.summary?.by_stage?.[node.service?.stage]?.queued })} />
   } else if (node?.kind === 'queue') {
     primary = <QueueBar queue={queueModel(snapshot?.summary, { nowMs })} nowMs={nowMs}
       generatedAt={snapshot?.generated_at} concentration={tenantConcentration(snapshot?.runs)} />

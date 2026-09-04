@@ -213,6 +213,50 @@ export function capacityMatchesService(capacity, service = {}) {
   return app === `acp-${role}` || app.endsWith(`-${role}`)
 }
 
+/* ─────────────────────── Worker saturation ─────────────────────── */
+
+/**
+ * Is this service's capacity sufficient, and when will its queue be clear?
+ *
+ * Two different capacities, kept apart because conflating them is how a saturated tier looks
+ * healthy: WORKER SLOTS are ACP's own concurrency inside a replica (the heartbeat's pool_size),
+ * while REPLICAS are Azure's — how many copies of the app are running against the scale rule's
+ * min/max. A service can have every slot busy with replicas to spare, or every replica up with
+ * slots idle, and those call for opposite responses.
+ *
+ * The drain estimate uses the SAME evidence rule as a run's ETA — at least two samples spanning
+ * 30 seconds with work actually completing — and says "not enough evidence" otherwise. A queue
+ * with no completions has no drain time, and a made-up one is worse than none: it is the number
+ * an operator would use to decide not to scale.
+ */
+export function saturationModel(service = {}, capacity = null, { samples = [], queueDepth = null } = {}) {
+  const mine = capacityMatchesService(capacity, service)
+  const replicaMetric = mine ? capacity?.metrics?.replicas : null
+  const running = replicaMetric?.available ? num(replicaMetric.latest) : (mine ? num(capacity?.current_replicas) : null)
+  const max = mine ? num(capacity?.max_replicas) : null
+  const min = mine ? num(capacity?.min_replicas) : null
+  const depth = num(queueDepth)
+  return {
+    slots: { active: num(service.active), total: num(service.slots), available: num(service.available) },
+    replicas: {
+      running, min, max,
+      // Headroom is only a number when both ends are measured. `max` with no `running` is a
+      // limit, not spare capacity, and reporting it as headroom would overstate what is available.
+      headroom: running == null || max == null ? null : Math.max(0, max - running),
+      atMax: running != null && max != null && running >= max,
+      source: mine ? 'azure' : 'unavailable',
+    },
+    queueDepth: depth,
+    drainSeconds: depth == null || depth === 0 ? (depth === 0 ? 0 : null) : etaSeconds(samples, depth),
+    // Stated so the UI can explain a missing estimate rather than just omitting it.
+    drainReason: depth == null ? 'Queue depth is not reported for this service.'
+      : depth === 0 ? null
+      : etaSeconds(samples, depth) == null
+        ? 'Needs 30s of samples with completions before a drain time can be measured.'
+        : null,
+  }
+}
+
 /* ─────────────────────── Replica lifecycle ─────────────────────── */
 
 /** Each state's word, its shape, and its tone. Shapes again, not colours alone (1.4.1). */

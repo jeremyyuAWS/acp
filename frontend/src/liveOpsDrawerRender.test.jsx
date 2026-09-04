@@ -250,6 +250,39 @@ describe('Provenance', () => {
   })
 })
 
+describe('Worker saturation', () => {
+  const workerNode = { kind: 'worker', label: 'Assess workers', service }
+  const busy = { ...snapshot, summary: { ...snapshot.summary,
+    by_stage: { ...snapshot.summary.by_stage, assess: { running: 2, queued: 10, completed: 8, total: 20 } } } }
+  const drainSamples = [
+    { at: iso(-120), active_jobs: 2, queue_depth: 12, completed: 4 },
+    { at: iso(0), active_jobs: 2, queue_depth: 10, completed: 12 },
+  ]
+
+  it('shows ACP worker slots and Azure replicas as two separate capacities', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, snapshot: busy })
+    expect(container.textContent).toContain('WORKER SLOTS')
+    expect(container.textContent).toContain('2 of 3 busy')
+    expect(container.textContent).toContain('REPLICAS')
+    expect(container.textContent).toContain('SCALE HEADROOM')
+  })
+
+  it('estimates the drain from this service own completions', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, snapshot: busy,
+      samples: drainSamples })
+    // 8 completed over 120s with 10 waiting → 2m 30s.
+    expect(container.textContent).toContain('TIME TO CLEAR QUEUE')
+    expect(container.textContent).toContain('2m 30s')
+  })
+
+  it('says why it has no drain time rather than leaving the tile blank', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, snapshot: busy,
+      samples: [{ at: iso(-120), completed: 4 }, { at: iso(0), completed: 4 }] })
+    expect(container.textContent).toContain('Not enough evidence')
+    expect(container.textContent).toContain('30s of samples with completions')
+  })
+})
+
 describe('Replica lifecycle', () => {
   const workerNode = { kind: 'worker', label: 'Assess workers', service }
   const lifecycleCapacity = { ...capacity,
