@@ -238,3 +238,38 @@ def test_fields_fall_through_to_the_flat_shape_when_not_nested_under_properties(
     assert rev["active"] is True
     assert rev["health_state"] == "Healthy"
     assert rev["replicas"] == 2
+
+
+def test_the_revision_list_reads_the_named_app_and_a_scope_slip_cannot_hide_in_the_except(
+        open_client, monkeypatch):
+    """Regression, and a guard on the shape of the bug rather than the typo.
+
+    A global rename for the multi-app capacity read reached this function, where no `app_name`
+    exists — and the resulting NameError landed in the bare `except` below as `revisions: []`. The
+    endpoint answered 200 with an empty list, which is exactly what it answers when Azure is
+    reachable but has no revisions, so nothing looked wrong.
+
+    So this asserts the app the list was asked FOR, not just that a list came back: a call made
+    against the wrong name, or against a name that does not resolve, fails here instead of
+    degrading into a plausible empty answer.
+    """
+    import routes.control as control_module
+    monkeypatch.setattr(control_module, "_AZ_CONFIGURED", True)
+    monkeypatch.setattr(control_module, "_AZ_APP", "acp-assess")
+    asked = []
+
+    fake_app = _fake_app()
+    client = SimpleNamespace(
+        container_apps=SimpleNamespace(get=lambda rg, name: fake_app),
+        container_apps_revisions=SimpleNamespace(
+            list_revisions=lambda rg, name: (asked.append(name), SimpleNamespace(value=[
+                _fake_revision("acp-assess--rev1", active=True, health_state="Healthy",
+                               provisioning_state="Provisioned", running_state="Running",
+                               replicas=2, created_time="2026-09-01T10:00:00+00:00")]))[1]),
+    )
+    monkeypatch.setattr(control_module, "_az_client", lambda: client)
+
+    body = open_client.get("/control/workers/revisions").json()
+    assert asked == ["acp-assess"]
+    assert [r["name"] for r in body["revisions"]] == ["acp-assess--rev1"]
+    assert body["revisions"][0]["replicas"] == 2

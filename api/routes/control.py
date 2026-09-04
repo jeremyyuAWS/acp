@@ -918,7 +918,12 @@ def get_revisions():
         swallowed("routes.control.get_revisions: reading a revision's fields failed")
 
     try:
-        revisions = client.container_apps_revisions.list_revisions(_AZ_RG, app_name)
+        # _AZ_APP, not app_name: this endpoint reads the single named app, unlike get_capacity
+        # which reads every app in _configured_apps(). It briefly said `app_name` — a global
+        # rename that reached a scope with no such variable — and the NameError landed in the
+        # except below as an empty revision list. A bare except turns a typo into "Azure returned
+        # nothing", which is why the tests below assert the CONTENT and not just the status.
+        revisions = client.container_apps_revisions.list_revisions(_AZ_RG, _AZ_APP)
         rev_list = getattr(revisions, "value", None)
         if rev_list is None:
             rev_list = list(revisions)
