@@ -13,9 +13,9 @@ import WorkspaceFooter from './WorkspaceFooter.jsx'
 // Master/detail Remediation inbox. Remediation is queue work — select an item, understand it, act,
 // move to the next — so the layout is a TWO-column split: a 35% work queue on the left to find and
 // choose the next finding, and a 65% remediation WORKSPACE on the right that stacks, in one scrolling
-// column, everything needed to finish it — Problem → Evidence → How to fix → Decision. The document
-// preview is folded into the Evidence section (not a separate third pane that sat empty for every
-// structure/metadata finding). Selecting a row NEVER expands it; it populates the workspace. Acting
+// column, everything needed to finish it — Problem → Evidence → How to fix → Decision. Full-document
+// viewing is an explicit action instead of a persistent third pane. Selecting a row NEVER expands
+// it; it populates the workspace. Acting
 // on a finding auto-advances to the next unresolved one, which is what makes the whole thing feel
 // fast. All derivation lives in remediationInboxModel.js; this file is presentation.
 
@@ -24,6 +24,19 @@ const fmtOf = (file) => String(file || '').split('.').pop().toLowerCase()
 // The success-criterion key a finding shares with its siblings, used to batch a decision across
 // every other queued finding of the same rule (W8). Normalised so 'SC_1_1_1' / 'WCAG 1.1.1' / '1.1.1' all match.
 const scKeyOf = (f) => scOf(f?.rule_id || f?.ruleId || f?.wcag)
+const LARGE_BATCH_THRESHOLD = 10
+
+const WHY_BY_SC = {
+  '1.1.1': 'Text alternatives let screen-reader users understand images and other non-text content.',
+  '1.3.1': 'Programmatic structure helps assistive technology identify headings, lists, tables, and relationships.',
+  '1.3.2': 'A meaningful reading order ensures content makes sense when it is read aloud or navigated without its visual layout.',
+  '1.4.3': 'Sufficient contrast makes text easier to read for people with low vision and in difficult viewing conditions.',
+  '2.4.2': 'A descriptive document title helps people identify the document and distinguish it from other open content.',
+  '2.4.4': 'Descriptive link text helps people understand a link’s destination without relying on surrounding context.',
+  '3.1.1': 'The correct document language helps screen readers pronounce and interpret the content accurately.',
+  '3.1.2': 'Correct language metadata helps screen readers pronounce passages written in another language.',
+  '4.1.2': 'Accessible names and roles let assistive technology identify controls and explain how to use them.',
+}
 
 function LaneRail({ lane }) {
   return <span aria-hidden="true" style={{ flex: '0 0 4px', alignSelf: 'stretch', borderRadius: 4, background: railColorOf(lane) }} />
@@ -57,6 +70,27 @@ function problemOf(f, issue) {
   const after = displayText(f.after || '')
   if (before && after) return `ACP found ${before} where ${after} is recommended.`
   return `ACP found an issue with ${issue.toLowerCase()} in this document.`
+}
+
+function whyOf(f) {
+  return displayText(f.whyMatters || f.rationale || WHY_BY_SC[scKeyOf(f)]
+    || 'Correcting this issue helps people using assistive technology understand and use the document.')
+}
+
+// Highlight only the characters that changed. The full value remains in the accessible label, so
+// screen readers receive a clean comparison rather than punctuation around separate fragments.
+function ChangedValue({ from, to }) {
+  const a = displayText(from)
+  const b = displayText(to)
+  if (!a || !b || a === b) return <>{b || 'Not recorded'}</>
+  let start = 0
+  while (start < a.length && start < b.length && a[start] === b[start]) start += 1
+  let end = 0
+  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end += 1
+  const prefix = b.slice(0, start)
+  const changed = b.slice(start, b.length - end || undefined)
+  const suffix = end ? b.slice(-end) : ''
+  return <>{prefix}{changed && <mark className="remediation-change">{changed}</mark>}{suffix}</>
 }
 
 // `showFile` is false for rows sitting under a document group header (the header already names the
@@ -299,20 +333,23 @@ function taskLineOf(f, lane) {
   }
 }
 
-function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCount = 0, onApplyToMatching, cluster = null, draft = null, onDraftChange, saving = false, error = null, headingRef = null, detailExtra = null }) {
+function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFindings = [], onApplyToMatching, cluster = null, draft = null, onDraftChange, saving = false, error = null, headingRef = null, detailExtra = null, emptyState = null }) {
   const [applyMatching, setApplyMatching] = useState(false)
+  const [matchingPreviewOpen, setMatchingPreviewOpen] = useState(false)
   useEffect(() => { setApplyMatching(false) }, [f?.id])
+  useEffect(() => { setMatchingPreviewOpen(false) }, [f?.id])
   if (!f) {
     return (
       <div style={{ display: 'grid', placeItems: 'center', height: '100%', textAlign: 'center', padding: 24 }}>
         <div className="muted">
           <div style={{ fontSize: 34 }} aria-hidden="true">✓</div>
-          <p style={{ marginTop: 8 }}>Select a finding to review it here.<br />Acting on one moves you to the next automatically.</p>
+          {emptyState || <p style={{ marginTop: 8 }}>Select a finding from the inbox to review its recommended action.</p>}
         </div>
       </div>
     )
   }
   const r = rowModel(f, decisions)
+  const matchingCount = matchingFindings.length
   const lane = laneOf(f)
   // Handoff (a rejected AI fix, W2) is worked by hand like a manual finding — guided steps + the
   // "Mark as assigned" action — so it shares the manual detail treatment.
@@ -333,10 +370,14 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
   const hasProposedValue = f.after != null && f.after !== ''
   const currentValue = displayText(f.before || f.observed || 'Not recorded')
   const proposedValue = displayText(draftValue || f.after || '')
-  const why = displayText(f.whyMatters || f.rationale || 'Correcting this issue helps people using assistive technology understand and use the document.')
-  const decide = (decision) => applyMatching && matchingCount > 0
-    ? onApplyToMatching?.(f, decision)
-    : onDecide?.(f, decision)
+  const why = whyOf(f)
+  const decide = (decision) => {
+    if (applyMatching && matchingCount > LARGE_BATCH_THRESHOLD) {
+      const ok = window.confirm(`Apply this decision to ${matchingCount + 1} findings across ${new Set([f.file, ...matchingFindings.map((x) => x.file)]).size} documents?`)
+      if (!ok) return
+    }
+    return applyMatching && matchingCount > 0 ? onApplyToMatching?.(f, decision) : onDecide?.(f, decision)
+  }
   return (
     <div className="remediation-detail" style={{ display: 'flex', flexDirection: 'column' }}>
       {/* Keep this content-sized. The workspace owns scrolling; making this child 100% tall
@@ -370,7 +411,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
           <>
             <div className="remediation-comparison" aria-label="Current and proposed values">
               <div><b>Current</b><span aria-label={`Current value: ${currentValue}`}>{currentValue}</span></div>
-              <div><b>Proposed</b><span aria-label={`Proposed value: ${proposedValue}`}>{proposedValue}</span></div>
+              <div><b>Proposed</b><span aria-label={`Proposed value: ${proposedValue}`}><ChangedValue from={currentValue} to={proposedValue} /></span></div>
             </div>
             {changed && <p style={{ fontSize: 13.5, lineHeight: 1.5, margin: '10px 0 0' }}>{displayText(changed)}</p>}
 
@@ -447,11 +488,24 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
               {' '}The other {matchingCount} carry the same criterion and an actionable proposal; manual,
               blocked and already-decided findings are excluded.
             </span>
-            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', color: 'var(--ink)' }}>
-              <input type="checkbox" checked={applyMatching} onChange={(e) => setApplyMatching(e.target.checked)} />
+            <div>
+              <button type="button" className="linklike" aria-expanded={matchingPreviewOpen}
+                      onClick={() => setMatchingPreviewOpen((open) => !open)}>Review matching items</button>
+              {matchingPreviewOpen && <>
+              <ul className="remediation-match-preview">
+                {matchingFindings.slice(0, 5).map((item) => (
+                  <li key={item.id}><b>{displayText(item.file)}</b><span>{displayText(item.after || item.observed || 'No proposed value recorded')}</span></li>
+                ))}
+              </ul>
+              {matchingCount > 5 && <p className="muted" style={{ margin: '4px 0 0' }}>And {matchingCount - 5} more matching findings.</p>}
+              </>}
+            </div>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: matchingPreviewOpen ? 'pointer' : 'not-allowed', color: 'var(--ink)' }}>
+              <input type="checkbox" checked={applyMatching} disabled={!matchingPreviewOpen} onChange={(e) => setApplyMatching(e.target.checked)} />
               <span>Apply this decision to {matchingCount} matching {scKeyOf(f) ? `WCAG ${scKeyOf(f)} ` : ''}finding{matchingCount === 1 ? '' : 's'}</span>
             </label>
-            {applyMatching && <span>This affects {matchingCount} additional finding{matchingCount === 1 ? '' : 's'} across {cluster?.fileCount || matchingCount} document{(cluster?.fileCount || matchingCount) === 1 ? '' : 's'}.</span>}
+            {!matchingPreviewOpen && <span className="muted">Review the matching items before applying one decision to the group.</span>}
+            {applyMatching && <span>This affects {matchingCount} additional finding{matchingCount === 1 ? '' : 's'} across {new Set(matchingFindings.map((x) => x.file)).size} additional document{new Set(matchingFindings.map((x) => x.file)).size === 1 ? '' : 's'}.</span>}
           </div>
         )}
         <div style={{ padding: '12px 22px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -698,7 +752,11 @@ export default function RemediationInbox({
     const row = clusterOfFinding(clusters, f?.id)
     return batchTargetsOf(row, decisions).filter((x) => x.id !== f?.id)
   }
-  const matchingCount = selected ? matchingOf(selected).length : 0
+  const matchingFindings = selected ? matchingOf(selected) : []
+  const queueComplete = queue.length > 0 && queue.every((f) => isResolved(f, decisions))
+  const emptyReviewState = queue.length === 0 || queueComplete
+    ? <div><b style={{ color: 'var(--ink)' }}>All review items are complete.</b><br />{prog.resolved} resolved · {counts.completed || 0} completed</div>
+    : <p style={{ marginTop: 8 }}>No items are available in {WORKFLOW_LABELS[tab]}. Choose another status from the inbox.</p>
 
   // Act on a finding, then auto-advance to the next unresolved one — the behaviour that makes the
   // queue feel like a controlled worklist rather than a scroll through an audit report.
@@ -819,10 +877,11 @@ export default function RemediationInbox({
                   headingRef={reviewHeadingRef}
                   saving={savingId != null && savingId === selected?.id}
                   error={saveError && selected && saveError.id === selected.id ? saveError : null}
-                  matchingCount={matchingCount} onApplyToMatching={applyToMatching} cluster={selectedCluster?.type === 'cluster' ? selectedCluster : null}
+                  matchingFindings={matchingFindings} onApplyToMatching={applyToMatching} cluster={selectedCluster?.type === 'cluster' ? selectedCluster : null}
                   draft={selected ? (drafts[selected.id] ?? null) : null}
                   onDraftChange={(v) => selected && setDrafts((d) => ({ ...d, [selected.id]: v }))}
-                  detailExtra={renderDetailExtra ? renderDetailExtra(selected) : null} />
+                  detailExtra={renderDetailExtra ? renderDetailExtra(selected) : null}
+                  emptyState={emptyReviewState} />
     </>
   )
   return (
@@ -913,11 +972,15 @@ export default function RemediationInbox({
         <div ref={listRef} onKeyDown={onQueueKey} aria-label="Findings — use Up and Down arrow keys to move between them"
              style={{ flex: '1 1 auto', overflowY: 'auto' }}>
           {visible.length === 0 ? (
-            <p className="muted" style={{ padding: 16, fontSize: 13 }}>
-              {assignedOnly
+            <div className="muted" style={{ padding: 16, fontSize: 13 }}>
+              {queue.length === 0 || queueComplete
+                ? <><b style={{ color: 'var(--ink)' }}>All review items are complete.</b><p style={{ margin: '6px 0 0' }}>{prog.resolved} resolved · {counts.completed || 0} completed</p></>
+                : search.trim()
+                ? <>No findings match “{displayText(search.trim())}”. <button className="linklike" onClick={() => setSearch('')}>Clear search</button></>
+                : assignedOnly
                 ? <>Nothing in this view is assigned to you. <button className="linklike" onClick={() => setAssignedOnly(false)}>Show all</button></>
-                : <>Nothing here. {tab !== 'needs-review' && <button className="linklike" onClick={() => setTab('needs-review')}>Back to Needs review</button>}</>}
-            </p>
+                : <>No items in {WORKFLOW_LABELS[tab]}. {tab !== 'needs-review' && <button className="linklike" onClick={() => setTab('needs-review')}>Review AI suggestions</button>}</>}
+            </div>
           ) : group === 'issue' ? clusters.map((row) => (
             row.type === 'single'
               ? <QueueRow key={row.key} f={row.finding} decisions={decisions}

@@ -1042,6 +1042,11 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .remediation-comparison > div + div { border-top: 1px solid var(--line); background: var(--surface-2, #f6f5f8); }
 .remediation-comparison b { font-size: 12px; }
 .remediation-comparison span { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px; line-height: 1.5; }
+.remediation-change { padding: 0 2px; border-radius: 3px; color: inherit; background: #fff0b8; box-shadow: inset 0 -1px #b7791f; }
+.remediation-match-preview { margin: 8px 0 4px; padding-left: 20px; }
+.remediation-match-preview li { margin: 5px 0; }
+.remediation-match-preview b, .remediation-match-preview span { display: block; overflow-wrap: anywhere; }
+.remediation-match-preview span { color: var(--muted); margin-top: 1px; }
 .remediation-details-list { margin: 10px 0 0; }
 .remediation-details-list > div { display: grid; grid-template-columns: minmax(150px, 32%) 1fr; gap: 14px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .remediation-details-list dt { font-size: 12px; font-weight: 600; }
