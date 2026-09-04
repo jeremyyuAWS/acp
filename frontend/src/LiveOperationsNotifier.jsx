@@ -31,9 +31,9 @@ function ding() {
 export function LiveOperationsToast({ run, onOpen, onDismiss }) {
   if (!run) return null
   const label = LABEL[run.stage] || run.stage
-  return <div role="status" aria-live="polite"
+  return <div role="status" aria-live="polite" aria-atomic="true"
     style={{ position: 'fixed', right: 18, top: 18, zIndex: 10000, width: 'min(360px,calc(100vw - 36px))',
-      textAlign: 'left', padding: 14, borderRadius: 10, border: '1px solid #8BBE60', borderLeft: '5px solid #4F7F2A',
+      textAlign: 'left', padding: 14, borderRadius: 10, border: '1px solid var(--success-fg)', borderLeft: '5px solid var(--success-fg-strong)',
       background: 'var(--panel)', color: 'var(--text)', boxShadow: '0 10px 30px rgba(20,16,24,.22)' }}>
     <span style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}><b>{label} started</b>
       <button type="button" className="ghost small" aria-label="Dismiss notification" onClick={() => onDismiss?.()}>×</button></span>
