@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .cost import PRICE_BOOK, Pricing
-from .schema import Case
+from .schema import ACTIONS, Case
 
 
 @dataclass
@@ -287,19 +287,81 @@ def _approx_tokens(s: str) -> int:
     return max(1, len(s) // 4)
 
 
+#: The envelope as a JSON schema, for runtimes that can constrain decoding to it (Ollama's
+#: `format`, llama.cpp grammars, an OpenAI-shaped `response_format`). It is the SAME shape the
+#: prose envelope asks for, so switching it on changes exactly one variable: whether the decoder
+#: is ALLOWED to produce anything else.
+#:
+#: `action` enumerates the FULL vocabulary, including the destructive members — deliberately.
+#: Narrowing it per case to that case's allowed_actions would make an unauthorised action
+#: impossible by construction, which is a fine thing to ship and a terrible thing to measure:
+#: the safety score would then be a property of the schema, not of the model. What this removes
+#: is malformed output, and nothing else.
+ENVELOPE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "detected": {"type": "array", "items": {"type": "string"}},
+        "diagnosis": {
+            "type": "object",
+            "properties": {
+                "criterion": {"type": "string"},
+                "component": {"type": "string"},
+                "root_cause": {"type": "string"},
+                "severity": {"type": "string", "enum": ["A", "AA", "AAA"]},
+                "confidence": {"type": "number"},
+            },
+            "required": ["criterion", "component", "root_cause", "severity", "confidence"],
+        },
+        "plan": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": list(ACTIONS)},
+                    "target": {"type": "string"},
+                    "value": {"type": "string"},
+                    "criterion": {"type": "string"},
+                    "rollback": {"type": "boolean"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    "required": ["detected", "diagnosis", "plan"],
+}
+
+
 class OllamaCandidate(HttpModelCandidate):
-    """A local model, priced by occupancy (see cost.local_amortised)."""
+    """A local model, priced by occupancy (see cost.local_amortised).
+
+    `constrain=True` sends ENVELOPE_SCHEMA as Ollama's `format`, so the decoder can only emit a
+    conforming object. The prompt is byte-identical either way — that is the point: the two
+    modes differ in one request field, so a difference in the report is attributable.
+    """
 
     def __init__(self, model: str, *, base_url: str | None = None, tier: int = 1,
-                 price_tier: str = "local-gpu"):
-        super().__init__(f"ollama:{model}", tier=tier, pricing=PRICE_BOOK[price_tier])
+                 price_tier: str = "local-gpu", constrain: bool = False):
+        super().__init__(f"ollama:{model}" + ("+schema" if constrain else ""),
+                         tier=tier, pricing=PRICE_BOOK[price_tier])
         self.model = model
+        self.constrain = constrain
         self.base = (base_url or os.environ.get("OLLAMA_BASE_URL",
                                                 "http://localhost:11434")).rstrip("/")
 
+    def body(self, case: Case) -> dict[str, Any]:
+        """The request payload, as its own method so a test can assert what is sent without a
+        server. The constrained/unconstrained difference is one key, and this is where it is."""
+        payload: dict[str, Any] = {
+            "model": self.model, "prompt": build_prompt(case), "stream": False,
+            "options": {"temperature": 0, "num_predict": 400},
+        }
+        if self.constrain:
+            payload["format"] = ENVELOPE_SCHEMA
+        return payload
+
     def _request(self, case: Case):   # pragma: no cover - network
-        body = json.dumps({"model": self.model, "prompt": build_prompt(case), "stream": False,
-                           "options": {"temperature": 0, "num_predict": 400}}).encode()
+        body = json.dumps(self.body(case)).encode()
         req = urllib.request.Request(f"{self.base}/api/generate", data=body,
                                      headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=self.timeout) as r:
@@ -338,7 +400,9 @@ class HostedCandidate(HttpModelCandidate):
 
 def resolve(spec: str) -> Candidate:
     """Turn a CLI string into a candidate. `rules-only`, `stub:*`, `ollama:<model>`,
-    `anthropic:<model>[#price-tier]`, `hosted:<model>@<endpoint>[#price-tier]`."""
+    `anthropic:<model>[#price-tier]`, `hosted:<model>@<endpoint>[#price-tier]`.
+
+    A trailing `+schema` on an ollama spec constrains decoding to ENVELOPE_SCHEMA."""
     price = None
     if "#" in spec and not spec.startswith("hosted:"):
         spec, price = spec.rsplit("#", 1)
@@ -353,8 +417,10 @@ def resolve(spec: str) -> Candidate:
                                  pricing=PRICE_BOOK[price] if price else None)
     if spec.startswith("ollama:"):
         model = spec.split(":", 1)[1]
+        constrain = model.endswith("+schema")
+        model = model[:-len("+schema")] if constrain else model
         tier_hint = "local-cpu" if os.environ.get("EVALS_LOCAL_CPU") else "local-gpu"
-        return OllamaCandidate(model, price_tier=tier_hint)
+        return OllamaCandidate(model, price_tier=tier_hint, constrain=constrain)
     if spec.startswith("anthropic:"):
         model = spec.split(":", 1)[1]
         return AnthropicCandidate(model, price_tier=price)
