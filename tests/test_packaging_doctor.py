@@ -414,3 +414,58 @@ def test_the_command_never_asks_kubectl_to_change_anything(tmp_path):
 def test_doctor_is_no_longer_advertised_as_unimplemented():
     from acpctl.cli import NOT_YET_IMPLEMENTED
     assert "doctor" not in NOT_YET_IMPLEMENTED
+
+
+# ── doctor against the chart it is preflighting ───────────────────────────────
+
+def test_doctor_checks_for_every_custom_resource_the_chart_renders():
+    """THE DRIFT GUARD BETWEEN THE TWO HALVES OF PHASE 2.
+
+    A custom resource rendered by the chart needs a controller in the cluster, and every such
+    controller that is absent produces the same silent failure: the object applies cleanly and
+    nothing reconciles it. doctor exists to catch exactly that — so a custom resource the chart
+    renders and doctor does not check for is a hole of precisely the shape the command was built
+    to close.
+
+    Adding a `ServiceMonitor` for Prometheus, say, would be a one-line chart change that silently
+    reintroduces the KEDA problem for a different operator, and every existing test would stay
+    green. This fails until doctor learns about it.
+    """
+    import inspect
+    import shutil
+    import subprocess
+
+    import yaml as _yaml
+
+    helm = shutil.which("helm")
+    if helm is None:
+        pytest.skip("helm not installed; see test_packaging_chart.py::test_ci_has_helm")
+
+    from acpctl import doctor as doctor_mod
+    from acpctl.values import render_values_yaml
+
+    chart = PACKAGING / "chart" / "acp"
+    proc = subprocess.run([helm, "template", "acp", str(chart), "-f", "-"],
+                          input=render_values_yaml(load_example("standard-production")),
+                          capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+
+    # Built-in API groups ship with Kubernetes and need no operator; only third-party ones do.
+    builtin = {"apps", "batch", "policy", "autoscaling", "networking.k8s.io", "rbac.authorization.k8s.io"}
+    rendered_groups = set()
+    for doc in _yaml.safe_load_all(proc.stdout):
+        if not doc:
+            continue
+        api = doc.get("apiVersion", "")
+        if "/" in api:
+            group = api.split("/", 1)[0]
+            if group not in builtin and not group.endswith(".k8s.io"):
+                rendered_groups.add(group)
+
+    assert rendered_groups, "no third-party resources found; this guard would pass vacuously"
+
+    source = inspect.getsource(doctor_mod)
+    unchecked = sorted(g for g in rendered_groups if g not in source)
+    assert not unchecked, (
+        f"the chart renders custom resources in {unchecked} but doctor never checks whether their "
+        "controller is installed — those objects would apply cleanly and do nothing")

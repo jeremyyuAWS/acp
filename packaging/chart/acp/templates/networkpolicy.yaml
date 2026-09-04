@@ -7,8 +7,9 @@ A NETWORKPOLICY IS A CLUSTER CAPABILITY, NOT A GUARANTEE THIS CHART MAKES. Kuber
 ignores NetworkPolicy objects when the CNI does not implement them — no error, no event, no
 status field saying "unenforced". Flannel is the common case. So a regulated installation can
 render every policy below, pass every review, and be running with completely open pod networking.
-That check belongs in `acpctl doctor` against a live cluster (phase 2); it cannot be made here,
-and pretending otherwise by staying quiet would be the more dangerous choice.
+`acpctl doctor` makes that check against a live cluster — by INFERENCE from the CNI, since
+enforcement has no API to query, and it says so rather than implying certainty. It cannot be
+checked here at all, and staying quiet about that would be the more dangerous choice.
 */}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

@@ -60,8 +60,8 @@ three cases **Kubernetes reports nothing when it cannot**:
 | `NetworkPolicy` | a CNI that enforces them | no error; pod networking stays open |
 | `ExternalSecret` | External Secrets Operator | pods stay in `CreateContainerConfigError` |
 
-Only the third is loud. `acpctl doctor` is where these become a checkable precondition, and it is
-not built yet — until then they are in the chart's NOTES and here.
+Only the third is loud. **`acpctl doctor` is where these become checkable** — run it against
+the target cluster before installing (see below).
 
 ## Using it
 

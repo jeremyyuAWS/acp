@@ -13,8 +13,9 @@ collapsing them would silently give the worker tier the wrong one.
 
 KEDA IS A CLUSTER PREREQUISITE, NOT A DEPENDENCY OF THIS CHART. A ScaledObject rendered into a
 cluster with no KEDA is an object nothing reconciles — the workers sit at their floor replica
-count and the backlog grows with nothing reporting why. `acpctl doctor` (phase 2, not yet built)
-is where that check belongs; until then it is in the chart's NOTES and in the runbook.
+count and the backlog grows with nothing reporting why. `acpctl doctor` checks for KEDA before
+an install and reports its absence as a blocker; the NOTES say so too, for the operator who
+installs without running it.
 */}}
 {{- if .Values.api.autoscaling.enabled }}
 apiVersion: autoscaling/v2

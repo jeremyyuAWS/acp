@@ -227,5 +227,7 @@ application code branches on it, the normalisation would be hiding the fork it e
 
 Three cluster prerequisites are rendered-but-unenforceable, and two of them fail **silently**:
 a `ScaledObject` without KEDA and a `NetworkPolicy` under a CNI that does not implement them are
-both accepted by the API server and quietly do nothing. `acpctl doctor` is where those become
-checkable preconditions, and it is not built.
+both accepted by the API server and quietly do nothing. `acpctl doctor` now checks both against
+a live cluster (KEDA directly; NetworkPolicy enforcement by inference from the CNI, since it has
+no API to query) and reports a check it could not RUN as a blocker rather than a pass — the
+checks that cannot run are the ones guarding the failures that are silent.
