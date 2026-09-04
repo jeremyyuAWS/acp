@@ -102,8 +102,8 @@ export default function FindingComments({ scanId, finding }) {
 
       {comments === null
         ? (err
-            ? <p style={{ ...muted, marginTop: 6 }}>Comments could not be loaded: {err}.</p>
-            : <p style={{ ...muted, marginTop: 6 }}>Loading…</p>)
+            ? <p role="alert" style={{ ...muted, marginTop: 6 }}>Comments could not be loaded: {err}.</p>
+            : <p role="status" aria-live="polite" style={{ ...muted, marginTop: 6 }}>Loading comments…</p>)
         : (
           <>
             {comments.length === 0
@@ -138,7 +138,7 @@ export default function FindingComments({ scanId, finding }) {
             {sending ? 'Posting…' : 'Post comment'}
           </button>
           <span style={{ ...muted, fontSize: 11 }}>⌘/Ctrl + Enter</span>
-          {err && comments !== null && <span style={{ ...muted, color: 'var(--red, #b23b3b)' }}>{err}</span>}
+          {err && comments !== null && <span role="alert" style={{ ...muted, color: 'var(--red, #b23b3b)' }}>{err}</span>}
         </div>
       </div>
     </section>

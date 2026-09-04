@@ -46,6 +46,22 @@ beforeEach(() => { thread = []; posted = undefined })
 afterEach(unmountAll)
 
 describe('FindingComments', () => {
+  it('announces the comments loading state without calling an empty thread', async () => {
+    thread = new Promise(() => {})
+    const c = await mount()
+    const status = c.querySelector('[role="status"]')
+    expect(status?.getAttribute('aria-live')).toBe('polite')
+    expect(status?.textContent).toBe('Loading comments…')
+    expect(c.textContent).not.toContain('No comments yet')
+  })
+
+  it('announces a failed thread read as an error', async () => {
+    thread = Promise.reject(new Error('offline'))
+    const c = await mount()
+    expect(c.querySelector('[role="alert"]')?.textContent).toMatch(/could not be loaded: offline/i)
+    expect(c.textContent).not.toContain('No comments yet')
+  })
+
   it('renders the thread oldest-first and marks the current user', async () => {
     thread = [
       { id: 'a', ts: '2026-08-20T10:00:00Z', author: 'jeremy@acp.io', body: 'decorative?' },
