@@ -30,6 +30,15 @@ rules), and `docs/pilot-scope.md`.
   carries a per-site breakdown — libraries, counts, status (`complete` / `partial` / `blocked` /
   `skipped`) and the error — so "no site was silently omitted" is checkable rather than asserted.
   Per-site progress reaches the SSE stream as each site resolves.
+- **A refusal that names whose problem it is (2026-09-04)** — a Graph 401/403 used to produce one
+  sentence for every case: grant `Sites.Read.All` with tenant admin consent. It is now three
+  answers, because they have three different owners. A **401** is the token (expired, wrong
+  audience) and no consent changes it. A **403 without** the scope in the sign-in's own claims is
+  the tenant admin's. A **403 WITH** it is the *site owner's*: a delegated grant is bounded by what
+  the signed-in account can see, so a private site refuses a correctly configured app. The old
+  message sent an admin to re-consent a permission already consented while the real blocker went
+  unexamined — a wrong diagnosis ends the investigation, which costs more than none. The
+  discovery preflight groups its per-site rows by that owner.
 - **Folder skipping** — the scan already skips ACP's own archive + remediated-mirror folders
   (`skip_folders`, `:544`), i.e. a folder-scoped exclusion mechanism exists.
 - **Disposition rule engine** — `api/disposition.py`: configurable `match` (AND) → `action`
@@ -46,14 +55,14 @@ rules), and `docs/pilot-scope.md`.
 
 | SOW requirement | ACP today | Gap / effort |
 |---|---|---|
-| **Up to 30 SharePoint locations** | ✅ **Built 2026-09-04.** One run spans up to 30 sites (`ACP_SP_MAX_SITES`), every library on each, one shared budget, per-site totals and failure isolation. A "location" is read as a **site**; a site's libraries are still scanned together, as they always were. | **Closed in code and synthetic scale tests.** `tests/test_sp_scale.py` proves 30 sites × 4 libraries × 3 nested folders while bounding Graph calls. A real-tenant run remains the deployment proof. |
-| Full scan, no doc-count limit at scan | Batch path for large estates; synthetic 30-site traversal is bounded by pages/folders rather than documents | **Code and synthetic proof complete.** Production proof against the customer's library sizes remains tenant-dependent. |
+| **Up to 30 SharePoint locations** | ✅ **Built 2026-09-04.** One run spans up to 30 sites (`ACP_SP_MAX_SITES`), every library on each, one shared budget, per-site totals and failure isolation. A "location" is read as a **site**; a site's libraries are still scanned together, as they always were. Per-site **checkpoints** persist each site's rows as it finishes, so a run that dies at site 28 resumes from there instead of re-listing all thirty (`ACP_SP_CHECKPOINT`). | **Closed in code and in a synthetic scale proof.** `tests/test_sp_scale.py` runs 30 sites and measures the run's Graph-call cost, requiring it to scale with libraries and never with documents — which is how it found `_sp_enrich_content_types` costing one call per document (now budgeted, `ACP_SP_CONTENT_TYPE_MAX`). The fixture is flat by design: it returns pages of documents, no nested folders, because the question it settles is cost per LIBRARY. **A real-tenant run remains the deployment proof** — permissions at breadth, throttling and SSE completion are unverified outside fixtures (backlog **R11**). |
+| Full scan, no doc-count limit at scan | Batch path for large estates; synthetic 30-site traversal is bounded by pages/libraries rather than documents | **Code and synthetic proof complete.** Production proof against the customer's library sizes remains tenant-dependent. |
 | Auto-flag non-applicable types (tiff, PhD, fonts…) | Filtered-by-type bucket | ✅ supported |
 | Archival rule: **date-based** | `age_days` match field | ✅ supported |
-| Archival rule: **folder-based** | Folder path **is read** (`parentReference`); folder-skip exists — but the disposition engine has **no path/folder match field** | **Small build** — the data is already fetched; expose a `path`/`folder` rule field. |
+| Archival rule: **folder-based** | ✅ **Fixed 2026-09-04.** `path` and `parent_folder` have been declared rule fields since the Lifecycle PRD's Phase B1 — this row's earlier claim that no folder field existed was **wrong**. What was actually broken sat one layer down: `disposition._values` derived `parent_folder` from the document's `path`, unconditionally, and Graph gives a driveItem no path. Every SharePoint row therefore had its real folder (`parentReference.path`, stored on the row) overwritten with `None`, so a folder rule matched correctly on Drive and **matched nothing on SharePoint** — validated, saved, and silently never fired. The derivation now falls back to the recorded folder, with Graph's `…/root:` prefix normalised off so one rule means the same thing on both sources. Drive is byte-identical: it always has a path, so the derivation still wins there. | **Closed**, and pinned by `tests/test_sp_folder_rules.py`. Worth reading as a cautionary row: the symptom (folder rules do not work) was recorded here as its cause (the field does not exist), and anyone acting on that note would have added a field that was already there, watched the rule still not fire, and had no reason to look at `_values`. |
 | Archival rule: **user-based (departed employee)** | `owner` match field | **Partial** — owner match ✅; "departed" needs the **UTSW roster** as an input (the SOW puts rule-supply on UTSW). |
 | **Smart archival — check active collaborators before flagging** | Not ingested | **Gap** — needs Graph **sharing/activity signals** (permissions / recent collaborators); extra reads, possibly extra scope. |
-| **Read SharePoint-native metadata** (managed metadata, content types, retention/sensitivity labels) as rule inputs | ✅ **Built 2026-09-04.** The walk expands `listItem($expand=fields)` on the page it already fetches, so content types, the tenant's managed columns, versions and check-out state arrive at no extra round trip; retention labels come from a wider `driveItem` `$select`. Every field carries an availability state, and `managed:<Column>` is a lifecycle-rule field. | **Closed as a build. Open as a PROOF**: the Graph shapes are documented-but-unverified against a real tenant. `scripts/sp_metadata_probe.py` is the instrument — run it against the UTSW tenant and read the evidence table. Sensitivity labels are the known gap: Graph exposes them on driveItem in **beta** only, so ACP reports them `unavailable`, never "unset". |
+| **Read SharePoint-native metadata** (managed metadata, content types, retention/sensitivity labels) as rule inputs | ✅ **Built 2026-09-04.** The walk expands `listItem($expand=fields)` on the page it already fetches, so content types, the tenant's managed columns, versions and check-out state arrive at no extra round trip; retention labels come from a wider `driveItem` `$select`. Every field carries an availability state, and `managed:<Column>` is a lifecycle-rule field. | **Closed as a build. Open as a PROOF**: the Graph shapes are documented-but-unverified against a real tenant. Two instruments now: `GET /sharepoint/readiness?site=<id>` answers it from the app with the token the SPA already holds — which permissions the sign-in carries, and which of the walk's three request tiers this tenant will answer — in at most three bounded requests; `scripts/sp_metadata_probe.py` is the fuller evidence table (per field, across a real sample) and needs a shell and a token. Sensitivity labels are the known gap: Graph exposes them on driveItem in **beta** only, so ACP reports them `unavailable`, never "unset". |
 | **Tag files back into SharePoint's native columns** | Read-only. A native column write needs **`Sites.Manage.All` + per-library provisioning** — documented at `scanner.py:521` | **Out of scope by design for the pilot.** The SOW says archival is **flagging only** → ACP flags **internally** (its own store / approval queue). Native SharePoint write-back is **post-pilot** + a write scope. |
 | Daily monitoring cadence | Scheduled re-scans | ✅ (1440 min) |
 | **Incremental re-scan at estate scale** | ✅ **Built 2026-09-04.** A per-LIBRARY delta plan: each document library is reconstructed from its own Graph delta cursor or re-walked, in the same pass, under one budget. One expired cursor degrades one library, not the estate. | **Closed.** Its exit gate is a test, not a claim: `tests/test_sp_incremental_estate.py` runs 30 sites fully and then incrementally over the same fixture and requires identical inventories — plus zero `/children` calls for the libraries that had cursors. |
@@ -104,7 +113,9 @@ the read-only posture.
 ## Related backlog
 
 - **R11** — multi-user queue isolation and concurrent fan-out are closed; `tests/test_sp_scale.py`
-  adds the SharePoint-specific 30-site traversal proof. Only real-tenant breadth remains unverified.
+  adds the SharePoint-specific 30-site traversal proof, including identical estates and identical
+  per-site totals at `ACP_SP_CONCURRENCY` 1 and 6. Only real-tenant breadth remains unverified —
+  real permissions, real throttling, real SSE completion, none of which a fixture can stand in for.
 - **R2 / R3 / R12** — RunPod vision not engaged (image alt-text degraded to CPU/manual).
 - The **folder/native-metadata rule fields** and **multi-site scan** are new items this doc introduces;
   add them to `docs/BACKLOG.md` if the SOW is signed.
@@ -148,6 +159,23 @@ the read-only posture.
   is one Graph call **per document** on top of the walk, which across a 30-site estate is the
   difference between a scan and an outage. Until it is on, `permissions` reports `unavailable`
   with the switch named in the reason.
+- **`ACP_SP_CHECKPOINT`** (default `1`) — persist each site's inventory rows as that site
+  finishes, and record it on the run, so a retry lists only the sites the previous attempt did not
+  reach. Set to `0` for the previous all-or-nothing behaviour, where the inventory was written once
+  after the last site and an interruption at site 28 discarded twenty-eight sites of Graph calls.
+  Only sites the walk **completed** are checkpointed: a site the cap truncated or whose library
+  failed is re-listed on the retry, because skipping a half-listed site would publish the half as
+  the whole library.
+- **`ACP_SP_CONTENT_TYPE_MAX`** (default `1000`) — how many documents one listing may fall back to
+  a per-document content-type read for. It only bites on a tenant that **refuses the inline
+  `listItem` expansion** while answering `/items/{id}/listItem` on a single resource: there the
+  walk cannot read the content type off the listing page, and each document costs its own Graph
+  call. The three-strike breaker beside it does not bound that case — it counts consecutive
+  *failures*, and here every call succeeds. Measured on a 30-site fixture the walk cost 90 calls
+  whether the estate held 150 documents or 1,500, and this fallback cost 150 and 1,500. The cap is
+  reported on the scan's scope (`content_type_fallback`) rather than absorbed, so a partial field
+  reads as "not asked", never "not configured" — and the remedy is the tenant's refusal of the
+  expansion, not a larger budget.
 - **`ACP_SP_ENUMERATE`** (default `walk`) — set to `search` to list via the SharePoint search index
   instead of walking `/children`. Faster on a very large estate and **knowingly incomplete**: the
   index is eventually consistent and under-reports recent changes with no error (issue #333
