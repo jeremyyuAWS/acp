@@ -37,8 +37,11 @@ describe('Admin live traffic graph', () => {
   it('opens run tiles in a non-overlapping right drawer with single and double-click detail', () => {
     expect(source).toMatch(/onNodeClick=.*setSelectedKey/)
     expect(source).toMatch(/onNodeDoubleClick=.*setSelectedKey/)
-    expect(source).toMatch(/<aside role="complementary"/)
-    expect(source).toMatch(/inset: '0 0 0 auto'/)
+    expect(source).toMatch(/<aside role="dialog" aria-modal="true"/)
+    expect(source).toContain("background: 'var(--card, #fff)'")
+    expect(source).toContain("width: 'clamp(360px, 38vw, 560px)'")
+    expect(source).toMatch(/position: 'sticky', top: 0/)
+    expect(source).toMatch(/rgba\(28,22,32,.28\)/)
     expect(source).toMatch(/overflowWrap: 'anywhere'/)
     expect(source).toContain("event.key === 'Escape'")
   })
