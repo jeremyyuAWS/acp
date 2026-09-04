@@ -1080,6 +1080,18 @@ export const putAiProvider = (patch) => (SIM
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(patch),
     }).then(j))
+// The ONE call that carries a key value, and only to hand it to the deployment's Key Vault: the
+// backend stores the resulting reference name and never the value, and no read path returns it.
+// Available only where GET /ai/providers reports secret_write.available — a deployment without a
+// vault refuses (422) rather than storing the value anywhere else, so the panel hides the field
+// instead of offering a box that cannot work.
+export const putAiProviderSecret = (provider, value) => (SIM
+  ? sim({ providers: [], simulated: true })
+  : fetch(`${BASE}/ai/providers/${encodeURIComponent(provider)}/secret`, {
+      method: 'POST',
+      headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ value }),
+    }).then(j))
 // Ask the server to send its own SYNTHETIC probe image to one provider and report what came back.
 // The body carries a provider NAME and nothing else — no key, and no document: the image is
 // generated server-side (providers.probe_image_bytes) precisely so pressing this cannot send

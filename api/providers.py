@@ -224,11 +224,32 @@ class OllamaVisionProvider:
 # 'environment_managed' when a ref is set (the enterprise "this is your key in your vault" answer).
 
 def _resolve_key(cfg: dict) -> str | None:
-    """The actual API key for a provider, read from the ops-provisioned environment secret named by
-    `key_secret_ref`. Internal — only an adapter calls this, never a route or the UI. Returns None
-    when unconfigured or the secret isn't present (→ provider stays inert, routes to local + human)."""
+    """The actual API key for a provider, read from the secret named by `key_secret_ref`.
+
+    Two kinds of name, one field (api/secret_store.py):
+      * an environment variable — the original, ops-provisioned design; unchanged;
+      * `keyvault:<name>` — a secret this product wrote to the deployment's Key Vault, resolved
+        through a short-lived cache so the AI request path does not make a vault round-trip per
+        call.
+
+    Internal — only an adapter calls this, never a route or the UI. Returns None when unconfigured
+    or the secret isn't present (→ provider stays inert, routes to local + human)."""
     ref = (cfg or {}).get("key_secret_ref")
-    return os.environ.get(ref) if ref else None
+    if not ref:
+        return None
+    import secret_store                    # noqa: PLC0415 - avoids an import cycle at module load
+    if secret_store.is_vault_ref(ref):
+        return secret_store.read_ref(ref)
+    return os.environ.get(ref)
+
+
+def credential_source_for(ref: str | None) -> str:
+    """Who owns the secret behind a reference — for an admin reading the Settings page, and never
+    a statement about its value."""
+    if not ref:
+        return "not_configured"
+    import secret_store                    # noqa: PLC0415
+    return "key_vault" if secret_store.is_vault_ref(ref) else "environment_managed"
 
 
 def credential_for(provider: str) -> tuple[str | None, str]:
@@ -249,7 +270,7 @@ def credential_for(provider: str) -> tuple[str | None, str]:
     ref = (cfg.get("key_secret_ref") or "").strip()
     if not ref:
         return None, "not_configured"
-    val = os.environ.get(ref)
+    val = _resolve_key(cfg)
     return (val, ref) if val else (None, f"secret_absent:{ref}")
 
 
@@ -265,8 +286,11 @@ def provider_view(cfg: dict) -> dict:
         "deployment": cfg.get("deployment") or "",
         "model": cfg.get("model") or "",
         "key_secret_ref": ref,                       # the NAME only, never the value
-        "key_present": bool(os.environ.get(ref)) if ref else False,
-        "credential_source": "environment_managed" if ref else "not_configured",
+        # Resolved through _resolve_key rather than os.environ directly, so a vault-backed
+        # credential reports "present" on the page that an admin uses to check exactly that.
+        # Before this, a key written to the vault read as absent and the provider looked broken.
+        "key_present": bool(_resolve_key(cfg or {})) if ref else False,
+        "credential_source": credential_source_for(ref),
         "zone": zone_for_url(cfg.get("endpoint") or "") if cfg.get("endpoint") else "cloud",
         "updated_at": cfg.get("updated_at"),
         "updated_by": cfg.get("updated_by"),
