@@ -43,6 +43,27 @@ HEALTHY = {
     "secret_stores": ["acp-production-acp-store"],
     # Commands the fake should fail, as {label: stderr}. Used for the "could not read" paths.
     "deny": {},
+    # ── what `acpctl status` reads: a running installation ────────────────────
+    #
+    # Shaped to match the standard-production example: an api tier autoscaled 2-4 and three
+    # worker tiers autoscaled by KEDA. `replicas: null` means the Deployment has NO spec.replicas,
+    # which is what the chart renders for an autoscaled tier — the distinction status depends on.
+    "release": "2026.9",
+    "profile": "standard",
+    "platform": "azure",
+    "deployments": [
+        {"name": "acp-api", "component": "api", "role": None, "replicas": None, "ready": 2},
+        {"name": "acp-worker-discover", "component": "worker", "role": "discovery",
+         "replicas": None, "ready": 1},
+        {"name": "acp-worker-assess", "component": "worker", "role": "assess",
+         "replicas": None, "ready": 7},
+        {"name": "acp-worker-remediate", "component": "worker", "role": "remediate",
+         "replicas": None, "ready": 3},
+    ],
+    # Each entry: {name, phase, containers: [{ready, restarts, waiting_reason, message}]}
+    "pods": [],
+    "jobs": [],
+    "scaled_objects": ["acp-worker-discover", "acp-worker-assess", "acp-worker-remediate"],
 }
 
 
@@ -129,6 +150,57 @@ if verb == "get":
     if what == "secretstores":
         out({"items": [{"metadata": {"name": n}}
                        for n in (fixture.get("secret_stores") or [])]})
+    if what == "deployments":
+        items = []
+        for d in fixture.get("deployments") or []:
+            spec = {"template": {"spec": {"containers": [
+                {"name": "c", "image": f"reg.example.org/acp:{fixture.get('release', '0')}"}]}}}
+            # ABSENT, not zero, when an autoscaler owns the count — the chart omits the field.
+            if d.get("replicas") is not None:
+                spec["replicas"] = d["replicas"]
+            items.append({
+                "metadata": {"name": d["name"], "labels": {
+                    "app.kubernetes.io/part-of": "acp",
+                    "app.kubernetes.io/component": d["component"],
+                    "app.kubernetes.io/version": d.get("version", fixture.get("release", "0")),
+                    "acp.mova.io/profile": d.get("profile", fixture.get("profile", "standard")),
+                    "acp.mova.io/platform": d.get("platform", fixture.get("platform", "azure")),
+                    **({"acp.mova.io/worker-role": d["role"]} if d.get("role") else {}),
+                }},
+                "spec": spec,
+                "status": {"readyReplicas": d.get("ready", 0),
+                           "availableReplicas": d.get("ready", 0),
+                           "updatedReplicas": d.get("ready", 0)},
+            })
+        out({"items": items})
+    if what == "pods":
+        items = []
+        for pod in fixture.get("pods") or []:
+            statuses = []
+            for c in pod.get("containers") or []:
+                state = {}
+                if c.get("waiting_reason"):
+                    state["waiting"] = {"reason": c["waiting_reason"],
+                                        "message": c.get("message", "")}
+                statuses.append({"name": "c", "ready": c.get("ready", True),
+                                 "restartCount": c.get("restarts", 0), "state": state})
+            items.append({
+                "metadata": {"name": pod["name"], "labels": {"app.kubernetes.io/part-of": "acp"}},
+                "status": {"phase": pod.get("phase", "Running"),
+                           "containerStatuses": statuses,
+                           "conditions": pod.get("conditions") or []},
+            })
+        out({"items": items})
+    if what == "jobs":
+        out({"items": [
+            {"metadata": {"name": j["name"], "labels": {
+                "app.kubernetes.io/part-of": "acp",
+                "app.kubernetes.io/component": j.get("component", "migrations")}},
+             "status": {k: j[k] for k in ("succeeded", "failed", "active") if k in j}}
+            for j in (fixture.get("jobs") or [])]})
+    if what == "scaledobjects":
+        out({"items": [{"metadata": {"name": n}}
+                       for n in (fixture.get("scaled_objects") or [])]})
     if what == "namespace":
         if fixture.get("namespace_exists"):
             out({"metadata": {"name": args[2] if len(args) > 2 else "?"}})
