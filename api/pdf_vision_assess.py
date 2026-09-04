@@ -31,9 +31,9 @@ def is_scanned_pdf(path: Path) -> bool:
                     if total_chars < _TEXT_FLOOR_PER_PAGE * len(sampled):
                         return True
             except Exception:
-                pass
+                swallowed("pdf_vision_assess.is_scanned_pdf: pdfplumber text check failed")
     except Exception:
-        pass
+        swallowed("pdf_vision_assess.is_scanned_pdf: pikepdf open failed")
     return False
 
 def extract_layout(
