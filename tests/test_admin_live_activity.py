@@ -155,4 +155,13 @@ def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(mo
             "assess": {"runs": 1, "running": 3, "queued": 8, "completed": 2, "total": 13},
             "remediate": {"runs": 1, "running": 1, "queued": 2, "completed": 4, "total": 7},
         },
+        # Stated, not omitted: ACP records which SERVICE ran a job, never which replica, because
+        # the worker_instances registry that would carry that has no writer yet. Reading the empty
+        # table instead would render as "no workers running".
+        "worker_instance_attribution": {
+            "available": False,
+            "reason": "ACP does not record which replica ran a job. The worker_instances "
+                      "registry exists but has no writer yet, so job activity is attributed "
+                      "to a service, not to one of its replicas.",
+        },
     }

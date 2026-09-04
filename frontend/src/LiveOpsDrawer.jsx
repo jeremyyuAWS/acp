@@ -4,7 +4,7 @@ import {
   EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, arcPath, capacityMatchesService, chartModel,
   componentState, defaultMetricFor, eventClock, eventsForNode, filterEvents, formatDuration,
   REPLICA_STATES, gaugeModel, metricGroups, nodeTypeLabel, outputModel, provenance, queueModel,
-  replicaLifecycle, reported, saturationModel,
+  replicaLifecycle, reported, saturationModel, workerJobHealth,
   revisionLabel, runModel, seriesForMetric, sourceModel, tenantConcentration, trendMarkers,
   updatedAgo,
 } from './liveOpsDrawer.js'
@@ -92,7 +92,7 @@ function LiveHeader({ name, kind, state, connection, generatedAt, revision, nowM
 
 /* ─────────────── B. Primary operational visualization ─────────────── */
 
-function WorkerGauge({ gauge, service, capacity, nowMs, saturation }) {
+function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health }) {
   if (!gauge.available) {
     return <div style={{ ...PANEL, padding: 14 }} role="status">
       <b>Worker utilization unavailable</b>
@@ -136,6 +136,7 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation }) {
       </div>
     </div>
     <Saturation saturation={saturation} nowMs={nowMs} measuredAt={capacity?.measured_at} />
+    <JobHealth health={health} />
     <ReplicaLifecycle lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs}
       measuredAt={capacity?.measured_at} />
     <AzureMetrics capacity={capacity} service={service} nowMs={nowMs} />
@@ -212,6 +213,47 @@ function ReplicaLifecycle({ lifecycle, nowMs, measuredAt }) {
       </li>)}
     </ul>}
     <Source kind="azure" at={measuredAt} nowMs={nowMs} detail="Container Apps control plane" />
+  </section>
+}
+
+/**
+ * What this service is working on right now, and whether it has been failing.
+ *
+ * Deliberately attributed to the SERVICE, not to a replica: ACP does not record which replica ran
+ * a job, and the panel says so rather than letting a reader assume the join exists just because
+ * the replica list is right above it.
+ */
+function JobHealth({ health }) {
+  if (!health) return null
+  return <section aria-label="Current work" style={{ marginTop: 12 }}>
+    <b style={{ fontSize: 13 }}>Current work</b>
+    {health.jobs.length === 0
+      ? <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>
+        No job is being processed by this service right now.
+      </p>
+      : <ul style={{ listStyle: 'none', margin: '7px 0 0', padding: 0, display: 'grid', gap: 6 }}>
+        {health.jobs.map((job) => <li key={job.scanId} style={{ ...PANEL, padding: 9, fontSize: 12 }}>
+          <div style={{ overflowWrap: 'anywhere' }}>
+            <code>{job.file || 'file not reported'}</code>
+          </div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 3, overflowWrap: 'anywhere' }}>
+            {job.ruleId ? `${job.ruleId} · ` : ''}{job.jobType || 'job type not reported'}
+            {' · '}
+            {job.runtimeS == null ? 'claim time not reported' : `running ${formatDuration(job.runtimeS)}`}
+            {job.owner ? ` · ${job.owner}` : ''}
+          </div>
+        </li>)}
+      </ul>}
+    {!!health.failing.length && <ul style={{ listStyle: 'none', margin: '8px 0 0', padding: 0,
+      display: 'grid', gap: 4, fontSize: 12 }}>
+      {health.failing.map((failure) => <li key={failure.scanId} style={{ color: TONE.warn }}>
+        <span aria-hidden="true">▲</span> Last failure: {failure.label}
+        {failure.attempts ? ` · ${failure.attempts} retr${failure.attempts === 1 ? 'y' : 'ies'}` : ''}
+      </li>)}
+    </ul>}
+    {health.attributionReason && <p className="muted" style={{ fontSize: 11, margin: '8px 0 0' }}>
+      {health.attributionReason}
+    </p>}
   </section>
 }
 
@@ -599,7 +641,8 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
     primary = <WorkerGauge service={node.service} capacity={capacity} nowMs={nowMs}
       gauge={gaugeModel(node.service, { stalled: snapshot?.summary?.pressure === 'stalled' })}
       saturation={saturationModel(node.service, capacity, { samples: shown.samples,
-        queueDepth: snapshot?.summary?.by_stage?.[node.service?.stage]?.queued })} />
+        queueDepth: snapshot?.summary?.by_stage?.[node.service?.stage]?.queued })}
+      health={workerJobHealth(snapshot, node.service?.stage, { nowMs })} />
   } else if (node?.kind === 'queue') {
     primary = <QueueBar queue={queueModel(snapshot?.summary, { nowMs })} nowMs={nowMs}
       generatedAt={snapshot?.generated_at} concentration={tenantConcentration(snapshot?.runs)} />

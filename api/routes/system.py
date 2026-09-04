@@ -1329,6 +1329,19 @@ def _admin_activity_snapshot() -> dict:
             "worker_tier_alive": bool(wt.get("alive")),
             "worker_roles": worker_roles,
             "by_stage": by_stage,
+            # ACP CANNOT ATTRIBUTE A JOB TO A REPLICA, and saying so is the point of this key.
+            # The `worker_instances` registry that would carry it (replica_id, revision_name,
+            # software_version, per-instance state) exists in the schema with NO WRITER — it is
+            # PR 1 of a five-PR plan whose emit sites are deliberately deferred. Reading it would
+            # return [] and render as "no workers running", which is the opposite of the truth.
+            # So per-replica ACP health is reported as unavailable, with the reason, and what IS
+            # known is reported per SERVICE from the role heartbeats.
+            "worker_instance_attribution": {
+                "available": False,
+                "reason": "ACP does not record which replica ran a job. The worker_instances "
+                          "registry exists but has no writer yet, so job activity is attributed "
+                          "to a service, not to one of its replicas.",
+            },
             # Absent, not empty, when the store cannot answer — see the guard above.
             **({"queue": composition} if composition else {}),
         },

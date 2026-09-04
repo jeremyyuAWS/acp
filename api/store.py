@@ -9550,7 +9550,14 @@ class Store:
         }
         with self._db.cursor() as cur:
             self._db.execute(cur,
+                # locked_at answers "how long has a worker been on this", which a status of
+                # 'running' cannot: a job claimed 40 seconds ago and one claimed at boot look
+                # identical without it. error_class and attempts answer "has this been failing",
+                # from the CLOSED ERROR_CLASS_VOCABULARY rather than the free-text last_error —
+                # this method is cross-user, and an error string can carry another tenant's
+                # filename, while a vocabulary term cannot.
                 "SELECT j.scan_id,j.type,j.status,j.created_at,j.updated_at,j.payload,"
+                "j.locked_at,j.error_class,j.attempts,"
                 "sr.owner_email,sr.source,sr.files,sr.files_done "
                 "FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
                 "WHERE j.scan_id IN (SELECT DISTINCT scan_id FROM jobs "
@@ -9574,6 +9581,7 @@ class Store:
                 "started_at": row.get("created_at"), "updated_at": row.get("updated_at"),
                 "oldest_queued_at": None, "current_file": None,
                 "current_job_type": None, "current_rule_id": None,
+                "current_job_started_at": None, "last_error_class": None, "max_attempts_seen": 0,
             })
             status = row.get("status")
             item["total"] += 1
@@ -9589,6 +9597,16 @@ class Store:
                     recent.add(key)
             if status in ("queued", "running"):
                 active.add(key)
+            # Retry pressure and the classified reason, for every job in the group rather than
+            # only the running one: a stage that is retrying is a different situation from one
+            # that is merely busy, and the newest running job may be the one attempt that is fine.
+            attempts = int(row.get("attempts") or 0)
+            if attempts > item["max_attempts_seen"]:
+                item["max_attempts_seen"] = attempts
+            if row.get("error_class") and not item["last_error_class"]:
+                item["last_error_class"] = row.get("error_class")
+            if status == "running" and not item["current_job_started_at"]:
+                item["current_job_started_at"] = row.get("locked_at")
             if status == "running" and not item["current_file"]:
                 try:
                     payload = row.get("payload") or {}

@@ -213,6 +213,60 @@ export function capacityMatchesService(capacity, service = {}) {
   return app === `acp-${role}` || app.endsWith(`-${role}`)
 }
 
+/* ─────────────────────── Per-worker job health ─────────────────────── */
+
+/** The closed vocabulary the backend classifies failures into, in the words an operator uses.
+ *  Free-text error messages are deliberately NOT carried across tenants — a message can name
+ *  another customer's document, a vocabulary term cannot. */
+export const ERROR_CLASS_LABELS = {
+  capacity: 'Capacity', worker_startup: 'Worker startup', worker_crash: 'Worker crash',
+  lease_expired: 'Lease expired', source_authentication: 'Source authentication',
+  source_authorization: 'Source authorization', source_rate_limit: 'Source rate limit',
+  source_unavailable: 'Source unavailable', storage: 'Storage', database: 'Database',
+  model_rate_limit: 'AI rate limit', model_safety: 'AI safety', model_unavailable: 'AI unavailable',
+  invalid_document: 'Invalid document', unsupported_document: 'Unsupported document',
+  timeout: 'Timeout', cancelled: 'Cancelled', unknown: 'Unclassified',
+}
+
+/**
+ * What each of this service's runs is doing right now — the file, the criterion, how long a
+ * worker has actually been on it, and whether the stage has been retrying.
+ *
+ * Runtime comes from the job's `locked_at`, not from its status: a job claimed forty seconds ago
+ * and one claimed at boot are both "running", and only the claim instant separates them. A queued
+ * job has no runtime and is given none.
+ *
+ * ATTRIBUTION IS TO A SERVICE, NEVER TO A REPLICA. ACP does not record which replica ran a job —
+ * the registry that would carry it has no writer — so this cannot say "replica r2 is working on
+ * X", and the snapshot's own `worker_instance_attribution` block says so rather than leaving a
+ * reader to assume the join exists.
+ */
+export function workerJobHealth(snapshot = {}, stage, { nowMs = Date.now() } = {}) {
+  const runs = (snapshot?.runs || []).filter((run) => run.stage === stage)
+  const jobs = runs
+    .filter((run) => run.current_file || run.current_job_started_at)
+    .map((run) => ({
+      scanId: run.scan_id,
+      owner: run.owner || null,
+      file: run.current_file || null,
+      ruleId: run.current_rule_id || null,
+      jobType: run.current_job_type ? String(run.current_job_type).replaceAll('_', ' ') : null,
+      runtimeS: secondsSince(run.current_job_started_at, nowMs),
+    }))
+  const failing = runs
+    .filter((run) => run.last_error_class)
+    .map((run) => ({ scanId: run.scan_id, kind: run.last_error_class,
+      label: ERROR_CLASS_LABELS[run.last_error_class] || run.last_error_class,
+      attempts: num(run.max_attempts_seen) }))
+  const attribution = snapshot?.summary?.worker_instance_attribution || null
+  return {
+    jobs, failing,
+    retrying: runs.some((run) => (num(run.max_attempts_seen) || 0) > 0),
+    perReplica: attribution?.available === true,
+    attributionReason: attribution?.available === false ? attribution.reason : null,
+  }
+}
+
 /* ─────────────────────── Worker saturation ─────────────────────── */
 
 /**

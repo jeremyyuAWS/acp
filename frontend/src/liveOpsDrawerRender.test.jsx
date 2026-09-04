@@ -250,6 +250,49 @@ describe('Provenance', () => {
   })
 })
 
+describe('Current work, attributed to a service and not to a replica', () => {
+  const workerNode = { kind: 'worker', label: 'Assess workers', service }
+  const working = { ...snapshot, summary: { ...snapshot.summary,
+    worker_instance_attribution: { available: false,
+      reason: 'ACP does not record which replica ran a job. The worker_instances registry exists but has no writer yet, so job activity is attributed to a service, not to one of its replicas.' } },
+    runs: [{ ...snapshot.runs[0], current_job_started_at: iso(-45),
+      current_job_type: 'scan_file', last_error_class: 'source_rate_limit', max_attempts_seen: 2 }] }
+
+  it('shows the file, the criterion and how long a worker has actually been on it', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, snapshot: working })
+    expect(container.textContent).toContain('Current work')
+    expect(container.textContent).toContain('Mediation Record 11.13.2022.xlsx')
+    expect(container.textContent).toContain('WCAG 1.3.1')
+    // From the claim instant, not from the status — 'running' alone cannot say how long.
+    expect(container.textContent).toContain('running 45s')
+  })
+
+  it('names a classified failure in an operator words, with the retry count', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, snapshot: working })
+    expect(container.textContent).toContain('Last failure: Source rate limit')
+    expect(container.textContent).toContain('2 retries')
+  })
+
+  it('says ACP cannot attribute a job to a replica, rather than implying it can', async () => {
+    // The replica list sits directly above this panel; without the sentence a reader would
+    // reasonably assume the two join.
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, snapshot: working })
+    expect(container.textContent).toContain('attributed to a service, not to one of its replicas')
+  })
+
+  it('says nothing is being processed rather than rendering an empty list', async () => {
+    const idle = { ...working, runs: [] }
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, snapshot: idle })
+    expect(container.textContent).toContain('No job is being processed by this service right now')
+  })
+
+  it('does not claim a runtime when the claim instant is not reported', async () => {
+    const noClaim = { ...working, runs: [{ ...working.runs[0], current_job_started_at: null }] }
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, snapshot: noClaim })
+    expect(container.textContent).toContain('claim time not reported')
+  })
+})
+
 describe('Worker saturation', () => {
   const workerNode = { kind: 'worker', label: 'Assess workers', service }
   const busy = { ...snapshot, summary: { ...snapshot.summary,
