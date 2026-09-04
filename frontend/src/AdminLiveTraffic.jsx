@@ -97,7 +97,19 @@ function AzureCapacity({ capacity, state }) {
     <b>Azure capacity telemetry unavailable</b><div className="muted" style={{ fontSize: 12 }}>Live job flow remains available; infrastructure measurements could not be refreshed.</div>
   </div>
   if (!capacity?.configured) return <div className="panel" style={{ padding: 12, marginBottom: 12 }}>
-    <b>Azure capacity telemetry not configured</b><div className="muted" style={{ fontSize: 12 }}>Connect the Azure subscription to show replica size, storage, utilization, and revision health.</div>
+    <b>Azure capacity telemetry not configured</b><div className="muted" style={{ fontSize: 12 }}>Set AZURE_SUBSCRIPTION_ID and WORKER_APP_NAME to show replica size, storage, utilization, and revision health. WORKER_APP_NAME has no default: production runs three worker apps and naming one by guess would report the wrong app&rsquo;s size.</div>
+  </div>
+  // Distinct from "not configured" and from "no metrics yet": the app IS named, and the lookup
+  // for it failed. Without this branch the panel renders its tiles full of dashes, which is what
+  // let a name pointing at a retired app go unnoticed.
+  if (capacity.app_unavailable) return <div className="panel" role="status" style={{ padding: 12, marginBottom: 12 }}>
+    <b>Azure worker app could not be read</b>
+    <div className="muted" style={{ fontSize: 12 }}>
+      WORKER_APP_NAME is set to <code>{capacity.worker_app_name || '(not reported)'}</code> and the
+      Container App lookup failed &mdash; the app may be renamed, deleted, or the identity may lack
+      access. Replica size, storage and utilization are unavailable until it resolves; live job
+      flow above is unaffected.
+    </div>
   </div>
   const metricReason = capacity.metrics_available ? null : ({ permission: 'Monitoring Reader permission needed', no_data: 'Azure Monitor has not reported samples yet', error: 'Azure Monitor refresh failed' }[capacity.metrics_unavailable_reason] || 'Metrics not reported')
   const tiles = [

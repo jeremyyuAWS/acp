@@ -156,3 +156,20 @@ describe('Idle map: scope and announcement', () => {
       .toMatch(/Discover workers, online, 0 active of 3 slots/)
   })
 })
+
+describe('Worker app misconfiguration is legible', () => {
+  it('distinguishes an unreadable app from telemetry that has not reported', () => {
+    // Backend returns configured:true with every field None when the Container App lookup fails,
+    // so without a dedicated branch this renders as a full panel of dashes — the same thing a
+    // healthy app awaiting Azure Monitor samples shows. That is how a WORKER_APP_NAME pointing
+    // at the retired acp-worker app stayed invisible.
+    expect(source).toMatch(/capacity\.app_unavailable/)
+    expect(source).toMatch(/Azure worker app could not be read/)
+    expect(source).toMatch(/renamed, deleted, or the identity may lack/)
+  })
+
+  it('names the variable an operator has to set, and says why it has no default', () => {
+    expect(source).toMatch(/Set AZURE_SUBSCRIPTION_ID and WORKER_APP_NAME/)
+    expect(source).toMatch(/WORKER_APP_NAME has no default/)
+  })
+})

@@ -28,12 +28,27 @@ import core
 from swallowed import swallowed
 
 # Azure Container Apps replica control — optional; gracefully absent when env vars are unset.
-# Required env vars: AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP, WORKER_APP_NAME (defaults
-# to "acp-worker"). The container's managed identity must have Contributor on the worker app.
+# Required env vars: AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP, WORKER_APP_NAME. The
+# container's managed identity must have Contributor on the worker app.
+#
+# WORKER_APP_NAME HAS NO DEFAULT, AND THAT IS THE FIX RATHER THAN AN OVERSIGHT. It used to
+# default to "acp-worker", the single generic worker app that docs/worker-split.md records as
+# RETIRED: production runs acp-discovery, acp-assess and acp-remediate, and NO deploy script in
+# this repository sets WORKER_APP_NAME — so the default was what was in force, and it named an
+# app that no longer exists.
+#
+# The failure was silent in the worst direction. A lookup against a missing app raises, the
+# handler degrades to all-None, and the payload still reports `configured: true` — so Live
+# Operations rendered a populated-looking panel of dashes, indistinguishable from "Azure Monitor
+# has not reported yet". Nothing said the app name was wrong.
+#
+# There is deliberately no replacement default. Production has THREE worker apps and no single
+# one of them is the right answer; picking one would restore the same class of quiet wrongness
+# with a fresher name. Unset now means unconfigured, which the panel already states plainly.
 _AZ_SUB  = os.environ.get("AZURE_SUBSCRIPTION_ID")
 _AZ_RG   = os.environ.get("AZURE_RESOURCE_GROUP", "mdk-accessibility")
-_AZ_APP  = os.environ.get("WORKER_APP_NAME", "acp-worker")
-_AZ_CONFIGURED = bool(_AZ_SUB)
+_AZ_APP  = os.environ.get("WORKER_APP_NAME") or None
+_AZ_CONFIGURED = bool(_AZ_SUB and _AZ_APP)
 
 
 def _az_client():
@@ -192,6 +207,11 @@ def _empty_capacity(configured: bool) -> dict:
         "metrics_available": False, "measured_at": None,
         "revision_health": None, "revision_provisioning_state": None, "draining_replicas": None,
         "revision_traffic_percent": None, "metrics_unavailable_reason": None,
+        # Set when the Container App lookup itself fails. Without it, a renamed, deleted or
+        # mistyped WORKER_APP_NAME is reported exactly like a healthy app with no metrics yet:
+        # `configured: true` and every value None. The caller cannot tell the difference, which
+        # is how a panel pointed at a retired app went unnoticed.
+        "app_unavailable": False,
     }
 
 
@@ -276,6 +296,9 @@ def get_capacity():
                 result["memory_per_replica"] = getattr(resources, "memory", None)
                 result["ephemeral_storage_per_replica"] = getattr(resources, "ephemeral_storage", None)
     except Exception:  # noqa: BLE001 — can't even reach the Container App; nothing else to try
+        # Say WHICH failure this is. Everything below stays None, but the caller now knows the
+        # named app could not be read rather than assuming the metrics are merely late.
+        result["app_unavailable"] = True
         return result
 
     try:
