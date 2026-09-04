@@ -1048,8 +1048,16 @@ export default function App() {
   // regression, not a review step. FolderPicker's `layout="inline"` is already what the wizard's
   // own step 1 embeds for "Specific folders" (see FolderPicker.jsx's own header), so the fix is
   // routing straight there instead of opening a second, separate instance of the same picker.
-  const requestScan = (source, folder = null, { folderFirst = false, allFolders = false } = {}) =>
-    setPendingScan({ source, folder, folderFirst, allFolders })
+  // `folders` is the multi-root form, carried through the review modal to the run. It exists for
+  // the SharePoint site picker: several sites travel as roots (scanner._sp_locations splits bare
+  // site ids out of the same `folders` list it reads folder pairs from), and the wizard has no
+  // surface that could hold them — its folder tree browses ONE drive, so a multi-site selection
+  // would have been silently dropped at the review step and the scan would have run against the
+  // whole of OneDrive instead. Dropping a boundary is the one failure this whole path is careful
+  // about, so the selection is carried rather than re-asked.
+  const requestScan = (source, folder = null,
+                       { folderFirst = false, allFolders = false, folders = null } = {}) =>
+    setPendingScan({ source, folder, folderFirst, allFolders, folders })
 
   // The DEFAULT (session-scoped, non-durable) scan path has no scan_runs row until AFTER its
   // crawl finishes — _scan_discover creates it partway through its own function body, well past
@@ -2306,7 +2314,20 @@ export default function App() {
             .reduce((a, s) => a + (s.files || 0), 0)}
           hasDrive={hasDriveToken} hasSP={hasSPToken} canEditScope={scopeOwner !== false}
           scans={scanList}
-          onConfirm={(runScope) => { const { source, folder } = pendingScan; setPendingScan(null); doScan(source, folder, runScope) }}
+          onConfirm={(runScope) => {
+            const { source, folder, folders: preset } = pendingScan
+            setPendingScan(null)
+            // The wizard's own answer WINS when it has one: an operator who went on to pick
+            // specific folders gave a tighter boundary than the sites they started from, and
+            // overriding it with the preset would scan more than they asked for. `folders: []`
+            // is the wizard's "entire connected source" and is not an answer about sites, so the
+            // preset stands there — that is the ordinary multi-site path.
+            const chose = Array.isArray(runScope?.folders) && runScope.folders.length > 0
+            const rs = (preset && preset.length && !chose)
+              ? { ...(runScope || {}), folders: preset }
+              : runScope
+            doScan(source, folder, rs)
+          }}
           onCancel={() => setPendingScan(null)} />
       )}
       <ConfirmDialog />

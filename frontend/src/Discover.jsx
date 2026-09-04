@@ -6,6 +6,7 @@ import FileDrawer from './FileDrawer.jsx'
 import { retentionBucket, isAcceptable } from './retentionSignal.js'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import SitePicker from './SitePicker.jsx'
+import SiteActivity from './SiteActivity.jsx'
 import DispositionRules from './DispositionRules.jsx'
 import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
@@ -909,6 +910,13 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           the full tree view. */}
       <FolderActivity active={progress?.active_folders} recent={progress?.recent_folders} />
 
+      {/* Per-SITE coverage for a multi-site SharePoint run: which sites are done, which are still
+          queued, which could not be read and why, and the libraries covered on each. Live rows
+          while the scan runs, the run's own recorded rows afterwards — the same shape from both
+          sources on purpose (see SiteActivity.jsx). Renders nothing for OneDrive, a folder scan,
+          Drive or a local corpus, which have no sites. */}
+      <SiteActivity sites={progress?.sites || scope?.sites} />
+
       {/* Discovery leads with facts from THIS listing. */}
       {!busy && (run?.discovered_at || run?.status === 'discovered') && (
         <AccordionSection id="discover-latest" title="Latest discovery results"
@@ -1166,11 +1174,22 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         )}
       </div>
 
-      {/* The site id travels as `folder`, which is what the backend reads it as — _list treats
-          `folder` as the site for source='sharepoint' (#156). One parameter, not two. */}
+      {/* ONE site travels as `folder`, which is what the backend reads it as — _list treats
+          `folder` as the site for source='sharepoint' (#156). One parameter, not two.
+
+          SEVERAL travel as `folders`, the repeatable multi-root form the same call already
+          accepts: scanner._sp_locations splits those roots into folder pairs (`<drive>/<item>`)
+          and bare site ids, so a list of site ids needs no third parameter either. The single
+          case keeps the old shape deliberately — a saved link, a queued job and every existing
+          test still name one site the way they always did. */}
       {showSites && (
         <SitePicker
-          onScan={(siteId) => { setShowSites(false); onScan('sharepoint', siteId) }}
+          onScan={(siteIds) => {
+            setShowSites(false)
+            const ids = Array.isArray(siteIds) ? siteIds : [siteIds]
+            if (ids.length <= 1) onScan('sharepoint', ids[0] || null)
+            else onScan('sharepoint', null, { folders: ids })
+          }}
           onClose={() => setShowSites(false)} />
       )}
 

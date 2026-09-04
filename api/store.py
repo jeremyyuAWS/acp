@@ -628,6 +628,18 @@ _SCHEMA = [
     # delta-sync baseline — the Drive mirror of drive_id's role in
     # core._sp_prior_inventory_for_drive.
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS drive_account_id TEXT",
+    # WHICH SharePoint site and WHICH document library each row came from. `drive_id` above is
+    # already the library's Graph drive id — half the identity — but a scan can now span up to 30
+    # sites, and a drive id names nothing to a reader and does not say which site it belongs to.
+    #
+    # Recorded at the grain the row is, not derived from the scan's scope, because the scope holds
+    # a SET of sites once a run spans several: "which site is this document in" stops being
+    # answerable from the run at all. Everything Phase 2 onwards depends on that boundary —
+    # per-site metadata, per-library delta cursors, per-site exception reports, write-back
+    # targeting — so it is stored now rather than reconstructed later from an id that was thrown
+    # away. NULL for every non-SharePoint source and for a OneDrive listing, which has no site.
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS site_id TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS library_name TEXT",
     # Per-document lifecycle status (PRD §4.3). One of: Active, Archive Candidate, Archived,
     # Delete Candidate, Deleted, Failed, Exempted. Defaults to Active on first discovery; a rule
     # run (Discover) or a manual action moves it. `lifecycle_rule_id`/`lifecycle_reason` record
@@ -1662,8 +1674,19 @@ class _PgAdapter:
     # tables and enforces nothing from them, and a replica without the code never touches them at
     # all. Neither can lose access to a surface it has today, because nothing consults these rows
     # until the flag turns the enforcement on.
-    _SCHEMA_VERSION = 11
-    _SCHEMA_CHECKSUM_AT_VERSION = "9e2e7bf4ebbe9c9ab0e14376ffa0d3b9"
+    # v12 adds scan_inventory.site_id and .library_name — which SharePoint site and which document
+    # library each discovered row came from, now that one run can span up to 30 sites and the
+    # scan's scope holds a SET rather than one site id. Additive on the usual terms, and additive
+    # in BEHAVIOUR for the same reason v4's fence was: a replica without this code writes neither
+    # column, add_inventory COALESCEs both through its ON CONFLICT, and every consumer reads them
+    # as optional — so an older replica keeps listing and inventorying exactly as it does today,
+    # it simply records no site attribution. Nothing reads these columns to decide anything yet;
+    # they are the identity the later SharePoint phases (per-site metadata, per-library delta
+    # cursors, exception reports, write-back targeting) need preserved at the row grain, because
+    # once a run covers a set of sites the run itself can no longer answer "which site is this
+    # document in" for any individual file.
+    _SCHEMA_VERSION = 12
+    _SCHEMA_CHECKSUM_AT_VERSION = "1b63b55167c0def43a08e47542ff986e"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -1885,6 +1908,31 @@ DISCOVERY_JOB_PRIORITY = 10
 # actually enumerates the estate — drop back into the general queue behind the backlog. A
 # reserved lane without this covers the starting gun and not the race.
 _DISCOVERY_JOB_TYPES = frozenset({"scan_discover", "scan_folder", "scan"})
+
+
+def sharepoint_scope_sites(scope: dict | None) -> tuple[str, ...]:
+    """Every SharePoint site a recorded scope covered, as an order-independent key.
+
+    Two scopes describe the same BOUNDARY when they cover the same set of sites, whatever order
+    the operator picked them in — so this sorts, and callers compare the tuples rather than the
+    raw fields.
+
+    Reads `sites` (the multi-site list, `[{"id", "name"}, ...]`) and falls back to the singular
+    `site` for every run recorded before multi-site existed. That fallback is what keeps an
+    incremental comparison working across the change: without it every historical SharePoint run
+    would key to () and a one-site scan would match a baseline taken on a different site — the
+    boundary check silently disabled, which is worse than no check at all.
+
+    Non-SharePoint scopes have neither field and key to (), which is the constant the singular
+    comparison already produced for them.
+    """
+    scope = scope or {}
+    sites = scope.get("sites")
+    if isinstance(sites, list) and sites:
+        ids = [str(s.get("id")) if isinstance(s, dict) else str(s) for s in sites]
+        return tuple(sorted(i for i in ids if i and i != "None"))
+    one = scope.get("site")
+    return (str(one),) if one else ()
 
 
 def job_priority(job_type: str) -> int:
@@ -2361,8 +2409,9 @@ class Store:
         now = self._now()
         sql = ("INSERT INTO scan_inventory(scan_id,file,drive_file_id,mime,size_kb,doc_class,"
                "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
-               "content_type,drive_account_id) "
-               "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
+               "content_type,drive_account_id,site_id,library_name) "
+               "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+               "ON CONFLICT(scan_id,file) DO UPDATE SET "
                "drive_file_id=EXCLUDED.drive_file_id, mime=EXCLUDED.mime, size_kb=EXCLUDED.size_kb, "
                "doc_class=EXCLUDED.doc_class, checksum=EXCLUDED.checksum, path=EXCLUDED.path, "
                "created_at=EXCLUDED.created_at, source_modified=EXCLUDED.source_modified, "
@@ -2371,14 +2420,21 @@ class Store:
                # transient enrichment failure) must not blank out one recorded on a PRIOR
                # list of the same file — that would be a real answer thrown away for a gap.
                "content_type=COALESCE(EXCLUDED.content_type, scan_inventory.content_type), "
-               "drive_account_id=EXCLUDED.drive_account_id")
+               "drive_account_id=EXCLUDED.drive_account_id, "
+               # COALESCE for the same reason content_type uses it: a re-list of the same file
+               # through a narrower path (a folder scan of one library, a delta reconstruction)
+               # may not know the site, and a gap must not erase a site id an earlier list of the
+               # same row recorded.
+               "site_id=COALESCE(EXCLUDED.site_id, scan_inventory.site_id), "
+               "library_name=COALESCE(EXCLUDED.library_name, scan_inventory.library_name)")
 
         def _params(it: dict) -> tuple:
             return (scan_id, it.get("file"), it.get("drive_file_id"), it.get("mime"),
                     it.get("size_kb"), it.get("doc_class"), it.get("checksum"), it.get("path"),
                     it.get("created_at"), it.get("source_modified"), it.get("owner"),
                     it.get("parent_folder"), it.get("discovered_at") or now, it.get("drive_id"),
-                    it.get("content_type"), it.get("drive_account_id"))
+                    it.get("content_type"), it.get("drive_account_id"),
+                    it.get("site_id"), it.get("library_name"))
 
         failed = 0
         with self._db.cursor() as cur:
@@ -5144,7 +5200,13 @@ class Store:
                 scope_kind = current_scope.get("kind")
                 if prior_scope.get("kind") != scope_kind:
                     continue
-                if scope_kind == "sharepoint" and prior_scope.get("site") != current_scope.get("site"):
+                # The SITE SET, not one site id: a multi-site run has no singular `site`, so
+                # comparing that field alone made every multi-site scan look like every other
+                # one ("None == None") and would have matched a baseline covering a completely
+                # different set of sites. See store.sharepoint_scope_sites.
+                if scope_kind == "sharepoint" and (
+                        sharepoint_scope_sites(prior_scope)
+                        != sharepoint_scope_sites(current_scope)):
                     continue
                 if not (prior_scope.get("enumeration") or {}).get("complete"):
                     continue
@@ -5234,7 +5296,7 @@ class Store:
         # discovered file whatever its type, so a format scope does not remove rows from it. What
         # does is where we looked — kind/folder/site — and whether the listing completed.
         def _boundary(s):
-            return (s.get("kind"), s.get("folder"), s.get("site"))
+            return (s.get("kind"), s.get("folder"), sharepoint_scope_sites(s))
         boundary_changed = _boundary(ps) != _boundary(cs)
         truncated = bool(ps.get("truncated") or cs.get("truncated"))
         # Either condition makes "absent" unreadable as "gone", so both route prev-only files to

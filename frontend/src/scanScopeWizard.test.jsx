@@ -210,13 +210,23 @@ describe('App renders the gate once and routes every entry point through it', ()
     // Third argument (2026-08-28): `folderFirst` lets a caller that already knows the user wants
     // to narrow to a folder — Discover's "Choose folder to scan…" — open the gate pre-set to
     // "Specific folders" instead of re-asking "entire source or specific folders?" from scratch.
-    expect(code).toMatch(/const requestScan = \(source, folder = null, \{ folderFirst = false, allFolders = false \} = \{\}\) =>/)
-    expect(code).toMatch(/setPendingScan\(\{ source, folder, folderFirst, allFolders \}\)/)
+    // Fourth argument (2026-09-04): `folders` carries a MULTI-ROOT selection through the gate.
+    // It exists for the SharePoint site picker — several sites travel as roots, and the wizard
+    // has no surface that could hold them (its folder tree browses one drive), so without this
+    // the selection would be silently dropped at the review step and the scan would widen to the
+    // whole of OneDrive. Dropping a boundary is the failure this whole path guards against.
+    expect(code).toMatch(/const requestScan = \(source, folder = null,\s+\{ folderFirst = false, allFolders = false, folders = null \} = \{\}\) =>/)
+    expect(code).toMatch(/setPendingScan\(\{ source, folder, folderFirst, allFolders, folders \}\)/)
     expect(code).toMatch(/<ScanReviewModal/)
     expect(code).toMatch(/startInFolderMode=\{pendingScan\.folderFirst\}/)
     // The confirm is the only path that dispatches doScan. It now also carries the wizard's
     // per-run folder scope as a third argument — the intent (one dispatch path) is unchanged.
-    expect(code).toMatch(/onConfirm=\{[\s\S]*?doScan\(source, folder, runScope\)/)
+    // Still ONE dispatch path. `rs` is runScope with the multi-root preset folded in when the
+    // wizard produced no folder set of its own — the wizard's own answer wins when it has one,
+    // because an operator who went on to pick folders gave a tighter boundary than the sites
+    // they started from.
+    expect(code).toMatch(/onConfirm=\{[\s\S]*?doScan\(source, folder, rs\)/)
+    expect(code).toMatch(/const rs = \(preset && preset\.length && !chose\)/)
   })
 
   it('wires onScan={requestScan} at every entry point, not doScan', () => {
