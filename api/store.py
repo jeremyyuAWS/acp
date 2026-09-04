@@ -1171,6 +1171,56 @@ _SCHEMA = [
       granted_by TEXT, granted_at TEXT,
       PRIMARY KEY (owner_email, report_id, email, role)
     )""",
+
+    # Workspace roles — which TABS an identity may see, and what they may do inside them.
+    #
+    # A THIRD authorization boundary, next to the two above it, and the distinction is the whole
+    # design: core.is_admin() answers "may this identity touch platform settings" (and under
+    # OPEN_ACCESS=1 that is everyone); acr_role answers "may this identity approve THIS report";
+    # these tables answer "which workflow surfaces does this identity have, and at what level".
+    # They do not confer ACR roles and ACR roles do not confer them. See api/workspace_rbac.py.
+    #
+    # `tenant_id` carries the owner-email tenant identifier, the same convention every other
+    # table in this file uses (see the note above scan_runs.owner_email) — spelled `tenant_id`
+    # because that is what it means here and because a role set is not owned by a scan owner in
+    # the way a scan is. It is not a new tenancy concept.
+    #
+    # `version` is the optimistic-concurrency token of PRD §14: an update carrying a stale version
+    # is refused rather than applied, so two administrators editing the same role in two tabs
+    # cannot silently overwrite one another. `is_system` marks a role this build ships (it can be
+    # duplicated, and a copy is an ordinary custom role); `is_protected` marks Owner, which cannot
+    # be edited, deleted, or assigned by anyone but the current Owner.
+    """CREATE TABLE IF NOT EXISTS workspace_roles (
+      id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      is_system INT NOT NULL DEFAULT 0,
+      is_protected INT NOT NULL DEFAULT 0,
+      created_by TEXT, created_at TEXT, updated_at TEXT,
+      version INT NOT NULL DEFAULT 1,
+      PRIMARY KEY (tenant_id, id)
+    )""",
+    # Role names are unique within a tenant (PRD §14). Enforced by the DATABASE and not only by
+    # the route: two administrators creating "Reviewer" in the same second both pass a
+    # read-then-check in the route and one of them is wrong. Lowercased in the index so "Reviewer"
+    # and "reviewer" collide, because to a human reading the role list they are the same name.
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_roles_name "
+    "ON workspace_roles(tenant_id, LOWER(name))",
+
+    # One row per (role, capability). `capability` holds a TAB KEY for a tab-access row and a
+    # grant capability id for an administrative permission; `access_level` is hidden/view/operate
+    # for the former and 'granted' for the latter. One table rather than two because they are read
+    # together on every request and a join that can half-fail is a way to compute a partial role
+    # and not notice — api/workspace_rbac.tab_access_from_rows drops what it does not recognise
+    # rather than defaulting it.
+    """CREATE TABLE IF NOT EXISTS workspace_role_permissions (
+      tenant_id TEXT NOT NULL,
+      role_id TEXT NOT NULL,
+      capability TEXT NOT NULL,
+      access_level TEXT NOT NULL,
+      PRIMARY KEY (tenant_id, role_id, capability)
+    )""",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -1605,8 +1655,15 @@ class _PgAdapter:
     # inert until a replica carrying api/acr_*.py serves a request against them.
     # v10 adds tenant_queue_state plus idx_jobs_tenant_fair. Older replicas ignore both and keep
     # their original FIFO claim; newer replicas can use them immediately, so rollout is safe.
-    _SCHEMA_VERSION = 10
-    _SCHEMA_CHECKSUM_AT_VERSION = "8091f4bbbfa936017e8d54f9d17ee930"
+    # v11 adds workspace_roles, workspace_role_permissions and idx_workspace_roles_name (the
+    # workspace RBAC catalog, PRD §12). Additive on the same terms as the ACR tables at v7, and
+    # additive in BEHAVIOUR for the stronger reason: the whole feature is behind
+    # ACP_WORKSPACE_RBAC_ENABLED, so a replica that carries the code but not the flag reads these
+    # tables and enforces nothing from them, and a replica without the code never touches them at
+    # all. Neither can lose access to a surface it has today, because nothing consults these rows
+    # until the flag turns the enforcement on.
+    _SCHEMA_VERSION = 11
+    _SCHEMA_CHECKSUM_AT_VERSION = "9e2e7bf4ebbe9c9ab0e14376ffa0d3b9"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -10725,3 +10782,112 @@ class Store:
                 "AND report_id IN (%s, '*')",
                 (owner_email, email.lower(), report_id))
             return sorted({r["role"] for r in self._db.fetchall(cur)})
+
+    # ── workspace roles (PRD §12) ─────────────────────────────────────────────
+    # The tenant identifier is the owner email, per this file's existing convention. It is passed
+    # in rather than read from a module global so a test can hold two tenants at once — which is
+    # what proves the isolation rather than assuming it.
+
+    def list_workspace_roles(self, *, tenant_id: str) -> list[dict]:
+        """Every role in the tenant, each carrying its permission rows.
+
+        One query per table rather than a join: a join returns no row at all for a role with no
+        permissions, and a Viewer whose every tab is Hidden is exactly that role. Losing it would
+        make "this role grants nothing" indistinguishable from "this role does not exist" — the
+        distinction api/workspace_rbac.py is built to preserve.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM workspace_roles WHERE tenant_id=%s ORDER BY name", (tenant_id,))
+            roles = self._db.fetchall(cur)
+            self._db.execute(cur,
+                "SELECT role_id, capability, access_level FROM workspace_role_permissions "
+                "WHERE tenant_id=%s", (tenant_id,))
+            perms = self._db.fetchall(cur)
+        by_role: dict[str, list[dict]] = {}
+        for p in perms:
+            by_role.setdefault(p["role_id"], []).append(p)
+        return [{**r, "permissions": by_role.get(r["id"], [])} for r in roles]
+
+    def get_workspace_role(self, *, tenant_id: str, role_id: str) -> dict | None:
+        """One role with its permissions, or None when there is no such role.
+
+        None means NOT FOUND. It never means "found, but empty" — see list_workspace_roles. A
+        caller that cannot tell those apart will eventually treat a missing role as a role with no
+        permissions, which reads as a successful deny and hides the real fault.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM workspace_roles WHERE tenant_id=%s AND id=%s", (tenant_id, role_id))
+            rows = self._db.fetchall(cur)
+            if not rows:
+                return None
+            self._db.execute(cur,
+                "SELECT role_id, capability, access_level FROM workspace_role_permissions "
+                "WHERE tenant_id=%s AND role_id=%s", (tenant_id, role_id))
+            return {**rows[0], "permissions": self._db.fetchall(cur)}
+
+    def upsert_workspace_role(self, *, tenant_id: str, role_id: str, name: str,
+                              permissions: dict[str, str], description: str | None = None,
+                              is_system: bool = False, is_protected: bool = False,
+                              actor: str | None = None,
+                              expected_version: int | None = None) -> dict:
+        """Create or replace one role and its whole permission set.
+
+        `expected_version` is PRD §14's concurrency check. Pass the version the caller read; a
+        mismatch raises ValueError and NOTHING is written. Pass None only when creating, or when
+        the caller genuinely intends a blind overwrite — a default of "no check" is how the check
+        stops being applied at the one call site that forgot it.
+
+        Permissions are REPLACED, not merged. A role edit that removed a tab must not leave the
+        old row behind: merging would make revoking access the one operation the drawer cannot
+        express.
+        """
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT version FROM workspace_roles WHERE tenant_id=%s AND id=%s",
+                (tenant_id, role_id))
+            existing = self._db.fetchall(cur)
+            current = existing[0]["version"] if existing else None
+            if existing and expected_version is not None and int(current) != int(expected_version):
+                raise ValueError(
+                    f"role {role_id} is at version {current}, not {expected_version} — "
+                    f"it was changed by someone else since you loaded it")
+            version = (int(current) + 1) if existing else 1
+            if existing:
+                self._db.execute(cur,
+                    "UPDATE workspace_roles SET name=%s, description=%s, is_system=%s, "
+                    "is_protected=%s, updated_at=%s, version=%s WHERE tenant_id=%s AND id=%s",
+                    (name, description, 1 if is_system else 0, 1 if is_protected else 0,
+                     now, version, tenant_id, role_id))
+            else:
+                self._db.execute(cur,
+                    "INSERT INTO workspace_roles(id,tenant_id,name,description,is_system,"
+                    "is_protected,created_by,created_at,updated_at,version) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    (role_id, tenant_id, name, description, 1 if is_system else 0,
+                     1 if is_protected else 0, actor, now, now, version))
+            self._db.execute(cur,
+                "DELETE FROM workspace_role_permissions WHERE tenant_id=%s AND role_id=%s",
+                (tenant_id, role_id))
+            for capability, access_level in sorted((permissions or {}).items()):
+                self._db.execute(cur,
+                    "INSERT INTO workspace_role_permissions(tenant_id,role_id,capability,"
+                    "access_level) VALUES(%s,%s,%s,%s)",
+                    (tenant_id, role_id, capability, access_level))
+        return self.get_workspace_role(tenant_id=tenant_id, role_id=role_id)
+
+    def delete_workspace_role(self, *, tenant_id: str, role_id: str) -> None:
+        """Remove a role and its permissions.
+
+        Refusing to delete a role that still has users, and refusing to delete Owner, are ROUTE
+        decisions (PRD §14) enforced there. The store deleting unconditionally is what lets a
+        migration or a test tear down cleanly without going through the gate the UI does.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "DELETE FROM workspace_role_permissions WHERE tenant_id=%s AND role_id=%s",
+                (tenant_id, role_id))
+            self._db.execute(cur,
+                "DELETE FROM workspace_roles WHERE tenant_id=%s AND id=%s", (tenant_id, role_id))

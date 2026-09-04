@@ -39,6 +39,20 @@ _CONFIG_SURVIVORS = {
     # next boot would simply re-run the migration, taking the exclusive locks this exists to
     # avoid.
     "acp_schema_version",
+    # Workspace roles and their permissions (PRD §12) — administrator-authored authorization
+    # config, the same class as scope_rule and disposition_policy. Nothing here describes a scan,
+    # a document or a decision.
+    #
+    # SURVIVING IS NOT MERELY HARMLESS HERE, IT IS REQUIRED, and for a reason the other survivors
+    # do not have. Role ASSIGNMENTS live on the managed-person record in app_settings
+    # (`people_records`), which already survives. Wiping the role DEFINITIONS while the
+    # assignments survived would leave every person pointing at a role id that resolves to
+    # nothing — and "the role could not be loaded" is the state PRD §14 requires the gate to treat
+    # as a refusal. A reset would therefore lock every user, including the Owner, out of a
+    # feature that had not gone wrong. Wiping both halves would be no better: it deletes the
+    # protected Owner role, which exists precisely so administrative lockout is impossible.
+    "workspace_roles",
+    "workspace_role_permissions",
 }
 
 
