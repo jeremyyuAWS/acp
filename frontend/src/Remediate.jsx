@@ -1368,6 +1368,27 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               )}
             </div>
           )}
+          {/* Automation maturity signal (ADR 0019 §8.5): rules whose reviewer edit-rate and
+              approval-rate pass the three-threshold gate are surfaced as promotion candidates.
+              This is evidence from real reviewer decisions, never a fabricated confidence score. */}
+          {reviewStats && (reviewStats.promotable_rules || []).length > 0 && (
+            <div className="rev-maturity" style={{ marginTop: 8, fontSize: 12 }}>
+              {(reviewStats.promotable_rules).map((ruleKey) => (
+                <span
+                  key={ruleKey}
+                  title={`Rule ${ruleKey} has ≥10 approvals, ≤20% edit rate, and ≥90% approval rate — consistently low reviewer intervention. Consider migrating this criterion to AI-Assisted mode in Settings → Automation.`}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                    background: 'var(--success-bg, #EDF7EE)', color: 'var(--success-fg, #1A6B2A)',
+                    border: '1px solid var(--success-border, #A3D9A8)',
+                    borderRadius: 12, padding: '2px 8px', marginRight: 6, cursor: 'default',
+                  }}
+                >
+                  ↑ {ruleKey} ready for AI-Assisted
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         {/* A decision the server refused. It rolled back, so the card is in the queue again —
             say so loudly, because a reviewer who thinks they signed something off and did not
