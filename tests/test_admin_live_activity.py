@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from fastapi import HTTPException
+
 from api.routes import system
 
 
@@ -11,6 +14,30 @@ def _scan(owner="admin@example.org"):
         "summary": {"files": 2, "certifiable": 0, "uncertain": 0, "error": 0, "avg_score": 0},
         "files": [],
     }
+
+
+class _Request:
+    def __init__(self, email):
+        self.state = type("State", (), {"user_email": email})()
+
+
+class _Response:
+    def __init__(self):
+        self.headers = {}
+
+
+def test_live_activity_read_is_available_to_any_signed_in_user(monkeypatch):
+    monkeypatch.setattr(system, "_admin_activity_snapshot", lambda: {"runs": [], "summary": {}})
+    response = _Response()
+    assert system.admin_activity(_Request("viewer@example.org"), response) == {
+        "runs": [], "summary": {}}
+    assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_live_activity_read_still_rejects_anonymous_users():
+    with pytest.raises(HTTPException) as denied:
+        system.admin_activity(_Request(""), _Response())
+    assert denied.value.status_code == 401
 
 
 def test_admin_live_activity_groups_active_stage_without_exposing_payload(isolated_store):

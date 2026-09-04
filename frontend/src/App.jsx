@@ -93,6 +93,11 @@ const TABS = [
   ['acr',           'Conformance',   'ACR / VPAT',          0],
 ]
 
+// TEMPORARY PRODUCT POLICY (2026-09-04): every signed-in user can navigate the complete
+// workspace. API authorization remains authoritative for privileged mutations; in particular,
+// making these views discoverable must not turn a read-only user into a platform administrator.
+const ALL_TAB_KEYS = TABS.map(([key]) => key)
+
 function timeAgo(iso) {
   if (!iso) return null
   const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
@@ -871,7 +876,8 @@ export default function App() {
     setAssessPhase('idle'); setJustAssessed(null)
     setOntology(loadPublished())
     setSettingsOpen(false); setView((p.allow || ['overview'])[0])
-    setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label, allow: p.allow || [] })
+    setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label,
+      allow: [...new Set([...(p.allow || []), ...ALL_TAB_KEYS])] })
     // Scope editing is owner-only (PUT /settings = _require_admin). GET /me returns the
     // authoritative per-user `is_scope_owner` post-auth (the sign-in payload doesn't carry it,
     // and /config is fetched pre-auth so its copy is null). A non-owner → read-only scope in the
@@ -1750,13 +1756,10 @@ export default function App() {
 
       <nav aria-label="Compliance workflow">
         <div className="tabs" role="tablist" aria-label="Compliance workflow">
-          {/* Two filters, deliberately kept separate. `me.allow` is the demo-persona surface list
-              that predates this feature; `visibleTabs` applies the SERVER's workspace role and
-              renumbers the workflow so it reads 1..n over what is actually there (PRD §10 — a
-              role that hides Discover must not leave a stepper starting at 2, which tells the
-              user they have skipped something rather than that it was never theirs). */}
-          {visibleTabs(access, TABS.filter(([k]) => !me.allow || me.allow.includes(k)))
-            .map(([k, label, rg, step]) => {
+          {/* The temporary open-tab policy gives every signed-in persona the complete TABS input.
+              `visibleTabs` changes it only when workspace RBAC is explicitly enforced; that
+              preserves the staged RBAC work without reintroducing the legacy persona filter. */}
+          {visibleTabs(access, TABS).map(([k, label, rg, step]) => {
             const stageDone = {
               // A scan record existing is not the same as discovery having FINISHED — `run` is
               // truthy the instant a scan starts (even mid-listing, `status='running'`), so `!!run`
@@ -2069,7 +2072,7 @@ export default function App() {
              a single ad-hoc file without wiring a whole source. */
           onStop={() => stopScan(liveScanId)} me={me}
           onViewMonitor={() => { setMonitorFocusScanId(liveScanId || run?.id); setView('monitor') }}
-          onViewLiveOps={me?.allow?.includes('liveops') ? () => { setView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) } : undefined}
+          onViewLiveOps={() => { setView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
           onOpenSource={(sourceKey) => { setPendingSourceOpen(sourceKey); setView('integrations'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />}
 
         {view === 'assess' && (run ? (
@@ -2210,13 +2213,13 @@ export default function App() {
             gate: assessGate when a scan exists but hasn't been assessed yet. */}
         {view === 'graph' && (run ? (assessed ? <Suspense fallback={<Loading />}><KnowledgeGraph files={files} scanId={run.id} /></Suspense> : assessGate) : placeholder)}
 
-        {/* Admin-only analytics — backend gate (_require_admin) mirrors the allow check */}
-        {view === 'analytics' && me.allow?.includes('analytics') && <AdminInsights me={me} />}
+        {/* Visible to every signed-in user under the temporary open-tab policy. The analytics
+            API remains the authority for the underlying estate-wide data. */}
+        {view === 'analytics' && <AdminInsights me={me} />}
 
-        {/* Admin-only live Azure traffic — its API and SSE endpoints independently enforce the
-            same admin boundary. Kept separate from historical Scan Analytics so operations are
-            visible in one click and do not start streaming until this tab is opened. */}
-        {view === 'liveops' && me.allow?.includes('liveops') &&
+        {/* Live Azure traffic is read-only and payload-sanitized. Its API and SSE endpoints still
+            require an authenticated user, and the stream starts only when this tab is opened. */}
+        {view === 'liveops' &&
           <Suspense fallback={<Loading />}><AdminLiveTraffic /></Suspense>}
 
         {/* ACP's own Accessibility Conformance Report (ADR 0047). No `run` gate: it is not about a
@@ -2300,7 +2303,7 @@ export default function App() {
           onCancel={() => setPendingScan(null)} />
       )}
       <ConfirmDialog />
-      {view !== 'liveops' && me?.allow?.includes('liveops') && <Suspense fallback={null}>
+      {view !== 'liveops' && <Suspense fallback={null}>
         <LiveOperationsNotifier onOpen={() => { setView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
       </Suspense>}
       <VersionToast currentVersion={platformVersion} />
