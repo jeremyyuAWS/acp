@@ -17,6 +17,7 @@ vi.mock('./api.js', () => ({
   getFileThumbnail: () => Promise.resolve(null),
   getFilePage: () => Promise.resolve(null),
   getFileGeometry: () => Promise.resolve(null),
+  getSourceLink: () => Promise.resolve({ url: null }),
   getScanAiCalls: () => Promise.resolve([]),      // NO ledger — a path can only come from the response
   validateAlt: () => Promise.resolve({}),
 }))

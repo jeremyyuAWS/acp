@@ -87,6 +87,7 @@ vi.mock('./api.js', () => ({
   getFileThumbnail: () => Promise.resolve(null),
   getFilePage: () => Promise.resolve(null),
   getFileGeometry: () => Promise.resolve(null),
+  getSourceLink: () => Promise.resolve({ url: null }),
   getScanAiCalls: () => Promise.resolve(h.calls),
   validateAlt: () => Promise.resolve({}),
 }))
