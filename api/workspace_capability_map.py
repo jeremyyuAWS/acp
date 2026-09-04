@@ -176,6 +176,7 @@ _map_many([("PUT", "/schedule")], {"monitor.view", "settings.view"})
 # ── Live Operations ───────────────────────────────────────────────────────────
 _map_many([("GET", "/admin/activity"), ("GET", "/jobs"), ("GET", "/jobs/{job_id}"),
            ("GET", "/control/estate"), ("GET", "/control/workers/capacity"),
+           ("GET", "/control/costs"),
            ("GET", "/control/workers/replicas"), ("GET", "/control/workers/revisions")],
           {"operations.view"})
 _map_many([("POST", "/admin/jobs/clear-dead"), ("PATCH", "/control/workers/replicas")],

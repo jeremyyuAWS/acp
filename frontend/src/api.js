@@ -1434,6 +1434,12 @@ export const getWorkerCapacity = () => (SIM
           workload_profile_name: null, active_revision_name: null,
           metrics_available: false, measured_at: null })
   : fetch(`${BASE}/control/workers/capacity`, { headers: headers() }).then(j))
+// Cost transparency is deliberately separate from capacity telemetry: it distinguishes an
+// operations-configured estimate from delayed Azure billing actuals and always returns provenance.
+export const getLiveOpsCosts = () => (SIM
+  ? sim({ configured: false, services: [], estimated_hourly_usd: null, estimated_daily_usd: null,
+          billing: { configured: false, freshness_label: 'Azure billing feed not configured' } })
+  : fetch(`${BASE}/control/costs`, { headers: headers() }).then(j))
 // The FULL deploy/revision history for the acp-worker Container App — every revision, not just
 // the active one getWorkerCapacity() extracts a handful of fields from. Read-only, open to any
 // signed-in user, same reasoning as getWorkerCapacity/getWorkerReplicas. Revisions change only
