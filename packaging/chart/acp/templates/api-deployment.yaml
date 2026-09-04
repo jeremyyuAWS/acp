@@ -1,0 +1,92 @@
+{{- include "acp.checkDataServices" . -}}
+{{- include "acp.checkRequiredSecrets" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "acp.fullname" . }}-api
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  {{- /*
+    replicas is OMITTED when the HPA owns it. Setting both means every `helm upgrade` resets the
+    replica count to the floor and the autoscaler climbs back — a scale-down at the exact moment
+    a deploy is already adding load, on a tier that is serving requests.
+  */}}
+  {{- if not .Values.api.autoscaling.enabled }}
+  replicas: {{ .Values.api.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "acp.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "acp.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+        acp.mova.io/tier: api
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "acp.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ include "acp.image" (dict "root" $ "component" "api") | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.api.port }}
+              protocol: TCP
+          env:
+            - name: PORT
+              value: {{ .Values.api.port | quote }}
+            {{- include "acp.commonEnv" . | nindent 12 }}
+            {{- range $k, $v := .Values.api.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- include "acp.apiProbes" . | nindent 10 }}
+          {{- with .Values.api.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.affinity }}
+      affinity:
+        {{- toYaml .Values.affinity | nindent 8 }}
+      {{- else if gt (int .Values.api.replicaCount) 1 }}
+      {{- /*
+        Spread API replicas across nodes when there is more than one. PREFERRED, not required:
+        a hard anti-affinity on a cluster with fewer nodes than replicas leaves pods Pending
+        forever, which turns a capacity shortfall into an outage. The high-availability profile's
+        real guarantee is the PodDisruptionBudget, which is separate and is required.
+      */}}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "acp.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: api
+      {{- end }}

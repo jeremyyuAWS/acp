@@ -1,0 +1,114 @@
+{{- if .Values.networkPolicy.enabled }}
+{{/*
+Network posture. Two objects, because "deny everything" and "allow what ACP needs" are separate
+decisions and only the first is safe to get wrong in the tightening direction.
+
+A NETWORKPOLICY IS A CLUSTER CAPABILITY, NOT A GUARANTEE THIS CHART MAKES. Kubernetes silently
+ignores NetworkPolicy objects when the CNI does not implement them — no error, no event, no
+status field saying "unenforced". Flannel is the common case. So a regulated installation can
+render every policy below, pass every review, and be running with completely open pod networking.
+That check belongs in `acpctl doctor` against a live cluster (phase 2); it cannot be made here,
+and pretending otherwise by staying quiet would be the more dangerous choice.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "acp.fullname" . }}-default-deny
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "acp.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    {{- if .Values.networkPolicy.defaultDeny }}
+    - Egress
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "acp.fullname" . }}-api
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "acp.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: {{ .Values.api.port }}
+          protocol: TCP
+{{- if not .Values.networkPolicy.workerIngress }}
+---
+{{/*
+`privateWorkers: true` in the deployment document. Workers claim from the queue and are reached by
+nothing — so an empty `ingress:` list is the accurate policy, and it is deliberately empty rather
+than absent: omitting the key entirely would leave the default-deny above as the only statement,
+which is the same effect by accident instead of on purpose.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "acp.fullname" . }}-worker-no-ingress
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "acp.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  policyTypes:
+    - Ingress
+  ingress: []
+{{- end }}
+{{- if and .Values.networkPolicy.defaultDeny .Values.networkPolicy.allowedEgress }}
+---
+{{/*
+The egress allow-list, and the honest limit of it.
+
+NetworkPolicy MATCHES ON IP, NOT ON HOSTNAME. `allowedEgress: [googleapis.com]` cannot become an
+`ipBlock` here — the addresses behind that name change, and pinning today's would break the
+connector on a day nobody deployed anything. What this renders is DNS egress plus a documented
+annotation naming the intended destinations, so the object records the intent and an operator can
+see what still needs enforcing.
+
+Real hostname egress control needs a policy engine that understands names — Cilium's
+CiliumNetworkPolicy `toFQDNs`, or an egress proxy. That is an adapter concern (the cluster either
+has one or does not), and naming it here is better than rendering an `ipBlock` that looks like
+enforcement and is a snapshot of yesterday's DNS.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "acp.fullname" . }}-egress
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+  annotations:
+    acp.mova.io/intended-egress: {{ join "," .Values.networkPolicy.allowedEgress | quote }}
+    acp.mova.io/egress-enforcement: >-
+      hostname allow-listing is not expressible in NetworkPolicy; enforce with a FQDN-aware
+      policy engine or an egress proxy
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "acp.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 443
+          protocol: TCP
+{{- end }}
+{{- end }}

@@ -63,6 +63,26 @@ IMAGES = {
 # which is exactly the kind of mismatch that turns into a worker that claims every job.
 TIER_ROLE = {"discover": "discovery", "assess": "assess", "remediate": "remediate"}
 
+# The job types each worker role claims — api/core.py's DISCOVERY/ASSESS/REMEDIATE_LANE_JOB_TYPES.
+#
+# COPIED, AND GUARDED BY A TEST THAT READS THE ORIGINAL. acpctl must not import api/core.py: that
+# module pulls in the whole application (the store, the worker pool, the connectors), and a
+# packaging CLI that cannot run without a database is not a packaging CLI. So the lists live here
+# too — and tests/test_packaging_chart.py::test_the_queue_lanes_match_the_application asserts
+# these tuples equal core's, so the copy cannot drift.
+#
+# WHY IT MATTERS THAT THEY ARE JOB TYPES AND NOT THE ROLE NAME. The `jobs` table has no `role`
+# column; it has `type`. A queue-depth scaler written against a `role` column returns a Postgres
+# error, KEDA logs it and scales nothing, and the worker tier sits at its floor while the backlog
+# grows — a failure whose only symptom is that autoscaling silently does not happen. That is the
+# query this table exists to make impossible to write from memory.
+LANE_JOB_TYPES = {
+    "discovery": ("scan_discover", "scan_folder"),
+    "assess": ("scan", "scan_assess", "scan_batch", "scan_file", "workspace_scan_file",
+               "workspace_scan_discover", "scan_finalize", "assess_trace"),
+    "remediate": ("remediate_file", "rescore_file", "apply_approved_values"),
+}
+
 
 @dataclass
 class Service:

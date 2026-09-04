@@ -12,10 +12,17 @@ ingress/storage classes. Everything else — tiers, roles, replica ranges, resou
 network posture — is identical across every platform, and this file is where a reviewer can see
 that it is identical rather than take it on trust.
 
-NOT A CHART, AND NOT AN INSTALL. This renders VALUES. The chart lands in phase 2, and nothing
-here runs helm, contacts a cluster or reads a secret. `acpctl values` is read-only like the rest
-of this release: its output is reviewable text, and generating it is the step before a chart
-exists, not a substitute for one.
+NOT AN INSTALL. This renders VALUES for the chart at packaging/chart/acp (added in phase 2).
+Nothing here runs helm, contacts a cluster or reads a secret; the output is reviewable text that
+an operator feeds to `helm template` or `helm install` themselves.
+
+WHAT THE CHART REQUIRES OF THIS FILE, so a change here does not silently break a render: every
+key the templates read must be present, and `queueJobTypes` in particular is what the worker
+autoscaler builds its queue query from — the `jobs` table has no `role` column, so a scaler
+written from the shape of this file rather than from that list queries a column that does not
+exist and, KEDA being what it is, scales nothing while logging the error. tests/
+test_packaging_chart.py renders the real chart against real output from here, so the two cannot
+drift apart quietly.
 """
 from __future__ import annotations
 
@@ -24,6 +31,7 @@ from typing import Any
 from . import presets
 from .inventory import (
     API_HEADROOM_CONN,
+    LANE_JOB_TYPES,
     TIER_ROLE,
     build_inventory,
     connection_budget,
@@ -81,6 +89,10 @@ def _tier_values(tier: dict, *, role: str | None, threads: int) -> dict[str, Any
             values["autoscaling"]["queueDepthTarget"] = auto["queueDepthTarget"]
         if "oldestJobAgeSeconds" in auto:
             values["autoscaling"]["oldestJobAgeSeconds"] = auto["oldestJobAgeSeconds"]
+        if queue_signals and role:
+            # The chart builds its scaler query from THIS, rather than holding its own copy of
+            # the lane lists in YAML where nothing can check them. See inventory.LANE_JOB_TYPES.
+            values["autoscaling"]["queueJobTypes"] = list(LANE_JOB_TYPES[role])
     return values
 
 

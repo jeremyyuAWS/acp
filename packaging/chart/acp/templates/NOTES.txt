@@ -1,0 +1,49 @@
+ACP {{ .Values.image.tag | default .Chart.AppVersion }} — profile {{ .Values.acpDeployment.profile }} on {{ .Values.acpDeployment.platform }}
+
+{{ if ne .Values.acpDeployment.supportStatus "supported" -}}
+!! PLATFORM STATUS: {{ .Values.acpDeployment.supportStatus | upper }}
+   No reference deployment in this repository runs the contract suite against
+   {{ .Values.acpDeployment.platform }} yet. The chart renders; parity is unproven.
+
+{{ end -}}
+Installed:
+  api — {{ .Values.api.replicaCount }} replica(s){{ if .Values.api.autoscaling.enabled }}, autoscaling {{ .Values.api.autoscaling.minReplicas }}–{{ .Values.api.autoscaling.maxReplicas }} ({{ .Values.api.autoscaling.scaler }}){{ end }}
+{{- range $role, $cfg := .Values.workers }}
+  worker/{{ $role }} — {{ $cfg.replicaCount }} replica(s){{ if $cfg.autoscaling.enabled }}, autoscaling {{ $cfg.autoscaling.minReplicas }}–{{ $cfg.autoscaling.maxReplicas }} ({{ $cfg.autoscaling.scaler }}){{ end }}
+{{- end }}
+
+What this chart did NOT install, and what therefore has to already be true:
+
+  * Postgres, Redis and object storage. Supplied by the platform adapter; this release reads
+    their endpoints from the secret references below. See ADR 0048.
+{{- if .Values.secrets.externalSecrets.enabled }}
+  * The External Secrets Operator, and a SecretStore named
+    "{{ .Values.secrets.externalSecrets.secretStoreRef | default (printf "%s-store" (include "acp.fullname" .)) }}" pointing at your {{ .Values.secrets.provider }} backend.
+    Without it the ExternalSecret never syncs, the Secret is never created, and every pod stays
+    in CreateContainerConfigError.
+{{- end }}
+{{- $needsKeda := false }}
+{{- range $role, $cfg := .Values.workers }}{{ if and $cfg.autoscaling.enabled (eq ($cfg.autoscaling.scaler | default "keda") "keda") }}{{ $needsKeda = true }}{{ end }}{{ end }}
+{{- if $needsKeda }}
+  * KEDA. The worker ScaledObjects need it. WITHOUT KEDA THERE IS NO ERROR — the objects sit
+    unreconciled, the workers stay at their minimum replica count, and the only symptom is a
+    queue that grows during load and never scales out.
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+  * A CNI that enforces NetworkPolicy. Kubernetes accepts the objects either way; a CNI that
+    does not implement them (Flannel, for one) leaves pod networking fully open with nothing
+    reporting that the policies are inert.
+{{- end }}
+{{- if .Values.ingress.enabled }}
+
+Reachable at: http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}
+{{- end }}
+
+Check it came up:
+
+  kubectl rollout status deploy/{{ include "acp.fullname" . }}-api
+  kubectl logs job/{{ include "acp.fullname" . }}-preflight
+
+The migration ran BEFORE this code was admitted (a pre-upgrade hook, backoffLimit 0). If the
+release failed at that hook, the previous version is still serving and the schema is either
+unchanged or additively ahead — both safe to leave while you read the Job's logs.
