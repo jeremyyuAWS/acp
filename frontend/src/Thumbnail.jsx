@@ -33,7 +33,7 @@ function cropStyle(url, box) {
 // the geometry reports (not the `page` prop) to guarantee the box and the picture always agree.
 // No box (non-pptx, grouped/inherited transform, SIM, any failure) → the plain large preview at
 // the `page` prop, exactly as before. Honesty (ADR 0016): the box is a measured rect or absent.
-export default function Thumbnail({ scanId, file, page = 1, locator = null, className = '', maxHeight = 240 }) {
+export default function Thumbnail({ scanId, file, page = 1, locator = null, className = '', maxHeight = 240, kindLabel = null }) {
   const [url, setUrl] = useState(null)
   const [box, setBox] = useState(null)      // {page,x,y,w,h} normalized, or null
   const [geomResolved, setGeomResolved] = useState(false)   // has the geometry fetch settled?
@@ -89,12 +89,14 @@ export default function Thumbnail({ scanId, file, page = 1, locator = null, clas
           {quadrant && <span className="thumb-loc">Flagged object · {quadrant}</span>}
           <button type="button" className="thumb-zoom-btn" aria-pressed={zoom}
                   onClick={() => setZoom((z) => !z)}>
-            {zoom ? 'Hide close-up' : '⤢ Zoom to object'}
+            {zoom
+              ? (kindLabel ? `Hide ${kindLabel}` : 'Hide close-up')
+              : (kindLabel ? `⤢ Zoom to ${kindLabel}` : '⤢ Zoom to object')}
           </button>
         </div>
       )}
       {box && zoom && (
-        <figure className="thumb-crop" aria-label="Close-up of the flagged object">
+        <figure className="thumb-crop" aria-label={kindLabel ? `Close-up of the flagged ${kindLabel}` : 'Close-up of the flagged object'}>
           <div className="thumb-crop-img" style={cropStyle(url, box)} />
           <figcaption>Close-up · {quadrant}</figcaption>
         </figure>

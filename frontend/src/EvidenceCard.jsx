@@ -3,7 +3,7 @@ import { aiProvenance, getFileGeometry, getFileRemediationDiffs, getScanAiCalls,
 import Thumbnail from './Thumbnail.jsx'
 import BeforeAfterEvidence from './BeforeAfterEvidence.jsx'
 import RiskChip from './RiskChip.jsx'
-import { authoringScaffold, buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, firstProposed, groupPages, houseStyleOf, imagesOfTextException, isValueFix, leadWithIsolatedImage, primaryActionLabel, proposalsOf, reviewIntent, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview, whyRecommendation, whySafeToApprove } from './reviewCard.js'
+import { authoringScaffold, buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, firstProposed, groupPages, guidanceSentence, houseStyleOf, imagesOfTextException, isValueFix, leadWithIsolatedImage, primaryActionLabel, proposalsOf, reviewIntent, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview, whyRecommendation, whySafeToApprove } from './reviewCard.js'
 import ProposalThumb, { isSafeThumb } from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import CaptionEditor from './CaptionEditor.jsx'
@@ -761,7 +761,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
               <figcaption className="muted">The flagged image, shown on its own (isolated from the sheet)</figcaption>
             </figure>
           ) : (
-            <Thumbnail scanId={card.scanId} file={card.file} page={card.page || 1} locator={heroLocator} maxHeight={360} />
+            <Thumbnail scanId={card.scanId} file={card.file} page={card.page || 1} locator={heroLocator} maxHeight={360}
+                       kindLabel={imgKind?.label?.toLowerCase() || null} />
           )}
         </div>
       )}
@@ -776,7 +777,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
                          size={thumbSize(card.thumbKind, 96)} className="evcard-thumb" />
         )}
         <div className="evcard-main" style={{ flex: 1, minWidth: 0 }}>
-          <p className="evcard-problem">{card.problem}</p>
+          <p className="evcard-problem">{guidanceSentence(card) || card.problem}</p>
           {/* Image-kind routing hint (#130) — the model's own noun for what this is, with a hint on
               what a good description looks like for that kind. Honest: derived from the description,
               shown only when a kind is recognised. */}

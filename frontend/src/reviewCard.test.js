@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { authoringScaffold, buildEvidenceCard, evidenceSignals, explainFinding, formatProposedValue, primaryActionLabel, reviewIntent, trustStates, validationChecklist, verificationLadder, whyHumanReview } from './reviewCard.js'
+import { authoringScaffold, buildEvidenceCard, evidenceSignals, explainFinding, formatProposedValue, guidanceSentence, primaryActionLabel, reviewIntent, trustStates, validationChecklist, verificationLadder, whyHumanReview } from './reviewCard.js'
 
 // The comparisonFor and noDraftHint suites are gone with the functions: both existed only
 // for Remediate's WhyReview + ReviewItemCard, deleted in #108 as unreachable. The live card
@@ -304,6 +304,48 @@ describe('authoringScaffold — never a blank box', () => {
     expect(authoringScaffold('1.1.1')).toEqual(expect.arrayContaining([expect.stringMatching(/kind of image/i)]))
     expect(authoringScaffold('2.4.4')).toEqual(expect.arrayContaining([expect.stringMatching(/where the link goes/i)]))
     expect(authoringScaffold('9.9.9')).toBeNull()
+  })
+})
+
+describe('guidanceSentence — context-aware natural sentence for 1.1.1', () => {
+  it('returns null for non-1.1.1 criteria', () => {
+    expect(guidanceSentence({ sc: '1.4.5', file: 'doc.pdf' })).toBeNull()
+    expect(guidanceSentence({ sc: '2.4.4', file: 'doc.pptx' })).toBeNull()
+    expect(guidanceSentence({})).toBeNull()
+  })
+  it('uses "slide" noun for pptx files', () => {
+    const s = guidanceSentence({ sc: '1.1.1', file: 'deck.pptx' })
+    expect(s).toMatch(/This slide has/)
+  })
+  it('uses "worksheet" noun for xlsx files', () => {
+    const s = guidanceSentence({ sc: '1.1.1', file: 'report.xlsx' })
+    expect(s).toMatch(/This worksheet has/)
+  })
+  it('uses "page" noun for pdf and docx files', () => {
+    expect(guidanceSentence({ sc: '1.1.1', file: 'doc.pdf' })).toMatch(/This page has/)
+    expect(guidanceSentence({ sc: '1.1.1', file: 'doc.docx' })).toMatch(/This page has/)
+  })
+  it('names the image kind when describedImageType detects one', () => {
+    const card = { sc: '1.1.1', file: 'doc.pdf', proposals: [{ proposed_value: 'a comparison chart showing revenue' }] }
+    const s = guidanceSentence(card)
+    expect(s).toMatch(/a chart/)
+  })
+  it('falls back to "N images" when multiple proposals and no detected kind', () => {
+    const card = { sc: '1.1.1', file: 'doc.pdf', proposals: [{ proposed_value: '' }, { proposed_value: '' }] }
+    const s = guidanceSentence(card)
+    expect(s).toMatch(/2 images/)
+  })
+  it('falls back to "an image" when no kind detected and single image', () => {
+    const s = guidanceSentence({ sc: '1.1.1', file: 'doc.pdf' })
+    expect(s).toMatch(/an image/)
+  })
+  it('gives "ACP drafted" resolution when proposals have a value', () => {
+    const card = { sc: '1.1.1', file: 'doc.pdf', proposals: [{ proposed_value: 'Logo of the company.' }] }
+    expect(guidanceSentence(card)).toMatch(/ACP drafted a description/)
+  })
+  it('gives "could not verify" resolution when no draft', () => {
+    const card = { sc: '1.1.1', file: 'doc.pdf', proposals: [{ proposed_value: '' }] }
+    expect(guidanceSentence(card)).toMatch(/could not verify/)
   })
 })
 
