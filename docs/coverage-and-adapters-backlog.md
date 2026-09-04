@@ -22,26 +22,29 @@ scheduled here — each is bookmarked so the next sprint can pick up the thread.
 
 ## P0 — Close the backend gap behind wired UIs (small, no blockers)
 
-- [ ] **Criterion disposition persistence backend.** `frontend/src/api.js:1632–1648` has a
+- [x] **Criterion disposition persistence backend.** `frontend/src/api.js:1632–1648` has a
   `// BACKEND DEFERRED` comment on `disposeCriterion` / `listDispositions`. The File Drawer's "W4"
   flow (reviewer attests a criterion as out-of-scope or manually verified) is fully wired in the
   frontend — `POST /scans/{sid}/files/{file}/dispose` and `GET .../dispositions` — but neither
   route exists. Dispositions are lost on reload; reviewers doing per-criterion scope exceptions
   have no persistence. Pattern: follow existing `decision_log` dual-write routes in
   `api/routes/scans.py`. **Two backend routes + a store method + structural tests.**
+  ✅ Routes, store methods, DB table, and 20-test suite (`tests/test_criterion_disposition.py`) landed.
 
-- [ ] **Auto-apply gate for 2.4.4 and 4.1.2 (ADR 0041).** ADR 0041 (`docs/adr/`) is Accepted;
+- [x] **Auto-apply gate for 2.4.4 and 4.1.2 (ADR 0041).** ADR 0041 (`docs/adr/`) is Accepted;
   the implementation step is exactly one check per applier: `apply_alt.py` (and its 2.4.4
   link-text / 4.1.2 accessible-name counterparts) check `hitl_queue.validated=True` — set by
   the structural verifier — before deciding to auto-apply vs. route to the human queue. Extends
   the auto-apply path beyond the current OCR-anchored alt path. **One gate condition per applier
   + routing tests asserting both branches fire correctly.**
+  ✅ Merged as #1327 — gate in `handlers._enqueue_proposals`, `store.auto_approve_proposals`, 21 tests.
 
-- [ ] **Folder/path match field in the disposition rule engine.** `api/disposition.py` has no
+- [x] **Folder/path match field in the disposition rule engine.** `api/disposition.py` has no
   `path` or `folder` match condition. The SharePoint walk already fetches `parentReference`
   (folder path) per item. Adding a `folder_path_contains` condition to the rule engine enables
   UTSW's folder-based archival rules. Named a "small build" in `docs/sharepoint-gaps.md`.
   **One new match field in `disposition.py` + tests.**
+  ✅ Built 2026-09-04 — `path`, `parent_folder`, `prefix`/`contains` ops, tested in `test_disposition_conditions.py`.
 
 ---
 
