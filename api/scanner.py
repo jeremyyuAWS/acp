@@ -2092,6 +2092,7 @@ class _SpWalkPipeline:
         parallel. Raises whatever the walk raised — the caller's per-library isolation is what
         turns that into a partial site, and swallowing it here would hide a broken library as an
         empty one."""
+        import joblog as _jl_bind
         i = self._at.get(unit)
         if i is None:                      # not a walk unit (delta-reconstructed, or search mode)
             raise KeyError(unit)
@@ -2100,7 +2101,14 @@ class _SpWalkPipeline:
         for j in range(i, min(i + self._conc, len(self._units))):
             u = self._units[j]
             if u not in self._futures:
-                self._futures[u] = self._pool.submit(self._run, u)
+                # BOUND, like every other thread start on the scan path. contextvars do not
+                # cross ThreadPoolExecutor.submit, so an unbound walk thread starts from an empty
+                # context: check_cancel() cannot see the job it belongs to, and every joblog
+                # record a library walk emits loses its job identity. A Stop pressed during a
+                # thirty-site walk would then be honoured by the consumer and ignored by the
+                # walkers still in flight. tests/test_cancel_crosses_threads.py guards the whole
+                # scan path for exactly this and caught it in CI.
+                self._futures[u] = self._pool.submit(_jl_bind.bind(self._run), u)
         return self._futures[unit].result()
 
     def close(self):
