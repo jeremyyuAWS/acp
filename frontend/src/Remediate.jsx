@@ -430,15 +430,24 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   }, [remBusy, remProg?.done, runId])
   const REMKEY = (id) => `acp-remed-${id || 'none'}`
 
+  // A batch of N documents cannot report more than N failures. The server scopes its own count
+  // to the latest batch now, so this is the last line of defence rather than the fix: on
+  // 2026-09-04 an unscoped `failed` of 294 against a 147-document batch reached this component
+  // and was rendered as "-147 documents remediated". Clamping here means no future counting bug
+  // upstream can produce an impossible number on screen.
+  const clampFailed = (total, failed) =>
+    Math.min(Math.max(0, Number(total || 0)), Math.max(0, Number(failed || 0)))
+
   const finishRemediation = (total, status = {}) => {
     clearInterval(pollRef.current); streamRef.current?.close?.(); streamRef.current = null
+    const failed = clampFailed(total, status.failed)
     setRemProg((previous) => ({ ...previous, total, done: total,
                  latest: status.latest_file || previous?.latest || null,
-                 failed: status.failed || 0, activity: null, history: previous?.history || [] }))
+                 failed, activity: null, history: previous?.history || [] }))
     setRemBusy(false); setRemUpdates('idle')
-    const ok = Math.max(0, total - (status.failed || 0))
+    const ok = Math.max(0, total - failed)
     setServerFixed((n) => n + ok)
-    setRemMsg(`✓ Remediation complete — ${ok} document${ok === 1 ? '' : 's'} fixed${status.failed ? `, ${status.failed} failed` : ''}.`)
+    setRemMsg(`✓ Remediation complete — ${ok} document${ok === 1 ? '' : 's'} fixed${failed ? `, ${failed} failed` : ''}.`)
     try { sessionStorage.removeItem(REMKEY(runId)) } catch { /* ignore */ }
     onRefresh?.(); fetchFixes()
     if (!SIM) listHitlQueue(runId, 'pending')
@@ -455,16 +464,17 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         history.unshift(activity)
         history.splice(6)
       }
+      const failed = clampFailed(total, s.failed)
       const metrics = {
         fixes: Number(s.fixes_applied || 0), verified: Number(s.verified_documents || 0),
-        stored: Number(s.stored_documents || 0), failed: Number(s.failed || 0),
+        stored: Number(s.stored_documents || 0), failed,
       }
       const before = previous?.metrics || {}
       const deltas = previous?.metrics
         ? Object.fromEntries(Object.entries(metrics).map(([key, value]) =>
             [key, Math.max(0, value - Number(before[key] || 0))]))
         : {}
-      return { total, done, latest: s.latest_file, failed: s.failed || 0, activity, history,
+      return { total, done, latest: s.latest_file, failed, activity, history,
                metrics, deltas, queued: s.queued, running: s.running, workers: s.workers,
                byRule: s.by_rule || [], recentFiles: s.recent_files || [] }
     })

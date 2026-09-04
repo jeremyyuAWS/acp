@@ -643,11 +643,14 @@ def _propose_media_captions(scan_id: str, filename: str, drive_file_id: str,
     import tempfile
     from pathlib import Path as _P
 
-    token = payload.get("drive_token") or core.get_scan_tokens(scan_id).get("drive")
-    if not token:
-        raise FatalJobError("no Drive token for this scan (expired/restarted) — re-trigger")
+    # Through the same source dispatch as the document lane: a local or SharePoint media file
+    # reads the bytes Assess cached, and only a Drive job asks for a Drive token. This branch
+    # used to demand one unconditionally, so the caption draft for a SharePoint (or local)
+    # recording died on a token that source never had.
     try:
-        data = _drive_client(token).files().get_media(fileId=drive_file_id).execute()
+        data, _svc = _remediation_source_bytes(scan_id, filename, payload, drive_file_id)
+    except FatalJobError:
+        raise          # no bytes and no way to get them — the job's own failure, not a swallow
     except Exception:
         swallowed(f"_propose_media_captions: downloading {filename} failed", scan_id)
         return
@@ -686,6 +689,72 @@ def _propose_media_captions(scan_id: str, filename: str, drive_file_id: str,
         swallowed(f"_propose_media_captions: enqueueing the {sc} proposal failed", scan_id)
 
 
+# Every source a remediate_file job can carry. Anything else is a bug in the enqueuer, and the
+# `else` that used to catch it sent the job to Drive (see _remediation_source_bytes).
+REMEDIATION_SOURCES = ("drive", "local", "sharepoint")
+
+
+def _remediation_source_bytes(scan_id: str, filename: str, payload: dict,
+                              drive_file_id: str | None = None):
+    """Original bytes for one remediation job, chosen by the job's OWN source. Returns
+    (data, drive_service) — the service is None for every source but Drive, which needs the
+    same client again for the mirror write.
+
+    LOCAL AND SHAREPOINT READ THE CACHE, DRIVE DOWNLOADS. Assess already fetched every file and
+    stashed the original bytes (ADR 0020, scanner.cache_source_bytes) whatever the source was,
+    so remediation of a SharePoint document needs no Graph call and — the part that broke — no
+    Drive call either.
+
+    Live 2026-09-04, scan 8b83e9e1ca5c: this function's predecessor special-cased `local` and
+    let everything else fall through to the Drive client, so all 147 SharePoint jobs asked for a
+    Drive token they were never given and died with "no Drive token for this scan
+    (expired/restarted)". Nothing about that message named SharePoint, and the batch was
+    resubmitted (twice, on two worker revisions) on the strength of the "re-trigger" it asks for.
+    An unsupported source now fails by NAME instead of borrowing Drive's identity.
+    """
+    source = payload.get("source") or "drive"
+    if source in ("local", "sharepoint"):
+        from scanner import read_cached_source
+        owner = payload.get("owner")
+        checksum = payload.get("checksum")
+        data = read_cached_source(scan_id, filename, owner, checksum=checksum)
+        if data is None and checksum:
+            # The checksum key only holds bytes when the LISTING carried that checksum. A file
+            # whose recorded checksum was computed after the download (or has changed since)
+            # misses it and is still in the cache under this scan's own scan_id/filename key.
+            # Reading only the first key is a cache miss that looks like "never cached".
+            data = read_cached_source(scan_id, filename, owner)
+        if data is not None:
+            return data, None
+        if source == "local":
+            # Local corpus remains the deterministic development/demo fallback when Blob caching
+            # is disabled. Resolve beneath the configured corpus and never accept a path from the
+            # job payload.
+            import scanner as _scanner
+            corpus = _Path(_os.environ.get("ACP_LOCAL_CORPUS") or
+                           (_scanner.ACP / "test-corpus/files")).resolve()
+            candidate = (corpus / filename).resolve()
+            if corpus not in candidate.parents or not candidate.is_file():
+                raise FatalJobError("local source bytes are unavailable — re-run Assess")
+            return candidate.read_bytes(), None
+        # No corpus fallback for SharePoint, and deliberately no Graph download: the remediation
+        # worker holds no SharePoint token, and re-running Assess is what repopulates the cache.
+        raise FatalJobError("no cached SharePoint source bytes for this scan — re-run Assess")
+    if source == "drive":
+        # Prefer the token carried in the durable job payload: the in-memory scan-token
+        # store is per-replica and is wiped by a restart/redeploy, so a durable remediate
+        # job that later runs on another replica (or after a restart) would otherwise fail
+        # with "no Drive token". The payload token survives both; fall back to in-memory.
+        token = payload.get("drive_token") or core.get_scan_tokens(scan_id).get("drive")
+        if not token:
+            raise FatalJobError("no Drive token for this scan (expired/restarted) — re-trigger")
+        svc = _drive_client(token)
+        file_id = drive_file_id or payload.get("drive_file_id")
+        return svc.files().get_media(fileId=file_id).execute(), svc
+    raise FatalJobError(f"unsupported remediation source {source!r} — expected one of "
+                        f"{', '.join(REMEDIATION_SOURCES)}")
+
+
 @handler("remediate_file")
 def _remediate_file(payload: dict, job: dict) -> None:
     """Apply server-side remediation to one file and write the fixed copy to Drive.
@@ -699,6 +768,13 @@ def _remediate_file(payload: dict, job: dict) -> None:
     source = payload.get("source") or "drive"
     if not (scan_id and filename) or (source == "drive" and not drive_file_id):
         raise FatalJobError("remediate_file job missing scan_id/file/source identity")
+    # Fail an unknown source HERE, before the job spends an activity row, a rule lookup and a
+    # format branch on work whose bytes can never be read. The check is cheap and it is the one
+    # that names the source: the old code had no such check at all, and an unrecognised source
+    # simply fell into the Drive branch and reported a missing Drive token.
+    if source not in REMEDIATION_SOURCES:
+        raise FatalJobError(f"unsupported remediation source {source!r} — expected one of "
+                            f"{', '.join(REMEDIATION_SOURCES)}")
 
     import activity as _activity
     try:
@@ -744,35 +820,13 @@ def _remediate_file(payload: dict, job: dict) -> None:
         _propose_media_captions(scan_id, filename, drive_file_id, payload)
         return
 
-    # Prefer the token carried in the durable job payload: the in-memory scan-token
-    # store is per-replica and is wiped by a restart/redeploy, so a durable remediate
-    # job that later runs on another replica (or after a restart) would otherwise fail
-    # with "no Drive token". The payload token survives both; fall back to in-memory.
     _phase(job, f"downloading {filename}")
     _activity.record(scan_id, file=filename, action="opening source document",
                      detail=_rule_detail, phase="downloading", force=True)
-    svc = None
-    if source == "local":
-        from scanner import read_cached_source
-        owner = payload.get("owner")
-        data = read_cached_source(scan_id, filename, owner, checksum=payload.get("checksum"))
-        if data is None:
-            # Local corpus remains the deterministic development/demo fallback when Blob caching
-            # is disabled. Resolve beneath the configured corpus and never accept a path from the
-            # job payload.
-            import scanner as _scanner
-            corpus = _Path(_os.environ.get("ACP_LOCAL_CORPUS") or
-                           (_scanner.ACP / "test-corpus/files")).resolve()
-            candidate = (corpus / filename).resolve()
-            if corpus not in candidate.parents or not candidate.is_file():
-                raise FatalJobError("local source bytes are unavailable — re-run Assess")
-            data = candidate.read_bytes()
-    else:
-        token = payload.get("drive_token") or core.get_scan_tokens(scan_id).get("drive")
-        if not token:
-            raise FatalJobError("no Drive token for this scan (expired/restarted) — re-trigger")
-        svc = _drive_client(token)
-        data = svc.files().get_media(fileId=drive_file_id).execute()
+    # One dispatch on the job's own source, for every source (see _remediation_source_bytes).
+    # `svc` stays None unless this really is a Drive job, so the mirror block below cannot
+    # reach a client a non-Drive job never built.
+    data, svc = _remediation_source_bytes(scan_id, filename, payload, drive_file_id)
 
     # Format-agnostic text proposers (3.1.2 language-of-parts + 1.3.3 sensory rewrite) run on
     # the original bytes — the prose these check is unchanged by remediation, and running
