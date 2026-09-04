@@ -1326,25 +1326,124 @@ _SP_TIER_REASON = {
 }
 
 
+#: How many times a throttled or transiently-failed Graph GET is retried before it is allowed to
+#: fail. Deliberately small: `_sp_get` is the single door EVERY SharePoint call goes through — the
+#: walk, the delta feed, the site list, the drives list, the freshness replay — so a generous
+#: retry budget here multiplies across an estate rather than adding to it. Four attempts covers
+#: the throttle Graph actually applies; a fifth mostly buys a longer wait before the same answer.
+def _sp_max_retries() -> int:
+    try:
+        n = int(os.environ.get("ACP_SP_MAX_RETRIES", "4") or 4)
+    except ValueError:
+        return 4
+    return max(0, min(n, 10))
+
+
+#: Counts every retry this process performed, per HTTP status. Read by the walk to record WHY a
+#: scan was slow on the site report — "this took an hour" and "this took an hour because Graph
+#: throttled us 240 times" are the same wall-clock and completely different problems, and the
+#: second is the one an operator can act on (fewer sites per run, a different window, a support
+#: case with Microsoft).
+_SP_RETRIES: dict = {}
+
+
+def _sp_sleep(seconds: float) -> None:
+    """The wait between Graph retries, as a named module attribute rather than a bare
+    `time.sleep` call.
+
+    A test suite must exercise the retry LOGIC — how many attempts, on which statuses, honouring
+    which header — without spending the real seconds, and patching `time.sleep` globally would
+    silence every other timing-dependent test in the process. One seam, patched in conftest, so
+    the retries still happen in tests and simply take no time.
+    """
+    time.sleep(seconds)
+
+
+def _sp_retry_delay(response, attempt: int) -> float:
+    """How long to wait before retrying a throttled Graph call.
+
+    `Retry-After` FIRST and always, when Graph sends one. It is the service telling us exactly
+    how long it wants — guessing shorter earns another 429 and guessing longer wastes the scan's
+    time, and on a tenant under load Graph's number is the only one that reflects the actual
+    queue. Capped anyway, because a header is caller-controlled input and a scan must not be
+    parked for an hour by one.
+
+    Absent, capped exponential with FULL JITTER, the same shape worker._backoff_seconds uses.
+    Jitter is not decoration here: a 30-site walk that hits a tenant-wide throttle would
+    otherwise retry all of its libraries in lockstep, re-creating the burst that caused the
+    throttle at exactly the moment the service asked for less.
+    """
+    header = None
+    try:
+        header = (getattr(response, "headers", None) or {}).get("Retry-After")
+    except Exception:  # noqa: BLE001 — a malformed header must never fail the retry
+        header = None
+    if header:
+        try:
+            return max(0.0, min(120.0, float(str(header).strip())))
+        except (TypeError, ValueError):
+            pass                       # an HTTP-date form; fall through to the backoff below
+    import random
+    return random.uniform(0, min(60.0, 2.0 * (2 ** max(0, attempt - 1))))
+
+
 def _sp_get(token: str, url: str, timeout: int = 30):
-    """One Graph GET, with the permission failure translated into something actionable.
+    """One Graph GET, with the permission failure translated into something actionable, and with
+    the throttling every other connector in this codebase already handles.
 
     A 403 here is almost always a MISSING SCOPE rather than a missing document, and the raw
     Graph body says "Access denied" without naming what would fix it. Listing sites needs
     Sites.Read.All, which is admin-consent territory in most tenants — so the operator who sees
     this needs to be told which consent to go and get, not that something was denied.
+
+    RETRIES 429 AND 5xx, AND NOTHING ELSE. Graph throttles hard, and until this every SharePoint
+    call in this codebase — walk, delta, site list, drives list, freshness — failed on the first
+    throttle, while the Drive path had `execute(num_retries=5)` from the start. On a 30-site
+    estate that is not an edge case; it is the ordinary Friday afternoon.
+
+    A 401/403 is NEVER retried, and that is the load-bearing exclusion. It is a scope problem,
+    not a busy service: the answer will not change, Phase 1's per-site isolation reads the
+    PermissionError to mark that site blocked with the consent that would fix it, and retrying
+    would turn one fast correct diagnosis into four slow ones — delaying the only thing the
+    operator can act on, and making a permissions failure look like a performance one.
+
+    A 404 is not retried either. A deleted item is deleted.
     """
     import httpx
-    r = httpx.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-                  timeout=timeout, follow_redirects=True)
-    if r.status_code in (401, 403):
-        raise PermissionError(
-            f"Microsoft Graph refused this request ({r.status_code}). SharePoint SITES need the "
-            "Sites.Read.All delegated permission on the Azure app registration, granted with "
-            "tenant admin consent; Files.Read.All alone only reaches the signed-in user's "
-            "OneDrive. URL: " + url.split("?")[0])
-    r.raise_for_status()
-    return r.json()
+    attempts = _sp_max_retries()
+    last_exc = None
+    for attempt in range(1, attempts + 2):
+        try:
+            r = httpx.get(url, headers={"Authorization": f"Bearer {token}",
+                                        "Accept": "application/json"},
+                          timeout=timeout, follow_redirects=True)
+        except Exception as e:  # noqa: BLE001 — a transport failure is the transient case too
+            last_exc = e
+            if attempt > attempts:
+                raise
+            _SP_RETRIES["transport"] = _SP_RETRIES.get("transport", 0) + 1
+            _sp_sleep(_sp_retry_delay(None, attempt))
+            continue
+        if r.status_code in (401, 403):
+            raise PermissionError(
+                f"Microsoft Graph refused this request ({r.status_code}). SharePoint SITES need "
+                "the Sites.Read.All delegated permission on the Azure app registration, granted "
+                "with tenant admin consent; Files.Read.All alone only reaches the signed-in "
+                "user's OneDrive. URL: " + url.split("?")[0])
+        if (r.status_code == 429 or r.status_code >= 500) and attempt <= attempts:
+            _SP_RETRIES[r.status_code] = _SP_RETRIES.get(r.status_code, 0) + 1
+            delay = _sp_retry_delay(r, attempt)
+            print(f"[scan] Microsoft Graph returned {r.status_code}; waiting {delay:.1f}s and "
+                  f"retrying ({attempt}/{attempts}) — {url.split('?')[0]}", flush=True)
+            _sp_sleep(delay)
+            continue
+        r.raise_for_status()
+        return r.json()
+    # Unreachable in practice: the loop either returns, raises, or exhausts its attempts on a
+    # status that then raises through raise_for_status above. Kept so a future edit that changes
+    # the loop cannot fall out of it silently returning None, which every caller would read as
+    # an empty Graph response — a listing of nothing, reported as a small estate.
+    raise last_exc or RuntimeError(f"Microsoft Graph request failed after {attempts} retries: {url}")
 
 
 def _sp_sites(token: str, query: str = "", max_sites: int = 50) -> list[dict]:
@@ -2143,6 +2242,7 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 _tick()
                 continue
             rep["status"] = "scanning"
+            _throttle_before = sum(_SP_RETRIES.values())
             # Resolved HERE, once per site, and reused by _list rather than looked up a second
             # time. The name is not decoration any more: sp_metadata records it as a field on
             # every document, so a report can say "Finance" where it used to say
@@ -2198,6 +2298,13 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 targets.append((d["id"], iter([walked]), s_id, rep["name"], d.get("name")))
             if rep["status"] == "scanning":
                 rep["status"] = "complete"
+            # WHY this site was slow, not just that it was. "This took an hour" and "this took an
+            # hour because Graph throttled us 240 times" are the same wall-clock and completely
+            # different problems, and only the second is one an operator can act on — fewer sites
+            # per run, a different window, a support case with Microsoft.
+            _throttled = sum(_SP_RETRIES.values()) - _throttle_before
+            if _throttled:
+                rep["throttled"] = _throttled
             _tick()
     elif use_search:
         print("[scan] OneDrive listed via the SEARCH INDEX (ACP_SP_ENUMERATE=search) — "

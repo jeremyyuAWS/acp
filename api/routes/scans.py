@@ -1787,6 +1787,64 @@ def _sp_export_cells(raw) -> dict:
     }
 
 
+@router.get("/scans/{sid}/exceptions.csv")
+def scan_exceptions_csv(sid: str, request: Request):
+    """Everything this scan could NOT read, as CSV — the exportable exception report.
+
+    An estate report says what was found. This says what was missed, which is the half an auditor
+    and an IT admin actually act on: a site whose consent lapsed, a library that throttled out, a
+    selection the site cap refused. Those facts have been on the scan's scope since Phase 1 and
+    have only ever been visible inside the app, one run at a time; a customer chasing thirty
+    consents needs a list they can send to somebody.
+
+    EMPTY IS A REAL ANSWER AND IS RETURNED AS ONE — a header row and no data. A report that 404s
+    when nothing failed is indistinguishable from a report that could not be produced, and the
+    difference is exactly what the reader is asking about.
+
+    Rows are per SITE and per LIBRARY, because those fail independently: a site can be readable
+    while one of its libraries throttles out, and merging them would hide the working nine tenths
+    of a site behind its broken tenth.
+    """
+    import csv
+    import io
+    if core.store.get_scan_head(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    scan = core.store.get_scan(sid, owner=_owner(request)) or {}
+    scope = (scan.get("run") or {}).get("scope")
+    if isinstance(scope, str):
+        try:
+            scope = _json.loads(scope)
+        except Exception:  # noqa: BLE001
+            scope = {}
+    scope = scope if isinstance(scope, dict) else {}
+
+    cols = ["level", "site_id", "site_name", "library_id", "library_name", "status",
+            "documents_listed", "reason"]
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(cols)
+    for site in (scope.get("sites") or []):
+        if not isinstance(site, dict):
+            continue
+        # A site that completed is not an exception, however little it held: an empty library is
+        # an answer about the tenant, and listing it here would bury the sites that actually
+        # failed under the ones that are simply small.
+        if site.get("status") in ("blocked", "skipped", "partial"):
+            w.writerow(["site", site.get("id") or "", site.get("name") or "", "", "",
+                        site.get("status") or "", site.get("listed") if site.get("listed")
+                        is not None else "", site.get("error") or ""])
+        for lib in (site.get("libraries") or []):
+            if not isinstance(lib, dict) or not lib.get("full_reason"):
+                continue
+            # A library walked in full is not itself an exception — but the REASON it had to be
+            # is the operational fact: an expired cursor, a forced reconciliation, a first sync.
+            w.writerow(["library", site.get("id") or "", site.get("name") or "",
+                        lib.get("id") or "", lib.get("name") or "", lib.get("mode") or "",
+                        "", lib.get("full_reason")])
+    return Response(buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="exceptions-{sid}.csv"'})
+
+
 @router.get("/scans/{sid}/inventory.csv")
 def scan_inventory_csv(sid: str, request: Request):
     """The whole per-file estate inventory as CSV (owner-scoped) — every discovered file, source
