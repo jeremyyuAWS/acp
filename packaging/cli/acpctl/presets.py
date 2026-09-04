@@ -60,7 +60,7 @@ PLATFORM_ADAPTER: dict[str, str] = {
 # PRD S7's closing requirement, made machine-readable. "supported" means a reference deployment in
 # THIS repository runs the contract suite against it. Nothing but Compose can honestly claim that
 # today: deploy/compose/ exists and works, and every Kubernetes path — including azure — is the
-# Helm chart that phase 2 builds. deploy/public/ deploys Azure Container Apps, which is a
+# Helm chart at packaging/chart/acp. deploy/public/ deploys Azure Container Apps, which is a
 # different topology from the AKS adapter named above, so it does not make `azure` supported here.
 #
 # This table is deliberately pessimistic. A "supported" that means "we wrote a module" is the
