@@ -2619,3 +2619,127 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .acc-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; border-radius: 4px; }
 .acc-panel[hidden] { display: none; }
 .acc-panel:not([hidden]) { margin-top: 10px; }
+
+/* ── App-wide high-contrast colour mode ───────────────────────────────────────────────
+   The header toggle is deliberately a PALETTE switch, not a conformance certificate: WCAG also
+   requires keyboard, name/role/value, reflow, reading order and manual AT checks.  In this mode,
+   every mounted tab gets the same small, audited colour system.  Existing tab-specific inline
+   colours are neutralised here so a newly mounted panel cannot silently retain pale text.
+
+   Audited pairs (relative luminance, normal text):
+     #18131a on #ffffff  18.24:1      #ffffff on #321d2b  15.21:1
+     #4d4551 on #ffffff   8.90:1      #003f73 on #ffffff  10.99:1
+   #59515d borders/focus-adjacent boundaries exceed the 3:1 non-text requirement on white. */
+html[data-wcag="on"] {
+  --plum: #321d2b;
+  --ink: #18131a;
+  --muted: #4d4551;
+  --line: #59515d;
+  --bg: #ffffff;
+  --card: #ffffff;
+  --surface: #ffffff;
+  --surface-1: #ffffff;
+  --hc-text: #18131a;
+  --hc-muted: #4d4551;
+  --hc-action: #321d2b;
+  --hc-link: #003f73;
+  --hc-border: #59515d;
+  --hc-focus: #005fcc;
+  color-scheme: light;
+}
+
+/* Text and decorative surfaces: remove per-screen pastel combinations, including inline styles.
+   SVGs are handled separately so charts retain their geometry and categorical fills. */
+html[data-wcag="on"] body,
+html[data-wcag="on"] body *:not(svg):not(svg *) {
+  color: var(--hc-text) !important;
+  text-shadow: none !important;
+}
+html[data-wcag="on"] body {
+  background: #ffffff !important;
+}
+html[data-wcag="on"] :where(.app, header, main, section, article, aside, nav, .panel, .metric,
+  .card, .scope-card, .runinfo, .setpanel, .drawer, .modal, [role="dialog"], [role="region"]) {
+  background-color: #ffffff !important;
+  background-image: none !important;
+}
+html[data-wcag="on"] :where(.muted, .sub, .scopebar, .runinfo-abs, .runinfo-build,
+  th, figcaption, small, .panel h2) {
+  color: var(--hc-muted) !important;
+}
+
+/* Links are identifiable without relying on colour. */
+html[data-wcag="on"] :where(a, .app a, .linkbtn) {
+  color: var(--hc-link) !important;
+  text-decoration: underline !important;
+  text-decoration-thickness: .1em !important;
+  text-underline-offset: .15em !important;
+}
+
+/* A consistent control surface across Overview, Sources, Discover, Assess, Remediate, Release,
+   Monitor, Scan Analytics, drawers and settings. */
+html[data-wcag="on"] :where(button, input, select, textarea, [role="button"], [role="tab"],
+  [role="switch"], [role="checkbox"]) {
+  border-color: var(--hc-border) !important;
+  box-shadow: none !important;
+}
+html[data-wcag="on"] :where(input, select, textarea) {
+  background: #ffffff !important;
+  color: var(--hc-text) !important;
+}
+html[data-wcag="on"] :where(button, [role="button"]) {
+  background: var(--hc-action) !important;
+  color: #ffffff !important;
+}
+html[data-wcag="on"] :where(button.ghost, button.linkbtn, .ghost, .fchip, .tab,
+  [role="tab"]):not(.on):not([aria-selected="true"]):not([aria-pressed="true"]) {
+  background: #ffffff !important;
+  color: var(--hc-text) !important;
+}
+html[data-wcag="on"] :where(.tab.on, .fchip.on, [role="tab"][aria-selected="true"],
+  button[aria-pressed="true"], [role="button"][aria-pressed="true"]) {
+  background: var(--hc-action) !important;
+  color: #ffffff !important;
+  border-color: var(--hc-action) !important;
+}
+html[data-wcag="on"] :where(button:disabled, [aria-disabled="true"]) {
+  background: #e6e3e7 !important;
+  color: #3d3740 !important;
+  border-color: #68606c !important;
+  opacity: 1 !important;
+  text-decoration: none !important;
+}
+
+/* Badges and notices use words/icons for meaning; high-contrast mode gives them one readable
+   surface instead of attempting to preserve dozens of low-contrast semantic pastels. */
+html[data-wcag="on"] :where(.badge, .chip, [class*="badge"], [class*="pill"], [class*="chip"],
+  [role="alert"], [role="status"]) {
+  color: var(--hc-text) !important;
+  border-color: var(--hc-border) !important;
+}
+html[data-wcag="on"] :where(.badge, .chip, [class*="badge"], [class*="pill"], [class*="chip"]) {
+  background: #ffffff !important;
+}
+
+/* Focus is visible against both white and the dark selected-control surface. */
+html[data-wcag="on"] :focus-visible {
+  outline: 3px solid var(--hc-focus) !important;
+  outline-offset: 3px !important;
+}
+html[data-wcag="on"] :where(button, [role="button"], [role="tab"]):focus-visible {
+  box-shadow: 0 0 0 2px #ffffff !important;
+}
+
+/* Keep chart labels readable and make lines/non-text boundaries survive the white surface. */
+html[data-wcag="on"] svg text { fill: var(--hc-text) !important; }
+html[data-wcag="on"] svg :where(line, path[fill="none"], [stroke]) {
+  stroke: var(--hc-border) !important;
+}
+
+/* The palette control must remain visually and programmatically obvious in its selected state. */
+html[data-wcag="on"] .wcag-toggle,
+html[data-wcag="on"] .wcag-toggle--on {
+  background: #ffffff !important;
+  color: #1f5128 !important;
+  border: 2px solid #1f5128 !important;
+}

@@ -1571,10 +1571,13 @@ export default function App() {
             className={`wcag-toggle${wcagMode ? ' wcag-toggle--on' : ''}`}
             onClick={() => setWcagMode(v => !v)}
             title={wcagMode
-              ? 'WCAG-compliant palette is on — all UI colours meet 4.5:1 contrast. Click to switch back to the standard palette.'
-              : 'Standard palette — some decorative colours fall below the 4.5:1 AA threshold. Click to switch to the WCAG-compliant palette.'}
+              ? 'High-contrast colours are on across every tab. Click to restore ACP’s standard colour palette.'
+              : 'Standard colours are on. Click to use ACP’s high-contrast colour palette across every tab.'}
+            aria-label={wcagMode
+              ? 'Use standard colour palette across every tab'
+              : 'Use high-contrast colour palette across every tab'}
             aria-pressed={wcagMode}>
-            {wcagMode ? '◉ WCAG' : '◎ WCAG'}
+            {wcagMode ? '◉ Contrast' : '◎ Contrast'}
           </button>
           <button
             className={`ai-toggle${aiEnabled ? ' ai-toggle--on' : ''}`}
