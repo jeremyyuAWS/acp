@@ -2175,7 +2175,9 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
              exclude_ids: set | None = None,
              sites: list[str] | None = None,
              progress_cb=None,
-             delta_plan: dict | None = None) -> list[dict]:
+             delta_plan: dict | None = None,
+             site_done_cb=None,
+             skip_sites: set | dict | None = None) -> list[dict]:
     """List scannable files from OneDrive, or from every document library on a SharePoint site.
 
     The RETURN value is the scannable analysis set (the six supported extensions) — unchanged, so
@@ -2192,6 +2194,21 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
     one-site spelling and is folded into `sites` here, so a caller that has never heard of the
     plural form is unaffected. The two are not different modes — there is one loop, and a single
     site is a list of one.
+
+    `site_done_cb(site_id, files, inventory_rows)` fires as each SITE's libraries finish being
+    consumed, with just that site's share of the listing. It exists so a caller can persist a
+    site's estate the moment it is known instead of at the end of a thirty-site walk — a scan
+    that dies at site 28 otherwise loses all twenty-eight. The scanner does not know what the
+    caller does with it and deliberately does not: this module owns no store.
+
+    `skip_sites` are sites a caller has ALREADY persisted and does not want walked again. They
+    are dropped from the walk and reported `complete` on the scope, so a resumed run's per-site
+    breakdown still names all thirty rather than the two it happened to finish. A SET names them;
+    a DICT of {site_id: {"listed", "estate", "name"}} additionally supplies what the caller
+    already knows about each. The dict form is what a resumable scan should pass: the exit gate
+    is auditable per-site totals, and a site reported `complete` beside a zero it did not walk is
+    a wrong number rather than a missing one — the reader has no way to tell it apart from a site
+    that really did hold nothing.
 
     `delta_plan` is Phase 3's per-LIBRARY incremental plan (core.sp_multi_sync_plan):
     `{"delta": {drive_id: {...}}, "full": {drive_id: "why"}}`. A library in `delta` is
@@ -2232,6 +2249,14 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
         if _s and _s not in site_ids:
             site_ids.append(_s)
     site_ids, _over_cap = _sp_cap_sites(site_ids)
+    # Sites a previous attempt already listed and persisted. Removed from the WALK, kept on the
+    # REPORT: a resumed run whose breakdown named only the sites it happened to finish would read
+    # as a two-site scan of a thirty-site estate, which is the under-report this connector's
+    # whole design is against.
+    _skipped = (dict(skip_sites) if isinstance(skip_sites, dict)
+                else {s_id: {} for s_id in (skip_sites or ())})
+    _resumed = [s_id for s_id in site_ids if s_id in _skipped]
+    site_ids = [s_id for s_id in site_ids if s_id not in _skipped]
     files: list[dict] = []
     # Keyed by (drive, item) — an item id is unique only within its drive, so a bare id would
     # collapse two genuinely different documents from two libraries into one.
@@ -2299,6 +2324,16 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
     site_report: dict[str, dict] = {s_id: {"id": s_id, "libraries": [], "listed": 0, "estate": 0,
                                            "status": "queued", "error": None}
                                     for s_id in site_ids}
+    # Sites a previous ATTEMPT of this scan already listed. On the report, complete, with the
+    # counts the caller supplied — see `skip_sites` above for why the counts and not just the ids.
+    for s_id in _resumed:
+        _known = _skipped.get(s_id) or {}
+        site_report[s_id] = {"id": s_id,
+                             "libraries": list(_known.get("libraries") or []),
+                             "listed": int(_known.get("listed") or 0),
+                             "estate": int(_known.get("estate") or 0),
+                             "name": _known.get("name"),
+                             "status": "complete", "error": None, "resumed": True}
     # Sites the CAP refused are in the report too, as skipped-with-a-reason. The exit gate is "no
     # site silently omitted"; a site dropped before the loop and absent from the breakdown is
     # exactly the omission the gate is about, and the count on its own does not name it.
@@ -2341,7 +2376,12 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                                           skip_names=skip_folders)
             hit_cap = hit_cap or cut
             targets.append((drive_id, iter([walked]), None, None, None))
-    elif site_ids:
+    elif site_ids or _resumed:
+        # `or _resumed` because a resume can legitimately have NOTHING left to walk: the previous
+        # attempt finished the final site and died before it could record that the listing was
+        # over. Without it `site_ids` is empty, the chain falls through to the OneDrive branch at
+        # the bottom, and the signed-in user's personal drive is returned as a thirty-site
+        # SharePoint estate — silent, plausible, and wrong about every document in it.
         if _over_cap:
             # Sites the cap refused. Named in the log rather than counted, because "which site did
             # you not read?" is the operator's next question and an id is what answers it.
@@ -2519,7 +2559,40 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
         hit_cap = hit_cap or cut
         targets = [(None, iter([walked]), None, None, None)]
 
+    # ── PER-SITE EMISSION ────────────────────────────────────────────────────────────────────
+    #
+    # Targets are appended in the operator's own site order and consumed in it, so one site's
+    # targets are CONTIGUOUS here. A site is therefore finished the moment the next site's first
+    # target comes up, and its share of the listing is the slice of `files` / `inventory_out`
+    # added since that boundary — bookkeeping over two indices, not a second data structure that
+    # could disagree with the one this function returns.
+    #
+    # ONLY A SITE THE REPORT CALLS `complete` IS EMITTED. `site_done_cb` is what a caller
+    # checkpoints against, and a caller that persists a site and then skips it on resume must
+    # never be handed a site the cap cut in half — the resumed run would report the truncated
+    # half as the whole library and never look again. Partial is not a small kind of complete.
+    _emitted: set = set()
+
+    def _emit_site(s_id, files_from: int, inv_from: int):
+        if not site_done_cb or not s_id or s_id in _emitted:
+            return
+        if (site_report.get(s_id) or {}).get("status") != "complete":
+            return
+        _emitted.add(s_id)
+        try:
+            site_done_cb(s_id, files[files_from:],
+                         inventory_out[inv_from:] if inventory_out is not None else [])
+        except Exception as e:  # noqa: BLE001 — a checkpoint is an optimisation, never the scan
+            print(f"[scan] SharePoint site {s_id} checkpoint failed: {e} — the scan continues "
+                  f"and this site will be re-listed if it is retried", flush=True)
+
+    cur_site, cur_files, cur_inv = None, 0, 0
     for i, (drive_id, pages, target_site, target_site_name, library_name) in enumerate(targets):
+        if target_site != cur_site:
+            _emit_site(cur_site, cur_files, cur_inv)
+            cur_site = target_site
+            cur_files = len(files)
+            cur_inv = len(inventory_out) if inventory_out is not None else 0
         for batch in pages:
             if len(files) >= max_files:
                 break
@@ -2566,6 +2639,13 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                         rep = site_report[later]
                         rep["status"] = "partial" if j == i else "skipped"
             break
+
+    _emit_site(cur_site, cur_files, cur_inv)
+    # A site with no libraries visible to the token completes without ever producing a target, so
+    # the boundary above never reaches it. It is still a site the caller has finished with, and a
+    # resume that re-resolved it would pay the Graph calls again to learn the same nothing.
+    for s_id in site_ids:
+        _emit_site(s_id, len(files), len(inventory_out) if inventory_out is not None else 0)
 
     if relisted:
         where = (f"site {site_ids[0]}" if len(site_ids) == 1
@@ -3158,7 +3238,9 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
           exclude_folders: list[str] | None = None,
           progress_cb=None, drive_delta: dict | None = None,
           sp_delta: dict | None = None,
-          sp_delta_plan: dict | None = None) -> list[dict]:
+          sp_delta_plan: dict | None = None,
+          sp_site_done=None,
+          sp_skip_sites: set | None = None) -> list[dict]:
     """List the source. `scope_out`, when given, is filled in with WHAT WAS COVERED.
 
     `inventory_out`, when given, is filled with per-file inventory rows for the NON-scannable
@@ -3309,6 +3391,15 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
                 # one, so a test stub pinning the old signature is unaffected — the same
                 # discipline `locations` and `sites` follow above.
                 extra["progress_cb"] = progress_cb
+            if sp_site_done is not None:
+                # Phase 4's per-site checkpoint seam. Same discipline again: passed only when a
+                # caller asked for it, so nothing that has not opted in can tell it exists.
+                extra["site_done_cb"] = sp_site_done
+            if sp_skip_sites:
+                # Passed through as given — a set names the sites, a dict also carries what the
+                # caller already knows each one held. _sp_list normalises; this layer must not
+                # flatten a dict to a set and throw the counts away.
+                extra["skip_sites"] = sp_skip_sites
             result = _sp_list(sp_token, max_files or 200, site=site,
                               exclude_remediated=exclude_remediated, inventory_out=inventory_out,
                               scope_out=scope_out, **extra)
