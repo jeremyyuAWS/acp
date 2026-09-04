@@ -46,8 +46,8 @@ rules), and `docs/pilot-scope.md`.
 
 | SOW requirement | ACP today | Gap / effort |
 |---|---|---|
-| **Up to 30 SharePoint locations** | ✅ **Built 2026-09-04.** One run spans up to 30 sites (`ACP_SP_MAX_SITES`), every library on each, one shared budget, per-site totals and failure isolation. A "location" is read as a **site**; a site's libraries are still scanned together, as they always were. | **Closed as an engineering item.** What remains is the **scale proof**: 30 sites has an exit-gate unit test (`tests/test_sharepoint_multi_site.py`) but has never been run against a real tenant. See backlog **R11**. |
-| Full scan, no doc-count limit at scan | Batch path for large estates | **Not load-tested** at 30-location breadth (backlog **R11**) — exactly what `scripts/robustness_corpus.py` probes. |
+| **Up to 30 SharePoint locations** | ✅ **Built 2026-09-04.** One run spans up to 30 sites (`ACP_SP_MAX_SITES`), every library on each, one shared budget, per-site totals and failure isolation. A "location" is read as a **site**; a site's libraries are still scanned together, as they always were. | **Closed in code and synthetic scale tests.** `tests/test_sp_scale.py` proves 30 sites × 4 libraries × 3 nested folders while bounding Graph calls. A real-tenant run remains the deployment proof. |
+| Full scan, no doc-count limit at scan | Batch path for large estates; synthetic 30-site traversal is bounded by pages/folders rather than documents | **Code and synthetic proof complete.** Production proof against the customer's library sizes remains tenant-dependent. |
 | Auto-flag non-applicable types (tiff, PhD, fonts…) | Filtered-by-type bucket | ✅ supported |
 | Archival rule: **date-based** | `age_days` match field | ✅ supported |
 | Archival rule: **folder-based** | Folder path **is read** (`parentReference`); folder-skip exists — but the disposition engine has **no path/folder match field** | **Small build** — the data is already fetched; expose a `path`/`folder` rule field. |
@@ -103,8 +103,8 @@ the read-only posture.
 
 ## Related backlog
 
-- **R11** — multi-user / concurrency load test (the 30-location full-scan scenario). **Now the
-  binding item for the 30-location requirement**: the orchestration exists, the proof does not.
+- **R11** — multi-user queue isolation and concurrent fan-out are closed; `tests/test_sp_scale.py`
+  adds the SharePoint-specific 30-site traversal proof. Only real-tenant breadth remains unverified.
 - **R2 / R3 / R12** — RunPod vision not engaged (image alt-text degraded to CPU/manual).
 - The **folder/native-metadata rule fields** and **multi-site scan** are new items this doc introduces;
   add them to `docs/BACKLOG.md` if the SOW is signed.

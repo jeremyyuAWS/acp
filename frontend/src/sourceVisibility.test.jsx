@@ -20,6 +20,10 @@ describe('SourceVisibility', () => {
     expect(html).toContain('Clinical')
     expect(html).toContain('Research')
     expect(html).toContain('3 document libraries')
+    expect(html).toContain('<details')
+    expect(html).toContain('Documents')
+    expect(html).toContain('Studies')
+    expect(html).toContain('Published')
   })
 
   it('distinguishes OneDrive from SharePoint and preserves Google Drive visibility', () => {
