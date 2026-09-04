@@ -1550,7 +1550,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       {/* The authenticated remediation SSE already supplies these values. Keep its progress in
           the main workflow, rather than hiding the only live signal inside Run details. */}
       {remProg && (
-        <RemediationRunProgress progress={remProg} updateMode={remUpdates} runId={runId} />
+        <RemediationRunProgress progress={remProg} updateMode={remUpdates} runId={runId}
+                                source={run?.source} scope={run?.scope} />
       )}
       {/* THE WORK. Second on the page, not eleventh — the review workspace is the only part of this
           screen that needs a person, so nothing but the run header and a blocking warning precedes
