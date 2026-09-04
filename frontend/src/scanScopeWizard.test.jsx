@@ -71,6 +71,13 @@ const click = async (el) => { await act(async () => { el.click() }) }
 
 // ── the four choices, the four cards, the summary ──────────────────────────────────────────────
 describe('the wizard chrome', () => {
+  it('names and announces the saved-scope loading state', () => {
+    const code = readFileSync(join(HERE, 'ScanScopeWizard.jsx'), 'utf8')
+    expect(code).toMatch(/role="status" aria-live="polite"/)
+    expect(code).toContain('Loading saved discovery scope…')
+    expect(code).not.toMatch(/>Loading…<\/div>/)
+  })
+
   it('uses the new wording, not the old "pairs" phrasing', async () => {
     const c = await render()
     // THE OLD LINE IS GONE, and it deserved to be. It read "the same scope will be used for
