@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { buildTrafficGraph, capacityValue, infrastructureDetail, queueConcentration, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
+import { buildTrafficGraph, capacityValue, infrastructureDetail, queueConcentration, sizeScopeNote, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
 
 const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'AdminLiveTraffic.jsx'), 'utf8')
 
@@ -138,12 +138,12 @@ describe('Idle map: scope and announcement', () => {
     const labels = detail.facts.map(([label]) => label)
     expect(labels).toContain('Replica size')
     expect(detail.facts.find(([l]) => l === 'Size measured from')[1])
-      .toMatch(/One Azure Container App \(acp-worker\) covering the worker tier — not measured per service/)
+      .toMatch(/Measured from acp-worker, which is not one of the 3 reporting worker services/)
   })
 
   it('marks the on-node size as the tier figure it is', () => {
     const stage = buildTrafficGraph(snapshot, new Map(), capacity).nodes.find((n) => n.id === 'stage:assess')
-    expect(stage.data.metric).toMatch(/^Tier: /)
+    expect(stage.data.metric).toMatch(/^acp-worker: /)
   })
 
   it('names every node for a screen reader', () => {
@@ -171,5 +171,43 @@ describe('Worker app misconfiguration is legible', () => {
   it('names the variable an operator has to set, and says why it has no default', () => {
     expect(source).toMatch(/Set AZURE_SUBSCRIPTION_ID and WORKER_APP_NAME/)
     expect(source).toMatch(/WORKER_APP_NAME has no default/)
+  })
+})
+
+describe('The size figure says whose size it is', () => {
+  const roles = { discovery: { alive: true, pool_size: 3, age_s: 1 },
+    assess: { alive: true, pool_size: 2, age_s: 1 }, remediate: { alive: true, pool_size: 2, age_s: 1 } }
+  const services = workerServiceRows({ worker_roles: roles, by_stage: {} })
+  const cap = (name) => ({ configured: true, worker_app_name: name, cpu_cores_per_replica: 2,
+    memory_per_replica: '4Gi', ephemeral_storage_per_replica: '8Gi' })
+
+  it('names the one service it measured, and how many it did not', () => {
+    // deploy/public/rightsize-production.sh: acp-discovery is 1 CPU / 2Gi while acp-assess and
+    // acp-remediate are 2 CPU / 4Gi, so a reading from one app is wrong for a differently sized
+    // sibling. "Covering the worker tier" — what this said before — was false.
+    expect(sizeScopeNote(cap('acp-assess'), services))
+      .toBe('Measured from acp-assess (Assess) only — 1 of 3 reporting worker services; the others may be sized differently')
+  })
+
+  it('says so when the named app is not one of the reporting services', () => {
+    expect(sizeScopeNote(cap('acp-worker'), services))
+      .toMatch(/not one of the 3 reporting worker services — it may not describe any of them/)
+  })
+
+  it('does not claim a comparison when only one service reports', () => {
+    const one = workerServiceRows({ worker_roles: { assess: roles.assess }, by_stage: {} })
+    expect(sizeScopeNote(cap('acp-assess'), one)).toBe('Measured from acp-assess (Assess), the only reporting worker service')
+  })
+
+  it('degrades honestly with nothing to go on', () => {
+    expect(sizeScopeNote(null, services)).toBe('Not reported')
+    expect(sizeScopeNote({ configured: true }, services))
+      .toBe('Azure did not report which container app was measured')
+    expect(sizeScopeNote(cap('acp-assess'), []))
+      .toMatch(/no worker services are reporting to compare it against/)
+  })
+
+  it('never claims tier-wide coverage from a single app reading', () => {
+    expect(source).not.toMatch(/covering the worker tier/)
   })
 })
