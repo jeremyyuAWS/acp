@@ -761,7 +761,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
               <figcaption className="muted">The flagged image, shown on its own (isolated from the sheet)</figcaption>
             </figure>
           ) : (
-            <Thumbnail scanId={card.scanId} file={card.file} page={card.page || 1} locator={heroLocator} maxHeight={360} />
+            <Thumbnail scanId={card.scanId} file={card.file} page={card.page || 1} locator={heroLocator} maxHeight={360}
+                       kindLabel={imgKind?.label?.toLowerCase() || null} />
           )}
         </div>
       )}
