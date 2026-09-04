@@ -5563,6 +5563,13 @@ class Store:
                  1 if edited else 0, review_ms, ai_value or None, final_value or None,
                  reviewer, datetime.now(timezone.utc).isoformat(), reject_reason or None))
 
+    # ADR 0019 §8.5 — thresholds for surfacing a rule as ready to migrate
+    # Human-Assisted → AI-Assisted. All three conditions must hold simultaneously.
+    # These are conservative defaults; no fabricated score, only reviewer-decision counts.
+    _MATURITY_MIN_APPROVALS = 10
+    _MATURITY_MAX_EDIT_RATE = 0.20     # ≤20% of approvals were edited
+    _MATURITY_MIN_APPROVAL_RATE = 0.90  # ≥90% of decided reviews were approved
+
     def hitl_analytics(self, scan_id: str | None = None) -> dict:
         """Aggregate HITL review telemetry — headline metric is reviewer time eliminated,
         not % automated. Scoped to one scan when scan_id is given (owner-checked at the
@@ -5570,9 +5577,17 @@ class Store:
 
         Reviewer Feedback Intelligence: also rolls up per-RULE and per-FORMAT quality (which
         criteria/doc types the AI is weakest on) and the reject-reason histogram — every figure
-        a count of real reviewer decisions, never a fabricated score (ADR 0016)."""
+        a count of real reviewer decisions, never a fabricated score (ADR 0016).
+
+        Maturity signal (ADR 0019 §8.5): rules that pass the three-threshold gate
+        (_MATURITY_MIN_APPROVALS, _MATURITY_MAX_EDIT_RATE, _MATURITY_MIN_APPROVAL_RATE) are
+        flagged ready_to_promote so the UI can surface them as candidates for AI-Assisted mode.
+        avg_edit_distance (normalised Levenshtein ratio via difflib) is included for information
+        but is NOT part of the promotion gate — it requires ai_value/final_value to be populated,
+        which is not guaranteed for all rows."""
+        import difflib as _difflib
         with self._db.cursor() as cur:
-            cols = "action,edited,review_ms,rule_id,file,reject_reason"
+            cols = "action,edited,review_ms,rule_id,file,reject_reason,ai_value,final_value"
             if scan_id:
                 self._db.execute(cur,
                     f"SELECT {cols} FROM hitl_events WHERE scan_id=%s", (scan_id,))
@@ -5587,14 +5602,20 @@ class Store:
         edited_n = sum(1 for r in rows if r.get("edited"))
         ms = [r["review_ms"] for r in rows if r.get("review_ms") is not None]
 
-        def _bucket(rows_iter, keyfn):
+        def _edit_dist(ai_val: str | None, final_val: str | None) -> float | None:
+            if not ai_val or not final_val:
+                return None
+            ratio = _difflib.SequenceMatcher(None, ai_val, final_val).ratio()
+            return round(1.0 - ratio, 4)
+
+        def _bucket(rows_iter, keyfn, *, include_maturity: bool = False):
             out: dict[str, dict] = {}
             for r in rows_iter:
                 k = keyfn(r)
                 if not k:
                     continue
                 b = out.setdefault(k, {"reviewed": 0, "approved": 0, "rejected": 0, "edited": 0,
-                                       "reject_reasons": {}, "_ms": []})
+                                       "reject_reasons": {}, "_ms": [], "_dists": []})
                 a = r.get("action")
                 if a in ("approve", "edit", "reject"):
                     b["reviewed"] += 1
@@ -5609,13 +5630,37 @@ class Store:
                     b["edited"] += 1
                 if r.get("review_ms") is not None:
                     b["_ms"].append(r["review_ms"])
+                if include_maturity and r.get("edited"):
+                    d = _edit_dist(r.get("ai_value"), r.get("final_value"))
+                    if d is not None:
+                        b["_dists"].append(d)
             result = []
             for k, b in out.items():
-                result.append({"key": k, "reviewed": b["reviewed"], "approved": b["approved"],
-                               "rejected": b["rejected"], "edited": b["edited"],
-                               "approval_rate": round(b["approved"] / b["reviewed"], 3) if b["reviewed"] else None,
-                               "avg_review_ms": round(sum(b["_ms"]) / len(b["_ms"])) if b["_ms"] else None,
-                               "reject_reasons": b["reject_reasons"]})
+                rev = b["reviewed"]
+                appr = b["approved"]
+                edit_n = b["edited"]
+                approval_rate = round(appr / rev, 3) if rev else None
+                edit_rate = round(edit_n / appr, 3) if appr else None
+                avg_dist = round(sum(b["_dists"]) / len(b["_dists"]), 4) if b["_dists"] else None
+                entry: dict = {
+                    "key": k,
+                    "reviewed": rev,
+                    "approved": appr,
+                    "rejected": b["rejected"],
+                    "edited": edit_n,
+                    "approval_rate": approval_rate,
+                    "avg_review_ms": round(sum(b["_ms"]) / len(b["_ms"])) if b["_ms"] else None,
+                    "reject_reasons": b["reject_reasons"],
+                }
+                if include_maturity:
+                    entry["edit_rate"] = edit_rate
+                    entry["avg_edit_distance"] = avg_dist
+                    entry["ready_to_promote"] = (
+                        appr >= self._MATURITY_MIN_APPROVALS
+                        and (edit_rate is not None and edit_rate <= self._MATURITY_MAX_EDIT_RATE)
+                        and (approval_rate is not None and approval_rate >= self._MATURITY_MIN_APPROVAL_RATE)
+                    )
+                result.append(entry)
             # weakest first: most rejections, then lowest approval rate — the "where should
             # engineering invest next" ordering.
             result.sort(key=lambda x: (-x["rejected"], x["approval_rate"] if x["approval_rate"] is not None else 1.0))
@@ -5626,6 +5671,10 @@ class Store:
             rr = r.get("reject_reason")
             if r.get("action") == "reject" and rr:
                 reasons[rr] = reasons.get(rr, 0) + 1
+        by_rule = _bucket(rows,
+                          lambda r: (r.get("rule_id") or "").replace("SC_", "").replace("_", ".") or None,
+                          include_maturity=True)
+        promotable_rules = [b["key"] for b in by_rule if b.get("ready_to_promote")]
         return {
             "total": len(rows),
             "by_action": by,
@@ -5634,7 +5683,8 @@ class Store:
             "edit_rate": round(edited_n / approvals, 3) if approvals else None,   # calibration signal
             "avg_review_ms": round(sum(ms) / len(ms)) if ms else None,
             "reject_reasons": reasons,
-            "by_rule": _bucket(rows, lambda r: (r.get("rule_id") or "").replace("SC_", "").replace("_", ".") or None),
+            "promotable_rules": promotable_rules,
+            "by_rule": by_rule,
             "by_format": _bucket(rows, lambda r: (r.get("file") or "").rsplit(".", 1)[-1].lower() if "." in (r.get("file") or "") else None),
         }
 

@@ -92,9 +92,12 @@ don't just generate text.
   guidance — not a draft"). Never writes to the proposal value. Cloud status fetched eagerly for
   these cards so the button appears without a prior draft failure. Requires a customer cloud
   provider (BYOAI) — governed, opt-in, provenance-logged.
-- [ ] **Reviewer-behaviour → automation-mode migration.** Feed HITL edit-rate / acceptance
-  (`hitl_events`) back so a criterion with consistently low edit-distance surfaces as ready to move
-  Human-Assisted → AI-Assisted (ties to the automation maturity funnel + ADR 0019 §8.5).
+- [x] **Reviewer-behaviour → automation-mode migration.** *(shipped #1302)* `hitl_analytics()` now
+  SELECTs `ai_value`/`final_value` and computes `avg_edit_distance` (normalised difflib SequenceMatcher
+  ratio) per rule. Rules that meet all three thresholds (≥10 approvals, ≤20% edit rate, ≥90% approval
+  rate) are flagged `ready_to_promote: true` in `by_rule` and listed in top-level `promotable_rules`.
+  `Remediate.jsx` renders a "↑ {rule} ready for AI-Assisted" chip with a tooltip pointing to
+  Settings → Automation. ADR 0019 §8.5 — no fabricated score, only real reviewer-decision counts.
 
 ## Dependency — unblocks P1/P2 premium-model items (ADR 0019 Phase 2)
 
