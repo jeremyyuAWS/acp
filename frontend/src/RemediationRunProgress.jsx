@@ -44,7 +44,10 @@ export default function RemediationRunProgress({ progress, updateMode = 'idle', 
   if (!progress) return null
   const total = Math.max(0, Number(progress.total || 0))
   const done = Math.min(total, Math.max(0, Number(progress.done || 0)))
-  const failed = Math.max(0, Number(progress.failed || 0))
+  // Clamped to the batch total: a run of N documents cannot fail more than N times, and the
+  // subtraction in the summary line below turns any excess into a negative "documents
+  // remediated" figure (observed live on 2026-09-04 as -147, from a doubly-counted retry).
+  const failed = Math.min(total, Math.max(0, Number(progress.failed || 0)))
   const finished = total > 0 && done >= total
   const activity = progress.activity || null
   const metrics = progress.metrics || {}
@@ -82,7 +85,8 @@ export default function RemediationRunProgress({ progress, updateMode = 'idle', 
           <Metric label="Fixes applied" value={metrics.fixes} delta={progress.deltas?.fixes} />
           <Metric label="Verified" value={metrics.verified} delta={progress.deltas?.verified} />
           <Metric label="Corrected copies" value={metrics.stored} delta={progress.deltas?.stored} />
-          <Metric label="Failed" value={metrics.failed ?? failed} delta={progress.deltas?.failed} />
+          <Metric label="Failed" value={Math.min(total, Math.max(0, Number(metrics.failed ?? failed)))}
+                  delta={progress.deltas?.failed} />
         </div>
 
         <div role="list" aria-live="polite" aria-atomic="false"
@@ -155,7 +159,7 @@ export default function RemediationRunProgress({ progress, updateMode = 'idle', 
 
         {finished && (
           <p style={{ margin: '12px 0 0', fontSize: 12.5 }}>
-            <strong>{n(done - failed)} documents remediated and verified.</strong>{' '}
+            <strong>{n(Math.max(0, done - failed))} documents remediated and verified.</strong>{' '}
             {failed ? `${n(failed)} routed for attention.` : 'Corrected copies are ready for review and release.'}
           </p>
         )}

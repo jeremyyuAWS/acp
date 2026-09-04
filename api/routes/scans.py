@@ -510,10 +510,14 @@ async def remediate_scan(sid: str, request: Request):
     res = core.store.get_scan(sid, owner=_owner(request))
     if res is None:
         raise HTTPException(404, "scan not found")
-    token = request.headers.get("x-drive-token")
     source = (res.get("run") or {}).get("source") or "drive"
     owner = _owner(request)
-    core.register_scan_tokens(sid, drive=token)  # in-memory only
+    # A Drive token belongs to a Drive job and to nothing else. A SharePoint (or local) scan
+    # reads the source bytes Assess cached, so it neither registers nor carries one — and the
+    # worker's source dispatch (handlers._remediation_source_bytes) never asks for one either.
+    token = request.headers.get("x-drive-token") if source == "drive" else None
+    if source == "drive":
+        core.register_scan_tokens(sid, drive=token)  # in-memory only
 
     # Parse optional scope list from request body.
     scope_set = None
@@ -534,6 +538,12 @@ async def remediate_scan(sid: str, request: Request):
             remediated_folder_id = handlers.ensure_remediated_folder(handlers._drive_client(token))
         except Exception:
             remediated_folder_id = None   # jobs fall back to find-or-create
+    # One id per SUBMISSION, so live progress can be scoped to the batch a user is watching
+    # rather than to everything this scan has ever queued. Re-submitting the same scan (the
+    # honest response to a failed run) used to make its dead jobs accumulate against one total:
+    # two 147-document batches reported "294 failed" out of 147, and the UI subtracted its way
+    # to -147 remediated. See store.remediation_status.
+    batch_id = uuid.uuid4().hex[:16]
     enqueued = []
     for f in res["files"]:
         # Honour the triage scope: skip files the user marked N/A or deferred.
@@ -564,9 +574,10 @@ async def remediate_scan(sid: str, request: Request):
             {"scan_id": sid, "file": f["file"], "drive_file_id": drive_file_id,
              "remediated_folder_id": remediated_folder_id, "drive_token": token,
              "source": source, "owner": owner, "checksum": f.get("checksum")},
-            scan_id=sid)
+            scan_id=sid, batch_id=batch_id)
         enqueued.append(jid)
     return {"scan_id": sid, "enqueued": len(enqueued), "job_ids": enqueued,
+            "batch_id": batch_id,
             "workers": core.WORKERS, "worker_tier_alive": core.store.worker_tier_alive()}
 
 
