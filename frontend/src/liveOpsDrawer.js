@@ -476,15 +476,18 @@ export const CAPACITY_RULES = { approachingAt: 0.75, saturatedAt: 1 }
 
 export function gaugeModel(service = {}, options = {}) {
   const slots = num(service.slots)
-  const active = num(service.active)
+  // `active` is occupied worker slots; `activeJobs` is the broader lifecycle count. Older
+  // snapshots only have `active`, so retain that as the compatibility fallback.
+  const reportedActive = num(service.activeJobs) ?? num(service.active)
   const provisioning = num(options.provisioning)
   if (!service.alive && slots == null) {
     return { available: false, reason: 'This service is not reporting worker slots.', tone: 'idle', state: 'unavailable' }
   }
-  if (slots == null || active == null) {
+  if (slots == null || reportedActive == null) {
     return { available: false, reason: 'Worker slot counts are not reported by this service.', tone: 'idle', state: 'unavailable' }
   }
-  const fraction = slots > 0 ? Math.min(1, active / slots) : 0
+  const active = slots > 0 ? Math.min(reportedActive, slots) : 0
+  const fraction = slots > 0 ? active / slots : 0
   const pct = slots > 0 ? Math.round((active / slots) * 100) : null
   const availableSlots = Math.max(0, slots - active)
   let state = 'available'
@@ -500,6 +503,7 @@ export function gaugeModel(service = {}, options = {}) {
     text: `${active} of ${slots} worker slots active`
       + (pct == null ? '' : ` (${pct}%)`)
       + `, ${availableSlots} available`
+      + (reportedActive > slots ? `; ${reportedActive} jobs in the active lifecycle` : '')
       + (provisioning == null ? '' : `, ${provisioning} provisioning`),
     stateLabel: { available: 'Capacity available', approaching: 'Approaching capacity',
       saturated: 'At capacity', idle: 'Idle — capacity available', unavailable: 'Capacity unavailable' }[state],

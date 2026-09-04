@@ -54,13 +54,29 @@ export function workerServiceRows(summary = {}) {
   return ['discovery', 'assess', 'remediate'].filter((role) => roles[role]).map((role) => {
     const heartbeat = roles[role]
     const stage = role === 'discovery' ? 'discover' : role
-    const active = Number(load[stage]?.running || 0)
+    const activeJobs = Number(load[stage]?.running || 0)
     const slots = Number(heartbeat.pool_size || 0)
+    const active = Math.min(activeJobs, slots)
     return {
-      role, stage, active, slots, available: Math.max(0, slots - active),
+      role, stage, active, activeJobs, slots, available: Math.max(0, slots - active),
       alive: Boolean(heartbeat.alive), age_s: heartbeat.age_s, version: heartbeat.version,
     }
   })
+}
+
+function MiniSlotGauge({ service, color }) {
+  if (!service || !service.slots) return null
+  const pct = Math.min(100, Math.round((service.active / service.slots) * 100))
+  const r = 10
+  const circumference = 2 * Math.PI * r
+  return <svg role="img" aria-label={`${pct}% worker slot utilization`} viewBox="0 0 26 26"
+    style={{ width: 26, height: 26, flex: '0 0 auto' }}>
+    <circle cx="13" cy="13" r={r} fill="none" stroke="var(--border)" strokeWidth="3" />
+    <circle cx="13" cy="13" r={r} fill="none" stroke={color} strokeWidth="3"
+      strokeDasharray={`${circumference * pct / 100} ${circumference}`}
+      strokeLinecap="round" transform="rotate(-90 13 13)" />
+    <text x="13" y="15.5" textAnchor="middle" fontSize="6.5" fontWeight="700" fill="currentColor">{pct}%</text>
+  </svg>
 }
 
 function MiniTrend({ values = [], color }) {
@@ -221,6 +237,7 @@ function InfraNode({ data }) {
       : data.hasInput !== false && <Handle type="target" position={Position.Left} />}
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 7, alignItems: 'start' }}>
       <b style={{ overflowWrap: 'anywhere' }}>{data.label}</b>
+      {data.kind === 'worker' && <MiniSlotGauge service={data.service} color={color} />}
       <span style={{ color, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>{data.status}</span>
     </div>
     <div className="muted" style={{ fontSize: 11, marginTop: 4, lineHeight: 1.3, overflowWrap: 'anywhere' }}>{data.detail}</div>
@@ -396,7 +413,8 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
         + `${service.active} active of ${service.slots} slots. Select for details.`,
       data: { kind: 'worker',
       label: `${STAGE[stage].label} workers`, status: service.alive ? 'online' : 'standby',
-      detail: `${service.active} active · ${service.available} available of ${service.slots}`,
+      detail: `${service.active} slots busy · ${service.available} available of ${service.slots}`
+        + (service.activeJobs > service.slots ? ` · ${service.activeJobs} jobs active` : ''),
       // Named rather than "Tier:", which claimed a coverage one container app does not have.
       // The app name is what makes a figure repeated on all three stage nodes readable: it says
       // whose size this is, so a stage it does not describe is visibly not describing itself.

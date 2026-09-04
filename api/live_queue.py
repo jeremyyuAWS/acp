@@ -26,7 +26,7 @@ STALE_AFTER = 120.0
 
 
 def compose(run: dict | None, activity: dict | None, *, pool_max: int | None = None,
-            now: float | None = None) -> dict:
+            capacity_scope: str | None = None, now: float | None = None) -> dict:
     """The live worker/queue/lane block. PURE — the load-bearing bit, unit-tested with plain dicts.
 
     `run` is a scan_runs summary ({files, files_done, phase, status}); `activity` is the
@@ -64,6 +64,8 @@ def compose(run: dict | None, activity: dict | None, *, pool_max: int | None = N
     if pool_max is not None and pool_max >= 0:
         workers["max"] = int(pool_max)
         workers["idle"] = max(0, int(pool_max) - in_flight)
+        if capacity_scope:
+            workers["capacity_scope"] = capacity_scope
 
     return {
         "phase": act.get("phase") or run.get("phase") or run.get("status"),
@@ -95,10 +97,24 @@ def for_scan(store, scan_id: str, *, pool_max: int | None = None, now: float | N
         act = _activity.current(scan_id)
     except Exception:
         act = None
+    capacity_scope = None
     if pool_max is None:
         try:
             import core
             pool_max = int(getattr(core, "WORKERS", 0) or 0) or None
         except Exception:
             pool_max = None
-    return compose(run, act, pool_max=pool_max, now=now)
+    # Production's API is serve-only (ACP_WORKERS=0); assessment runs in dedicated replicas.
+    # Their role heartbeat reports the real pool size INSIDE one replica. That is useful capacity
+    # evidence, but not an estate-wide total, so preserve its scope rather than multiplying by an
+    # unmeasured replica count or presenting it as unavailable.
+    if pool_max is None:
+        try:
+            assess = (store.worker_roles_status() or {}).get("assess") or {}
+            reported = assess.get("pool_size")
+            if assess.get("alive") and isinstance(reported, (int, float)) and reported >= 0:
+                pool_max = int(reported)
+                capacity_scope = "per_replica"
+        except Exception:
+            pool_max = None
+    return compose(run, act, pool_max=pool_max, capacity_scope=capacity_scope, now=now)

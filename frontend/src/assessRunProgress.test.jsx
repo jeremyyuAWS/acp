@@ -46,6 +46,14 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toMatch(/Results appear when the run finishes/)
   })
 
+  it('labels dedicated worker heartbeat capacity as per-replica, never unavailable or aggregate', () => {
+    const split = { ...SNAP, queue: { ...SNAP.queue,
+      workers: { busy: 1, max: 2, idle: 1, capacity_scope: 'per_replica' } } }
+    const html = render(split)
+    expect(html).toContain('Assessment service online · 2 slots per replica')
+    expect(html).not.toContain('Worker status unavailable')
+  })
+
   it('groups current processing and throughput in a collapsible section that starts expanded', () => {
     const html = render(SNAP, { ratePerMin: 12, points: [1, 3, 5, 8] })
     expect(html).toMatch(/<details open="" class="assess-live-details"/)

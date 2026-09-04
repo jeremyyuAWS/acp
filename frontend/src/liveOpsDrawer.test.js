@@ -113,6 +113,15 @@ describe('Worker gauge thresholds come from a documented rule', () => {
       .toBe('2 of 3 worker slots active (67%), 1 available')
   })
 
+  it('caps slot utilization at 100% and keeps excess lifecycle jobs separate', () => {
+    const gauge = gaugeModel({ ...service, active: 51, slots: 2 })
+    expect(gauge.pct).toBe(100)
+    expect(gauge.active).toBe(2)
+    expect(gauge.text).toContain('2 of 2 worker slots active (100%)')
+    expect(gauge.text).toContain('51 jobs in the active lifecycle')
+    expect(gauge.text).not.toContain('2550%')
+  })
+
   it('draws a half circle that starts at the left and grows clockwise', () => {
     expect(arcPath(100, 100, 78, 0)).toContain('M 22.00 100.00')
     expect(arcPath(100, 100, 78, 1)).toContain('A 78 78 0 0 1 178.00 100.00')

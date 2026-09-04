@@ -86,10 +86,25 @@ describe('Admin live traffic graph', () => {
         remediate: { alive: false, pool_size: 2, age_s: 130, version: 'v9' },
       },
     })).toEqual([
-      { role: 'discovery', stage: 'discover', active: 1, slots: 3, available: 2, alive: true, age_s: 1.2, version: 'v10' },
-      { role: 'assess', stage: 'assess', active: 2, slots: 2, available: 0, alive: true, age_s: 4.6, version: 'v10' },
-      { role: 'remediate', stage: 'remediate', active: 0, slots: 2, available: 2, alive: false, age_s: 130, version: 'v9' },
+      { role: 'discovery', stage: 'discover', active: 1, activeJobs: 1, slots: 3, available: 2, alive: true, age_s: 1.2, version: 'v10' },
+      { role: 'assess', stage: 'assess', active: 2, activeJobs: 2, slots: 2, available: 0, alive: true, age_s: 4.6, version: 'v10' },
+      { role: 'remediate', stage: 'remediate', active: 0, activeJobs: 0, slots: 2, available: 2, alive: false, age_s: 130, version: 'v9' },
     ])
+  })
+
+  it('does not turn active lifecycle jobs into impossible slot utilization', () => {
+    const [assess] = workerServiceRows({
+      by_stage: { assess: { running: 51 } },
+      worker_roles: { assess: { alive: true, pool_size: 2, age_s: 1, version: 'v10' } },
+    })
+    expect(assess).toMatchObject({ active: 2, activeJobs: 51, slots: 2, available: 0 })
+    const graph = buildTrafficGraph({ runs: [], summary: {
+      by_stage: { assess: { running: 51 } },
+      worker_roles: { assess: { alive: true, pool_size: 2 } },
+    } })
+    expect(graph.nodes.find((node) => node.id === 'stage:assess').data.detail)
+      .toBe('2 slots busy · 0 available of 2 · 51 jobs active')
+    expect(source).toContain('MiniSlotGauge')
   })
 
   it('shows authoritative Azure sizing without turning missing data into zero', () => {
